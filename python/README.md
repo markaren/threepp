@@ -55,6 +55,7 @@ display is only required for the on-screen examples.
 | [`examples/vulkan_aovs.py`](examples/vulkan_aovs.py) | Vulkan deferred render → G-buffer AOVs (normals / segmentation / albedo / depth) as numpy. Needs a Vulkan build. |
 | [`examples/ui_demo.py`](examples/ui_demo.py) | In-window Dear ImGui control panel (sliders/buttons) driving the scene live (GL). Needs a display. |
 | [`examples/vulkan_ui.py`](examples/vulkan_ui.py) | The same ImGui control panel, over the **Vulkan** deferred renderer. Needs a Vulkan build + display. |
+| [`examples/physics_demo.py`](examples/physics_demo.py) | A pile of boxes tumbling onto the floor — `PhysxWorld` rigid bodies driving the scene graph. Needs a PhysX build + display. |
 | [`examples/smoke_test.py`](examples/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
 
 ```sh
@@ -92,6 +93,10 @@ python examples/headless_render.py
 - **In-window UI**: `ImguiContext` + the `threepp.imgui` submodule — Dear ImGui
   immediate-mode widgets (window/text/button/slider/checkbox/color/combo/…) for
   control panels. Works on **both** the GL and Vulkan renderers (`tp.HAS_IMGUI`).
+- **Rigid-body physics** (when built with PhysX, see below): `PhysxWorld` +
+  `RigidBody` — add `Mesh`es as dynamic/static bodies (box/sphere/capsule, convex
+  hull, or triangle mesh), `step(dt)`, and the bound meshes follow the simulation
+  (`tp.HAS_PHYSX`).
 - **Vulkan deferred renderer + G-buffer AOVs** (when built with Vulkan, see
   below): `VulkanRenderer.render_aov(scene, camera, aov)` returns a deferred
   G-buffer attachment as `(H, W, 3)` uint8 — `'rgb'`, `'normals'`,
@@ -211,6 +216,59 @@ deferred frame after the scene). Create the `ImguiContext` after the renderer. S
 
 One caveat: only **one** `ImguiContext` should be alive at a time (Dear ImGui has a
 single global context) — don't keep a GL and a Vulkan one simultaneously.
+
+## Rigid-body physics (PhysX)
+
+threepp ships a scene-graph-integrated PhysX wrapper; the binding exposes it as
+`PhysxWorld` (+ a `RigidBody` handle). Add meshes as bodies, `step(dt)` each frame,
+and the bound meshes' transforms follow the simulation. It's pure CPU — **no canvas
+or renderer required**, so it works headless:
+
+```python
+import threepp as tp
+assert tp.HAS_PHYSX
+
+world = tp.PhysxWorld(gravity=tp.Vector3(0, -9.81, 0))
+
+floor = tp.Mesh(tp.BoxGeometry(20, 1, 20), tp.MeshStandardMaterial())
+floor.position.y = -0.5
+world.add_static(floor)                 # static collider
+
+box = tp.Mesh(tp.BoxGeometry(1, 1, 1), tp.MeshStandardMaterial())
+box.position.set(0, 5, 0)
+body = world.add(box, density=200)      # dynamic body, auto-bound to the mesh
+body.add_impulse(tp.Vector3(2, 0, 0))
+
+for _ in range(120):
+    world.step(1 / 60)                   # box.position now follows the sim
+```
+
+Shapes are inferred from Box/Sphere/Capsule geometry; `add_dynamic_convex` (convex
+hull), `add_static_trimesh` / `add_static_trimesh_tree` (exact triangles, e.g. an
+imported glTF environment), and `add_instanced` (one body per `InstancedMesh`
+instance) cover the rest. `RigidBody` exposes pose, linear/angular velocity,
+`add_force` / `add_impulse`, damping, and a kinematic mode
+(`set_kinematic` + `set_kinematic_target`). `on_pre_substep` / `on_post_substep`
+hooks fire around each fixed substep.
+
+Enable PhysX at configure time. It comes from vcpkg
+(`unofficial-omniverse-physx-sdk`), so configure with the vcpkg toolchain:
+
+```sh
+cmake -S . -B build -DTHREEPP_WITH_PYTHON=ON \
+      -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
+cmake --build build --target threepp_py
+```
+
+(Or, to reuse an existing install without the toolchain, pass
+`-Dunofficial-omniverse-physx-sdk_DIR=<vcpkg_installed>/x64-windows/share/unofficial-omniverse-physx-sdk`;
+the build then stages the PhysX runtime DLLs next to the module.) `tp.HAS_PHYSX`
+reports whether it was compiled in. Soft bodies and vehicles (which need the
+CUDA/GPU path) are not exposed yet — rigid bodies only.
+
+Combined with the Vulkan AOVs, this is the **dynamic** half of the synthetic-data
+story: physics gives you moving scenes, the G-buffer gives you per-frame
+segmentation / depth / optical-flow labels for free.
 
 ## Notes for maintainers
 

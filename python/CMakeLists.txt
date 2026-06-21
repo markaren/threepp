@@ -27,7 +27,8 @@ pybind11_add_module(threepp_py
         src/bind_render.cpp
         src/bind_loaders.cpp
         src/bind_vulkan.cpp
-        src/bind_imgui.cpp)
+        src/bind_imgui.cpp
+        src/bind_physx.cpp)
 
 target_link_libraries(threepp_py PRIVATE threepp)
 target_compile_features(threepp_py PRIVATE cxx_std_20)
@@ -70,6 +71,34 @@ if (EXISTS ${IMGUI_DIR}/imgui.cpp)
     endif ()
     target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_IMGUI)
     message(STATUS "threepp_py: Dear ImGui UI enabled")
+endif ()
+
+# Optional PhysX rigid-body world (header-only extras/physx/PhysxWorld.hpp), via
+# the omniverse-physx-sdk (vcpkg). examples/LibConfig.cmake only find_package()s
+# it for the examples, so do it here too. Configure with the vcpkg toolchain, or
+# point it at an existing install:
+#   -Dunofficial-omniverse-physx-sdk_DIR=<vcpkg_installed>/x64-windows/share/unofficial-omniverse-physx-sdk
+find_package(unofficial-omniverse-physx-sdk CONFIG QUIET)
+if (TARGET unofficial::omniverse-physx-sdk::sdk)
+    target_link_libraries(threepp_py PRIVATE unofficial::omniverse-physx-sdk::sdk)
+    target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_PHYSX)
+    # Stage the SDK runtime DLLs (PhysX_64 / Common / Cooking / Foundation, plus the
+    # GPU pair) next to the module so `import threepp` resolves them without the
+    # vcpkg toolchain's applocal step (we use a _DIR hint, not the toolchain).
+    # TARGET_RUNTIME_DLLS is empty here — the SDK is linked via static import libs —
+    # so derive the bin dir from the package config location and copy the DLLs.
+    if (WIN32 AND unofficial-omniverse-physx-sdk_DIR)
+        get_filename_component(_physx_bin "${unofficial-omniverse-physx-sdk_DIR}/../../bin" ABSOLUTE)
+        file(GLOB _physx_dlls "${_physx_bin}/PhysX*.dll")
+        if (_physx_dlls)
+            add_custom_command(TARGET threepp_py POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_physx_dlls} $<TARGET_FILE_DIR:threepp_py>
+                    COMMAND_EXPAND_LISTS)
+        endif ()
+    endif ()
+    message(STATUS "threepp_py: PhysX rigid-body world enabled")
+else ()
+    message(STATUS "threepp_py: PhysX not found — physics disabled (threepp.HAS_PHYSX=False)")
 endif ()
 
 # Importable as `import threepp` — the file name must match PYBIND11_MODULE(threepp,...).

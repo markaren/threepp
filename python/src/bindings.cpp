@@ -36,4 +36,5 @@ PYBIND11_MODULE(threepp, m) {
     tp::init_loaders(m);// returns Group/Texture/BufferGeometry
     tp::init_vulkan(m); // optional deferred renderer + G-buffer AOVs
     tp::init_imgui(m);  // optional Dear ImGui UI (GL backend)
+    tp::init_physx(m);  // optional PhysX rigid-body world
 }
