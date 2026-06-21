@@ -131,6 +131,11 @@ namespace {
         Vector3 position() const { return fromPxVec3(link_->getGlobalPose().p); }
         Quaternion quaternion() const { return fromPxQuat(link_->getGlobalPose().q); }
 
+        // External force/impulse on this link (a PxArticulationLink is a PxRigidBody).
+        // Use for perturbations — e.g. random shoves to train push recovery.
+        void add_force(const Vector3& v) { link_->addForce(toPxVec3(v), PxForceMode::eFORCE); }
+        void add_impulse(const Vector3& v) { link_->addForce(toPxVec3(v), PxForceMode::eIMPULSE); }
+
         void set_drive_target(float t) { joint()->setDriveTarget(PxArticulationAxis::eTWIST, t); }
         void set_drive_velocity(float v) { joint()->setDriveVelocity(PxArticulationAxis::eTWIST, v); }
         float joint_position() const { return joint()->getJointPosition(PxArticulationAxis::eTWIST); }
@@ -163,9 +168,24 @@ namespace {
             if (solverPositionIters > 0) art_->setSolverIterationCounts(static_cast<PxU32>(solverPositionIters), 1);
         }
         ~Articulation() {
+            if (cache_) cache_->release();
             // If it was never added to a scene we still own it; once finalized the
             // scene owns it and releases it on world teardown (the world outlives us).
             if (art_ && !finalized_) art_->release();
+        }
+
+        // Episode reset: teleport the root to `pos` upright with zero velocity and
+        // zero every joint position/velocity (back to the neutral build pose). The
+        // bound visuals snap to the new state on the next world.step().
+        void reset(const Vector3& pos) {
+            if (!finalized_) throw std::runtime_error("Articulation.reset: finalize() first");
+            art_->setRootGlobalPose(PxTransform(toPxVec3(pos), PxQuat(PxIdentity)), false);
+            if (!cache_) cache_ = art_->createCache();
+            art_->zeroCache(*cache_);
+            art_->applyCache(*cache_,
+                             PxArticulationCacheFlag::ePOSITION | PxArticulationCacheFlag::eVELOCITY |
+                                     PxArticulationCacheFlag::eROOT_VELOCITIES,
+                             true);
         }
         Articulation(const Articulation&) = delete;
         Articulation& operator=(const Articulation&) = delete;
@@ -230,6 +250,7 @@ namespace {
     private:
         PhysxWorld& world_;
         PxArticulationReducedCoordinate* art_ = nullptr;
+        PxArticulationCache* cache_ = nullptr;
         bool finalized_ = false;
     };
 
@@ -271,6 +292,8 @@ namespace threepp_py {
                 .def_property_readonly("quaternion", &ArticulationLink::quaternion)
                 .def_property_readonly("joint_position", &ArticulationLink::joint_position, "Joint angle (radians).")
                 .def_property_readonly("joint_velocity", &ArticulationLink::joint_velocity, "Joint angular velocity (rad/s).")
+                .def("add_force", &ArticulationLink::add_force, py::arg("force"), "Apply an external force (N) to this link.")
+                .def("add_impulse", &ArticulationLink::add_impulse, py::arg("impulse"), "Apply an external impulse (kg·m/s) — e.g. a random shove.")
                 .def("set_drive_target", &ArticulationLink::set_drive_target, py::arg("target"),
                      "Set the PD drive's target angle (radians).")
                 .def("set_drive_velocity", &ArticulationLink::set_drive_velocity, py::arg("velocity"));
@@ -304,7 +327,10 @@ namespace threepp_py {
                      "position drive (stiffness>0 motorizes it). Shape is inferred from the mesh "
                      "(Box/Sphere/Capsule). Returns an ArticulationLink.")
                 .def("finalize", &Articulation::finalize,
-                     "Add the finished articulation to the scene. No links may be added afterwards.");
+                     "Add the finished articulation to the scene. No links may be added afterwards.")
+                .def("reset", &Articulation::reset, py::arg("position"),
+                     "Episode reset: teleport the root upright to `position` with zero velocity and "
+                     "zero all joint positions/velocities (back to the neutral build pose).");
 
         py::class_<PhysxWorld>(m, "PhysxWorld",
                                "A PhysX rigid-body world wired to the threepp scene graph. Add meshes as "

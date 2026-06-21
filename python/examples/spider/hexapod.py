@@ -110,7 +110,10 @@ class Hexapod:
         self.cmd[0] = max(-1.0, min(1.0, forward))
         self.cmd[1] = max(-1.0, min(1.0, turn))
 
-    def update(self, dt):
+    def update(self, dt, residuals=None):
+        """Advance the gait and set joint drive targets. `residuals` (optional, 12
+        values: coxa,femur per leg) are added on top of the CPG targets — this is
+        the action interface for residual RL (Stage 2)."""
         self.psi += self.gait_freq * 2.0 * math.pi * dt
         fwd, turn = self.cmd
         for i, leg in enumerate(self.legs):
@@ -121,8 +124,27 @@ class Hexapod:
             coxa_t = self.coxa_amp * drive * leg["coxa_sign"] * math.cos(phase)
             lift = self.lift_amp * max(0.0, -math.sin(phase))
             femur_t = leg["femur_sign"] * lift
+            if residuals is not None:
+                coxa_t += residuals[2 * i]
+                femur_t += residuals[2 * i + 1]
             leg["coxa"].set_drive_target(coxa_t)
             leg["femur"].set_drive_target(femur_t)
+
+    def reset(self, position=(0.0, 0.40, 0.0)):
+        """Teleport back to `position`, upright, joints zeroed; restart the gait."""
+        self.art.reset(tp.Vector3(*position))
+        self.psi = 0.0
+        self.cmd = [0.0, 0.0]
+
+    def joint_states(self):
+        """(positions, velocities) for all 12 joints — coxa,femur interleaved per leg."""
+        pos, vel = [], []
+        for leg in self.legs:
+            pos.append(leg["coxa"].joint_position)
+            vel.append(leg["coxa"].joint_velocity)
+            pos.append(leg["femur"].joint_position)
+            vel.append(leg["femur"].joint_velocity)
+        return pos, vel
 
     @property
     def position(self):
