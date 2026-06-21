@@ -1,0 +1,230 @@
+# threepp for Python
+
+[threepp](https://github.com/markaren/threepp) is a cross-platform C++ 3D
+library with the high-level API of [three.js](https://threejs.org). This package
+exposes that high-level API to Python through a single
+[pybind11](https://github.com/pybind/pybind11) extension module, `threepp`.
+
+You get the three.js scene graph — `Scene`, `Mesh`, geometries, materials,
+cameras, lights, `OrbitControls`, an animation loop — plus **headless
+render-to-numpy** for ML data generation, robotics cameras and machine vision.
+
+```python
+import threepp as tp
+
+scene = tp.Scene()
+scene.add(tp.Mesh(tp.BoxGeometry(), tp.MeshStandardMaterial()))
+scene.add(tp.AmbientLight())
+
+camera = tp.PerspectiveCamera(75, 1.0, 0.1, 100)
+camera.position.z = 5
+
+canvas = tp.Canvas("demo")
+renderer = tp.GLRenderer(canvas)
+canvas.animate(lambda: renderer.render(scene, camera))
+```
+
+## Build
+
+The module is built as part of threepp's CMake project, gated behind
+`THREEPP_WITH_PYTHON`. pybind11 is fetched automatically; the host Python is
+auto-detected (override with `-DPython_EXECUTABLE=...`).
+
+```sh
+cmake -S . -B build -DTHREEPP_WITH_PYTHON=ON \
+      -DTHREEPP_BUILD_EXAMPLES=OFF -DTHREEPP_BUILD_TESTS=OFF
+cmake --build build --target threepp_py
+```
+
+The built module (`threepp.*.pyd` / `threepp.*.so`) is placed in this `python/`
+directory, so scripts here can `import threepp`. The examples add this directory
+to `sys.path` automatically, so they run from anywhere.
+
+This is a GL-only build — it needs no Vulkan SDK, PhysX or CUDA, and works on any
+laptop. Off-screen rendering uses a hidden GLFW window (a real GL context), so a
+display is only required for the on-screen examples.
+
+## Examples
+
+| Script | What it shows |
+| --- | --- |
+| [`examples/hello_cube.py`](examples/hello_cube.py) | On-screen window: spinning, lit cubes you can orbit (`OrbitControls` + animation loop). Needs a display. |
+| [`examples/headless_render.py`](examples/headless_render.py) | Off-screen render straight into a `(H, W, 3)` uint8 numpy array; saves a PNG. No window. |
+| [`examples/textured_box.py`](examples/textured_box.py) | Load an image with `TextureLoader` and map it onto a mesh (headless). |
+| [`examples/load_model.py`](examples/load_model.py) | `python load_model.py model.glb` — load a model with `ModelLoader`, auto-frame and render it. |
+| [`examples/vulkan_aovs.py`](examples/vulkan_aovs.py) | Vulkan deferred render → G-buffer AOVs (normals / segmentation / albedo / depth) as numpy. Needs a Vulkan build. |
+| [`examples/ui_demo.py`](examples/ui_demo.py) | In-window Dear ImGui control panel (sliders/buttons) driving the scene live (GL). Needs a display. |
+| [`examples/vulkan_ui.py`](examples/vulkan_ui.py) | The same ImGui control panel, over the **Vulkan** deferred renderer. Needs a Vulkan build + display. |
+| [`examples/smoke_test.py`](examples/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
+
+```sh
+cd python
+python examples/headless_render.py
+```
+
+## What's exposed
+
+- **Math** (mutable value types): `Vector2/3/4`, `Color`, `Euler`, `Quaternion`,
+  `Matrix3/4`, `Box3`. A hex int (`0xff0000`) or CSS/name string converts
+  implicitly to a `Color`, so `material.color = 0xff0000` just works.
+- **Scene graph**: `Object3D`, `Scene`, `Group`, `Mesh`, `InstancedMesh`,
+  `Points`, `Line`, `LineSegments`, `Sprite`. `obj.position.x = 1` mutates in
+  place, exactly like three.js; `scene.add(a, b, c)`, `traverse`,
+  `get_object_by_name`, `children` all work.
+- **Geometries**: `Box`, `Sphere`, `Plane`, `Cylinder`, `Cone`, `Capsule`,
+  `Torus`, `TorusKnot`, `Circle`, `Ring`, `Icosahedron`, `Octahedron`.
+- **Materials**: `MeshStandard`, `MeshPhong`, `MeshLambert`, `MeshBasic`,
+  `MeshNormal`, `Points`, `LineBasic`, `Sprite`, `Shadow` — concrete fields, the
+  shared base fields (`opacity`, `transparent`, `side`, …), and texture-map slots
+  (`map`, `normal_map`, `roughness_map`, `metalness_map`, `emissive_map`,
+  `ao_map`, `alpha_map`, …).
+- **Cameras**: `PerspectiveCamera`, `OrthographicCamera`.
+- **Lights**: `Ambient`, `Directional`, `Point`, `Spot`, `Hemisphere`,
+  `RectArea`.
+- **Textures**: `Texture`, `TextureLoader` (`load(path, color_space=...)`),
+  with `TextureWrapping` / `Filter` / `ColorSpace` enums.
+- **Model loaders**: `ModelLoader` (`load(path)` → `Group`, dispatches by
+  extension: `.obj` / `.gltf` / `.glb` / `.stl` / `.dae`), plus `OBJLoader`,
+  `STLLoader`, `GLTFLoader` directly. All first-party — no Assimp/FBX/USD needed.
+- **Rendering**: `Canvas` (window / headless), `GLRenderer`
+  (`render`, `set_clear_color`, `read_pixels` → numpy, `save_frame`, shadows),
+  `OrbitControls`, `Clock`.
+- **In-window UI**: `ImguiContext` + the `threepp.imgui` submodule — Dear ImGui
+  immediate-mode widgets (window/text/button/slider/checkbox/color/combo/…) for
+  control panels. Works on **both** the GL and Vulkan renderers (`tp.HAS_IMGUI`).
+- **Vulkan deferred renderer + G-buffer AOVs** (when built with Vulkan, see
+  below): `VulkanRenderer.render_aov(scene, camera, aov)` returns a deferred
+  G-buffer attachment as `(H, W, 3)` uint8 — `'rgb'`, `'normals'`,
+  `'segmentation'` (per-instance ids), `'albedo'`, `'motion'` — and
+  `read_depth(scene, camera)` returns **metric depth** as `(H, W)` float32
+  (distance from the camera in scene units). This is the "labels for free" path
+  for synthetic-data generation.
+
+Naming follows Python conventions (`snake_case` methods/properties), e.g.
+`camera.update_projection_matrix()`, `renderer.set_clear_color(...)`.
+
+## Tests
+
+A pytest suite under [`tests/`](tests/) covers the whole surface — math,
+scene graph, geometries, materials, cameras, lights, textures, loaders and
+headless rendering — including regression tests that pin the pybind11
+virtual-base workaround (they crash the interpreter if it ever regresses).
+
+```sh
+pip install pytest numpy pillow
+cd python
+pytest
+```
+
+[`examples/smoke_test.py`](examples/smoke_test.py) is a dependency-light
+standalone alternative that prints `ALL OK`.
+
+### Type stubs (IDE autocomplete)
+
+`threepp.pyi` ships alongside the module. Regenerate it after changing the
+bindings with:
+
+```sh
+pip install pybind11-stubgen
+cmake --build build --target threepp_stubs
+```
+
+## Vulkan deferred AOVs (synthetic data)
+
+The deferred (RasterFirst) Vulkan renderer writes a full G-buffer every frame —
+world normals, optical flow, per-instance segmentation ids, albedo, depth. The
+binding exposes those attachments as numpy, so a scene authored in Python yields
+ground-truth labels with no path tracer and no manual annotation:
+
+```python
+import threepp as tp
+assert tp.HAS_VULKAN
+
+canvas = tp.Canvas("aov", width=512, height=384, headless=True, vsync=False)
+renderer = tp.VulkanRenderer(canvas)            # deferred / RasterFirst
+
+# ... build scene + camera ...
+out = renderer.render_aovs(scene, camera, ["rgb", "normals", "segmentation"])
+rgb, normals, seg = out["rgb"], out["normals"], out["segmentation"]   # (H, W, 3) uint8
+depth = renderer.read_depth(scene, camera)                           # (H, W) float32, metres
+```
+
+Enable the Vulkan backend at configure time (needs the Vulkan SDK + a
+Vulkan-capable GPU). The GL renderer stays available in the same module:
+
+```sh
+cmake -S . -B build -DTHREEPP_WITH_PYTHON=ON -DTHREEPP_WITH_VULKAN=ON
+cmake --build build --target threepp_py
+```
+
+`tp.HAS_VULKAN` reports whether the backend was compiled in.
+
+**Current scope / honest limits.** The colour AOVs come out as `(H, W, 3)` uint8
+via the renderer's debug-resolve pass: normals as `n*0.5+0.5`, segmentation as
+per-id hashed colours, albedo as *linear* albedo (so it looks gamma-/hue-off as
+a viewed image, but the data is the real linear base colour). **Depth is metric
+float32** (`read_depth`) — the debug-resolve pass packs the reverse-Z depth into
+24 bits, which the host decodes and linearizes with the camera near/far;
+verified accurate to a fraction of a unit against known distances. Still not
+exposed: **raw integer** instance ids (segmentation comes back as hashed colours,
+not the underlying ids), which wants a device-buffer readback. Driving is via the
+deferred frame-model under the hood (submit/present is deferred to the canvas
+frame-end callback, so each `render*` repeats a few frames to make the MAILBOX
+readback deterministic — tune with `set_flush_frames`).
+
+## In-window UI (Dear ImGui)
+
+threepp integrates Dear ImGui; the binding exposes it as `ImguiContext` plus the
+`threepp.imgui` submodule of immediate-mode widgets. Issue widgets each frame
+inside a draw callback, and call `ui.render(draw)` in the animate loop after
+`renderer.render(...)`:
+
+```python
+ui = tp.ImguiContext(canvas)        # create AFTER the GLRenderer
+
+def draw():
+    tp.imgui.begin("Controls")
+    changed, rough = tp.imgui.slider_float("roughness", material.roughness, 0.0, 1.0)
+    if changed: material.roughness = rough
+    _, material.wireframe = tp.imgui.checkbox("wireframe", material.wireframe)
+    if tp.imgui.button("reset"): camera.position.set(0, 2, 6)
+    tp.imgui.end()
+
+def animate():
+    controls.enabled = not ui.want_capture_mouse   # don't orbit while over the panel
+    controls.update()
+    renderer.render(scene, camera)
+    ui.render(draw)
+
+canvas.animate(animate)
+```
+
+Value-returning widgets give back `(changed, new_value)` tuples; `button` returns
+`True` on the clicked frame. `tp.imgui.show_demo_window()` opens the full ImGui
+gallery. `tp.HAS_IMGUI` reports availability.
+
+It works on **both** renderers — pass the renderer so the backend matches:
+`ImguiContext(canvas, gl_renderer)` (or `ImguiContext(canvas)`) for GL, and
+`ImguiContext(canvas, vulkan_renderer)` for the Vulkan overlay (recorded into the
+deferred frame after the scene). Create the `ImguiContext` after the renderer. See
+[examples/vulkan_ui.py](examples/vulkan_ui.py) for the Vulkan version.
+
+One caveat: only **one** `ImguiContext` should be alive at a time (Dear ImGui has a
+single global context) — don't keep a GL and a Vulkan one simultaneously.
+
+## Notes for maintainers
+
+threepp uses **virtual inheritance** for some classes (`Mesh`/`Points`/`Line`
+derive from `Object3D` virtually; concrete materials derive from `Material`
+virtually). pybind11 mishandles pointer adjustment across a virtual base, which
+corrupts memory. The bindings work around this by:
+
+- never letting pybind up-cast a derived Python object to a `shared_ptr` of a
+  virtual base — `as_object3d` / `as_material` cast to the concrete type and let
+  the C++ compiler do the up-cast;
+- binding the inherited `Object3D` / `Material` members on each concrete leaf
+  with **concrete** member pointers (`&T::field`) and `T&` lambdas, instead of
+  inheriting the (broken) base bindings.
+
+See `src/bind_objects.cpp` (`bind_object3d_api`) and `src/bind_materials.cpp`
+(`bind_material_base_fields`).
