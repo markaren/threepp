@@ -32,6 +32,7 @@
 
 #include <PxPhysicsAPI.h>
 
+#include <array>
 #include <stdexcept>
 #include <vector>
 
@@ -74,6 +75,164 @@ namespace {
         ::physx::PxRigidActor* actor_;
     };
 
+    using namespace ::physx;
+
+    // Shortest-arc quaternion mapping unit vector `from` onto unit vector `to`.
+    // Used to orient a revolute joint frame so its X axis (the eTWIST axis) lies
+    // along the requested world hinge axis.
+    inline PxQuat shortestArc(PxVec3 from, PxVec3 to) {
+        from.normalize();
+        to.normalize();
+        const float d = from.dot(to);
+        if (d >= 1.f - 1e-6f) return PxQuat(PxIdentity);
+        if (d <= -1.f + 1e-6f) {
+            PxVec3 axis = PxVec3(1, 0, 0).cross(from);
+            if (axis.magnitudeSquared() < 1e-6f) axis = PxVec3(0, 1, 0).cross(from);
+            axis.normalize();
+            return PxQuat(PxPi, axis);
+        }
+        const PxVec3 c = from.cross(to);
+        PxQuat q(c.x, c.y, c.z, 1.f + d);
+        q.normalize();
+        return q;
+    }
+
+    // Box/Sphere/Capsule collider inferred from a mesh geometry (mirrors
+    // PhysxWorld's private inferShape). localPose corrects the capsule axis
+    // (threepp capsule is Y-aligned; PhysX capsule is X-aligned).
+    struct LinkShape {
+        PxGeometryHolder geom;
+        PxTransform localPose{PxIdentity};
+        bool valid = true;
+    };
+    inline LinkShape inferLinkShape(const BufferGeometry& g) {
+        LinkShape s;
+        if (auto* b = dynamic_cast<const BoxGeometry*>(&g)) {
+            s.geom = PxBoxGeometry(b->width * 0.5f, b->height * 0.5f, b->depth * 0.5f);
+        } else if (auto* sp = dynamic_cast<const SphereGeometry*>(&g)) {
+            s.geom = PxSphereGeometry(sp->radius);
+        } else if (auto* c = dynamic_cast<const CapsuleGeometry*>(&g)) {
+            s.geom = PxCapsuleGeometry(c->radius, c->length * 0.5f);
+            s.localPose = PxTransform(PxQuat(-PxHalfPi, PxVec3(0, 0, 1)));
+        } else {
+            s.valid = false;
+        }
+        return s;
+    }
+
+    // Handle to one articulation link + its inbound revolute joint (null for the
+    // root). Valid only while its Articulation (and world) live.
+    class ArticulationLink {
+    public:
+        ArticulationLink(PxArticulationLink* link, PxArticulationJointReducedCoordinate* joint, PxTransform creationPose)
+            : link_(link), joint_(joint), creationPose_(creationPose) {}
+
+        bool is_root() const { return joint_ == nullptr; }
+        Vector3 position() const { return fromPxVec3(link_->getGlobalPose().p); }
+        Quaternion quaternion() const { return fromPxQuat(link_->getGlobalPose().q); }
+
+        void set_drive_target(float t) { joint()->setDriveTarget(PxArticulationAxis::eTWIST, t); }
+        void set_drive_velocity(float v) { joint()->setDriveVelocity(PxArticulationAxis::eTWIST, v); }
+        float joint_position() const { return joint()->getJointPosition(PxArticulationAxis::eTWIST); }
+        float joint_velocity() const { return joint()->getJointVelocity(PxArticulationAxis::eTWIST); }
+
+        PxArticulationLink* raw() const { return link_; }
+        PxTransform creationPose() const { return creationPose_; }
+
+    private:
+        PxArticulationJointReducedCoordinate* joint() const {
+            if (!joint_) throw std::runtime_error("ArticulationLink: the root link has no joint");
+            return joint_;
+        }
+        PxArticulationLink* link_;
+        PxArticulationJointReducedCoordinate* joint_;
+        PxTransform creationPose_;
+    };
+
+    // Reduced-coordinate articulation builder (a robot). Add links (root first,
+    // then children with an inbound revolute joint), then finalize() to add it to
+    // the world's scene. world.step() drives the bound visual meshes.
+    class Articulation {
+    public:
+        Articulation(PhysxWorld& world, bool fixedBase, int solverPositionIters, bool disableSelfCollision)
+            : world_(world) {
+            art_ = world_.physics().createArticulationReducedCoordinate();
+            if (!art_) throw std::runtime_error("createArticulationReducedCoordinate failed");
+            art_->setArticulationFlag(PxArticulationFlag::eFIX_BASE, fixedBase);
+            if (disableSelfCollision) art_->setArticulationFlag(PxArticulationFlag::eDISABLE_SELF_COLLISION, true);
+            if (solverPositionIters > 0) art_->setSolverIterationCounts(static_cast<PxU32>(solverPositionIters), 1);
+        }
+        ~Articulation() {
+            // If it was never added to a scene we still own it; once finalized the
+            // scene owns it and releases it on world teardown (the world outlives us).
+            if (art_ && !finalized_) art_->release();
+        }
+        Articulation(const Articulation&) = delete;
+        Articulation& operator=(const Articulation&) = delete;
+
+        ArticulationLink add_link(ArticulationLink* parent, Mesh& mesh, float density,
+                                  const std::array<float, 3>& axis, const std::array<float, 3>& anchor,
+                                  bool limited, float lower, float upper,
+                                  float stiffness, float damping, float maxForce, float driveTarget) {
+            if (finalized_) throw std::runtime_error("Articulation.add_link: already finalized (no links after finalize)");
+            auto* g = mesh.geometry().get();
+            if (!g) throw std::runtime_error("Articulation.add_link: mesh has no geometry");
+            const auto shape = inferLinkShape(*g);
+            if (!shape.valid) throw std::runtime_error("Articulation.add_link: unsupported geometry (use Box/Sphere/Capsule)");
+
+            mesh.updateMatrixWorld();
+            Vector3 pos, scl;
+            Quaternion rot;
+            mesh.matrixWorld->decompose(pos, rot, scl);
+            const PxTransform linkPose(toPxVec3(pos), toPxQuat(rot));
+
+            PxArticulationLink* parentLink = parent ? parent->raw() : nullptr;
+            PxArticulationLink* link = art_->createLink(parentLink, linkPose);
+            if (!link) throw std::runtime_error("Articulation.add_link: createLink failed");
+
+            PxShape* s = world_.physics().createShape(shape.geom.any(), world_.defaultMaterial(), true);
+            s->setLocalPose(shape.localPose);
+            link->attachShape(*s);
+            s->release();
+            PxRigidBodyExt::updateMassAndInertia(*link, density);
+
+            PxArticulationJointReducedCoordinate* joint = nullptr;
+            if (parentLink) {
+                joint = link->getInboundJoint();
+                joint->setJointType(PxArticulationJointType::eREVOLUTE);
+                // Joint frame in world space: origin at the hinge anchor, X axis
+                // along the hinge axis (eTWIST rotates about X).
+                const PxTransform jointWorld(toPxVec3(Vector3(anchor[0], anchor[1], anchor[2])),
+                                             shortestArc(PxVec3(1, 0, 0), toPxVec3(Vector3(axis[0], axis[1], axis[2]))));
+                joint->setParentPose(parent->creationPose().getInverse() * jointWorld);
+                joint->setChildPose(linkPose.getInverse() * jointWorld);
+                joint->setMotion(PxArticulationAxis::eTWIST,
+                                 limited ? PxArticulationMotion::eLIMITED : PxArticulationMotion::eFREE);
+                if (limited) joint->setLimitParams(PxArticulationAxis::eTWIST, PxArticulationLimit(lower, upper));
+                if (stiffness > 0.f || damping > 0.f) {
+                    joint->setDriveParams(PxArticulationAxis::eTWIST,
+                                          PxArticulationDrive(stiffness, damping, maxForce, PxArticulationDriveType::eFORCE));
+                    joint->setDriveTarget(PxArticulationAxis::eTWIST, driveTarget, false);// autowake=false: pre-scene
+                }
+            }
+            // A PxArticulationLink is a PxRigidActor, so the rigid-body bind path
+            // syncs the visual mesh to the simulated link pose.
+            world_.bind(mesh, *link);
+            return ArticulationLink(link, joint, linkPose);
+        }
+
+        void finalize() {
+            if (finalized_) return;
+            world_.scene().addArticulation(*art_);
+            finalized_ = true;
+        }
+
+    private:
+        PhysxWorld& world_;
+        PxArticulationReducedCoordinate* art_ = nullptr;
+        bool finalized_ = false;
+    };
+
 }// namespace
 
 namespace threepp_py {
@@ -103,6 +262,49 @@ namespace threepp_py {
                      "Toggle kinematic mode: the body is driven by set_kinematic_target and ignores forces/gravity.")
                 .def("set_kinematic_target", &RigidBody::setKinematicTarget,
                      py::arg("position"), py::arg("quaternion") = Quaternion());
+
+        py::class_<ArticulationLink>(m, "ArticulationLink",
+                                     "A link of an Articulation plus its inbound revolute joint (the root has "
+                                     "none). Valid while its Articulation/world live.")
+                .def_property_readonly("is_root", &ArticulationLink::is_root)
+                .def_property_readonly("position", &ArticulationLink::position)
+                .def_property_readonly("quaternion", &ArticulationLink::quaternion)
+                .def_property_readonly("joint_position", &ArticulationLink::joint_position, "Joint angle (radians).")
+                .def_property_readonly("joint_velocity", &ArticulationLink::joint_velocity, "Joint angular velocity (rad/s).")
+                .def("set_drive_target", &ArticulationLink::set_drive_target, py::arg("target"),
+                     "Set the PD drive's target angle (radians).")
+                .def("set_drive_velocity", &ArticulationLink::set_drive_velocity, py::arg("velocity"));
+
+        py::class_<Articulation>(m, "Articulation",
+                                 "A reduced-coordinate articulation (robot): a tree of links joined by "
+                                 "motorized revolute joints. Build with add_link (root first), then "
+                                 "finalize(); stepping the world drives the bound meshes.")
+                .def("add_link",
+                     [](Articulation& a, Mesh& mesh, const py::object& parent, float density,
+                        const std::array<float, 3>& axis, const std::array<float, 3>& anchor,
+                        const py::object& lower, const py::object& upper,
+                        float stiffness, float damping, float max_force, float drive_target) {
+                         ArticulationLink* p = parent.is_none() ? nullptr : parent.cast<ArticulationLink*>();
+                         const bool limited = !lower.is_none() && !upper.is_none();
+                         const float lo = limited ? lower.cast<float>() : 0.f;
+                         const float hi = limited ? upper.cast<float>() : 0.f;
+                         return a.add_link(p, mesh, density, axis, anchor, limited, lo, hi,
+                                           stiffness, damping, max_force, drive_target);
+                     },
+                     py::arg("mesh"), py::arg("parent") = py::none(), py::arg("density") = 1000.f,
+                     py::arg("axis") = std::array<float, 3>{0.f, 0.f, 1.f},
+                     py::arg("anchor") = std::array<float, 3>{0.f, 0.f, 0.f},
+                     py::arg("lower") = py::none(), py::arg("upper") = py::none(),
+                     py::arg("stiffness") = 0.f, py::arg("damping") = 0.f,
+                     py::arg("max_force") = 1e6f, py::arg("drive_target") = 0.f,
+                     py::keep_alive<1, 2>(), py::keep_alive<0, 1>(),
+                     "Add a link. parent=None → the fixed/free root; otherwise attach a revolute inbound "
+                     "joint at world-space `anchor` about world-space `axis`. lower/upper (radians) set the "
+                     "joint limits (omit both for a free axis); stiffness/damping/max_force configure the PD "
+                     "position drive (stiffness>0 motorizes it). Shape is inferred from the mesh "
+                     "(Box/Sphere/Capsule). Returns an ArticulationLink.")
+                .def("finalize", &Articulation::finalize,
+                     "Add the finished articulation to the scene. No links may be added afterwards.");
 
         py::class_<PhysxWorld>(m, "PhysxWorld",
                                "A PhysX rigid-body world wired to the threepp scene graph. Add meshes as "
@@ -184,7 +386,16 @@ namespace threepp_py {
                      [](PhysxWorld& w, py::function cb) {
                          w.onPostSubstep([cb](float dt) { py::gil_scoped_acquire g; cb(dt); });
                      },
-                     py::arg("callback"), "Register callback(dt) fired after each fixed substep.");
+                     py::arg("callback"), "Register callback(dt) fired after each fixed substep.")
+                .def("create_articulation",
+                     [](PhysxWorld& w, bool fixed_base, int solver_position_iterations, bool disable_self_collision) {
+                         return std::make_unique<Articulation>(w, fixed_base, solver_position_iterations, disable_self_collision);
+                     },
+                     py::arg("fixed_base") = false, py::arg("solver_position_iterations") = 8,
+                     py::arg("disable_self_collision") = false, py::keep_alive<0, 1>(),
+                     "Create a reduced-coordinate articulation (robot). fixed_base pins the root to the "
+                     "world (use for arms; leave false for free-floating bodies like a walking robot). "
+                     "Add links, then call finalize().");
 
         m.attr("HAS_PHYSX") = true;
     }

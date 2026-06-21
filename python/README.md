@@ -56,6 +56,7 @@ display is only required for the on-screen examples.
 | [`examples/ui_demo.py`](examples/ui_demo.py) | In-window Dear ImGui control panel (sliders/buttons) driving the scene live (GL). Needs a display. |
 | [`examples/vulkan_ui.py`](examples/vulkan_ui.py) | The same ImGui control panel, over the **Vulkan** deferred renderer. Needs a Vulkan build + display. |
 | [`examples/physics_demo.py`](examples/physics_demo.py) | A pile of boxes tumbling onto the floor — `PhysxWorld` rigid bodies driving the scene graph. Needs a PhysX build + display. |
+| [`examples/spider/spider_demo.py`](examples/spider/spider_demo.py) | **Drive a physics hexapod with WASD** — an articulated robot walking via a CPG tripod gait (no training). Needs a PhysX build + display. |
 | [`examples/smoke_test.py`](examples/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
 
 ```sh

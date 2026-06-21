@@ -10,13 +10,37 @@
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/controls/OrbitControls.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/input/KeyListener.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 
+#include <cctype>
 #include <cstring>
+#include <string>
 
 using namespace threepp;
 
 namespace threepp_py {
+
+    // Map a friendly key name ('W', 'a', 'SPACE', 'UP', ...) to threepp's Key enum.
+    // Letters/digits exploit the enum's contiguous A-Z and NUM_0-NUM_9 ranges.
+    static Key keyFromName(std::string n) {
+        for (auto& ch : n) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        if (n.size() == 1 && n[0] >= 'A' && n[0] <= 'Z')
+            return static_cast<Key>(static_cast<int>(Key::A) + (n[0] - 'A'));
+        if (n.size() == 1 && n[0] >= '0' && n[0] <= '9')
+            return static_cast<Key>(static_cast<int>(Key::NUM_0) + (n[0] - '0'));
+        if (n == "SPACE") return Key::SPACE;
+        if (n == "UP") return Key::UP;
+        if (n == "DOWN") return Key::DOWN;
+        if (n == "LEFT") return Key::LEFT;
+        if (n == "RIGHT") return Key::RIGHT;
+        if (n == "ESCAPE" || n == "ESC") return Key::ESCAPE;
+        if (n == "ENTER") return Key::ENTER;
+        if (n == "TAB") return Key::TAB;
+        if (n == "SHIFT") return Key::LEFT_SHIFT;
+        if (n == "CTRL" || n == "CONTROL") return Key::LEFT_CONTROL;
+        return Key::UNKNOWN;
+    }
 
     void init_render(py::module_& m) {
 
@@ -58,6 +82,10 @@ namespace threepp_py {
                 }, py::arg("callback"),
                    "Register callback(width, height), called when the window is resized. Use it to "
                    "update the camera aspect (+ update_projection_matrix) and the renderer size.")
+                .def("is_key_down", [](const Canvas& c, const std::string& key) { return c.isKeyDown(keyFromName(key)); },
+                     py::arg("key"),
+                     "Poll whether a key is currently held — e.g. 'W','A','S','D','SPACE','UP','LEFT'. "
+                     "Query per-frame for continuous controls (WASD driving); never sticks.")
                 .def("is_open", &Canvas::isOpen)
                 .def("close", &Canvas::close);
 
