@@ -72,6 +72,15 @@ def spawn_box():
 for _ in range(35):
     spawn_box()
 
+
+def on_resize(w, h):
+    camera.aspect = w / max(h, 1)
+    camera.update_projection_matrix()
+    renderer.set_size(w, h)
+
+
+canvas.on_window_resize(on_resize)
+
 clock = tp.Clock()
 elapsed = {"t": 0.0}
 

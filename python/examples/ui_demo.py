@@ -49,6 +49,14 @@ ground.rotate_x(-math.pi / 2)
 ground.receive_shadow = True
 scene.add(ground)
 
+def on_resize(w, h):
+    camera.aspect = w / max(h, 1)
+    camera.update_projection_matrix()
+    renderer.set_size(w, h)
+
+
+canvas.on_window_resize(on_resize)
+
 state = {
     "roughness": 0.4, "metalness": 0.1, "color": (1.0, 0.53, 0.0),
     "wireframe": False, "spin": True, "speed": 0.6, "demo": False,

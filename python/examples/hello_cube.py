@@ -43,6 +43,14 @@ for i, color in enumerate((0xff5555, 0x55ff66, 0x5599ff)):
     cubes.add(cube)
 scene.add(cubes)
 
+def on_resize(w, h):
+    camera.aspect = w / max(h, 1)
+    camera.update_projection_matrix()
+    renderer.set_size(w, h)
+
+
+canvas.on_window_resize(on_resize)
+
 clock = tp.Clock()
 
 

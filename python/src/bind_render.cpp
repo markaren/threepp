@@ -53,6 +53,11 @@ namespace threepp_py {
                     }
                 })
                 .def("set_size", [](Canvas& c, int w, int h) { c.setSize({w, h}); }, py::arg("width"), py::arg("height"))
+                .def("on_window_resize", [](Canvas& c, const std::function<void(int, int)>& cb) {
+                    c.onWindowResize([cb](WindowSize s) { cb(s.width(), s.height()); });
+                }, py::arg("callback"),
+                   "Register callback(width, height), called when the window is resized. Use it to "
+                   "update the camera aspect (+ update_projection_matrix) and the renderer size.")
                 .def("is_open", &Canvas::isOpen)
                 .def("close", &Canvas::close);
 

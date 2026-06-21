@@ -57,3 +57,24 @@ def test_read_pixels_flip_orientation(renderer, lit_scene):
     bottom_up = renderer.read_pixels(flip=False)
     assert top_down.shape == bottom_up.shape
     assert not (top_down == bottom_up).all()
+
+
+def test_on_window_resize_registers():
+    # Registering a resize callback must not raise. (No event fires for a headless
+    # canvas, but this pins the binding the interactive demos rely on.)
+    canvas = tp.Canvas("resize-reg", width=64, height=64, headless=True)
+    canvas.on_window_resize(lambda w, h: None)
+
+
+def test_resize_handler_operations(renderer):
+    # The work an on_window_resize handler does: resize the renderer + fix the
+    # camera aspect. Restores the session renderer's size afterwards.
+    try:
+        renderer.set_size(320, 240)
+        assert renderer.size() == (320, 240)
+        cam = tp.PerspectiveCamera(60, 1.0, 0.1, 100)
+        cam.aspect = 320 / 240
+        cam.update_projection_matrix()
+        assert abs(cam.aspect - 320 / 240) < 1e-5
+    finally:
+        renderer.set_size(200, 150)  # restore the shared fixture's size

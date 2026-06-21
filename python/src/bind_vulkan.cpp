@@ -128,6 +128,7 @@ namespace {
 
         void set_clear_color(const Color& c, float alpha) { renderer_.setClearColor(c, alpha); }
         void set_flush_frames(int n) { flush_ = n < 1 ? 1 : n; }
+        void set_size(int w, int h) { renderer_.setSize({w, h}); }
 
         std::pair<int, int> size() const {
             const auto s = renderer_.framebufferSize();
@@ -202,6 +203,9 @@ namespace threepp_py {
                 .def("set_flush_frames", &PyVulkanRenderer::set_flush_frames, py::arg("n"),
                      "Frames driven per render() to flush the MAILBOX swapchain (default 3; "
                      "raise to 4+ for fast-moving dynamic scenes).")
+                .def("set_size", &PyVulkanRenderer::set_size, py::arg("width"), py::arg("height"),
+                     "Resize the renderer's framebuffer/swapchain — call this from "
+                     "canvas.on_window_resize together with updating the camera aspect.")
                 .def("save_frame", &PyVulkanRenderer::save_frame, py::arg("scene"), py::arg("camera"), py::arg("path"))
                 .def("size", &PyVulkanRenderer::size);
 

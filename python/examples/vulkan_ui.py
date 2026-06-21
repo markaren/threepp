@@ -47,6 +47,14 @@ ground.position.y = -1.6
 ground.rotate_x(-math.pi / 2)
 scene.add(ground)
 
+def on_resize(w, h):
+    camera.aspect = w / max(h, 1)
+    camera.update_projection_matrix()
+    renderer.set_size(w, h)
+
+
+canvas.on_window_resize(on_resize)
+
 state = {"roughness": 0.4, "metalness": 0.2, "color": (1.0, 0.53, 0.0), "spin": True, "speed": 0.6}
 clock = tp.Clock()
 
