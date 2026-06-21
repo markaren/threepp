@@ -35,6 +35,25 @@ RESIDUAL_SCALE = 0.28   # action [-1,1] -> joint-target residual (rad); shared w
 START = (0.0, 0.40, 0.0)
 
 
+def compute_reward(spider, vel_xz, yawrate, command, action):
+    """Reward + fell flag, shared by the single env and the vectorized env."""
+    f = spider.forward
+    fl = math.hypot(f.x, f.z) or 1.0
+    fx, fz = f.x / fl, f.z / fl
+    v_fwd = vel_xz[0] * fx + vel_xz[1] * fz
+    v_lat = vel_xz[0] * fz - vel_xz[1] * fx
+    tgt_v = float(command[0]) * MAX_SPEED
+    tgt_w = float(command[1]) * MAX_YAW
+    up = spider.up_y
+    r = (2.0 * math.exp(-4.0 * (v_fwd - tgt_v) ** 2)
+         + 1.0 * math.exp(-2.0 * (yawrate - tgt_w) ** 2)
+         + 0.3 * max(0.0, up)
+         + 0.1                                       # alive bonus
+         - 0.03 * float(np.mean(np.square(action)))  # effort
+         - 0.2 * abs(v_lat))                         # sideways drift
+    return r, up < 0.4
+
+
 def make_observation(spider, vel_xz, yawrate, command):
     """The 34-d observation, shared by the env and the play script so they match."""
     pos, vel = spider.joint_states()
@@ -140,22 +159,7 @@ class HexapodEnv(_Base):
         if self._steps % self.command_hold == 0:
             self.command = self._sample_command()  # track changing commands
 
-        # reward
-        f = self.spider.forward
-        fl = math.hypot(f.x, f.z) or 1.0
-        fx, fz = f.x / fl, f.z / fl
-        v_fwd = self._vel[0] * fx + self._vel[1] * fz
-        v_lat = self._vel[0] * fz - self._vel[1] * fx
-        tgt_v = float(self.command[0]) * MAX_SPEED
-        tgt_w = float(self.command[1]) * MAX_YAW
-        up = self.spider.up_y
-        r = (2.0 * math.exp(-4.0 * (v_fwd - tgt_v) ** 2)
-             + 1.0 * math.exp(-2.0 * (self._yawrate - tgt_w) ** 2)
-             + 0.3 * max(0.0, up)
-             + 0.1                                   # alive bonus
-             - 0.03 * float(np.mean(action ** 2))    # effort
-             - 0.2 * abs(v_lat))                     # sideways drift
-        fell = up < 0.4
+        r, fell = compute_reward(self.spider, self._vel, self._yawrate, self.command, action)
         terminated = bool(fell)
         truncated = self._steps >= self.max_steps
         if fell:

@@ -57,7 +57,7 @@ display is only required for the on-screen examples.
 | [`examples/vulkan_ui.py`](examples/vulkan_ui.py) | The same ImGui control panel, over the **Vulkan** deferred renderer. Needs a Vulkan build + display. |
 | [`examples/physics_demo.py`](examples/physics_demo.py) | A pile of boxes tumbling onto the floor — `PhysxWorld` rigid bodies driving the scene graph. Needs a PhysX build + display. |
 | [`examples/spider/spider_demo.py`](examples/spider/spider_demo.py) | **Drive a physics hexapod with WASD** — an articulated robot walking via a CPG tripod gait (no training). Needs a PhysX build + display. |
-| [`examples/spider/train.py`](examples/spider/train.py) / [`play.py`](examples/spider/play.py) | Residual RL on the gait: a Gymnasium env + SB3 PPO (`train.py`), then drive the trained policy with WASD (`play.py`). Needs `gymnasium`, `stable-baselines3`. |
+| [`examples/spider/train_vec.py`](examples/spider/train_vec.py) / [`play.py`](examples/spider/play.py) | Residual RL on the gait. `train_vec.py` runs **K robots in one PhysX scene** (one `world.step()` for all of them, ~7–35× faster than separate processes); `play.py` drives the trained policy with WASD. `train.py` is the slower `SubprocVecEnv` variant. Needs `gymnasium`, `stable-baselines3`. |
 | [`examples/smoke_test.py`](examples/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
 
 ```sh
