@@ -16,7 +16,38 @@
 
 namespace tp = threepp_py;
 
+#ifdef _WIN32
+#include <windows.h>
+namespace {
+    // PhysX loads its GPU module (PhysXGpu_64.dll, staged next to this .pyd by the
+    // build) at runtime via a bare-name LoadLibrary, which searches python.exe's
+    // directory + CWD + PATH — none of which is the extension's directory. Register
+    // the module's own folder on the DLL search path at import time so GPU dynamics
+    // work regardless of the process working directory.
+    void register_module_dll_dir() {
+        HMODULE self = nullptr;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                reinterpret_cast<LPCWSTR>(&register_module_dll_dir), &self))
+            return;
+        wchar_t path[MAX_PATH];
+        const DWORD n = GetModuleFileNameW(self, path, MAX_PATH);
+        if (n == 0 || n >= MAX_PATH) return;
+        for (DWORD i = n; i-- > 0;) {
+            if (path[i] == L'\\' || path[i] == L'/') {
+                path[i] = 0;
+                break;
+            }
+        }
+        SetDllDirectoryW(path);
+    }
+}// namespace
+#endif
+
 PYBIND11_MODULE(threepp, m) {
+#ifdef _WIN32
+    register_module_dll_dir();
+#endif
     m.doc() = "threepp — a cross-platform C++ 3D library with the high-level API "
               "of three.js, exposed to Python (scene graph, geometries, materials, "
               "cameras, lights, OpenGL renderer + headless render-to-numpy).";

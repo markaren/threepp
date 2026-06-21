@@ -25,6 +25,7 @@
 #include <pybind11/stl.h>
 
 #include "threepp/core/Object3D.hpp"
+#include "threepp/extras/physx/PhysxGpuBatch.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Vector3.hpp"
@@ -34,6 +35,8 @@
 #include <PxPhysicsAPI.h>
 
 #include <array>
+#include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 
@@ -250,6 +253,11 @@ namespace {
             finalized_ = true;
         }
 
+        // Underlying PhysX articulation — used to assemble a PhysxGpuBatch over many
+        // identical robots for GPU-resident vectorized stepping.
+        PxArticulationReducedCoordinate* raw_art() const { return art_; }
+        bool finalized() const { return finalized_; }
+
         // Batched joint I/O — one call reads/writes every revolute joint (in
         // add_link order), instead of a Python call per joint. This is the hot
         // path for vectorized RL: it collapses ~36 pybind calls per robot per
@@ -271,8 +279,34 @@ namespace {
         void set_drive_targets(const py::array_t<float>& arr) {
             auto r = arr.unchecked<1>();
             const size_t n = std::min<size_t>(joints_.size(), static_cast<size_t>(r.shape(0)));
+            // autowake=true on the last write: a policy that drives a settled robot
+            // (e.g. after a reset/settle) must wake it, or the targets are ignored and
+            // the articulation stays frozen at its rest pose.
             for (size_t i = 0; i < n; ++i)
-                joints_[i]->setDriveTarget(PxArticulationAxis::eTWIST, r(i), false);
+                joints_[i]->setDriveTarget(PxArticulationAxis::eTWIST, r(i), i + 1 == n);
+        }
+
+        // For each joint (in add-order, the order joint_positions()/set_drive_targets use),
+        // its low-level DOF slot — the index it occupies in the direct-GPU joint buffers
+        // (PhysxGpuBatch), which follow PhysX's cache layout, NOT add-order. Use this to
+        // reconcile a GPU-trained policy (GPU-DOF order) with the CPU getters (add-order):
+        // obs_gpu[dof_order[i]] = cpu_value[i];  cpu_target[i] = gpu_target[dof_order[i]].
+        py::array_t<int> dof_order() const {
+            const size_t n = joints_.size();
+            // GPU/cache DOF order follows ascending low-level link index, one DOF per
+            // revolute link. So a joint's GPU slot = the rank of its child link's index.
+            std::vector<PxU32> linkIdx(n);
+            for (size_t i = 0; i < n; ++i)
+                linkIdx[i] = joints_[i]->getChildArticulationLink().getLinkIndex();
+            py::array_t<int> a(static_cast<py::ssize_t>(n));
+            int* p = a.mutable_data();
+            for (size_t i = 0; i < n; ++i) {
+                int rank = 0;
+                for (size_t j = 0; j < n; ++j)
+                    if (linkIdx[j] < linkIdx[i]) ++rank;
+                p[i] = rank;
+            }
+            return a;
         }
 
         // Root link world pose as one array [px,py,pz, qx,qy,qz,qw] — one call
@@ -380,20 +414,27 @@ namespace threepp_py {
                      "Set every joint's PD drive target from one numpy array — the batched hot path "
                      "for vectorized stepping (one call instead of one per joint).")
                 .def("root_state", &Articulation::root_state,
-                     "Root link world pose as numpy [px,py,pz, qx,qy,qz,qw] in one call.");
+                     "Root link world pose as numpy [px,py,pz, qx,qy,qz,qw] in one call.")
+                .def("dof_order", &Articulation::dof_order,
+                     "Per add-order joint, its low-level DOF slot in the direct-GPU joint buffers "
+                     "(PhysX cache order != add-order). Use to map a GPU-trained policy back to the "
+                     "CPU getters: obs_gpu[dof_order[i]] = cpu[i]; cpu_target[i] = gpu_target[dof_order[i]].");
 
         py::class_<PhysxWorld>(m, "PhysxWorld",
                                "A PhysX rigid-body world wired to the threepp scene graph. Add meshes as "
                                "bodies, then call step(dt) each frame; every bound mesh's position/quaternion "
                                "follows the simulation. Pure CPU — no canvas or renderer required.")
                 .def(py::init([](const Vector3& gravity, float fixed_timestep, int max_substeps,
-                                 unsigned num_threads, bool gpu_dynamics) {
+                                 unsigned num_threads, bool gpu_dynamics, bool direct_gpu,
+                                 std::uintptr_t cuda_context) {
                          PhysxWorld::Settings s;
                          s.gravity = gravity;
                          s.fixedTimestep = fixed_timestep;
                          s.maxSubSteps = max_substeps;
                          s.numThreads = num_threads;
                          s.enableGpuDynamics = gpu_dynamics;
+                         s.enableDirectGpu = direct_gpu;
+                         s.cudaContext = reinterpret_cast<CUcontext>(cuda_context);
                          return std::make_unique<PhysxWorld>(s);
                      }),
                      py::arg("gravity") = Vector3(0, -9.81f, 0),
@@ -401,7 +442,15 @@ namespace threepp_py {
                      py::arg("max_substeps") = 4,
                      py::arg("num_threads") = 2,
                      py::arg("gpu_dynamics") = false,
-                     "gpu_dynamics requires a CUDA GPU and is only needed for soft bodies (not yet exposed).")
+                     py::arg("direct_gpu") = false,
+                     py::arg("cuda_context") = 0,
+                     "gpu_dynamics requires a CUDA GPU (needed for soft bodies). direct_gpu also "
+                     "enables the PhysX direct-GPU API for batched GPU-resident articulation state "
+                     "I/O (PhysxGpuBatch) — the basis for GPU vectorized RL. Under direct_gpu the "
+                     "per-actor CPU getters and the binding-sync step() are NOT valid. cuda_context "
+                     "(an existing CUcontext as an int, e.g. torch's primary context) makes PhysX "
+                     "share that context instead of creating its own — required to mix PhysX GPU work "
+                     "with the framework's cuBLAS/cuDNN on the same device.")
                 .def("step", &PhysxWorld::step, py::arg("dt"),
                      "Advance the simulation by dt seconds (variable-rate caller, fixed-rate physics). "
                      "After it returns, every bound mesh's transform reflects the new state.")
@@ -472,6 +521,91 @@ namespace threepp_py {
                      "Create a reduced-coordinate articulation (robot). fixed_base pins the root to the "
                      "world (use for arms; leave false for free-floating bodies like a walking robot). "
                      "Add links, then call finalize().");
+
+        // GPU-resident batched articulation state I/O (the direct-GPU API). Build one
+        // over many identical finalized articulations in a PhysxWorld(direct_gpu=True),
+        // then drive the whole swarm with read_*/write_* + step — no CPU readback.
+        using Read = threepp::PhysxGpuBatch::Read;
+        using Write = threepp::PhysxGpuBatch::Write;
+        auto reshape = [](std::vector<float>&& flat, py::ssize_t n, py::ssize_t block) {
+            py::array_t<float> a({n, block});
+            std::memcpy(a.mutable_data(), flat.data(), flat.size() * sizeof(float));
+            return a;
+        };
+        py::class_<threepp::PhysxGpuBatch>(m, "PhysxGpuBatch",
+                "Batched GPU-resident state I/O over many reduced-coordinate articulations in one "
+                "direct-GPU scene. The read_*/write_* methods take a CUDA device pointer (e.g. a torch "
+                "cuda tensor's .data_ptr()) and move ALL robots' state in a single call with no CPU "
+                "readback; *_host variants stage through numpy for debugging. Requires "
+                "PhysxWorld(direct_gpu=True) and finalized articulations.")
+                .def(py::init([](PhysxWorld& world, const py::iterable& arts) {
+                         std::vector<PxArticulationReducedCoordinate*> raw;
+                         for (auto h : arts) {
+                             auto* a = h.cast<Articulation*>();
+                             if (!a->finalized()) throw std::runtime_error("PhysxGpuBatch: articulation not finalized()");
+                             raw.push_back(a->raw_art());
+                         }
+                         return std::make_unique<threepp::PhysxGpuBatch>(world, std::move(raw));
+                     }),
+                     py::arg("world"), py::arg("articulations"), py::keep_alive<1, 2>(),
+                     "world must be created with direct_gpu=True and outlive this batch.")
+                .def_property_readonly("count", [](threepp::PhysxGpuBatch& b) { return b.count(); })
+                .def_property_readonly("max_dofs", [](threepp::PhysxGpuBatch& b) { return b.maxDofs(); })
+                .def("step", &threepp::PhysxGpuBatch::step, py::arg("dt"),
+                     "Advance every articulation one substep on the GPU (no binding sync).")
+                // --- zero-copy device-pointer path (pass tensor.data_ptr()) ---
+                .def("read_joint_pos", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
+                         b.read(static_cast<CUdeviceptr>(p), Read::eJOINT_POSITION); },
+                     py::arg("cuda_ptr"), "Fill [n, max_dofs] joint positions into the device buffer.")
+                .def("read_joint_vel", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
+                         b.read(static_cast<CUdeviceptr>(p), Read::eJOINT_VELOCITY); },
+                     py::arg("cuda_ptr"), "Fill [n, max_dofs] joint velocities into the device buffer.")
+                .def("read_root_pose", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
+                         b.read(static_cast<CUdeviceptr>(p), Read::eROOT_GLOBAL_POSE); },
+                     py::arg("cuda_ptr"), "Fill [n, 7] root pose [qx,qy,qz,qw,px,py,pz] into the device buffer.")
+                .def("read_root_linvel", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
+                         b.read(static_cast<CUdeviceptr>(p), Read::eROOT_LINEAR_VELOCITY); },
+                     py::arg("cuda_ptr"), "Fill [n, 3] root linear velocity into the device buffer.")
+                .def("read_root_angvel", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
+                         b.read(static_cast<CUdeviceptr>(p), Read::eROOT_ANGULAR_VELOCITY); },
+                     py::arg("cuda_ptr"), "Fill [n, 3] root angular velocity into the device buffer.")
+                .def("write_joint_target_pos", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
+                         b.write(static_cast<CUdeviceptr>(p), Write::eJOINT_TARGET_POSITION); },
+                     py::arg("cuda_ptr"), "Set all joints' PD position targets from the [n, max_dofs] device buffer.")
+                // --- subset reset (done envs only) ---
+                .def("write_subset_joint_pos", [](threepp::PhysxGpuBatch& b, std::uintptr_t src, std::uintptr_t idx, ::physx::PxU32 nb) {
+                         b.writeSubset(static_cast<CUdeviceptr>(src), static_cast<CUdeviceptr>(idx), Write::eJOINT_POSITION, nb); },
+                     py::arg("src_ptr"), py::arg("indices_ptr"), py::arg("nb"))
+                .def("write_subset_joint_vel", [](threepp::PhysxGpuBatch& b, std::uintptr_t src, std::uintptr_t idx, ::physx::PxU32 nb) {
+                         b.writeSubset(static_cast<CUdeviceptr>(src), static_cast<CUdeviceptr>(idx), Write::eJOINT_VELOCITY, nb); },
+                     py::arg("src_ptr"), py::arg("indices_ptr"), py::arg("nb"))
+                .def("write_subset_root_pose", [](threepp::PhysxGpuBatch& b, std::uintptr_t src, std::uintptr_t idx, ::physx::PxU32 nb) {
+                         b.writeSubset(static_cast<CUdeviceptr>(src), static_cast<CUdeviceptr>(idx), Write::eROOT_GLOBAL_POSE, nb); },
+                     py::arg("src_ptr"), py::arg("indices_ptr"), py::arg("nb"))
+                .def("write_subset_root_linvel", [](threepp::PhysxGpuBatch& b, std::uintptr_t src, std::uintptr_t idx, ::physx::PxU32 nb) {
+                         b.writeSubset(static_cast<CUdeviceptr>(src), static_cast<CUdeviceptr>(idx), Write::eROOT_LINEAR_VELOCITY, nb); },
+                     py::arg("src_ptr"), py::arg("indices_ptr"), py::arg("nb"))
+                .def("write_subset_root_angvel", [](threepp::PhysxGpuBatch& b, std::uintptr_t src, std::uintptr_t idx, ::physx::PxU32 nb) {
+                         b.writeSubset(static_cast<CUdeviceptr>(src), static_cast<CUdeviceptr>(idx), Write::eROOT_ANGULAR_VELOCITY, nb); },
+                     py::arg("src_ptr"), py::arg("indices_ptr"), py::arg("nb"))
+                .def("gpu_indices", [](threepp::PhysxGpuBatch& b) {
+                         auto idx = b.gpuIndicesHost();
+                         py::array_t<std::uint32_t> a(static_cast<py::ssize_t>(idx.size()));
+                         std::memcpy(a.mutable_data(), idx.data(), idx.size() * sizeof(std::uint32_t));
+                         return a; },
+                     "The K articulation GPU indices as a uint32 numpy array (upload once to build "
+                     "subset-index buffers for resets).")
+                // --- host-staged debug readers (return numpy [n, block]) ---
+                .def("read_joint_pos_host", [reshape](threepp::PhysxGpuBatch& b) {
+                         return reshape(b.readHost(Read::eJOINT_POSITION), b.count(), b.maxDofs()); })
+                .def("read_joint_vel_host", [reshape](threepp::PhysxGpuBatch& b) {
+                         return reshape(b.readHost(Read::eJOINT_VELOCITY), b.count(), b.maxDofs()); })
+                .def("read_root_pose_host", [reshape](threepp::PhysxGpuBatch& b) {
+                         return reshape(b.readHost(Read::eROOT_GLOBAL_POSE), b.count(), 7); })
+                .def("read_root_linvel_host", [reshape](threepp::PhysxGpuBatch& b) {
+                         return reshape(b.readHost(Read::eROOT_LINEAR_VELOCITY), b.count(), 3); })
+                .def("read_root_angvel_host", [reshape](threepp::PhysxGpuBatch& b) {
+                         return reshape(b.readHost(Read::eROOT_ANGULAR_VELOCITY), b.count(), 3); });
 
         m.attr("HAS_PHYSX") = true;
     }
