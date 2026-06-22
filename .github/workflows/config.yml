@@ -260,7 +260,7 @@ jobs:
             -DPYBIND11_FINDPYTHON=ON \
             -DPython_EXECUTABLE=$(which python) \
             -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target threepp_py -j
+          cmake --build build --target threepp_py -j 2
 
       - name: Run binding tests (headless GL under Xvfb)
         working-directory: python
