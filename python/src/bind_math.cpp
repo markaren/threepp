@@ -219,7 +219,13 @@ namespace threepp_py {
                 .def("get_center", py::overload_cast<>(&Box3::getCenter, py::const_))
                 .def("get_size", py::overload_cast<>(&Box3::getSize, py::const_))
                 .def("contains_point", &Box3::containsPoint, py::arg("point"))
-                .def("set_from_object", &Box3::setFromObject, py::arg("object"), py::arg("precise") = false, py::return_value_policy::reference_internal);
+                // Route the object through as_object3d: a direct &Box3::setFromObject
+                // pointer corrupts the argument for virtual-Object3D types
+                // (Mesh/Points/Line) → "no RTTI data" crash. Group/Scene worked by
+                // luck (non-virtual base); this makes any Object3D safe.
+                .def("set_from_object", [](Box3& b, const py::object& obj, bool precise) -> Box3& {
+                    return b.setFromObject(*as_object3d(obj), precise);
+                }, py::arg("object"), py::arg("precise") = false, py::return_value_policy::reference_internal);
     }
 
 }// namespace threepp_py

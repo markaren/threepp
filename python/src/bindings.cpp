@@ -61,10 +61,11 @@ PYBIND11_MODULE(threepp, m) {
     tp::init_geometries(m);
     tp::init_materials(m);
     tp::init_objects(m);
+    tp::init_animation(m);// before loaders: GLTFResult.animations is a list of AnimationClip
     tp::init_cameras(m);
     tp::init_lights(m);
     tp::init_render(m);
-    tp::init_loaders(m);// returns Group/Texture/BufferGeometry
+    tp::init_loaders(m);// returns Group/Texture/BufferGeometry + GLTFResult
     tp::init_vulkan(m); // optional deferred renderer + G-buffer AOVs
     tp::init_imgui(m);  // optional Dear ImGui UI (GL backend)
     tp::init_physx(m);  // optional PhysX rigid-body world

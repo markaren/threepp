@@ -88,7 +88,23 @@ python examples/headless_render.py
   with `TextureWrapping` / `Filter` / `ColorSpace` enums.
 - **Model loaders**: `ModelLoader` (`load(path)` → `Group`, dispatches by
   extension: `.obj` / `.gltf` / `.glb` / `.stl` / `.dae`), plus `OBJLoader`,
-  `STLLoader`, `GLTFLoader` directly. All first-party — no Assimp/FBX/USD needed.
+  `STLLoader`, and `GLTFLoader` (`load(path)` → `GLTFResult` with `.scene` and
+  `.animations`). All first-party — no Assimp/FBX/USD needed.
+- **Animation**: `AnimationMixer`, `AnimationClip`, `AnimationAction`, the
+  `KeyframeTrack` family (`Vector`/`Quaternion`/`Number`/`Color`), and the `Loop`
+  / `AnimationBlendMode` / `Interpolation` enums — three.js' animation system.
+  Play clips loaded from glTF, or build them procedurally:
+
+  ```python
+  result = tp.GLTFLoader().load("model.glb")
+  scene.add(result.scene)
+  mixer = tp.AnimationMixer(result.scene)
+  mixer.clip_action(result.animations[0]).set_loop(tp.Loop.REPEAT).play()
+
+  clock = tp.Clock()
+  canvas.animate(lambda: (mixer.update(clock.get_delta()),
+                          renderer.render(scene, camera)))
+  ```
 - **Rendering**: `Canvas` (window / headless), `GLRenderer`
   (`render`, `set_clear_color`, `read_pixels` → numpy, `save_frame`, shadows),
   `OrbitControls`, `Clock`.

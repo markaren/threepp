@@ -4,10 +4,130 @@ threepp — a cross-platform C++ 3D library with the high-level API of three.js,
 from __future__ import annotations
 import numpy
 import typing
-__all__: list[str] = ['AmbientLight', 'Background', 'Blending', 'Box3', 'BoxGeometry', 'BufferGeometry', 'Camera', 'Canvas', 'CapsuleGeometry', 'CircleGeometry', 'Clock', 'Color', 'ColorSpace', 'CombineOperation', 'ConeGeometry', 'CylinderGeometry', 'DirectionalLight', 'Euler', 'Filter', 'Fog', 'GLRenderer', 'GLTFLoader', 'Group', 'HAS_VULKAN', 'HemisphereLight', 'IcosahedronGeometry', 'InstancedMesh', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshStandardMaterial', 'ModelLoader', 'OBJLoader', 'Object3D', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'PerspectiveCamera', 'PlaneGeometry', 'PointLight', 'Points', 'PointsMaterial', 'Quaternion', 'RectAreaLight', 'RingGeometry', 'RotationOrder', 'STLLoader', 'Scene', 'ShadowMaterial', 'Side', 'SphereGeometry', 'SpotLight', 'Sprite', 'SpriteMaterial', 'Texture', 'TextureLoader', 'TextureWrapping', 'TorusGeometry', 'TorusKnotGeometry', 'Vector2', 'Vector3', 'Vector4', 'VulkanRenderer']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'Background', 'Blending', 'Box3', 'BoxGeometry', 'BufferGeometry', 'Camera', 'Canvas', 'CapsuleGeometry', 'CircleGeometry', 'Clock', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'ConeGeometry', 'CylinderGeometry', 'DirectionalLight', 'Euler', 'Filter', 'Fog', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'Group', 'HAS_VULKAN', 'HemisphereLight', 'IcosahedronGeometry', 'InstancedMesh', 'Interpolation', 'KeyframeTrack', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'PerspectiveCamera', 'PlaneGeometry', 'PointLight', 'Points', 'PointsMaterial', 'Quaternion', 'QuaternionKeyframeTrack', 'RectAreaLight', 'RingGeometry', 'RotationOrder', 'STLLoader', 'Scene', 'ShadowMaterial', 'Side', 'SphereGeometry', 'SpotLight', 'Sprite', 'SpriteMaterial', 'Texture', 'TextureLoader', 'TextureWrapping', 'TorusGeometry', 'TorusKnotGeometry', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VulkanRenderer']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: float = 1.0) -> None:
         ...
+class AnimationAction:
+    blend_mode: AnimationBlendMode
+    def cross_fade_to(self, other: AnimationAction, duration: float, warp: bool = False) -> AnimationAction:
+        ...
+    def fade_in(self, duration: float) -> AnimationAction:
+        ...
+    def fade_out(self, duration: float) -> AnimationAction:
+        ...
+    def get_effective_time_scale(self) -> float:
+        ...
+    def get_effective_weight(self) -> float:
+        ...
+    def halt(self, duration: float) -> AnimationAction:
+        ...
+    def is_running(self) -> bool:
+        ...
+    def is_scheduled(self) -> bool:
+        ...
+    def play(self) -> AnimationAction:
+        ...
+    def reset(self) -> AnimationAction:
+        ...
+    def set_duration(self, duration: float) -> AnimationAction:
+        ...
+    def set_effective_time_scale(self, time_scale: float) -> AnimationAction:
+        ...
+    def set_effective_weight(self, weight: float) -> AnimationAction:
+        ...
+    def set_loop(self, mode: Loop, repetitions: int = -1) -> AnimationAction:
+        ...
+    def start_at(self, time: float) -> AnimationAction:
+        ...
+    def stop(self) -> AnimationAction:
+        ...
+    def stop_fading(self) -> AnimationAction:
+        ...
+    def stop_warping(self) -> AnimationAction:
+        ...
+    def sync_with(self, action: AnimationAction) -> AnimationAction:
+        ...
+    def warp(self, start_time_scale: float, end_time_scale: float, duration: float) -> AnimationAction:
+        ...
+class AnimationBlendMode:
+    """
+    Members:
+
+      NORMAL
+
+      ADDITIVE
+    """
+    ADDITIVE: typing.ClassVar[AnimationBlendMode]  # value = <AnimationBlendMode.ADDITIVE: 1>
+    NORMAL: typing.ClassVar[AnimationBlendMode]  # value = <AnimationBlendMode.NORMAL: 0>
+    __members__: typing.ClassVar[dict[str, AnimationBlendMode]]  # value = {'NORMAL': <AnimationBlendMode.NORMAL: 0>, 'ADDITIVE': <AnimationBlendMode.ADDITIVE: 1>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: int) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: int) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class AnimationClip:
+    blend_mode: AnimationBlendMode
+    @staticmethod
+    def find_by_name(clips: list[AnimationClip], name: str) -> AnimationClip:
+        ...
+    def __init__(self, name: str, duration: float = 1.0, tracks: list[KeyframeTrack] = [], blend_mode: AnimationBlendMode = ...) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def make_additive(self) -> None:
+        """
+        Convert every track to additive form and mark the clip Additive.
+        """
+    def reset_duration(self) -> None:
+        """
+        Recompute duration as the maximum track end time.
+        """
+    @property
+    def duration(self) -> float:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def uuid(self) -> str:
+        ...
+class AnimationMixer:
+    time: float
+    time_scale: float
+    def __init__(self, root: typing.Any) -> None:
+        ...
+    def clip_action(self, clip: AnimationClip, blend_mode: AnimationBlendMode | None = None) -> AnimationAction:
+        """
+        Return (creating if needed) the AnimationAction for a clip on this mixer's root.
+        """
+    def stop_all_action(self) -> None:
+        ...
+    def update(self, dt: float) -> None:
+        """
+        Advance all active actions by dt seconds and write the result into the scene graph.
+        """
 class Background:
     @typing.overload
     def __init__(self, color: int) -> None:
@@ -87,7 +207,7 @@ class Box3:
         ...
     def min(self) -> Vector3:
         ...
-    def set_from_object(self, object: ..., precise: bool = False) -> Box3:
+    def set_from_object(self, object: typing.Any, precise: bool = False) -> Box3:
         ...
 class BoxGeometry(BufferGeometry):
     def __init__(self, width: float = 1.0, height: float = 1.0, depth: float = 1.0, width_segments: int = 1, height_segments: int = 1, depth_segments: int = 1) -> None:
@@ -217,6 +337,9 @@ class Color:
     def set_rgb(self, r: float, g: float, b: float) -> Color:
         ...
     def set_style(self, style: str) -> Color:
+        ...
+class ColorKeyframeTrack(KeyframeTrack):
+    def __init__(self, name: str, times: list[float], values: list[float], interpolation: Interpolation | None = None) -> None:
         ...
 class ColorSpace:
     """
@@ -402,8 +525,26 @@ class GLRenderer:
 class GLTFLoader:
     def __init__(self) -> None:
         ...
-    def load(self, path: str) -> Group:
+    def load(self, path: str) -> GLTFResult:
         ...
+class GLTFResult:
+    def __repr__(self) -> str:
+        ...
+    @property
+    def animations(self) -> list[AnimationClip]:
+        """
+        All AnimationClips in the file.
+        """
+    @property
+    def scene(self) -> Group:
+        """
+        Root Group of the loaded model.
+        """
+    @property
+    def scenes(self) -> list[Group]:
+        """
+        All scenes in the file.
+        """
 class Group(Object3D):
     def __init__(self) -> None:
         ...
@@ -431,6 +572,70 @@ class InstancedMesh(Mesh):
         ...
     @property
     def count(self) -> int:
+        ...
+class Interpolation:
+    """
+    Keyframe interpolation mode.
+
+    Members:
+
+      DISCRETE
+
+      LINEAR
+
+      SMOOTH
+    """
+    DISCRETE: typing.ClassVar[Interpolation]  # value = <Interpolation.DISCRETE: 0>
+    LINEAR: typing.ClassVar[Interpolation]  # value = <Interpolation.LINEAR: 1>
+    SMOOTH: typing.ClassVar[Interpolation]  # value = <Interpolation.SMOOTH: 2>
+    __members__: typing.ClassVar[dict[str, Interpolation]]  # value = {'DISCRETE': <Interpolation.DISCRETE: 0>, 'LINEAR': <Interpolation.LINEAR: 1>, 'SMOOTH': <Interpolation.SMOOTH: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: int) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: int) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class KeyframeTrack:
+    def make_additive(self) -> None:
+        """
+        Convert this track's values to deltas from its first frame (for additive layering).
+        """
+    def set_interpolation(self, interpolation: Interpolation) -> None:
+        ...
+    @property
+    def interpolation(self) -> Interpolation:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def times(self) -> list[float]:
+        ...
+    @property
+    def value_type_name(self) -> str:
+        ...
+    @property
+    def values(self) -> list[float]:
         ...
 class Light(Object3D):
     color: Color
@@ -536,6 +741,48 @@ class LineBasicMaterial(Material):
         ...
 class LineSegments(Line):
     def __init__(self, geometry: BufferGeometry = None, material: typing.Any = None) -> None:
+        ...
+class Loop:
+    """
+    Looping mode for an AnimationAction.
+
+    Members:
+
+      ONCE
+
+      REPEAT
+
+      PING_PONG
+    """
+    ONCE: typing.ClassVar[Loop]  # value = <Loop.ONCE: 2200>
+    PING_PONG: typing.ClassVar[Loop]  # value = <Loop.PING_PONG: 2202>
+    REPEAT: typing.ClassVar[Loop]  # value = <Loop.REPEAT: 2201>
+    __members__: typing.ClassVar[dict[str, Loop]]  # value = {'ONCE': <Loop.ONCE: 2200>, 'REPEAT': <Loop.REPEAT: 2201>, 'PING_PONG': <Loop.PING_PONG: 2202>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: int) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: int) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class Mapping:
     """
@@ -879,6 +1126,9 @@ class ModelLoader:
         """
     def set_ignore_up_direction(self, ignore: bool) -> None:
         ...
+class NumberKeyframeTrack(KeyframeTrack):
+    def __init__(self, name: str, times: list[float], values: list[float], interpolation: Interpolation | None = None) -> None:
+        ...
 class OBJLoader:
     def __init__(self) -> None:
         ...
@@ -1135,6 +1385,9 @@ class Quaternion:
     def set_from_euler(self, euler: Euler) -> Quaternion:
         ...
     def slerp(self, qb: Quaternion, t: float) -> Quaternion:
+        ...
+class QuaternionKeyframeTrack(KeyframeTrack):
+    def __init__(self, name: str, times: list[float], values: list[float], interpolation: Interpolation | None = None) -> None:
         ...
 class RectAreaLight(Light):
     def __init__(self, color: Color = ..., intensity: float = 1.0, width: float = 1.0, height: float = 1.0) -> None:
@@ -1500,6 +1753,9 @@ class Vector4:
     def __repr__(self) -> str:
         ...
     def set(self, x: float, y: float, z: float, w: float) -> Vector4:
+        ...
+class VectorKeyframeTrack(KeyframeTrack):
+    def __init__(self, name: str, times: list[float], values: list[float], interpolation: Interpolation | None = None) -> None:
         ...
 class VulkanRenderer:
     def __init__(self, canvas: Canvas, flush_frames: int = 3) -> None:

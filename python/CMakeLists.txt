@@ -22,6 +22,7 @@ pybind11_add_module(threepp_py
         src/bind_geometries.cpp
         src/bind_materials.cpp
         src/bind_objects.cpp
+        src/bind_animation.cpp
         src/bind_cameras.cpp
         src/bind_lights.cpp
         src/bind_render.cpp

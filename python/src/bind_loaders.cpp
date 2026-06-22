@@ -3,6 +3,9 @@
 // loaders — no Assimp/FBX/USD required.
 #include "bindings.hpp"
 
+#include <pybind11/stl.h>
+
+#include "threepp/animation/AnimationClip.hpp"
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
@@ -47,12 +50,29 @@ namespace threepp_py {
                 .def(py::init<>())
                 .def("load", [](const STLLoader& l, const std::string& path) { return l.load(path); }, py::arg("path"));
 
-        // ---- GLTFLoader (returns the scene Group) ----------------------------
+        // ---- GLTFResult ------------------------------------------------------
+        // Mirrors three.js' `gltf` object: the loaded scene plus its animation
+        // clips. `scene` is the convenient root; `animations` feeds an
+        // AnimationMixer (see bind_animation.cpp). Returned by GLTFLoader.load.
+        py::class_<GLTFResult>(m, "GLTFResult")
+                .def_readonly("scene", &GLTFResult::scene, "Root Group of the loaded model.")
+                .def_readonly("scenes", &GLTFResult::scenes, "All scenes in the file.")
+                .def_readonly("animations", &GLTFResult::animations, "All AnimationClips in the file.")
+                .def("__repr__", [](const GLTFResult& r) {
+                    return "<threepp.GLTFResult scenes=" + std::to_string(r.scenes.size()) +
+                           " animations=" + std::to_string(r.animations.size()) + ">";
+                });
+
+        // ---- GLTFLoader (returns scene + animations) -------------------------
+        // Unlike ModelLoader (geometry only, returns a Group), GLTFLoader hands
+        // back the full result so animations survive. Raises RuntimeError if the
+        // file can't be loaded.
         py::class_<GLTFLoader>(m, "GLTFLoader")
                 .def(py::init<>())
-                .def("load", [](GLTFLoader& l, const std::string& path) -> std::shared_ptr<Group> {
+                .def("load", [](GLTFLoader& l, const std::string& path) -> GLTFResult {
                     auto result = l.load(path);
-                    return result ? result->scene : nullptr;
+                    if (!result) throw std::runtime_error("GLTFLoader: failed to load '" + path + "'");
+                    return std::move(*result);
                 }, py::arg("path"));
     }
 

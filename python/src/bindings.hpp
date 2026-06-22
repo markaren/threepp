@@ -41,6 +41,7 @@ namespace threepp_py {
     void init_geometries(py::module_& m);
     void init_materials(py::module_& m);
     void init_objects(py::module_& m);
+    void init_animation(py::module_& m);
     void init_cameras(py::module_& m);
     void init_lights(py::module_& m);
     void init_render(py::module_& m);
