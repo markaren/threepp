@@ -128,7 +128,9 @@ def _shape_from_geometry(geom, base_dir):
 
 
 def _link_collider(link, world_T, base_dir):
-    """Build the collider mesh for a link, placed at its world pose. (mesh, volume) or None."""
+    """Build the collider mesh for a link, placed at its world pose.
+    Returns (mesh, volume, link->collider transform) or None. The last item lets a caller
+    place a visual mesh under the collider (the world transform cancels in inv(local) @ visual)."""
     src = link.find("collision")
     if src is None:
         src = link.find("visual")           # fall back to the visual mesh's bbox
@@ -146,12 +148,46 @@ def _link_collider(link, world_T, base_dir):
     mesh.position.set(*[float(v) for v in wp[:3, 3]])
     qx, qy, qz, qw = _quat_from_R(wp[:3, :3])
     mesh.quaternion.set(float(qx), float(qy), float(qz), float(qw))
-    return mesh, vol
+    return mesh, vol, local
 
 
 def _trans(v):
     T = np.eye(4); T[:3, 3] = v
     return T
+
+
+def _attach_visual(collider, collider_local, link, base_dir):
+    """If `link` has a <visual><mesh>, load the real mesh and parent it under `collider` so it
+    tracks the sim, then hide the collider's primitive via its material (the object stays visible
+    so the child still renders). Returns True if a visual was attached.
+
+    `collider_local` is the link-frame -> collider transform from `_link_collider`; the visual's
+    local offset under the collider is inv(collider_local) @ <visual origin>, with the link's
+    world transform cancelling out. .obj/.dae/.stl all load through ModelLoader; ignore_up keeps
+    the mesh in the link frame (URDF owns orientation) instead of applying a file up-axis."""
+    vis = link.find("visual")
+    geom = vis.find("geometry") if vis is not None else None
+    msh = geom.find("mesh") if geom is not None else None
+    if msh is None or not msh.get("filename"):
+        return False
+    path = os.path.join(base_dir, msh.get("filename"))
+    if not os.path.exists(path):
+        return False
+    loader = tp.ModelLoader(); loader.set_ignore_up_direction(True)
+    obj = loader.load(path)                              # Group, or None on failure
+    if obj is None:
+        return False
+    sx, sy, sz = _floats(msh.get("scale"), 3, (1, 1, 1))
+    obj.scale.set(float(sx), float(sy), float(sz))
+    vloc = np.linalg.inv(collider_local) @ _origin_T(vis)
+    obj.position.set(*[float(v) for v in vloc[:3, 3]])
+    qx, qy, qz, qw = _quat_from_R(vloc[:3, :3])
+    obj.quaternion.set(float(qx), float(qy), float(qz), float(qw))
+    obj.traverse(lambda o: setattr(o, "cast_shadow", True))
+    collider.add(obj)
+    collider.cast_shadow = False                        # the visual casts; the hidden box must not
+    collider.material.visible = False
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -182,12 +218,17 @@ class UrdfArticulation:
 # --------------------------------------------------------------------------- #
 def load_articulation(world, path, *, fixed_base=False, base_position=(0, 0, 0),
                       default_density=1000.0, stiffness=0.0, damping=0.0, max_force=1e6,
-                      self_collision=False, solver_position_iterations=12):
+                      self_collision=False, solver_position_iterations=12, render_visuals=True):
     """Import a URDF as a reduced-coordinate `Articulation`. Returns a UrdfArticulation.
 
     The articulation is built at the zero joint configuration. `stiffness`/`damping`/
     `max_force` configure a PD position drive on every actuated joint (leave stiffness
     0 for passive/force-controlled joints). `base_position` places the root link.
+
+    With `render_visuals` (default), each link's `<visual><mesh>` (.obj/.dae/.stl) is loaded and
+    parented under its collider so the robot renders as its real geometry while the primitive
+    colliders (hidden) still drive the physics. Links whose visual fails to load keep the
+    primitive; `robot.meshes[i].material.visible` is True exactly for those fallbacks.
     """
     root_xml = ET.parse(path).getroot()
     base_dir = os.path.dirname(os.path.abspath(path))
@@ -224,8 +265,9 @@ def load_articulation(world, path, *, fixed_base=False, base_position=(0, 0, 0),
             mesh.position.set(*[float(v) for v in world_T[:3, 3]])
             mesh.visible = False
             vol = 4 / 3 * math.pi * 0.02 ** 3
+            local = None
         else:
-            mesh, vol = col
+            mesh, vol, local = col
         density = density_for(links[name], vol)
 
         if inbound is None:                  # root
@@ -248,6 +290,8 @@ def load_articulation(world, path, *, fixed_base=False, base_position=(0, 0, 0),
             joint_names.append(inbound.get("name"))
         art_links[name] = link_obj
         meshes.append(mesh)
+        if render_visuals and local is not None:
+            _attach_visual(mesh, local, links[name], base_dir)
         return name
 
     def walk(name, art_parent, world_T, inbound):

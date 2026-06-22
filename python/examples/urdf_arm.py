@@ -4,10 +4,10 @@
     python urdf_arm.py --urdf <robot.urdf> --shot out.png
 
 Uses threepp.urdf.load_articulation to turn a URDF into a simulatable
-reduced-coordinate articulation (collision via primitives / bounding boxes,
-revolute+prismatic joints with PD drives), then sweeps every joint with a
-phase-shifted sine so you can see it move. Best with a fixed-base arm. Needs a
-PhysX-enabled threepp build (`tp.HAS_PHYSX`).
+reduced-coordinate articulation — the real `<visual>` meshes (.obj/.dae/.stl) are
+rendered over hidden primitive colliders, with revolute+prismatic joints on PD
+drives — then sweeps every joint with a phase-shifted sine so you can see it move.
+Best with a fixed-base arm. Needs a PhysX-enabled threepp build (`tp.HAS_PHYSX`).
 """
 import argparse
 import math
@@ -49,7 +49,8 @@ def main():
     floor.material.color = 0x171b24; floor.material.roughness = 0.95; floor.receive_shadow = True
     scene.add(floor)
     for i, m in enumerate(robot.meshes):
-        m.material.color = PALETTE[i % len(PALETTE)]; m.material.roughness = 0.5; m.cast_shadow = True
+        if m.material.visible:   # primitive fallback (no visual mesh): colour it; visuals keep their own
+            m.material.color = PALETTE[i % len(PALETTE)]; m.material.roughness = 0.5; m.cast_shadow = True
         scene.add(m)
 
     camera = tp.PerspectiveCamera(45, 1.0, 0.01, 100); camera.up.set(0, 0, 1)
