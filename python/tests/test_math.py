@@ -1,8 +1,19 @@
 import math
 
+import numpy as np
 import pytest
 
 import threepp as tp
+
+
+def test_matrix4_to_numpy_row_major():
+    m = tp.Matrix4()
+    m.make_translation(1, 2, 3)
+    a = m.to_numpy()
+    assert a.shape == (4, 4)
+    # standard math layout: translation in the last column, [0,0,0,1] bottom row
+    assert np.allclose(a[:3, 3], [1, 2, 3])
+    assert np.allclose(a[3, :], [0, 0, 0, 1])
 
 
 def test_vector3_basics():

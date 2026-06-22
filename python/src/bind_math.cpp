@@ -6,9 +6,11 @@
 // hands back a reference so `mesh.position.x = 1` mutates in place.
 #include "bindings.hpp"
 
+#include <pybind11/numpy.h>
 #include <pybind11/operators.h>
 #include <pybind11/stl.h>
 
+#include "threepp/cameras/Camera.hpp"// complete type for Vector3::project/unproject
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/Color.hpp"
 #include "threepp/math/Euler.hpp"
@@ -78,6 +80,13 @@ namespace threepp_py {
                 .def("multiply_scalar", &Vector3::multiplyScalar, py::arg("s"), py::return_value_policy::reference_internal)
                 .def("apply_matrix4", &Vector3::applyMatrix4, py::arg("m"), py::return_value_policy::reference_internal)
                 .def("apply_quaternion", &Vector3::applyQuaternion, py::arg("q"), py::return_value_policy::reference_internal)
+                // World point -> NDC ([-1,1]^3) and back. In-place (mutates self,
+                // returns self, like three.js). NDC.x/y map to the viewport with
+                // x_px=(ndc.x*0.5+0.5)*W, y_px=(1-(ndc.y*0.5+0.5))*H. The camera's
+                // matrices must be current — call render(), or update_matrix_world()
+                // + update_projection_matrix(), before projecting.
+                .def("project", [](Vector3& v, const Camera& cam) -> Vector3& { return v.project(cam); }, py::arg("camera"), py::return_value_policy::reference_internal)
+                .def("unproject", [](Vector3& v, const Camera& cam) -> Vector3& { return v.unproject(cam); }, py::arg("camera"), py::return_value_policy::reference_internal)
                 .def("lerp", &Vector3::lerp, py::arg("v"), py::arg("alpha"), py::return_value_policy::reference_internal)
                 .def(py::self + py::self)
                 .def(py::self - py::self)
@@ -191,7 +200,16 @@ namespace threepp_py {
                 .def("invert", &Matrix3::invert, py::return_value_policy::reference_internal)
                 .def("transpose", &Matrix3::transpose, py::return_value_policy::reference_internal)
                 .def("determinant", &Matrix3::determinant)
-                .def("elements", [](const Matrix3& m) { return std::vector<float>(m.elements.begin(), m.elements.end()); });
+                .def("elements", [](const Matrix3& m) { return std::vector<float>(m.elements.begin(), m.elements.end()); })
+                // (3,3) row-major float32 — the standard math layout, so `M @ v`
+                // works directly. (`elements()` is the raw column-major buffer.)
+                .def("to_numpy", [](const Matrix3& m) {
+                    py::array_t<float> a({3, 3});
+                    auto* d = a.mutable_data();
+                    for (int r = 0; r < 3; ++r)
+                        for (int c = 0; c < 3; ++c) d[r * 3 + c] = m.elements[c * 3 + r];
+                    return a;
+                });
 
         py::class_<Matrix4>(m, "Matrix4")
                 .def(py::init<>())
@@ -207,7 +225,17 @@ namespace threepp_py {
                 .def("make_scale", &Matrix4::makeScale, py::arg("x"), py::arg("y"), py::arg("z"), py::return_value_policy::reference_internal)
                 .def("compose", &Matrix4::compose, py::arg("position"), py::arg("quaternion"), py::arg("scale"), py::return_value_policy::reference_internal)
                 .def("set_position", py::overload_cast<float, float, float>(&Matrix4::setPosition), py::arg("x"), py::arg("y"), py::arg("z"), py::return_value_policy::reference_internal)
-                .def("elements", [](const Matrix4& m) { return std::vector<float>(m.elements.begin(), m.elements.end()); });
+                .def("elements", [](const Matrix4& m) { return std::vector<float>(m.elements.begin(), m.elements.end()); })
+                // (4,4) row-major float32 — the standard math layout, so `M @ v`
+                // works directly (e.g. K, or a world / view / projection matrix).
+                // (`elements()` is the raw column-major buffer three.js stores.)
+                .def("to_numpy", [](const Matrix4& m) {
+                    py::array_t<float> a({4, 4});
+                    auto* d = a.mutable_data();
+                    for (int r = 0; r < 4; ++r)
+                        for (int c = 0; c < 4; ++c) d[r * 4 + c] = m.elements[c * 4 + r];
+                    return a;
+                });
 
         // ---- Box3 ------------------------------------------------------------
         py::class_<Box3>(m, "Box3")

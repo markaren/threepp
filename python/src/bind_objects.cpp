@@ -68,6 +68,14 @@ namespace threepp_py {
                 .def("look_at", [](T& o, const Vector3& v) { o.lookAt(v); }, py::arg("vector"))
                 .def("get_world_position", [](T& o) { Vector3 v; o.getWorldPosition(v); return v; })
                 .def("get_world_direction", [](T& o) { Vector3 v; o.getWorldDirection(v); return v; })
+                // World-space pose — mirrors the Object3D base bindings in bind_core.cpp
+                // (must be kept in sync: this template shadows them for virtual-base
+                // leaves Mesh/Points/Line). All refresh the world matrix first.
+                .def("get_world_quaternion", [](T& o) { Quaternion q; o.getWorldQuaternion(q); return q; })
+                .def("get_world_scale", [](T& o) { Vector3 v; o.getWorldScale(v); return v; })
+                .def_property_readonly("matrix_world", [](T& o) { o.updateWorldMatrix(true, false); return *o.matrixWorld; })
+                .def("local_to_world", [](T& o, Vector3 v) { o.localToWorld(v); return v; }, py::arg("vector"))
+                .def("world_to_local", [](T& o, Vector3 v) { o.worldToLocal(v); return v; }, py::arg("vector"))
                 .def("get_object_by_name", [](T& o, const std::string& n) { return o.getObjectByName(n); }, py::arg("name"), py::return_value_policy::reference)
                 .def("traverse", [](T& self, const std::function<void(py::object)>& cb) {
                     self.traverse([&cb](Object3D& o) { cb(py::cast(&o, py::return_value_policy::reference)); });

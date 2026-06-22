@@ -1,5 +1,6 @@
 import math
 
+import numpy as np
 import pytest
 
 import threepp as tp
@@ -34,6 +35,42 @@ def test_camera_inherits_object3d():
     cam.position.set(1, 2, 3)
     assert cam.position.z == 3
     cam.look_at(0, 0, 0)  # should not raise
+
+
+def test_camera_matrices_shapes_and_inverse():
+    cam = tp.PerspectiveCamera(60, 16 / 9, 0.1, 100)
+    cam.position.set(0, 0, 5)
+    cam.look_at(0, 0, 0)
+    cam.update_projection_matrix()
+    cam.update_matrix_world(True)
+    P = cam.projection_matrix.to_numpy()       # intrinsics (clip-from-view)
+    V = cam.matrix_world_inverse.to_numpy()    # view (world -> camera)
+    M = cam.matrix_world.to_numpy()            # extrinsics (camera -> world)
+    assert P.shape == V.shape == M.shape == (4, 4)
+    # view is the inverse of the camera pose
+    assert np.allclose(V @ M, np.eye(4), atol=1e-4)
+    # extrinsics translation == camera world position
+    assert np.allclose(M[:3, 3], [0, 0, 5], atol=1e-4)
+    # perspective intrinsics: fy = cot(fov/2), fx = fy / aspect
+    fy = 1.0 / math.tan(math.radians(60) / 2)
+    assert P[1, 1] == pytest.approx(fy, abs=1e-3)
+    assert P[0, 0] == pytest.approx(fy / (16 / 9), abs=1e-3)
+
+
+def test_project_unproject_roundtrip():
+    cam = tp.PerspectiveCamera(60, 1.0, 0.1, 100)
+    cam.position.set(0, 0, 5)
+    cam.look_at(0, 0, 0)
+    cam.update_projection_matrix()
+    cam.update_matrix_world(True)
+    # world -> NDC (in front of the camera, so inside the [-1,1] frustum)
+    ndc = tp.Vector3(1.0, 0.5, 0.0).project(cam)
+    assert -1 <= ndc.x <= 1 and -1 <= ndc.y <= 1
+    # NDC -> world round-trips back to the original point
+    back = tp.Vector3(ndc.x, ndc.y, ndc.z).unproject(cam)
+    assert back.x == pytest.approx(1.0, abs=1e-3)
+    assert back.y == pytest.approx(0.5, abs=1e-3)
+    assert back.z == pytest.approx(0.0, abs=1e-3)
 
 
 def test_lights_color_intensity():

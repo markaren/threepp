@@ -52,6 +52,41 @@ def test_virtual_base_methods(name):
     assert isinstance(wp, tp.Vector3)
 
 
+@pytest.mark.parametrize("name", list(VIRTUAL_OBJECTS))
+def test_world_pose_getters_virtual_leaves(name):
+    # get_world_quaternion / get_world_scale / matrix_world / local<->world are
+    # added to BOTH binding sites; this pins the virtual-base (Mesh/Points/Line)
+    # path that shadows the bind_core.cpp base bindings.
+    o = VIRTUAL_OBJECTS[name]()
+    o.position.set(1, 2, 3)
+    o.update_matrix_world(True)
+    wp = o.get_world_position()
+    assert (round(wp.x, 4), round(wp.y, 4), round(wp.z, 4)) == (1, 2, 3)
+    assert isinstance(o.get_world_quaternion(), tp.Quaternion)
+    ws = o.get_world_scale()
+    assert (round(ws.x, 4), round(ws.y, 4), round(ws.z, 4)) == (1, 1, 1)
+    # matrix_world translation is the world position (column-major elements 12..14)
+    e = o.matrix_world.elements()
+    assert (round(e[12], 4), round(e[13], 4), round(e[14], 4)) == (1, 2, 3)
+    # local <-> world round-trip through the object's frame
+    loc = o.world_to_local(tp.Vector3(1, 2, 3))
+    assert abs(loc.x) < 1e-4 and abs(loc.y) < 1e-4 and abs(loc.z) < 1e-4
+    wl = o.local_to_world(tp.Vector3(0, 0, 0))
+    assert (round(wl.x, 4), round(wl.y, 4), round(wl.z, 4)) == (1, 2, 3)
+
+
+def test_world_pose_getters_base_object3d():
+    # the non-virtual base path (Object3D), bound directly in bind_core.cpp
+    o = tp.Object3D()
+    o.position.set(4, 5, 6)
+    o.update_matrix_world(True)
+    wp = o.get_world_position()
+    assert (round(wp.x, 4), round(wp.y, 4), round(wp.z, 4)) == (4, 5, 6)
+    assert isinstance(o.get_world_quaternion(), tp.Quaternion)
+    loc = o.world_to_local(tp.Vector3(4, 5, 6))
+    assert abs(loc.x) < 1e-4 and abs(loc.y) < 1e-4 and abs(loc.z) < 1e-4
+
+
 def test_add_variadic_and_children():
     scene = tp.Scene()
     a = tp.Mesh(tp.BoxGeometry(), tp.MeshStandardMaterial())

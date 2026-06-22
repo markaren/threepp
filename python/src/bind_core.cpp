@@ -87,6 +87,26 @@ namespace threepp_py {
                     o.getWorldDirection(v);
                     return v;
                 })
+                // World-space pose (all refresh the world matrix first, so they read
+                // correctly without a manual update). get_world_quaternion + get_world_position
+                // give 6-DoF ground truth; matrix_world is the full (camera-to-world)
+                // extrinsics — use .to_numpy() for a (4,4). local<->world transform points.
+                .def("get_world_quaternion", [](Object3D& o) {
+                    Quaternion q;
+                    o.getWorldQuaternion(q);
+                    return q;
+                })
+                .def("get_world_scale", [](Object3D& o) {
+                    Vector3 v;
+                    o.getWorldScale(v);
+                    return v;
+                })
+                .def_property_readonly("matrix_world", [](Object3D& o) {
+                    o.updateWorldMatrix(true, false);
+                    return *o.matrixWorld;
+                })
+                .def("local_to_world", [](Object3D& o, Vector3 v) { o.localToWorld(v); return v; }, py::arg("vector"))
+                .def("world_to_local", [](Object3D& o, Vector3 v) { o.worldToLocal(v); return v; }, py::arg("vector"))
                 .def("get_object_by_name", [](Object3D& o, const std::string& name) { return o.getObjectByName(name); }, py::arg("name"), py::return_value_policy::reference)
                 // Pass each visited object by reference (Object3D is non-copyable)
                 // and let polymorphic_type_hook hand back the concrete subclass.
