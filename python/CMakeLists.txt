@@ -147,6 +147,7 @@ install(TARGETS threepp_py
         LIBRARY DESTINATION threepp COMPONENT python_module
         RUNTIME DESTINATION threepp COMPONENT python_module)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/threepp/__init__.py"
+              "${CMAKE_CURRENT_SOURCE_DIR}/threepp/urdf.py"
         DESTINATION threepp COMPONENT python_module)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp/rl"
         DESTINATION threepp COMPONENT python_module

@@ -165,6 +165,7 @@ namespace threepp_py {
                      py::arg("material") = std::shared_ptr<SpriteMaterial>{})
                 .def_readwrite("center", &Sprite::center)
                 .def_readwrite("screen_space", &Sprite::screenSpace)
+                .def_readwrite("screen_anchor", &Sprite::screenAnchor)
                 .def_property_readonly("material", [](Sprite& s) { return material_to_py(s.material()); });
 
         // ---- Background / Fog ------------------------------------------------

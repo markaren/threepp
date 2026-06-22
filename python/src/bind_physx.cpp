@@ -357,6 +357,25 @@ namespace {
             return a;
         }
 
+        // Root link world-frame spatial velocity [vx,vy,vz, wx,wy,wz]. Locomotion
+        // observations need the base linear/angular velocity, but the per-actor
+        // articulation API otherwise exposes pose only (a PxArticulationLink is a
+        // PxRigidBody, so it has the velocities).
+        py::array_t<float> root_velocity() const {
+            cpuOnly("root_velocity");
+            py::array_t<float> a(6);
+            float* p = a.mutable_data();
+            if (rootLink_) {
+                const PxVec3 lv = rootLink_->getLinearVelocity();
+                const PxVec3 av = rootLink_->getAngularVelocity();
+                p[0] = lv.x; p[1] = lv.y; p[2] = lv.z;
+                p[3] = av.x; p[4] = av.y; p[5] = av.z;
+            } else {
+                for (int i = 0; i < 6; ++i) p[i] = 0.f;
+            }
+            return a;
+        }
+
         // Root link world pose as one array [px,py,pz, qx,qy,qz,qw] — one call
         // instead of reading position + quaternion + their 7 components separately.
         py::array_t<float> root_state() const {
@@ -470,6 +489,9 @@ namespace threepp_py {
                      "for vectorized stepping (one call instead of one per joint).")
                 .def("root_state", &Articulation::root_state,
                      "Root link world pose as numpy [px,py,pz, qx,qy,qz,qw] in one call.")
+                .def("root_velocity", &Articulation::root_velocity,
+                     "Root link world-frame velocity as numpy [vx,vy,vz, wx,wy,wz] — the base "
+                     "linear + angular velocity a locomotion observation needs.")
                 .def("dof_order", &Articulation::dof_order,
                      "Per add-order joint, its low-level DOF slot in the direct-GPU joint buffers "
                      "(PhysX cache order != add-order). Use to map a GPU-trained policy back to the "
