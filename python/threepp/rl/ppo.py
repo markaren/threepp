@@ -68,16 +68,43 @@ def _mlp(sizes, act=nn.ELU):
     return nn.Sequential(*layers)
 
 
+def _make_cnn(image_shape, feat=256):
+    """Small conv trunk for [N,C,H,W] obs -> [N, feat]. C may be channels*frame_stack."""
+    c, h, w = image_shape
+    body = nn.Sequential(
+        nn.Conv2d(c, 16, 5, stride=2, padding=2), nn.ELU(),
+        nn.Conv2d(16, 32, 3, stride=2, padding=1), nn.ELU(),
+        nn.Conv2d(32, 32, 3, stride=2, padding=1), nn.ELU(),
+        nn.Flatten(),
+    )
+    with torch.no_grad():
+        flat = body(torch.zeros(1, c, h, w)).shape[1]
+    return nn.Sequential(body, nn.Linear(flat, feat), nn.ELU()), feat
+
+
 class ActorCritic(nn.Module):
     """Gaussian-policy actor-critic. Log-prob / entropy are computed by hand (no
     torch.distributions) — leaner, and it sidesteps a distribution-backward CUDA
-    quirk seen on torch 2.11+cu128 with an expanded (0-stride) scale."""
+    quirk seen on torch 2.11+cu128 with an expanded (0-stride) scale.
 
-    def __init__(self, obs_dim, act_dim, hidden=(256, 256), log_std_init=-1.0):
+    State obs ([N, obs_dim]) feed the MLP heads directly. Image obs ([N, C, H, W]) pass
+    `image_shape=(C,H,W)` to grow a shared CNN trunk feeding the same heads; uint8 pixels
+    are cast and scaled to [0,1] in-net (so no RunningNorm for images)."""
+
+    def __init__(self, obs_dim, act_dim, hidden=(256, 256), log_std_init=-1.0, image_shape=None):
         super().__init__()
-        self.actor = _mlp([obs_dim, *hidden, act_dim])
-        self.critic = _mlp([obs_dim, *hidden, 1])
+        if image_shape is not None:
+            self.cnn, feat = _make_cnn(tuple(image_shape))
+        else:
+            self.cnn, feat = None, obs_dim
+        self.actor = _mlp([feat, *hidden, act_dim])
+        self.critic = _mlp([feat, *hidden, 1])
         self.log_std = nn.Parameter(torch.ones(act_dim) * log_std_init)
+
+    def _feat(self, obs):
+        if self.cnn is None:
+            return obs                      # MLP path: byte-identical to the no-CNN model
+        return self.cnn(obs.float() / 255.0)  # [N,C,H,W] uint8/float pixels -> [N, feat]
 
     def _logprob(self, mean, act):
         # sum over action dims of the diagonal-Gaussian log density
@@ -90,17 +117,23 @@ class ActorCritic(nn.Module):
 
     @torch.no_grad()
     def act(self, obs):
-        mean = self.actor(obs)
+        f = self._feat(obs)
+        mean = self.actor(f)
         a = mean + torch.exp(self.log_std) * torch.randn_like(mean)
-        return a, self._logprob(mean, a), self.critic(obs).squeeze(-1)
+        return a, self._logprob(mean, a), self.critic(f).squeeze(-1)
 
     @torch.no_grad()
     def act_mean(self, obs):
-        return self.actor(obs)  # deterministic action for eval/deployment
+        return self.actor(self._feat(obs))  # deterministic action for eval/deployment
+
+    @torch.no_grad()
+    def value(self, obs):
+        return self.critic(self._feat(obs)).squeeze(-1)
 
     def evaluate(self, obs, act):
-        mean = self.actor(obs)
-        return self._logprob(mean, act), self._entropy(), self.critic(obs).squeeze(-1)
+        f = self._feat(obs)
+        mean = self.actor(f)
+        return self._logprob(mean, act), self._entropy(), self.critic(f).squeeze(-1)
 
 
 def compute_gae(rew, val, done, last_val, term_val, gamma=0.99, lam=0.95):
@@ -122,7 +155,8 @@ def compute_gae(rew, val, done, last_val, term_val, gamma=0.99, lam=0.95):
 
 
 def save_policy(path, ac, norm, meta):
-    torch.save({"model": ac.state_dict(), "norm": norm.state(), "meta": meta}, path)
+    torch.save({"model": ac.state_dict(), "norm": norm.state() if norm is not None else None,
+                "meta": meta}, path)
 
 
 def load_policy(path, device):
@@ -130,12 +164,15 @@ def load_policy(path, device):
     # run arbitrary unpickle code (don't trust a .pt to be safe just because we wrote it).
     ckpt = torch.load(path, map_location=device, weights_only=True)
     meta = ckpt["meta"]
-    ac = ActorCritic(meta["obs_dim"], meta["act_dim"],
-                     hidden=tuple(meta.get("hidden", (256, 256)))).to(device)
+    ac = ActorCritic(meta.get("obs_dim", 0), meta["act_dim"],
+                     hidden=tuple(meta.get("hidden", (256, 256))),
+                     image_shape=meta.get("image_shape")).to(device)
     ac.load_state_dict(ckpt["model"])
     ac.eval()
-    norm = RunningNorm(meta["obs_dim"], device)
-    norm.load(ckpt["norm"])
+    norm = None   # image policies normalize in-net (no obs RunningNorm)
+    if ckpt.get("norm") is not None:
+        norm = RunningNorm(meta["obs_dim"], device)
+        norm.load(ckpt["norm"])
     return ac, norm, meta
 
 
@@ -156,7 +193,10 @@ class PPO:
                  normalize_returns=True, meta=None, device=None):
         self.env = env
         self.obs = env.reset()
-        self.K, self.obs_dim = self.obs.shape[0], self.obs.shape[1]
+        self.is_image = self.obs.ndim == 4                          # [K,C,H,W] image vs [K,obs_dim]
+        self.K = self.obs.shape[0]
+        self.image_shape = tuple(self.obs.shape[1:]) if self.is_image else None
+        self.obs_dim = 0 if self.is_image else self.obs.shape[1]
         self.device = self.obs.device if device is None else torch.device(device)
         self.act_dim, self.T = act_dim, horizon
         self.gamma, self.lam, self.clip = gamma, lam, clip
@@ -164,21 +204,30 @@ class PPO:
         self.max_grad_norm, self.target_kl = max_grad_norm, target_kl
         self.anneal_lr, self.lr0 = anneal_lr, lr
         self.mb = max(1, self.K * self.T // minibatches)
-        self.ac = ActorCritic(self.obs_dim, act_dim, tuple(hidden), log_std_init).to(self.device)
-        self.norm = RunningNorm(self.obs_dim, self.device)
+        self.ac = ActorCritic(self.obs_dim, act_dim, tuple(hidden), log_std_init,
+                              image_shape=self.image_shape).to(self.device)
+        # image obs are normalized in-net (uint8/255) -> no obs RunningNorm
+        self.norm = None if self.is_image else RunningNorm(self.obs_dim, self.device)
         # return normalizer (clip≈off): the critic predicts NORMALIZED returns, so value
         # clipping is meaningful regardless of reward scale. denorm() back to raw for GAE.
         self.ret_norm = RunningNorm(1, self.device, clip=1e9) if normalize_returns else None
         self.opt = torch.optim.Adam(self.ac.parameters(), lr=lr)
-        self.meta = {"obs_dim": self.obs_dim, "act_dim": act_dim, "hidden": list(hidden), **(meta or {})}
+        self.meta = {"obs_dim": self.obs_dim, "act_dim": act_dim, "hidden": list(hidden),
+                     "image_shape": list(self.image_shape) if self.image_shape else None, **(meta or {})}
+
+    def _normobs(self, obs):
+        return obs if self.is_image else self.norm.norm(obs)
 
     def _value_raw(self, nobs):
-        v = self.ac.critic(nobs).squeeze(-1)
+        v = self.ac.value(nobs)
         return self.ret_norm.denorm(v) if self.ret_norm else v
 
     def learn(self, iterations, log_every=10, on_log=None):
-        dev, K, T, O, A = self.device, self.K, self.T, self.obs_dim, self.act_dim
-        b_obs = torch.zeros(T, K, O, device=dev); b_term = torch.zeros(T, K, O, device=dev)
+        dev, K, T, A = self.device, self.K, self.T, self.act_dim
+        oshape = self.image_shape if self.is_image else (self.obs_dim,)
+        odtype = torch.uint8 if self.is_image else torch.float32      # uint8 pixels save VRAM
+        b_obs = torch.zeros(T, K, *oshape, dtype=odtype, device=dev)
+        b_term = torch.zeros(T, K, *oshape, dtype=odtype, device=dev)
         b_act = torch.zeros(T, K, A, device=dev); b_logp = torch.zeros(T, K, device=dev)
         b_vraw = torch.zeros(T, K, device=dev); b_rew = torch.zeros(T, K, device=dev)
         b_done = torch.zeros(T, K, device=dev); b_to = torch.zeros(T, K, device=dev)
@@ -191,8 +240,9 @@ class PPO:
                 for g in self.opt.param_groups:
                     g["lr"] = self.lr0 * (1.0 - (it - 1) / iterations)
             for t in range(T):
-                self.norm.update(obs)
-                nobs = self.norm.norm(obs)
+                if not self.is_image:
+                    self.norm.update(obs)
+                nobs = self._normobs(obs)
                 with torch.no_grad():
                     a, logp, vnorm = self.ac.act(nobs)
                     vraw = self.ret_norm.denorm(vnorm) if self.ret_norm else vnorm
@@ -207,8 +257,8 @@ class PPO:
             total += T * K
 
             with torch.no_grad():
-                last_v = self._value_raw(self.norm.norm(obs))
-                term_v = self._value_raw(self.norm.norm(b_term.reshape(-1, O))).reshape(T, K) * b_to
+                last_v = self._value_raw(self._normobs(obs))
+                term_v = self._value_raw(self._normobs(b_term.reshape(-1, *oshape))).reshape(T, K) * b_to
             adv, ret = compute_gae(b_rew, b_vraw, b_done, last_v, term_v, self.gamma, self.lam)
             adv = (adv - adv.mean()) / (adv.std() + 1e-8)
             if self.ret_norm:
@@ -218,7 +268,7 @@ class PPO:
             else:
                 vtarg, vold = ret.reshape(-1), b_vraw.reshape(-1)
 
-            f_obs = b_obs.reshape(-1, O); f_act = b_act.reshape(-1, A)
+            f_obs = b_obs.reshape(-1, *oshape); f_act = b_act.reshape(-1, A)
             f_logp = b_logp.reshape(-1); f_adv = adv.reshape(-1)
             n = f_obs.shape[0]
             for _ in range(self.epochs):
