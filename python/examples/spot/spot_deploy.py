@@ -257,7 +257,7 @@ def main():
     SIZE, CELL = 120.0, 0.6
     scene = tp.Scene()
     scene.background = tp.Background(FOG)
-    scene.set_fog(FOG, 5.0, 55.0)     # the grid fades into a light-blue haze at distance
+    scene.set_fog(FOG, 4.0, 26.0)     # the grid dissolves into a light-blue haze (tight = visible)
     scene.add(tp.HemisphereLight(0xd0e4f7, 0x4a5a6a, 1.15))
     key = tp.DirectionalLight(0xffffff, 2.8); key.position.set(6, -5, 11); key.cast_shadow = True
     scene.add(key)
