@@ -30,6 +30,13 @@ namespace threepp_py {
             return static_cast<Key>(static_cast<int>(Key::A) + (n[0] - 'A'));
         if (n.size() == 1 && n[0] >= '0' && n[0] <= '9')
             return static_cast<Key>(static_cast<int>(Key::NUM_0) + (n[0] - '0'));
+        // Numpad keys: "KP8" / "NUM8" / "NUMPAD8" -> Key::KP_8 (distinct from the
+        // top-row digit "8" -> Key::NUM_8).
+        for (const std::string& pre : {std::string("KP"), std::string("NUMPAD"), std::string("NUM")}) {
+            if (n.size() == pre.size() + 1 && n.compare(0, pre.size(), pre) == 0 &&
+                n.back() >= '0' && n.back() <= '9')
+                return static_cast<Key>(static_cast<int>(Key::KP_0) + (n.back() - '0'));
+        }
         if (n == "SPACE") return Key::SPACE;
         if (n == "UP") return Key::UP;
         if (n == "DOWN") return Key::DOWN;
