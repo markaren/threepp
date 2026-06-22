@@ -34,6 +34,15 @@ pybind11_add_module(threepp_py
 target_link_libraries(threepp_py PRIVATE threepp)
 target_compile_features(threepp_py PRIVATE cxx_std_20)
 
+# threepp is a static lib; linking it into this shared module requires every
+# object to be position-independent on ELF platforms. Without it the link fails
+# with e.g. "relocation R_X86_64_TPOFF32 against `stbi__g_failure_reason` can
+# not be used when making a shared object; recompile with -fPIC" (stb_image's
+# thread-local in ImageLoader.cpp). Set PIC on the dependency — only reached when
+# THREEPP_WITH_PYTHON is on, so the normal lib/examples/tests build is untouched.
+# No-op on Windows (DLLs have no PIC concept).
+set_target_properties(threepp PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # Expose the Vulkan deferred renderer + G-buffer AOVs only when threepp has the
 # Vulkan backend; otherwise the module is GL-only and VulkanRenderer is absent.
 # THREEPP_WITH_VULKAN must match how the threepp lib was built so headers like
