@@ -74,9 +74,10 @@ class CartPoleEnv:
 
     @torch.no_grad()
     def step(self, actions):
-        """Returns (next_obs, reward, done, terminal_obs). done is a TRUNCATION (timeout) — this
-        env has no failure terminal — so terminal_obs is the real post-step obs for done envs
-        (before reset overwrites it), which the trainer uses to bootstrap V(s_T) correctly."""
+        """Returns (next_obs, reward, done, terminal_obs, is_timeout). Every done here IS a
+        timeout (this env has no failure terminal), so is_timeout = done — the trainer bootstraps
+        V(terminal_obs) on all of them. terminal_obs is the real post-step obs for done envs
+        (captured before reset overwrites it)."""
         a = actions.clamp(-1.0, 1.0)
         force = torch.zeros(self.K, self.sim.dof, device=self.sim.device)
         force[:, 0] = a[:, 0] * FORCE_SCALE                    # cart is joint 0
@@ -100,7 +101,7 @@ class CartPoleEnv:
             obs = self._obs()
         else:
             obs = term_obs
-        return obs, rew, done, term_obs
+        return obs, rew, done, term_obs, done   # is_timeout = done (no failure terminal)
 
 
 if __name__ == "__main__":
@@ -110,7 +111,7 @@ if __name__ == "__main__":
     obs = env.reset()
     print("obs", tuple(obs.shape), "finite", bool(torch.isfinite(obs).all()))
     for _ in range(300):
-        obs, rew, done, term = env.step(torch.rand(env.K, 1, device=env.sim.device) * 2 - 1)
+        obs, rew, done, term, to = env.step(torch.rand(env.K, 1, device=env.sim.device) * 2 - 1)
         assert torch.isfinite(obs).all() and torch.isfinite(rew).all()
     print(f"300 steps ok; reward [{rew.min():.2f},{rew.max():.2f}]")
     print("CARTPOLE ENV SELFTEST: PASS")

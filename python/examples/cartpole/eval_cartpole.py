@@ -30,7 +30,7 @@ t_up = torch.full((env.K,), -1.0, device=dev)
 ups = []
 with torch.no_grad():
     for step in range(400):                       # ~6.7 s
-        obs, _, _, _ = env.step(ac.act_mean(norm.norm(obs)))
+        obs, _, _, _, _ = env.step(ac.act_mean(norm.norm(obs)))
         up = torch.cos(env.sim.joint_pos[:, 1])
         newly = (up > 0.9) & ~reached
         t_up[newly] = step / 60.0
