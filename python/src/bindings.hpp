@@ -46,6 +46,7 @@ namespace threepp_py {
     void init_lights(py::module_& m);
     void init_render(py::module_& m);
     void init_loaders(py::module_& m);
+    void init_robot(py::module_& m); // URDFLoader + Robot (articulated Object3D)
     void init_vulkan(py::module_& m);// no-op unless built with the Vulkan backend
     void init_imgui(py::module_& m); // no-op unless built with imgui
     void init_physx(py::module_& m); // no-op unless built with the omniverse-physx-sdk
