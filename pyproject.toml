@@ -23,7 +23,7 @@ license = { file = "LICENSE" }
 authors = [{ name = "Lars Ivar Hatledal", email = "larsivarhatledal@gmail.com" }]
 keywords = ["3d", "graphics", "opengl", "rendering", "threejs", "scene-graph", "visualization", "robotics", "synthetic-data"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 4 - Alpha",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: C++",
