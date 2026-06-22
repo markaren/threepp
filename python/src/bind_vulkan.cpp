@@ -200,6 +200,17 @@ namespace threepp_py {
                      "Metric depth as (H, W) float32 — distance from the camera in scene units. "
                      "Background reads as the camera far plane.")
                 .def("set_clear_color", &PyVulkanRenderer::set_clear_color, py::arg("color"), py::arg("alpha") = 1.f)
+                // Tone mapping — same knobs as GLRenderer. The deferred renderer
+                // syncs these (from the Renderer base) into its composite/resolve
+                // pass each frame, so they can be flipped between renders. Default
+                // operator is NoToneMapping (HDR clips); ACESFilmic/Neutral give a
+                // filmic roll-off.
+                .def_property("tone_mapping",
+                              [](PyVulkanRenderer& r) { return r.native().toneMapping; },
+                              [](PyVulkanRenderer& r, ToneMapping t) { r.native().toneMapping = t; })
+                .def_property("tone_mapping_exposure",
+                              [](PyVulkanRenderer& r) { return r.native().toneMappingExposure; },
+                              [](PyVulkanRenderer& r, float e) { r.native().toneMappingExposure = e; })
                 .def("set_flush_frames", &PyVulkanRenderer::set_flush_frames, py::arg("n"),
                      "Frames driven per render() to flush the MAILBOX swapchain (default 3; "
                      "raise to 4+ for fast-moving dynamic scenes).")
