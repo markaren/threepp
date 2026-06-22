@@ -36,6 +36,28 @@ def test_box3_set_from_object_frames_model(stl_cube):
     assert size.x > 0 and size.y > 0 and size.z > 0
 
 
+def test_rgbe_loader_returns_texture(hdr_env):
+    tex = tp.RGBELoader().load(hdr_env)
+    assert tex is not None and isinstance(tex, tp.Texture)
+    assert tex.name == "env"  # named after the file stem
+
+
+def test_scene_environment_and_hdr_background(hdr_env):
+    tex = tp.RGBELoader().load(hdr_env)
+    scene = tp.Scene()
+    # image-based-lighting env map: assignable and clearable
+    scene.environment = tex
+    assert scene.environment is not None
+    scene.environment = None
+    assert scene.environment is None
+    # HDR as background (the Texture branch of the background setter)
+    scene.background = tex
+    assert scene.background.is_texture()
+    # a solid color still works through the same property
+    scene.background = 0x202830
+    assert scene.background.is_color()
+
+
 def test_loaded_model_can_be_retinted(stl_cube):
     model = tp.ModelLoader().load(stl_cube)
     mat = tp.MeshStandardMaterial()

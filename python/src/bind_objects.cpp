@@ -17,6 +17,7 @@
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/scenes/Fog.hpp"
 #include "threepp/scenes/Scene.hpp"
+#include "threepp/textures/Texture.hpp"
 
 using namespace threepp;
 
@@ -170,6 +171,7 @@ namespace threepp_py {
         py::class_<Background>(m, "Background")
                 .def(py::init<int>(), py::arg("color"))
                 .def(py::init<const Color&>(), py::arg("color"))
+                .def(py::init<const std::shared_ptr<Texture>&>(), py::arg("texture"))
                 .def("is_color", &Background::isColor)
                 .def("is_texture", &Background::isTexture);
         py::implicitly_convertible<int, Background>();
@@ -184,7 +186,21 @@ namespace threepp_py {
         // ---- Scene -----------------------------------------------------------
         py::class_<Scene, Object3D, std::shared_ptr<Scene>>(m, "Scene")
                 .def(py::init(&Scene::create))
-                .def_readwrite("background", &Scene::background)
+                // Accepts a hex int / Color (solid color) or a Texture (e.g. an
+                // equirect HDR from RGBELoader) for an image backdrop.
+                .def_property("background",
+                              [](Scene& s) { return s.background; },
+                              [](Scene& s, const py::object& v) {
+                                  if (py::isinstance<Texture>(v)) {
+                                      s.background = Background(v.cast<std::shared_ptr<Texture>>());
+                                  } else {
+                                      s.background = v.cast<Background>();// int / Color / Background
+                                  }
+                              })
+                // The image-based-lighting environment map (an equirect HDR Texture
+                // from RGBELoader). Drives IBL on standard/physical materials; the GL
+                // renderer PMREM-prefilters it. None to clear.
+                .def_readwrite("environment", &Scene::environment)
                 .def_readwrite("override_material", &Scene::overrideMaterial)
                 .def_readwrite("auto_update", &Scene::autoUpdate)
                 // Convenience: linear distance fog. (scene.fog is a std::variant

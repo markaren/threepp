@@ -97,6 +97,21 @@ def obj_cube(tmp_path):
 
 
 @pytest.fixture
+def hdr_env(tmp_path):
+    """Path to a tiny valid Radiance .hdr (flat RGBE, 4x2, ~0.5 grey).
+
+    stb_image (used by RGBELoader) reads scanlines with width<8 uncompressed,
+    so no RLE encoding is needed — RGBE byte (128,128,128,128) decodes to ~0.5
+    linear. 2:1 to look like an equirect map.
+    """
+    path = tmp_path / "env.hdr"
+    header = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 2 +X 4\n"
+    body = bytes([128, 128, 128, 128]) * (4 * 2)
+    path.write_bytes(header + body)
+    return str(path)
+
+
+@pytest.fixture
 def checker_texture(tmp_path):
     """Path to a 256x256 (power-of-two) checkerboard PNG. Skips if Pillow is absent."""
     Image = pytest.importorskip("PIL.Image")

@@ -10,6 +10,7 @@
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/OBJLoader.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/loaders/STLLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/objects/Group.hpp"
@@ -31,6 +32,17 @@ namespace threepp_py {
                 .def("load", [](TextureLoader& l, const std::string& path, ColorSpace cs, bool flip_y) { return l.load(path, cs, flip_y); },
                      py::arg("path"), py::arg("color_space"), py::arg("flip_y") = true)
                 .def("clear_cache", &TextureLoader::clearCache);
+
+        // ---- RGBELoader (Radiance .hdr -> float equirect Texture) ------------
+        // The returned texture (float RGBA, EquirectangularReflection mapping,
+        // linear color space) is ready to assign to scene.environment for IBL on
+        // standard/physical materials, or to scene.background for an HDR backdrop.
+        // The GL renderer PMREM-prefilters it into a real image-based light.
+        py::class_<RGBELoader>(m, "RGBELoader")
+                .def(py::init<>())
+                .def("load", [](RGBELoader& l, const std::string& path, bool flip_y) { return l.load(path, flip_y); },
+                     py::arg("path"), py::arg("flip_y") = true,
+                     "Load a Radiance .hdr equirectangular environment as a float Texture.");
 
         // ---- ModelLoader (dispatch-by-extension) -----------------------------
         py::class_<ModelLoader>(m, "ModelLoader")
