@@ -49,8 +49,10 @@ threepp and Isaac Lab **both run PhysX 5**, which is what makes this work despit
 the approximations:
 
 - The URDF carries **no inertials or collision**, so link masses are approximated
-  and each link gets a **Box/Capsule** collider (the articulation API takes
-  primitive shapes, not the visual meshes).
+  and each link gets a **Box/Capsule** collider for the physics (the articulation
+  API takes primitive shapes). Those primitives are hidden — each link's **visual
+  mesh** (`link_models/*.obj`) is parented under its collider, so Spot *renders* as
+  the real robot while the capsules drive the simulation.
 - The knee's **remotized** actuator is treated as a plain PD.
 
 With the obs/action contract exact, the policy still produces a clean forward trot

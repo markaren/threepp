@@ -129,14 +129,20 @@ def _capsule(length, radius, center, direction, color):
     return m, vol
 
 
-def build_spot(world):
-    """Build Spot as a PhysX articulation; returns (articulation, link meshes)."""
+def build_spot(world, assets=None):
+    """Build Spot as a PhysX articulation; returns (articulation, render meshes).
+
+    Physics uses tuned Box/Capsule colliders (the URDF has no collision/inertial). If `assets`
+    is given, each link's URDF visual mesh (link_models/*.obj) is parented under its collider so
+    Spot renders as the real robot while the primitives stay hidden but still drive the sim."""
     art = world.create_articulation(fixed_base=False, solver_position_iterations=12,
                                     disable_self_collision=True)
     bm = tp.Mesh(tp.BoxGeometry(0.70, 0.18, 0.19), tp.MeshStandardMaterial())
     bm.material.color = 0xffc24d
     bm.position.set(0, 0, Z0)
     base = art.add_link(bm, parent=None, density=MASS["base"] / (0.70 * 0.18 * 0.19))
+    if assets:
+        _attach_obj(bm, (0, 0, Z0), "base", 0xffc24d, assets)
     meshes = [bm]
     for L in LEGS:
         sx, sy = SIGN[L]
@@ -154,7 +160,14 @@ def build_spot(world):
         art.add_link(lm, parent=uleg, density=MASS["lleg"] / lv, axis=(0, 1, 0), anchor=tuple(Jkn),
                      lower=LIM["kn"][0], upper=LIM["kn"][1], stiffness=GAINS["kn"][0],
                      damping=GAINS["kn"][1], max_force=GAINS["kn"][2], drive_target=DEFAULT[L + "_kn"])
+        if assets:
+            _attach_obj(hm, Jhx, L + ".hip", 0x303030, assets)
+            _attach_obj(um, Jhy, L + ".uleg", 0xffc24d, assets)
+            _attach_obj(lm, Jkn, L + ".lleg", 0x303030, assets)
         meshes += [hm, um, lm]
+    if not assets:                       # no visuals: let the primitive colliders cast shadows
+        for m in meshes:
+            m.cast_shadow = True
     art.finalize()
     return art, meshes
 
@@ -165,6 +178,55 @@ def _quat_to_R(q):  # q = [qx,qy,qz,qw], body->world
         [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
         [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
         [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]], float)
+
+
+def _quat_from_R(R):  # rotation matrix -> [qx,qy,qz,qw]
+    t = R[0, 0] + R[1, 1] + R[2, 2]
+    if t > 0:
+        s = math.sqrt(t + 1.0) * 2
+        return ((R[2, 1] - R[1, 2]) / s, (R[0, 2] - R[2, 0]) / s, (R[1, 0] - R[0, 1]) / s, 0.25 * s)
+    i = int(np.argmax([R[0, 0], R[1, 1], R[2, 2]]))
+    j, k = (i + 1) % 3, (i + 2) % 3
+    s = math.sqrt(1.0 + R[i, i] - R[j, j] - R[k, k]) * 2
+    q = [0.0, 0.0, 0.0, 0.0]
+    q[i] = 0.25 * s
+    q[j] = (R[j, i] + R[i, j]) / s
+    q[k] = (R[k, i] + R[i, k]) / s
+    q[3] = (R[k, j] - R[j, k]) / s
+    return tuple(q)
+
+
+def _compose(pos, quat):  # 4x4 from translation + quaternion
+    M = np.eye(4); M[:3, :3] = _quat_to_R(quat); M[:3, 3] = pos
+    return M
+
+
+def _attach_obj(collider, link_pos, name, color, assets):
+    """Parent a URDF visual mesh (link_models/<name>.obj, authored in the link frame) under
+    its bound collider so it tracks the physics, and hide the collider's own primitive via its
+    material (the object stays visible so the child still renders). Spot's visual origins are
+    all identity, so the link frame here is (link_pos, no rotation)."""
+    path = os.path.join(assets, "link_models", name + ".obj")
+    try:
+        grp = tp.OBJLoader().load(path, False)
+    except Exception as e:                       # missing/odd OBJ -> keep the primitive
+        print(f"[spot] visual {name}.obj not loaded ({e}); showing collider"); return None
+    cw = _compose([collider.position.x, collider.position.y, collider.position.z],
+                  [collider.quaternion.x, collider.quaternion.y, collider.quaternion.z, collider.quaternion.w])
+    loc = np.linalg.inv(cw) @ _compose(list(link_pos), [0.0, 0.0, 0.0, 1.0])
+    grp.position.set(*(float(v) for v in loc[:3, 3]))
+    grp.quaternion.set(*(float(v) for v in _quat_from_R(loc[:3, :3])))
+
+    def paint(o):
+        try:                                     # Mesh children get Spot's colours; Groups skip
+            mat = tp.MeshStandardMaterial(); mat.color = color; mat.roughness = 0.5; mat.metalness = 0.0
+            o.set_material(mat); o.cast_shadow = True
+        except Exception:
+            pass
+    grp.traverse(paint)
+    collider.add(grp)
+    collider.material.visible = False
+    return grp
 
 
 class SpotController:
@@ -241,7 +303,7 @@ def main():
     ground = tp.Mesh(tp.BoxGeometry(80, 80, 1.0), tp.MeshStandardMaterial())
     ground.position.set(0, 0, -0.5)
     world.add_static(ground)
-    art, meshes = build_spot(world)
+    art, meshes = build_spot(world, assets)   # assets -> render the URDF's link_models/*.obj
     ctrl = SpotController(art, policy)
     ctrl.hold(world, 150)   # stand up
 
@@ -270,8 +332,7 @@ def main():
     floor.receive_shadow = True
     scene.add(floor)
     for m in meshes:
-        m.cast_shadow = True
-        scene.add(m)
+        scene.add(m)   # each collider carries its hidden primitive + the visible OBJ (which casts)
 
     camera = tp.PerspectiveCamera(50, canvas.aspect(), 0.01, 300)
     camera.up.set(0, 0, 1)   # Z-up world
@@ -300,7 +361,7 @@ def main():
         for _ in range(120):
             ctrl.step(world, np.array([1.0, 0, 0], np.float32))   # walk forward ~2.4 s
         bx = art.root_state()[0]
-        camera.position.set(bx + 2.2, -3.2, 2.3); camera.look_at(bx, 0, 0.3)   # elevated 3/4 hero view
+        camera.position.set(bx + 1.7, -2.5, 1.35); camera.look_at(bx - 0.2, 0, 0.35)   # close 3/4 hero view
         rend.render(scene, camera)        # clean still (the controls HUD is interactive-only)
         rend.save_frame(args.shot)
         print(f"saved {args.shot}  (walked to x={bx:.2f} m)")
@@ -319,11 +380,25 @@ def main():
     def down(*keys):
         return any(canvas.is_key_down(k) for k in keys)
 
+    heading_lock = [None]   # yaw to hold while the user isn't turning
+
     def frame():
         # velocity command [vx, vy, wz] in Spot's body frame (+x fwd, +y left)
         vx = (1.5 if down("UP", "KP8") else 0.0) - (1.0 if down("DOWN", "KP2") else 0.0)
         vy = (1.0 if down("LEFT", "KP4") else 0.0) - (1.0 if down("RIGHT", "KP6") else 0.0)
-        wz = (1.5 if down("N", "KP7") else 0.0) - (1.5 if down("M", "KP9") else 0.0)
+        turn = (1.5 if down("N", "KP7") else 0.0) - (1.5 if down("M", "KP9") else 0.0)
+        # Hold heading when not actively turning: the policy only regulates yaw
+        # *rate* to 0, so any bias slowly spirals. A light P-controller on the yaw
+        # error keeps it pointing straight (and walking straight) when idle.
+        R = _quat_to_R(art.root_state()[3:7])
+        yaw = math.atan2(R[1, 0], R[0, 0])
+        if turn != 0.0:
+            wz, heading_lock[0] = turn, yaw
+        else:
+            if heading_lock[0] is None:
+                heading_lock[0] = yaw
+            err = (yaw - heading_lock[0] + math.pi) % (2 * math.pi) - math.pi
+            wz = float(np.clip(-2.0 * err, -1.0, 1.0))
         ctrl.step(world, np.array([vx, vy, wz], np.float32))
 
         # chase cam: sit BACK metres behind Spot's heading at HEIGHT, look at the body.
