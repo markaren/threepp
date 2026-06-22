@@ -7,7 +7,7 @@ include(FetchContent)
 FetchContent_Declare(
         pybind11
         GIT_REPOSITORY https://github.com/pybind/pybind11.git
-        GIT_TAG v2.13.6
+        GIT_TAG v3.0.4   # 3.0.x is the first line that supports CPython 3.14's C-API
         GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(pybind11)
 
