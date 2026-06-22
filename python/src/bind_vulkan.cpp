@@ -211,6 +211,27 @@ namespace threepp_py {
                 .def_property("tone_mapping_exposure",
                               [](PyVulkanRenderer& r) { return r.native().toneMappingExposure; },
                               [](PyVulkanRenderer& r, float e) { r.native().toneMappingExposure = e; })
+                // Internal render scale: the deferred G-buffer + ray-traced channels
+                // run at (extent * scale) and TAA upsamples to full resolution. 1.0 =
+                // none; 0.5 quarters the shaded pixel count (quadratic perf lever).
+                // Clamped to [0.25, 1.0]. Reallocates + resets accumulation, so don't
+                // set it from inside a render().
+                .def_property("render_scale",
+                              [](PyVulkanRenderer& r) { return r.native().renderScale(); },
+                              [](PyVulkanRenderer& r, float s) { r.native().setRenderScale(s); })
+                // HDR bloom (added in linear HDR before the tone-map curve).
+                .def_property("bloom_intensity",
+                              [](PyVulkanRenderer& r) { return r.native().bloomIntensity(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setBloomIntensity(v); },
+                              "Bloom strength. 0 disables; typical 0.2-0.8.")
+                .def_property("bloom_threshold",
+                              [](PyVulkanRenderer& r) { return r.native().bloomThreshold(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setBloomThreshold(v); },
+                              "Bright-pass cutoff (linear-HDR luma); higher = only the brightest glow. Typical 0.8-2.0.")
+                .def_property("bloom_clamp",
+                              [](PyVulkanRenderer& r) { return r.native().bloomClamp(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setBloomClamp(v); },
+                              "Bloom input clamp to stabilise flickery ultra-bright highlights. <=0 disables (default); typical 8-32.")
                 .def("set_flush_frames", &PyVulkanRenderer::set_flush_frames, py::arg("n"),
                      "Frames driven per render() to flush the MAILBOX swapchain (default 3; "
                      "raise to 4+ for fast-moving dynamic scenes).")
