@@ -46,10 +46,15 @@ def test_free_joint_swings_under_gravity():
                        axis=(0, 0, 1), anchor=(0.0, 3, 0))  # no stiffness → free
     art.finalize()
 
+    # A frictionless free joint is an undamped pendulum: it swings far, then back through
+    # ~its start. Assert on the PEAK swing over the trajectory, not the final angle (which
+    # oscillates and can land near the start at any given sample).
     start = arm.joint_position
+    max_swing = 0.0
     for _ in range(120):
         world.step(1 / 60)
-    assert abs(arm.joint_position - start) > 0.5, "free joint should swing far under gravity"
+        max_swing = max(max_swing, abs(arm.joint_position - start))
+    assert max_swing > 0.5, "free joint should swing far under gravity"
 
 
 def test_drive_holds_against_gravity():
