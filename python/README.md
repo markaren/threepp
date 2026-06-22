@@ -24,6 +24,33 @@ renderer = tp.GLRenderer(canvas)
 canvas.animate(lambda: renderer.render(scene, camera))
 ```
 
+## Install
+
+> **Status: pre-1.0 / alpha.** This is a young package and the API is still
+> moving — it **may change between releases**. Releases are dated (a `YYYY-MM-DD`
+> tag builds a `YYYY.MM.DD` wheel); pin a version (`threepp==2026.6.17`) and
+> check the release notes before upgrading.
+
+Prebuilt **GL-only** wheels (Windows / macOS / Linux, CPython 3.10–3.13) are
+attached to each [GitHub release](https://github.com/markaren/threepp/releases) —
+no build tools or system libraries needed. Download the wheel matching your OS +
+Python from the Releases page, then:
+
+```sh
+pip install ./threepp-2026.6.17-cp312-cp312-win_amd64.whl
+```
+
+Or build from source (needs a C++ compiler + CMake ≥ 3.19; pybind11 is fetched
+automatically):
+
+```sh
+pip install "git+https://github.com/markaren/threepp"
+```
+
+The wheel is **GL-only** by design — it needs no Vulkan SDK, PhysX, or CUDA and
+runs on any machine. The Vulkan path-tracer / deferred AOVs and the PhysX physics
++ GPU-RL backends are opt-in **source** builds (see the backend sections below).
+
 ## Build
 
 The module is built as part of threepp's CMake project, gated behind
@@ -49,6 +76,8 @@ display is only required for the on-screen examples.
 | Script | What it shows |
 | --- | --- |
 | [`examples/hello_cube.py`](examples/hello_cube.py) | On-screen window: spinning, lit cubes you can orbit (`OrbitControls` + animation loop). Needs a display. |
+| [`examples/pbr_showcase.py`](examples/pbr_showcase.py) | **Photoreal PBR playground** — metals + glowing gems under a *procedurally generated* HDR sky (no assets), ACES tone mapping, live ImGui controls. `--shot out.png` renders headless. |
+| [`examples/text_overlay.py`](examples/text_overlay.py) | **Text & SVG overlay** — billboard `TextSprite` labels on 3D objects + a 2D HUD (`Text2D` + `SVGLoader` badge) via an `OrthographicCamera` overlay pass. |
 | [`examples/headless_render.py`](examples/headless_render.py) | Off-screen render straight into a `(H, W, 3)` uint8 numpy array; saves a PNG. No window. |
 | [`examples/textured_box.py`](examples/textured_box.py) | Load an image with `TextureLoader` and map it onto a mesh (headless). |
 | [`examples/load_model.py`](examples/load_model.py) | `python load_model.py model.glb` — load a model with `ModelLoader`, auto-frame and render it. |
@@ -106,8 +135,23 @@ python examples/headless_render.py
                           renderer.render(scene, camera)))
   ```
 - **Rendering**: `Canvas` (window / headless), `GLRenderer`
-  (`render`, `set_clear_color`, `read_pixels` → numpy, `save_frame`, shadows),
-  `OrbitControls`, `Clock`.
+  (`render`, `set_clear_color`, `read_pixels` → numpy, `save_frame`, shadows,
+  `tone_mapping` / `tone_mapping_exposure`), `OrbitControls`, `Clock`.
+- **HDR image-based lighting**: `RGBELoader().load("env.hdr")` → an equirect
+  `Texture`; assign it to `scene.environment` (IBL on standard/physical
+  materials) or `scene.background`. `ToneMapping.ACESFilmic` (etc.) keeps HDR
+  highlights from clipping.
+- **Camera intrinsics / extrinsics**: `camera.projection_matrix`,
+  `matrix_world_inverse`, `obj.matrix_world`, `get_world_quaternion`,
+  `Matrix4.to_numpy()` (→ `(4, 4)`), and `Vector3.project(camera)` / `unproject`
+  for 3D↔2D — the building blocks for 6-DoF pose ground truth and 2D annotation.
+- **URDF robots**: `URDFLoader().load("robot.urdf")` → a `Robot` (an `Object3D`)
+  with `set_joint_value(s)`, `get_joint_range(s)`, `num_dof`, and forward
+  kinematics (`get_end_effector_transform()` / `compute_end_effector_transform`).
+- **2D text & SVG**: `FontLoader().default_font()` (embedded — no font file),
+  `Text2D` / `Text3D` (text meshes), `TextSprite` (billboard labels), and
+  `SVGLoader().parse(...)` → a `Group` of filled meshes. Pair with an
+  `OrthographicCamera` + `auto_clear=False` for a HUD.
 - **In-window UI**: `ImguiContext` + the `threepp.imgui` submodule — Dear ImGui
   immediate-mode widgets (window/text/button/slider/checkbox/color/combo/…) for
   control panels. Works on **both** the GL and Vulkan renderers (`tp.HAS_IMGUI`).

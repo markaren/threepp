@@ -20,10 +20,10 @@ description = "three.js-style 3D scene authoring and rendering for Python (OpenG
 readme = "python/README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
-authors = [{ name = "Lars Ivar Hatledal", email = "larsivarhatledal@gmail.com" }]
+authors = [{ name = "Lars Ivar Hatledal", email = "laht@ntnu.no" }]
 keywords = ["3d", "graphics", "opengl", "rendering", "threejs", "scene-graph", "visualization", "robotics", "synthetic-data"]
 classifiers = [
-    "Development Status :: 4 - Alpha",
+    "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: C++",

@@ -1,0 +1,116 @@
+# Build redistributable wheels (GL backend) for the `threepp` Python package and
+# attach them to a GitHub Release. NO PyPI upload — wheels live on the Releases
+# page, so users `pip install` them from a URL/file.
+#
+# Releases are date-tagged (YYYY-MM-DD, e.g. 2026-06-17). Pushing such a tag runs
+# this workflow and attaches the wheels to that release. The wheel version is the
+# PEP 440 form of the tag (2026-06-17 -> 2026.06.17), derived at build time.
+#
+# The wheels are GL-only (Vulkan/PhysX stay source-build opt-ins).
+name: Wheels
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - '2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'   # date releases, e.g. 2026-06-17
+
+jobs:
+  build_wheels:
+    name: Wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-22.04, windows-2022, macos-14 ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # PEP 440 needs dots, not dashes: 2026-06-17 -> 2026.06.17 (pip normalises
+      # the leading zeros). On dispatch (no tag) the pyproject default version is
+      # kept. Anchored to ^version so it only touches [project].version.
+      - name: Derive version from the date tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          ver="${TAG//-/.}"
+          sed -i.bak -E "s/^version = \".*\"/version = \"${ver}\"/" pyproject.toml
+          rm -f pyproject.toml.bak
+          echo "wheel version -> ${ver}"
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21.3
+        env:
+          # CPython 3.10–3.13. To add 3.14, bump cibuildwheel to a version that
+          # ships 3.14 support and append `cp314-*` here.
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
+          CIBW_SKIP: "*-musllinux* *_i686 *-win32 pp*"
+          CIBW_ARCHS_MACOS: "x86_64 arm64"
+          # C++20 needs a recent toolchain; AlmaLinux 8 (manylinux_2_28) ships GCC 12.
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          # The vendored GLFW needs the X11/GL dev headers to compile on Linux.
+          CIBW_BEFORE_ALL_LINUX: >
+            yum install -y libX11-devel libXrandr-devel libXinerama-devel
+            libXcursor-devel libXi-devel mesa-libGL-devel
+          # GLFW links the system X11/GL libs; keep them external (the user's system
+          # / GPU driver provides them) instead of bundling them into the wheel.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
+            auditwheel repair -w {dest_dir} {wheel}
+            --exclude libGL.so.1 --exclude libGLX.so.0 --exclude libOpenGL.so.0
+            --exclude libEGL.so.1 --exclude libX11.so.6 --exclude libXrandr.so.2
+            --exclude libXinerama.so.1 --exclude libXcursor.so.1 --exclude libXi.so.6
+            --exclude libXext.so.6 --exclude libxcb.so.1
+          # Smoke-test the import where there's a usable runtime. The manylinux
+          # container has no GL driver and the X11 libs are intentionally external,
+          # so skip its import test (the wheel still works on a real Linux desktop).
+          CIBW_TEST_COMMAND: 'python -c "import threepp; print(threepp.HAS_IMGUI)"'
+          CIBW_TEST_SKIP: "*-manylinux*"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+
+  build_sdist:
+    name: Source distribution
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Derive version from the date tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          ver="${TAG//-/.}"
+          sed -i.bak -E "s/^version = \".*\"/version = \"${ver}\"/" pyproject.toml
+          rm -f pyproject.toml.bak
+          echo "sdist version -> ${ver}"
+      - name: Build sdist
+        run: pipx run build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  release:
+    name: Attach wheels to the GitHub Release
+    needs: [ build_wheels, build_sdist ]
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/2')   # the date tag that triggered the run
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      # Attaches the wheels + sdist to the existing release for this tag, leaving
+      # its title / notes / pre-release flag untouched.
+      - name: Upload to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
