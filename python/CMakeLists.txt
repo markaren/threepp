@@ -125,9 +125,34 @@ endif ()
 # `import threepp` loads the package and re-exports the native API. The PhysX DLLs are
 # copied alongside it (POST_BUILD uses $<TARGET_FILE_DIR:threepp_py>), and the module adds
 # its own dir to the DLL search path at import. (Ninja is single-config.)
-set_target_properties(threepp_py PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp"
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp")
+#
+# Skip this under scikit-build-core (SKBUILD): wheel builds stage the module via the
+# install() rules below instead of writing into the source tree.
+if (NOT DEFINED SKBUILD)
+    set_target_properties(threepp_py PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp")
+endif ()
+
+# Wheel packaging (scikit-build-core, pyproject.toml at the repo root): install the
+# whole `threepp` package — native module + the Python files — under one component, so
+# the backend packs a self-contained wheel and never copies stale dev-built binaries
+# from the source tree. The C++ lib/headers (default component) are NOT installed into
+# the wheel; threepp is statically linked into the module.
+# A pybind11 module is a CMake MODULE library, whose artifact is the LIBRARY kind
+# on every platform (incl. the Windows .pyd) — so COMPONENT must be set on the
+# LIBRARY block, not just RUNTIME, or the binary lands in the default component
+# and scikit-build-core's component filter drops it from the wheel.
+install(TARGETS threepp_py
+        LIBRARY DESTINATION threepp COMPONENT python_module
+        RUNTIME DESTINATION threepp COMPONENT python_module)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/threepp/__init__.py"
+        DESTINATION threepp COMPONENT python_module)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp/rl"
+        DESTINATION threepp COMPONENT python_module
+        FILES_MATCHING PATTERN "*.py")
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/threepp/threepp.pyi"
+        DESTINATION threepp COMPONENT python_module OPTIONAL)
 
 # Optional: generate IDE type stubs into the package (threepp/threepp.pyi). Needs `pip
 # install pybind11-stubgen`. Build with: cmake --build <dir> --target threepp_stubs
