@@ -21,7 +21,7 @@ import threepp as tp
 from cartpole import CartPole
 from cartpole_env import CONFIG as ENV_CONFIG
 from cartpole_env import make_obs   # the ONE observation function, shared with training
-from gpu_ppo import load_policy
+from threepp.rl import load_policy
 
 MODEL = os.path.join(_HERE, "cartpole_swingup.pt")
 if not tp.HAS_PHYSX:

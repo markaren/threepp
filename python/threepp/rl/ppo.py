@@ -1,8 +1,8 @@
 """A compact, self-contained PPO for GPU-resident vec envs (no rl_games / rsl_rl dep).
 
 Everything stays on the GPU: the actor-critic, the running observation normalizer, and
-GAE. Designed to pair with HexapodGpuVecEnv (gpu_env.py), where the env hands back obs/
-reward/done as cuda tensors — so a whole PPO iteration never touches the CPU.
+GAE. Designed to pair with GpuSim-based envs, where the env hands back obs/reward/done as
+cuda tensors — so a whole PPO iteration never touches the CPU.
 
 Owned on purpose: ~150 lines you can read and tune, vs pulling the Isaac training stack.
 """

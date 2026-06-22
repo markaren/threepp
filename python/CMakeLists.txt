@@ -101,25 +101,28 @@ else ()
     message(STATUS "threepp_py: PhysX not found — physics disabled (threepp.HAS_PHYSX=False)")
 endif ()
 
-# Importable as `import threepp` — the file name must match PYBIND11_MODULE(threepp,...).
+# The native module is the `threepp.threepp` submodule of the `threepp` package; the file name
+# must match PYBIND11_MODULE(threepp,...) (it's the final import-path component either way).
 set_target_properties(threepp_py PROPERTIES OUTPUT_NAME threepp)
 
 if (MSVC)
     target_compile_options(threepp_py PRIVATE /bigobj)
 endif ()
 
-# Drop the built module next to the Python scripts so `import threepp` works
-# when running from this directory. (Ninja is single-config.)
+# Build the native module INTO the `threepp/` package dir (next to __init__.py), so
+# `import threepp` loads the package and re-exports the native API. The PhysX DLLs are
+# copied alongside it (POST_BUILD uses $<TARGET_FILE_DIR:threepp_py>), and the module adds
+# its own dir to the DLL search path at import. (Ninja is single-config.)
 set_target_properties(threepp_py PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp")
 
-# Optional: generate IDE type stubs (threepp.pyi). Needs `pip install
-# pybind11-stubgen`. Build with: cmake --build <dir> --target threepp_stubs
+# Optional: generate IDE type stubs into the package (threepp/threepp.pyi). Needs `pip
+# install pybind11-stubgen`. Build with: cmake --build <dir> --target threepp_stubs
 if (DEFINED Python_EXECUTABLE)
     add_custom_target(threepp_stubs
             COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}"
-            ${Python_EXECUTABLE} -m pybind11_stubgen threepp
+            ${Python_EXECUTABLE} -m pybind11_stubgen threepp.threepp
             --output-dir ${CMAKE_CURRENT_SOURCE_DIR}
             DEPENDS threepp_py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}

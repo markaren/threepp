@@ -12,29 +12,26 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 sys.path.insert(0, _HERE)
 
 from cartpole_env import CartPoleEnv
-from gpu_ppo import load_policy
+from threepp.rl import load_policy
 
 ac, norm, meta = load_policy(os.path.join(_HERE, "cartpole_swingup.pt"), device="cuda")
 env = CartPoleEnv(num_envs=256)
 env.reset()
+dev = env.sim.device
 
 # Force every env to hang straight DOWN (pole at pi), zero velocity.
-jp = torch.zeros(env.K, env.dof, device=env.device); jp[:, 1] = math.pi   # canonical: pole down
-jv = torch.zeros(env.K, env.dof, device=env.device)
-torch.cuda.synchronize()
-env.batch.write_subset_joint_pos(env._to_gpu(jp), env.gpu_idx)            # canonical -> GPU order
-env.batch.write_subset_joint_vel(env._to_gpu(jv), env.gpu_idx)
-env.batch.step(env.dt)
-env._read()
+pos = torch.zeros(env.K, env.sim.dof, device=dev); pos[:, 1] = math.pi
+env.sim.set_joint_state(torch.arange(env.K, device=dev), pos, torch.zeros_like(pos))
+env.sim.step(env.dt)
 obs = env._obs()
 
-reached = torch.zeros(env.K, dtype=torch.bool, device=env.device)
-t_up = torch.full((env.K,), -1.0, device=env.device)
+reached = torch.zeros(env.K, dtype=torch.bool, device=dev)
+t_up = torch.full((env.K,), -1.0, device=dev)
 ups = []
 with torch.no_grad():
     for step in range(400):                       # ~6.7 s
         obs, _, _, _ = env.step(ac.act_mean(norm.norm(obs)))
-        up = torch.cos(env.jp[:, 1])
+        up = torch.cos(env.sim.joint_pos[:, 1])
         newly = (up > 0.9) & ~reached
         t_up[newly] = step / 60.0
         reached |= (up > 0.9)
