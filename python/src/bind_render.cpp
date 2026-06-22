@@ -8,6 +8,7 @@
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/canvas/Canvas.hpp"
+#include "threepp/constants.hpp"
 #include "threepp/controls/OrbitControls.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/input/KeyListener.hpp"
@@ -43,6 +44,17 @@ namespace threepp_py {
     }
 
     void init_render(py::module_& m) {
+
+        // Tone-mapping operator (maps HDR/linear radiance to displayable range).
+        // Default is NoToneMapping (clips >1); ACESFilmic/Neutral give a filmic
+        // roll-off that keeps HDR highlights and IBL reflections from blowing out.
+        py::enum_<ToneMapping>(m, "ToneMapping")
+                .value("NoToneMapping", ToneMapping::None)
+                .value("Linear", ToneMapping::Linear)
+                .value("Reinhard", ToneMapping::Reinhard)
+                .value("Cineon", ToneMapping::Cineon)
+                .value("ACESFilmic", ToneMapping::ACESFilmic)
+                .value("Neutral", ToneMapping::Neutral);
 
         // ---- Canvas ----------------------------------------------------------
         // A GLFW window (or a hidden surface when headless=True). Construction is
@@ -101,6 +113,7 @@ namespace threepp_py {
                 .def_readwrite("auto_clear", &GLRenderer::autoClear)
                 .def_readwrite("sort_objects", &GLRenderer::sortObjects)
                 .def_readwrite("check_shader_errors", &GLRenderer::checkShaderErrors)
+                .def_readwrite("tone_mapping", &GLRenderer::toneMapping)
                 .def_readwrite("tone_mapping_exposure", &GLRenderer::toneMappingExposure)
                 .def_property("shadow_map_enabled",
                               [](GLRenderer& r) { return r.shadowMap().enabled; },

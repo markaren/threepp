@@ -47,6 +47,23 @@ def test_save_frame(renderer, lit_scene, tmp_path):
     assert out.exists() and out.stat().st_size > 0
 
 
+def test_tone_mapping_and_ibl(renderer, hdr_env):
+    # ToneMapping operator + RGBELoader + scene.environment in one render pass.
+    prev = renderer.tone_mapping
+    try:
+        renderer.tone_mapping = tp.ToneMapping.ACESFilmic
+        scene = tp.Scene()
+        scene.environment = tp.RGBELoader().load(hdr_env)  # image-based lighting
+        mat = tp.MeshStandardMaterial()
+        mat.metalness, mat.roughness = 1.0, 0.1
+        scene.add(tp.Mesh(tp.SphereGeometry(1.0), mat))
+        renderer.render(scene, _camera())
+        img = renderer.read_pixels()
+        assert int(img.max()) > int(img.min())  # the metal sphere is lit by the env
+    finally:
+        renderer.tone_mapping = prev
+
+
 def test_read_pixels_flip_orientation(renderer, lit_scene):
     # flip=True (default) and flip=False should differ for a non-symmetric scene
     mesh = tp.Mesh(tp.BoxGeometry(), tp.MeshStandardMaterial())
