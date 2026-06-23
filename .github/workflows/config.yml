@@ -138,15 +138,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Ninja ships on the windows image but, unlike the VS generator, needs the
+      # MSVC toolchain (cl.exe) on PATH. Activate the x64 developer environment.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Configure and build
         run: |
-          cmake . -A x64 -B build -DTHREEPP_TREAT_WARNINGS_AS_ERRORS=ON -DCMAKE_BUILD_TYPE="Release"
-          cmake --build build --config Release
+          cmake . -B build -G Ninja -DTHREEPP_TREAT_WARNINGS_AS_ERRORS=ON -DCMAKE_BUILD_TYPE="Release"
+          cmake --build build
 
       - name: Test
         run: |
           cd build/tests
-          ctest -C Release --output-on-failure
+          ctest --output-on-failure
 
 
   darwin:
