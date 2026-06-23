@@ -15442,7 +15442,22 @@ namespace threepp {
         pimpl_->toneMapping_         = toneMapping;
         pimpl_->toneMappingExposure_ = toneMappingExposure;
         pimpl_->autoClear_           = autoClear;
-        // Only the PT-bound (perspective-camera) render() call needs the
+        // A split-screen secondary pane — a second perspective render() into a
+        // scissor sub-rect while a frame is already in flight — composes
+        // overlay-only (Points / Lines / Sprites) into that region and must NOT
+        // run the scene-build pass. renderFrame already routes it to the
+        // overlay-only path (its matching condition below), but the open frame's
+        // command buffer still has the PRIMARY pane's TLAS + scene-desc buffers
+        // bound: ensureSceneBuilt's structural-rebuild branch (a different scene
+        // ⇒ snapshot mismatch ⇒ fullRebuild) tears those down mid-frame, which
+        // invalidates the recording command buffer and surfaces as a device-lost
+        // at the next buildTlas one-shot. OverlayPass::record updates the
+        // scene/camera matrices itself, so skipping the build here is matrix-safe.
+        const bool secondaryOverlayPane =
+                pimpl_->frameState_ != Impl::FrameState::Idle &&
+                pimpl_->scissorTest &&
+                pimpl_->scissor.z >= 1.f && pimpl_->scissor.w >= 1.f;
+        // Only the PT-bound (perspective-camera) primary render() call needs the
         // scene-build pass — it populates lastVisibleEntries_, the BLAS
         // cache, motion bits and the per-mesh fingerprint state the PT
         // pipeline reads. The HUD pattern's second call (ortho camera over
@@ -15450,7 +15465,7 @@ namespace threepp {
         // motionThisFrame_ / meshMovedBits_ / lastVisibleEntries_ and the
         // next PT frame cold-starts (visibly drops to ~1-spp quality).
         // The ortho overlay record path walks the HUD scene directly instead.
-        if (!camera.is<OrthographicCamera>()) {
+        if (!camera.is<OrthographicCamera>() && !secondaryOverlayPane) {
             const auto sceneStart = std::chrono::high_resolution_clock::now();
             pimpl_->ensureSceneBuilt(scene);
             // World-space Sprites (screenSpace == false) are drawn by the overlay
