@@ -46,6 +46,35 @@ using namespace threepp;
 
 namespace {
 
+// Thin handle over a PxMaterial (surface friction + restitution). The PxMaterial is owned by the
+// PxPhysics inside PhysxWorld and released with it, so this just holds the pointer (keep_alive ties
+// it to the world). Properties are runtime-mutable so a domain-randomization loop can re-roll the
+// friction/restitution of a per-env material in place each reset. Default restitution 0 (a bouncing
+// foot is wrong for locomotion); the global defaultMaterial stays 0.2 for back-compat.
+class PhysxMaterial {
+public:
+    explicit PhysxMaterial(::physx::PxMaterial* m) : mat_(m) {}
+    ::physx::PxMaterial* raw() const { return mat_; }
+    float staticFriction() const { return mat_->getStaticFriction(); }
+    void setStaticFriction(float v) { mat_->setStaticFriction(v); }
+    float dynamicFriction() const { return mat_->getDynamicFriction(); }
+    void setDynamicFriction(float v) { mat_->setDynamicFriction(v); }
+    float restitution() const { return mat_->getRestitution(); }
+    void setRestitution(float v) { mat_->setRestitution(v); }
+
+private:
+    ::physx::PxMaterial* mat_;
+};
+
+// "average"|"min"|"multiply"|"max" -> PxCombineMode (how two contacting materials' coefficients mix).
+inline ::physx::PxCombineMode::Enum combineModeFromString(const std::string& s) {
+    using ::physx::PxCombineMode;
+    if (s == "min") return PxCombineMode::eMIN;
+    if (s == "multiply") return PxCombineMode::eMULTIPLY;
+    if (s == "max") return PxCombineMode::eMAX;
+    return PxCombineMode::eAVERAGE;
+}
+
     // Thin Python-facing handle over a PhysX actor created through PhysxWorld.
     // The actor is owned by the world's PxScene, so a RigidBody is only valid
     // while its PhysxWorld lives — enforced with keep_alive on the adders.
@@ -214,7 +243,8 @@ namespace {
                                   const std::array<float, 3>& axis, const std::array<float, 3>& anchor,
                                   bool limited, float lower, float upper,
                                   float stiffness, float damping, float maxForce, float driveTarget,
-                                  const std::string& jointType, float jointFriction) {
+                                  const std::string& jointType, float jointFriction,
+                                  ::physx::PxMaterial* material) {
             if (finalized_) throw std::runtime_error("Articulation.add_link: already finalized (no links after finalize)");
             auto* g = mesh.geometry().get();
             if (!g) throw std::runtime_error("Articulation.add_link: mesh has no geometry");
@@ -232,7 +262,8 @@ namespace {
             if (!link) throw std::runtime_error("Articulation.add_link: createLink failed");
             if (!parentLink) rootLink_ = link;// the root link (for batched root_state)
 
-            PxShape* s = world_.physics().createShape(shape.geom.any(), world_.defaultMaterial(), true);
+            PxShape* s = world_.physics().createShape(shape.geom.any(),
+                                                      material ? *material : world_.defaultMaterial(), true);
             s->setLocalPose(shape.localPose);
             link->attachShape(*s);
             s->release();
@@ -450,13 +481,14 @@ namespace threepp_py {
                         const std::array<float, 3>& axis, const std::array<float, 3>& anchor,
                         const py::object& lower, const py::object& upper,
                         float stiffness, float damping, float max_force, float drive_target,
-                        const std::string& joint_type, float joint_friction) {
+                        const std::string& joint_type, float joint_friction, const py::object& material) {
                          ArticulationLink* p = parent.is_none() ? nullptr : parent.cast<ArticulationLink*>();
                          const bool limited = !lower.is_none() && !upper.is_none();
                          const float lo = limited ? lower.cast<float>() : 0.f;
                          const float hi = limited ? upper.cast<float>() : 0.f;
+                         ::physx::PxMaterial* mat = material.is_none() ? nullptr : material.cast<PhysxMaterial*>()->raw();
                          return a.add_link(p, mesh, density, axis, anchor, limited, lo, hi,
-                                           stiffness, damping, max_force, drive_target, joint_type, joint_friction);
+                                           stiffness, damping, max_force, drive_target, joint_type, joint_friction, mat);
                      },
                      py::arg("mesh"), py::arg("parent") = py::none(), py::arg("density") = 1000.f,
                      py::arg("axis") = std::array<float, 3>{0.f, 0.f, 1.f},
@@ -465,13 +497,17 @@ namespace threepp_py {
                      py::arg("stiffness") = 0.f, py::arg("damping") = 0.f,
                      py::arg("max_force") = 1e6f, py::arg("drive_target") = 0.f,
                      py::arg("joint_type") = "revolute", py::arg("joint_friction") = 0.0f,
+                     py::arg("material") = py::none(),
                      py::keep_alive<1, 2>(), py::keep_alive<0, 1>(),
                      "Add a link. parent=None → the fixed/free root; otherwise attach an inbound joint at "
                      "world-space `anchor` along world-space `axis`. joint_type='revolute' (hinge about axis) "
                      "or 'prismatic' (slider along axis). lower/upper set the joint limits (radians for "
                      "revolute, metres for prismatic; omit both for a free axis); stiffness/damping/max_force "
                      "configure the PD drive (stiffness>0 motorizes it; leave 0 for a passive/force-controlled "
-                     "joint). Shape is inferred from the mesh (Box/Sphere/Capsule). Returns an ArticulationLink.")
+                     "joint). Shape is inferred from the mesh (Box/Sphere/Capsule). `material` (from "
+                     "world.create_material) overrides the contact friction/restitution for this link's "
+                     "shape — e.g. a grippy, restitution-0 foot, or a per-env material for friction "
+                     "domain randomization; default uses the world's shared material. Returns an ArticulationLink.")
                 .def("finalize", &Articulation::finalize,
                      "Add the finished articulation to the scene. No links may be added afterwards.")
                 .def("reset", &Articulation::reset, py::arg("position"),
@@ -497,13 +533,31 @@ namespace threepp_py {
                      "(PhysX cache order != add-order). Use to map a GPU-trained policy back to the "
                      "CPU getters: obs_gpu[dof_order[i]] = cpu[i]; cpu_target[i] = gpu_target[dof_order[i]].");
 
+        py::class_<PhysxMaterial>(m, "PhysxMaterial",
+                                  "A contact material (surface friction + restitution). Create via "
+                                  "world.create_material(...), pass to add_link/add/add_static. The "
+                                  "static_friction / dynamic_friction / restitution properties are "
+                                  "mutable at runtime — re-roll them each reset for per-env friction "
+                                  "domain randomization (a key sim-to-real robustness lever).")
+                .def_property("static_friction", &PhysxMaterial::staticFriction, &PhysxMaterial::setStaticFriction)
+                .def_property("dynamic_friction", &PhysxMaterial::dynamicFriction, &PhysxMaterial::setDynamicFriction)
+                .def_property("restitution", &PhysxMaterial::restitution, &PhysxMaterial::setRestitution)
+                .def("set",
+                     [](PhysxMaterial& m, float static_friction, float dynamic_friction, float restitution) {
+                         m.setStaticFriction(static_friction);
+                         m.setDynamicFriction(dynamic_friction);
+                         m.setRestitution(restitution);
+                     },
+                     py::arg("static_friction"), py::arg("dynamic_friction"), py::arg("restitution"),
+                     "Set all three coefficients at once (the domain-randomization hot path).");
+
         py::class_<PhysxWorld>(m, "PhysxWorld",
                                "A PhysX rigid-body world wired to the threepp scene graph. Add meshes as "
                                "bodies, then call step(dt) each frame; every bound mesh's position/quaternion "
                                "follows the simulation. Pure CPU — no canvas or renderer required.")
                 .def(py::init([](const Vector3& gravity, float fixed_timestep, int max_substeps,
                                  unsigned num_threads, bool gpu_dynamics, bool direct_gpu,
-                                 std::uintptr_t cuda_context) {
+                                 bool tgs_pcm, std::uintptr_t cuda_context) {
                          PhysxWorld::Settings s;
                          s.gravity = gravity;
                          s.fixedTimestep = fixed_timestep;
@@ -511,6 +565,7 @@ namespace threepp_py {
                          s.numThreads = num_threads;
                          s.enableGpuDynamics = gpu_dynamics;
                          s.enableDirectGpu = direct_gpu;
+                         s.enableTgsPcm = tgs_pcm;
                          s.cudaContext = reinterpret_cast<CUcontext>(cuda_context);
                          return std::make_unique<PhysxWorld>(s);
                      }),
@@ -520,11 +575,15 @@ namespace threepp_py {
                      py::arg("num_threads") = 2,
                      py::arg("gpu_dynamics") = false,
                      py::arg("direct_gpu") = false,
+                     py::arg("tgs_pcm") = false,
                      py::arg("cuda_context") = 0,
                      "gpu_dynamics requires a CUDA GPU (needed for soft bodies). direct_gpu also "
                      "enables the PhysX direct-GPU API for batched GPU-resident articulation state "
                      "I/O (PhysxGpuBatch) — the basis for GPU vectorized RL. Under direct_gpu the "
-                     "per-actor CPU getters and the binding-sync step() are NOT valid. cuda_context "
+                     "per-actor CPU getters and the binding-sync step() are NOT valid. tgs_pcm makes "
+                     "a CPU world use the TGS solver + PCM + stabilization (the GPU path always does) "
+                     "so its contact model MATCHES a GPU-trained policy for sim-to-sim deploy. "
+                     "cuda_context "
                      "(an existing CUcontext as an int, e.g. torch's primary context) makes PhysX "
                      "share that context instead of creating its own — required to mix PhysX GPU work "
                      "with the framework's cuBLAS/cuDNN on the same device.")
@@ -532,14 +591,39 @@ namespace threepp_py {
                      "Advance the simulation by dt seconds (variable-rate caller, fixed-rate physics). "
                      "After it returns, every bound mesh's transform reflects the new state.")
                 .def("set_gravity", &PhysxWorld::setGravity, py::arg("gravity"))
-                .def("add", [](PhysxWorld& w, Mesh& mesh, float density) { return RigidBody(w.add(mesh, density)); },
-                     py::arg("mesh"), py::arg("density") = 1000.f,
+                .def("add", [](PhysxWorld& w, Mesh& mesh, float density, const py::object& material) {
+                         ::physx::PxMaterial* mat = material.is_none() ? nullptr : material.cast<PhysxMaterial*>()->raw();
+                         return RigidBody(w.add(mesh, density, mat));
+                     },
+                     py::arg("mesh"), py::arg("density") = 1000.f, py::arg("material") = py::none(),
                      py::keep_alive<1, 2>(), py::keep_alive<0, 1>(),
                      "Add a dynamic body whose shape is inferred from the mesh's Box/Sphere/Capsule "
-                     "geometry; the mesh is bound so it follows the sim. Returns a RigidBody.")
-                .def("add_static", [](PhysxWorld& w, Mesh& mesh) { return RigidBody(w.addStatic(mesh)); },
-                     py::arg("mesh"), py::keep_alive<0, 1>(),
-                     "Add a static collider inferred from the mesh's Box/Sphere/Capsule geometry.")
+                     "geometry; the mesh is bound so it follows the sim. `material` (from create_material) "
+                     "overrides the contact friction/restitution. Returns a RigidBody.")
+                .def("add_static", [](PhysxWorld& w, Mesh& mesh, const py::object& material) {
+                         ::physx::PxMaterial* mat = material.is_none() ? nullptr : material.cast<PhysxMaterial*>()->raw();
+                         return RigidBody(w.addStatic(mesh, mat));
+                     },
+                     py::arg("mesh"), py::arg("material") = py::none(), py::keep_alive<0, 1>(),
+                     "Add a static collider inferred from the mesh's Box/Sphere/Capsule geometry. "
+                     "`material` (from create_material) sets its friction/restitution — e.g. a grippy floor.")
+                .def("create_material",
+                     [](PhysxWorld& w, float static_friction, float dynamic_friction, float restitution,
+                        const std::string& friction_combine, const std::string& restitution_combine) {
+                         ::physx::PxMaterial* m = w.physics().createMaterial(static_friction, dynamic_friction, restitution);
+                         if (!m) throw std::runtime_error("create_material: PxPhysics::createMaterial failed");
+                         m->setFrictionCombineMode(combineModeFromString(friction_combine));
+                         m->setRestitutionCombineMode(combineModeFromString(restitution_combine));
+                         return std::make_unique<PhysxMaterial>(m);
+                     },
+                     py::arg("static_friction") = 0.5f, py::arg("dynamic_friction") = 0.5f,
+                     py::arg("restitution") = 0.0f, py::arg("friction_combine") = "average",
+                     py::arg("restitution_combine") = "average", py::keep_alive<0, 1>(),
+                     "Create a contact material. Defaults: friction 0.5/0.5, restitution 0 (no bounce — "
+                     "right for feet/locomotion, unlike the world's shared 0.2 default). combine modes "
+                     "('average'|'min'|'multiply'|'max') control how two contacting materials' coefficients "
+                     "mix — use 'min' so a clean material governs a contact against a different one. The "
+                     "returned PhysxMaterial is mutable (per-env friction randomization). Keeps the world alive.")
                 .def("add_dynamic_convex",
                      [](PhysxWorld& w, Mesh& mesh, float density) {
                          auto* a = w.addDynamicConvex(mesh, density);
