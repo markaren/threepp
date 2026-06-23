@@ -11,6 +11,8 @@ option(THREEPP_WITH_FBX "Build with FBXLoader (OpenFBX)" OFF)
 option(THREEPP_WITH_USD "Build with USDLoader (tinyusdz)" OFF)
 option(THREEPP_WITH_RLTOOLS "Fetch RLtools (header-only deep RL) for the reinforcement-learning example" OFF)
 
+option(THREEPP_WITH_PYTHON "Build the pybind11 Python bindings (threepp module)" OFF)
+
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 option(THREEPP_WITH_WGPU "Build with WebGPU backend (via wgpu-native)" OFF)
 option(THREEPP_WITH_VULKAN "Build with Vulkan backend (requires Vulkan SDK)" OFF)
@@ -67,6 +69,12 @@ endif ()
 include(cmake/FetchOptionalDeps.cmake)
 
 add_subdirectory(src)
+
+# Python bindings (pybind11). Built only when explicitly enabled; pulls in
+# pybind11 via FetchContent and produces the `threepp` Python extension module.
+if (THREEPP_WITH_PYTHON)
+    add_subdirectory(python)
+endif ()
 
 # Example/test assets live in a separate
 # repo, fetched only when building examples or tests so library consumers stay

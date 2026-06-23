@@ -6,6 +6,12 @@ build
 cmake-build-*
 compile_commands.json
 
+# Python packaging / wheel-build artifacts (scikit-build-core)
+dist/
+wheelhouse/
+*.egg-info/
+__pycache__/
+
 
 *.bin
 *.weights

@@ -220,3 +220,60 @@ jobs:
         run: |
           cmake . -B build -DCMAKE_TOOLCHAIN_FILE=${{env.EMSDK}}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake -DTHREEPP_BUILD_TESTS=OFF -DTHREEPP_FETCH_ASSIMP=OFF -DCMAKE_BUILD_TYPE="Release"
           cmake --build build
+
+
+  # Build the pybind11 Python bindings (the `threepp` module) and run the binding
+  # test-suite. Like the Vulkan job, this can't exercise the GPU-only paths — the
+  # PhysX direct-GPU + CUDA/torch RL stuff needs a real GPU the runners don't have —
+  # so it builds GL-only: the module is compiled (catching binding breaks across the
+  # matrix of Python versions) and the GL + math/scene/loader/imgui tests run on
+  # Mesa's software rasteriser under a virtual display. The PhysX and Vulkan tests
+  # skip themselves on a GL-only build (pytest.mark.skipif on threepp.HAS_*).
+  python-bindings:
+
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: [ '3.10', '3.12' ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+          libxinerama-dev \
+          libxcursor-dev \
+          xorg-dev \
+          libglu1-mesa-dev \
+          pkg-config \
+          libglfw3 \
+          libglfw3-dev \
+          libgl1-mesa-dri \
+          xvfb
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Python test deps
+        run: python -m pip install --upgrade pip pytest numpy pillow
+
+      - name: Build the threepp module (GL only — PhysX/Vulkan need a GPU)
+        run: |
+          cmake . -B build \
+            -DTHREEPP_WITH_PYTHON=ON \
+            -DTHREEPP_USE_EXTERNAL_GLFW=ON \
+            -DTHREEPP_BUILD_TESTS=OFF \
+            -DTHREEPP_BUILD_EXAMPLES=OFF \
+            -DPYBIND11_FINDPYTHON=ON \
+            -DPython_EXECUTABLE=$(which python) \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target threepp_py -j 2
+
+      - name: Run binding tests (headless GL under Xvfb)
+        working-directory: python
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" python -m pytest -ra

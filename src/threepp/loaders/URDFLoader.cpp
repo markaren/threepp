@@ -13,6 +13,7 @@
 #include "pugixml.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <list>
@@ -25,10 +26,16 @@ namespace {
 
     Vector3 parseTupleString(const std::string& strValues) {
         if (strValues.empty()) return {};
-        const auto values = utils::split(strValues, ' ');
-        return {utils::parseFloat(values[0]),
-                utils::parseFloat(values[1]),
-                utils::parseFloat(values[2])};
+        // URDF xyz/rpy/size attributes may separate components with runs of
+        // whitespace (e.g. `xyz="0 1      0"`); collect the non-empty tokens so a
+        // split on ' ' doesn't yield empty fields that fail float conversion.
+        std::array<float, 3> v{};
+        size_t n = 0;
+        for (const auto& tok : utils::split(strValues, ' ')) {
+            if (tok.empty() || n >= 3) continue;
+            v[n++] = utils::parseFloat(tok);
+        }
+        return {v[0], v[1], v[2]};
     }
 
     void applyRotation(const std::shared_ptr<Object3D>& object, const Vector3& rotation) {
