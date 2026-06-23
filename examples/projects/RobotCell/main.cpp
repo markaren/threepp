@@ -42,6 +42,7 @@
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/extras/SpriteInteractor.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
+#include "threepp/extras/physx/UrdfArticulation.hpp"
 #include "threepp/helpers/CameraHelper.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/loaders/SVGLoader.hpp"
@@ -1151,9 +1152,19 @@ int main(int argc, char** argv) {
         toolGroup->add(cup);
     }
 
-    // kinematic pusher so the arm can nudge crates it sweeps through
-    PxRigidDynamic* pusher = world.addDynamic(PxSphereGeometry(0.03f), PxTransform(PxVec3(0, 0.8f, 0)), 100.f);
-    pusher->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
+    // Physical arm: the SAME URDF loaded as a PhysX articulation (one shared loader with the visual
+    // Robot above), so the arm is a REAL collider that nudges crates it sweeps through — replacing the
+    // old kinematic pusher-sphere hack. It PD-tracks the IK's joint command every frame; it is invisible
+    // (the Robot renders the meshes) and just provides contact. Built Z-up -> Y-up to match the Robot.
+    URDFArticulationOptions armOpts;
+    armOpts.fixedBase = true;
+    armOpts.basePosition = Vector3(0.f, kPedestalH, 0.f);
+    armOpts.baseRotation = Quaternion().setFromAxisAngle(Vector3(1, 0, 0), -math::PI / 2);
+    armOpts.stiffness = 4000.f;// stiff PD so the collider tracks the commanded pose tightly (low sag)
+    armOpts.damping = 300.f;
+    armOpts.maxForce = 3000.f;
+    armOpts.renderVisuals = false;// invisible physical twin; the Robot above is what you see
+    auto arm = loadArticulation(world, urdfPath, armOpts);
 
     // ===== eye-in-hand depth sensor =========================================
     // 70-deg FOV so the survey pose sees the whole crate zone in one scan.
@@ -1319,11 +1330,9 @@ int main(int argc, char** argv) {
         }
     };
 
-    // drive the kinematic pusher + carried crate from the latest tool pose
+    // drive the carried crate from the latest tool pose (the suction grip); the arm articulation itself
+    // pushes any crate it sweeps through, so no kinematic pusher proxy is needed any more.
     world.onPreSubstep([&](float) {
-        // pusher rides a bit up the tool column so the cup itself can touch
-        const PxVec3 off = tipPose.q.rotate(PxVec3(0, 0, -0.05f));
-        pusher->setKinematicTarget(PxTransform(tipPose.p + off, tipPose.q));
         if (carried) carried->setKinematicTarget(tipPose * grabOffset);
     });
 
@@ -1691,6 +1700,7 @@ int main(int argc, char** argv) {
         const Vector3& setpoint = planner.step(tipTarget, vmax, dt);
         ik.track(qCmd, setpoint, dt);
         robot->setJointValues(qCmd);
+        arm.articulation->setDriveTargets(qCmd.data(), qCmd.size());// the physical arm PD-tracks the IK command
 
         flange = robot->computeEndEffectorTransform(qCmd);
         tip = tipOf(flange);

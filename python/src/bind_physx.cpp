@@ -25,8 +25,10 @@
 #include <pybind11/stl.h>
 
 #include "threepp/core/Object3D.hpp"
+#include "threepp/extras/physx/Articulation.hpp"
 #include "threepp/extras/physx/PhysxGpuBatch.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
+#include "threepp/extras/physx/UrdfArticulation.hpp"
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
@@ -37,12 +39,16 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace py = pybind11;// the threepp_py::py alias isn't visible in the anon namespace
 using namespace threepp;
+using namespace ::physx;// bare PhysX type names in the binding code (was provided by a now-removed
+                        // using-directive inside the old in-file Articulation block)
 
 namespace {
 
@@ -109,324 +115,6 @@ inline ::physx::PxCombineMode::Enum combineModeFromString(const std::string& s) 
         ::physx::PxRigidActor* actor_;
     };
 
-    using namespace ::physx;
-
-    // Shortest-arc quaternion mapping unit vector `from` onto unit vector `to`.
-    // Used to orient a revolute joint frame so its X axis (the eTWIST axis) lies
-    // along the requested world hinge axis.
-    inline PxQuat shortestArc(PxVec3 from, PxVec3 to) {
-        from.normalize();
-        to.normalize();
-        const float d = from.dot(to);
-        if (d >= 1.f - 1e-6f) return PxQuat(PxIdentity);
-        if (d <= -1.f + 1e-6f) {
-            PxVec3 axis = PxVec3(1, 0, 0).cross(from);
-            if (axis.magnitudeSquared() < 1e-6f) axis = PxVec3(0, 1, 0).cross(from);
-            axis.normalize();
-            return PxQuat(PxPi, axis);
-        }
-        const PxVec3 c = from.cross(to);
-        PxQuat q(c.x, c.y, c.z, 1.f + d);
-        q.normalize();
-        return q;
-    }
-
-    // Box/Sphere/Capsule collider inferred from a mesh geometry (mirrors
-    // PhysxWorld's private inferShape). localPose corrects the capsule axis
-    // (threepp capsule is Y-aligned; PhysX capsule is X-aligned).
-    struct LinkShape {
-        PxGeometryHolder geom;
-        PxTransform localPose{PxIdentity};
-        bool valid = true;
-    };
-    inline LinkShape inferLinkShape(const BufferGeometry& g) {
-        LinkShape s;
-        if (auto* b = dynamic_cast<const BoxGeometry*>(&g)) {
-            s.geom = PxBoxGeometry(b->width * 0.5f, b->height * 0.5f, b->depth * 0.5f);
-        } else if (auto* sp = dynamic_cast<const SphereGeometry*>(&g)) {
-            s.geom = PxSphereGeometry(sp->radius);
-        } else if (auto* c = dynamic_cast<const CapsuleGeometry*>(&g)) {
-            s.geom = PxCapsuleGeometry(c->radius, c->length * 0.5f);
-            s.localPose = PxTransform(PxQuat(-PxHalfPi, PxVec3(0, 0, 1)));
-        } else {
-            s.valid = false;
-        }
-        return s;
-    }
-
-    // Handle to one articulation link + its inbound revolute joint (null for the
-    // root). Valid only while its Articulation (and world) live.
-    class ArticulationLink {
-    public:
-        ArticulationLink(PxArticulationLink* link, PxArticulationJointReducedCoordinate* joint,
-                         PxTransform creationPose, PxArticulationAxis::Enum axis = PxArticulationAxis::eTWIST)
-            : link_(link), joint_(joint), creationPose_(creationPose), axis_(axis) {}
-
-        bool is_root() const { return joint_ == nullptr; }
-        Vector3 position() const { return fromPxVec3(link_->getGlobalPose().p); }
-        Quaternion quaternion() const { return fromPxQuat(link_->getGlobalPose().q); }
-
-        // External force/impulse on this link (a PxArticulationLink is a PxRigidBody).
-        // Use for perturbations — e.g. random shoves to train push recovery, or to
-        // force-drive a cart link in a cart-pole on the CPU deployment path.
-        void add_force(const Vector3& v) { link_->addForce(toPxVec3(v), PxForceMode::eFORCE); }
-        void add_impulse(const Vector3& v) { link_->addForce(toPxVec3(v), PxForceMode::eIMPULSE); }
-
-        // Operate on this joint's actual motion axis (eTWIST for revolute, eX for
-        // prismatic) so the accessors are correct for both joint types.
-        void set_drive_target(float t) { joint()->setDriveTarget(axis_, t); }
-        void set_drive_velocity(float v) { joint()->setDriveVelocity(axis_, v); }
-        float joint_position() const { return joint()->getJointPosition(axis_); }
-        float joint_velocity() const { return joint()->getJointVelocity(axis_); }
-
-        PxArticulationLink* raw() const { return link_; }
-        PxTransform creationPose() const { return creationPose_; }
-
-    private:
-        PxArticulationJointReducedCoordinate* joint() const {
-            if (!joint_) throw std::runtime_error("ArticulationLink: the root link has no joint");
-            return joint_;
-        }
-        PxArticulationLink* link_;
-        PxArticulationJointReducedCoordinate* joint_;
-        PxTransform creationPose_;
-        PxArticulationAxis::Enum axis_;
-    };
-
-    // Reduced-coordinate articulation builder (a robot). Add links (root first,
-    // then children with an inbound revolute joint), then finalize() to add it to
-    // the world's scene. world.step() drives the bound visual meshes.
-    class Articulation {
-    public:
-        Articulation(PhysxWorld& world, bool fixedBase, int solverPositionIters, bool disableSelfCollision)
-            : world_(world) {
-            art_ = world_.physics().createArticulationReducedCoordinate();
-            if (!art_) throw std::runtime_error("createArticulationReducedCoordinate failed");
-            art_->setArticulationFlag(PxArticulationFlag::eFIX_BASE, fixedBase);
-            if (disableSelfCollision) art_->setArticulationFlag(PxArticulationFlag::eDISABLE_SELF_COLLISION, true);
-            if (solverPositionIters > 0) art_->setSolverIterationCounts(static_cast<PxU32>(solverPositionIters), 1);
-        }
-        ~Articulation() {
-            if (cache_) cache_->release();
-            // If it was never added to a scene we still own it; once finalized the
-            // scene owns it and releases it on world teardown (the world outlives us).
-            if (art_ && !finalized_) art_->release();
-        }
-
-        // CPU state I/O (per-joint getters/setters, the cache) is NOT valid once the world
-        // runs in direct-GPU mode — that state isn't synced. Fail loudly instead of silently
-        // returning stale data; use PhysxGpuBatch for state I/O under direct_gpu.
-        void cpuOnly(const char* what) const {
-            if (world_.directGpuEnabled())
-                throw std::runtime_error(std::string("Articulation.") + what +
-                                         ": not valid under direct_gpu — use PhysxGpuBatch for state I/O");
-        }
-
-        // Episode reset: teleport the root to `pos` upright with zero velocity and
-        // zero every joint position/velocity (back to the neutral build pose). The
-        // bound visuals snap to the new state on the next world.step().
-        void reset(const Vector3& pos) {
-            if (!finalized_) throw std::runtime_error("Articulation.reset: finalize() first");
-            cpuOnly("reset");
-            art_->setRootGlobalPose(PxTransform(toPxVec3(pos), PxQuat(PxIdentity)), false);
-            if (!cache_) cache_ = art_->createCache();
-            art_->zeroCache(*cache_);
-            art_->applyCache(*cache_,
-                             PxArticulationCacheFlag::ePOSITION | PxArticulationCacheFlag::eVELOCITY |
-                                     PxArticulationCacheFlag::eROOT_VELOCITIES,
-                             true);
-        }
-        Articulation(const Articulation&) = delete;
-        Articulation& operator=(const Articulation&) = delete;
-
-        ArticulationLink add_link(ArticulationLink* parent, Mesh& mesh, float density,
-                                  const std::array<float, 3>& axis, const std::array<float, 3>& anchor,
-                                  bool limited, float lower, float upper,
-                                  float stiffness, float damping, float maxForce, float driveTarget,
-                                  const std::string& jointType, float jointFriction,
-                                  ::physx::PxMaterial* material) {
-            if (finalized_) throw std::runtime_error("Articulation.add_link: already finalized (no links after finalize)");
-            auto* g = mesh.geometry().get();
-            if (!g) throw std::runtime_error("Articulation.add_link: mesh has no geometry");
-            const auto shape = inferLinkShape(*g);
-            if (!shape.valid) throw std::runtime_error("Articulation.add_link: unsupported geometry (use Box/Sphere/Capsule)");
-
-            mesh.updateMatrixWorld();
-            Vector3 pos, scl;
-            Quaternion rot;
-            mesh.matrixWorld->decompose(pos, rot, scl);
-            const PxTransform linkPose(toPxVec3(pos), toPxQuat(rot));
-
-            PxArticulationLink* parentLink = parent ? parent->raw() : nullptr;
-            PxArticulationLink* link = art_->createLink(parentLink, linkPose);
-            if (!link) throw std::runtime_error("Articulation.add_link: createLink failed");
-            if (!parentLink) rootLink_ = link;// the root link (for batched root_state)
-
-            PxShape* s = world_.physics().createShape(shape.geom.any(),
-                                                      material ? *material : world_.defaultMaterial(), true);
-            s->setLocalPose(shape.localPose);
-            link->attachShape(*s);
-            s->release();
-            PxRigidBodyExt::updateMassAndInertia(*link, density);
-
-            // Revolute (hinge, rotation about the axis) or prismatic (slider,
-            // translation along the axis). For revolute the motion DOF is eTWIST
-            // (rotation about joint-frame X); for prismatic it's eX (translation
-            // along joint-frame X) — same frame, different DOF.
-            const bool prismatic = (jointType == "prismatic");
-            const PxArticulationAxis::Enum ax = prismatic ? PxArticulationAxis::eX : PxArticulationAxis::eTWIST;
-
-            PxArticulationJointReducedCoordinate* joint = nullptr;
-            if (parentLink) {
-                joint = link->getInboundJoint();
-                joint->setJointType(prismatic ? PxArticulationJointType::ePRISMATIC
-                                              : PxArticulationJointType::eREVOLUTE);
-                // Joint frame in world space: origin at the anchor, X axis along the
-                // hinge/slide axis (eTWIST rotates about X / eX translates along X).
-                const PxTransform jointWorld(toPxVec3(Vector3(anchor[0], anchor[1], anchor[2])),
-                                             shortestArc(PxVec3(1, 0, 0), toPxVec3(Vector3(axis[0], axis[1], axis[2]))));
-                joint->setParentPose(parent->creationPose().getInverse() * jointWorld);
-                joint->setChildPose(linkPose.getInverse() * jointWorld);
-                joint->setMotion(ax, limited ? PxArticulationMotion::eLIMITED : PxArticulationMotion::eFREE);
-                // Joint friction holds a joint static until the applied torque exceeds it —
-                // which silently fakes balancing tasks (a near-upright pole's tiny gravity
-                // torque never overcomes the default friction, so it never falls). Default to
-                // frictionless so "free" joints are genuinely free.
-                joint->setFrictionCoefficient(jointFriction);
-                joint->setArmature(ax, 0.0f);
-                if (limited) joint->setLimitParams(ax, PxArticulationLimit(lower, upper));
-                if (stiffness > 0.f || damping > 0.f) {
-                    joint->setDriveParams(ax,
-                                          PxArticulationDrive(stiffness, damping, maxForce, PxArticulationDriveType::eFORCE));
-                    joint->setDriveTarget(ax, driveTarget, false);// autowake=false: pre-scene
-                }
-                joints_.push_back(joint);
-            }
-            // A PxArticulationLink is a PxRigidActor, so the rigid-body bind path
-            // syncs the visual mesh to the simulated link pose.
-            world_.bind(mesh, *link);
-            return ArticulationLink(link, joint, linkPose, ax);
-        }
-
-        void finalize() {
-            if (finalized_) return;
-            world_.scene().addArticulation(*art_);
-            finalized_ = true;
-        }
-
-        // Set all joint positions (DOF order) and zero velocities, via the cache.
-        // Use to place an articulation in a chosen configuration — e.g. start a
-        // cart-pole hanging straight down for a swing-up demo.
-        void set_joint_positions(const py::array_t<float>& pos) {
-            if (!finalized_) throw std::runtime_error("Articulation.set_joint_positions: finalize() first");
-            cpuOnly("set_joint_positions");
-            if (!cache_) cache_ = art_->createCache();
-            art_->zeroCache(*cache_);
-            auto r = pos.unchecked<1>();
-            const PxU32 dof = art_->getDofs();
-            const PxU32 n = std::min<PxU32>(dof, static_cast<PxU32>(r.shape(0)));
-            for (PxU32 i = 0; i < n; ++i) cache_->jointPosition[i] = r(i);
-            art_->applyCache(*cache_, PxArticulationCacheFlag::ePOSITION | PxArticulationCacheFlag::eVELOCITY);
-        }
-
-        // Underlying PhysX articulation — used to assemble a PhysxGpuBatch over many
-        // identical robots for GPU-resident vectorized stepping.
-        PxArticulationReducedCoordinate* raw_art() const { return art_; }
-        bool finalized() const { return finalized_; }
-
-        // Batched joint I/O — one call reads/writes every revolute joint (in
-        // add_link order), instead of a Python call per joint. This is the hot
-        // path for vectorized RL: it collapses ~36 pybind calls per robot per
-        // step to 3, clawing back the cost of the Python bridge.
-        py::array_t<float> joint_positions() const {
-            cpuOnly("joint_positions");
-            py::array_t<float> a(static_cast<py::ssize_t>(joints_.size()));
-            float* p = a.mutable_data();
-            for (size_t i = 0; i < joints_.size(); ++i)
-                p[i] = joints_[i]->getJointPosition(PxArticulationAxis::eTWIST);
-            return a;
-        }
-        py::array_t<float> joint_velocities() const {
-            cpuOnly("joint_velocities");
-            py::array_t<float> a(static_cast<py::ssize_t>(joints_.size()));
-            float* p = a.mutable_data();
-            for (size_t i = 0; i < joints_.size(); ++i)
-                p[i] = joints_[i]->getJointVelocity(PxArticulationAxis::eTWIST);
-            return a;
-        }
-        void set_drive_targets(const py::array_t<float>& arr) {
-            cpuOnly("set_drive_targets");
-            auto r = arr.unchecked<1>();
-            const size_t n = std::min<size_t>(joints_.size(), static_cast<size_t>(r.shape(0)));
-            // autowake=true on the last write: a policy that drives a settled robot
-            // (e.g. after a reset/settle) must wake it, or the targets are ignored and
-            // the articulation stays frozen at its rest pose.
-            for (size_t i = 0; i < n; ++i)
-                joints_[i]->setDriveTarget(PxArticulationAxis::eTWIST, r(i), i + 1 == n);
-        }
-
-        // For each joint (in add-order, the order joint_positions()/set_drive_targets use),
-        // its low-level DOF slot — the index it occupies in the direct-GPU joint buffers
-        // (PhysxGpuBatch), which follow PhysX's cache layout, NOT add-order. Use this to
-        // reconcile a GPU-trained policy (GPU-DOF order) with the CPU getters (add-order):
-        // obs_gpu[dof_order[i]] = cpu_value[i];  cpu_target[i] = gpu_target[dof_order[i]].
-        py::array_t<int> dof_order() const {
-            const size_t n = joints_.size();
-            // GPU/cache DOF order follows ascending low-level link index, one DOF per
-            // revolute link. So a joint's GPU slot = the rank of its child link's index.
-            std::vector<PxU32> linkIdx(n);
-            for (size_t i = 0; i < n; ++i)
-                linkIdx[i] = joints_[i]->getChildArticulationLink().getLinkIndex();
-            py::array_t<int> a(static_cast<py::ssize_t>(n));
-            int* p = a.mutable_data();
-            for (size_t i = 0; i < n; ++i) {
-                int rank = 0;
-                for (size_t j = 0; j < n; ++j)
-                    if (linkIdx[j] < linkIdx[i]) ++rank;
-                p[i] = rank;
-            }
-            return a;
-        }
-
-        // Root link world-frame spatial velocity [vx,vy,vz, wx,wy,wz]. Locomotion
-        // observations need the base linear/angular velocity, but the per-actor
-        // articulation API otherwise exposes pose only (a PxArticulationLink is a
-        // PxRigidBody, so it has the velocities).
-        py::array_t<float> root_velocity() const {
-            cpuOnly("root_velocity");
-            py::array_t<float> a(6);
-            float* p = a.mutable_data();
-            if (rootLink_) {
-                const PxVec3 lv = rootLink_->getLinearVelocity();
-                const PxVec3 av = rootLink_->getAngularVelocity();
-                p[0] = lv.x; p[1] = lv.y; p[2] = lv.z;
-                p[3] = av.x; p[4] = av.y; p[5] = av.z;
-            } else {
-                for (int i = 0; i < 6; ++i) p[i] = 0.f;
-            }
-            return a;
-        }
-
-        // Root link world pose as one array [px,py,pz, qx,qy,qz,qw] — one call
-        // instead of reading position + quaternion + their 7 components separately.
-        py::array_t<float> root_state() const {
-            cpuOnly("root_state");
-            py::array_t<float> a(7);
-            float* p = a.mutable_data();
-            const PxTransform t = rootLink_ ? rootLink_->getGlobalPose() : PxTransform(PxIdentity);
-            p[0] = t.p.x; p[1] = t.p.y; p[2] = t.p.z;
-            p[3] = t.q.x; p[4] = t.q.y; p[5] = t.q.z; p[6] = t.q.w;
-            return a;
-        }
-
-    private:
-        PhysxWorld& world_;
-        PxArticulationReducedCoordinate* art_ = nullptr;
-        PxArticulationCache* cache_ = nullptr;
-        PxArticulationLink* rootLink_ = nullptr;
-        std::vector<PxArticulationJointReducedCoordinate*> joints_;// non-root joints, add order
-        bool finalized_ = false;
-    };
 
 }// namespace
 
@@ -461,16 +149,16 @@ namespace threepp_py {
         py::class_<ArticulationLink>(m, "ArticulationLink",
                                      "A link of an Articulation plus its inbound revolute joint (the root has "
                                      "none). Valid while its Articulation/world live.")
-                .def_property_readonly("is_root", &ArticulationLink::is_root)
+                .def_property_readonly("is_root", &ArticulationLink::isRoot)
                 .def_property_readonly("position", &ArticulationLink::position)
                 .def_property_readonly("quaternion", &ArticulationLink::quaternion)
-                .def_property_readonly("joint_position", &ArticulationLink::joint_position, "Joint angle (radians).")
-                .def_property_readonly("joint_velocity", &ArticulationLink::joint_velocity, "Joint angular velocity (rad/s).")
-                .def("add_force", &ArticulationLink::add_force, py::arg("force"), "Apply an external force (N) to this link.")
-                .def("add_impulse", &ArticulationLink::add_impulse, py::arg("impulse"), "Apply an external impulse (kg·m/s) — e.g. a random shove.")
-                .def("set_drive_target", &ArticulationLink::set_drive_target, py::arg("target"),
+                .def_property_readonly("joint_position", &ArticulationLink::jointPosition, "Joint angle (radians).")
+                .def_property_readonly("joint_velocity", &ArticulationLink::jointVelocity, "Joint angular velocity (rad/s).")
+                .def("add_force", &ArticulationLink::addForce, py::arg("force"), "Apply an external force (N) to this link.")
+                .def("add_impulse", &ArticulationLink::addImpulse, py::arg("impulse"), "Apply an external impulse (kg·m/s) — e.g. a random shove.")
+                .def("set_drive_target", &ArticulationLink::setDriveTarget, py::arg("target"),
                      "Set the PD drive's target angle (radians).")
-                .def("set_drive_velocity", &ArticulationLink::set_drive_velocity, py::arg("velocity"));
+                .def("set_drive_velocity", &ArticulationLink::setDriveVelocity, py::arg("velocity"));
 
         py::class_<Articulation>(m, "Articulation",
                                  "A reduced-coordinate articulation (robot): a tree of links joined by "
@@ -487,8 +175,8 @@ namespace threepp_py {
                          const float lo = limited ? lower.cast<float>() : 0.f;
                          const float hi = limited ? upper.cast<float>() : 0.f;
                          ::physx::PxMaterial* mat = material.is_none() ? nullptr : material.cast<PhysxMaterial*>()->raw();
-                         return a.add_link(p, mesh, density, axis, anchor, limited, lo, hi,
-                                           stiffness, damping, max_force, drive_target, joint_type, joint_friction, mat);
+                         return a.addLink(p, mesh, density, axis, anchor, limited, lo, hi,
+                                          stiffness, damping, max_force, drive_target, joint_type, joint_friction, mat);
                      },
                      py::arg("mesh"), py::arg("parent") = py::none(), py::arg("density") = 1000.f,
                      py::arg("axis") = std::array<float, 3>{0.f, 0.f, 1.f},
@@ -513,22 +201,50 @@ namespace threepp_py {
                 .def("reset", &Articulation::reset, py::arg("position"),
                      "Episode reset: teleport the root upright to `position` with zero velocity and "
                      "zero all joint positions/velocities (back to the neutral build pose).")
-                .def("set_joint_positions", &Articulation::set_joint_positions, py::arg("positions"),
+                .def("set_joint_positions",
+                     [](Articulation& a, py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
+                         a.setJointPositions(arr.data(), static_cast<std::size_t>(arr.size()));
+                     },
+                     py::arg("positions"),
                      "Set all joint positions (DOF order) and zero velocities — e.g. place a cart-pole "
                      "hanging straight down for a swing-up demo.")
-                .def("joint_positions", &Articulation::joint_positions,
+                .def("joint_positions",
+                     [](const Articulation& a) {
+                         const auto v = a.jointPositions();
+                         return py::array_t<float>(static_cast<py::ssize_t>(v.size()), v.data());
+                     },
                      "All revolute joint angles (radians) as one numpy array, in add_link order.")
-                .def("joint_velocities", &Articulation::joint_velocities,
+                .def("joint_velocities",
+                     [](const Articulation& a) {
+                         const auto v = a.jointVelocities();
+                         return py::array_t<float>(static_cast<py::ssize_t>(v.size()), v.data());
+                     },
                      "All revolute joint angular velocities (rad/s) as one numpy array.")
-                .def("set_drive_targets", &Articulation::set_drive_targets, py::arg("targets"),
+                .def("set_drive_targets",
+                     [](Articulation& a, py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
+                         a.setDriveTargets(arr.data(), static_cast<std::size_t>(arr.size()));
+                     },
+                     py::arg("targets"),
                      "Set every joint's PD drive target from one numpy array — the batched hot path "
                      "for vectorized stepping (one call instead of one per joint).")
-                .def("root_state", &Articulation::root_state,
+                .def("root_state",
+                     [](const Articulation& a) {
+                         const auto s = a.rootState();
+                         return py::array_t<float>(7, s.data());
+                     },
                      "Root link world pose as numpy [px,py,pz, qx,qy,qz,qw] in one call.")
-                .def("root_velocity", &Articulation::root_velocity,
+                .def("root_velocity",
+                     [](const Articulation& a) {
+                         const auto s = a.rootVelocity();
+                         return py::array_t<float>(6, s.data());
+                     },
                      "Root link world-frame velocity as numpy [vx,vy,vz, wx,wy,wz] — the base "
                      "linear + angular velocity a locomotion observation needs.")
-                .def("dof_order", &Articulation::dof_order,
+                .def("dof_order",
+                     [](const Articulation& a) {
+                         const auto v = a.dofOrder();
+                         return py::array_t<int>(static_cast<py::ssize_t>(v.size()), v.data());
+                     },
                      "Per add-order joint, its low-level DOF slot in the direct-GPU joint buffers "
                      "(PhysX cache order != add-order). Use to map a GPU-trained policy back to the "
                      "CPU getters: obs_gpu[dof_order[i]] = cpu[i]; cpu_target[i] = gpu_target[dof_order[i]].");
@@ -681,7 +397,39 @@ namespace threepp_py {
                      py::arg("disable_self_collision") = false, py::keep_alive<0, 1>(),
                      "Create a reduced-coordinate articulation (robot). fixed_base pins the root to the "
                      "world (use for arms; leave false for free-floating bodies like a walking robot). "
-                     "Add links, then call finalize().");
+                     "Add links, then call finalize().")
+                .def("load_articulation",
+                     [](PhysxWorld& w, const std::string& path, bool fixed_base,
+                        const std::array<float, 3>& base_position, float default_density,
+                        float stiffness, float damping, float max_force, bool self_collision,
+                        int solver_position_iterations, bool render_visuals) {
+                         URDFArticulationOptions opts;
+                         opts.fixedBase = fixed_base;
+                         opts.basePosition = Vector3(base_position[0], base_position[1], base_position[2]);
+                         opts.defaultDensity = default_density;
+                         opts.stiffness = stiffness;
+                         opts.damping = damping;
+                         opts.maxForce = max_force;
+                         opts.selfCollision = self_collision;
+                         opts.solverPositionIterations = solver_position_iterations;
+                         opts.renderVisuals = render_visuals;
+                         auto r = loadArticulation(w, std::filesystem::path(path), opts);
+                         if (!r.articulation) throw std::runtime_error("load_articulation: could not read URDF: " + path);
+                         return std::make_tuple(std::move(r.articulation), std::move(r.meshes), std::move(r.jointNames));
+                     },
+                     py::arg("path"), py::arg("fixed_base") = false,
+                     py::arg("base_position") = std::array<float, 3>{0.f, 0.f, 0.f},
+                     py::arg("default_density") = 1000.f, py::arg("stiffness") = 0.f, py::arg("damping") = 0.f,
+                     py::arg("max_force") = 1e6f, py::arg("self_collision") = false,
+                     py::arg("solver_position_iterations") = 12, py::arg("render_visuals") = true,
+                     // No keep_alive: the result is a tuple (can't be a weakref nurse). The returned
+                     // articulation holds a PhysxWorld& — the caller must keep the world alive (urdf.py does).
+                     "Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ "
+                     "URDFLoader — xacro supported). Returns (articulation, meshes, joint_names): the "
+                     "collider meshes are bound to the sim (add them to a scene to render), joint_names "
+                     "lists the actuated joints in drive-target order. Collision is primitive/bbox, mass "
+                     "from <inertial> (else default_density x volume); fixed joints are collapsed. "
+                     "stiffness/damping/max_force set a PD drive on every joint.");
 
         // GPU-resident batched articulation state I/O (the direct-GPU API). Build one
         // over many identical finalized articulations in a PhysxWorld(direct_gpu=True),
@@ -731,7 +479,7 @@ namespace threepp_py {
                          for (auto h : arts) {
                              auto* a = h.cast<Articulation*>();
                              if (!a->finalized()) throw std::runtime_error("PhysxGpuBatch: articulation not finalized()");
-                             raw.push_back(a->raw_art());
+                             raw.push_back(a->rawArt());
                          }
                          return std::make_unique<threepp::PhysxGpuBatch>(world, std::move(raw));
                      }),
