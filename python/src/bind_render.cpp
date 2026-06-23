@@ -11,11 +11,14 @@
 #include "threepp/constants.hpp"
 #include "threepp/controls/OrbitControls.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/helpers/LidarModel.hpp"
+#include "threepp/helpers/LidarTypes.hpp"
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 
 #include <cctype>
 #include <cstring>
+#include <sstream>
 #include <string>
 
 using namespace threepp;
@@ -62,6 +65,64 @@ namespace threepp_py {
                 .value("Cineon", ToneMapping::Cineon)
                 .value("ACESFilmic", ToneMapping::ACESFilmic)
                 .value("Neutral", ToneMapping::Neutral);
+
+        // ---- LIDAR value types (helpers/LidarTypes.hpp + LidarModel.hpp) -----
+        // Pure data structs shared by the GL LidarSensor and the Vulkan
+        // PathTracedLidarSensor. Bound here (always-compiled, GL-safe) as plain
+        // value types; the scan itself is a separate, renderer-side step.
+        py::class_<LidarBeam>(m, "LidarBeam")
+                .def(py::init([](const Vector3& origin, const Vector3& direction) {
+                    return LidarBeam{origin, direction};
+                }), py::arg("origin") = Vector3(), py::arg("direction") = Vector3())
+                .def_readwrite("origin", &LidarBeam::origin)
+                .def_readwrite("direction", &LidarBeam::direction);
+
+        py::class_<LidarReturn>(m, "LidarReturn")
+                .def(py::init<>())
+                .def_readwrite("position", &LidarReturn::position)
+                .def_readwrite("normal", &LidarReturn::normal)
+                .def_readwrite("distance", &LidarReturn::distance)
+                .def_readwrite("intensity", &LidarReturn::intensity)
+                .def_readwrite("hit_instance_id", &LidarReturn::hitInstanceId)
+                .def_readwrite("return_no", &LidarReturn::returnNo)
+                .def("__repr__", [](const LidarReturn& r) {
+                    std::ostringstream o;
+                    o << "LidarReturn(distance=" << r.distance << ", intensity=" << r.intensity
+                      << ", hit_instance_id=" << r.hitInstanceId << ", return_no=" << r.returnNo << ")";
+                    return o.str();
+                });
+
+        py::class_<LidarParams>(m, "LidarParams")
+                .def(py::init<>())
+                .def_readwrite("max_range", &LidarParams::maxRange)
+                .def_readwrite("laser_power", &LidarParams::laserPower)
+                .def_readwrite("reference_range", &LidarParams::referenceRange)
+                .def_readwrite("atmospheric_extinction", &LidarParams::atmosphericExtinction)
+                .def_readwrite("detector_threshold", &LidarParams::detectorThreshold)
+                .def_readwrite("max_returns", &LidarParams::maxReturns)
+                .def_readwrite("samples_per_beam", &LidarParams::samplesPerBeam)
+                .def_readwrite("beam_divergence_mrad", &LidarParams::beamDivergenceMrad)
+                .def_readwrite("medium_surface_y", &LidarParams::mediumSurfaceY)
+                .def_readwrite("medium_extinction", &LidarParams::mediumExtinction)
+                .def_readwrite("medium_albedo", &LidarParams::mediumAlbedo)
+                .def_readwrite("medium_anisotropy", &LidarParams::mediumAnisotropy);
+
+        py::class_<LidarModel>(m, "LidarModel")
+                .def(py::init<>())
+                .def_readwrite("elevation_angles", &LidarModel::elevationAngles)
+                .def_readwrite("azimuth_resolution", &LidarModel::azimuthResolution)
+                .def_readwrite("azimuth_min", &LidarModel::azimuthMin)
+                .def_readwrite("azimuth_max", &LidarModel::azimuthMax)
+                .def_static("vlp16", &LidarModel::VLP16, "Velodyne VLP-16: 16 beams, +/-15deg elevation.")
+                .def_static("hdl32e", &LidarModel::HDL32E, "Velodyne HDL-32E: 32 beams, -30.67..+10.67deg.")
+                .def_static("os1_64", &LidarModel::OS1_64, "Ouster OS1-64: 64 beams, +/-22.5deg elevation.")
+                .def_static("os0_128", &LidarModel::OS0_128, "Ouster OS0-128: 128 beams, +/-45deg elevation.")
+                .def("__repr__", [](const LidarModel& lm) {
+                    std::ostringstream o;
+                    o << "LidarModel(beams=" << lm.elevationAngles.size()
+                      << ", azimuth_resolution=" << lm.azimuthResolution << ")";
+                    return o.str();
+                });
 
         // ---- Canvas ----------------------------------------------------------
         // A GLFW window (or a hidden surface when headless=True). Construction is
@@ -116,6 +177,11 @@ namespace threepp_py {
                 .def("set_size", [](GLRenderer& r, int w, int h) { r.setSize({w, h}); }, py::arg("width"), py::arg("height"))
                 .def("set_pixel_ratio", &GLRenderer::setPixelRatio, py::arg("value"))
                 .def("set_clear_color", &GLRenderer::setClearColor, py::arg("color"), py::arg("alpha") = 1.f)
+                .def("set_viewport", [](GLRenderer& r, int x, int y, int width, int height) { r.setViewport(x, y, width, height); },
+                     py::arg("x"), py::arg("y"), py::arg("width"), py::arg("height"))
+                .def("set_scissor", [](GLRenderer& r, int x, int y, int width, int height) { r.setScissor(x, y, width, height); },
+                     py::arg("x"), py::arg("y"), py::arg("width"), py::arg("height"))
+                .def("set_scissor_test", &GLRenderer::setScissorTest, py::arg("enabled"))
                 .def("clear", &GLRenderer::clear, py::arg("color") = true, py::arg("depth") = true, py::arg("stencil") = true)
                 .def_readwrite("auto_clear", &GLRenderer::autoClear)
                 .def_readwrite("sort_objects", &GLRenderer::sortObjects)

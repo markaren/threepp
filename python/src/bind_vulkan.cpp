@@ -74,6 +74,20 @@ namespace {
 
         py::array_t<uint8_t> read_pixels() { return to_numpy(renderer_.readRGBPixels()); }
 
+        // Scene-only swapchain capture: the post-TAA / pre-overlay frame, WITHOUT
+        // any sprite / ImGui overlays composited on top — what sensor pipelines
+        // need to avoid feeding their own overlay back in. Reuses to_numpy →
+        // (H, W, 3) uint8. Enable once, then read after a render(); the per-frame
+        // copy costs only while enabled.
+        void set_scene_capture(bool enabled) { renderer_.setSceneCaptureEnabled(enabled); }
+        bool scene_capture() const { return renderer_.sceneCaptureEnabled(); }
+        py::array_t<uint8_t> read_scene_pixels() { return to_numpy(renderer_.readSceneRGBPixels()); }
+
+        // Viewport / scissor (forwarded to the native renderer; (x,y,w,h) overload).
+        void set_viewport(int x, int y, int w, int h) { renderer_.setViewport(x, y, w, h); }
+        void set_scissor(int x, int y, int w, int h) { renderer_.setScissor(x, y, w, h); }
+        void set_scissor_test(bool enabled) { renderer_.setScissorTest(enabled); }
+
         // Metric depth as (H, W) float32 in scene units (distance from the
         // camera). The depth debug-view packs the reverse-Z depth into 24-bit
         // RGB; here we decode it and linearize with the camera near/far. Sky /
@@ -182,6 +196,14 @@ namespace threepp_py {
                 .def("render", &PyVulkanRenderer::render, py::arg("scene"), py::arg("camera"))
                 .def("read_pixels", &PyVulkanRenderer::read_pixels,
                      "Final shaded RGB of the last render as (H, W, 3) uint8.")
+                .def_property("scene_capture",
+                              [](PyVulkanRenderer& r) { return r.scene_capture(); },
+                              [](PyVulkanRenderer& r, bool v) { r.set_scene_capture(v); },
+                              "Toggle scene-only swapchain capture (post-TAA, pre-overlay). When on, "
+                              "read it via read_scene_pixels(); off = no cost.")
+                .def("read_scene_pixels", &PyVulkanRenderer::read_scene_pixels,
+                     "Last captured scene-only RGB (post-TAA, pre-overlay; no sprite/ImGui) as "
+                     "(H, W, 3) uint8. Requires scene_capture=True.")
                 .def("render_aov", &PyVulkanRenderer::render_aov,
                      py::arg("scene"), py::arg("camera"), py::arg("aov"),
                      "Render and return a G-buffer AOV as (H, W, 3) uint8: "
@@ -238,6 +260,11 @@ namespace threepp_py {
                 .def("set_size", &PyVulkanRenderer::set_size, py::arg("width"), py::arg("height"),
                      "Resize the renderer's framebuffer/swapchain — call this from "
                      "canvas.on_window_resize together with updating the camera aspect.")
+                .def("set_viewport", &PyVulkanRenderer::set_viewport,
+                     py::arg("x"), py::arg("y"), py::arg("width"), py::arg("height"))
+                .def("set_scissor", &PyVulkanRenderer::set_scissor,
+                     py::arg("x"), py::arg("y"), py::arg("width"), py::arg("height"))
+                .def("set_scissor_test", &PyVulkanRenderer::set_scissor_test, py::arg("enabled"))
                 .def("save_frame", &PyVulkanRenderer::save_frame, py::arg("scene"), py::arg("camera"), py::arg("path"))
                 .def("size", &PyVulkanRenderer::size);
 

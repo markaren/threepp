@@ -3,12 +3,16 @@
 // C++ headers so Python construction matches three.js.
 #include "bindings.hpp"
 
+#include <pybind11/stl.h>
+
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/geometries/geometries.hpp"
 // Not aggregated by geometries.hpp:
+#include "threepp/geometries/ConvexGeometry.hpp"
 #include "threepp/geometries/OctahedronGeometry.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/utils/BufferGeometryUtils.hpp"
 
 using namespace threepp;
 
@@ -110,6 +114,32 @@ namespace threepp_py {
                     return OctahedronGeometry::create(radius, detail);
                 }),
                      py::arg("radius") = 1.f, py::arg("detail") = 0);
+
+        // ---- ConvexGeometry --------------------------------------------------
+        // Convex hull of an input point set (pass a list of Vector3).
+        // contains_point() is a cheap point-in-hull test; tolerance < 0 uses the
+        // geometry's default.
+        py::class_<ConvexGeometry, BufferGeometry, std::shared_ptr<ConvexGeometry>>(m, "ConvexGeometry")
+                .def(py::init([](const std::vector<Vector3>& points) {
+                    return ConvexGeometry::create(points);
+                }),
+                     py::arg("points"))
+                .def("contains_point", &ConvexGeometry::containsPoint, py::arg("point"), py::arg("tolerance") = -1.f);
+
+        // ---- BufferGeometry merge / simplify utilities (free functions) ------
+        // Merge static scene geometry into one draw, or weld / decimate imported
+        // meshes for faster GPU sim. Each returns a new BufferGeometry.
+        m.def("merge_buffer_geometries",
+              [](const std::vector<std::shared_ptr<BufferGeometry>>& geometries, bool use_groups) {
+                  return mergeBufferGeometries(geometries, use_groups);
+              },
+              py::arg("geometries"), py::arg("use_groups") = false);
+        m.def("merge_vertices",
+              [](const BufferGeometry& geometry, float tolerance) { return mergeVertices(geometry, tolerance); },
+              py::arg("geometry"), py::arg("tolerance") = 1e-4f);
+        m.def("simplify_geometry",
+              [](const BufferGeometry& geometry, float ratio, float error) { return simplifyGeometry(geometry, ratio, error); },
+              py::arg("geometry"), py::arg("ratio"), py::arg("error") = 1e-2f);
     }
 
 }// namespace threepp_py

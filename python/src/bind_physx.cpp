@@ -694,6 +694,15 @@ namespace threepp_py {
                      py::arg("tensor"),
                      "Apply per-DOF joint forces/torques (effort control) from the [n, max_dofs] float32 cuda "
                      "tensor. Re-apply each step (forces don't persist). Use for force-controlled joints.")
+                .def("write_joint_target_vel", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.write(cudaPtr(t, std::int64_t(b.count()) * b.maxDofs(), "write_joint_target_vel"), Write::eJOINT_TARGET_VELOCITY); },
+                     py::arg("tensor"), "Set all joints' PD velocity targets from the [n, max_dofs] float32 cuda tensor.")
+                .def("write_joint_pos", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.write(cudaPtr(t, std::int64_t(b.count()) * b.maxDofs(), "write_joint_pos"), Write::eJOINT_POSITION); },
+                     py::arg("tensor"), "Overwrite ALL joints' positions from the [n, max_dofs] float32 cuda tensor (full-batch reset).")
+                .def("write_joint_vel", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.write(cudaPtr(t, std::int64_t(b.count()) * b.maxDofs(), "write_joint_vel"), Write::eJOINT_VELOCITY); },
+                     py::arg("tensor"), "Overwrite ALL joints' velocities from the [n, max_dofs] float32 cuda tensor (full-batch reset).")
                 // --- subset reset (done envs only): nb is derived from the index tensor ---
                 .def("write_subset_joint_pos", [cudaPtr, cudaIdx](threepp::PhysxGpuBatch& b, const py::object& src, const py::object& idx) {
                          std::int64_t nb = 0; auto ip = cudaIdx(idx, nb, "write_subset_joint_pos.indices");

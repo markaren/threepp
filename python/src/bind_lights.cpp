@@ -30,7 +30,12 @@ namespace threepp_py {
                     return DirectionalLight::create(color, intensity);
                 }),
                      py::arg("color") = Color(0xffffff), py::arg("intensity") = 1.f)
-                .def("set_target", [](DirectionalLight& l, Object3D& target) { l.setTarget(target); }, py::arg("target"));
+                .def("set_target", [](DirectionalLight& l, Object3D& target) { l.setTarget(target); }, py::arg("target"))
+                // Non-owning view of the aim target. target() may return the light's
+                // internal defaultTarget (not shared_ptr-owned), so use the reference
+                // policy (cf. Object3D.parent) — the returned target must not outlive
+                // the light.
+                .def("get_target", [](DirectionalLight& l) -> const Object3D& { return l.target(); }, py::return_value_policy::reference);
 
         // ---- PointLight ------------------------------------------------------
         py::class_<PointLight, Light, std::shared_ptr<PointLight>>(m, "PointLight")
@@ -56,7 +61,8 @@ namespace threepp_py {
                 .def_readwrite("angle", &SpotLight::angle)
                 .def_readwrite("penumbra", &SpotLight::penumbra)
                 .def_readwrite("decay", &SpotLight::decay)
-                .def("set_target", [](SpotLight& l, Object3D& target) { l.setTarget(target); }, py::arg("target"));
+                .def("set_target", [](SpotLight& l, Object3D& target) { l.setTarget(target); }, py::arg("target"))
+                .def("get_target", [](SpotLight& l) -> const Object3D& { return l.target(); }, py::return_value_policy::reference);
 
         // ---- HemisphereLight -------------------------------------------------
         py::class_<HemisphereLight, Light, std::shared_ptr<HemisphereLight>>(m, "HemisphereLight")

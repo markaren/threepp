@@ -54,6 +54,14 @@ if (THREEPP_WITH_VULKAN)
     target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_VULKAN THREEPP_WITH_VULKAN)
 endif ()
 
+# FBXLoader (OpenFBX) is compiled into the threepp static lib only when threepp
+# was configured with -DTHREEPP_WITH_FBX=ON. threepp adds THREEPP_WITH_FBX as a
+# PRIVATE define on its own target, so it doesn't reach this module — mirror it
+# here as THREEPP_PY_HAS_FBX to gate the binding (#ifdef in bind_loaders.cpp).
+if (THREEPP_WITH_FBX)
+    target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_FBX)
+endif ()
+
 # Dear ImGui (GL backend) for in-window UI from Python. Compile the imgui core +
 # GLFW/OpenGL3 backends vendored under examples/external/imgui straight into the
 # module; pairs with GLRenderer / a GL Canvas.

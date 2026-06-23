@@ -115,6 +115,16 @@ namespace threepp_py {
                 }, py::arg("callback"))
                 .def("update_matrix", [](Object3D& o) { o.updateMatrix(); })
                 .def("update_matrix_world", [](Object3D& o, bool force) { o.updateMatrixWorld(force); }, py::arg("force") = false)
+                // clone() dispatches through the virtual createDefault(), so it
+                // produces the concrete subclass (Mesh/Group/...) even though the
+                // lambda takes Object3D&; pybind downcasts the returned
+                // shared_ptr<Object3D> to the right Python type. recursive (default
+                // True) deep-copies the child subtree. copy() routes the source
+                // through as_object3d() to dodge the virtual-base pointer bug.
+                .def("clone", [](Object3D& o, bool recursive) { return o.clone(recursive); }, py::arg("recursive") = true)
+                .def("copy", [](Object3D& self, const py::handle& source, bool recursive) {
+                    self.copy(*as_object3d(source), recursive);
+                }, py::arg("source"), py::arg("recursive") = true)
                 .def("__repr__", [](const Object3D& o) { return "<threepp." + o.type() + " name='" + o.name + "'>"; });
 
         // ---- BufferGeometry --------------------------------------------------

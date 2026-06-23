@@ -5,6 +5,7 @@
 #include "bindings.hpp"
 
 #include "threepp/constants.hpp"
+#include "threepp/materials/MeshDepthMaterial.hpp"// not aggregated by materials.hpp
 #include "threepp/materials/materials.hpp"
 
 using namespace threepp;
@@ -22,6 +23,7 @@ namespace threepp_py {
         THREEPP_TRY_MAT(MeshBasicMaterial)
         THREEPP_TRY_MAT(MeshLambertMaterial)
         THREEPP_TRY_MAT(MeshNormalMaterial)
+        THREEPP_TRY_MAT(MeshDepthMaterial)
         THREEPP_TRY_MAT(PointsMaterial)
         THREEPP_TRY_MAT(LineBasicMaterial)
         THREEPP_TRY_MAT(SpriteMaterial)
@@ -41,6 +43,7 @@ namespace threepp_py {
         THREEPP_CAST_MAT(MeshBasicMaterial)
         THREEPP_CAST_MAT(MeshLambertMaterial)
         THREEPP_CAST_MAT(MeshNormalMaterial)
+        THREEPP_CAST_MAT(MeshDepthMaterial)
         THREEPP_CAST_MAT(PointsMaterial)
         THREEPP_CAST_MAT(LineBasicMaterial)
         THREEPP_CAST_MAT(SpriteMaterial)
@@ -93,6 +96,10 @@ namespace threepp_py {
                 .value("Multiply", CombineOperation::Multiply)
                 .value("Mix", CombineOperation::Mix)
                 .value("Add", CombineOperation::Add);
+
+        py::enum_<DepthPacking>(m, "DepthPacking")
+                .value("Basic", DepthPacking::Basic)
+                .value("RGBA", DepthPacking::RGBA);
 
         // ---- Material base ---------------------------------------------------
         // Abstract; never instantiated. Registered only so concrete materials
@@ -188,6 +195,21 @@ namespace threepp_py {
                 .def_readwrite("normal_map", &MeshNormalMaterial::normalMap)
                 .def_readwrite("bump_map", &MeshNormalMaterial::bumpMap)
                 .def_readwrite("displacement_map", &MeshNormalMaterial::displacementMap);
+
+        // ---- MeshDepthMaterial ----------------------------------------------
+        // Renders fragment depth (optionally RGBA-packed). Assign via
+        // scene.override_material to produce a depth pass on the GL path.
+        auto depth = py::class_<MeshDepthMaterial, Material, std::shared_ptr<MeshDepthMaterial>>(m, "MeshDepthMaterial");
+        bind_material_base_fields(depth);
+        depth.def(py::init([] { return MeshDepthMaterial::create(); }))
+                .def_readwrite("depth_packing", &MeshDepthMaterial::depthPacking)
+                .def_readwrite("wireframe", &MeshDepthMaterial::wireframe)
+                .def_readwrite("wireframe_linewidth", &MeshDepthMaterial::wireframeLinewidth)
+                .def_readwrite("displacement_scale", &MeshDepthMaterial::displacementScale)
+                .def_readwrite("displacement_bias", &MeshDepthMaterial::displacementBias)
+                .def_readwrite("map", &MeshDepthMaterial::map)
+                .def_readwrite("alpha_map", &MeshDepthMaterial::alphaMap)
+                .def_readwrite("displacement_map", &MeshDepthMaterial::displacementMap);
 
         // ---- PointsMaterial --------------------------------------------------
         auto pointsMat = py::class_<PointsMaterial, Material, std::shared_ptr<PointsMaterial>>(m, "PointsMaterial");

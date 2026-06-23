@@ -17,12 +17,14 @@
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Quaternion.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/math/Vector4.hpp"
 
 #include "threepp/core/Object3D.hpp"// complete type for Box3::setFromObject
 
+#include <algorithm>
 #include <sstream>
 
 using namespace threepp;
@@ -254,6 +256,27 @@ namespace threepp_py {
                 .def("set_from_object", [](Box3& b, const py::object& obj, bool precise) -> Box3& {
                     return b.setFromObject(*as_object3d(obj), precise);
                 }, py::arg("object"), py::arg("precise") = false, py::return_value_policy::reference_internal);
+
+        // ---- MathUtils free functions (module-level) -------------------------
+        // Plain scalar helpers from threepp::math, reimplemented constantly in
+        // Python today (angle conversions, RL action/state math). randFloat is
+        // overloaded, so split into rand_float() [0,1] and rand_float_range(min,max).
+        m.def("deg_to_rad", &math::degToRad, py::arg("degrees"));
+        m.def("rad_to_deg", &math::radToDeg, py::arg("radians"));
+        m.def("map_linear", &math::mapLinear, py::arg("x"), py::arg("a1"), py::arg("a2"), py::arg("b1"), py::arg("b2"));
+        m.def("inverse_lerp", &math::inverseLerp, py::arg("x"), py::arg("y"), py::arg("value"));
+        m.def("lerp", &math::lerp, py::arg("x"), py::arg("y"), py::arg("t"));
+        m.def("damp", &math::damp, py::arg("x"), py::arg("y"), py::arg("lambda"), py::arg("dt"));
+        m.def("euclidean_modulo", &math::euclideanModulo, py::arg("n"), py::arg("m"));
+        // clamp has no MathUtils equivalent; provide it via std::clamp.
+        m.def("clamp", [](float value, float low, float high) { return std::clamp(value, low, high); },
+              py::arg("value"), py::arg("low"), py::arg("high"));
+        m.def("rand_int", &math::randInt, py::arg("low"), py::arg("high"));
+        m.def("rand_float", py::overload_cast<>(&math::randFloat));
+        m.def("rand_float_range", py::overload_cast<float, float>(&math::randFloat), py::arg("min"), py::arg("max"));
+        m.def("rand_float_spread", &math::randFloatSpread, py::arg("range"));
+        m.def("generate_uuid", &math::generateUUID);
+        m.def("is_power_of_two", &math::isPowerOfTwo, py::arg("value"));
     }
 
 }// namespace threepp_py
