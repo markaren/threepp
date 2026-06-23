@@ -100,6 +100,14 @@ namespace threepp {
             // setDriveTarget, ...) and the binding-sync step() are NOT valid; all
             // runtime state I/O must go through the direct-GPU batch instead.
             bool enableDirectGpu = false;
+            // Use the TGS solver + PCM narrowphase + stabilization on a CPU world.
+            // The GPU path (enableGpuDynamics) ALWAYS uses these; a pure-CPU world
+            // otherwise defaults to PGS, no PCM, no stabilization. Set this so a CPU
+            // world's CONTACT MODEL matches a GPU-trained policy — PGS-vs-TGS and the
+            // PCM difference change the effective friction / penetration recovery a
+            // policy sees, which is a primary sim-to-sim (GPU train -> CPU deploy)
+            // transfer gap. No effect (already implied) when enableGpuDynamics is set.
+            bool enableTgsPcm = false;
             // Existing CUDA context for PhysX to adopt (instead of creating its own).
             // Pass the host framework's context (e.g. PyTorch's device primary context)
             // so PhysX and that framework share ONE context — required for correctness
@@ -165,14 +173,19 @@ namespace threepp {
             desc.gravity = toPxVec3(settings_.gravity);
             desc.cpuDispatcher = dispatcher_;
             desc.filterShader = PxDefaultSimulationFilterShader;
+            // TGS solver + PCM narrowphase + stabilization. The GPU pipeline requires
+            // these; a CPU world opts in via enableTgsPcm so its contact model matches
+            // a GPU-trained policy (the GPU-only flags below stay gated separately).
+            if (settings_.enableGpuDynamics || settings_.enableTgsPcm) {
+                desc.solverType = PxSolverType::eTGS;
+                desc.flags |= PxSceneFlag::eENABLE_PCM;
+                desc.flags |= PxSceneFlag::eENABLE_STABILIZATION;
+            }
             if (settings_.enableGpuDynamics) {
                 desc.cudaContextManager = cuda_;
                 desc.flags |= PxSceneFlag::eENABLE_GPU_DYNAMICS;
-                desc.flags |= PxSceneFlag::eENABLE_PCM;
-                desc.flags |= PxSceneFlag::eENABLE_STABILIZATION;
                 desc.broadPhaseType = PxBroadPhaseType::eGPU;
                 desc.gpuMaxNumPartitions = 8;
-                desc.solverType = PxSolverType::eTGS;
                 // Size the GPU solver pools for many articulations (RL swarms).
                 desc.gpuDynamicsConfig.maxRigidContactCount = settings_.gpuMaxRigidContacts;
                 desc.gpuDynamicsConfig.maxRigidPatchCount = settings_.gpuMaxRigidPatches;
