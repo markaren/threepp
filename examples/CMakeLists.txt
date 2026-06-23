@@ -34,12 +34,14 @@ if (THREEPP_BUILD_EXAMPLE_PROJECTS)
 endif ()
 
 if (DEFINED EMSCRIPTEN)
-    file(GLOB HTML_FILES "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/*.html")
-    list(REMOVE_ITEM HTML_FILES "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/index.html")
+    # Build the example listing from the names registered by add_example(), not
+    # from a glob of the output dir: the *.html files are produced at build time,
+    # so a configure-time glob is empty on a clean build (e.g. in CI).
+    get_property(WEB_EXAMPLES GLOBAL PROPERTY THREEPP_WEB_EXAMPLES)
+    list(SORT WEB_EXAMPLES)
 
     set(EXAMPLE_LINKS "")
-    foreach (FILE ${HTML_FILES})
-        get_filename_component(NAME ${FILE} NAME_WE)
+    foreach (NAME ${WEB_EXAMPLES})
         string(APPEND EXAMPLE_LINKS "<li><a href=\"${NAME}.html\">${NAME}</a></li>\n")
     endforeach ()
 
