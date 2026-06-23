@@ -129,13 +129,20 @@ def _capsule(length, radius, center, direction, color):
     return m, vol
 
 
-def build_spot(world, assets=None, base_xy=(0.0, 0.0)):
+def build_spot(world, assets=None, base_xy=(0.0, 0.0), gains=None, foot_material=None):
     """Build Spot as a PhysX articulation; returns (articulation, render meshes).
 
     Physics uses tuned Box/Capsule colliders (the URDF has no collision/inertial). If `assets`
     is given, each link's URDF visual mesh (link_models/*.obj) is parented under its collider so
     Spot renders as the real robot while the primitives stay hidden but still drive the sim.
-    `base_xy` offsets the whole robot in the ground plane (for GpuSim per-env grids)."""
+    `base_xy` offsets the whole robot in the ground plane (for GpuSim per-env grids).
+    `gains` overrides the PD gains dict {hx,hy,kn: (stiffness, damping, max_force)} — default is the
+    Isaac spec (stiffness 60), but 60 is too soft for our ~28 kg model (the legs sag ~12-34 deg under
+    load and the body crouches), so the FROM-SCRATCH gait passes a stiffer set for a rigid stance.
+    `foot_material` (from world.create_material) sets the shin/foot contact friction+restitution —
+    grippy restitution-0 feet (vs the bouncy 0.5/0.5/0.2 default) for clean push-off; pass a per-env
+    material for friction domain randomization."""
+    gn = gains if gains is not None else GAINS
     ox, oy = float(base_xy[0]), float(base_xy[1])
     art = world.create_articulation(fixed_base=False, solver_position_iterations=12,
                                     disable_self_collision=True)
@@ -152,16 +159,17 @@ def build_spot(world, assets=None, base_xy=(0.0, 0.0)):
         Jkn = Jhy + KN; Jft = Jkn + FOOT
         hm, hv = _capsule(0.06, 0.045, (Jhx + Jhy) / 2, Jhy - Jhx, 0x303030)
         hip = art.add_link(hm, parent=base, density=MASS["hip"] / hv, axis=(1, 0, 0), anchor=tuple(Jhx),
-                           lower=LIM["hx"][0], upper=LIM["hx"][1], stiffness=GAINS["hx"][0],
-                           damping=GAINS["hx"][1], max_force=GAINS["hx"][2], drive_target=DEFAULT[L + "_hx"])
+                           lower=LIM["hx"][0], upper=LIM["hx"][1], stiffness=gn["hx"][0],
+                           damping=gn["hx"][1], max_force=gn["hx"][2], drive_target=DEFAULT[L + "_hx"])
         um, uv = _capsule(0.30, 0.045, (Jhy + Jkn) / 2, Jkn - Jhy, 0xffc24d)
         uleg = art.add_link(um, parent=hip, density=MASS["uleg"] / uv, axis=(0, 1, 0), anchor=tuple(Jhy),
-                            lower=LIM["hy"][0], upper=LIM["hy"][1], stiffness=GAINS["hy"][0],
-                            damping=GAINS["hy"][1], max_force=GAINS["hy"][2], drive_target=DEFAULT[L + "_hy"])
+                            lower=LIM["hy"][0], upper=LIM["hy"][1], stiffness=gn["hy"][0],
+                            damping=gn["hy"][1], max_force=gn["hy"][2], drive_target=DEFAULT[L + "_hy"])
         lm, lv = _capsule(0.30, 0.028, (Jkn + Jft) / 2, Jft - Jkn, 0x303030)
         art.add_link(lm, parent=uleg, density=MASS["lleg"] / lv, axis=(0, 1, 0), anchor=tuple(Jkn),
-                     lower=LIM["kn"][0], upper=LIM["kn"][1], stiffness=GAINS["kn"][0],
-                     damping=GAINS["kn"][1], max_force=GAINS["kn"][2], drive_target=DEFAULT[L + "_kn"])
+                     lower=LIM["kn"][0], upper=LIM["kn"][1], stiffness=gn["kn"][0],
+                     damping=gn["kn"][1], max_force=gn["kn"][2], drive_target=DEFAULT[L + "_kn"],
+                     material=foot_material)            # grippy restitution-0 (or per-env) foot contact
         if assets:
             _attach_obj(hm, Jhx, L + ".hip", 0x303030, assets)
             _attach_obj(um, Jhy, L + ".uleg", 0xffc24d, assets)
