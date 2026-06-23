@@ -25,7 +25,7 @@ def main():
     ap.add_argument("--envs", type=int, default=4096)
     ap.add_argument("--iters", type=int, default=1500)
     ap.add_argument("--horizon", type=int, default=48)   # >= one gait cycle (0.96s @ 50Hz) so PPO links lift-off to landing
-    ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--lr", type=float, default=2e-4)   # gentler -> stable convergence (3e-4 let the trot drift off)
     ap.add_argument("--turn", action="store_true", help="also command lateral + yaw (default: forward only)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=os.path.join(_HERE, "spot_walk_policy.pt"))

@@ -100,7 +100,7 @@ def main():
     def control_tick():
         nonlocal last_a, phase
         R = _quat_to_R(art.root_state()[3:7])                   # heading-hold: steer back toward straight (+x),
-        cmd[2] = float(np.clip(-1.5 * math.atan2(R[1, 0], R[0, 0]), -1.0, 1.0))   # matching the training command
+        cmd[2] = float(np.clip(-2.0 * math.atan2(R[1, 0], R[0, 0]), -1.5, 1.5))   # matching the training command
         with torch.no_grad():
             ra = pol["ac"].act_mean(torch.from_numpy(walk_obs(art, last_a, cmd, phase, with_phase))[None].to(dev)).clamp(-1, 1)[0].cpu().numpy()
         last_a = ra

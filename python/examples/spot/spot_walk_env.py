@@ -1,13 +1,15 @@
 """Spot locomotion FROM SCRATCH on GpuSim — no frozen Isaac walker, no CPG.
 
-The policy directly outputs the 12 joint position targets (as an offset on the default stance,
-PD-driven); it is rewarded legged-gym style for tracking a commanded body-frame velocity
-[vx, vy, wz] while staying upright and regular. First milestone: flat FORWARD walking. If Spot
-learns to walk here, terrain (stairs) — which the residual-on-flat-walker couldn't do — becomes
-reachable, because the gait itself is now learned.
+The policy outputs 12 joint-position targets (offset on the default stance, PD-driven). It learns a
+diagonal TROT via a gait-phase clock: a periodic phase advances each step, the obs carries (sin,cos)
+of it, and the reward pays each foot for matching a desired trot CONTACT SCHEDULE (pair FL+HR down for
+the first half-cycle then lifted, pair FR+HL opposite). This PRESCRIBES the trot, where penalty-only
+shaping just produced a shuffle. Velocity tracking + a heading-hold command keep it walking straight;
+grippy restitution-0 feet + per-env friction randomization (the material API) make it transfer to the
+CPU deploy. K Spots train in one direct-GPU PhysX scene.
 
-  obs (48): base lin vel (body), base ang vel (body), projected gravity, command [vx,vy,wz],
-            joint pos (rel default, add-order), joint vel, last action
+  obs (50): base lin vel (body), base ang vel (body), projected gravity, command [vx,vy,wz],
+            joint pos (rel default, add-order), joint vel, last action, gait phase (sin, cos)
   action (12): joint-target offset on the default stance, scaled by ACTION_SCALE
 """
 import os
@@ -22,29 +24,30 @@ sys.path.insert(0, _HERE)
 
 from threepp.rl import GpuSim
 from spot_deploy import default_q, add_to_isaac
-from spot_stairs_env import (SpotGpu, quat_rotate_inverse, _flat_ground,
-                             SPACING, DT, CONTROL_HZ, SPAWN_Z)
+from spot_gpu import SpotGpu, quat_rotate_inverse, flat_ground, SPACING, DT, CONTROL_HZ
 
 SUBSTEPS = 6                # finer GPU physics than the stairs env's 4 — closes the GPU<->CPU transfer gap
 ACTION_SCALE = 0.4          # joint authority (0.5 scooted; 0.3 suppressed the forward drive; 0.4 is the balance)
 EPISODE_S = 12.0
 COMMAND_HOLD_S = 3.0
-MAX_SPEED = 0.55            # forward m/s ceiling — moderate so the policy doesn't SPRINT into a fall (v7 chased 0.8 and fell)
+MAX_SPEED = 0.7             # forward m/s ceiling (raised for bigger strides; the gait clock keeps it stable)
 MAX_LAT = 0.4
 MAX_YAW = 1.0              # rad/s
 SETTLE_RESET = 12          # ticks holding the default stance after a reset
-TARGET_H = 0.45            # base height target while walking (natural stand ~0.40 under TGS+PCM)
-SQUAT_FLOOR = 0.38         # below this the base is folding (natural stand ~0.44; 0.38 allows a stepping dip) — anti-squat
+TARGET_H = 0.45            # nominal stand height (informational; the reward uses the H_LOW/H_HIGH band below)
 OBS_DIM = 50               # +2 for the gait-phase clock (sin, cos) appended to the obs
 ACT_DIM = 12
 # GAIT-PHASE CLOCK (the technique that PRESCRIBES a trot instead of hoping penalties produce it).
 # A periodic phase advances each step; the obs carries (sin,cos) of it; the reward pays each foot for
 # matching a desired diagonal-trot CONTACT SCHEDULE (pair A = FL+HR down in the first half-cycle, up in
 # the second; pair B = FR+HL opposite). Only enforced when commanded to MOVE (a stand command -> no schedule).
-GAIT_FREQ = 1.5            # trot cycle frequency (Hz); period ~0.67 s
+GAIT_FREQ = 1.2            # trot cycle frequency (Hz); period ~0.83 s (lower -> longer strides, bigger steps)
 W_GAIT = 1.5               # weight on matching the trot contact schedule (strong -> the trot dominates)
+W_HEADING = 1.0            # penalty on heading error (yaw^2) -> walks a STRAIGHT line, not just zero yaw-rate
+OVERLIFT_H = 0.17          # feet lifting above ~this are over-lifting toward a fly -> penalize (close that basin)
+W_OVERLIFT = 1.0
 GAIT_STANCE_H = 0.03       # a stance foot must be firmly PLANTED (tip_z below ~this) to score the schedule
-GAIT_SWING_H = 0.09        # target swing clearance (m); the swing reward CAPS here so it can't over-lift into a fly
+GAIT_SWING_H = 0.12        # target swing clearance (m); reward caps here (bigger lift than 0.09 -> bigger steps)
 TWO_PI = 6.283185307179586
 # domain randomization — for a ROBUST gait that survives a different (CPU/real) solver, not just the training sim
 OBS_NOISE = 0.02            # gaussian observation noise
@@ -66,25 +69,11 @@ P_STAND = 0.30             # fraction of commands that are a pure stand (vx=0)
 # penalize crouch/fold below H_LOW AND a hop/launch above H_HIGH (keeps the anti-hop, allows the trot bounce).
 H_LOW, H_HIGH = 0.42, 0.50
 W_CROUCH, W_HOP = 15.0, 15.0
-# stumble/scuff penalty (gait-review idea): a foot that is LOW (near ground) but SLIDING horizontally is a
-# scuff -> forces a clean lift before moving the foot, without rewarding HIGH lift (so no pronk).
-W_STUMBLE = 0.3
-# foot sensing (anti-shuffle) — the term most tied to sim-to-sim transfer: a foot dragging on the
-# ground exploits the coarse contact model and doesn't survive a different solver. Penalize a planted
-# foot's horizontal speed so the gait must LIFT a foot before moving it (a real step, not a slide).
+# foot sensing — the foot tip (for the gait contact schedule) is offset from the lleg link frame.
 FOOT_TIP_OFFSET = (0.0, 0.178, 0.0)   # foot tip in the lleg link frame: +Y = knee->foot, len/2 + radius
 CONTACT_H = 0.04            # height scale (m): a foot below ~this is "planted" (soft gate via exp)
-W_DRAG = 0.25              # planted-foot slide penalty (back to v6 — the horizon+free-band+stumble do the stepping work, not a drag push)
-# gait shaping (legged-gym style) — the anti-scoot fix. The drag penalty alone has no incentive to LIFT
-# a foot, so PPO settled into a planted scoot that folds on deploy. Reward a foot that lands after a real
-# swing (air-time) + lifting airborne feet (clearance), so a true swing phase emerges.
+W_DRAG = 0.25              # planted-foot slide penalty (no scuffing/sliding while a foot is down)
 TRACK_SIG = 0.25           # velocity-tracking sharpness (broad basin so a from-scratch policy is pulled off 0 speed)
-W_AIRTIME = 0.5           # reward a foot that lands after a real swing (back to v6; gentle shaping)
-AIR_TARGET = 0.10         # swing-duration target (s): feet airborne longer than this pay off
-AIR_CAP = 0.4             # cap accumulated air-time in the reward (anti-farming a held-up foot)
-W_CLEAR = 0.2             # swing-clearance bonus for airborne feet (small — high lifts = a hop, not a walk)
-CLEAR_CAP = 0.06          # cap the per-foot clearance reward (m): a flat walk lifts ~5 cm, not 22
-W_FLIGHT = 0.4            # MILD flight penalty (<2 feet down) — kills the fold/fly degenerate w/o forbidding a trot (1.5 broke walking)
 # PD gains for the from-scratch gait. The Isaac default (stiffness 60) is too SOFT for our ~28 kg
 # model: the legs sag ~12 deg (worst ~34 deg, the knees) under body weight and the body crouches at
 # ~0.38 — so a lifted foot folds the sagging stance and only a scoot stays upright. Stiffness 140
@@ -115,7 +104,7 @@ class SpotWalkEnv:
         def _build_world(world):
             gmat = world.create_material(static_friction=GROUND_FRIC, dynamic_friction=GROUND_FRIC * 0.9,
                                          restitution=0.0, friction_combine="min", restitution_combine="min")
-            _flat_ground(world, num_envs, SPACING, material=gmat)
+            flat_ground(world, num_envs, SPACING, material=gmat)
 
         self.sim = GpuSim(num_envs,
                           lambda world, i: SpotGpu(world, i, SPACING, gains=WALK_GAINS,
@@ -141,11 +130,10 @@ class SpotWalkEnv:
         self.last_speed = 0.0; self.last_up = 0.0; self.last_climb = 0.0; self.last_fell = 0.0
         self.r_local = torch.tensor(FOOT_TIP_OFFSET, device=dev)
         self.foot_idx = None        # 4 foot links, auto-detected as the lowest links at the settled stand
-        self.last_drag = 0.0; self.last_clear = 0.0; self.last_air = 0.0
-        self.air_time = z(self.K, 4)                            # per-foot seconds airborne (gait shaping)
-        self.last_contact = torch.ones(self.K, 4, dtype=torch.bool, device=dev)  # feet planted at the stand
+        self.last_drag = 0.0; self.last_clear = 0.0
         self.phase = z(self.K)                                  # gait-phase clock [0,1) per env
         self.foot_pair = None                                   # [4] +1=pairA(FL,HR), -1=pairB(FR,HL); set at reset
+        self.cur_yaw = z(self.K)                                # base heading (yaw) for the straight-line penalty
         self.last_gait = 0.0
 
     def _sample_cmd(self, n):
@@ -203,8 +191,6 @@ class SpotWalkEnv:
         self.steps[idx] = 0
         self.last_act[idx] = 0.0
         self.cmd[idx] = self._sample_cmd(n)
-        self.air_time[idx] = 0.0
-        self.last_contact[idx] = True          # reset feet planted (the settle folds into a stand)
         self.phase[idx] = torch.rand(n, generator=self.g, device=self.sim.device)   # random gait phase (decorrelate)
 
     def reset(self):
@@ -240,7 +226,10 @@ class SpotWalkEnv:
             q0 = self.sim.root_quat                            # back toward straight (+x) so it walks a straight
             yaw = torch.atan2(2.0 * (q0[:, 0] * q0[:, 1] + q0[:, 2] * q0[:, 3]),   # line, not just zero yaw-RATE
                               1.0 - 2.0 * (q0[:, 1] ** 2 + q0[:, 2] ** 2))         # (which drifts). cmd is in the obs.
-            self.cmd[:, 2] = torch.clamp(-1.5 * yaw, -1.0, 1.0)
+            self.cmd[:, 2] = torch.clamp(-2.0 * yaw, -1.5, 1.5)
+            self.cur_yaw = yaw                                  # keep for the heading-error penalty
+        else:
+            self.cur_yaw = torch.zeros(self.K, device=self.sim.device)
 
         arate = a - self.last_act
         self.last_act = a
@@ -251,7 +240,6 @@ class SpotWalkEnv:
         contact = tip_z < CONTACT_H                            # planted foot [K,4]
         num_contact = contact.float().sum(1)                   # feet on the ground [K] (metric)
         drag = (foot_spd * torch.exp(-tip_z.clamp(min=0.0) / CONTACT_H)).sum(1)  # planted feet sliding [K]
-        self.last_contact = contact
         # GAIT-PHASE trot reward — PRESCRIBE the diagonal trot: pay each foot for matching the desired
         # contact schedule. pairA (FL,HR) should be DOWN in the first half-cycle (phase<0.5) and lifted in
         # the second; pairB (FR,HL) opposite. Only enforced when commanded to move (stand cmd -> no schedule).
@@ -264,16 +252,19 @@ class SpotWalkEnv:
         moving = (self.cmd[:, 0].abs() + self.cmd[:, 1].abs() + 0.3 * self.cmd[:, 2].abs() > 0.12).float()
         r_gait = W_GAIT * gait_match.mean(1) * moving                     # enforce the trot only while moving
         r_lin = 1.5 * torch.exp(-((lin_b[:, 0] - self.cmd[:, 0]) ** 2 + (lin_b[:, 1] - self.cmd[:, 1]) ** 2) / TRACK_SIG)
-        r_ang = 0.75 * torch.exp(-((ang_b[:, 2] - self.cmd[:, 2]) ** 2) / 0.25)
+        r_ang = 1.0 * torch.exp(-((ang_b[:, 2] - self.cmd[:, 2]) ** 2) / 0.25)   # tighter yaw-rate tracking (straighter)
+        overlift = torch.relu(tip_z - OVERLIFT_H).sum(1)       # feet flying too high -> close the fly basin
         rew = (r_lin + r_ang + r_gait
                + 0.3                                           # small alive
-               - W_CROUCH * torch.relu(H_LOW - zz) ** 2        # anti-crouch/fold (don't collapse below the stance)
-               - W_HOP * torch.relu(zz - H_HIGH) ** 2          # anti-hop (don't launch); free band between = trot room
+               - W_HEADING * self.cur_yaw ** 2                 # heading error -> walk a STRAIGHT line
+               - W_CROUCH * torch.relu(H_LOW - zz) ** 2        # anti-crouch/fold
+               - W_HOP * torch.relu(zz - H_HIGH) ** 2          # anti-hop; free band between = trot room
                - 1.0 * lin_b[:, 2] ** 2                        # damp vertical bounce
                - 0.05 * (ang_b[:, 0] ** 2 + ang_b[:, 1] ** 2)  # damp roll/pitch rate
-               - 2.5 * (proj_g[:, 0] ** 2 + proj_g[:, 1] ** 2)  # stay upright (allow a trot's natural pitch/roll)
-               - 0.0003 * (self.sim.joint_vel ** 2).sum(1)     # joint velocity (energy)
-               - 0.02 * arate.pow(2).sum(1)                    # action rate (smooth)
+               - 2.5 * (proj_g[:, 0] ** 2 + proj_g[:, 1] ** 2)  # stay upright
+               - W_OVERLIFT * overlift                         # don't fly (over-lift penalty -> stable grounded trot)
+               - 0.0006 * (self.sim.joint_vel ** 2).sum(1)     # joint velocity (smoother, less vibration)
+               - 0.06 * arate.pow(2).sum(1)                    # action rate (much smoother targets -> kills the jitter)
                - W_DRAG * drag)                                # planted-foot slip (no slide)
         fell = (up < 0.4) | (zz < 0.30)                        # a deeply folded base is a fall
         rew = rew - 2.0 * fell.float()

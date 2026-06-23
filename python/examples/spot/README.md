@@ -58,3 +58,36 @@ the approximations:
 With the obs/action contract exact, the policy still produces a clean forward trot
 at ~0.9 m/s for a 1.0 m/s command. Tune `MASS` / `GAINS` / `Z0` at the top of the
 script for other robots or policies.
+
+---
+
+# Training Spot to walk from scratch (RL, no Isaac policy)
+
+The rest of this folder trains Spot's gait **from scratch** in threepp — author the
+robot in Python, train thousands of them on threepp's **GPU** PhysX, then deploy +
+render. It runs the standard SOTA legged-RL recipe: a **gait-phase clock** with a
+diagonal-trot **contact-schedule reward**, which *prescribes* the trot (penalty-only
+rewards just produce a shuffle).
+
+```sh
+python train_spot_walk.py --iters 1500    # train on GpuSim (~4096 robots, ~70k steps/s)
+python play_spot_walk.py                  # deploy on the CPU world + render (chase cam)
+python play_spot_walk.py --shot 8         # headless montage -> spot_walk_shot.png
+```
+
+![Spot trotting (from-scratch gait-phase policy)](spot_walk_shot.png)
+
+| file | role |
+| --- | --- |
+| [`spot_gpu.py`](spot_gpu.py) | shared GpuSim infra — `SpotGpu` build factory, `flat_ground`, `quat_rotate_inverse` |
+| [`spot_walk_env.py`](spot_walk_env.py) | the GpuSim RL env — gait-phase trot reward, heading-hold, per-env friction DR |
+| [`train_spot_walk.py`](train_spot_walk.py) | PPO trainer (`threepp.rl.PPO`) |
+| [`play_spot_walk.py`](play_spot_walk.py) | CPU-world deploy + GL render (runs the gait-phase clock + heading-hold) |
+| [`spot_cpu_env.py`](spot_cpu_env.py) / [`train_spot_cpu.py`](train_spot_cpu.py) | train **directly on the CPU** articulation — no sim-to-sim gap (`train == deploy`) |
+
+Key findings (the hard-won ones): the soft Isaac PD (stiffness 60) is too compliant
+for our ~28 kg model — the legs sag and nothing can step, so the from-scratch gait
+uses **stiffness 120**. Grippy **restitution-0 feet** (via `world.create_material(...)`,
+the new material API) + per-env friction randomization make push-off clean and the
+gait robust. `PhysxWorld(tgs_pcm=True)` makes the CPU deploy use the same TGS+PCM
+contact model as the GPU training.
