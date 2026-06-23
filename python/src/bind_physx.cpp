@@ -655,6 +655,7 @@ namespace threepp_py {
                      "world must be created with direct_gpu=True and outlive this batch.")
                 .def_property_readonly("count", [](threepp::PhysxGpuBatch& b) { return b.count(); })
                 .def_property_readonly("max_dofs", [](threepp::PhysxGpuBatch& b) { return b.maxDofs(); })
+                .def_property_readonly("max_links", [](threepp::PhysxGpuBatch& b) { return b.maxLinks(); })
                 .def("step", &threepp::PhysxGpuBatch::step, py::arg("dt"),
                      "Advance every articulation one substep on the GPU (no binding sync).")
                 // --- zero-copy path: pass the torch CUDA tensor (validated: cuda/float32/
@@ -674,6 +675,17 @@ namespace threepp_py {
                 .def("read_root_angvel", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
                          b.read(cudaPtr(t, std::int64_t(b.count()) * 3, "read_root_angvel"), Read::eROOT_ANGULAR_VELOCITY); },
                      py::arg("tensor"), "Fill the [n, 3] float32 cuda tensor with root angular velocity.")
+                // --- per-link reads (link 0 = root, then links in add_link order): foot
+                //     kinematics for clearance/slip rewards. Buffer is [n, max_links * block]. ---
+                .def("read_link_pose", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.read(cudaPtr(t, std::int64_t(b.count()) * b.maxLinks() * 7, "read_link_pose"), Read::eLINK_GLOBAL_POSE); },
+                     py::arg("tensor"), "Fill the [n, max_links*7] float32 cuda tensor with per-link poses [qx,qy,qz,qw,px,py,pz].")
+                .def("read_link_linvel", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.read(cudaPtr(t, std::int64_t(b.count()) * b.maxLinks() * 3, "read_link_linvel"), Read::eLINK_LINEAR_VELOCITY); },
+                     py::arg("tensor"), "Fill the [n, max_links*3] float32 cuda tensor with per-link linear velocities (world frame).")
+                .def("read_link_angvel", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.read(cudaPtr(t, std::int64_t(b.count()) * b.maxLinks() * 3, "read_link_angvel"), Read::eLINK_ANGULAR_VELOCITY); },
+                     py::arg("tensor"), "Fill the [n, max_links*3] float32 cuda tensor with per-link angular velocities (world frame).")
                 .def("write_joint_target_pos", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
                          b.write(cudaPtr(t, std::int64_t(b.count()) * b.maxDofs(), "write_joint_target_pos"), Write::eJOINT_TARGET_POSITION); },
                      py::arg("tensor"), "Set all joints' PD position targets from the [n, max_dofs] float32 cuda tensor.")
@@ -720,7 +732,13 @@ namespace threepp_py {
                 .def("read_root_linvel_host", [reshape](threepp::PhysxGpuBatch& b) {
                          return reshape(b.readHost(Read::eROOT_LINEAR_VELOCITY), b.count(), 3); })
                 .def("read_root_angvel_host", [reshape](threepp::PhysxGpuBatch& b) {
-                         return reshape(b.readHost(Read::eROOT_ANGULAR_VELOCITY), b.count(), 3); });
+                         return reshape(b.readHost(Read::eROOT_ANGULAR_VELOCITY), b.count(), 3); })
+                .def("read_link_pose_host", [reshape](threepp::PhysxGpuBatch& b) {
+                         return reshape(b.readHost(Read::eLINK_GLOBAL_POSE), b.count(), b.maxLinks() * 7); })
+                .def("read_link_linvel_host", [reshape](threepp::PhysxGpuBatch& b) {
+                         return reshape(b.readHost(Read::eLINK_LINEAR_VELOCITY), b.count(), b.maxLinks() * 3); })
+                .def("read_link_angvel_host", [reshape](threepp::PhysxGpuBatch& b) {
+                         return reshape(b.readHost(Read::eLINK_ANGULAR_VELOCITY), b.count(), b.maxLinks() * 3); });
 
         m.attr("HAS_PHYSX") = true;
     }

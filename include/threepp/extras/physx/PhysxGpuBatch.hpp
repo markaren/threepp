@@ -59,7 +59,9 @@ namespace threepp {
             world_.simulateRaw(world_.settings().fixedTimestep);
 
             auto& dg = world_.scene().getDirectGPUAPI();
-            maxDofs_ = dg.getArticulationGPUAPIMaxCounts().maxDofs;
+            const auto maxCounts = dg.getArticulationGPUAPIMaxCounts();
+            maxDofs_ = maxCounts.maxDofs;
+            maxLinks_ = maxCounts.maxLinks;// per-link reads (foot kinematics) stride by this
 
             std::vector<PxArticulationGPUIndex> idx(n_);
             for (PxU32 i = 0; i < n_; ++i) idx[i] = arts_[i]->getGPUIndex();
@@ -84,7 +86,19 @@ namespace threepp {
 
         ::physx::PxU32 count() const { return n_; }
         ::physx::PxU32 maxDofs() const { return maxDofs_; }
+        ::physx::PxU32 maxLinks() const { return maxLinks_; }// per-articulation link count (incl. root)
         ::physx::PxU32 dofs() const { return dofs_; }// per-articulation DOF count (homogeneous)
+
+        // Floats per articulation block for any read type, accounting for link-centric
+        // types (eLINK_*) which stride by maxLinks rather than maxDofs.
+        ::physx::PxU32 blockFloats(Read::Enum t) const {
+            switch (t) {
+                case Read::eLINK_GLOBAL_POSE: return maxLinks_ * 7;
+                case Read::eLINK_LINEAR_VELOCITY:
+                case Read::eLINK_ANGULAR_VELOCITY: return maxLinks_ * 3;
+                default: return blockFloatsRead(t, maxDofs_);
+            }
+        }
 
         // Number of floats per articulation block for a given read/write data type.
         static ::physx::PxU32 blockFloatsRead(Read::Enum t, ::physx::PxU32 maxDofs) {
@@ -160,7 +174,7 @@ namespace threepp {
         // --- host-staged path (debugging / validation; no torch needed) ----------
         std::vector<float> readHost(Read::Enum type) {
             using namespace ::physx;
-            const PxU32 block = blockFloatsRead(type, maxDofs_);
+            const PxU32 block = blockFloats(type);
             const size_t bytes = static_cast<size_t>(n_) * block * sizeof(float);
             std::vector<float> host(static_cast<size_t>(n_) * block);
             PxScopedCudaLock lock(*cuda_);
@@ -215,6 +229,7 @@ namespace threepp {
         CUevent finishEvent_ = nullptr;
         ::physx::PxU32 n_ = 0;
         ::physx::PxU32 maxDofs_ = 0;
+        ::physx::PxU32 maxLinks_ = 0;
         ::physx::PxU32 dofs_ = 0;
     };
 

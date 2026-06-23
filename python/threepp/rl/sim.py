@@ -37,12 +37,13 @@ def _torch_cuda_context():
 
 class GpuSim:
     def __init__(self, num_envs, build_robot, gravity=(0, -9.81, 0), spacing=3.0,
-                 device="cuda", read_root=False, build_world=None):
+                 device="cuda", read_root=False, read_links=False, build_world=None):
         if not tp.HAS_PHYSX:
             raise RuntimeError("GpuSim needs a PhysX-enabled threepp build (threepp.HAS_PHYSX is False)")
         self.K = num_envs
         self.device = torch.device(device)
         self.read_root = read_root   # also read the floating base each step (free-base robots)
+        self.read_links = read_links  # also read every link's world pose + velocity (foot kinematics)
 
         # make torch create + own the device primary context, then hand it to PhysX
         torch.zeros(1, device=self.device)
@@ -78,6 +79,19 @@ class GpuSim:
             self.root_pose = torch.zeros(self.K, 7, device=self.device)
             self.root_linvel = torch.zeros(self.K, 3, device=self.device)
             self.root_angvel = torch.zeros(self.K, 3, device=self.device)
+        if self.read_links:
+            # every link's world pose + velocity, refreshed by read(). link 0 = root, then links
+            # in add_link order (NO DOF remap — these are per-LINK, not per-DOF). link_pose is PhysX
+            # layout [qx,qy,qz,qw, px,py,pz]. Use for foot kinematics (clearance/slip rewards):
+            # a foot tip = link_position + rotate(link_quat, local_tip_offset). The reads write the
+            # flat buffers in place, so the [K, max_links, ...] views below stay live across read().
+            self.max_links = self.batch.max_links
+            self._lp_gpu = torch.zeros(self.K, self.max_links * 7, device=self.device)
+            self._llv_gpu = torch.zeros(self.K, self.max_links * 3, device=self.device)
+            self._lav_gpu = torch.zeros(self.K, self.max_links * 3, device=self.device)
+            self.link_pose = self._lp_gpu.view(self.K, self.max_links, 7)
+            self.link_linvel = self._llv_gpu.view(self.K, self.max_links, 3)
+            self.link_angvel = self._lav_gpu.view(self.K, self.max_links, 3)
 
     @property
     def root_quat(self):
@@ -116,6 +130,10 @@ class GpuSim:
             self.batch.read_root_linvel(self._rlv_gpu)
             self.batch.read_root_angvel(self._rav_gpu)
             self.root_pose, self.root_linvel, self.root_angvel = self._rp_gpu, self._rlv_gpu, self._rav_gpu
+        if self.read_links:
+            self.batch.read_link_pose(self._lp_gpu)      # in-place -> the [K, max_links, ...] views update
+            self.batch.read_link_linvel(self._llv_gpu)
+            self.batch.read_link_angvel(self._lav_gpu)
 
     def step(self, dt):
         """Advance every robot one physics step and refresh joint_pos / joint_vel."""
