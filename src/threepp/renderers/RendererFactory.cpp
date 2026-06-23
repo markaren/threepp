@@ -28,7 +28,7 @@ namespace threepp {
             std::cout << "\n  [2] WebGPU\n  [3] Cross (GL left, WGPU right)";
 #endif
 #ifdef THREEPP_WITH_VULKAN
-            std::cout << "\n  [4] Vulkan Path-tracer";
+            std::cout << "\n  [4] Vulkan Deferred renderer";
 #endif
             std::cout << "\n  [0] Abort and Exit\n> ";
             std::string line;
