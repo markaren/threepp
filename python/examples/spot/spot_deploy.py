@@ -129,24 +129,26 @@ def _capsule(length, radius, center, direction, color):
     return m, vol
 
 
-def build_spot(world, assets=None):
+def build_spot(world, assets=None, base_xy=(0.0, 0.0)):
     """Build Spot as a PhysX articulation; returns (articulation, render meshes).
 
     Physics uses tuned Box/Capsule colliders (the URDF has no collision/inertial). If `assets`
     is given, each link's URDF visual mesh (link_models/*.obj) is parented under its collider so
-    Spot renders as the real robot while the primitives stay hidden but still drive the sim."""
+    Spot renders as the real robot while the primitives stay hidden but still drive the sim.
+    `base_xy` offsets the whole robot in the ground plane (for GpuSim per-env grids)."""
+    ox, oy = float(base_xy[0]), float(base_xy[1])
     art = world.create_articulation(fixed_base=False, solver_position_iterations=12,
                                     disable_self_collision=True)
     bm = tp.Mesh(tp.BoxGeometry(0.70, 0.18, 0.19), tp.MeshStandardMaterial())
     bm.material.color = 0xffc24d
-    bm.position.set(0, 0, Z0)
+    bm.position.set(ox, oy, Z0)
     base = art.add_link(bm, parent=None, density=MASS["base"] / (0.70 * 0.18 * 0.19))
     if assets:
-        _attach_obj(bm, (0, 0, Z0), "base", 0xffc24d, assets)
+        _attach_obj(bm, (ox, oy, Z0), "base", 0xffc24d, assets)
     meshes = [bm]
     for L in LEGS:
         sx, sy = SIGN[L]
-        Jhx = np.array([sx * HIP_X, sy * HIP_Y, Z0]); Jhy = Jhx + [0, sy * HY_Y, 0]
+        Jhx = np.array([ox + sx * HIP_X, oy + sy * HIP_Y, Z0]); Jhy = Jhx + [0, sy * HY_Y, 0]
         Jkn = Jhy + KN; Jft = Jkn + FOOT
         hm, hv = _capsule(0.06, 0.045, (Jhx + Jhy) / 2, Jhy - Jhx, 0x303030)
         hip = art.add_link(hm, parent=base, density=MASS["hip"] / hv, axis=(1, 0, 0), anchor=tuple(Jhx),
