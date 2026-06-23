@@ -115,7 +115,9 @@ def main():
         last_a = ra
         art.set_drive_targets((STAND_Q + W.ACTION_SCALE * ra).astype(np.float32))
         world.step(0.02)
-        phase = (phase + W.GAIT_FREQ * 0.02) % 1.0          # advance the trot clock (no-op for 48-d policies)
+        move = abs(cmd[0]) + abs(cmd[1]) + 0.3 * abs(cmd[2])           # speed-scaled trot clock: 0 cmd -> frozen
+        freq = min(move / W.MAX_SPEED, 1.5) * W.GAIT_FREQ              # -> the robot STANDS; faster cmd -> faster trot
+        phase = (phase + freq * 0.02) % 1.0
 
     def render_chase():
         rs = art.root_state(); p = rs[0:3]; R = _quat_to_R(rs[3:7]); fwd = R[:, 0]

@@ -30,7 +30,7 @@ SUBSTEPS = 6                # finer GPU physics than the stairs env's 4 — clos
 ACTION_SCALE = 0.4          # joint authority (0.5 scooted; 0.3 suppressed the forward drive; 0.4 is the balance)
 EPISODE_S = 12.0
 COMMAND_HOLD_S = 3.0
-MAX_SPEED = 0.7             # forward m/s ceiling (raised for bigger strides; the gait clock keeps it stable)
+MAX_SPEED = 1.2             # forward m/s ceiling — FAST (Spot's real top walk is ~1.6); the speed-scaled gait clock handles it
 MAX_LAT = 0.4
 MAX_YAW = 1.0              # rad/s
 SETTLE_RESET = 12          # ticks holding the default stance after a reset
@@ -41,8 +41,11 @@ ACT_DIM = 12
 # A periodic phase advances each step; the obs carries (sin,cos) of it; the reward pays each foot for
 # matching a desired diagonal-trot CONTACT SCHEDULE (pair A = FL+HR down in the first half-cycle, up in
 # the second; pair B = FR+HL opposite). Only enforced when commanded to MOVE (a stand command -> no schedule).
-GAIT_FREQ = 1.2            # trot cycle frequency (Hz); period ~0.83 s (lower -> longer strides, bigger steps)
+GAIT_FREQ = 2.4            # MAX trot cadence (Hz) at full command; the clock advances at freq*(command/MAX_SPEED)
 W_GAIT = 1.5               # weight on matching the trot contact schedule (strong -> the trot dominates)
+W_SPEED = 1.5              # NON-SATURATING pull toward the commanded forward speed: reward = min(vx, cmd_vx).
+                          # The exp velocity-track basin goes flat far from a HIGH target (no gradient -> short
+                          # strides at a fast cadence); this linear term keeps pulling -> learns to stride out FAST.
 W_HEADING = 1.0            # penalty on heading error (yaw^2) -> walks a STRAIGHT line, not just zero yaw-rate
 OVERLIFT_H = 0.17          # feet lifting above ~this are over-lifting toward a fly -> penalize (close that basin)
 W_OVERLIFT = 1.0
@@ -72,8 +75,8 @@ W_CROUCH, W_HOP = 15.0, 15.0
 # foot sensing — the foot tip (for the gait contact schedule) is offset from the lleg link frame.
 FOOT_TIP_OFFSET = (0.0, 0.178, 0.0)   # foot tip in the lleg link frame: +Y = knee->foot, len/2 + radius
 CONTACT_H = 0.04            # height scale (m): a foot below ~this is "planted" (soft gate via exp)
-W_DRAG = 0.25              # planted-foot slide penalty (no scuffing/sliding while a foot is down)
-TRACK_SIG = 0.25           # velocity-tracking sharpness (broad basin so a from-scratch policy is pulled off 0 speed)
+W_DRAG = 0.4               # planted-foot slide penalty (raised: force a CLEAN plant+push, not a slide, when chasing speed)
+TRACK_SIG = 0.15           # velocity-tracking sharpness (tighter -> the speed command is actually tracked; throttle responds)
 # PD gains for the from-scratch gait. The Isaac default (stiffness 60) is too SOFT for our ~28 kg
 # model: the legs sag ~12 deg (worst ~34 deg, the knees) under body weight and the body crouches at
 # ~0.38 — so a lifted foot folds the sagging stance and only a scoot stays upright. Stiffness 140
@@ -219,7 +222,6 @@ class SpotWalkEnv:
         for _ in range(SUBSTEPS):
             self.sim.step(DT / SUBSTEPS)
         self.steps += 1
-        self.phase = (self.phase + GAIT_FREQ * DT) % 1.0       # advance the gait-phase clock
         lin_b, ang_b, proj_g = self._frame()
         zz = self.sim.root_position[:, 2]
 
@@ -235,6 +237,12 @@ class SpotWalkEnv:
             self.cur_yaw = yaw                                  # keep for the heading-error penalty
         else:
             self.cur_yaw = torch.zeros(self.K, device=self.sim.device)
+        # gait-phase clock advances PROPORTIONAL to the commanded speed: a 0 command freezes the phase ->
+        # the policy STANDS; a bigger command -> faster cadence -> faster trot. The command is in the obs,
+        # so the policy is speed-conditioned (and the deploy advances the phase by the same rule).
+        move = self.cmd[:, 0].abs() + self.cmd[:, 1].abs() + 0.3 * self.cmd[:, 2].abs()
+        freq = torch.clamp(move / MAX_SPEED, 0.0, 1.5) * GAIT_FREQ
+        self.phase = (self.phase + freq * DT) % 1.0
 
         arate = a - self.last_act
         self.last_act = a
@@ -245,21 +253,24 @@ class SpotWalkEnv:
         contact = tip_z < CONTACT_H                            # planted foot [K,4]
         num_contact = contact.float().sum(1)                   # feet on the ground [K] (metric)
         drag = (foot_spd * torch.exp(-tip_z.clamp(min=0.0) / CONTACT_H)).sum(1)  # planted feet sliding [K]
-        # GAIT-PHASE trot reward — PRESCRIBE the diagonal trot: pay each foot for matching the desired
-        # contact schedule. pairA (FL,HR) should be DOWN in the first half-cycle (phase<0.5) and lifted in
-        # the second; pairB (FR,HL) opposite. Only enforced when commanded to move (stand cmd -> no schedule).
+        # GAIT-PHASE reward — PRESCRIBE the diagonal trot: pay each foot for matching the desired contact
+        # schedule. pairA (FL,HR) DOWN in the first half-cycle (phase<0.5), lifted in the second; pairB
+        # (FR,HL) opposite. STAND (~0 command, frozen clock) instead targets ALL FOUR feet DOWN: a trot has
+        # no all-down phase, so freezing mid-cycle would strand two feet in the air -> the robot topples.
         in_first = (self.phase < 0.5).float()[:, None]                    # [K,1]
         pairA = (self.foot_pair > 0).float()[None, :]                     # [1,4] FL,HR
-        desired_down = pairA * in_first + (1.0 - pairA) * (1.0 - in_first)  # [K,4] feet that should be DOWN now
+        trot_down = pairA * in_first + (1.0 - pairA) * (1.0 - in_first)   # [K,4] trot schedule (feet DOWN now)
+        standing = (move < 0.12).float()[:, None]                         # [K,1] ~0 command -> plant all feet
+        desired_down = standing + (1.0 - standing) * trot_down            # [K,4] stand: all DOWN; move: trot
         stance_score = torch.exp(-tip_z.clamp(min=0.0) / GAIT_STANCE_H)               # [K,4] ~1 firmly planted
         swing_score = (tip_z.clamp(0.0, GAIT_SWING_H) / GAIT_SWING_H)                 # [K,4] 0..1 for 0..9cm, capped
         gait_match = desired_down * stance_score + (1.0 - desired_down) * swing_score  # [K,4] grounded trot (no over-lift)
-        moving = (self.cmd[:, 0].abs() + self.cmd[:, 1].abs() + 0.3 * self.cmd[:, 2].abs() > 0.12).float()
-        r_gait = W_GAIT * gait_match.mean(1) * moving                     # enforce the trot only while moving
+        r_gait = W_GAIT * gait_match.mean(1)                              # stand -> 4-foot stance; move -> diagonal trot
         r_lin = 1.5 * torch.exp(-((lin_b[:, 0] - self.cmd[:, 0]) ** 2 + (lin_b[:, 1] - self.cmd[:, 1]) ** 2) / TRACK_SIG)
         r_ang = 1.0 * torch.exp(-((ang_b[:, 2] - self.cmd[:, 2]) ** 2) / 0.25)   # tighter yaw-rate tracking (straighter)
+        r_fast = W_SPEED * torch.minimum(lin_b[:, 0].clamp(min=0.0), self.cmd[:, 0].clamp(min=0.0))  # stride out to the command
         overlift = torch.relu(tip_z - OVERLIFT_H).sum(1)       # feet flying too high -> close the fly basin
-        rew = (r_lin + r_ang + r_gait
+        rew = (r_lin + r_ang + r_gait + r_fast
                + 0.3                                           # small alive
                - W_HEADING * self.cur_yaw ** 2                 # heading error -> walk a STRAIGHT line
                - W_CROUCH * torch.relu(H_LOW - zz) ** 2        # anti-crouch/fold
@@ -268,7 +279,7 @@ class SpotWalkEnv:
                - 0.05 * (ang_b[:, 0] ** 2 + ang_b[:, 1] ** 2)  # damp roll/pitch rate
                - 2.5 * (proj_g[:, 0] ** 2 + proj_g[:, 1] ** 2)  # stay upright
                - W_OVERLIFT * overlift                         # don't fly (over-lift penalty -> stable grounded trot)
-               - 0.0006 * (self.sim.joint_vel ** 2).sum(1)     # joint velocity (smoother, less vibration)
+               - 0.0005 * (self.sim.joint_vel ** 2).sum(1)     # joint velocity (smoothness; eased a touch for the faster trot)
                - 0.06 * arate.pow(2).sum(1)                    # action rate (much smoother targets -> kills the jitter)
                - W_DRAG * drag)                                # planted-foot slip (no slide)
         fell = (up < 0.4) | (zz < 0.30)                        # a deeply folded base is a fall
