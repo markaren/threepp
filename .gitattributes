@@ -4,3 +4,13 @@
 
 # Declare files that will always have LF line endings on checkout.
 version.txt text eol=lf
+
+# Raw binary assets — never apply text/EOL conversion. PPM golden references
+# (tests/renderers/golden/*.ppm) are raw readRGBPixels bytes; with `* text=auto`
+# + core.autocrlf=true, git misdetects a golden with no early NUL byte (e.g. the
+# dark "emissive" scene) as text and rewrites its header LFs to CRLF on checkout.
+# That shifts the binary pixel block by one byte in the test's PPM reader, so the
+# whole image's R/G/B channels rotate — a spurious golden failure on Windows
+# checkouts. Marking them binary (= -text -diff) keeps the checked-out bytes
+# byte-identical to the committed blob.
+*.ppm binary
