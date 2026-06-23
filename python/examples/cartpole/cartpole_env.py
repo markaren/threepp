@@ -86,11 +86,35 @@ class CartPoleEnv:
         self.steps += 1
 
         jp, jv = self.sim.joint_pos, self.sim.joint_vel
+        # --- state ---
         up = torch.cos(jp[:, 1])                               # +1 up, -1 hanging down
-        rew = (up + 1.5 * (up > 0.9).float()
-               - 0.01 * (jp[:, 0] / RAIL) ** 2
-               - 0.0005 * jv[:, 1] ** 2
-               - 0.003 * a[:, 0] ** 2)
+        x_n = jp[:, 0] / RAIL                                  # normalized cart position (+-1 at the rail)
+        v_cart = jv[:, 0]                                      # cart velocity
+        v_pole = jv[:, 1]                                      # pole angular velocity
+        a_eff = a[:, 0]                                        # action effort
+
+        # Continuous "uprightness" weight: ~1 when perfectly up, decaying smoothly as the pole falls.
+        # Smooth (vs a hard up>0.9 gate) so the agent ANTICIPATES the stabilization cost and eases into
+        # the balance gracefully. SHARP (exp(-8) not exp(-3)): a broad gate makes the v_pole^2 stabilization
+        # term live during the final swing, taxing the very velocity needed to carry the pole over the top
+        # -> it either can't hold or never swings up (stay-down local optimum). exp(-8) keeps it ~off below
+        # up~0.85 (the whole pump) and engages only for the fine balance.
+        upright_weight = torch.exp(-8.0 * (1.0 - up))
+        # Energy-matching: penalize deviation from the ideal energy state (up=1, pole still) -> an
+        # efficient pump instead of thrashing.
+        energy_error = torch.abs((up - 1.0) + 0.1 * v_pole ** 2)
+
+        rew = (up                                              # point the pole up
+               + 2.5 * upright_weight                          # BONUS for being up (sharp-gated): makes the long
+                                                               #   resonant pump clearly worth it -> reliably escapes
+                                                               #   the "never move / stay down" local optimum
+               - 0.4 * energy_error                            # pump efficiently (stronger -> stronger pull off bottom)
+               - 5.0 * torch.relu(x_n.abs() - 0.5) ** 2        # soft wall: stay off the rail
+               - 0.01 * a_eff ** 2                             # mild action effort (glide, don't thrash)
+               # LQR-style stabilization, scaled by uprightness so it engages smoothly near the top:
+               - upright_weight * (1.0 * x_n ** 2              # lock the cart to centre
+                                   + 0.5 * v_cart ** 2         # kill cart velocity (minimize movement)
+                                   + 0.1 * v_pole ** 2))       # kill pole wobble
         done = self.steps >= self.max_steps
         term_obs = self._obs()
         d = torch.nonzero(done, as_tuple=False).squeeze(-1)
