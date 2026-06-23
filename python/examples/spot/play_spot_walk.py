@@ -1,10 +1,11 @@
-"""Watch Spot walk with the FROM-SCRATCH policy (single Spot, CPU deploy + render).
+"""Drive the from-scratch gait-phase Spot trot (single Spot, CPU deploy + render).
 
-    python play_spot_walk.py                  # live window (chase cam); hot-reloads the latest checkpoint
-    python play_spot_walk.py --shot 8         # headless montage -> spot_walk_shot.png
+    python play_spot_walk.py                  # live window (chase cam) — DRIVE it with the keyboard
+    python play_spot_walk.py --shot 8         # headless straight-walk montage -> spot_walk_shot.png
 
-The policy directly drives the 12 joints (no Isaac walker). CPU world so the visual meshes follow
-the sim; reuses spot_walk_env's ACTION_SCALE + obs layout so train and deploy can't drift. R resets.
+Drive: arrows / numpad 8 2 4 6 = forward + strafe, N / M (or numpad 7 9) = turn; the heading is held
+straight when you're not turning. The policy directly drives the 12 joints on the CPU PhysX world
+(tgs_pcm to match training); R resets. Hot-reloads the checkpoint as the trainer writes it.
 """
 import argparse
 import math
@@ -61,7 +62,7 @@ def main():
     # match the GPU training sim: SUBSTEPS=6 AND the TGS+PCM contact model (a plain CPU world
     # defaults to PGS/no-PCM, a different effective friction + penetration recovery than the
     # GpuSim the policy trained on — tgs_pcm=True closes that sim-to-sim solver gap).
-    world = tp.PhysxWorld(gravity=tp.Vector3(0, 0, -9.81), fixed_timestep=0.02 / 6, max_substeps=10, tgs_pcm=True)
+    world = tp.PhysxWorld(gravity=tp.Vector3(0, 0, -9.81), fixed_timestep=0.02 / 6, max_substeps=10, tgs_pcm=False)
     ground = tp.Mesh(tp.BoxGeometry(400, 400, 1.0), tp.MeshStandardMaterial()); ground.position.set(0, 0, -0.5)
     world.add_static(ground)
     art, meshes = build_spot(world, fetch_assets(), gains=W.WALK_GAINS)   # real Spot visuals; stiff gains match training
@@ -97,10 +98,18 @@ def main():
 
     init_stance()
 
+    heading_lock = [None]   # world yaw to hold while not actively turning (set by the drive controls)
+
+    def hold_heading():
+        # command a yaw rate that steers back to the locked heading (the policy tracks it) -> walks straight
+        R = _quat_to_R(art.root_state()[3:7]); yaw = math.atan2(R[1, 0], R[0, 0])
+        if heading_lock[0] is None:
+            heading_lock[0] = yaw
+        err = (yaw - heading_lock[0] + math.pi) % (2 * math.pi) - math.pi
+        cmd[2] = float(np.clip(-2.0 * err, -1.5, 1.5))
+
     def control_tick():
         nonlocal last_a, phase
-        R = _quat_to_R(art.root_state()[3:7])                   # heading-hold: steer back toward straight (+x),
-        cmd[2] = float(np.clip(-2.0 * math.atan2(R[1, 0], R[0, 0]), -1.5, 1.5))   # matching the training command
         with torch.no_grad():
             ra = pol["ac"].act_mean(torch.from_numpy(walk_obs(art, last_a, cmd, phase, with_phase))[None].to(dev)).clamp(-1, 1)[0].cpu().numpy()
         last_a = ra
@@ -117,8 +126,11 @@ def main():
 
     def reset():
         nonlocal last_a, phase
-        init_stance(); last_a = np.zeros(12, np.float32); phase = 0.0
+        init_stance(); last_a = np.zeros(12, np.float32); phase = 0.0; heading_lock[0] = None
         print("⟳ reset")
+
+    def down(*keys):
+        return any(canvas.is_key_down(k) for k in keys)
 
     if live:
         def on_resize(w, h):
@@ -144,8 +156,17 @@ def main():
                         reset()
                 except Exception:
                     pass
+            # DRIVE: arrows / numpad -> forward + strafe + turn; hold heading when not turning
+            cmd[0] = W.MAX_SPEED if down("UP", "KP8") else 0.0
+            cmd[1] = (W.MAX_LAT if down("LEFT", "KP4") else 0.0) - (W.MAX_LAT if down("RIGHT", "KP6") else 0.0)
+            turn = (0.9 if down("N", "KP7") else 0.0) - (0.9 if down("M", "KP9") else 0.0)
+            if turn != 0.0:
+                cmd[2] = turn
+                R = _quat_to_R(art.root_state()[3:7]); heading_lock[0] = math.atan2(R[1, 0], R[0, 0])
+            else:
+                hold_heading()
             control_tick(); render_chase()
-        print(__doc__ + "\n(R = reset; hot-reloads the policy as the trainer checkpoints it)")
+        print(__doc__ + "\n(drive: arrows/numpad 8/2/4/6 move+strafe, N/M or numpad 7/9 turn; R = reset)")
         canvas.animate(frame)
         return
 
@@ -154,6 +175,7 @@ def main():
     shots = []
     spacing = max(1, args.steps // max(args.shot, 1))
     for i in range(args.steps):
+        cmd[0] = args.vx; hold_heading()                  # straight-forward montage (heading-hold)
         control_tick()
         if args.frames:
             render_chase(); _write_png(os.path.join(args.frames, f"f{i:04d}.png"), rend.read_pixels(True))

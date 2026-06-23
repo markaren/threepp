@@ -138,15 +138,20 @@ class SpotWalkEnv:
 
     def _sample_cmd(self, n):
         dev = self.sim.device
-        # stationary mix: P_STAND fraction are a pure stand (vx=0, learn active balance), else a forward
-        # walk in [0.2, MAX_SPEED]. Fixed (not ramped) -> stationary reward -> stable PPO.
-        vx = torch.rand(n, generator=self.g, device=dev) * (MAX_SPEED - 0.2) + 0.2
-        stand = torch.rand(n, generator=self.g, device=dev) < P_STAND
-        vx = torch.where(stand, torch.zeros_like(vx), vx)
+        rnd = lambda: torch.rand(n, generator=self.g, device=dev)
+        z = torch.zeros(n, device=dev)
+        r = rnd()                                                # mutually-exclusive mode selector
+        vx = rnd() * (MAX_SPEED - 0.2) + 0.2
+        stand = r < P_STAND                                      # P_STAND: pure stand (vx=0) -> active balance
+        vx = torch.where(stand, z, vx)
         if self.forward_only:
-            return torch.stack([vx, torch.zeros_like(vx), torch.zeros_like(vx)], dim=-1)
-        vy = torch.where(stand, torch.zeros_like(vx), (torch.rand(n, generator=self.g, device=dev) - 0.5) * 2 * MAX_LAT)
-        wz = torch.where(stand, torch.zeros_like(vx), (torch.rand(n, generator=self.g, device=dev) - 0.5) * 2 * MAX_YAW)
+            return torch.stack([vx, z, z], dim=-1)
+        # drive mix: 25% turning, 15% strafe, the rest straight forward (+ the stand fraction). Keeping most
+        # commands straight (vy=wz=0) means the deploy heading-hold's small yaw command is well-trained.
+        turn = (r >= P_STAND) & (r < P_STAND + 0.25)
+        strafe = (r >= P_STAND + 0.25) & (r < P_STAND + 0.40)
+        vy = torch.where(strafe, (rnd() - 0.5) * 2 * MAX_LAT, z)
+        wz = torch.where(turn, (rnd() - 0.5) * 2 * MAX_YAW, z)
         return torch.stack([vx, vy, wz], dim=-1)
 
     def _frame(self):

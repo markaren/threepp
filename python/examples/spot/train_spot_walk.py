@@ -28,14 +28,23 @@ def main():
     ap.add_argument("--lr", type=float, default=2e-4)   # gentler -> stable convergence (3e-4 let the trot drift off)
     ap.add_argument("--turn", action="store_true", help="also command lateral + yaw (default: forward only)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--warmstart", default="", help="policy .pt to initialize from (e.g. the forward trot)")
     ap.add_argument("--out", default=os.path.join(_HERE, "spot_walk_policy.pt"))
     args = ap.parse_args()
     if not torch.cuda.is_available():
         print("need CUDA"); sys.exit(0)
 
     env = SpotWalkEnv(num_envs=args.envs, device="cuda", seed=args.seed, forward_only=not args.turn)
+    # entropy 0.002 + tighter target_kl (0.012) -> stable convergence: the gait-phase reward has a sharp
+    # trot optimum that bigger updates kept overshooting (peak-then-crash). Gentler exploration holds it.
     ppo = PPO(env, ACT_DIM, hidden=(256, 256), lr=args.lr, horizon=args.horizon,
-              log_std_init=-0.5, entropy=0.005, meta=CONFIG)   # more exploration for from-scratch gait discovery
+              log_std_init=-0.5, entropy=0.002, target_kl=0.012, meta=CONFIG)
+    if args.warmstart and os.path.exists(args.warmstart):
+        ck = torch.load(args.warmstart, map_location="cuda", weights_only=True)   # same 50-d obs + net
+        ppo.ac.load_state_dict(ck["model"])
+        if ck.get("norm") is not None and ppo.norm is not None:
+            ppo.norm.load(ck["norm"])
+        print("warm-started from", os.path.basename(args.warmstart))
 
     def log(msg):
         print(f"{msg} | fwd {env.last_speed:+.2f} | up {env.last_up:.2f} | fell {env.last_fell:.3f} "
