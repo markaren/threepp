@@ -937,6 +937,11 @@ namespace threepp {
         static constexpr uint32_t kSnapOverlay    = 32u;
         static constexpr uint32_t kSnapTet        = 64u;
         static constexpr uint32_t kSnapParticle   = 128u;
+        // material()->visible == false. The node is still recorded (so the
+        // replay walk can detect a re-show) but contributes no MeshEntry /
+        // LineEntry — matches three.js / GLRenderer, which drops a
+        // material-hidden object from the render list. [[#mat-visible]]
+        static constexpr uint32_t kSnapMatHidden  = 256u;
         std::vector<SnapNode> sceneSnapshot_;
 
         // Classification-routing flags for a mesh — shared by the snapshot
@@ -982,8 +987,11 @@ namespace threepp {
                 // without re-doing the string-keyed attribute lookups.
                 if (kind == kSnapKindLine || kind == kSnapKindPoints) {
                     auto geom = sn.line ? sn.line->geometry() : sn.pts->geometry();
+                    auto matL = sn.line ? sn.line->material() : sn.pts->material();
+                    const bool matHidden = matL && !matL->visible;
                     if (geom.get() != sn.geom ||
-                        (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer)) ok = false;
+                        (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer) ||
+                        matHidden != ((sn.flags & kSnapMatHidden) != 0u)) ok = false;
                     return;
                 }
                 Mesh* m = sn.mesh;
@@ -1003,10 +1011,14 @@ namespace threepp {
                                   o.layers.isEnabled(static_cast<unsigned>(overlayLayer_));
                 const bool tet = sn.mat && sn.mat->tetSkinning && sn.mat->tetTexture != nullptr;
                 const bool particle = sn.mat && sn.mat->name == kParticleMaterialName;
+                // sn.mat compared equal above, so it's alive and dereferenceable
+                // (nullptr ⇒ no material ⇒ treated as visible). [[#mat-visible]]
+                const bool matHidden = sn.mat && !sn.mat->visible;
                 if (wire != ((sn.flags & kSnapWire) != 0u) ||
                     over != ((sn.flags & kSnapOverlay) != 0u) ||
                     tet != ((sn.flags & kSnapTet) != 0u) ||
-                    particle != ((sn.flags & kSnapParticle) != 0u)) {
+                    particle != ((sn.flags & kSnapParticle) != 0u) ||
+                    matHidden != ((sn.flags & kSnapMatHidden) != 0u)) {
                     ok = false;
                     return;
                 }
@@ -5063,7 +5075,9 @@ namespace threepp {
                     sn.geom  = geom.get();
                     sn.geomB = geom.get();
                     if (geom) sn.attrVer = geom->attributesVersion();
-                    if (geom && geom->hasAttribute("position")) {
+                    const bool matHidden = line->material() && !line->material()->visible;
+                    if (matHidden) sn.flags |= kSnapMatHidden;
+                    if (!matHidden && geom && geom->hasAttribute("position")) {
                         sn.flags |= kSnapHasPos;
                         LineEntry le{};
                         le.line       = line;
@@ -5087,7 +5101,9 @@ namespace threepp {
                     sn.geom  = geom.get();
                     sn.geomB = geom.get();
                     if (geom) sn.attrVer = geom->attributesVersion();
-                    if (geom && geom->hasAttribute("position")) {
+                    const bool matHidden = pts->material() && !pts->material()->visible;
+                    if (matHidden) sn.flags |= kSnapMatHidden;
+                    if (!matHidden && geom && geom->hasAttribute("position")) {
                         sn.flags |= kSnapHasPos;
                         LineEntry le{};
                         le.line       = nullptr;
@@ -5124,8 +5140,15 @@ namespace threepp {
                 sn.wf        = wf;
                 sn.instCount = inst ? static_cast<int32_t>(inst->count()) : -1;
                 sn.flags     = snapMeshFlags(*m, wf);
+                // material()->visible == false: record the full mesh node (so a
+                // re-show is caught by the replay walk) but build no entries, so
+                // PT / raster G-buffer / overlay / emissive NEE never see it.
+                // [[#mat-visible]]
+                const bool matHidden = m->material() && !m->material()->visible;
+                if (matHidden) sn.flags |= kSnapMatHidden;
                 if (sn.geomB) sn.attrVer = sn.geomB->attributesVersion();
                 sceneSnapshot_.push_back(sn);
+                if (matHidden) return;
                 auto geom = m->geometry();
                 if (!geom || !geom->hasAttribute("position")) return;
                 if (!geom->hasAttribute("normal")) return;
