@@ -124,14 +124,26 @@ endif ()
 # Build the native module INTO the `threepp/` package dir (next to __init__.py), so
 # `import threepp` loads the package and re-exports the native API. The PhysX DLLs are
 # copied alongside it (POST_BUILD uses $<TARGET_FILE_DIR:threepp_py>), and the module adds
-# its own dir to the DLL search path at import. (Ninja is single-config.)
+# its own dir to the DLL search path at import.
 #
 # Skip this under scikit-build-core (SKBUILD): wheel builds stage the module via the
 # install() rules below instead of writing into the source tree.
 if (NOT DEFINED SKBUILD)
+    set(_threepp_py_pkg "${CMAKE_CURRENT_SOURCE_DIR}/threepp")
     set_target_properties(threepp_py PROPERTIES
-            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp"
-            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp")
+            LIBRARY_OUTPUT_DIRECTORY "${_threepp_py_pkg}"
+            RUNTIME_OUTPUT_DIRECTORY "${_threepp_py_pkg}")
+    # Multi-config generators (Visual Studio — the Windows default — plus Ninja
+    # Multi-Config / Xcode) otherwise append a per-config subdir, so the module would
+    # land in threepp/Debug/threepp.*.pyd where `import threepp` can't find it. Pin
+    # every config to the package dir so the documented build command works under any
+    # generator. No-op for single-config generators (CMAKE_CONFIGURATION_TYPES empty).
+    foreach (_cfg IN LISTS CMAKE_CONFIGURATION_TYPES)
+        string(TOUPPER "${_cfg}" _cfg_up)
+        set_target_properties(threepp_py PROPERTIES
+                LIBRARY_OUTPUT_DIRECTORY_${_cfg_up} "${_threepp_py_pkg}"
+                RUNTIME_OUTPUT_DIRECTORY_${_cfg_up} "${_threepp_py_pkg}")
+    endforeach ()
 endif ()
 
 # Wheel packaging (scikit-build-core, pyproject.toml at the repo root): install the

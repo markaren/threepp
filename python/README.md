@@ -63,6 +63,9 @@ cmake -S . -B build -DTHREEPP_WITH_PYTHON=ON \
 cmake --build build --target threepp_py
 ```
 
+(On Windows, CMake defaults to the multi-config Visual Studio generator; the build
+works under it, but `-G Ninja` gives a faster single-config build.)
+
 The built module (`threepp.*.pyd` / `threepp.*.so`) is placed in this `python/`
 directory, so scripts here can `import threepp`. The examples add this directory
 to `sys.path` automatically, so they run from anywhere.
