@@ -1,93 +1,80 @@
-# Spot — deploying an Isaac Lab policy in threepp
+# Spot — terrain locomotion RL on GpuSim
 
-[`spot_deploy.py`](spot_deploy.py) takes a **Boston Dynamics Spot URDF** and a
-**locomotion policy trained in Isaac Lab**, and makes Spot walk in threepp's
-PhysX — a sim-to-sim transfer with **no retraining**. Drive it with the **arrow
-keys / numpad**; the camera follows.
+![Spot](spot.png)
 
-| | | |
-| --- | --- | --- |
-| **forward** UP / NUM 8 | **back** DOWN / NUM 2 | **turn L** N / NUM 7 |
-| **strafe L** LEFT / NUM 4 | **strafe R** RIGHT / NUM 6 | **turn R** M / NUM 9 |
+Reinforcement-learning locomotion for the Boston Dynamics Spot, trained **entirely inside threepp** on
+the batched direct-GPU PhysX backend (`threepp.rl.GpuSim`) with a compact owned PPO (`threepp.rl.PPO`),
+and deployed + rendered with threepp's own GL renderer. One engine for physics, training, and rendering.
 
-![Spot walking under the Isaac policy](spot.png)
-
-```sh
-python spot_deploy.py                  # interactive — assets download on first run
-python spot_deploy.py --shot out.png
-```
-
-On first run the assets download once to `~/.cache/threepp/spot` (re-runs reuse
-them); pass `--assets <folder>` to use your own copy instead. They come from
-Isaac Sim + the Spot SDK:
-
-| file | source |
-| --- | --- |
-| `spot_policy.pt` | Isaac Lab **Spot velocity** policy (TorchScript) — *the only file the demo needs* |
-| `spot_env.yaml` | the Isaac env config (the obs/action contract; baked into the script) |
-| `model.urdf` + `link_models/` | Boston Dynamics Spot SDK URDF (cached for the URDF importer) |
-
-Needs a **PhysX-enabled** threepp build (`tp.HAS_PHYSX`) and **torch**.
+The headline result is **`spot_steps.pt` — a single generalist policy** that walks flat ground, negotiates
+rough/uneven terrain, and climbs discrete stairs up to **0.20 m risers**, while preserving the original
+velocity/steering command-following and a symmetric (drift-free) gait.
 
 ## How it works
 
-The whole trick is reproducing Isaac Lab's observation/action contract exactly,
-then letting PhysX do the rest:
+Everything starts from the **Isaac Lab Spot velocity walker** (a TorchScript actor, 48-d proprioceptive
+obs → 12 joint targets) — see `spot_deploy.py`, which loads and runs it on a single CPU Spot. We
+**warm-start** that walker into a wider network whose observation also carries a **terrain height scan**
+(the 10 new input columns zero-init, so the policy *begins* bit-identical to the flat walker) and
+PPO-fine-tune the whole gait on terrain. The objective is **velocity-command tracking** (exp-kernel on the
+commanded body-frame `[vx, vy, wz]`), plus a **scan-gated imitation anchor** that keeps the gait matched to
+the teacher on locally-flat ground so steering is never forgotten.
 
-- **Observation (48-d, this order):** base linear velocity, base angular velocity,
-  projected gravity (all body-frame), the velocity command `[vx, vy, wz]`,
-  joint positions relative to the default pose, joint velocities, and the last
-  action — in Isaac's joint order (`hx`×4, `hy`×4, `kn`×4).
-- **Action:** `target_q = default_pose + 0.2 · action`, applied as PD position
-  targets (stiffness 60, damping 1.5; effort 45 hips / 115 knees).
-- **Physics:** Spot is a reduced-coordinate `Articulation` stepped at 0.002 s with
-  decimation 10 (50 Hz policy), in a **Z-up** world to match the URDF.
-
-## Sim-to-sim caveats (why it transfers anyway)
-
-threepp and Isaac Lab **both run PhysX 5**, which is what makes this work despite
-the approximations:
-
-- The URDF carries **no inertials or collision**, so link masses are approximated
-  and each link gets a **Box/Capsule** collider for the physics (the articulation
-  API takes primitive shapes). Those primitives are hidden — each link's **visual
-  mesh** (`link_models/*.obj`) is parented under its collider, so Spot *renders* as
-  the real robot while the capsules drive the simulation.
-- The knee's **remotized** actuator is treated as a plain PD.
-
-With the obs/action contract exact, the policy still produces a clean forward trot
-at ~0.9 m/s for a 1.0 m/s command. Tune `MASS` / `GAINS` / `Z0` at the top of the
-script for other robots or policies.
-
----
-
-# Training Spot to walk from scratch (RL, no Isaac policy)
-
-The rest of this folder trains Spot's gait **from scratch** in threepp — author the
-robot in Python, train thousands of them on threepp's **GPU** PhysX, then deploy +
-render. It runs the standard SOTA legged-RL recipe: a **gait-phase clock** with a
-diagonal-trot **contact-schedule reward**, which *prescribes* the trot (penalty-only
-rewards just produce a shuffle).
-
-```sh
-python train_spot_walk.py --iters 1500    # train on GpuSim (~4096 robots, ~70k steps/s)
-python play_spot_walk.py                  # deploy on the CPU world + render (chase cam)
-python play_spot_walk.py --shot 8         # headless montage -> spot_walk_shot.png
+```
+obs (58): lin_b(3) ang_b(3) proj_g(3) cmd(3) qpos(12) qvel(12) last_act(12) base_above(1) scan(9)
+action (12): joint targets = default_q + ACTION_SCALE * a   (Isaac order, unclamped)
 ```
 
-![Spot trotting (from-scratch gait-phase policy)](spot_walk_shot.png)
+`spot_steps.pt` is the end of a **cumulative warm-start chain** — Isaac walker → heightfield (smooth
+rough) → stairs — where each stage keeps the previous skills because every env shares the exact same
+obs/action/reward contract.
 
-| file | role |
-| --- | --- |
-| [`spot_gpu.py`](spot_gpu.py) | shared GpuSim infra — `SpotGpu` build factory, `flat_ground`, `quat_rotate_inverse` |
-| [`spot_walk_env.py`](spot_walk_env.py) | the GpuSim RL env — gait-phase trot reward, heading-hold, per-env friction DR |
-| [`train_spot_walk.py`](train_spot_walk.py) | PPO trainer (`threepp.rl.PPO`) |
-| [`play_spot_walk.py`](play_spot_walk.py) | CPU-world deploy + GL render (runs the gait-phase clock + heading-hold) |
-| [`spot_cpu_env.py`](spot_cpu_env.py) / [`train_spot_cpu.py`](train_spot_cpu.py) | train **directly on the CPU** articulation — no sim-to-sim gap (`train == deploy`) |
+## Terrain stages (each: env + trainer + viewer)
 
-Key findings (the hard-won ones): the soft Isaac PD (stiffness 60) is too compliant
-for our ~28 kg model — the legs sag and nothing can step, so the from-scratch gait
-uses **stiffness 120**. Grippy **restitution-0 feet** (via `world.create_material(...)`,
-the new material API) + per-env friction randomization make push-off clean and the
-gait robust. `PhysxWorld(tgs_pcm=True)` makes the CPU deploy use the same TGS+PCM
-contact model as the GPU training.
+| Terrain | env | what it adds |
+|---|---|---|
+| **tents** (debut) | `spot_terrain_env.py` | velocity-tracking + randomized commands on the original stair-tent terrain |
+| **rough** (box humps) | `spot_rough_env.py` | gentle uneven ground from smooth box-built noise |
+| **heightfield** | `spot_heightfield_env.py` | true continuous 2-D rough terrain (triangle-soup → `add_static_trimesh`), smooth at high amplitude |
+| **stairs** | `spot_steps_env.py` | discrete risers + an **adaptive per-env difficulty curriculum** (promote on clearing a tent, demote on falling) |
+
+Shared pieces: `spot_symmetry.py` (left-right mirror + symmetry-augmentation loss, kills the lateral
+gait drift), and `spot_deploy.py` (the Isaac-walker deploy + the asset/robot construction layer everything
+imports). The viewers are CPU-deploy + GL render with hot-reload, keyboard steering, and a chase cam.
+
+## Run it
+
+```bash
+# selftest any env (finiteness + a stable stand)
+K=64 python spot_steps_env.py
+
+# watch the generalist drive (hot-reloads spot_steps.pt; arrows/numpad steer, R resets)
+python play_spot_steps.py --level 3     # spawn at the 0.13 m riser band
+python play_spot_heightfield.py         # same policy on continuous rough terrain
+python play_spot_rough.py               # ...and on box humps
+
+# train (warm-starts from the previous stage; curriculum auto-ramps)
+python train_spot_steps.py --iters 1000            # stairs, from spot_hf.pt, symmetry on
+python train_spot_heightfield.py --iters 250       # heightfield, from the Isaac walker
+python train_spot_steps.py --score spot_steps.pt   # deterministic track / fell / riser level reached
+python train_spot_steps.py --eval  spot_steps.pt   # held-out per-command steering regression vs the teacher
+```
+
+Checkpoints (`*.pt`) are git-ignored — regenerate by training, or keep your own locally.
+
+## Notes / design choices
+
+- **GpuSim is the enabler** — K Spots in one direct-GPU PhysX scene; the 48-d Isaac obs is assembled as
+  torch ops on the GPU state. ~35–40k env-steps/s at K=2048 on an RTX 4070.
+- **Privileged terrain scan** — the 9-probe scan is an exact analytic forward height profile (heading-
+  relative line, ~1.1 m look-ahead), the same idea as IsaacLab's height scanner. Real hardware would
+  estimate it from perception.
+- **Drop-settle spawns** — the robot is placed referenced to the highest terrain under its footprint so a
+  foot never spawns inside the terrain (no depenetration jolt).
+- **CPU deploy / sim-to-sim** — viewers default to `tgs_pcm`/0.005 to match the GpuSim training contact
+  model; `--pgs` selects PhysX's default solver. Both transfer for this gait.
+- **Steering preservation** — best checkpoints are gated on a held-out flat-steering eval, not training
+  reward; `--score`/`--eval` are the real acceptance tests.
+
+The PPO has a general `aux_loss` hook (used here for symmetry augmentation; also reusable for a
+behavioral-cloning / KL anchor to the teacher).

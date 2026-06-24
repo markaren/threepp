@@ -190,8 +190,11 @@ class PPO:
     def __init__(self, env, act_dim, hidden=(256, 256), *, lr=3e-4, gamma=0.99, lam=0.95,
                  clip=0.2, epochs=5, minibatches=4, horizon=32, entropy=0.0, vfcoef=1.0,
                  log_std_init=-0.5, max_grad_norm=1.0, target_kl=0.02, anneal_lr=True,
-                 normalize_returns=True, normalize_obs=True, meta=None, device=None):
+                 normalize_returns=True, normalize_obs=True, meta=None, device=None, aux_loss=None):
         self.env = env
+        # aux_loss(ac, obs_minibatch) -> scalar, added to the PPO loss each minibatch (None = off).
+        # General hook for extra objectives: symmetry augmentation, a BC/KL anchor to a reference policy, etc.
+        self.aux_loss = aux_loss
         self.obs = env.reset()
         self.is_image = self.obs.ndim == 4                          # [K,C,H,W] image vs [K,obs_dim]
         self.K = self.obs.shape[0]
@@ -287,6 +290,8 @@ class PPO:
                     v_clip = vold[j] + (vnorm - vold[j]).clamp(-self.clip, self.clip)
                     vf = torch.max((vnorm - vtarg[j]).pow(2), (v_clip - vtarg[j]).pow(2)).mean()
                     loss = pg + self.vfcoef * vf - self.entropy * ent.mean()
+                    if self.aux_loss is not None:                       # symmetry / BC anchor / etc.
+                        loss = loss + self.aux_loss(self.ac, f_obs[j])
                     if not torch.isfinite(loss):
                         continue
                     self.opt.zero_grad(); loss.backward()
