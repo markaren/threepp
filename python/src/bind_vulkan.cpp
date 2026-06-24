@@ -141,6 +141,14 @@ namespace {
         }
 
         void set_clear_color(const Color& c, float alpha) { renderer_.setClearColor(c, alpha); }
+
+        // Accepted for GLRenderer API parity. The Vulkan backend's analytic
+        // lights cast ray-traced shadows unconditionally (there is no shadow-map
+        // pass to toggle), so this flag is stored but has no rendering effect —
+        // it just lets GL-targeted code run unchanged on Vulkan.
+        bool shadow_map_enabled() const { return shadowMapEnabled_; }
+        void set_shadow_map_enabled(bool v) { shadowMapEnabled_ = v; }
+
         void set_flush_frames(int n) { flush_ = n < 1 ? 1 : n; }
         void set_size(int w, int h) { renderer_.setSize({w, h}); }
 
@@ -181,6 +189,7 @@ namespace {
         Canvas& canvas_;
         VulkanRenderer renderer_;
         int flush_;
+        bool shadowMapEnabled_ = true;// no-op parity flag (Vulkan shadows are always on)
     };
 
 }// namespace
@@ -222,6 +231,12 @@ namespace threepp_py {
                      "Metric depth as (H, W) float32 — distance from the camera in scene units. "
                      "Background reads as the camera far plane.")
                 .def("set_clear_color", &PyVulkanRenderer::set_clear_color, py::arg("color"), py::arg("alpha") = 1.f)
+                // No-op shadow toggle for GLRenderer API parity: Vulkan analytic
+                // lights always cast ray-traced shadows, so this is stored but
+                // ignored — the same script runs on GL and Vulkan unchanged.
+                .def_property("shadow_map_enabled",
+                              [](PyVulkanRenderer& r) { return r.shadow_map_enabled(); },
+                              [](PyVulkanRenderer& r, bool v) { r.set_shadow_map_enabled(v); })
                 // Tone mapping — same knobs as GLRenderer. The deferred renderer
                 // syncs these (from the Renderer base) into its composite/resolve
                 // pass each frame, so they can be flipped between renders. Default
