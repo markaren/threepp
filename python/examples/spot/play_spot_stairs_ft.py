@@ -86,7 +86,7 @@ def main():
     art, meshes = build_spot(world, fetch_assets())               # default Isaac gains (no override)
 
     canvas = tp.Canvas("spot-stairs (fine-tuned)", width=DISP, height=DISP, headless=not live)
-    rend = tp.VulkanRenderer(canvas); rend.shadow_map_enabled = True
+    rend = tp.GLRenderer(canvas); rend.shadow_map_enabled = True
     rend.tone_mapping = tp.ToneMapping.ACESFilmic; rend.tone_mapping_exposure = 1.1
     scene = tp.Scene(); scene.background = tp.Background(0x9fb6cf)
     scene.add(tp.HemisphereLight(0xdce8f6, 0x55606c, 1.15))
