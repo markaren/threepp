@@ -99,6 +99,7 @@ def _flat_ground(world, k, spacing, material=None):
 
 
 STAIR_X0, STAIR_RUN, STAIR_N = 1.6, 0.32, 10     # stairs start 1.6 m ahead; default tread depth; step count
+LAND_LEN = 1.0            # flat landing length at a tent's peak (between ascent and descent) — used by the tent geom
 
 
 def _add_stairs(world, k, spacing, rises, runs=None, x0=STAIR_X0, n=STAIR_N):
@@ -107,6 +108,8 @@ def _add_stairs(world, k, spacing, rises, runs=None, x0=STAIR_X0, n=STAIR_N):
     policy doesn't overfit one geometry). Each step is a solid box from the ground up to its tread."""
     for i in range(k):
         r = float(rises[i]); run = float(runs[i]) if runs is not None else STAIR_RUN
+        if r < 0.005:                                   # FLAT lane (FT flat-gait training): no stairs, no landing
+            continue
         for s in range(n):
             h = (s + 1) * r
             box = tp.Mesh(tp.BoxGeometry(run, spacing * 0.92, h), tp.MeshStandardMaterial())
@@ -118,6 +121,32 @@ def _add_stairs(world, k, spacing, rises, runs=None, x0=STAIR_X0, n=STAIR_N):
         land = tp.Mesh(tp.BoxGeometry(4.0, spacing * 0.92, top), tp.MeshStandardMaterial())
         land.position.set(x0 + n * run + 2.0, i * spacing, top * 0.5)
         world.add_static(land)
+
+
+def _add_tent(world, k, spacing, rises, runs, n_ups, x0=STAIR_X0, land=LAND_LEN):
+    """Per-lane up-then-down staircase (a 'tent'): ascend n -> flat landing -> descend n, matching
+    tent_height. rise<0.005 -> flat lane (no boxes). Solid boxes from the ground up to each tread top."""
+    for i in range(k):
+        r = float(rises[i]); run = float(runs[i]); n = int(n_ups[i])
+        if r < 0.005:
+            continue
+        w = spacing * 0.92
+        for s in range(n):                                  # ascend: tread s top at (s+1)*r
+            h = (s + 1) * r
+            b = tp.Mesh(tp.BoxGeometry(run, w, h), tp.MeshStandardMaterial())
+            b.position.set(x0 + s * run + run * 0.5, i * spacing, h * 0.5)
+            world.add_static(b)
+        up_end = x0 + n * run
+        top = n * r
+        lb = tp.Mesh(tp.BoxGeometry(land, w, top), tp.MeshStandardMaterial())   # flat landing at the peak
+        lb.position.set(up_end + land * 0.5, i * spacing, top * 0.5)
+        world.add_static(lb)
+        land_end = up_end + land
+        for s in range(n - 1):                              # descend: tread s top at (n-1-s)*r (last=0 -> ground)
+            h = (n - 1 - s) * r
+            b = tp.Mesh(tp.BoxGeometry(run, w, h), tp.MeshStandardMaterial())
+            b.position.set(land_end + s * run + run * 0.5, i * spacing, h * 0.5)
+            world.add_static(b)
 
 
 def up_z(q):
@@ -167,6 +196,19 @@ def terrain_height(x, rise, run):
     """Stair-profile height at world-x for a lane of step `rise` and tread `run`. Vectorized
     (x/rise/run broadcast — pass [K] or [K,P])."""
     steps = torch.clamp(torch.floor((x - STAIR_X0) / run) + 1.0, 0.0, float(STAIR_N))
+    return steps * rise
+
+
+def tent_height(x, rise, run, n_up, x0=STAIR_X0, land=LAND_LEN):
+    """Up-then-down stair profile at world-x: flat approach -> ascend n_up -> flat landing -> descend n_up
+    -> flat run-out. Vectorized; rise/run/n_up broadcast with x ([K] or [K,P]). rise=0 -> flat everywhere.
+    The descent shows up as NEGATIVE entries in the obs scan (terrain dropping ahead) — the policy's cue to
+    step down. n_up must be a tensor (per-lane step count); pass n_up[:,None] when x is [K,P]."""
+    up_end = x0 + n_up * run
+    land_end = up_end + land
+    asc = torch.minimum(torch.clamp(torch.floor((x - x0) / run) + 1.0, min=0.0), n_up)       # steps climbed
+    desc = torch.minimum(torch.clamp(torch.floor((x - land_end) / run) + 1.0, min=0.0), n_up)  # steps descended
+    steps = torch.where(x < up_end, asc, torch.where(x < land_end, n_up, n_up - desc))
     return steps * rise
 
 
@@ -326,6 +368,11 @@ class SpotStairEnv:
 # adapt the WHOLE gait to stairs — lifting the feet over the edges instead of fighting a frozen base.
 FT_OBS_DIM = 3 + 3 + 3 + 3 + 12 + 12 + 12 + 1 + len(PROBE_DX)   # 48 isaac proprio + base_above + scan = 58
 FT_HIDDEN = (512, 256, 128)                                     # matches the Isaac actor MLP (for warm-start)
+FLAT_FRAC = 0.25          # fraction of FLAT lanes (rise=0) -> clean flat-gait practice (tent lanes add more flat)
+FT_RISE_MAX = 0.20        # widen the curriculum: small (0.02) .. large (0.20) steps, not just 0.13
+N_UP_MIN, N_UP_MAX = 3, 8 # steps up (= steps down) per tent lane, varied so step-count generalizes
+FT_EPISODE_S = 20.0       # longer than the ascend-only 16 s: time to climb UP, cross the landing, and walk DOWN
+W_IMIT = 0.05             # weight on imitating the Isaac flat walker, scan-gated -> a CLEAN flat gait (not a limp)
 
 FT_CONFIG = {"control_hz": CONTROL_HZ, "dt": DT, "substeps": SUBSTEPS, "spacing": SPACING,
              "rise_min": RISE_MIN, "run_min": RUN_MIN, "run_max": RUN_MAX, "fwd_cmd": FWD_CMD,
@@ -334,15 +381,18 @@ FT_CONFIG = {"control_hz": CONTROL_HZ, "dt": DT, "substeps": SUBSTEPS, "spacing"
 
 
 class SpotStairFTEnv:
-    def __init__(self, num_envs=2048, device="cuda", seed=0, rise_max=RISE_MAX):
+    def __init__(self, num_envs=2048, device="cuda", seed=0, rise_max=FT_RISE_MAX):
         self.K, self.dt = num_envs, DT
-        self.max_steps = int(EPISODE_S * CONTROL_HZ)
-        rises = np.linspace(RISE_MIN, rise_max, num_envs).astype(np.float32)  # graded lanes = built-in curriculum
-        runs = np.random.default_rng(seed).uniform(RUN_MIN, RUN_MAX, num_envs).astype(np.float32)
+        self.max_steps = int(FT_EPISODE_S * CONTROL_HZ)                       # 20 s: up + across the landing + down
+        rng = np.random.default_rng(seed)
+        rises = np.linspace(RISE_MIN, rise_max, num_envs).astype(np.float32)  # graded small..large = curriculum
+        rises[rng.random(num_envs) < FLAT_FRAC] = 0.0                         # FLAT lanes -> clean flat-gait practice
+        runs = rng.uniform(RUN_MIN, RUN_MAX, num_envs).astype(np.float32)
+        n_ups = rng.integers(N_UP_MIN, N_UP_MAX + 1, num_envs).astype(np.float32)   # steps up (= steps down) per tent
         self.sim = GpuSim(num_envs, lambda world, i: SpotGpu(world, i, SPACING),
                           gravity=(0.0, 0.0, -9.81), spacing=SPACING, device=device, read_root=True,
                           build_world=lambda world: (_flat_ground(world, num_envs, SPACING),
-                                                      _add_stairs(world, num_envs, SPACING, rises, runs)))
+                                                      _add_tent(world, num_envs, SPACING, rises, runs, n_ups)))
         dev = self.sim.device
         self.default_q = torch.from_numpy(default_q).to(dev)                  # [12] isaac order
         self.i2a = torch.from_numpy(isaac_to_add.astype(np.int64)).to(dev)    # add -> isaac index
@@ -351,7 +401,10 @@ class SpotStairFTEnv:
         self.grav = torch.tensor([0.0, 0.0, -1.0], device=dev)
         self.rise = torch.from_numpy(rises).to(dev)
         self.run = torch.from_numpy(runs).to(dev)
+        self.n_up = torch.from_numpy(n_ups).to(dev)                           # [K] steps up (= down) per tent lane
         self.probe = torch.tensor(PROBE_DX, device=dev)
+        self.imit_policy = torch.jit.load(os.path.join(fetch_assets(), "spot_policy.pt"),
+                                          map_location=dev).eval()            # Isaac flat walker = the flat-gait target
         self.lane_y = torch.arange(num_envs, device=dev, dtype=torch.float32) * SPACING
         self.fwd_v = torch.full((num_envs,), FWD_CMD, device=dev)
         pos = torch.zeros(num_envs, 3, device=dev); pos[:, 1] = self.lane_y; pos[:, 2] = SPAWN_Z
@@ -359,9 +412,10 @@ class SpotStairFTEnv:
         z = lambda *s: torch.zeros(*s, device=dev)
         self.steps = torch.zeros(num_envs, dtype=torch.long, device=dev)
         self.last_act = z(num_envs, ACT_DIM)                                  # isaac-order action (for the obs)
+        self._last_obs = z(num_envs, FT_OBS_DIM)                              # obs the policy acted on (imitation input)
         self.up = z(num_envs)
         self.ep_max_climb = z(num_envs); self.ep_max_x = z(num_envs)
-        self.last_climb = 0.0; self.last_fell = 0.0
+        self.last_climb = 0.0; self.last_fell = 0.0; self.last_dist = 0.0; self.last_flatmatch = 0.0
 
     def _cmd(self):
         # heading + lane hold: steer the policy straight at its staircase (forward + strafe-to-lane + face-up).
@@ -381,12 +435,14 @@ class SpotStairFTEnv:
         qpos = s.joint_pos[:, self.i2a] - self.default_q                      # isaac-order joint deviation
         jv_isaac = s.joint_vel[:, self.i2a]
         x, zz = s.root_position[:, 0], s.root_position[:, 2]
-        h_here = terrain_height(x, self.rise, self.run)
+        h_here = tent_height(x, self.rise, self.run, self.n_up)
         base_above = (zz - h_here).unsqueeze(-1)
-        ahead = (terrain_height(x[:, None] + self.probe[None, :], self.rise[:, None], self.run[:, None])
-                 - h_here[:, None])                                           # forward height scan
-        return torch.cat([lin_b, ang_b, proj_g, self._cmd(), qpos, jv_isaac, self.last_act,
-                          base_above, ahead], dim=1)                          # [K, FT_OBS_DIM]
+        ahead = (tent_height(x[:, None] + self.probe[None, :], self.rise[:, None], self.run[:, None],
+                             self.n_up[:, None]) - h_here[:, None])           # forward scan (negative = descent ahead)
+        obs = torch.cat([lin_b, ang_b, proj_g, self._cmd(), qpos, jv_isaac, self.last_act,
+                         base_above, ahead], dim=1)                           # [K, FT_OBS_DIM]
+        self._last_obs = obs                                                  # remember it: imitation reads obs[:,:48]
+        return obs
 
     def _reset_idx(self, idx):
         n = idx.numel()
@@ -429,26 +485,32 @@ class SpotStairFTEnv:
         y_err = self.sim.root_position[:, 1] - self.lane_y                   # sideways drift off the lane centre
         yaw = torch.atan2(2.0 * (q[:, 0] * q[:, 1] + q[:, 2] * q[:, 3]),
                           1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2))         # heading (0 = facing straight up the stairs)
-        th = terrain_height(x, self.rise, self.run)
+        th = tent_height(x, self.rise, self.run, self.n_up)
+        ahead = (tent_height(x[:, None] + self.probe[None, :], self.rise[:, None], self.run[:, None],
+                             self.n_up[:, None]) - th[:, None])                 # signed forward scan: up>0, down<0
+        change = ahead.abs().max(dim=1).values                                 # nearest terrain change (up OR down)
+        w_imit = (1.0 - change / 0.10).clamp(0.0, 1.0)                          # 1 on TRUE flat -> 0 once a step nears
+        isaac_a = self.imit_policy(self._last_obs[:, :48])                      # the clean Isaac walker's action here
+        imit = w_imit * (a - isaac_a).pow(2).mean(dim=1)                        # match it on flat -> clean flat gait
         base_above = zz - th
         climb = th
         arate = a - prev_a
         fell = (self.up < 0.35) | (base_above < 0.18)
         new_high = (climb - self.ep_max_climb).clamp_min(0.0)
         new_x = (x - self.ep_max_x).clamp_min(0.0)
-        # Same stair reward as the residual env, MINUS the residual-energy a^2 term: here the action IS the
-        # gait, so penalizing its magnitude would damp the walk. arate^2 (smoothness) stays.
-        rew = (30.0 * new_high                          # climb a new (higher) step — the goal, dominant
-               + 15.0 * new_x                           # forward-progress ratchet — BOOSTED so the gait clearly
-                                                        #   beats standing (it must pay for itself on flat too)
+        # The action IS the gait (no residual a^2). new_x drives the WHOLE traversal (up, across, DOWN); new_high
+        # shapes the ascent; W_IMIT*imit makes flat sections track the Isaac walker -> a clean walk, not a limp.
+        rew = (15.0 * new_high                          # ASCEND: gain new height (shaping; new_x already forces it)
+               + 20.0 * new_x                           # FORWARD: the whole traversal — across the landing AND down
                + 0.05                                   # alive
                - 1.0 * roll.pow(2)                      # discourage tipping sideways (light — not the gait's sway)
-               - 0.05 * (ang_b[:, 0].pow(2) + ang_b[:, 2].pow(2))   # VERY light roll/yaw-rate damp (don't fight the gait)
+               - 0.05 * (ang_b[:, 0].pow(2) + ang_b[:, 2].pow(2))   # VERY light roll/yaw-rate damp (don't fight gait)
                - 0.2 * lin_b[:, 1].abs()                # light: no big lateral drift off the edge
                - 2.0 * y_err.pow(2)                     # STAY IN LANE: kills the rightward veer (drift off centre)
-               - 1.0 * yaw.pow(2)                       # FACE STRAIGHT up the stairs (no heading drift)
-               - 3.0 * torch.relu(0.30 - base_above)    # anti-scrape: don't drag the body up the steps
+               - 1.0 * yaw.pow(2)                       # FACE STRAIGHT along the lane (no heading drift)
+               - 3.0 * torch.relu(0.30 - base_above)    # anti-scrape: don't drag the body over the steps
                - 0.001 * arate.pow(2).mean(dim=1)       # tiny smoothness, SCALED for the ~+-7 Isaac action range
+               - W_IMIT * imit                          # BE the Isaac flat walker on flat -> clean walk (not wounded)
                - 5.0 * fell.float())
         self.ep_max_climb = torch.maximum(self.ep_max_climb, climb)
         self.ep_max_x = torch.maximum(self.ep_max_x, x)
@@ -458,6 +520,7 @@ class SpotStairFTEnv:
         d = torch.nonzero(done, as_tuple=False).squeeze(-1)
         if d.numel() > 0:
             self.last_climb = self.ep_max_climb[d].mean().item()
+            self.last_dist = self.ep_max_x[d].mean().item()                    # full forward traversal (up+across+down)
             self._reset_idx(d)
             self.sim.read()
             self.up = up_z(self.sim.root_quat)
@@ -465,6 +528,7 @@ class SpotStairFTEnv:
         else:
             obs = term_obs
         self.last_fell = fell.float().mean().item()
+        self.last_flatmatch = (imit.sum() / w_imit.sum().clamp(min=1.0)).item()   # mean flat imitation err (low=clean)
         return obs, rew, done, term_obs, timeout
 
 

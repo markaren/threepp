@@ -21,6 +21,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 sys.path.insert(0, _HERE)
 
+try:                                                  # the Windows cp1252 console chokes on unicode status glyphs
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 import threepp as tp
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, grid_texture, _write_png, _quat_to_R,
@@ -31,8 +36,15 @@ DISP = 760
 GRAV = np.array([0.0, 0.0, -1.0])
 
 
-def terr_h(x, rise, run, n):
-    return float(np.clip(math.floor((x - S.STAIR_X0) / run) + 1.0, 0.0, n) * rise)
+def terr_h(x, rise, run, n, x0=S.STAIR_X0, land=S.LAND_LEN):
+    """numpy mirror of spot_stairs_env.tent_height: flat -> ascend n -> landing -> descend n -> flat.
+    `n` = steps up (= steps down). The descent reads as NEGATIVE entries in the obs scan."""
+    up_end = x0 + n * run
+    land_end = up_end + land
+    asc = min(max(math.floor((x - x0) / run) + 1.0, 0.0), n)
+    desc = min(max(math.floor((x - land_end) / run) + 1.0, 0.0), n)
+    steps = asc if x < up_end else (n if x < land_end else n - desc)
+    return float(steps * rise)
 
 
 def ft_obs(art, last_act, rise, run, n, cmd):
@@ -87,7 +99,7 @@ def main():
     # matches the colliders the robot is on. Rebuilt DEBOUNCED (after the slider settles) to avoid churning
     # Vulkan geometry every drag-frame.
     N_MAX = 20
-    cfg = {"rise": args.rise, "run": args.run, "n": min(S.STAIR_N, N_MAX)}
+    cfg = {"rise": args.rise, "run": args.run, "n": 6}           # n = steps UP (= steps down) of the tent
     built = {"rise": None, "run": None, "n": None}
     stairs = {"bodies": [], "meshes": []}
 
@@ -105,9 +117,13 @@ def main():
             scene.remove(m)
         stairs["bodies"].clear(); stairs["meshes"].clear()
         rise, run, n = cfg["rise"], cfg["run"], int(cfg["n"])
-        for s in range(n):
+        for s in range(n):                                       # ASCEND: tread s top at (s+1)*rise
             _stair_box(run, (s + 1) * rise, S.STAIR_X0 + s * run + run * 0.5)
-        _stair_box(4.0, n * rise, S.STAIR_X0 + n * run + 2.0)     # flat landing at the top
+        up_end = S.STAIR_X0 + n * run
+        _stair_box(S.LAND_LEN, n * rise, up_end + S.LAND_LEN * 0.5)   # flat landing at the peak
+        land_end = up_end + S.LAND_LEN
+        for s in range(n - 1):                                   # DESCEND: tread s top at (n-1-s)*rise
+            _stair_box(run, (n - 1 - s) * rise, land_end + s * run + run * 0.5)
         built.update(rise=rise, run=run, n=n)
 
     rebuild_stairs()
@@ -151,10 +167,10 @@ def main():
         def draw_ui():
             tp.imgui.set_next_window_pos(12, 12)
             tp.imgui.set_next_window_size(260, 0)
-            tp.imgui.begin("staircase")
+            tp.imgui.begin("tent stairs (up / down)")
             _, cfg["rise"] = tp.imgui.slider_float("rise (m)", cfg["rise"], 0.04, 0.30)
-            _, cfg["n"] = tp.imgui.slider_int("# steps", int(cfg["n"]), 1, N_MAX)
-            tp.imgui.text(f"top of flight: {int(cfg['n']) * cfg['rise']:.2f} m")
+            _, cfg["n"] = tp.imgui.slider_int("# steps up=down", int(cfg["n"]), 1, 12)
+            tp.imgui.text(f"peak height: {int(cfg['n']) * cfg['rise']:.2f} m")
             if cfg["rise"] != built["rise"] or int(cfg["n"]) != built["n"]:
                 tp.imgui.text("rebuilding on release...")
             tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps")
@@ -162,7 +178,7 @@ def main():
 
         def reset_spot():
             art.reset(tp.Vector3(0, 0, Z0)); last_act = np.zeros(12, np.float32); settle(40)
-            print("⟳ reset Spot to the bottom")
+            print("[reset] Spot to the bottom")
         def frame():
             nonlocal last_act
             if canvas.is_key_down("R"):
@@ -178,7 +194,7 @@ def main():
                     if mt != pol["mt"]:
                         pol["ac"], _, _ = load_policy(args.model, device=dev); pol["mt"] = mt
                         reset_spot()
-                        print("↻ reloaded latest policy")
+                        print("[reload] latest policy")
                 except Exception:
                     pass
             # debounced staircase rebuild: rebuild once the rise / # steps sliders settle (no per-frame churn)

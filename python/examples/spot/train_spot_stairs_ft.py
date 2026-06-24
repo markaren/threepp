@@ -43,6 +43,17 @@ def warmstart_from_isaac(ac, policy_path, n_proprio=48, device="cuda"):
     print(f"warm-started actor from {os.path.basename(policy_path)} (terrain input cols zero-init)")
 
 
+def warmstart_from_ckpt(ac, ckpt_path, device="cuda"):
+    """Resume from a previous FT checkpoint (same 58-d obs + arch): the CLIMB survives intact and we only
+    teach the flat-gait relaxation (flat lanes + the energy-on-flat penalty). log_std is KEPT at v1's
+    converged ~0.18 — re-opening it (and a hot lr) destabilised the climb early; the flat-energy gradient
+    shifts the gait without needing extra exploration, so a gentle low-lr fine-tune is all this takes."""
+    from threepp.rl import load_policy
+    src, _, _ = load_policy(ckpt_path, device=device)
+    ac.load_state_dict(src.state_dict())
+    print(f"warm-started from checkpoint {os.path.basename(ckpt_path)} (full actor+critic, log_std kept)")
+
+
 @torch.no_grad()
 def sanity_walk(env, ac, steps=300):
     """Roll the warm-started DETERMINISTIC policy on the graded stairs and report mean peak climb — a
@@ -52,7 +63,7 @@ def sanity_walk(env, ac, steps=300):
     for _ in range(steps):
         obs, _, _, _, _ = env.step(ac.act_mean(obs))
     print(f"warm-start sanity ({steps} steps): mean peak climb={env.ep_max_climb.mean().item():.3f} m  "
-          f"fell/step={env.last_fell:.3f}")
+          f"dist={env.ep_max_x.mean().item():.2f} m  fell/step={env.last_fell:.3f}")
 
 
 def main():
@@ -61,7 +72,9 @@ def main():
     ap.add_argument("--iters", type=int, default=1500)
     ap.add_argument("--horizon", type=int, default=32)
     ap.add_argument("--lr", type=float, default=1e-4)        # gentle: adapt the gait, don't forget it
-    ap.add_argument("--rise_max", type=float, default=0.13)  # top step height in the graded lanes (curriculum lever)
+    ap.add_argument("--rise_max", type=float, default=0.20)  # top step height in the graded lanes (curriculum lever)
+    ap.add_argument("--warmstart", default="")               # resume from an FT .pt (keeps the climb); else from Isaac
+    ap.add_argument("--flat_w", type=float, default=0.2)     # weight of flat-match in the checkpoint-selection score
     ap.add_argument("--out", default=os.path.join(_HERE, "spot_stairs_ft.pt"))
     args = ap.parse_args()
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
@@ -70,21 +83,28 @@ def main():
     env = SpotStairFTEnv(num_envs=args.envs, device="cuda", rise_max=args.rise_max)
     ppo = PPO(env, ACT_DIM, hidden=FT_HIDDEN, lr=args.lr, horizon=args.horizon,
               log_std_init=-1.5, entropy=0.0, normalize_obs=False, meta=FT_CONFIG)
-    warmstart_from_isaac(ppo.ac, os.path.join(fetch_assets(), "spot_policy.pt"), device="cuda")
+    if args.warmstart:
+        warmstart_from_ckpt(ppo.ac, args.warmstart, device="cuda")
+    else:
+        warmstart_from_isaac(ppo.ac, os.path.join(fetch_assets(), "spot_policy.pt"), device="cuda")
     sanity_walk(env, ppo.ac)
 
     latest = os.path.splitext(args.out)[0] + "_latest.pt"   # always-current policy (resume / final converged)
-    best = [0.0]
+    best = [-1e9]
 
     def log(msg):
-        c = env.last_climb
+        c, dist, fm = env.last_climb, env.last_dist, env.last_flatmatch
+        # best-by-score: traverse FAR (up + across the landing + DOWN — only a full traversal racks up distance)
+        # AND match the Isaac flat walker on flat (low flat-match = clean walk, not the wounded-dog limp). A fallen
+        # policy traverses little, so distance keeps it honest; flat-match captures the gait quality on flat.
+        score = dist - args.flat_w * fm
         ppo.save(latest)                      # LATEST every log (so the final/converged policy is never lost)
         mark = ""
-        if c > best[0]:                       # BEST-by-climb -> args.out, what the viewer hot-reloads & deploy uses
-            best[0] = c
-            ppo.save(args.out)                #   (PPO oscillates; latest alone can be a post-peak/veered checkpoint)
+        if score > best[0]:                   # BEST-by-score -> args.out, what the viewer hot-reloads & deploy uses
+            best[0] = score
+            ppo.save(args.out)
             mark = "  <- saved best"
-        print(f"{msg} | climb {c:.3f} m | fell {env.last_fell:.3f}{mark}")
+        print(f"{msg} | climb {c:.2f} | dist {dist:.2f} | fmatch {fm:.2f} | fell {env.last_fell:.3f} | score {score:.3f}{mark}")
 
     ppo.learn(args.iters, log_every=20, on_log=log)
     ppo.save(latest)
