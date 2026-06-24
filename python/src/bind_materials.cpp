@@ -72,6 +72,10 @@ namespace threepp_py {
                 .def_readwrite("alpha_test", &T::alphaTest)
                 .def_readwrite("tone_mapped", &T::toneMapped)
                 .def_readwrite("premultiplied_alpha", &T::premultipliedAlpha)
+                // Bump the material version so backends that cache derived
+                // per-material GPU state (Vulkan MaterialDesc SSBO) re-upload
+                // after a runtime property edit. No-op visual cost on GL.
+                .def("needs_update", [](T& mat) { mat.needsUpdate(); })
                 .def("dispose", [](T& mat) { mat.dispose(); })
                 .def("__repr__", [](const T& mat) { return "<threepp." + mat.type() + ">"; });
     }

@@ -241,7 +241,7 @@ def main():
     controls.auto_rotate = True
     controls.auto_rotate_speed = 0.4
 
-    ui = tp.ImguiContext(canvas)
+    ui = tp.ImguiContext(canvas, renderer)
     clock = tp.Clock()
     state = {
         "exposure": 1.0, "env_intensity": 1.0,
@@ -270,17 +270,20 @@ def main():
 
         tp.imgui.separator()
         tp.imgui.text("Hero material")
-        changed, state["preset"] = tp.imgui.combo("metal", state["preset"], [m[0] for m in METALS])
-        if changed:
-            _, color, metal, rough = METALS[state["preset"]]
-            hero.material.color = color
-            state["hero_metal"], state["hero_rough"] = metal, rough
-        _, state["hero_metal"] = tp.imgui.slider_float("metalness", state["hero_metal"], 0.0, 1.0)
-        _, state["hero_rough"] = tp.imgui.slider_float("roughness", state["hero_rough"], 0.0, 1.0)
-        hero.material.metalness = state["hero_metal"]
-        hero.material.roughness = state["hero_rough"]
-        _, state["wireframe"] = tp.imgui.checkbox("wireframe", state["wireframe"])
-        hero.material.wireframe = state["wireframe"]
+        # Edit inside the block; material_edits() flushes once on exit so the
+        # changes reach the GPU under Vulkan (no-op on GL).
+        with tp.material_edits(renderer, hero.material):
+            changed, state["preset"] = tp.imgui.combo("metal", state["preset"], [m[0] for m in METALS])
+            if changed:
+                _, color, metal, rough = METALS[state["preset"]]
+                hero.material.color = color
+                state["hero_metal"], state["hero_rough"] = metal, rough
+            _, state["hero_metal"] = tp.imgui.slider_float("metalness", state["hero_metal"], 0.0, 1.0)
+            _, state["hero_rough"] = tp.imgui.slider_float("roughness", state["hero_rough"], 0.0, 1.0)
+            hero.material.metalness = state["hero_metal"]
+            hero.material.roughness = state["hero_rough"]
+            _, state["wireframe"] = tp.imgui.checkbox("wireframe", state["wireframe"])
+            hero.material.wireframe = state["wireframe"]
 
         tp.imgui.separator()
         tp.imgui.text("Camera")
