@@ -50,7 +50,7 @@ def on_resize(w, h):
 
 canvas.on_window_resize(on_resize)
 
-ui = tp.ImguiContext(canvas) if tp.HAS_IMGUI else None
+ui = tp.ImguiContext(canvas, renderer) if tp.HAS_IMGUI else None
 clock = tp.Clock()
 cam = [-3.5, 2.6, 0.0]  # smoothed chase-cam position
 key_r = [False]         # edge-detect the reset key

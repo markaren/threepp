@@ -19,7 +19,7 @@ import threepp as tp
 canvas = tp.Canvas("threepp - ImGui UI", antialiasing=4)
 renderer = tp.GLRenderer(canvas)
 renderer.shadow_map_enabled = True
-ui = tp.ImguiContext(canvas)        # create AFTER the GLRenderer
+ui = tp.ImguiContext(canvas, renderer)  # create AFTER the renderer
 
 scene = tp.Scene()
 scene.background = 0x202830

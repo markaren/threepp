@@ -132,8 +132,9 @@ def test_imgui_over_vulkan():
 def test_imgui_vulkan_canvas_needs_renderer():
     canvas = tp.Canvas("imgui-vk2", width=64, height=64, headless=True, vsync=False)
     tp.VulkanRenderer(canvas)
-    # On a Vulkan canvas the renderer must be passed (GL backend can't be used).
-    with pytest.raises((ValueError, RuntimeError)):
+    # A renderer is required on every backend; omitting it must fail (pybind
+    # raises TypeError for the missing arg, our own guard raises ValueError).
+    with pytest.raises((TypeError, ValueError, RuntimeError)):
         tp.ImguiContext(canvas)
 
 

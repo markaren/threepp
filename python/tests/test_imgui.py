@@ -12,7 +12,7 @@ def gl():
     canvas = tp.Canvas("imgui-test", width=W, height=H, headless=True)
     renderer = tp.GLRenderer(canvas)
     renderer.set_clear_color(0x202830)
-    ui = tp.ImguiContext(canvas)  # after the GLRenderer
+    ui = tp.ImguiContext(canvas, renderer)  # after the renderer
     return canvas, renderer, ui
 
 

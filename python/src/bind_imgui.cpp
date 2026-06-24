@@ -79,29 +79,29 @@ namespace threepp_py {
 
         py::class_<PyImgui>(m, "ImguiContext")
                 .def(py::init([](Canvas& canvas, const py::object& renderer) -> std::unique_ptr<PyImgui> {
-                    // The ImGui backend follows the renderer/canvas: GLRenderer → GL,
-                    // VulkanRenderer → Vulkan overlay (threepp's ImguiContext records
-                    // ImGui into the deferred frame after the scene).
-                    if (auto* vk = renderer.is_none() ? nullptr : py_vulkan_native_renderer(renderer)) {
-                        return std::make_unique<PyImgui>(canvas, *vk);
-                    }
-                    if (canvas.graphicsApi() == GraphicsAPI::Vulkan) {
+                    // A renderer is required on every backend so the same construction
+                    // call is portable. The Vulkan backend needs it to attach the ImGui
+                    // overlay; we require it on GL too rather than offer a GL-only
+                    // shortcut that breaks the moment you switch to a VulkanRenderer.
+                    if (renderer.is_none()) {
                         throw std::invalid_argument(
-                                "ImguiContext: a Vulkan Canvas needs its VulkanRenderer passed as the "
-                                "`renderer` argument.");
+                                "ImguiContext requires a renderer — pass your GLRenderer or "
+                                "VulkanRenderer (create the UI after the renderer). The same "
+                                "call then runs on both backends.");
                     }
-                    if (renderer.is_none()) return std::make_unique<PyImgui>(canvas);// GL backend
+                    if (auto* vk = py_vulkan_native_renderer(renderer)) {
+                        return std::make_unique<PyImgui>(canvas, *vk);// Vulkan overlay
+                    }
                     if (py::isinstance<GLRenderer>(renderer)) {
                         return std::make_unique<PyImgui>(canvas, *renderer.cast<GLRenderer*>());
                     }
                     throw std::invalid_argument(
-                            "ImguiContext: renderer must be a GLRenderer or VulkanRenderer (or omitted "
-                            "for the GL backend)");
+                            "ImguiContext: renderer must be a GLRenderer or VulkanRenderer.");
                 }),
-                     py::arg("canvas"), py::arg("renderer") = py::none(),
+                     py::arg("canvas"), py::arg("renderer"),
                      py::keep_alive<1, 2>(), py::keep_alive<1, 3>(),
-                     "Dear ImGui UI. Pass the renderer (GLRenderer or VulkanRenderer; omit for GL). "
-                     "Create it AFTER the renderer. Works on both backends.")
+                     "Dear ImGui UI. Pass the renderer (GLRenderer or VulkanRenderer); create "
+                     "the context AFTER the renderer. The same call works on both backends.")
                 .def("render", &PyImgui::render_with, py::arg("draw"),
                      "Build + draw one UI frame; call inside animate() after renderer.render().")
                 .def_property_readonly("want_capture_mouse", &PyImgui::want_capture_mouse,

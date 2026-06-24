@@ -124,7 +124,7 @@ def on_resize(w, h):
 
 
 canvas.on_window_resize(on_resize)
-ui = tp.ImguiContext(canvas) if tp.HAS_IMGUI else None
+ui = tp.ImguiContext(canvas, renderer) if tp.HAS_IMGUI else None
 clock = tp.Clock()
 st = {"accum": 0.0, "key_p": False, "key_r": False, "up": -1.0, "rng": np.random.default_rng(0)}
 
