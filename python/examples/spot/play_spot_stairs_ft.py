@@ -160,12 +160,14 @@ def main():
             tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps")
             tp.imgui.end()
 
+        def reset_spot():
+            art.reset(tp.Vector3(0, 0, Z0)); last_act = np.zeros(12, np.float32); settle(40)
+            print("⟳ reset Spot to the bottom")
         def frame():
             nonlocal last_act
             if canvas.is_key_down("R"):
                 if not r_down[0]:
-                    art.reset(tp.Vector3(0, 0, Z0)); last_act = np.zeros(12, np.float32); settle(40)
-                    print("⟳ reset Spot to the bottom")
+                    reset_spot()
                 r_down[0] = True
             else:
                 r_down[0] = False
@@ -175,6 +177,7 @@ def main():
                     mt = os.path.getmtime(args.model)
                     if mt != pol["mt"]:
                         pol["ac"], _, _ = load_policy(args.model, device=dev); pol["mt"] = mt
+                        reset_spot()
                         print("↻ reloaded latest policy")
                 except Exception:
                     pass
@@ -186,6 +189,8 @@ def main():
                 rb_wait[0] += 1
                 if rb_wait[0] > 6:
                     rebuild_stairs()
+                    reset_spot()
+
             control_tick(); render_chase(); ui.render(draw_ui)
 
         print(__doc__ + "\n(rise / # steps sliders rebuild the staircase; R = reset; hot-reloads the checkpoint)")
