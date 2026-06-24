@@ -190,7 +190,7 @@ class PPO:
     def __init__(self, env, act_dim, hidden=(256, 256), *, lr=3e-4, gamma=0.99, lam=0.95,
                  clip=0.2, epochs=5, minibatches=4, horizon=32, entropy=0.0, vfcoef=1.0,
                  log_std_init=-0.5, max_grad_norm=1.0, target_kl=0.02, anneal_lr=True,
-                 normalize_returns=True, meta=None, device=None):
+                 normalize_returns=True, normalize_obs=True, meta=None, device=None):
         self.env = env
         self.obs = env.reset()
         self.is_image = self.obs.ndim == 4                          # [K,C,H,W] image vs [K,obs_dim]
@@ -206,8 +206,11 @@ class PPO:
         self.mb = max(1, self.K * self.T // minibatches)
         self.ac = ActorCritic(self.obs_dim, act_dim, tuple(hidden), log_std_init,
                               image_shape=self.image_shape).to(self.device)
-        # image obs are normalized in-net (uint8/255) -> no obs RunningNorm
-        self.norm = None if self.is_image else RunningNorm(self.obs_dim, self.device)
+        # image obs are normalized in-net (uint8/255) -> no obs RunningNorm. normalize_obs=False also
+        # disables it for state obs — needed when WARM-STARTING a policy trained on raw (un-normalized)
+        # obs (e.g. an Isaac/rsl_rl actor with an Identity normalizer): a RunningNorm would shift the obs
+        # out from under the loaded first-layer weights.
+        self.norm = RunningNorm(self.obs_dim, self.device) if (normalize_obs and not self.is_image) else None
         # return normalizer (clip≈off): the critic predicts NORMALIZED returns, so value
         # clipping is meaningful regardless of reward scale. denorm() back to raw for GAE.
         self.ret_norm = RunningNorm(1, self.device, clip=1e9) if normalize_returns else None
@@ -216,7 +219,7 @@ class PPO:
                      "image_shape": list(self.image_shape) if self.image_shape else None, **(meta or {})}
 
     def _normobs(self, obs):
-        return obs if self.is_image else self.norm.norm(obs)
+        return obs if self.norm is None else self.norm.norm(obs)
 
     def _value_raw(self, nobs):
         v = self.ac.value(nobs)
@@ -240,7 +243,7 @@ class PPO:
                 for g in self.opt.param_groups:
                     g["lr"] = self.lr0 * (1.0 - (it - 1) / iterations)
             for t in range(T):
-                if not self.is_image:
+                if self.norm is not None:
                     self.norm.update(obs)
                 nobs = self._normobs(obs)
                 with torch.no_grad():

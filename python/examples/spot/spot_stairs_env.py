@@ -112,6 +112,12 @@ def _add_stairs(world, k, spacing, rises, runs=None, x0=STAIR_X0, n=STAIR_N):
             box = tp.Mesh(tp.BoxGeometry(run, spacing * 0.92, h), tp.MeshStandardMaterial())
             box.position.set(x0 + s * run + run * 0.5, i * spacing, h * 0.5)
             world.add_static(box)
+        # flat LANDING at the top: without it the staircase ends in a cliff, so climbing the last step
+        # walks straight off a drop ("falls off the top"). terrain_height already models this flat top.
+        top = n * r
+        land = tp.Mesh(tp.BoxGeometry(4.0, spacing * 0.92, top), tp.MeshStandardMaterial())
+        land.position.set(x0 + n * run + 2.0, i * spacing, top * 0.5)
+        world.add_static(land)
 
 
 def up_z(q):
@@ -302,6 +308,159 @@ class SpotStairEnv:
             self._reset_idx(d)
             self.sim.read()
             self._refresh()
+            obs = self._obs()
+        else:
+            obs = term_obs
+        self.last_fell = fell.float().mean().item()
+        return obs, rew, done, term_obs, timeout
+
+
+# =============================================================================
+#  SpotStairFTEnv — FINE-TUNE the Isaac walker directly (no frozen residual).
+# =============================================================================
+# The residual env above froze the flat Isaac walker and learned a small additive correction; that
+# self-fight capped climbing at ~0.17 m. This env instead drives the joints with the policy's OWN action
+# (targets = default_q + ACTION_SCALE*a, isaac order) and feeds the 48-d Isaac proprioceptive obs PLUS a
+# 10-d terrain scan. Warm-starting the Isaac actor (with a zero-init terrain input block — see
+# train_spot_stairs_ft.warmstart_from_isaac) makes the policy START as the exact flat walker and then
+# adapt the WHOLE gait to stairs — lifting the feet over the edges instead of fighting a frozen base.
+FT_OBS_DIM = 3 + 3 + 3 + 3 + 12 + 12 + 12 + 1 + len(PROBE_DX)   # 48 isaac proprio + base_above + scan = 58
+FT_HIDDEN = (512, 256, 128)                                     # matches the Isaac actor MLP (for warm-start)
+
+FT_CONFIG = {"control_hz": CONTROL_HZ, "dt": DT, "substeps": SUBSTEPS, "spacing": SPACING,
+             "rise_min": RISE_MIN, "run_min": RUN_MIN, "run_max": RUN_MAX, "fwd_cmd": FWD_CMD,
+             "stair_x0": STAIR_X0, "stair_n": STAIR_N, "probe_dx": list(PROBE_DX),
+             "obs_dim": FT_OBS_DIM, "act_dim": ACT_DIM, "hidden": list(FT_HIDDEN)}
+
+
+class SpotStairFTEnv:
+    def __init__(self, num_envs=2048, device="cuda", seed=0, rise_max=RISE_MAX):
+        self.K, self.dt = num_envs, DT
+        self.max_steps = int(EPISODE_S * CONTROL_HZ)
+        rises = np.linspace(RISE_MIN, rise_max, num_envs).astype(np.float32)  # graded lanes = built-in curriculum
+        runs = np.random.default_rng(seed).uniform(RUN_MIN, RUN_MAX, num_envs).astype(np.float32)
+        self.sim = GpuSim(num_envs, lambda world, i: SpotGpu(world, i, SPACING),
+                          gravity=(0.0, 0.0, -9.81), spacing=SPACING, device=device, read_root=True,
+                          build_world=lambda world: (_flat_ground(world, num_envs, SPACING),
+                                                      _add_stairs(world, num_envs, SPACING, rises, runs)))
+        dev = self.sim.device
+        self.default_q = torch.from_numpy(default_q).to(dev)                  # [12] isaac order
+        self.i2a = torch.from_numpy(isaac_to_add.astype(np.int64)).to(dev)    # add -> isaac index
+        self.a2i = torch.from_numpy(add_to_isaac.astype(np.int64)).to(dev)    # isaac -> add index
+        self.stand_q_add = self.default_q[self.a2i].expand(num_envs, -1).contiguous()
+        self.grav = torch.tensor([0.0, 0.0, -1.0], device=dev)
+        self.rise = torch.from_numpy(rises).to(dev)
+        self.run = torch.from_numpy(runs).to(dev)
+        self.probe = torch.tensor(PROBE_DX, device=dev)
+        self.lane_y = torch.arange(num_envs, device=dev, dtype=torch.float32) * SPACING
+        self.fwd_v = torch.full((num_envs,), FWD_CMD, device=dev)
+        pos = torch.zeros(num_envs, 3, device=dev); pos[:, 1] = self.lane_y; pos[:, 2] = SPAWN_Z
+        self.base_pose = GpuSim.make_root_pose(pos, quat=(0.0, 0.0, 0.0, 1.0), device=dev)
+        z = lambda *s: torch.zeros(*s, device=dev)
+        self.steps = torch.zeros(num_envs, dtype=torch.long, device=dev)
+        self.last_act = z(num_envs, ACT_DIM)                                  # isaac-order action (for the obs)
+        self.up = z(num_envs)
+        self.ep_max_climb = z(num_envs); self.ep_max_x = z(num_envs)
+        self.last_climb = 0.0; self.last_fell = 0.0
+
+    def _cmd(self):
+        # heading + lane hold: steer the policy straight at its staircase (forward + strafe-to-lane + face-up).
+        q0 = self.sim.root_quat
+        yaw = torch.atan2(2.0 * (q0[:, 0] * q0[:, 1] + q0[:, 2] * q0[:, 3]),
+                          1.0 - 2.0 * (q0[:, 1] ** 2 + q0[:, 2] ** 2))
+        y_err = self.sim.root_position[:, 1] - self.lane_y
+        return torch.stack([self.fwd_v, torch.clamp(-1.0 * y_err, -0.4, 0.4),
+                            torch.clamp(-1.5 * yaw, -1.0, 1.0)], dim=1)
+
+    def _obs(self):
+        s = self.sim
+        q = s.root_quat
+        lin_b = quat_rotate_inverse(q, s.root_linvel)
+        ang_b = quat_rotate_inverse(q, s.root_angvel)
+        proj_g = quat_rotate_inverse(q, self.grav.expand(self.K, 3))
+        qpos = s.joint_pos[:, self.i2a] - self.default_q                      # isaac-order joint deviation
+        jv_isaac = s.joint_vel[:, self.i2a]
+        x, zz = s.root_position[:, 0], s.root_position[:, 2]
+        h_here = terrain_height(x, self.rise, self.run)
+        base_above = (zz - h_here).unsqueeze(-1)
+        ahead = (terrain_height(x[:, None] + self.probe[None, :], self.rise[:, None], self.run[:, None])
+                 - h_here[:, None])                                           # forward height scan
+        return torch.cat([lin_b, ang_b, proj_g, self._cmd(), qpos, jv_isaac, self.last_act,
+                          base_above, ahead], dim=1)                          # [K, FT_OBS_DIM]
+
+    def _reset_idx(self, idx):
+        n = idx.numel()
+        if n == 0:
+            return
+        self.sim.set_root_state(idx, self.base_pose[idx])
+        self.sim.set_joint_state(idx, self.stand_q_add[idx], torch.zeros(n, self.sim.dof, device=self.sim.device))
+        self.steps[idx] = 0; self.last_act[idx] = 0.0
+        self.ep_max_climb[idx] = 0.0; self.ep_max_x[idx] = self.base_pose[idx, 4]
+
+    def reset(self):
+        self._reset_idx(torch.arange(self.K, device=self.sim.device))
+        self.sim.read()
+        for _ in range(20):                                                  # settle to a clean stand
+            self.sim.apply_drive_target(self.stand_q_add)
+            for _ in range(SUBSTEPS):
+                self.sim.step(DT / SUBSTEPS)
+        self.last_act.zero_()
+        self.up = up_z(self.sim.root_quat)
+        return self._obs()
+
+    @torch.no_grad()
+    def step(self, action):
+        # NO clamp: the Isaac walker emits actions in ~[-8, 8] (default_q + ACTION_SCALE*a is the joint
+        # target); clamping to [-1,1] like the [-1,1]-convention envs would destroy the warm-started gait.
+        a = action
+        prev_a = self.last_act
+        targets_isaac = self.default_q + ACTION_SCALE * a                    # FULL policy action (not a residual)
+        self.sim.apply_drive_target(targets_isaac[:, self.a2i])              # isaac -> add-order drive targets
+        for _ in range(SUBSTEPS):
+            self.sim.step(DT / SUBSTEPS)
+        self.steps += 1
+        self.last_act = a
+        q = self.sim.root_quat
+        self.up = up_z(q)
+        x, zz = self.sim.root_position[:, 0], self.sim.root_position[:, 2]
+        roll = 2.0 * (q[:, 1] * q[:, 2] + q[:, 0] * q[:, 3])
+        ang_b = quat_rotate_inverse(q, self.sim.root_angvel)
+        lin_b = quat_rotate_inverse(q, self.sim.root_linvel)
+        y_err = self.sim.root_position[:, 1] - self.lane_y                   # sideways drift off the lane centre
+        yaw = torch.atan2(2.0 * (q[:, 0] * q[:, 1] + q[:, 2] * q[:, 3]),
+                          1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2))         # heading (0 = facing straight up the stairs)
+        th = terrain_height(x, self.rise, self.run)
+        base_above = zz - th
+        climb = th
+        arate = a - prev_a
+        fell = (self.up < 0.35) | (base_above < 0.18)
+        new_high = (climb - self.ep_max_climb).clamp_min(0.0)
+        new_x = (x - self.ep_max_x).clamp_min(0.0)
+        # Same stair reward as the residual env, MINUS the residual-energy a^2 term: here the action IS the
+        # gait, so penalizing its magnitude would damp the walk. arate^2 (smoothness) stays.
+        rew = (30.0 * new_high                          # climb a new (higher) step — the goal, dominant
+               + 15.0 * new_x                           # forward-progress ratchet — BOOSTED so the gait clearly
+                                                        #   beats standing (it must pay for itself on flat too)
+               + 0.05                                   # alive
+               - 1.0 * roll.pow(2)                      # discourage tipping sideways (light — not the gait's sway)
+               - 0.05 * (ang_b[:, 0].pow(2) + ang_b[:, 2].pow(2))   # VERY light roll/yaw-rate damp (don't fight the gait)
+               - 0.2 * lin_b[:, 1].abs()                # light: no big lateral drift off the edge
+               - 2.0 * y_err.pow(2)                     # STAY IN LANE: kills the rightward veer (drift off centre)
+               - 1.0 * yaw.pow(2)                       # FACE STRAIGHT up the stairs (no heading drift)
+               - 3.0 * torch.relu(0.30 - base_above)    # anti-scrape: don't drag the body up the steps
+               - 0.001 * arate.pow(2).mean(dim=1)       # tiny smoothness, SCALED for the ~+-7 Isaac action range
+               - 5.0 * fell.float())
+        self.ep_max_climb = torch.maximum(self.ep_max_climb, climb)
+        self.ep_max_x = torch.maximum(self.ep_max_x, x)
+        timeout = (self.steps >= self.max_steps) & ~fell
+        done = fell | (self.steps >= self.max_steps)
+        term_obs = self._obs()
+        d = torch.nonzero(done, as_tuple=False).squeeze(-1)
+        if d.numel() > 0:
+            self.last_climb = self.ep_max_climb[d].mean().item()
+            self._reset_idx(d)
+            self.sim.read()
+            self.up = up_z(self.sim.root_quat)
             obs = self._obs()
         else:
             obs = term_obs
