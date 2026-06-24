@@ -106,6 +106,9 @@ inline ::physx::PxCombineMode::Enum combineModeFromString(const std::string& s) 
         void setKinematic(bool k) { dyn()->setRigidBodyFlag(::physx::PxRigidBodyFlag::eKINEMATIC, k); }
         void setKinematicTarget(const Vector3& p, const Quaternion& q) { dyn()->setKinematicTarget(toPxTransform(p, q)); }
 
+        ::physx::PxRigidActor* raw() const { return actor_; }     // for PhysxWorld::removeActor
+        void invalidate() { actor_ = nullptr; }                   // after world.remove: handle no longer usable
+
     private:
         ::physx::PxRigidDynamic* dyn() const {
             auto* d = actor_->is<::physx::PxRigidDynamic>();
@@ -323,6 +326,15 @@ namespace threepp_py {
                      py::arg("mesh"), py::arg("material") = py::none(), py::keep_alive<0, 1>(),
                      "Add a static collider inferred from the mesh's Box/Sphere/Capsule geometry. "
                      "`material` (from create_material) sets its friction/restitution — e.g. a grippy floor.")
+                .def("remove",
+                     [](PhysxWorld& w, RigidBody& body) {
+                         w.removeActor(body.raw());
+                         body.invalidate();   // the handle is now dead — reusing it is undefined
+                     },
+                     py::arg("body"),
+                     "Remove a body (from add / add_static / add_dynamic_convex / add_static_trimesh) from the "
+                     "world and release it — e.g. to rebuild geometry without recreating the world. Any mesh "
+                     "binding is dropped; the RigidBody handle is INVALID afterwards (don't reuse it).")
                 .def("create_material",
                      [](PhysxWorld& w, float static_friction, float dynamic_friction, float restitution,
                         const std::string& friction_combine, const std::string& restitution_combine) {

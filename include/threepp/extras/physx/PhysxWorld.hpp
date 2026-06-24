@@ -305,6 +305,20 @@ namespace threepp {
                     instBindings_.end());
         }
 
+        // Remove a body (static or dynamic) from the world: drop any mesh binding that mirrors it, take it
+        // out of the scene, and release it. The PxRigidActor* dangles afterwards — the caller must not reuse
+        // a RigidBody handle to a removed actor. Use e.g. to rebuild geometry (a configurable staircase)
+        // without recreating the whole world.
+        void removeActor(::physx::PxRigidActor* actor) {
+            if (!actor) return;
+            objBindings_.erase(
+                    std::remove_if(objBindings_.begin(), objBindings_.end(),
+                                   [&](const ObjBinding& b) { return b.actor == actor; }),
+                    objBindings_.end());
+            scene_->removeActor(*actor);
+            actor->release();
+        }
+
         // Low-level: explicit geometry + transform. Use when shape can't be inferred
         // (custom geometry, plane, trimesh) or when shape != mesh visuals.
         ::physx::PxRigidStatic* addStatic(const ::physx::PxGeometry& geom,
