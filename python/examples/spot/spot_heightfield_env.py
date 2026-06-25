@@ -252,8 +252,7 @@ class SpotHeightfieldEnv:
         self.sim.read()
         for _ in range(20):
             self.sim.apply_drive_target(self.stand_q_add)
-            for _ in range(SUBSTEPS):
-                self.sim.step(DT / SUBSTEPS)
+            self.sim.substep(DT / SUBSTEPS, SUBSTEPS)        # advance n substeps, read once
         self.last_act.zero_()
         self.up = up_z(self.sim.root_quat)
         return self._obs()
@@ -264,8 +263,7 @@ class SpotHeightfieldEnv:
         prev_a = self.last_act
         targets_isaac = self.default_q + ACTION_SCALE * a
         self.sim.apply_drive_target(targets_isaac[:, self.a2i])
-        for _ in range(SUBSTEPS):
-            self.sim.step(DT / SUBSTEPS)
+        self.sim.substep(DT / SUBSTEPS, SUBSTEPS)                            # advance n substeps, read once
         self.steps += 1
         self.last_act = a
         self.cmd_timer -= 1

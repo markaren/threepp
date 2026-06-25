@@ -150,9 +150,23 @@ class GpuSim:
             self.batch.read_link_linvel(self._llv_gpu)
             self.batch.read_link_angvel(self._lav_gpu)
 
-    def step(self, dt):
-        """Advance every robot one physics step and refresh joint_pos / joint_vel."""
+    def step(self, dt, read=True):
+        """Advance every robot one physics step. Refreshes joint_pos / joint_vel (and the root /
+        links if enabled) afterward, unless read=False. Each read() is several CPU<->GPU syncs
+        (one per state buffer), so inside a multi-substep control tick pass read=False and read
+        once at the end — or just use substep(), which does exactly that."""
         self.batch.step(dt)
+        if read:
+            self.read()
+
+    def substep(self, dt, n):
+        """Advance n physics substeps of size dt, reading state ONCE at the end. The right
+        primitive for a control tick with several physics substeps per policy action: it runs
+        the n internal advances with no readback and a single read() afterward, instead of
+        `for _ in range(n): step(dt)` which reads (and CPU-syncs every state buffer) every
+        substep — n-1 of those reads are thrown away before the policy sees the state."""
+        for _ in range(n):
+            self.batch.step(dt)
         self.read()
 
     def apply_force(self, force):

@@ -297,8 +297,7 @@ class SpotTerrainEnv:
         self.sim.read()
         for _ in range(20):                                                  # settle to a clean stand (default targets)
             self.sim.apply_drive_target(self.stand_q_add)
-            for _ in range(SUBSTEPS):
-                self.sim.step(DT / SUBSTEPS)
+            self.sim.substep(DT / SUBSTEPS, SUBSTEPS)        # advance n substeps, read once
         self.last_act.zero_()
         self.up = up_z(self.sim.root_quat)
         return self._obs()
@@ -311,8 +310,7 @@ class SpotTerrainEnv:
         prev_a = self.last_act
         targets_isaac = self.default_q + ACTION_SCALE * a                    # FULL policy action (not a residual)
         self.sim.apply_drive_target(targets_isaac[:, self.a2i])              # isaac -> add-order drive targets
-        for _ in range(SUBSTEPS):
-            self.sim.step(DT / SUBSTEPS)
+        self.sim.substep(DT / SUBSTEPS, SUBSTEPS)                            # advance n substeps, read once
         self.steps += 1
         self.last_act = a
         self.cmd_timer -= 1                                                  # in-episode velocity-command changes
