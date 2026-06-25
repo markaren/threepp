@@ -85,6 +85,7 @@ display is only required for the on-screen examples.
 | [`examples/textured_box.py`](examples/textured_box.py) | Load an image with `TextureLoader` and map it onto a mesh (headless). |
 | [`examples/load_model.py`](examples/load_model.py) | `python load_model.py model.glb` — load a model with `ModelLoader`, auto-frame and render it. |
 | [`examples/vulkan_aovs.py`](examples/vulkan_aovs.py) | Vulkan deferred render → G-buffer AOVs (normals / segmentation / albedo / depth) as numpy. Needs a Vulkan build. |
+| [`examples/vulkan_ocean.py`](examples/vulkan_ocean.py) | The FFT-displaced **`Ocean`** — fancy water (waves, foam, transmission) in one line; orbit around it live. Needs a Vulkan build + display. |
 | [`examples/ui_demo.py`](examples/ui_demo.py) | In-window Dear ImGui control panel (sliders/buttons) driving the scene live (GL). Needs a display. |
 | [`examples/vulkan_ui.py`](examples/vulkan_ui.py) | The same ImGui control panel, over the **Vulkan** deferred renderer. Needs a Vulkan build + display. |
 | [`examples/physics_demo.py`](examples/physics_demo.py) | A pile of boxes tumbling onto the floor — `PhysxWorld` rigid bodies driving the scene graph. Needs a PhysX build + display. |
@@ -169,6 +170,14 @@ python examples/headless_render.py
   `read_depth(scene, camera)` returns **metric depth** as `(H, W)` float32
   (distance from the camera in scene units). This is the "labels for free" path
   for synthetic-data generation.
+- **FFT ocean** (renders under the Vulkan backend): `tp.Ocean(size=1000.0)` is a
+  ready-made 3-cascade Phillips/FFT-displaced water surface — waves, foam, and
+  transmission. Add it to a scene and render. Tune `ocean.params` (wind / cascades
+  / choppiness), pack vertex density toward any focus with `warp_toward(x, z)`, add
+  `add_foam_disturbance(...)` splats, and read the wave height on the CPU with
+  `sample_height(x, z)`. The low-level `tp.DisplacedMesh` (own geometry + material)
+  is exposed too. Not tied to any "hero" object — see
+  [`examples/vulkan_ocean.py`](examples/vulkan_ocean.py).
 
 Naming follows Python conventions (`snake_case` methods/properties), e.g.
 `camera.update_projection_matrix()`, `renderer.set_clear_color(...)`.

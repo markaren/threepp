@@ -61,6 +61,7 @@ PYBIND11_MODULE(threepp, m) {
     tp::init_geometries(m);
     tp::init_materials(m);
     tp::init_objects(m);
+    tp::init_ocean(m);   // DisplacedMesh + Ocean (subclasses of Mesh from init_objects)
     tp::init_animation(m);// before loaders: GLTFResult.animations is a list of AnimationClip
     tp::init_cameras(m);
     tp::init_lights(m);

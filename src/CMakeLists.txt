@@ -192,7 +192,6 @@ set(publicHeaders
         "threepp/objects/Text.hpp"
         "threepp/objects/TextSprite.hpp"
         "threepp/objects/Water.hpp"
-        "threepp/objects/DisplacedMesh.hpp"
         "threepp/objects/GrassMesh.hpp"
 
         "threepp/textures/CubeTexture.hpp"
@@ -469,7 +468,6 @@ set(sources
         "threepp/objects/Reflector.cpp"
         "threepp/objects/TextSprite.cpp"
         "threepp/objects/Water.cpp"
-        "threepp/objects/DisplacedMesh.cpp"
         "threepp/objects/GrassMesh.cpp"
 
         "threepp/textures/Texture.cpp"
@@ -601,6 +599,10 @@ if (THREEPP_WITH_VULKAN)
     list(APPEND publicHeaders
             "threepp/renderers/VulkanRenderer.hpp"
             "threepp/helpers/PathTracedLidarSensor.hpp"
+            # FFT-displaced ocean: the renderer is the only consumer (recognised
+            # via dynamic_cast), so the object types live with it under Vulkan.
+            "threepp/objects/DisplacedMesh.hpp"
+            "threepp/objects/Ocean.hpp"
     )
     list(APPEND privateHeaders
             "threepp/renderers/vulkan/VulkanContext.hpp"
@@ -623,6 +625,8 @@ if (THREEPP_WITH_VULKAN)
     list(APPEND sources
             "threepp/renderers/VulkanRenderer.cpp"
             "threepp/helpers/PathTracedLidarSensor.cpp"
+            "threepp/objects/DisplacedMesh.cpp"
+            "threepp/objects/Ocean.cpp"
             "threepp/renderers/vulkan/VulkanContext.cpp"
             "threepp/renderers/vulkan/VulkanResources.cpp"
             "threepp/renderers/vulkan/LidarScanner.cpp"

@@ -3,6 +3,8 @@
 Skips entirely on a GL-only build (threepp.HAS_VULKAN is False). On a Vulkan
 build these require a Vulkan-capable GPU.
 """
+import math
+
 import numpy as np
 import pytest
 
@@ -152,6 +154,61 @@ def test_depth_occlusion(vk_renderer):
     depth = vk_renderer.read_depth(scene, cam)
     assert depth[H // 2, W // 2] == pytest.approx(4.0, abs=0.1)   # box front
     assert depth[5, 5] == pytest.approx(8.0, abs=0.1)             # wall behind
+
+
+def _ocean_scene():
+    scene = tp.Scene()
+    scene.add(tp.AmbientLight(0xffffff, 1.0))
+    sun = tp.DirectionalLight(0xffffff, 2.0)
+    sun.position.set(2, 1, 2)
+    scene.add(sun)
+    floor_mat = tp.MeshStandardMaterial()
+    floor_mat.color = 0x050505
+    floor = tp.Mesh(tp.PlaneGeometry(200, 200), floor_mat)
+    floor.rotate_x(-math.pi / 2)
+    floor.position.y = -5.0
+    scene.add(floor)
+    # Small grid + FFT so the per-frame displace/BLAS stays cheap in the test.
+    ocean = tp.Ocean(size=200.0, resolution=128, fft_size=256, wind_speed=10.0)
+    scene.add(ocean)
+    cam = tp.PerspectiveCamera(55, W / H, 0.1, 400)
+    cam.position.set(0, 8, 30)
+    cam.look_at(0, 0, 0)
+    return scene, cam, ocean
+
+
+def test_ocean_is_displaced_mesh_with_knobs():
+    ocean = tp.Ocean(size=500.0)
+    assert isinstance(ocean, tp.DisplacedMesh)
+    assert isinstance(ocean, tp.Mesh)
+    # inherited Object3D API works across threepp's virtual base
+    ocean.position.set(1, 2, 3)
+    assert ocean.position.x == 1
+    # params + warp are mutable sub-objects
+    assert ocean.params.tile_size_0 == pytest.approx(500.0)
+    ocean.params.wind_speed = 6.5
+    assert ocean.params.wind_speed == pytest.approx(6.5)
+    ocean.warp_toward(10.0, -4.0, 0.2)
+    assert ocean.warp.half_range > 0 and ocean.warp.center_x == pytest.approx(10.0)
+    # foam API is callable
+    ocean.add_foam_disturbance(0.0, 0.0, 2.0, 1.0)
+    ocean.clear_foam_disturbances()
+
+
+def test_ocean_renders_and_displaces(vk_renderer):
+    scene, cam, ocean = _ocean_scene()
+    for _ in range(8):  # let the wave field evolve + the BLAS displace
+        ocean.warp_toward(0.0, 0.0, 0.3)
+        vk_renderer.render(scene, cam)
+    img = vk_renderer.read_pixels()
+    assert img.shape == (H, W, 3) and str(img.dtype) == "uint8"
+    assert int(img.max()) > int(img.min()), "ocean render is flat"
+    # The CPU height readback is filled by the Vulkan render -> waves vary across
+    # the tile (validates the FFT/displace pipeline ran end to end).
+    coords = np.linspace(-80, 80, 6)
+    heights = np.array([ocean.sample_height(float(x), float(z)) for x in coords for z in coords])
+    assert np.all(np.isfinite(heights))
+    assert np.ptp(heights) > 1e-3, "wave height field looks flat"
 
 
 def test_depthsensor_pathtraced(vk_renderer):
