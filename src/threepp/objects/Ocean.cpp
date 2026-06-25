@@ -51,6 +51,10 @@ namespace threepp {
         return "Ocean";
     }
 
+    std::shared_ptr<Ocean> Ocean::create() {
+        return create(Options{});
+    }
+
     std::shared_ptr<Ocean> Ocean::create(const Options& options) {
         const unsigned int res = std::max<unsigned int>(2u, options.resolution);
         // Mesh density is decoupled from the FFT field: the renderer samples the

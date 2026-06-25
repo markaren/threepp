@@ -66,7 +66,13 @@ namespace threepp {
             uint32_t fftSize = 1024;
         };
 
-        static std::shared_ptr<Ocean> create(const Options& options = Options{});
+        static std::shared_ptr<Ocean> create(const Options& options);
+
+        // Default-configured ocean. Kept as a separate overload (rather than a
+        // `= {}` / `= Options{}` default argument) because GCC rejects a nested
+        // aggregate's default member initializers when they are evaluated inside
+        // the enclosing class's complete-class context.
+        static std::shared_ptr<Ocean> create();
 
         [[nodiscard]] std::string type() const override;
 
