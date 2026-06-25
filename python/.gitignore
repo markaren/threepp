@@ -21,3 +21,6 @@ demo_cube.stl
 
 # RL artifacts (VecNormalize stats, etc.)
 *.pkl
+
+*.ilk
+*.pdb
