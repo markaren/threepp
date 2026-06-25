@@ -54,6 +54,12 @@ class ForwardDepthScanner:
     bounds = (x0, x1, y0, y1): world extent of the elevation map (cover the demo's terrain; points/queries
     outside read as flat ground, which is what is actually there). Reset the map with clear_map() whenever
     the robot is teleported (spawn / R / level change) so stale terrain under the new pose is not reused.
+
+    Backend: tp.DepthSensor.scan is backend-neutral (GL raster / Vulkan path-traced), so this works with a
+    GLRenderer or a VulkanRenderer. The robot self-filter here (hiding meshes during the scan) relies on the
+    GL sensor RE-rendering the scene; on Vulkan the scan traces the renderer's TLAS from the last render(),
+    so a Vulkan deploy must instead render() each frame BEFORE scanning and exclude the robot another way
+    (e.g. LidarReturn.hit_instance_id), and the body must not sit in the sensor's field of view.
     """
 
     def __init__(self, renderer, scene, robot_meshes, bounds, *,

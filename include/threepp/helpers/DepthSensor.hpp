@@ -18,13 +18,20 @@ namespace threepp {
     class Renderer;
 
     /**
-     * Simulates a depth sensor using GPU depth rendering.
+     * Simulates a depth sensor, backend-neutrally.
      *
-     * Can scan with or without color: the former is slightly more expensive but gives per-point color information, while the latter is faster and uses less GPU memory.
+     * `scan()` takes the abstract `Renderer&` and dispatches on the concrete backend:
+     *   - GLRenderer (and other raster backends): renders the scene from the sensor's
+     *     viewpoint into a depth texture, linearizes it via a post-process shader, reads
+     *     back the pixels, and reprojects them into world-space 3D points.
+     *   - VulkanRenderer: there is no raster depth pass, so the same pinhole ray pattern
+     *     is traced through the renderer's path-tracing acceleration structure (via an
+     *     internal PathTracedLidarSensor in camera mode). The result is the same world-
+     *     space point cloud, so perception/deploy code is identical on either backend.
      *
-     * Renders the scene from the sensor's viewpoint into a depth texture,
-     * linearizes the result via a post-process shader, reads back the pixels,
-     * and reprojects them into world-space 3D points.
+     * Can scan with or without color: the former is slightly more expensive but gives
+     * per-point color information, while the latter is faster and uses less GPU memory.
+     * (On Vulkan the "color" is the LIDAR intensity as greyscale, not surface albedo.)
      */
     class DepthSensor: public Object3D {
 
@@ -38,10 +45,13 @@ namespace threepp {
         /**
          * Performs a scan and returns the hit points in world space.
          *
-         * The Lidar object must be in the scene (or have its parent chain
-         * updated) before calling this, so its world matrix is current.
+         * The sensor's world matrix must be current (add it to the scene, or call
+         * updateWorldMatrix/updateMatrixWorld) before calling this.
          *
-         * The renderer's active render target is restored to nullptr after the scan.
+         * GL: the renderer's active render target is restored to nullptr after the scan.
+         * Vulkan: the scan traces the renderer's path-tracing acceleration structure, so
+         * the scene must have been render()-ed at least once beforehand; `scene` is then
+         * unused (the TLAS is traced, not the scene graph).
          */
         void scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud);
 

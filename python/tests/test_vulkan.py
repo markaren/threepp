@@ -152,3 +152,35 @@ def test_depth_occlusion(vk_renderer):
     depth = vk_renderer.read_depth(scene, cam)
     assert depth[H // 2, W // 2] == pytest.approx(4.0, abs=0.1)   # box front
     assert depth[5, 5] == pytest.approx(8.0, abs=0.1)             # wall behind
+
+
+def test_depthsensor_pathtraced(vk_renderer):
+    # The backend-neutral tp.DepthSensor.scan must work on Vulkan (path-traced
+    # through the renderer's TLAS) and reconstruct world-space heights — the same
+    # call signature as on GL. Z-up scene: ground top at z=0, a 0.30 m cube on it.
+    scene = tp.Scene()
+    scene.add(tp.HemisphereLight(0xffffff, 0x404040, 1.0))
+    ground = tp.Mesh(tp.BoxGeometry(20, 20, 1.0), tp.MeshStandardMaterial())
+    ground.position.set(0, 0, -0.5)                       # top at z=0
+    scene.add(ground)
+    box = tp.Mesh(tp.BoxGeometry(0.6, 0.6, 0.3), tp.MeshStandardMaterial())
+    box.position.set(0, 0, 0.15)                          # top at z=0.30
+    scene.add(box)
+    cam = tp.PerspectiveCamera(55, W / H, 0.05, 100)
+    cam.up.set(0, 0, 1)
+    cam.position.set(3, 3, 3)
+    cam.look_at(0, 0, 0)
+    vk_renderer.render(scene, cam)                        # build the TLAS (required before scan)
+
+    sensor = tp.DepthSensor(fov_y=70, width=96, height=96, near=0.05, far=8.0)
+    sensor.range_noise = 0.0                              # exact reconstruction for the assert
+    sensor.position.set(0, 0, 3.0)                        # identity rot -> looks straight down (Z-up)
+    pts = sensor.scan(vk_renderer, scene)
+
+    assert pts.ndim == 2 and pts.shape[1] == 3 and pts.shape[0] > 1000
+    r = np.hypot(pts[:, 0], pts[:, 1])
+    z = pts[:, 2]
+    on_box = r < 0.25                                     # squarely over the cube top
+    on_ground = (r > 1.0) & (r < 4.0)                     # well off the cube
+    assert on_box.sum() > 5 and z[on_box].mean() == pytest.approx(0.30, abs=0.02)
+    assert on_ground.sum() > 50 and z[on_ground].mean() == pytest.approx(0.0, abs=0.02)

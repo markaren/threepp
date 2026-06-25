@@ -4,13 +4,22 @@
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Quaternion.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/renderers/Renderer.hpp"
 #include "threepp/textures/DepthTexture.hpp"
 #include "threepp/utils/ImageUtils.hpp"
 
+// On a Vulkan build, DepthSensor::scan dispatches to the path-traced sensor (no
+// raster depth pass exists); these are only pulled in there.
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/helpers/PathTracedLidarSensor.hpp"
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
+
 #include <cmath>
+#include <optional>
 #include <random>
 
 using namespace threepp;
@@ -46,6 +55,60 @@ namespace {
             r.autoClear = ac;
         }
     };
+
+#ifdef THREEPP_WITH_VULKAN
+    // Vulkan backend: there is no raster depth buffer to read back, so reproduce
+    // the same pinhole ray pattern with a PathTracedLidarSensor (camera mode —
+    // identical fovY / width / height and the look-down-local-(-Z) convention)
+    // and trace it through the renderer's path-tracing TLAS. The TLAS, not the
+    // `scene` graph, is what gets traced, so the scene must have been render()-ed
+    // at least once before scanning (the public scan() doc spells this out).
+    void scanViaPathTracer(const Matrix4& world, float fovY, unsigned int width, unsigned int height,
+                           float far, float rangeNoise, VulkanRenderer& vk,
+                           std::vector<Vector3>& cloud, std::vector<Color>* colors) {
+        PathTracedLidarSensor lidar(fovY, width, height, far);
+        Vector3 pos, scl;
+        Quaternion quat;
+        world.decompose(pos, quat, scl);
+        lidar.position = pos;
+        lidar.quaternion = quat;
+        lidar.scale = scl;
+
+        std::vector<LidarReturn> returns;
+        lidar.scan(vk, returns);
+
+        cloud.clear();
+        cloud.reserve(returns.size());
+        if (colors) {
+            colors->clear();
+            colors->reserve(returns.size());
+        }
+
+        static std::mt19937 rng{std::random_device{}()};
+        std::optional<std::normal_distribution<float>> noiseDist;
+        if (rangeNoise > 0.f) noiseDist = std::normal_distribution{0.f, rangeNoise};
+
+        for (const auto& ret : returns) {
+            Vector3 p = ret.position;
+            if (noiseDist) {
+                // perturb the hit along its beam to mirror DepthSensor's range noise
+                Vector3 dir = ret.position;
+                dir.sub(pos);
+                const float dist = dir.length();
+                if (dist > 1e-6f) {
+                    const float nd = dist + (*noiseDist)(rng);
+                    if (nd <= 0.f || nd > far) continue;
+                    dir.multiplyScalar(nd / dist).add(pos);
+                    p = dir;
+                }
+            }
+            cloud.push_back(p);
+            // The path tracer returns LIDAR intensity, not surface colour; expose
+            // it as greyscale so scan_rgbd has a uniform (cloud, colors) shape.
+            if (colors) colors->emplace_back(ret.intensity, ret.intensity, ret.intensity);
+        }
+    }
+#endif
 
 }// namespace
 
@@ -132,6 +195,14 @@ DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, fl
 
 void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
 
+#ifdef THREEPP_WITH_VULKAN
+    if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
+        scanViaPathTracer(*matrixWorld, camera_.fov, width_, height_, camera_.farPlane,
+                          rangeNoise, *vk, cloud, nullptr);
+        return;
+    }
+#endif
+
     DataPassGuard guard(renderer);
 
     // Render scene from sensor viewpoint to capture depth
@@ -152,6 +223,14 @@ void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& c
 }
 
 void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud, std::vector<Color>& colors) {
+
+#ifdef THREEPP_WITH_VULKAN
+    if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
+        scanViaPathTracer(*matrixWorld, camera_.fov, width_, height_, camera_.farPlane,
+                          rangeNoise, *vk, cloud, &colors);
+        return;
+    }
+#endif
 
     DataPassGuard guard(renderer);
 

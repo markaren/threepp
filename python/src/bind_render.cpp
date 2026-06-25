@@ -28,6 +28,15 @@ using namespace threepp;
 
 namespace threepp_py {
 
+    // Resolve a Python renderer object to the backend-neutral threepp::Renderer&.
+    // Accepts the GLRenderer binding or the Vulkan facade (whose underlying native
+    // renderer is recovered via py_vulkan_native_renderer); raises a clear TypeError
+    // for anything else. Lets renderer-taking helpers (DepthSensor) be backend-neutral.
+    static Renderer& as_renderer(const py::handle& h) {
+        if (Renderer* vk = py_vulkan_native_renderer(h)) return *vk;
+        return h.cast<GLRenderer&>();
+    }
+
     // Map a friendly key name ('W', 'a', 'SPACE', 'UP', ...) to threepp's Key enum.
     // Letters/digits exploit the enum's contiguous A-Z and NUM_0-NUM_9 ranges.
     static Key keyFromName(std::string n) {
@@ -248,18 +257,20 @@ namespace threepp_py {
                 .def_property_readonly("fov", &DepthSensor::fov)
                 .def_property_readonly("near", &DepthSensor::near)
                 .def_property_readonly("far", &DepthSensor::far)
-                .def("scan", [pts_to_numpy](DepthSensor& self, GLRenderer& renderer, Scene& scene) {
+                .def("scan", [pts_to_numpy](DepthSensor& self, const py::object& renderer, Scene& scene) {
                     self.updateWorldMatrix(true, true);            // sync sensor + child camera pose
                     std::vector<Vector3> cloud;
-                    self.scan(renderer, scene, cloud);
+                    self.scan(as_renderer(renderer), scene, cloud);
                     return pts_to_numpy(cloud);
                 }, py::arg("renderer"), py::arg("scene"),
-                   "Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far).")
-                .def("scan_rgbd", [pts_to_numpy](DepthSensor& self, GLRenderer& renderer, Scene& scene) {
+                   "Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far). "
+                   "Works with a GLRenderer (raster depth) or a VulkanRenderer (path-traced through the "
+                   "renderer's acceleration structure -- render() the scene at least once first).")
+                .def("scan_rgbd", [pts_to_numpy](DepthSensor& self, const py::object& renderer, Scene& scene) {
                     self.updateWorldMatrix(true, true);
                     std::vector<Vector3> cloud;
                     std::vector<Color> colors;
-                    self.scan(renderer, scene, cloud, colors);
+                    self.scan(as_renderer(renderer), scene, cloud, colors);
                     py::array_t<float> col({static_cast<py::ssize_t>(colors.size()), static_cast<py::ssize_t>(3)});
                     auto* c = col.mutable_data();
                     for (size_t i = 0; i < colors.size(); ++i) {
@@ -267,7 +278,8 @@ namespace threepp_py {
                     }
                     return py::make_tuple(pts_to_numpy(cloud), col);
                 }, py::arg("renderer"), py::arg("scene"),
-                   "RGB-D scan -> (points (N,3) float32 world-space, colors (N,3) float32 sRGB in [0,1]).");
+                   "RGB-D scan -> (points (N,3) float32 world-space, colors (N,3) float32 in [0,1]). On GL the "
+                   "colors are sampled sRGB; on Vulkan they are LIDAR intensity as greyscale.");
 
         // ---- OrbitControls ---------------------------------------------------
         py::class_<OrbitControls>(m, "OrbitControls")
