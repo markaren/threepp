@@ -33,6 +33,7 @@
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/DisplacedMesh.hpp"
+#include "threepp/objects/Ocean.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
@@ -115,50 +116,9 @@ namespace {
     // from ~1 M to ~262 K — a 4× win on BLAS rebuild/refit and the per-vertex
     // displace dispatch, while wave geometry stays crisp (vertex spacing ~2 m
     // still resolves λ ≥ 4 m, and Phillips 1/k⁴ puts most energy above that).
-    constexpr int   kSubdiv      = static_cast<int>(kFftSize) / 2 - 1;
-
-    auto makeOceanMaterial() {
-        auto mat = MeshPhysicalMaterial::create();
-        // Pure water has no diffuse pigment — the blue comes from Beer-Lambert
-        // absorption through the medium, not albedo.
-        mat->color = Color::white;
-        // Small roughness simulates the sub-pixel chop the FFT can't resolve.
-        // 0.04 broadens the specular lobe just enough that each highlight
-        // covers multiple pixels — converges fast under TAA, avoids the
-        // salt-and-pepper sparkle that 0.01 + a tight-mip normal map gives
-        // on distant water.
-        mat->roughness = 0.04f;
-        mat->metalness = 0.0f;
-        mat->setIor(1.33f);
-        mat->transmission = 1.0f;
-        // doubleSided + thickness opts this surface into the path tracer's
-        // thin-shell transmission path: every transmission crossing applies
-        // Beer-Lambert for `thickness` metres of in-medium depth. The down-
-        // crossing (camera → water) tints the refracted ray; the up-crossing
-        // (sand → camera, after bounce) tints again. 2 m × 2 ≈ 4 m of
-        // effective tint — a tropical-ocean blue that still shows refracted
-        // sand under the brightest crests. Without doubleSided the BSDF
-        // would need to use the actual ray distance through the medium
-        // (~12 m here), which over-saturates to near-black.
-        mat->side = Side::Double;
-        mat->thickness = 2.0f;
-        // Opt this surface into the path tracer's thin-shell BSDF: a single
-        // FFT-displaced plane has no closed interior, so both faces should
-        // refract as entries and Beer-Lambert applies per-crossing using
-        // `thickness` as the in-medium proxy. Without this flag, the back-
-        // face hit (ray bouncing off sand) would refract using eta=ior with
-        // gl_HitTEXT = full water column → opaque deep blue, no see-through.
-        mat->thinWalled = true;
-        mat->attenuationColor = Color(0.10f, 0.45f, 0.55f);
-        mat->attenuationDistance = 3.0f;
-        mat->clearcoat = 0.1;
-
-        // Sub-mesh-resolution wave detail comes from the FFT fine cascade
-        // sampled directly in closest_hit (binding 32 → cascade-2 height,
-        // gated on `thinWalled`). That animates with the wave field for free
-        // and replaces the procedural normal map this example used to ship.
-        return mat;
-    }
+    // Mesh resolution per side. 512 vertices over the 1 km tile (~2 m spacing);
+    // the water material + spectrum now come from threepp::Ocean (objects/Ocean.hpp).
+    constexpr uint32_t kOceanRes = kFftSize / 2;
 
     auto makeSandMaterial() {
         return MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.02,0.02,0.02)).roughness(1.0f));
@@ -909,45 +869,27 @@ int main(int argc, char** argv) {
     // one BLAS build; the lighthouse beam grazes its cliffs at night.
     scene.add(island::build());
 
-    // Ocean surface. PlaneGeometry with kSubdiv segments → (kFftSize/2)² =
-    // 512² vertices (mesh density is decoupled from the kFftSize² wave
-    // field — see kSubdiv above). The DisplacedMesh detects the grid
-    // dimension at first-frame init and runs the FFT/displace pipeline
-    // against it.
-    auto oceanGeo = PlaneGeometry::create(kPlaneEdge, kPlaneEdge, kSubdiv, kSubdiv);
-    oceanGeo->rotateX(-math::PI / 2.f);
-    auto oceanMat = makeOceanMaterial();
-    auto ocean = DisplacedMesh::create(oceanGeo, oceanMat);
-    // Three-cascade FFT:
-    //   tileSize0 = 1000 m → big swells, dominant macro shapes.
-    //   tileSize1 =  100 m → mid-frequency waves filling each swell face.
-    //   tileSize2 =    8 m → fine chop in the 4–8 m range (the rest aliases
-    //                        at 1.95 m mesh spacing, but Phillips 1/k⁴ puts
-    //                        most energy in the resolvable end).
-    // The band-pass scheme (PhillipsSpectrum.kMin/kMax in the renderer)
-    // keeps each cascade in its own k-range so they stack cleanly without
-    // double-counting wavelengths the adjacent band already covers.
-    ocean->params.tileSize0   = kTileSize;
-    ocean->params.tileSize1   = 100.0f;
-    ocean->params.tileSize2   = 8.0f;
-    ocean->params.windTheta   = 0.6f;       // wind slightly off the X axis
-    // windSpeed scales wave amplitude as V⁴ in Phillips, so it's the
-    // dominant lever for "how big is the sea": 20 m/s = gale (10 m mountain
-    // crests, dwarfs the boat), 8–10 = Beaufort 4–5 moderate sea (1–2 m
-    // waves, visible chop without overpowering geometry). waveScale should
-    // stay near 1 (physical) — keeping it at 0.1 just attenuates the entire
-    // multi-cascade detail and reads as a glassy lake.
-    ocean->params.windSpeed   = shotClose ? 3.5f : 10.0f;// --close: calm glassy sea — the artifact-hunting state
-    ocean->params.waveScale   = 1.0f;
-    ocean->params.choppiness  = 0.55f;      // sharper crests, more visible wave-folding
-    // Per-cascade FFT resolution. Cascade-0 (big swells, 1 km tile) needs the
-    // full kFftSize to keep macro-shape fidelity. Cascades 1 and 2 carry
-    // shorter wavelengths whose resolvable detail saturates well below the
-    // cascade-0 resolution — halving them cuts FFT cost ~2× with no visible
-    // loss.
-    ocean->params.textureSize0 = kFftSize;
-    ocean->params.textureSize1 = kFftSize / 2;
-    ocean->params.textureSize2 = kFftSize / 2;
+    // Ocean surface — the first-party threepp::Ocean (objects/Ocean.hpp) builds
+    // the plane, the transmissive water material, and the three-cascade Phillips
+    // spectrum from these options:
+    //   size       = 1 km tile = cascade-0 swell wavelength.
+    //   resolution = kFftSize/2 → 512² verts (mesh density is decoupled from the
+    //                kFftSize² wave field — see the kOceanRes note above).
+    //   fftSize    = cascade-0 FFT resolution; cascades 1 & 2 use half.
+    // The mid/fine cascade tiles (100 m / 8 m), choppiness (0.55) and waveScale
+    // (1.0) keep Ocean's defaults. Everything the boat drives — warp / wake /
+    // hull-exclusion / foam — is set per-frame on this same object below (Ocean
+    // is-a DisplacedMesh).
+    Ocean::Options oceanOpts;
+    oceanOpts.size       = kTileSize;
+    oceanOpts.resolution = kOceanRes;
+    oceanOpts.fftSize    = kFftSize;
+    // windSpeed scales wave amplitude as V⁴ in Phillips, so it's the dominant
+    // lever for "how big is the sea": 20 m/s = gale, 8–10 = Beaufort 4–5 (1–2 m
+    // waves, visible chop without overpowering geometry). --close drops to a
+    // calm glassy sea — the surface-artifact-hunting state.
+    oceanOpts.windSpeed  = shotClose ? 3.5f : 10.0f;
+    auto ocean = Ocean::create(oceanOpts);
     scene.add(ocean);
 
     // ── Lighthouse (scene centre) ───────────────────────────────────────────
@@ -1586,6 +1528,7 @@ int main(int argc, char** argv) {
     float windTheta = ocean->params.windTheta;
     float exposure  = renderer.toneMappingExposure;
     int   toneMode  = static_cast<int>(renderer.toneMapping);
+    bool  ptMode    = renderer.renderMode() == VulkanRenderer::RenderMode::ReferencePT;
     int   spp       = renderer.samplesPerPixel();
     float renderScale = renderer.renderScale();
     float fps = 0.f, fpsAccum = 0.f;
@@ -1768,6 +1711,19 @@ int main(int argc, char** argv) {
         }
         ImGui::Separator();
 
+        ImGui::TextUnformatted("Rendering");
+        // Switch between the real-time deferred path (RasterFirst: a raster
+        // G-buffer with ray-traced reflections/refraction/shadows) and the full
+        // path-traced reference (ReferencePT: slower, the ground-truth image the
+        // deferred path approximates). Both displace the ocean and refract.
+        if (ImGui::Checkbox("Path-traced reference", &ptMode)) {
+            renderer.setRenderMode(ptMode ? VulkanRenderer::RenderMode::ReferencePT
+                                          : VulkanRenderer::RenderMode::RasterFirst);
+        }
+        ImGui::TextDisabled("%s", ptMode ? "ReferencePT — full path tracer"
+                                         : "RasterFirst — deferred + RT accents");
+        ImGui::Separator();
+
         if (ImGui::SliderFloat("Wave scale", &waveScale, 0.f, 3.f, "%.2f")) {
             ocean->params.waveScale = waveScale;
         }
@@ -1807,18 +1763,20 @@ int main(int argc, char** argv) {
         if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
             renderer.setRestirDIEnabled(restirDI);
         }
-        bool restirGI = renderer.restirGIEnabled();
-        if (ImGui::Checkbox("ReSTIR GI", &restirGI)) {
-            renderer.setRestirGIEnabled(restirGI);
-        }
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16)) {
-            renderer.setSamplesPerPixel(spp);
-        }
-        // Silhouette MSAA: extra primary rays at edge pixels only.
-        // 0 disables; default 7 → 8× MSAA at edges.
-        int edgeMsaa = static_cast<int>(renderer.silhouetteMsaaExtra());
-        if (ImGui::SliderInt("Silhouette MSAA extras", &edgeMsaa, 0, 15)) {
-            renderer.setSilhouetteMsaaExtra(static_cast<uint32_t>(edgeMsaa));
+        if (renderer.renderMode() == VulkanRenderer::RenderMode::ReferencePT) {
+            bool restirGI = renderer.restirGIEnabled();
+            if (ImGui::Checkbox("ReSTIR GI", &restirGI)) {
+                renderer.setRestirGIEnabled(restirGI);
+            }
+            if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16)) {
+                renderer.setSamplesPerPixel(spp);
+            }
+            // Silhouette MSAA: extra primary rays at edge pixels only.
+            // 0 disables; default 7 → 8× MSAA at edges.
+            int edgeMsaa = static_cast<int>(renderer.silhouetteMsaaExtra());
+            if (ImGui::SliderInt("Silhouette MSAA extras", &edgeMsaa, 0, 15)) {
+                renderer.setSilhouetteMsaaExtra(static_cast<uint32_t>(edgeMsaa));
+            }
         }
         // Path-trace render scale: < 1 traces fewer pixels, then upscales.
         if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f")) {
