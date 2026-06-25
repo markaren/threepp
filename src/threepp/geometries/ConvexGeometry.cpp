@@ -84,6 +84,13 @@ ConvexGeometry::ConvexGeometry(const std::vector<Vector3>& _points)
     this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
 }
 
+// Defined out-of-line here, where Impl is complete, so the unique_ptr<Impl>
+// deleter is instantiated in this TU rather than at every use site. Without
+// this, holders that construct a shared_ptr<ConvexGeometry> from a raw pointer
+// in a TU that only sees the forward-declared Impl (e.g. the pybind11 bindings)
+// fail with "invalid application of sizeof to incomplete type".
+ConvexGeometry::~ConvexGeometry() = default;
+
 std::shared_ptr<ConvexGeometry> ConvexGeometry::create(const std::vector<Vector3>& points) {
 
     return std::shared_ptr<ConvexGeometry>(new ConvexGeometry(points));
