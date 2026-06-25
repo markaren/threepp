@@ -21,9 +21,13 @@ commanded body-frame `[vx, vy, wz]`), plus a **scan-gated imitation anchor** tha
 the teacher on locally-flat ground so steering is never forgotten.
 
 ```
-obs (58): lin_b(3) ang_b(3) proj_g(3) cmd(3) qpos(12) qvel(12) last_act(12) base_above(1) scan(9)
+obs (94): lin_b(3) ang_b(3) proj_g(3) cmd(3) qpos(12) qvel(12) last_act(12) base_above(1) scan(45)
 action (12): joint targets = default_q + ACTION_SCALE * a   (Isaac order, unclamped)
 ```
+
+The terrain `scan` is a **2-D heading-relative height grid** (45 = 9 forward x 5 lateral, ~1.1 m look-ahead),
+the same idea as IsaacLab's height scanner. In training it is the exact analytic terrain height (privileged).
+At deploy the viewers replace it with **onboard perception** — see "Seeing the terrain" below.
 
 `spot_steps.pt` is the end of a **cumulative warm-start chain** — Isaac walker → heightfield (smooth
 rough) → stairs — where each stage keeps the previous skills because every env shares the exact same
@@ -41,6 +45,22 @@ obs/action/reward contract.
 Shared pieces: `spot_symmetry.py` (left-right mirror + symmetry-augmentation loss, kills the lateral
 gait drift), and `spot_deploy.py` (the Isaac-walker deploy + the asset/robot construction layer everything
 imports). The viewers are CPU-deploy + GL render with hot-reload, keyboard steering, and a chase cam.
+
+## Seeing the terrain (onboard perception in the viewers)
+
+In training the height scan is privileged (exact terrain), but no real robot has that. Every `play_*`
+viewer instead feeds the policy a scan derived from **onboard perception**, via `spot_depth_scan.py`:
+
+- A `threepp.DepthSensor` is mounted on the body looking **forward and down** (~40°), like Spot's real
+  depth cameras. Each control tick it renders the scene from that viewpoint and reprojects to a
+  world-space point cloud (the robot is hidden during the scan = perfect self-filtering).
+- The cloud is fused into an accumulating **2.5-D elevation map**; cells now beside/under/behind the
+  robot were *ahead* of it a moment ago, so they are remembered (a forward camera alone can't see them).
+- The 45-cell heading-relative grid is sampled from the map — a drop-in for the analytic scan.
+
+The viewers draw the raw point cloud and the policy's scan grid, and expose a range-noise slider.
+Pass `--analytic` to fall back to the privileged oracle for an A/B; `--noise M` sets sensor range noise.
+The deployed gait is essentially unchanged from the oracle, and survives several cm of range noise.
 
 ## Run it
 
@@ -66,9 +86,9 @@ Checkpoints (`*.pt`) are git-ignored — regenerate by training, or keep your ow
 
 - **GpuSim is the enabler** — K Spots in one direct-GPU PhysX scene; the 48-d Isaac obs is assembled as
   torch ops on the GPU state. ~35–40k env-steps/s at K=2048 on an RTX 4070.
-- **Privileged terrain scan** — the 9-probe scan is an exact analytic forward height profile (heading-
-  relative line, ~1.1 m look-ahead), the same idea as IsaacLab's height scanner. Real hardware would
-  estimate it from perception.
+- **Privileged terrain scan in training, perception at deploy** — training uses the exact analytic
+  45-cell height grid (privileged, like IsaacLab's height scanner); the viewers estimate that same grid
+  from an onboard depth camera + elevation map (see "Seeing the terrain"). One obs contract, two sources.
 - **Drop-settle spawns** — the robot is placed referenced to the highest terrain under its footprint so a
   foot never spawns inside the terrain (no depenetration jolt).
 - **CPU deploy / sim-to-sim** — viewers default to `tgs_pcm`/0.005 to match the GpuSim training contact

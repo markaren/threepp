@@ -2,9 +2,13 @@
 checkpoint as train_spot_steps.py writes it. The terrain is the curriculum ladder: tents of increasing
 riser along +x. Drive it through, or use the `level` slider to spawn at a chosen riser band.
 
-    python play_spot_steps.py                   # live; hot-reloads spot_steps_latest.pt
+    python play_spot_steps.py                   # live; forward DepthSensor scan; hot-reloads spot_steps_latest.pt
     python play_spot_steps.py --model spot_steps.pt
+    python play_spot_steps.py --analytic        # privileged exact-height oracle (the old fake scan), for A/B
     python play_spot_steps.py --check 400 --level 2
+
+The height scan the policy reads comes from a body-mounted forward depth camera fused into a local
+elevation map (see spot_depth_scan.py) — onboard perception, not the privileged analytic terrain oracle.
 
 DRIVE (body frame, +x fwd / +y left):
     forward  UP / KP8        back     DOWN / KP2
@@ -34,9 +38,10 @@ import threepp as tp
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, grid_texture, _quat_to_R,
                          default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, Z0)
-from spot_terrain_env import scan_xy_np, N_SCAN, HALF_W, VX_HI, VY_HI, WZ_HI
+from spot_terrain_env import scan_xy_np, HALF_W, VX_HI, VY_HI, WZ_HI
 from spot_steps_env import (RISERS, N_LEVELS, N_UP, STEP_RUN, FLAT_APPROACH, LAND, BAND_LEN,
                             SPAWN_OFF, STRIP_LEN, HALF_W_BOX, HALF_W_STEPS)
+from spot_depth_scan import ForwardDepthScanner
 
 DISP = 820
 GRAV = np.array([0.0, 0.0, -1.0])
@@ -62,31 +67,28 @@ def terr_h(x, y):
     return float(r * steps)
 
 
-def _scan_color(d):
-    """Height-delta d in [-1,1] -> 0xRRGGBB for a probe marker: blue (drop) -> green (level) -> red (rise)."""
-    if d >= 0.0:
-        r, g, b = 0.2 + 0.8 * d, 0.9 - 0.7 * d, 0.2
-    else:
-        r, g, b = 0.2, 0.9 + 0.6 * d, 0.3 - 0.6 * d
-    clamp = lambda v: int(max(0.0, min(1.0, v)) * 255)
-    return (clamp(r) << 16) | (clamp(g) << 8) | clamp(b)
+def analytic_scan(art):
+    """Privileged scan: exact terrain height at the 45 heading-relative grid points (the oracle baseline)."""
+    rs = art.root_state(); R = _quat_to_R(rs[3:7])
+    x, y = float(rs[0]), float(rs[1])
+    hx, hy = float(R[0, 0]), float(R[1, 0]); nrm = math.hypot(hx, hy) or 1.0
+    cyaw, syaw = hx / nrm, hy / nrm
+    h_here = terr_h(x, y)
+    px, py = scan_xy_np(x, y, cyaw, syaw)
+    ahead = np.clip(np.array([terr_h(float(pxi), float(pyi)) - h_here
+                              for pxi, pyi in zip(px, py)], np.float32), -1.0, 1.0)
+    return ahead, h_here
 
 
-def v2_obs(art, last_act, cmd):
+def v2_obs(art, last_act, cmd, ahead, h_here):
+    """94-d SpotStepsEnv obs. `ahead` (45) + `h_here` come from EITHER the depth sensor or the oracle."""
     rs, rv = art.root_state(), art.root_velocity()
     R = _quat_to_R(rs[3:7]); Rt = R.T
     lin_b, ang_b, proj_g = Rt @ rv[0:3], Rt @ rv[3:6], Rt @ GRAV
     jp_isaac = art.joint_positions()[isaac_to_add]
     jv_isaac = art.joint_velocities()[isaac_to_add]
     qpos = jp_isaac - default_q
-    x, y, z = float(rs[0]), float(rs[1]), float(rs[2])
-    hx, hy = float(R[0, 0]), float(R[1, 0])
-    nrm = math.hypot(hx, hy) or 1.0
-    cyaw, syaw = hx / nrm, hy / nrm
-    h_here = terr_h(x, y)
-    px, py = scan_xy_np(x, y, cyaw, syaw)                          # 2-D heading-relative grid (world)
-    ahead = np.clip(np.array([terr_h(float(pxi), float(pyi)) - h_here
-                              for pxi, pyi in zip(px, py)], np.float32), -1.0, 1.0)
+    z = float(rs[2])
     return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
                            [z - h_here], ahead]).astype(np.float32)
 
@@ -103,13 +105,19 @@ def main():
     ap.add_argument("--model", default=os.path.join(_HERE, "spot_steps.pt"))
     ap.add_argument("--level", type=int, default=0, help="riser band to spawn at (0..%d)" % (N_LEVELS - 1))
     ap.add_argument("--check", type=int, default=0)
+    ap.add_argument("--analytic", action="store_true",
+                    help="use the privileged exact-height scan oracle instead of the depth sensor")
+    ap.add_argument("--noise", type=float, default=0.0, help="depth-sensor range noise std-dev (m)")
     ap.add_argument("--pgs", action="store_true",
                     help="use PhysX's default PGS/0.002 solver instead of tgs_pcm/0.005 (both transfer)")
+    ap.add_argument("--shot", metavar="PNG", help="headless: drive --check steps, render the chase view, save a PNG")
     args = ap.parse_args()
     model = _resolve_model(args.model)
     if not os.path.exists(model):
         print(f"No policy at {model} — run train_spot_steps.py first."); sys.exit(0)
-    live = args.check == 0
+    live = args.check == 0 and not args.shot
+    if args.shot and args.check == 0:
+        args.check = 240
     dev = "cpu"
     ac, _, _ = load_policy(model, device=dev)
     pol = {"ac": ac, "mt": os.path.getmtime(model), "reloads": 0}
@@ -155,20 +163,16 @@ def main():
     for m in meshes:
         scene.add(m)
 
-    # 2-D scan-grid overlay: one small sphere per probe, repositioned each frame to the world grid
-    # and colored by measured height-delta -> shows exactly what the policy senses on the terrain.
-    scan_group = tp.Group(); scan_markers = []
-    for _ in range(N_SCAN):
-        mk = tp.Mesh(tp.SphereGeometry(0.022, 8, 6), tp.MeshStandardMaterial())
-        mk.material.color = 0x22ff88
-        scan_markers.append(mk); scan_group.add(mk)
-    scene.add(scan_group)
+    # PERCEPTION: a body-mounted forward depth camera fuses an elevation map and supplies the 45-cell
+    # scan (drop-in for the analytic oracle). It also draws the raw point cloud + the policy's scan grid.
+    scanner = None if args.analytic else ForwardDepthScanner(
+        rend, scene, meshes, bounds=(-2.0, STRIP_LEN + 3.0, -3.0, 3.0), noise=args.noise)
+    print(f"[scan] {'analytic oracle (privileged)' if args.analytic else 'forward DepthSensor + elevation map'}")
 
     cam = tp.PerspectiveCamera(46, 1.0, 0.05, 200); cam.up.set(0, 0, 1)
     cam.position.set(-2.6, -2.7, 1.4)
     state = {"last_act": np.zeros(12, np.float32), "hdg_lock": None,
-             "auto_fwd": True, "hdg_hold": True, "cmd": (0.0, 0.0, 0.0), "level": int(args.level),
-             "show_scan": True}
+             "auto_fwd": True, "hdg_hold": True, "cmd": (0.0, 0.0, 0.0), "level": int(args.level)}
     BACK, HEIGHT, LAG = 3.0, 1.5, 0.10
 
     def settle(n):
@@ -181,6 +185,8 @@ def main():
         h = max(terr_h(sx + dx, dy) for dx, dy in foot)
         art.reset(tp.Vector3(sx, 0.0, Z0 + h + 0.02)); state["last_act"] = np.zeros(12, np.float32)
         state["hdg_lock"] = None; settle(nsettle)
+        if scanner is not None:                                       # forget stale terrain, then pre-fill from here
+            scanner.clear_map(); scanner.prewarm(art.root_state())
 
     def key_cmd():
         d = lambda *ks: any(canvas.is_key_down(k) for k in ks)
@@ -203,8 +209,9 @@ def main():
             err = (yaw - state["hdg_lock"] + math.pi) % (2 * math.pi) - math.pi
             wz = float(np.clip(-2.0 * err, -1.0, 1.0))
         cmd = np.array([vx, vy, wz], np.float32); state["cmd"] = (vx, vy, wz)
+        ahead, h_here = scanner.scan(art.root_state()) if scanner is not None else analytic_scan(art)
         with torch.no_grad():
-            obs = v2_obs(art, state["last_act"], cmd)
+            obs = v2_obs(art, state["last_act"], cmd, ahead, h_here)
             a = pol["ac"].act_mean(torch.from_numpy(obs)[None])[0].numpy()
         state["last_act"] = a
         art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
@@ -219,21 +226,6 @@ def main():
         cam.look_at(float(p[0] + fwd[0] * 0.4), float(p[1] + fwd[1] * 0.4), float(p[2] + 0.1))
         rend.render(scene, cam)
 
-    def update_scan_viz():
-        scan_group.visible = state["show_scan"]
-        if not state["show_scan"]:
-            return
-        rs = art.root_state(); R = _quat_to_R(rs[3:7])
-        x, y = float(rs[0]), float(rs[1])
-        hx, hy = float(R[0, 0]), float(R[1, 0]); nrm = math.hypot(hx, hy) or 1.0
-        cyaw, syaw = hx / nrm, hy / nrm
-        px, py = scan_xy_np(x, y, cyaw, syaw)
-        h_here = terr_h(x, y)
-        for i in range(N_SCAN):
-            h = terr_h(float(px[i]), float(py[i]))
-            scan_markers[i].position.set(float(px[i]), float(py[i]), h + 0.03)
-            scan_markers[i].material.color = _scan_color(float(np.clip((h - h_here) / 0.2, -1.0, 1.0)))
-
     reset_spot(120)
 
     if not live:
@@ -244,6 +236,9 @@ def main():
         print(f"after {args.check} fwd steps (spawn level {args.level}, riser {RISERS[args.level]:.02f}): "
               f"base=({bx:+.2f},{by:+.2f},{bz:.2f})  terrain_under_base={h:.2f}  "
               f"clearance={bz - h:.2f}  up_ok={bool(_quat_to_R(rs[3:7])[2,2] > 0.5)}")
+        if args.shot:
+            render_chase(); rend.save_frame(args.shot)
+            print(f"saved {args.shot}  (point cloud + scan grid are the live depth-sensor data)")
         print("SPOTV2 STEPS PLAY HEADLESS CHECK: OK")
         return
 
@@ -263,7 +258,13 @@ def main():
         tp.imgui.text(f"climbed {h:.2f} m   clearance {float(rs[2]) - h:.2f} m")
         _, state["auto_fwd"] = tp.imgui.checkbox("auto-forward (idle)", state["auto_fwd"])
         _, state["hdg_hold"] = tp.imgui.checkbox("heading-hold (no-turn)", state["hdg_hold"])
-        _, state["show_scan"] = tp.imgui.checkbox("show 2-D scan grid", state["show_scan"])
+        if scanner is not None:
+            tp.imgui.text("scan: forward DepthSensor + elevation map")
+            _, scanner.show_grid = tp.imgui.checkbox("show scan grid (policy input)", scanner.show_grid)
+            _, scanner.show_cloud = tp.imgui.checkbox("show depth point cloud", scanner.show_cloud)
+            _, scanner.sensor.range_noise = tp.imgui.slider_float("range noise (m)", scanner.sensor.range_noise, 0.0, 0.15)
+        else:
+            tp.imgui.text("scan: analytic oracle (privileged)")
         _, state["level"] = tp.imgui.slider_int("spawn riser band", int(state["level"]), 0, N_LEVELS - 1)
         tp.imgui.text(f"band {int(state['level'])} riser = {RISERS[int(state['level'])]:.02f} m")
         tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   R = reset")
@@ -287,7 +288,7 @@ def main():
                     pol["reloads"] += 1; reset_spot(); print(f"[reload] {os.path.basename(model)} (#{pol['reloads']})")
             except Exception:
                 pass
-        control_tick(use_keys=True); update_scan_viz(); render_chase(); ui.render(draw_ui)
+        control_tick(use_keys=True); render_chase(); ui.render(draw_ui)
 
     print(__doc__)
     canvas.animate(frame)
