@@ -944,6 +944,13 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/event_shade.comp"
         kEventShadeCompSpv
         _event_shade_spv_h)
+    # Debug-view resolve: samples one G-buffer channel and writes a readable
+    # visualization to the swapchain (setHybridDebugView). Replaces a raw blit
+    # that couldn't show the signed motion or integer ids attachments.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/debug_resolve.comp"
+        kDebugResolveCompSpv
+        _debug_resolve_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/prefilter_env.comp"
         kPrefilterEnvCompSpv

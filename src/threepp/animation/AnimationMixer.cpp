@@ -229,23 +229,17 @@ struct AnimationMixer::Impl {
         auto& actions = this->_actions;
         auto& actionsByClip = this->_actionsByClip;
 
-        ClipAction actionsForClip;
-
         if (!actionsByClip.contains(clipUuid)) {
-
-            actionsForClip = ClipAction{
-                    {action.get()},
-                    {}};
 
             action->_byClipCacheIndex = 0;
 
-            actionsByClip[clipUuid] = actionsForClip;
+            actionsByClip[clipUuid] = ClipAction{
+                    {action.get()},
+                    {}};
 
         } else {
 
-            auto& actionsForClip = actionsByClip.at(clipUuid);
-
-            auto& knownActions = actionsForClip.knownActions;
+            auto& knownActions = actionsByClip.at(clipUuid).knownActions;
 
             action->_byClipCacheIndex = knownActions.size();
             knownActions.emplace_back(action.get());
@@ -254,7 +248,11 @@ struct AnimationMixer::Impl {
         action->_cacheIndex = actions.size();
         actions.emplace_back(action);
 
-        actionsForClip.actionByRoot[rootUuid] = action.get();
+        // Register the per-root lookup on the *stored* ClipAction. The previous
+        // code wrote this to a local copy (default-constructed, or already
+        // copied into the map), so actionByRoot stayed empty and clipAction()
+        // never found an existing action — it allocated a fresh one every call.
+        actionsByClip.at(clipUuid).actionByRoot[rootUuid] = action.get();
     }
 
     void stopAllAction() const {

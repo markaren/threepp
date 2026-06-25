@@ -1,0 +1,85 @@
+#version 460
+
+// Debug-view resolve for VulkanRenderer::setHybridDebugView(). Samples one
+// channel of the hybrid raster G-buffer and writes a human-readable RGB
+// visualization straight to the swapchain, bypassing the path tracer /
+// deferred shade.
+//
+// Replaces the old raw vkCmdBlitImage debug path, which could only show the
+// world-normal attachment correctly:
+//   • the SIGNED motion-vector channel clamps to near-black under a blit
+//     (a blit can't bias 0 -> mid-grey), and
+//   • the integer ids attachment (R16G16B16A16_UINT) cannot be blitted into
+//     the UNORM swapchain at all — the Vulkan spec forbids integer<->non-
+//     integer blits (VUID-vkCmdBlitImage-srcImage-00229/-00230).
+// A compute pass samples each attachment with the correct sampler type
+// (usampler2D for ids) and encodes it explicitly.
+//
+// outImage has NO format qualifier: the swapchain is VK_FORMAT_B8G8R8A8_UNORM
+// and GLSL has no bgra8 qualifier; writing without a format
+// (shaderStorageImageWriteWithoutFormat, enabled at device creation) stores
+// r/g/b/a by component name, so RGB order is correct. Matches composite.comp /
+// taa_resolve.comp swapchain writes.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D  gbufNormal;  // .xyz = n*0.5+0.5
+layout(set = 0, binding = 1) uniform sampler2D  gbufMotion;  // .rg = signed NDC motion delta
+layout(set = 0, binding = 2) uniform usampler2D gbufIds;     // .r = instanceCustomIndex+1 (0 = sky)
+layout(set = 0, binding = 3) uniform sampler2D  gbufAlbedo;  // .rgb = linear albedo
+layout(set = 0, binding = 4) uniform writeonly image2D outImage;// swapchain (bgra8, no format)
+layout(set = 0, binding = 5) uniform sampler2D  gbufDepth;   // .r = reverse-Z depth [0,1] (1 = near, 0 = far)
+
+layout(push_constant) uniform Pc {
+    uint  view;       // 1 = normal, 2 = motion, 3 = ids, 4 = albedo, 5 = depth
+    uint  width;      // output (swapchain) extent — drives the dispatch
+    uint  height;
+    uint  gbufWidth;  // gbuf (input) extent — may differ under sub-extent render
+    uint  gbufHeight;
+    float motionGain; // scales the signed motion delta for visibility
+} pc;
+
+// Hash an instance id to a distinct, reasonably bright colour so adjacent
+// instances are visually separable (a segmentation-style view).
+vec3 idToColor(uint id) {
+    uint h = id * 2654435761u;          // Knuth multiplicative hash
+    h ^= h >> 15; h *= 0x2c1b3c6du;
+    h ^= h >> 13; h *= 0x297a2d39u;
+    h ^= h >> 16;
+    vec3 c = vec3(float(h & 255u), float((h >> 8) & 255u), float((h >> 16) & 255u)) / 255.0;
+    return c * 0.8 + 0.2;               // lift off black so dim ids stay visible
+}
+
+void main() {
+    const ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= int(pc.width) || pix.y >= int(pc.height)) return;
+
+    // Nearest map output pixel -> gbuf texel (identity when extents match).
+    const ivec2 src = ivec2(
+        int((float(pix.x) + 0.5) * float(pc.gbufWidth)  / float(pc.width)),
+        int((float(pix.y) + 0.5) * float(pc.gbufHeight) / float(pc.height)));
+
+    vec3 col;
+    if (pc.view == 2u) {
+        // Signed NDC motion: 0 -> mid-grey, +/- x -> red axis, +/- y -> green.
+        const vec2 m = texelFetch(gbufMotion, src, 0).rg;
+        col = vec3(clamp(0.5 + m * pc.motionGain, vec2(0.0), vec2(1.0)), 0.5);
+    } else if (pc.view == 3u) {
+        const uint id = texelFetch(gbufIds, src, 0).r;// instanceCustomIndex + 1
+        col = (id == 0u) ? vec3(0.0) : idToColor(id);
+    } else if (pc.view == 4u) {
+        col = texelFetch(gbufAlbedo, src, 0).rgb;
+    } else if (pc.view == 5u) {
+        // Raw reverse-Z depth [0,1] (1 = near, 0 = far, 0 = sky) packed into
+        // 24-bit RGB. The host decodes the integer back to [0,1] and linearizes
+        // to metric distance with the camera near/far.
+        const float d = clamp(texelFetch(gbufDepth, src, 0).r, 0.0, 1.0);
+        const uint  q = uint(d * 16777215.0 + 0.5);// 2^24 - 1
+        col = vec3(float((q >> 16) & 255u), float((q >> 8) & 255u), float(q & 255u)) / 255.0;
+    } else {
+        // Normal (default): already encoded to [0,1] as n*0.5+0.5.
+        col = texelFetch(gbufNormal, src, 0).xyz;
+    }
+
+    imageStore(outImage, pix, vec4(col, 1.0));
+}

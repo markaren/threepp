@@ -77,6 +77,12 @@ function(add_example)
                 PROPERTIES SUFFIX ".html"
                 LINK_FLAGS "${LINK_FLAGS}")
 
+        # Register this web example so examples/CMakeLists.txt can list it in the
+        # generated index.html. We record the name here (at configure time) rather
+        # than globbing the output dir for *.html afterwards, because on a clean
+        # build the .html files don't exist yet when the index is generated.
+        set_property(GLOBAL APPEND PROPERTY THREEPP_WEB_EXAMPLES "${arg_NAME}")
+
     else ()
         target_compile_definitions(${arg_NAME} PRIVATE DATA_FOLDER="${THREEPP_DATA_DIR}")
         target_compile_definitions(${arg_NAME} PRIVATE PROJECT_FOLDER="${PROJECT_SOURCE_DIR}")

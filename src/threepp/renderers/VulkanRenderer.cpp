@@ -107,6 +107,7 @@
 #include "threepp/renderers/vulkan/shaders/overlay_point.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_point.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/event_shade.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/debug_resolve.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/particle.vert.spv.h"
@@ -936,6 +937,11 @@ namespace threepp {
         static constexpr uint32_t kSnapOverlay    = 32u;
         static constexpr uint32_t kSnapTet        = 64u;
         static constexpr uint32_t kSnapParticle   = 128u;
+        // material()->visible == false. The node is still recorded (so the
+        // replay walk can detect a re-show) but contributes no MeshEntry /
+        // LineEntry — matches three.js / GLRenderer, which drops a
+        // material-hidden object from the render list. [[#mat-visible]]
+        static constexpr uint32_t kSnapMatHidden  = 256u;
         std::vector<SnapNode> sceneSnapshot_;
 
         // Classification-routing flags for a mesh — shared by the snapshot
@@ -981,8 +987,11 @@ namespace threepp {
                 // without re-doing the string-keyed attribute lookups.
                 if (kind == kSnapKindLine || kind == kSnapKindPoints) {
                     auto geom = sn.line ? sn.line->geometry() : sn.pts->geometry();
+                    auto matL = sn.line ? sn.line->material() : sn.pts->material();
+                    const bool matHidden = matL && !matL->visible;
                     if (geom.get() != sn.geom ||
-                        (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer)) ok = false;
+                        (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer) ||
+                        matHidden != ((sn.flags & kSnapMatHidden) != 0u)) ok = false;
                     return;
                 }
                 Mesh* m = sn.mesh;
@@ -1002,10 +1011,14 @@ namespace threepp {
                                   o.layers.isEnabled(static_cast<unsigned>(overlayLayer_));
                 const bool tet = sn.mat && sn.mat->tetSkinning && sn.mat->tetTexture != nullptr;
                 const bool particle = sn.mat && sn.mat->name == kParticleMaterialName;
+                // sn.mat compared equal above, so it's alive and dereferenceable
+                // (nullptr ⇒ no material ⇒ treated as visible). [[#mat-visible]]
+                const bool matHidden = sn.mat && !sn.mat->visible;
                 if (wire != ((sn.flags & kSnapWire) != 0u) ||
                     over != ((sn.flags & kSnapOverlay) != 0u) ||
                     tet != ((sn.flags & kSnapTet) != 0u) ||
-                    particle != ((sn.flags & kSnapParticle) != 0u)) {
+                    particle != ((sn.flags & kSnapParticle) != 0u) ||
+                    matHidden != ((sn.flags & kSnapMatHidden) != 0u)) {
                     ok = false;
                     return;
                 }
@@ -1255,6 +1268,24 @@ namespace threepp {
         VkDescriptorSet       eventShadeDescSet_        = VK_NULL_HANDLE;
         uint32_t              eventLumaW_ = 0;
         uint32_t              eventLumaH_ = 0;
+
+        // Debug-view resolve (setHybridDebugView): a compute pass that
+        // visualizes one G-buffer channel to the swapchain. Replaces the old
+        // raw blit, which could not correctly show the signed motion or
+        // integer ids attachments. Created lazily on first debug-view frame.
+        struct DebugResolvePC {
+            uint32_t view;      // 1 = normal, 2 = motion, 3 = ids, 4 = albedo
+            uint32_t width;
+            uint32_t height;
+            uint32_t gbufWidth;
+            uint32_t gbufHeight;
+            float    motionGain;
+        };
+        VkDescriptorSetLayout debugResolveDsLayout_       = VK_NULL_HANDLE;
+        VkPipelineLayout      debugResolvePipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline            debugResolvePipeline_       = VK_NULL_HANDLE;
+        VkDescriptorPool      debugResolveDescPool_       = VK_NULL_HANDLE;
+        VkDescriptorSet       debugResolveDescSet_        = VK_NULL_HANDLE;
 
         // User-requested sensor resolution. 0 means "track swapchain";
         // any non-zero pair pins the detector + luma buffer at that res
@@ -1987,6 +2018,10 @@ namespace threepp {
             if (eventShadePipelineLayout_) vkDestroyPipelineLayout(d, eventShadePipelineLayout_, nullptr);
             if (eventShadeDescPool_)       vkDestroyDescriptorPool(d, eventShadeDescPool_, nullptr);
             if (eventShadeDsLayout_)       vkDestroyDescriptorSetLayout(d, eventShadeDsLayout_, nullptr);
+            if (debugResolvePipeline_)       vkDestroyPipeline(d, debugResolvePipeline_, nullptr);
+            if (debugResolvePipelineLayout_) vkDestroyPipelineLayout(d, debugResolvePipelineLayout_, nullptr);
+            if (debugResolveDescPool_)       vkDestroyDescriptorPool(d, debugResolveDescPool_, nullptr);
+            if (debugResolveDsLayout_)       vkDestroyDescriptorSetLayout(d, debugResolveDsLayout_, nullptr);
 
             for (auto& [_, rec] : blasCache) {
                 if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
@@ -5040,7 +5075,9 @@ namespace threepp {
                     sn.geom  = geom.get();
                     sn.geomB = geom.get();
                     if (geom) sn.attrVer = geom->attributesVersion();
-                    if (geom && geom->hasAttribute("position")) {
+                    const bool matHidden = line->material() && !line->material()->visible;
+                    if (matHidden) sn.flags |= kSnapMatHidden;
+                    if (!matHidden && geom && geom->hasAttribute("position")) {
                         sn.flags |= kSnapHasPos;
                         LineEntry le{};
                         le.line       = line;
@@ -5064,7 +5101,9 @@ namespace threepp {
                     sn.geom  = geom.get();
                     sn.geomB = geom.get();
                     if (geom) sn.attrVer = geom->attributesVersion();
-                    if (geom && geom->hasAttribute("position")) {
+                    const bool matHidden = pts->material() && !pts->material()->visible;
+                    if (matHidden) sn.flags |= kSnapMatHidden;
+                    if (!matHidden && geom && geom->hasAttribute("position")) {
                         sn.flags |= kSnapHasPos;
                         LineEntry le{};
                         le.line       = nullptr;
@@ -5101,8 +5140,15 @@ namespace threepp {
                 sn.wf        = wf;
                 sn.instCount = inst ? static_cast<int32_t>(inst->count()) : -1;
                 sn.flags     = snapMeshFlags(*m, wf);
+                // material()->visible == false: record the full mesh node (so a
+                // re-show is caught by the replay walk) but build no entries, so
+                // PT / raster G-buffer / overlay / emissive NEE never see it.
+                // [[#mat-visible]]
+                const bool matHidden = m->material() && !m->material()->visible;
+                if (matHidden) sn.flags |= kSnapMatHidden;
                 if (sn.geomB) sn.attrVer = sn.geomB->attributesVersion();
                 sceneSnapshot_.push_back(sn);
+                if (matHidden) return;
                 auto geom = m->geometry();
                 if (!geom || !geom->hasAttribute("position")) return;
                 if (!geom->hasAttribute("normal")) return;
@@ -7719,147 +7765,209 @@ namespace threepp {
             vkCmdEndRenderPass(cb);
         }
 
-        // Debug visualization: blit one of the G-buffer color attachments to
-        // the swapchain image so we can inspect raster output without wiring
-        // raygen to read it. Normal channel is the most informative — solid
-        // surfaces show their world-space orientation as RGB.
-        void recordHybridDebugBlit(VkCommandBuffer cb, uint32_t imageIndex, uint32_t frame) {
+        // Lazily create the debug_resolve compute pipeline + descriptor set.
+        void createDebugResolvePipeline() {
+            if (debugResolvePipeline_ != VK_NULL_HANDLE) return;
+
+            // 6 bindings: normal/motion/ids/albedo (combined image samplers;
+            // ids is a usampler) + the swapchain storage image + depth (a
+            // depth-aspect combined image sampler, for the depth AOV).
+            std::array<VkDescriptorSetLayoutBinding, 6> b{};
+            for (uint32_t i = 0; i < 4; ++i) {
+                b[i].binding         = i;
+                b[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                b[i].descriptorCount = 1;
+                b[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            b[4].binding         = 4;
+            b[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            b[4].descriptorCount = 1;
+            b[4].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[5].binding         = 5;
+            b[5].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b[5].descriptorCount = 1;
+            b[5].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+
+            VkDescriptorSetLayoutCreateInfo dlci{};
+            dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            dlci.bindingCount = static_cast<uint32_t>(b.size());
+            dlci.pBindings    = b.data();
+            check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &debugResolveDsLayout_),
+                  "vkCreateDescriptorSetLayout(debug_resolve)");
+
+            VkPushConstantRange pcr{};
+            pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            pcr.offset     = 0;
+            pcr.size       = sizeof(DebugResolvePC);
+
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount         = 1;
+            plci.pSetLayouts            = &debugResolveDsLayout_;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &pcr;
+            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &debugResolvePipelineLayout_),
+                  "vkCreatePipelineLayout(debug_resolve)");
+
+            VkShaderModuleCreateInfo smci{};
+            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            smci.codeSize = sizeof(kDebugResolveCompSpv);
+            smci.pCode    = kDebugResolveCompSpv;
+            VkShaderModule mod = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &mod),
+                  "vkCreateShaderModule(debug_resolve)");
+
+            VkPipelineShaderStageCreateInfo ssci{};
+            ssci.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            ssci.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            ssci.module = mod;
+            ssci.pName  = "main";
+
+            VkComputePipelineCreateInfo cpci{};
+            cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            cpci.stage  = ssci;
+            cpci.layout = debugResolvePipelineLayout_;
+            check(vkCreateComputePipelines(ctx->device(), ctx->pipelineCache(), 1, &cpci, nullptr, &debugResolvePipeline_),
+                  "vkCreateComputePipelines(debug_resolve)");
+            vkDestroyShaderModule(ctx->device(), mod, nullptr);
+
+            std::array<VkDescriptorPoolSize, 2> ps{};
+            ps[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            ps[0].descriptorCount = 5;// normal/motion/ids/albedo + depth
+            ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            ps[1].descriptorCount = 1;
+            VkDescriptorPoolCreateInfo dpci{};
+            dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            dpci.maxSets       = 1;
+            dpci.poolSizeCount = static_cast<uint32_t>(ps.size());
+            dpci.pPoolSizes    = ps.data();
+            check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &debugResolveDescPool_),
+                  "vkCreateDescriptorPool(debug_resolve)");
+            VkDescriptorSetAllocateInfo dsai{};
+            dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            dsai.descriptorPool     = debugResolveDescPool_;
+            dsai.descriptorSetCount = 1;
+            dsai.pSetLayouts        = &debugResolveDsLayout_;
+            check(vkAllocateDescriptorSets(ctx->device(), &dsai, &debugResolveDescSet_),
+                  "vkAllocateDescriptorSets(debug_resolve)");
+        }
+
+        // Debug visualization: sample one G-buffer channel and write a
+        // readable RGB image straight to the swapchain via debug_resolve.comp.
+        // Replaces the old raw vkCmdBlitImage, which could only show the
+        // world-normal attachment: a blit cannot bias the SIGNED motion vector
+        // (it clamped to near-black) and is INVALID from the integer ids
+        // attachment (R16G16B16A16_UINT) into the UNORM swapchain (the Vulkan
+        // spec forbids integer<->non-integer blits). The gbuf attachments are
+        // in SHADER_READ_ONLY_OPTIMAL here (the gbuffer render pass declares a
+        // COMPUTE consumer dependency, same as the deferred / event-shade
+        // consumers), so no gbuf barrier is needed — we only move the
+        // freshly-acquired swapchain image to GENERAL for the storage write
+        // and leave it there, the exact exit contract the full PT path uses so
+        // endFrame()'s shared overlay/present finalize is unchanged.
+        void recordHybridDebugResolve(VkCommandBuffer cb, uint32_t imageIndex, uint32_t frame) {
+            if (hybridDebugView_ == HybridDebugView::Off) return;
+            createDebugResolvePipeline();
+
             const auto& g = rasterGbufs[frame];
-            VkImage src = VK_NULL_HANDLE;
-            VkImageLayout srcLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            // Map the public view enum to the shader's compact code. Depth is
+            // not reachable from setHybridDebugView (1..4) and has no sampled
+            // path here, so anything else falls through to the normal view.
+            uint32_t viewCode = 1;// Normal
             switch (hybridDebugView_) {
-                case HybridDebugView::Normal: src = g.normal.image; break;
-                case HybridDebugView::Motion: src = g.motion.image; break;
-                case HybridDebugView::Depth:  src = g.depth.image;
-                                              srcLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                                              break;
-                case HybridDebugView::Ids:    src = g.ids.image; break;
-                case HybridDebugView::Albedo: src = g.albedo.image; break;
-                default: return;
-            }
-            if (src == VK_NULL_HANDLE) return;
-
-            VkImage dst = ctx->swapchainImages()[imageIndex];
-
-            // Transition src to TRANSFER_SRC_OPTIMAL, dst (already in GENERAL
-            // from raygen path's preBarriers) to TRANSFER_DST_OPTIMAL.
-            VkImageMemoryBarrier2 toSrc{};
-            toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            toSrc.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                  VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-            toSrc.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
-                                  VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            toSrc.dstStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
-            toSrc.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-            toSrc.oldLayout = srcLayout;
-            toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            toSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toSrc.image = src;
-            toSrc.subresourceRange.aspectMask =
-                    (hybridDebugView_ == HybridDebugView::Depth)
-                            ? VK_IMAGE_ASPECT_DEPTH_BIT
-                            : VK_IMAGE_ASPECT_COLOR_BIT;
-            toSrc.subresourceRange.levelCount = 1;
-            toSrc.subresourceRange.layerCount = 1;
-
-            VkImageMemoryBarrier2 toDst{};
-            toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            toDst.srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            toDst.srcAccessMask = 0;
-            toDst.dstStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
-            toDst.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toDst.image = dst;
-            toDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            toDst.subresourceRange.levelCount = 1;
-            toDst.subresourceRange.layerCount = 1;
-
-            VkImageMemoryBarrier2 pre[2] = {toSrc, toDst};
-            VkDependencyInfo depPre{};
-            depPre.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            depPre.imageMemoryBarrierCount = 2;
-            depPre.pImageMemoryBarriers = pre;
-            vkCmdPipelineBarrier2(cb, &depPre);
-
-            const VkExtent2D ext = ctx->swapchainExtent();
-            VkImageBlit blit{};
-            blit.srcSubresource.aspectMask = toSrc.subresourceRange.aspectMask;
-            blit.srcSubresource.layerCount = 1;
-            blit.srcOffsets[1] = {int32_t(g.width), int32_t(g.height), 1};
-            blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            blit.dstSubresource.layerCount = 1;
-            blit.dstOffsets[1] = {int32_t(ext.width), int32_t(ext.height), 1};
-            // For depth, the swapchain doesn't accept a depth blit directly;
-            // depth is informational so we'd need a tiny resolve shader. Skip
-            // that for stage 1 — Normal/Motion/Ids are the visually useful views.
-            if (hybridDebugView_ != HybridDebugView::Depth) {
-                vkCmdBlitImage(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                               1, &blit, VK_FILTER_NEAREST);
+                case HybridDebugView::Motion: viewCode = 2; break;
+                case HybridDebugView::Ids:    viewCode = 3; break;
+                case HybridDebugView::Albedo: viewCode = 4; break;
+                case HybridDebugView::Depth:  viewCode = 5; break;
+                default:                      viewCode = 1; break;
             }
 
-            // Restore src attachment to its original SHADER_READ layout (so
-            // raygen can sample on the next frame), and bring dst (the
-            // swapchain) to GENERAL — the SAME exit layout the full PT path
-            // leaves behind. The caller returns immediately after this, so
-            // endFrame()'s recordOverlayAndPresentTransition (which assumes
-            // GENERAL) composites the overlay and does the single PRESENT_SRC
-            // transition uniformly with the PT path. Leaving dst in
-            // TRANSFER_DST here (the old behavior) collided with that unified
-            // finalize — double vkEndCommandBuffer + a GENERAL-vs-TRANSFER_DST
-            // layout mismatch that crashed the --shot writeFramebuffer readback.
-            VkImageMemoryBarrier2 toShaderRead{};
-            toShaderRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            toShaderRead.srcStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
-            toShaderRead.srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-            toShaderRead.dstStageMask  = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-            toShaderRead.dstAccessMask = 0;
-            toShaderRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            toShaderRead.newLayout = srcLayout;
-            toShaderRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toShaderRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toShaderRead.image = src;
-            toShaderRead.subresourceRange.aspectMask = toSrc.subresourceRange.aspectMask;
-            toShaderRead.subresourceRange.levelCount = 1;
-            toShaderRead.subresourceRange.layerCount = 1;
+            auto img = [&](VkImageView view) {
+                VkDescriptorImageInfo info{};
+                info.sampler     = gbufSampler_;
+                info.imageView   = view;
+                info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                return info;
+            };
+            VkDescriptorImageInfo normalInfo = img(g.normal.view);
+            VkDescriptorImageInfo motionInfo = img(g.motion.view);
+            VkDescriptorImageInfo idsInfo    = img(g.ids.view);
+            VkDescriptorImageInfo albedoInfo = img(g.albedo.view);
 
-            // dst: TRANSFER_DST_OPTIMAL → GENERAL. For the Depth view the blit
-            // above is skipped, but toDst still moved dst to TRANSFER_DST, so
-            // this transition is valid for every view. dstStage/access mirror
-            // the ortho-only clear path's TRANSFER_DST→GENERAL transition so the
-            // downstream overlay/present/readback all observe a settled image.
+            // Depth is a depth-aspect image; it rests in DEPTH_STENCIL_READ_ONLY
+            // (the gbuffer render pass's depth finalLayout), not the colour
+            // SHADER_READ_ONLY the img() helper uses.
+            VkDescriptorImageInfo depthInfo{};
+            depthInfo.sampler     = gbufSampler_;
+            depthInfo.imageView   = g.depth.view;
+            depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+            VkDescriptorImageInfo outInfo{};
+            outInfo.imageView   = ctx->swapchainImageViews()[imageIndex];
+            outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+            std::array<VkWriteDescriptorSet, 6> w{};
+            for (auto& it : w) it.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            const VkDescriptorImageInfo* imgs[4] = {&normalInfo, &motionInfo, &idsInfo, &albedoInfo};
+            for (uint32_t i = 0; i < 4; ++i) {
+                w[i].dstSet          = debugResolveDescSet_;
+                w[i].dstBinding      = i;
+                w[i].descriptorCount = 1;
+                w[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w[i].pImageInfo      = imgs[i];
+            }
+            w[4].dstSet          = debugResolveDescSet_;
+            w[4].dstBinding      = 4;
+            w[4].descriptorCount = 1;
+            w[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[4].pImageInfo      = &outInfo;
+            w[5].dstSet          = debugResolveDescSet_;
+            w[5].dstBinding      = 5;
+            w[5].descriptorCount = 1;
+            w[5].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[5].pImageInfo      = &depthInfo;
+            vkUpdateDescriptorSets(ctx->device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
+
+            // Freshly-acquired swapchain image (contents undefined) → GENERAL
+            // for the compute storage write.
             VkImageMemoryBarrier2 toGeneral{};
             toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            toGeneral.srcStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
-            toGeneral.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            toGeneral.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                      VK_PIPELINE_STAGE_2_TRANSFER_BIT |
-                                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-            toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                      VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                      VK_ACCESS_2_TRANSFER_READ_BIT |
-                                      VK_ACCESS_2_TRANSFER_WRITE_BIT |
-                                      VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
-                                      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-            toGeneral.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toGeneral.srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            toGeneral.srcAccessMask = 0;
+            toGeneral.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            toGeneral.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
             toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toGeneral.image = dst;
+            toGeneral.image = ctx->swapchainImages()[imageIndex];
             toGeneral.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             toGeneral.subresourceRange.levelCount = 1;
             toGeneral.subresourceRange.layerCount = 1;
+            VkDependencyInfo dep{};
+            dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dep.imageMemoryBarrierCount = 1;
+            dep.pImageMemoryBarriers = &toGeneral;
+            vkCmdPipelineBarrier2(cb, &dep);
 
-            VkImageMemoryBarrier2 post[2] = {toShaderRead, toGeneral};
-            VkDependencyInfo depPost{};
-            depPost.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            depPost.imageMemoryBarrierCount = 2;
-            depPost.pImageMemoryBarriers = post;
-            vkCmdPipelineBarrier2(cb, &depPost);
+            const VkExtent2D ext = ctx->swapchainExtent();
+            DebugResolvePC pc{};
+            pc.view       = viewCode;
+            pc.width      = ext.width;
+            pc.height     = ext.height;
+            pc.gbufWidth  = g.width;
+            pc.gbufHeight = g.height;
+            pc.motionGain = 20.0f;// signed NDC delta is tiny; scale for visibility
+
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, debugResolvePipeline_);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    debugResolvePipelineLayout_, 0, 1, &debugResolveDescSet_, 0, nullptr);
+            vkCmdPushConstants(cb, debugResolvePipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(pc), &pc);
+            vkCmdDispatch(cb, (ext.width + 7) / 8, (ext.height + 7) / 8, 1);
+            // Swapchain left in GENERAL — the shared overlay/present finalize
+            // expects exactly that.
         }
 
         void createLightsUbos() {
@@ -13478,7 +13586,7 @@ namespace threepp {
                     // uniformly. This keeps the --shot writeFramebuffer readback
                     // (which expects PRESENT_SRC) consistent and avoids the
                     // double vkEndCommandBuffer the bespoke finalize used to do.
-                    recordHybridDebugBlit(cb, imageIndex, currentFrame);
+                    recordHybridDebugResolve(cb, imageIndex, currentFrame);
                     return;
                 }
             }
@@ -15357,7 +15465,22 @@ namespace threepp {
         pimpl_->toneMapping_         = toneMapping;
         pimpl_->toneMappingExposure_ = toneMappingExposure;
         pimpl_->autoClear_           = autoClear;
-        // Only the PT-bound (perspective-camera) render() call needs the
+        // A split-screen secondary pane — a second perspective render() into a
+        // scissor sub-rect while a frame is already in flight — composes
+        // overlay-only (Points / Lines / Sprites) into that region and must NOT
+        // run the scene-build pass. renderFrame already routes it to the
+        // overlay-only path (its matching condition below), but the open frame's
+        // command buffer still has the PRIMARY pane's TLAS + scene-desc buffers
+        // bound: ensureSceneBuilt's structural-rebuild branch (a different scene
+        // ⇒ snapshot mismatch ⇒ fullRebuild) tears those down mid-frame, which
+        // invalidates the recording command buffer and surfaces as a device-lost
+        // at the next buildTlas one-shot. OverlayPass::record updates the
+        // scene/camera matrices itself, so skipping the build here is matrix-safe.
+        const bool secondaryOverlayPane =
+                pimpl_->frameState_ != Impl::FrameState::Idle &&
+                pimpl_->scissorTest &&
+                pimpl_->scissor.z >= 1.f && pimpl_->scissor.w >= 1.f;
+        // Only the PT-bound (perspective-camera) primary render() call needs the
         // scene-build pass — it populates lastVisibleEntries_, the BLAS
         // cache, motion bits and the per-mesh fingerprint state the PT
         // pipeline reads. The HUD pattern's second call (ortho camera over
@@ -15365,7 +15488,7 @@ namespace threepp {
         // motionThisFrame_ / meshMovedBits_ / lastVisibleEntries_ and the
         // next PT frame cold-starts (visibly drops to ~1-spp quality).
         // The ortho overlay record path walks the HUD scene directly instead.
-        if (!camera.is<OrthographicCamera>()) {
+        if (!camera.is<OrthographicCamera>() && !secondaryOverlayPane) {
             const auto sceneStart = std::chrono::high_resolution_clock::now();
             pimpl_->ensureSceneBuilt(scene);
             // World-space Sprites (screenSpace == false) are drawn by the overlay
@@ -16046,6 +16169,7 @@ namespace threepp {
             case 2:  pimpl_->hybridDebugView_ = V::Motion; break;
             case 3:  pimpl_->hybridDebugView_ = V::Ids;    break;
             case 4:  pimpl_->hybridDebugView_ = V::Albedo; break;
+            case 5:  pimpl_->hybridDebugView_ = V::Depth;  break;
             default: pimpl_->hybridDebugView_ = V::Off;    break;
         }
     }

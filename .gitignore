@@ -6,6 +6,12 @@ build
 cmake-build-*
 compile_commands.json
 
+# Python packaging / wheel-build artifacts (scikit-build-core)
+dist/
+wheelhouse/
+*.egg-info/
+__pycache__/
+
 
 *.bin
 *.weights
@@ -24,6 +30,9 @@ temp/
 
 #folder used locally for capturing screenshots of the rendered output, not needed in the repo
 aaa_caps
+
+# Local planning / strategy scratch docs — kept on disk, not tracked
+plans/
 
 # Local scratch capture/repro/profiling harnesses: auto-built (examples/vulkan/CMakeLists.txt
 # globs scratch/*.cpp) but never tracked. Only the README is committed, to document the convention.

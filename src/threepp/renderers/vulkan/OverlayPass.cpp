@@ -882,7 +882,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         if (!sp) return;
         if (screenSpaceOnly && !sp->screenSpace) return;
         auto mat = sp->material();
-        if (!mat) return;
+        if (!mat || !mat->visible) return;
         auto* mm = dynamic_cast<MaterialWithMap*>(mat.get());
         if (!mm || !mm->map) return;
         SpriteDraw d;
@@ -938,6 +938,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         scene.traverseVisible([&](Object3D& o) {
             auto* ln = dynamic_cast<Line*>(&o);
             if (!ln) return;
+            if (auto mat = ln->material(); mat && !mat->visible) return;
             auto g = ln->geometry();
             if (!g || !g->hasAttribute("position")) return;
             OrthoLineDraw ld;
@@ -967,7 +968,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
             auto g = m->geometry();
             if (!g || !g->hasAttribute("position")) return;
             auto mat = m->material();
-            if (!mat) return;
+            if (!mat || !mat->visible) return;
             OrthoMeshDraw md;
             md.mesh = m;
             std::memcpy(md.world.elements.data(), m->matrixWorld->elements.data(), 64);
@@ -993,6 +994,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         scene.traverseVisible([&](Object3D& o) {
             auto* p = dynamic_cast<Points*>(&o);
             if (!p) return;
+            if (auto mat = p->material(); mat && !mat->visible) return;
             auto g = p->geometry();
             if (!g || !g->hasAttribute("position") || !g->hasAttribute("color")) return;
             OrthoPointDraw pd;

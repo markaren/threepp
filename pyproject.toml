@@ -1,0 +1,59 @@
+# Python packaging for the `threepp` extension module. Builds the pybind11
+# bindings (GL backend) into a self-contained wheel via scikit-build-core, which
+# drives the existing CMake build.
+#
+#   pip install .                      # build + install from source
+#   pip wheel . --no-deps -w dist      # build a redistributable wheel
+#
+# The wheel is GL-only by design: the Vulkan path-tracer (needs the Vulkan SDK +
+# a GPU) and the PhysX direct-GPU RL backend (needs vcpkg + GPU DLLs) remain
+# opt-in source builds — configure CMake directly with -DTHREEPP_WITH_VULKAN=ON
+# / the PhysX SDK hint for those.
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "threepp"
+version = "0.1.0"
+description = "three.js-style 3D scene authoring and rendering for Python (OpenGL, headless render-to-numpy)"
+readme = "python/README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Lars Ivar Hatledal", email = "laht@ntnu.no" }]
+keywords = ["3d", "graphics", "opengl", "rendering", "threejs", "scene-graph", "visualization", "robotics", "synthetic-data"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "Topic :: Multimedia :: Graphics :: 3D Rendering",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Operating System :: OS Independent",
+]
+dependencies = ["numpy"]
+
+# `pip install threepp[rl]` adds the owned PPO trainer's dependency. (GpuSim
+# itself additionally requires a PhysX-enabled source build.)
+[project.optional-dependencies]
+rl = ["torch"]
+
+[project.urls]
+Homepage = "https://github.com/markaren/threepp"
+Source = "https://github.com/markaren/threepp"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+# Build only the Python module (and its deps), not the C++ examples/tests, and
+# install only the package files (the python_module component from CMake).
+build.targets = ["threepp_py"]
+install.components = ["python_module"]
+wheel.packages = []
+cmake.version = ">=3.19"
+cmake.args = [
+    "-DTHREEPP_WITH_PYTHON=ON",
+    "-DTHREEPP_BUILD_EXAMPLES=OFF",
+    "-DTHREEPP_BUILD_TESTS=OFF",
+    "-DTHREEPP_WITH_AUDIO=OFF",
+    "-DPYBIND11_FINDPYTHON=ON",
+]

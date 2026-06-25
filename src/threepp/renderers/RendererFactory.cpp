@@ -23,12 +23,22 @@ namespace threepp {
         GraphicsAPI chosen = api.value_or(GraphicsAPI::OpenGL);
 
         if (!api.has_value()) {
+#ifdef __EMSCRIPTEN__
+            // The browser has no interactive console: reading std::cin triggers a
+            // blocking window.prompt() popup (or hangs the demo). Skip the menu and
+            // keep the default backend. Pass an explicit GraphicsAPI to override.
+#  ifdef THREEPP_WITH_WGPU
+            chosen = GraphicsAPI::WebGPU;
+#  else
+            chosen = GraphicsAPI::OpenGL;
+#  endif
+#else
             std::cout << "Select renderer:\n  [1] OpenGL (default)";
 #ifdef THREEPP_WITH_WGPU
             std::cout << "\n  [2] WebGPU\n  [3] Cross (GL left, WGPU right)";
 #endif
 #ifdef THREEPP_WITH_VULKAN
-            std::cout << "\n  [4] Vulkan Path-tracer";
+            std::cout << "\n  [4] Vulkan Deferred renderer";
 #endif
             std::cout << "\n  [0] Abort and Exit\n> ";
             std::string line;
@@ -49,6 +59,7 @@ namespace threepp {
                 std::cout << "Aborting.\n";
                 std::exit(0);
             }
+#endif// __EMSCRIPTEN__
         }
 
         if (chosen == GraphicsAPI::WebGPU) {

@@ -1,0 +1,73 @@
+name: Deploy WASM examples to GitHub Pages
+
+# Builds the Emscripten (WebGL2) examples and publishes build/bin — which
+# contains every web example plus the generated index.html — to GitHub Pages.
+# Runs on every push to master; can also be triggered manually from the Actions
+# tab (workflow_dispatch works from any branch, useful for previewing).
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+# Permissions required by the official GitHub Pages deploy actions.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one Pages deployment at a time. Don't cancel an in-progress deploy —
+# let production deployments finish; newer queued runs supersede older ones.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    env:
+      CC: gcc-11
+      CXX: g++-11
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+          libxinerama-dev \
+          libxcursor-dev \
+          xorg-dev \
+          libglu1-mesa-dev \
+          pkg-config
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 5.0.6
+          actions-cache-folder: 'emsdk-cache'
+
+      - name: Configure and build (Emscripten / WebGL2)
+        run: |
+          cmake . -B build \
+            -DCMAKE_TOOLCHAIN_FILE=${{env.EMSDK}}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake \
+            -DTHREEPP_BUILD_TESTS=OFF \
+            -DTHREEPP_FETCH_ASSIMP=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/bin
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

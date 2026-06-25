@@ -92,6 +92,37 @@ namespace threepp {
             // solver. Needs a CUDA-capable GPU and the omniverse-physx GPU library
             // (gpu-library is copied next to the example by AddExample.cmake).
             bool enableGpuDynamics = false;
+            // Enable the PhysX direct-GPU API (eENABLE_DIRECT_GPU_API). Implies
+            // enableGpuDynamics. Lets articulation state be read/written as CUDA
+            // device buffers in bulk (zero-copy to e.g. a torch CUDA tensor) — the
+            // basis for GPU-resident vectorized RL (see PhysxGpuBatch). NOTE: when on,
+            // the per-actor CPU getters/setters (getGlobalPose, getJointPosition,
+            // setDriveTarget, ...) and the binding-sync step() are NOT valid; all
+            // runtime state I/O must go through the direct-GPU batch instead.
+            bool enableDirectGpu = false;
+            // Use the TGS solver + PCM narrowphase + stabilization on a CPU world.
+            // The GPU path (enableGpuDynamics) ALWAYS uses these; a pure-CPU world
+            // otherwise defaults to PGS, no PCM, no stabilization. Set this so a CPU
+            // world's CONTACT MODEL matches a GPU-trained policy — PGS-vs-TGS and the
+            // PCM difference change the effective friction / penetration recovery a
+            // policy sees, which is a primary sim-to-sim (GPU train -> CPU deploy)
+            // transfer gap. No effect (already implied) when enableGpuDynamics is set.
+            bool enableTgsPcm = false;
+            // Existing CUDA context for PhysX to adopt (instead of creating its own).
+            // Pass the host framework's context (e.g. PyTorch's device primary context)
+            // so PhysX and that framework share ONE context — required for correctness
+            // when both run CUDA work on the same device (a separate PhysX context leaves
+            // cuBLAS/cuDNN unable to launch: CUBLAS_STATUS_INTERNAL_ERROR). Must be the
+            // current context on this thread when the world is constructed.
+            CUcontext cudaContext = nullptr;
+            // GPU solver memory sizing (only used when enableGpuDynamics). The
+            // defaults are tuned for a handful of bodies; thousands of articulations
+            // need bigger pools or the GPU pipeline silently drops contacts / errors.
+            unsigned gpuMaxRigidContacts = 1u << 20;
+            unsigned gpuMaxRigidPatches = 1u << 20;
+            unsigned gpuFoundLostPairsCapacity = 1u << 18;
+            unsigned gpuTempBufferCapacityMB = 16;
+            unsigned gpuHeapCapacityMB = 64;
         };
 
         PhysxWorld() : PhysxWorld(Settings{}) {}
@@ -100,6 +131,10 @@ namespace threepp {
             : settings_(s) {
 
             using namespace ::physx;
+
+            // Direct-GPU implies GPU dynamics; normalize before any of the setup below
+            // branches on enableGpuDynamics.
+            if (settings_.enableDirectGpu) settings_.enableGpuDynamics = true;
 
             foundation_ = PxCreateFoundation(PX_PHYSICS_VERSION, allocator_, errorCallback_);
             if (!foundation_) throw std::runtime_error("PxCreateFoundation failed");
@@ -115,6 +150,10 @@ namespace threepp {
 
             if (settings_.enableGpuDynamics) {
                 PxCudaContextManagerDesc cudaDesc;
+                // Adopt the caller's context (e.g. PyTorch's) when provided, so both
+                // share a single CUDA context on the device.
+                CUcontext sharedCtx = settings_.cudaContext;
+                if (sharedCtx) cudaDesc.ctx = &sharedCtx;
                 cuda_ = PxCreateCudaContextManager(*foundation_, cudaDesc, PxGetProfilerCallback());
                 if (cuda_ && !cuda_->contextIsValid()) {
                     cuda_->release();
@@ -134,14 +173,32 @@ namespace threepp {
             desc.gravity = toPxVec3(settings_.gravity);
             desc.cpuDispatcher = dispatcher_;
             desc.filterShader = PxDefaultSimulationFilterShader;
+            // TGS solver + PCM narrowphase + stabilization. The GPU pipeline requires
+            // these; a CPU world opts in via enableTgsPcm so its contact model matches
+            // a GPU-trained policy (the GPU-only flags below stay gated separately).
+            if (settings_.enableGpuDynamics || settings_.enableTgsPcm) {
+                desc.solverType = PxSolverType::eTGS;
+                desc.flags |= PxSceneFlag::eENABLE_PCM;
+                desc.flags |= PxSceneFlag::eENABLE_STABILIZATION;
+            }
             if (settings_.enableGpuDynamics) {
                 desc.cudaContextManager = cuda_;
                 desc.flags |= PxSceneFlag::eENABLE_GPU_DYNAMICS;
-                desc.flags |= PxSceneFlag::eENABLE_PCM;
-                desc.flags |= PxSceneFlag::eENABLE_STABILIZATION;
                 desc.broadPhaseType = PxBroadPhaseType::eGPU;
                 desc.gpuMaxNumPartitions = 8;
-                desc.solverType = PxSolverType::eTGS;
+                // Size the GPU solver pools for many articulations (RL swarms).
+                desc.gpuDynamicsConfig.maxRigidContactCount = settings_.gpuMaxRigidContacts;
+                desc.gpuDynamicsConfig.maxRigidPatchCount = settings_.gpuMaxRigidPatches;
+                desc.gpuDynamicsConfig.foundLostPairsCapacity = settings_.gpuFoundLostPairsCapacity;
+                desc.gpuDynamicsConfig.tempBufferCapacity =
+                        static_cast<PxU32>(settings_.gpuTempBufferCapacityMB) * 1024u * 1024u;
+                desc.gpuDynamicsConfig.heapCapacity =
+                        static_cast<PxU32>(settings_.gpuHeapCapacityMB) * 1024u * 1024u;
+                // Direct-GPU API: read/write actor + articulation state as CUDA buffers
+                // with no CPU readback. Requires GPU dynamics + GPU broadphase (set above).
+                if (settings_.enableDirectGpu) {
+                    desc.flags |= PxSceneFlag::eENABLE_DIRECT_GPU_API;
+                }
             }
             scene_ = physics_->createScene(desc);
             if (!scene_) throw std::runtime_error("createScene failed");
@@ -246,6 +303,20 @@ namespace threepp {
                     std::remove_if(instBindings_.begin(), instBindings_.end(),
                                    [&](const InstBinding& b) { return b.mesh == &mesh; }),
                     instBindings_.end());
+        }
+
+        // Remove a body (static or dynamic) from the world: drop any mesh binding that mirrors it, take it
+        // out of the scene, and release it. The PxRigidActor* dangles afterwards — the caller must not reuse
+        // a RigidBody handle to a removed actor. Use e.g. to rebuild geometry (a configurable staircase)
+        // without recreating the whole world.
+        void removeActor(::physx::PxRigidActor* actor) {
+            if (!actor) return;
+            objBindings_.erase(
+                    std::remove_if(objBindings_.begin(), objBindings_.end(),
+                                   [&](const ObjBinding& b) { return b.actor == actor; }),
+                    objBindings_.end());
+            scene_->removeActor(*actor);
+            actor->release();
         }
 
         // Low-level: explicit geometry + transform. Use when shape can't be inferred
@@ -498,6 +569,17 @@ namespace threepp {
         // CUDA context — non-null only when Settings::enableGpuDynamics was set.
         // Required for soft bodies, particle systems, and GPU broadphase.
         ::physx::PxCudaContextManager* cudaContextManager() const { return cuda_; }
+
+        const Settings& settings() const { return settings_; }
+        bool directGpuEnabled() const { return settings_.enableDirectGpu; }
+
+        // Raw fixed-rate substep with no binding sync — simulate() + fetchResults().
+        // Use under direct-GPU (where the binding-sync step() is invalid); state is
+        // read/written through PhysxGpuBatch rather than CPU getters.
+        void simulateRaw(float dt) {
+            scene_->simulate(dt);
+            scene_->fetchResults(true);
+        }
 
         void setGravity(const Vector3& g) {
             settings_.gravity = g;

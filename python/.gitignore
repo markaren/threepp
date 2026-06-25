@@ -1,0 +1,26 @@
+# Built extension module (produced by the threepp_py CMake target)
+*.pyd
+*.so
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Example/render outputs
+render*.png
+*_smoke.png
+
+examples/*.png
+examples/*.npy
+demo_cube.stl
+
+# Legacy artifacts from the experimental RL branch (not part of this package)
+*.dll
+*.zip
+*.log
+
+# RL artifacts (VecNormalize stats, etc.)
+*.pkl
+
+*.ilk
+*.pdb
