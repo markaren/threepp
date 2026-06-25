@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "spot"))
 
 import threepp as tp
 from spot_deploy import fetch_assets
-from spot_terrain_env import ACT_DIM, CONFIG, HIDDEN, SpotTerrainEnv
+from spot_terrain_env import ACT_DIM, CONFIG, HIDDEN, N_DX, N_DY, N_SCAN, SCAN_CENTER, SpotTerrainEnv
 from threepp.rl import PPO, load_policy
 
 
@@ -49,6 +49,32 @@ def warmstart_from_isaac(ac, policy_path, n_proprio=48, device="cuda"):
                 dst.weight.copy_(w)
             dst.bias.copy_(b)
     print(f"warm-started actor from {os.path.basename(policy_path)} (terrain input cols zero-init)")
+
+
+def warmstart_expand_scan(ac, old_path, device="cuda"):
+    """Transfer a trained 1-D-scan policy (old obs: 48 proprio + base_above + 9 forward-scan) into the new
+    AC whose obs carries the 2-D scan GRID. Copy proprio + base_above verbatim, map each old forward-scan
+    column onto the new grid's CENTERLINE row (dy=0), and zero-init the lateral columns -> the policy BEGINS
+    bit-identical to the old walker (lateral cols contribute nothing) and only learns to exploit the lateral
+    scan. Expands the input layer of BOTH actor and critic; deeper layers + log_std copy directly. Both
+    sides use raw obs (normalize_obs=False), so no RunningNorm transfer."""
+    old, _, _ = load_policy(old_path, device=device)
+    HEAD = 48 + 1                                  # proprio (48) + base_above (1), copied as-is
+    with torch.no_grad():
+        for dst_net, src_net in ((ac.actor, old.actor), (ac.critic, old.critic)):
+            for li in (0, 2, 4, 6):                # Linear layers (ELU between); index 0 is the input layer
+                dst, src = dst_net[li], src_net[li]
+                if li == 0:
+                    dst.weight.zero_()
+                    dst.weight[:, :HEAD].copy_(src.weight[:, :HEAD])                    # proprio + base_above
+                    for fi in range(N_DX):                                              # old forward probe fi ...
+                        dst.weight[:, HEAD + fi * N_DY + SCAN_CENTER].copy_(src.weight[:, HEAD + fi])  # ... -> grid centerline cell
+                    dst.bias.copy_(src.bias)
+                else:
+                    dst.weight.copy_(src.weight); dst.bias.copy_(src.bias)
+        ac.log_std.copy_(old.log_std)
+    print(f"warm-started (1-D->2-D scan transfer) from {os.path.basename(old_path)}: centerline row copied, "
+          f"{N_SCAN - N_DX} lateral scan cols zero-init (policy begins == the 1-D climber)")
 
 
 @torch.no_grad()

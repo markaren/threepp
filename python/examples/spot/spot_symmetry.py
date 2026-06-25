@@ -1,4 +1,4 @@
-"""Left-right symmetry mirror for the spotv2 58-d obs / 12-d action (Isaac joint order).
+"""Left-right symmetry mirror for the spotv2 obs (OBS_DIM) / 12-d action (Isaac joint order).
 
 The learned gait drifts right (~0.05 m/s lateral bias at zero strafe command) and strafe tracking
 regressed — both are a left/right asymmetry the symmetric reward didn't iron out. The fix is symmetry
@@ -13,7 +13,8 @@ Mirror = reflection across the body x-z plane (y -> -y):
   cmd [vx,vy,wz]     -> [vx,-vy,-wz]       (lateral vel + yaw rate negate)
   joints (qpos/qvel/last_act/action, Isaac order): swap L<->R legs, negate hip-x (abduction)
   base_above         -> unchanged
-  scan (1-D forward) -> unchanged          (probes along heading, on the centerline -> symmetric)
+  scan (2-D grid)    -> SWAP left<->right lateral columns within each forward row (y -> -y maps a grid
+                        cell to its lateral mirror; SCAN_MIRROR_PERM, an involution, from spot_terrain_env)
 """
 import os
 import sys
@@ -25,6 +26,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "spot"))
+
+from spot_terrain_env import OBS_DIM, N_SCAN, SCAN_MIRROR_PERM   # 2-D scan contract (single source of truth)
+
+_SCAN0 = 49   # scan columns start after 48 proprio + 1 base_above
 
 # Isaac joint order: [fl_hx,fr_hx,hl_hx,hr_hx, fl_hy,fr_hy,hl_hy,hr_hy, fl_kn,fr_kn,hl_kn,hr_kn].
 # Mirror swaps fl<->fr and hl<->hr within each (hx,hy,kn) group; the hip-x (abduction) joints negate.
@@ -43,6 +48,7 @@ def _consts(device):
             "lin": torch.tensor([1.0, -1.0, 1.0], device=device),     # true vector: -y
             "ang": torch.tensor([-1.0, 1.0, -1.0], device=device),    # pseudovector: -x,-z
             "cmd": torch.tensor([1.0, -1.0, -1.0], device=device),    # -vy, -wz
+            "scan": torch.tensor(SCAN_MIRROR_PERM, dtype=torch.long, device=device),   # lateral-column swap
         }
     return _CACHE[key]
 
@@ -52,7 +58,7 @@ def mirror_joints(q, c):
 
 
 def mirror_obs(obs):
-    """Mirror the 58-d observation left<->right. obs [..., 58]."""
+    """Mirror the OBS_DIM observation left<->right. obs [..., OBS_DIM]."""
     c = _consts(obs.device)
     o = obs.clone()
     o[..., 0:3] = obs[..., 0:3] * c["lin"]      # lin_b
@@ -62,7 +68,8 @@ def mirror_obs(obs):
     o[..., 12:24] = mirror_joints(obs[..., 12:24], c)   # qpos (Isaac)
     o[..., 24:36] = mirror_joints(obs[..., 24:36], c)   # qvel
     o[..., 36:48] = mirror_joints(obs[..., 36:48], c)   # last_act
-    # [48:49] base_above and [49:58] forward scan are unchanged
+    # [48:49] base_above unchanged; [49:49+N_SCAN] 2-D scan grid: swap left<->right lateral columns
+    o[..., _SCAN0:_SCAN0 + N_SCAN] = obs[..., _SCAN0:_SCAN0 + N_SCAN][..., c["scan"]]
     return o
 
 
@@ -88,7 +95,7 @@ def make_aux_loss(coef):
 if __name__ == "__main__":
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     # 1) involution: mirroring twice returns the original
-    x = torch.randn(64, 58, device=dev)
+    x = torch.randn(64, OBS_DIM, device=dev)
     err_obs = (mirror_obs(mirror_obs(x)) - x).abs().max().item()
     a = torch.randn(64, 12, device=dev)
     err_act = (mirror_act(mirror_act(a)) - a).abs().max().item()

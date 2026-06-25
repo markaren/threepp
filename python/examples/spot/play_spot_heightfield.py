@@ -1,8 +1,8 @@
-"""Watch the spotv2 policy DRIVE on the SMOOTH heightfield terrain — single Spot, CPU deploy + render,
-hot-reloading the checkpoint as train_spot_heightfield.py writes it. Steer it and watch it track.
+"""Watch the spotv2 policy roam a BIG, ROUGH heightfield patch — single Spot, CPU deploy + render,
+hot-reloading the checkpoint as it trains. Steer anywhere across the patch and watch it stay upright.
 
-    python play_spot_heightfield.py                  # live; hot-reloads spot_hf_latest.pt
-    python play_spot_heightfield.py --model spot_hf.pt
+    python play_spot_heightfield.py                  # live; hot-reloads spot_steps.pt (default --model)
+    python play_spot_heightfield.py --model spot_hf.pt --amp 0.30
     python play_spot_heightfield.py --check 400      # headless smoke
 
 DRIVE (body frame, +x fwd / +y left):
@@ -11,8 +11,9 @@ DRIVE (body frame, +x fwd / +y left):
     turn  L  N / KP7         turn  R  M / KP9
     R = reset    (ImGui: amplitude + shape-seed sliders, auto-forward, heading-hold)
 
-The terrain is a real continuous triangle-mesh heightfield (Python soup -> add_static_trimesh), smooth in
-x AND y. Obs is the 58-d SpotHeightfieldEnv layout (heading-relative scan + bilinear height). tgs_pcm/0.005.
+The terrain is a big continuous triangle-mesh heightfield (20 m x 16 m, Python soup -> add_static_trimesh),
+smooth in x AND y but harder than the training tile (shorter rotated octaves, amplitude to 0.45 m). Obs is
+the 94-d SpotHeightfieldEnv layout (heading-relative 2-D scan grid + bilinear height). tgs_pcm/0.005.
 """
 import argparse
 import math
@@ -36,23 +37,51 @@ import threepp as tp
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, grid_texture, _quat_to_R,
                          default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, Z0)
-from spot_terrain_env import PROBE_DX, HALF_W, VX_HI, VY_HI, WZ_HI
-from spot_heightfield_env import make_hf_grids, build_hf_geom, HF_X0, HF_X1, HF_NX, HF_NY
+from spot_terrain_env import scan_xy_np, VX_HI, VY_HI, WZ_HI
+from spot_heightfield_env import build_hf_geom, _taper
 
 DISP = 820
 GRAV = np.array([0.0, 0.0, -1.0])
 CRUISE = 0.8
-SPAWN_X = HF_X0 + 0.2           # spawn on the flat tapered tile edge (terrain~0) -> stable fold; walk in
+
+# ---- BIG 2-D demo patch (independent of the narrow per-lane training tile): roam + turn anywhere ----
+PATCH_X0, PATCH_X1 = -4.0, 16.0      # 20 m forward extent
+PATCH_HALF_Y = 8.0                    # +/-8 m -> 16 m wide (drive AND steer across rough terrain)
+PATCH_RES = 0.20                      # grid spacing (m); fine enough for the scan to resolve the features
+PATCH_NX = int(round((PATCH_X1 - PATCH_X0) / PATCH_RES)) + 1     # 101
+PATCH_NY = int(round((2.0 * PATCH_HALF_Y) / PATCH_RES)) + 1      # 81
+# HARDER than the training tile: shorter dominant wavelengths + an extra octave -> steeper, busier terrain.
+# (wavelength_m, weight); each octave is randomly ROTATED so ridges don't line up with the grid.
+PATCH_OCTAVES = ((4.0, 1.0), (2.0, 0.6), (1.1, 0.32))
+SPAWN_X = PATCH_X0 + 0.6              # spawn on the tapered patch edge (terrain~0) -> stable fold; walk in
+
+
+def make_patch(seed):
+    """A big square smooth-noise height grid H[nx,ny] in [0,1], edge-tapered to 0 so it meets the flat
+    ground. Same separable-sine recipe as the training tiles but with shorter wavelengths + rotation."""
+    rng = np.random.default_rng(seed)
+    xs = np.linspace(PATCH_X0, PATCH_X1, PATCH_NX).astype(np.float32)
+    ys = np.linspace(-PATCH_HALF_Y, PATCH_HALF_Y, PATCH_NY).astype(np.float32)
+    h = np.zeros((PATCH_NX, PATCH_NY), np.float32)
+    for wl, w in PATCH_OCTAVES:
+        ang = float(rng.uniform(0.0, 2.0 * np.pi)); ca, sa = np.cos(ang), np.sin(ang)
+        xr = ca * xs[:, None] - sa * ys[None, :]
+        yr = sa * xs[:, None] + ca * ys[None, :]
+        phx, phy = rng.uniform(0.0, 2.0 * np.pi, 2)
+        h += w * np.sin(2.0 * np.pi * xr / wl + phx) * np.sin(2.0 * np.pi * yr / wl + phy)
+    h = (h - h.min()) / (h.max() - h.min() + 1e-9)
+    win = _taper(PATCH_NX, 0.12)[:, None] * _taper(PATCH_NY, 0.12)[None, :]
+    return (h * win).astype(np.float32), xs, ys
 
 
 def terr_h(x, y, hf):
-    """numpy bilinear mirror of SpotHeightfieldEnv._terrain_h for ONE lane at y=0."""
-    if x < HF_X0 or x > HF_X1 or abs(y) >= HALF_W:
+    """numpy bilinear height of the big 2-D demo patch at world (x,y); 0 outside the patch (flat ground)."""
+    if x < PATCH_X0 or x > PATCH_X1 or y < -PATCH_HALF_Y or y > PATCH_HALF_Y:
         return 0.0
     H, amp = hf["H"], hf["amp"]
-    fx = (x - HF_X0) / (HF_X1 - HF_X0) * (HF_NX - 1)
-    fy = (y + HALF_W) / (2.0 * HALF_W) * (HF_NY - 1)
-    ix = int(min(max(fx, 0), HF_NX - 2)); iy = int(min(max(fy, 0), HF_NY - 2))
+    fx = (x - PATCH_X0) / (PATCH_X1 - PATCH_X0) * (PATCH_NX - 1)
+    fy = (y + PATCH_HALF_Y) / (2.0 * PATCH_HALF_Y) * (PATCH_NY - 1)
+    ix = int(min(max(fx, 0), PATCH_NX - 2)); iy = int(min(max(fy, 0), PATCH_NY - 2))
     tx = fx - ix; ty = fy - iy
     h = ((1 - tx) * (1 - ty) * H[ix, iy] + tx * (1 - ty) * H[ix + 1, iy]
          + (1 - tx) * ty * H[ix, iy + 1] + tx * ty * H[ix + 1, iy + 1])
@@ -60,7 +89,7 @@ def terr_h(x, y, hf):
 
 
 def v2_obs(art, last_act, hf, cmd):
-    """58-d SpotHeightfieldEnv obs, single-robot (heading-relative scan + bilinear height)."""
+    """94-d SpotHeightfieldEnv obs, single-robot (heading-relative 2-D scan grid + bilinear height)."""
     rs, rv = art.root_state(), art.root_velocity()
     R = _quat_to_R(rs[3:7]); Rt = R.T
     lin_b, ang_b, proj_g = Rt @ rv[0:3], Rt @ rv[3:6], Rt @ GRAV
@@ -72,8 +101,9 @@ def v2_obs(art, last_act, hf, cmd):
     nrm = math.hypot(hx, hy) or 1.0
     cyaw, syaw = hx / nrm, hy / nrm
     h_here = terr_h(x, y, hf)
-    ahead = np.array([np.clip(terr_h(x + dx * cyaw, y + dx * syaw, hf) - h_here, -1.0, 1.0)
-                      for dx in PROBE_DX], np.float32)
+    px, py = scan_xy_np(x, y, cyaw, syaw)                          # 2-D heading-relative grid (world)
+    ahead = np.clip(np.array([terr_h(float(pxi), float(pyi), hf) - h_here
+                              for pxi, pyi in zip(px, py)], np.float32), -1.0, 1.0)
     return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
                            [z - h_here], ahead]).astype(np.float32)
 
@@ -88,7 +118,7 @@ def _resolve_model(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=os.path.join(_HERE, "spot_steps.pt"))
-    ap.add_argument("--amp", type=float, default=0.14, help="display heightfield amplitude")
+    ap.add_argument("--amp", type=float, default=0.22, help="display heightfield amplitude (harder default)")
     ap.add_argument("--seed", type=int, default=0, help="terrain shape seed")
     ap.add_argument("--check", type=int, default=0)
     ap.add_argument("--pgs", action="store_true",
@@ -108,7 +138,7 @@ def main():
     else:
         world = tp.PhysxWorld(gravity=tp.Vector3(0, 0, -9.81), fixed_timestep=0.005, max_substeps=8, tgs_pcm=True)
     print(f"[solver] {'PGS/0.002 (PhysX default CPU solver)' if args.pgs else 'tgs_pcm/0.005 (matches GpuSim training)'}")
-    ground = tp.Mesh(tp.BoxGeometry(60, 30, 1.0), tp.MeshStandardMaterial()); ground.position.set(20, 0, -0.5)
+    ground = tp.Mesh(tp.BoxGeometry(80, 80, 1.0), tp.MeshStandardMaterial()); ground.position.set(6, 0, -0.5)
     world.add_static(ground)
     art, meshes = build_spot(world, fetch_assets())
 
@@ -118,26 +148,30 @@ def main():
     scene = tp.Scene(); scene.background = tp.Background(0x9fb6cf)
     scene.add(tp.HemisphereLight(0xdce8f6, 0x55606c, 1.15))
     sun = tp.DirectionalLight(0xffffff, 2.7); sun.position.set(4, -6, 12); sun.cast_shadow = True; scene.add(sun)
-    floor = tp.Mesh(tp.PlaneGeometry(60, 30), tp.MeshStandardMaterial())
-    floor.material.map = grid_texture(40); floor.material.color = 0xffffff
-    floor.material.roughness = 0.95; floor.receive_shadow = True; scene.add(floor)
+    floor = tp.Mesh(tp.PlaneGeometry(80, 80), tp.MeshStandardMaterial())
+    floor.material.map = grid_texture(53); floor.material.color = 0xffffff
+    floor.material.roughness = 0.95; floor.receive_shadow = True; floor.position.set(6, 0, 0); scene.add(floor)
 
     cfg = {"amp": args.amp, "seed": args.seed}
     hf = {"body": None, "mesh": None, "H": None, "amp": cfg["amp"]}
+    geom_cache = {}                                                  # seed -> (geom, H); built once per shape
 
     def rebuild_hf():
+        seed = int(cfg["seed"])
+        if seed not in geom_cache:                                  # the slow triangle-soup build: once per seed
+            H, xs, ys = make_patch(seed)
+            geom_cache[seed] = (build_hf_geom(H, xs, ys), H)
+        geom, H = geom_cache[seed]
         if hf["body"] is not None:
             world.remove(hf["body"])
         if hf["mesh"] is not None:
             scene.remove(hf["mesh"])
-        H, xs, ys = make_hf_grids(num_shapes=1, seed=int(cfg["seed"]))
-        geom = build_hf_geom(H[0], xs, ys)
-        m = tp.Mesh(geom, tp.MeshStandardMaterial())
+        m = tp.Mesh(geom, tp.MeshStandardMaterial())               # amplitude is just a z-scale of the [0,1] tile
         m.material.color = 0x8a7d6a; m.material.roughness = 0.97; m.receive_shadow = True
         m.position.set(0.0, 0.0, 0.0); m.scale.set(1.0, 1.0, cfg["amp"])
         scene.add(m)
         hf["body"] = world.add_static_trimesh(m); hf["mesh"] = m
-        hf["H"] = H[0]; hf["amp"] = cfg["amp"]
+        hf["H"] = H; hf["amp"] = cfg["amp"]
 
     rebuild_hf()
     for m in meshes:
@@ -228,7 +262,7 @@ def main():
         tp.imgui.text(f"clearance over terrain: {float(rs[2]) - h:.2f} m")
         _, state["auto_fwd"] = tp.imgui.checkbox("auto-forward (idle)", state["auto_fwd"])
         _, state["hdg_hold"] = tp.imgui.checkbox("heading-hold (no-turn)", state["hdg_hold"])
-        _, cfg["amp"] = tp.imgui.slider_float("amplitude (m)", cfg["amp"], 0.0, 0.30)
+        _, cfg["amp"] = tp.imgui.slider_float("amplitude (m)", cfg["amp"], 0.0, 0.65)
         _, cfg["seed"] = tp.imgui.slider_int("shape seed", int(cfg["seed"]), 0, 15)
         if abs(cfg["amp"] - built["amp"]) > 1e-4 or int(cfg["seed"]) != built["seed"]:
             tp.imgui.text("rebuilding on release...")

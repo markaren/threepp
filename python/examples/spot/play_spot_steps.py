@@ -34,7 +34,7 @@ import threepp as tp
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, grid_texture, _quat_to_R,
                          default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, Z0)
-from spot_terrain_env import PROBE_DX, HALF_W, VX_HI, VY_HI, WZ_HI
+from spot_terrain_env import scan_xy_np, N_SCAN, HALF_W, VX_HI, VY_HI, WZ_HI
 from spot_steps_env import (RISERS, N_LEVELS, N_UP, STEP_RUN, FLAT_APPROACH, LAND, BAND_LEN,
                             SPAWN_OFF, STRIP_LEN, HALF_W_BOX, HALF_W_STEPS)
 
@@ -62,6 +62,16 @@ def terr_h(x, y):
     return float(r * steps)
 
 
+def _scan_color(d):
+    """Height-delta d in [-1,1] -> 0xRRGGBB for a probe marker: blue (drop) -> green (level) -> red (rise)."""
+    if d >= 0.0:
+        r, g, b = 0.2 + 0.8 * d, 0.9 - 0.7 * d, 0.2
+    else:
+        r, g, b = 0.2, 0.9 + 0.6 * d, 0.3 - 0.6 * d
+    clamp = lambda v: int(max(0.0, min(1.0, v)) * 255)
+    return (clamp(r) << 16) | (clamp(g) << 8) | clamp(b)
+
+
 def v2_obs(art, last_act, cmd):
     rs, rv = art.root_state(), art.root_velocity()
     R = _quat_to_R(rs[3:7]); Rt = R.T
@@ -74,8 +84,9 @@ def v2_obs(art, last_act, cmd):
     nrm = math.hypot(hx, hy) or 1.0
     cyaw, syaw = hx / nrm, hy / nrm
     h_here = terr_h(x, y)
-    ahead = np.array([np.clip(terr_h(x + dx * cyaw, y + dx * syaw) - h_here, -1.0, 1.0)
-                      for dx in PROBE_DX], np.float32)
+    px, py = scan_xy_np(x, y, cyaw, syaw)                          # 2-D heading-relative grid (world)
+    ahead = np.clip(np.array([terr_h(float(pxi), float(pyi)) - h_here
+                              for pxi, pyi in zip(px, py)], np.float32), -1.0, 1.0)
     return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
                            [z - h_here], ahead]).astype(np.float32)
 
@@ -144,10 +155,20 @@ def main():
     for m in meshes:
         scene.add(m)
 
+    # 2-D scan-grid overlay: one small sphere per probe, repositioned each frame to the world grid
+    # and colored by measured height-delta -> shows exactly what the policy senses on the terrain.
+    scan_group = tp.Group(); scan_markers = []
+    for _ in range(N_SCAN):
+        mk = tp.Mesh(tp.SphereGeometry(0.022, 8, 6), tp.MeshStandardMaterial())
+        mk.material.color = 0x22ff88
+        scan_markers.append(mk); scan_group.add(mk)
+    scene.add(scan_group)
+
     cam = tp.PerspectiveCamera(46, 1.0, 0.05, 200); cam.up.set(0, 0, 1)
     cam.position.set(-2.6, -2.7, 1.4)
     state = {"last_act": np.zeros(12, np.float32), "hdg_lock": None,
-             "auto_fwd": True, "hdg_hold": True, "cmd": (0.0, 0.0, 0.0), "level": int(args.level)}
+             "auto_fwd": True, "hdg_hold": True, "cmd": (0.0, 0.0, 0.0), "level": int(args.level),
+             "show_scan": True}
     BACK, HEIGHT, LAG = 3.0, 1.5, 0.10
 
     def settle(n):
@@ -198,6 +219,21 @@ def main():
         cam.look_at(float(p[0] + fwd[0] * 0.4), float(p[1] + fwd[1] * 0.4), float(p[2] + 0.1))
         rend.render(scene, cam)
 
+    def update_scan_viz():
+        scan_group.visible = state["show_scan"]
+        if not state["show_scan"]:
+            return
+        rs = art.root_state(); R = _quat_to_R(rs[3:7])
+        x, y = float(rs[0]), float(rs[1])
+        hx, hy = float(R[0, 0]), float(R[1, 0]); nrm = math.hypot(hx, hy) or 1.0
+        cyaw, syaw = hx / nrm, hy / nrm
+        px, py = scan_xy_np(x, y, cyaw, syaw)
+        h_here = terr_h(x, y)
+        for i in range(N_SCAN):
+            h = terr_h(float(px[i]), float(py[i]))
+            scan_markers[i].position.set(float(px[i]), float(py[i]), h + 0.03)
+            scan_markers[i].material.color = _scan_color(float(np.clip((h - h_here) / 0.2, -1.0, 1.0)))
+
     reset_spot(120)
 
     if not live:
@@ -227,6 +263,7 @@ def main():
         tp.imgui.text(f"climbed {h:.2f} m   clearance {float(rs[2]) - h:.2f} m")
         _, state["auto_fwd"] = tp.imgui.checkbox("auto-forward (idle)", state["auto_fwd"])
         _, state["hdg_hold"] = tp.imgui.checkbox("heading-hold (no-turn)", state["hdg_hold"])
+        _, state["show_scan"] = tp.imgui.checkbox("show 2-D scan grid", state["show_scan"])
         _, state["level"] = tp.imgui.slider_int("spawn riser band", int(state["level"]), 0, N_LEVELS - 1)
         tp.imgui.text(f"band {int(state['level'])} riser = {RISERS[int(state['level'])]:.02f} m")
         tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   R = reset")
@@ -250,7 +287,7 @@ def main():
                     pol["reloads"] += 1; reset_spot(); print(f"[reload] {os.path.basename(model)} (#{pol['reloads']})")
             except Exception:
                 pass
-        control_tick(use_keys=True); render_chase(); ui.render(draw_ui)
+        control_tick(use_keys=True); update_scan_viz(); render_chase(); ui.render(draw_ui)
 
     print(__doc__)
     canvas.animate(frame)

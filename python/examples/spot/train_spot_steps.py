@@ -1,14 +1,16 @@
 """spotv2 — train the velocity-tracking policy to climb DISCRETE STAIRS with an adaptive curriculum.
 
-    python train_spot_steps.py --iters 1500                 # warm-starts from spot_hf.pt by default
-    python train_spot_steps.py --warmstart "" --iters 1500  # from the Isaac flat walker instead
-    python train_spot_steps.py --score spot_steps.pt        # deterministic track/flat/fell + curriculum level
-    python train_spot_steps.py --eval  spot_steps.pt        # flat-steering regression vs the teacher
+    python train_spot_steps.py --iters 1500                       # transfers spot_steps_1d.pt (2-D scan) by default
+    python train_spot_steps.py --warmstart "" --iters 1500        # from the Isaac flat walker instead
+    python train_spot_steps.py --warmstart spot_hf.pt --iters 1500  # (only if spot_hf.pt is a 2-D-scan ckpt)
+    python train_spot_steps.py --score spot_steps.pt              # deterministic track/flat/fell + curriculum level
+    python train_spot_steps.py --eval  spot_steps.pt              # flat-steering regression vs the teacher
 
 The curriculum (per-env level, promote on clearing the tent / demote on a fall) lives in SpotStepsEnv;
 the trainer just logs `level` (mean riser-band the stair envs are on) and `clear` (fraction clearing
-their tent). Warm-starting from spot_hf.pt gives the rough-terrain foot-lift gait + preserved steering,
-so the policy should clear risers the original flat-walker attempt stalled on (~0.17 m).
+their tent). The default warm-start TRANSFERS the preserved 1-D stair climber (spot_steps_1d.pt) into
+the new 2-D scan obs via warmstart_expand_scan (centerline row = old scan, lateral cols zero-init), so
+the policy begins exactly as the 1-D climber and learns to exploit the lateral scan from there.
 """
 import argparse
 import os
@@ -25,7 +27,8 @@ import threepp as tp
 from spot_deploy import fetch_assets
 from spot_steps_env import ACT_DIM, CONFIG, HIDDEN, N_LEVELS, RISERS, SpotStepsEnv
 from spot_symmetry import make_aux_loss
-from train_spot_terrain import warmstart_from_isaac, sanity_walk, stochastic_flat_baseline
+from train_spot_terrain import (warmstart_from_isaac, warmstart_expand_scan, sanity_walk,
+                                stochastic_flat_baseline)
 from threepp.rl import PPO, load_policy
 
 
@@ -83,8 +86,9 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--gate", type=float, default=0.90)
     ap.add_argument("--out", default=os.path.join(_HERE, "spot_steps.pt"))
-    ap.add_argument("--warmstart", default=os.path.join(_HERE, "spot_hf.pt"),
-                    help="continue from this .pt (default spot_hf.pt — the heightfield rough walker); '' = from Isaac")
+    ap.add_argument("--warmstart", default=os.path.join(_HERE, "spot_steps_1d.pt"),
+                    help="1-D-scan .pt to transfer into the 2-D scan via warmstart_expand_scan "
+                         "(default spot_steps_1d.pt — the preserved 1-D stair climber); '' = from Isaac")
     ap.add_argument("--fell_max", type=float, default=0.006)
     ap.add_argument("--sym_coef", type=float, default=1.0)   # left-right symmetry augmentation (kills the veer)
     ap.add_argument("--eval", default="")
@@ -104,9 +108,8 @@ def main():
     if aux is not None:
         print(f"symmetry augmentation ON (coef {args.sym_coef})")
     if args.warmstart and os.path.exists(args.warmstart):
-        src, _, _ = load_policy(args.warmstart, device="cuda")
-        ppo.ac.load_state_dict(src.state_dict())
-        print(f"warm-started from {os.path.basename(args.warmstart)} (rough walker + preserved steering)")
+        # 1-D-scan checkpoint -> new 2-D-scan AC (input layer expanded; centerline = old scan, lateral = 0)
+        warmstart_expand_scan(ppo.ac, args.warmstart, device="cuda")
     else:
         if args.warmstart:
             print(f"(warmstart {args.warmstart} not found — falling back to Isaac)")

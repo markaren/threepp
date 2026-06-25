@@ -28,6 +28,7 @@ import threepp as tp
 from threepp.rl import GpuSim
 from spot_deploy import default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, fetch_assets
 from spot_terrain_env import (quat_rotate_inverse, up_z, heading_cossin, SpotGpu, _flat_ground,
+                              scan_offsets, scan_xy,
                               CONTROL_HZ, DT, SUBSTEPS, SPACING, SPAWN_Z, PROBE_DX, OBS_DIM, ACT_DIM,
                               HIDDEN, HALF_W, FLAT_FRAC, VX_LO, VX_HI, VY_HI, WZ_HI, STAND_PROB,
                               FWD_DRIVE_FRAC, CMD_MIN, CMD_MAX, SIG, W_IMIT)
@@ -140,7 +141,7 @@ class SpotHeightfieldEnv:
         H_t = torch.from_numpy(H_np).to(dev)                         # [S, nx, ny]
         self.Hsel = H_t[torch.from_numpy(shape_idx).to(dev)].reshape(num_envs, HF_NX * HF_NY)  # [K, nx*ny]
         self.xs = torch.from_numpy(xs_np).to(dev); self.ys = torch.from_numpy(ys_np).to(dev)
-        self.probe = torch.tensor(PROBE_DX, device=dev)
+        self.gx, self.gy = scan_offsets(dev)                              # [N_SCAN] heading-relative grid offsets
         self.imit_policy = torch.jit.load(os.path.join(fetch_assets(), "spot_policy.pt"),
                                           map_location=dev).eval()
         self.lane_y = torch.arange(num_envs, device=dev, dtype=torch.float32) * SPACING
@@ -204,8 +205,7 @@ class SpotHeightfieldEnv:
         x, y, zz = s.root_position[:, 0], s.root_position[:, 1], s.root_position[:, 2]
         cyaw, syaw = heading_cossin(q)
         h_here = self._terrain_h(x, y)
-        px = x[:, None] + self.probe[None, :] * cyaw[:, None]
-        py = y[:, None] + self.probe[None, :] * syaw[:, None]
+        px, py = scan_xy(x, y, cyaw, syaw, self.gx, self.gy)
         ahead = (self._terrain_h(px, py) - h_here[:, None]).clamp(-1.0, 1.0)
         base_above = (zz - h_here).unsqueeze(-1)
         obs = torch.cat([lin_b, ang_b, proj_g, self.cmd, qpos, jv_isaac, self.last_act,
@@ -278,8 +278,7 @@ class SpotHeightfieldEnv:
         h_here = self._terrain_h(x, y)
         base_above = zz - h_here
         cyaw, syaw = heading_cossin(q)
-        px = x[:, None] + self.probe[None, :] * cyaw[:, None]
-        py = y[:, None] + self.probe[None, :] * syaw[:, None]
+        px, py = scan_xy(x, y, cyaw, syaw, self.gx, self.gy)
         ahead = self._terrain_h(px, py) - h_here[:, None]
         change = ahead.abs().max(dim=1).values
         w_imit = (1.0 - change / 0.10).clamp(0.0, 1.0)

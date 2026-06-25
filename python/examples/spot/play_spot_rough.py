@@ -36,7 +36,7 @@ import threepp as tp
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, grid_texture, _quat_to_R,
                          default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, Z0)
-from spot_terrain_env import PROBE_DX, HALF_W, VX_HI, VY_HI, WZ_HI
+from spot_terrain_env import scan_xy_np, HALF_W, VX_HI, VY_HI, WZ_HI
 from spot_rough_env import rough_profile, ROUGH_X0, ROUGH_RUN, N_BOXES
 
 DISP = 820
@@ -54,7 +54,7 @@ def terr_h(x, y, heights):
 
 
 def v2_obs(art, last_act, heights, cmd):
-    """The 58-d SpotRoughEnv observation, single-robot (heading-relative scan + box-top height)."""
+    """The 94-d SpotRoughEnv observation, single-robot (heading-relative 2-D scan grid + box-top height)."""
     rs, rv = art.root_state(), art.root_velocity()
     R = _quat_to_R(rs[3:7]); Rt = R.T
     lin_b, ang_b, proj_g = Rt @ rv[0:3], Rt @ rv[3:6], Rt @ GRAV
@@ -66,8 +66,9 @@ def v2_obs(art, last_act, heights, cmd):
     nrm = math.hypot(hx, hy) or 1.0
     cyaw, syaw = hx / nrm, hy / nrm
     h_here = terr_h(x, y, heights)
-    ahead = np.array([np.clip(terr_h(x + dx * cyaw, y + dx * syaw, heights) - h_here, -1.0, 1.0)
-                      for dx in PROBE_DX], np.float32)
+    px, py = scan_xy_np(x, y, cyaw, syaw)                          # 2-D heading-relative grid (world)
+    ahead = np.clip(np.array([terr_h(float(pxi), float(pyi), heights) - h_here
+                              for pxi, pyi in zip(px, py)], np.float32), -1.0, 1.0)
     return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
                            [z - h_here], ahead]).astype(np.float32)
 
@@ -82,7 +83,7 @@ def _resolve_model(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=os.path.join(_HERE, "spot_steps.pt"))
-    ap.add_argument("--amp", type=float, default=0.06, help="bump amplitude of the display terrain")
+    ap.add_argument("--amp", type=float, default=0.4, help="bump amplitude of the display terrain")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--check", type=int, default=0)
     ap.add_argument("--pgs", action="store_true",

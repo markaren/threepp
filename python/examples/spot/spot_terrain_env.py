@@ -22,9 +22,9 @@ GOAL OF PHASE 1: prove that (a) tracking-driven climbing works on the existing t
 steering survives (held-out flat-tracking within ~1.1x the teacher — see train_spot_terrain.py
 --eval) BEFORE adding terrain variety / a 2-D scan / a difficulty curriculum (Phase 2).
 
-  obs (58): base lin vel (body 3), base ang vel (body 3), projected gravity (3), command [vx,vy,wz] (3),
+  obs (94): base lin vel (body 3), base ang vel (body 3), projected gravity (3), command [vx,vy,wz] (3),
             joint pos rel default (12 isaac order), joint vel (12 isaac), last action (12),
-            base height over local terrain (1), forward height scan (9, heading-relative)
+            base height over local terrain (1), 2-D height-scan grid (45 = 9 fwd x 5 lat, heading-relative)
   action (12): the FULL Isaac-order policy action -> joint targets default_q + ACTION_SCALE*a (NOT clamped)
 """
 import os
@@ -67,8 +67,21 @@ HALF_W = SPACING * 0.46           # half-width of a tent (= box width / 2); beyo
 # --------------------------------------------------------------------------- #
 #  Obs / policy
 # --------------------------------------------------------------------------- #
-PROBE_DX = (-0.35, -0.15, 0.05, 0.2, 0.35, 0.5, 0.7, 0.9, 1.1)   # forward height-scan profile (m ahead, heading-relative)
-OBS_DIM = 3 + 3 + 3 + 3 + 12 + 12 + 12 + 1 + len(PROBE_DX)        # = 58 (matches the Isaac warm-start)
+# 2-D heading-relative height-scan GRID: forward (x_local) x lateral (y_local), rotated by heading.
+# The forward axis keeps the old 1-D PROBE_DX offsets and the lateral axis is symmetric about 0, so
+# the grid's centerline row (dy=0) IS the old 1-D scan -> a trained 1-D policy transfers cleanly
+# (centerline copied, lateral columns zero-init). See warmstart_expand_scan in train_spot_terrain.py.
+PROBE_DX = (-0.35, -0.15, 0.05, 0.2, 0.35, 0.5, 0.7, 0.9, 1.1)   # forward offsets (m ahead, heading-relative)
+PROBE_DY = (-0.30, -0.15, 0.0, 0.15, 0.30)                       # lateral offsets (m, +y = LEFT of heading)
+N_DX, N_DY = len(PROBE_DX), len(PROBE_DY)
+# flattened FORWARD-MAJOR grid: index = fi*N_DY + dj  (for each forward offset, the N_DY lateral cols)
+SCAN_GX = tuple(float(dx) for dx in PROBE_DX for _dy in PROBE_DY)   # [N_SCAN] local forward offset per cell
+SCAN_GY = tuple(float(dy) for _dx in PROBE_DX for dy in PROBE_DY)   # [N_SCAN] local lateral offset per cell
+N_SCAN = len(SCAN_GX)                                               # = 45
+SCAN_CENTER = N_DY // 2                                             # lateral index of dy=0 (the old 1-D line)
+# left<->right mirror (y -> -y): reverse the N_DY lateral cols within each forward group
+SCAN_MIRROR_PERM = tuple(fi * N_DY + (N_DY - 1 - dj) for fi in range(N_DX) for dj in range(N_DY))
+OBS_DIM = 3 + 3 + 3 + 3 + 12 + 12 + 12 + 1 + N_SCAN                 # = 94 (48 proprio + base_above + 45 scan)
 ACT_DIM = 12
 HIDDEN = (512, 256, 128)         # matches the Isaac actor MLP (48->512->256->128->12) for the warm-start
 
@@ -89,6 +102,7 @@ W_IMIT = 0.1               # scan-gated imitation-of-the-Isaac-walker weight (an
 CONFIG = {"control_hz": CONTROL_HZ, "dt": DT, "substeps": SUBSTEPS, "spacing": SPACING,
           "rise_min": RISE_MIN, "rise_max": RISE_MAX, "run_min": RUN_MIN, "run_max": RUN_MAX,
           "episode_s": EPISODE_S, "stair_x0": STAIR_X0, "probe_dx": list(PROBE_DX),
+          "probe_dy": list(PROBE_DY), "n_scan": N_SCAN,
           "obs_dim": OBS_DIM, "act_dim": ACT_DIM, "hidden": list(HIDDEN),
           "vx": [VX_LO, VX_HI], "vy_hi": VY_HI, "wz_hi": WZ_HI, "stand_prob": STAND_PROB,
           "sig": SIG, "w_imit": W_IMIT}
@@ -119,6 +133,28 @@ def heading_cossin(q):
     hy = 2.0 * (q[:, 0] * q[:, 1] + q[:, 2] * q[:, 3])
     nrm = (hx * hx + hy * hy).sqrt().clamp(min=1e-6)
     return hx / nrm, hy / nrm
+
+
+# --------------------------------------------------------------------------- #
+#  Heading-relative 2-D scan grid (shared by every env + the deploy players)
+# --------------------------------------------------------------------------- #
+def scan_offsets(device):
+    """Local-frame grid offsets (gx forward, gy lateral) as torch tensors [N_SCAN]. Store once per env."""
+    return (torch.tensor(SCAN_GX, device=device), torch.tensor(SCAN_GY, device=device))
+
+
+def scan_xy(x, y, cyaw, syaw, gx, gy):
+    """World (px, py) of the heading-relative grid -> each [K, N_SCAN]. x,y,cyaw,syaw: [K]; gx,gy: [N_SCAN].
+    Rotate the local (gx, gy) offsets by yaw: world = R(yaw) @ local (so the grid turns with the robot)."""
+    dx = gx[None, :] * cyaw[:, None] - gy[None, :] * syaw[:, None]
+    dy = gx[None, :] * syaw[:, None] + gy[None, :] * cyaw[:, None]
+    return x[:, None] + dx, y[:, None] + dy
+
+
+def scan_xy_np(x, y, cyaw, syaw):
+    """numpy single-robot version of scan_xy: scalars x,y,cyaw,syaw -> world (px, py) arrays [N_SCAN]."""
+    gx = np.asarray(SCAN_GX); gy = np.asarray(SCAN_GY)
+    return x + gx * cyaw - gy * syaw, y + gx * syaw + gy * cyaw
 
 
 class SpotGpu:
@@ -201,7 +237,7 @@ class SpotTerrainEnv:
         self.run = torch.from_numpy(runs).to(dev)
         self.n_up = torch.from_numpy(n_ups).to(dev)
         self.is_tent = self.rise > 0.005                                     # [K] tent lane vs flat lane
-        self.probe = torch.tensor(PROBE_DX, device=dev)                      # [P]
+        self.gx, self.gy = scan_offsets(dev)                                 # [N_SCAN] heading-relative grid offsets
         self.imit_policy = torch.jit.load(os.path.join(fetch_assets(), "spot_policy.pt"),
                                           map_location=dev).eval()           # Isaac flat walker = the flat-gait anchor
         self.lane_y = torch.arange(num_envs, device=dev, dtype=torch.float32) * SPACING
@@ -261,9 +297,8 @@ class SpotTerrainEnv:
         x, y, zz = s.root_position[:, 0], s.root_position[:, 1], s.root_position[:, 2]
         cyaw, syaw = heading_cossin(q)
         h_here = self._terrain_h(x, y)
-        px = x[:, None] + self.probe[None, :] * cyaw[:, None]                 # HEADING-relative scan: probe ahead of facing
-        py = y[:, None] + self.probe[None, :] * syaw[:, None]
-        ahead = (self._terrain_h(px, py) - h_here[:, None]).clamp(-1.0, 1.0)  # terrain rise/drop ahead (clipped)
+        px, py = scan_xy(x, y, cyaw, syaw, self.gx, self.gy)                  # HEADING-relative 2-D scan grid
+        ahead = (self._terrain_h(px, py) - h_here[:, None]).clamp(-1.0, 1.0)  # terrain rise/drop per cell (clipped)
         base_above = (zz - h_here).unsqueeze(-1)
         obs = torch.cat([lin_b, ang_b, proj_g, self.cmd, qpos, jv_isaac, self.last_act,
                          base_above, ahead], dim=1)                           # [K, OBS_DIM]
@@ -324,10 +359,9 @@ class SpotTerrainEnv:
         lin_b = quat_rotate_inverse(q, self.sim.root_linvel)
         h_here = self._terrain_h(x, y)
         base_above = zz - h_here
-        # forward scan (unclipped) for the imitation gate: anchor to the Isaac walker only where terrain is flat
+        # scan (unclipped) for the imitation gate: anchor to the Isaac walker only where terrain is flat
         cyaw, syaw = heading_cossin(q)
-        px = x[:, None] + self.probe[None, :] * cyaw[:, None]
-        py = y[:, None] + self.probe[None, :] * syaw[:, None]
+        px, py = scan_xy(x, y, cyaw, syaw, self.gx, self.gy)
         ahead = self._terrain_h(px, py) - h_here[:, None]
         change = ahead.abs().max(dim=1).values                               # nearest terrain change (up OR down)
         w_imit = (1.0 - change / 0.10).clamp(0.0, 1.0)                        # 1 on TRUE flat -> 0 once a step nears

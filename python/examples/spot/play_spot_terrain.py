@@ -38,7 +38,7 @@ import threepp as tp
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, grid_texture, _quat_to_R,
                          default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, Z0)
-from spot_terrain_env import PROBE_DX, STAIR_X0, LAND_LEN, HALF_W, VX_HI, VY_HI, WZ_HI
+from spot_terrain_env import scan_xy_np, STAIR_X0, LAND_LEN, HALF_W, VX_HI, VY_HI, WZ_HI
 
 DISP = 820
 GRAV = np.array([0.0, 0.0, -1.0])
@@ -60,8 +60,8 @@ def terr_h(x, y, rise, run, n, x0=STAIR_X0, land=LAND_LEN):
 
 
 def v2_obs(art, last_act, rise, run, n, cmd):
-    """The 58-d SpotTerrainEnv observation, single-robot. Heading-relative forward scan (the probe
-    direction rotates with body yaw) + 2-D tent height, exactly as the env builds it."""
+    """The 94-d SpotTerrainEnv observation, single-robot. Heading-relative 2-D scan grid (the grid
+    rotates with body yaw) + tent height, exactly as the env builds it."""
     rs, rv = art.root_state(), art.root_velocity()
     R = _quat_to_R(rs[3:7]); Rt = R.T
     lin_b, ang_b, proj_g = Rt @ rv[0:3], Rt @ rv[3:6], Rt @ GRAV
@@ -73,8 +73,9 @@ def v2_obs(art, last_act, rise, run, n, cmd):
     nrm = math.hypot(hx, hy) or 1.0
     cyaw, syaw = hx / nrm, hy / nrm
     h_here = terr_h(x, y, rise, run, n)
-    ahead = np.array([np.clip(terr_h(x + dx * cyaw, y + dx * syaw, rise, run, n) - h_here, -1.0, 1.0)
-                      for dx in PROBE_DX], np.float32)             # heading-relative, clipped
+    px, py = scan_xy_np(x, y, cyaw, syaw)                          # 2-D heading-relative grid (world)
+    ahead = np.clip(np.array([terr_h(float(pxi), float(pyi), rise, run, n) - h_here
+                              for pxi, pyi in zip(px, py)], np.float32), -1.0, 1.0)
     return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
                            [z - h_here], ahead]).astype(np.float32)
 
