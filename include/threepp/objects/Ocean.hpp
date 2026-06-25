@@ -66,7 +66,7 @@ namespace threepp {
             uint32_t fftSize = 1024;
         };
 
-        static std::shared_ptr<Ocean> create(const Options& options = {});
+        static std::shared_ptr<Ocean> create(const Options& options = Options{});
 
         [[nodiscard]] std::string type() const override;
 
