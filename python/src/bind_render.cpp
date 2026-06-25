@@ -11,10 +11,13 @@
 #include "threepp/constants.hpp"
 #include "threepp/controls/OrbitControls.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/helpers/LidarModel.hpp"
 #include "threepp/helpers/LidarTypes.hpp"
 #include "threepp/input/KeyListener.hpp"
+#include "threepp/math/Color.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/scenes/Scene.hpp"
 
 #include <cctype>
 #include <cstring>
@@ -217,6 +220,54 @@ namespace threepp_py {
                     return arr;
                 }, py::arg("flip") = true)
                 .def("save_frame", [](GLRenderer& r, const std::string& path) { r.writeFramebuffer(path); }, py::arg("path"));
+
+        // ---- DepthSensor (helpers/DepthSensor.hpp) ---------------------------
+        // A GPU depth-render sensor: renders the scene from its own viewpoint, linearizes
+        // depth, reads it back, and reprojects to a world-space point cloud (optionally with
+        // per-point sRGB color). It is an Object3D — aim it with position/rotation/quaternion/
+        // look_at, then scan() with a GLRenderer. scan() refreshes the sensor's world matrix
+        // first, so it works whether or not the sensor was added to the scene.
+        auto pts_to_numpy = [](const std::vector<Vector3>& cloud) {
+            py::array_t<float> pts({static_cast<py::ssize_t>(cloud.size()), static_cast<py::ssize_t>(3)});
+            auto* d = pts.mutable_data();
+            for (size_t i = 0; i < cloud.size(); ++i) {
+                d[i * 3 + 0] = cloud[i].x; d[i * 3 + 1] = cloud[i].y; d[i * 3 + 2] = cloud[i].z;
+            }
+            return pts;
+        };
+        py::class_<DepthSensor, Object3D, std::shared_ptr<DepthSensor>>(m, "DepthSensor")
+                .def(py::init([](float fov_y, unsigned int width, unsigned int height, float near, float far) {
+                    return std::make_shared<DepthSensor>(fov_y, width, height, near, far);
+                }), py::arg("fov_y"), py::arg("width"), py::arg("height"),
+                    py::arg("near") = 0.1f, py::arg("far") = 100.f,
+                    "Depth sensor with a vertical FOV (deg), output resolution, and near/far clip (m).")
+                .def_readwrite("range_noise", &DepthSensor::rangeNoise,
+                               "Gaussian range-noise std-dev in metres (0 = perfect sensor).")
+                .def_property_readonly("width", &DepthSensor::width)
+                .def_property_readonly("height", &DepthSensor::height)
+                .def_property_readonly("fov", &DepthSensor::fov)
+                .def_property_readonly("near", &DepthSensor::near)
+                .def_property_readonly("far", &DepthSensor::far)
+                .def("scan", [pts_to_numpy](DepthSensor& self, GLRenderer& renderer, Scene& scene) {
+                    self.updateWorldMatrix(true, true);            // sync sensor + child camera pose
+                    std::vector<Vector3> cloud;
+                    self.scan(renderer, scene, cloud);
+                    return pts_to_numpy(cloud);
+                }, py::arg("renderer"), py::arg("scene"),
+                   "Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far).")
+                .def("scan_rgbd", [pts_to_numpy](DepthSensor& self, GLRenderer& renderer, Scene& scene) {
+                    self.updateWorldMatrix(true, true);
+                    std::vector<Vector3> cloud;
+                    std::vector<Color> colors;
+                    self.scan(renderer, scene, cloud, colors);
+                    py::array_t<float> col({static_cast<py::ssize_t>(colors.size()), static_cast<py::ssize_t>(3)});
+                    auto* c = col.mutable_data();
+                    for (size_t i = 0; i < colors.size(); ++i) {
+                        c[i * 3 + 0] = colors[i].r; c[i * 3 + 1] = colors[i].g; c[i * 3 + 2] = colors[i].b;
+                    }
+                    return py::make_tuple(pts_to_numpy(cloud), col);
+                }, py::arg("renderer"), py::arg("scene"),
+                   "RGB-D scan -> (points (N,3) float32 world-space, colors (N,3) float32 sRGB in [0,1]).");
 
         // ---- OrbitControls ---------------------------------------------------
         py::class_<OrbitControls>(m, "OrbitControls")

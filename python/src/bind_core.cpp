@@ -3,14 +3,19 @@
 #include "bindings.hpp"
 
 #include <pybind11/functional.h>
+#include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
+#include "threepp/constants.hpp"
+#include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Clock.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Points.hpp"
+
+#include <algorithm>
 
 using namespace threepp;
 
@@ -141,6 +146,43 @@ namespace threepp_py {
                 .def("rotate_z", &BufferGeometry::rotateZ, py::arg("angle"), py::return_value_policy::reference_internal)
                 .def("center", &BufferGeometry::center, py::return_value_policy::reference_internal)
                 .def("set_from_points", [](BufferGeometry& g, const std::vector<Vector3>& pts) -> BufferGeometry& { return g.setFromPoints(pts); }, py::arg("points"), py::return_value_policy::reference_internal)
+                // Set/replace a float vertex attribute (e.g. "position", "color", "normal") from an
+                // (N, item_size) numpy array. The attribute is marked Dynamic and the draw range reset
+                // to all N rows. Allocates a new GPU buffer — for per-frame updates of a fixed-capacity
+                // cloud prefer update_attribute (in place, no buffer churn).
+                .def("set_attribute", [](BufferGeometry& g, const std::string& name,
+                                         py::array_t<float, py::array::c_style | py::array::forcecast> data) -> BufferGeometry& {
+                    if (data.ndim() != 2) throw std::runtime_error("set_attribute: expected a 2-D (N, item_size) array");
+                    const int n = static_cast<int>(data.shape(0)), item = static_cast<int>(data.shape(1));
+                    const float* s = data.data();
+                    auto attr = FloatBufferAttribute::create(std::vector<float>(s, s + static_cast<size_t>(n) * item), item);
+                    attr->setUsage(DrawUsage::Dynamic);
+                    g.setAttribute(name, std::move(attr));
+                    g.setDrawRange(0, n);
+                    return g;
+                }, py::arg("name"), py::arg("data"), py::return_value_policy::reference_internal)
+                // Overwrite the first N rows of an existing float attribute in place (no realloc, no GPU
+                // buffer churn) and flag it for re-upload. N may be <= the allocated capacity; pair with
+                // set_draw_range(0, N) to render exactly the rows you wrote. Raises if the attribute is
+                // missing, the item_size differs, or N exceeds the allocated capacity.
+                .def("update_attribute", [](BufferGeometry& g, const std::string& name,
+                                            py::array_t<float, py::array::c_style | py::array::forcecast> data) -> BufferGeometry& {
+                    auto* attr = g.getAttribute<float>(name);
+                    if (!attr) throw std::runtime_error("update_attribute: no attribute '" + name + "' (call set_attribute first)");
+                    if (data.ndim() != 2) throw std::runtime_error("update_attribute: expected a 2-D (N, item_size) array");
+                    const int n = static_cast<int>(data.shape(0)), item = static_cast<int>(data.shape(1));
+                    if (item != attr->itemSize()) throw std::runtime_error("update_attribute: item_size mismatch");
+                    auto& arr = attr->array();
+                    const size_t need = static_cast<size_t>(n) * item;
+                    if (need > arr.size()) throw std::runtime_error("update_attribute: N exceeds allocated capacity (use set_attribute to grow)");
+                    std::copy(data.data(), data.data() + need, arr.begin());
+                    attr->needsUpdate();
+                    return g;
+                }, py::arg("name"), py::arg("data"), py::return_value_policy::reference_internal)
+                .def("set_draw_range", [](BufferGeometry& g, int start, int count) -> BufferGeometry& {
+                    return g.setDrawRange(start, count);
+                }, py::arg("start"), py::arg("count"), py::return_value_policy::reference_internal,
+                   "Render only vertices [start, start+count). Use with a fixed-capacity attribute + update_attribute.")
                 .def("dispose", &BufferGeometry::dispose);
 
         // ---- Clock -----------------------------------------------------------
