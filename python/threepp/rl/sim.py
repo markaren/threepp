@@ -26,13 +26,25 @@ import threepp as tp
 def _torch_cuda_context():
     """The CUDA primary context torch is using, as an int — so PhysX can adopt the SAME
     context (a separate PhysX context makes torch's cuBLAS fail). torch must have touched
-    CUDA first (it has, by the time we call this)."""
+    CUDA first (it has, by the time we call this).
+
+    Raises rather than returning 0 on failure: PhysxWorld treats cuda_context=0 as "make my
+    own context", which silently produces the exact split-context failure this exists to
+    prevent — so a failed lookup must be loud, not a silent fallback."""
     try:
         drv = ctypes.CDLL("nvcuda.dll")
-    except OSError:
-        return 0
+    except OSError as e:
+        raise RuntimeError("GpuSim: cannot load nvcuda.dll to read torch's CUDA context") from e
+    drv.cuCtxGetCurrent.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    drv.cuCtxGetCurrent.restype = ctypes.c_int
     ctx = ctypes.c_void_p()
-    return int(ctx.value or 0) if drv.cuCtxGetCurrent(ctypes.byref(ctx)) == 0 else 0
+    err = drv.cuCtxGetCurrent(ctypes.byref(ctx))
+    if err != 0 or not ctx.value:
+        raise RuntimeError(
+            f"GpuSim: could not read torch's current CUDA context (cuCtxGetCurrent err={err}, "
+            f"ctx={ctx.value}); PhysX would otherwise create a separate context and break "
+            "torch's cuBLAS. Ensure torch has run a CUDA op before constructing GpuSim.")
+    return int(ctx.value)
 
 
 class GpuSim:
@@ -66,16 +78,18 @@ class GpuSim:
         self._jp_gpu = torch.zeros(self.K, self.dof, device=self.device)
         self._jv_gpu = torch.zeros(self.K, self.dof, device=self.device)
         self._force = torch.zeros(self.K, self.dof, device=self.device)
-        self.joint_pos = torch.zeros(self.K, self.dof, device=self.device)   # add-order, after read()
-        self.joint_vel = torch.zeros(self.K, self.dof, device=self.device)
+        # add-order public state, refreshed in-place by read() so the tensor identity is
+        # stable across steps (obs = sim.joint_pos stays valid after the next step). Sized by
+        # the permutation, not self.dof, so the copy_ in read() can't shape-mismatch if the
+        # scene reports a larger maxDofs than this robot's DOF count.
+        self.joint_pos = torch.zeros(self.K, self._perm.shape[0], device=self.device)
+        self.joint_vel = torch.zeros(self.K, self._perm.shape[0], device=self.device)
         if self.read_root:
-            # floating-base state (root link), refreshed by read(). root_pose is PhysX's
-            # PxTransform layout: [qx,qy,qz,qw, px,py,pz] (QUATERNION FIRST, then position) —
-            # use the root_quat / root_position accessors, don't index it by hand. linear/angular
-            # velocity are world-frame. Root is single per robot -> no DOF remap.
-            self._rp_gpu = torch.zeros(self.K, 7, device=self.device)
-            self._rlv_gpu = torch.zeros(self.K, 3, device=self.device)
-            self._rav_gpu = torch.zeros(self.K, 3, device=self.device)
+            # floating-base state (root link), refreshed in-place by read() so these tensors
+            # keep a stable identity across steps. root_pose is PhysX's PxTransform layout:
+            # [qx,qy,qz,qw, px,py,pz] (QUATERNION FIRST, then position) — use the root_quat /
+            # root_position accessors, don't index it by hand. linear/angular velocity are
+            # world-frame. Root is single per robot -> no DOF remap, so read straight in.
             self.root_pose = torch.zeros(self.K, 7, device=self.device)
             self.root_linvel = torch.zeros(self.K, 3, device=self.device)
             self.root_angvel = torch.zeros(self.K, 3, device=self.device)
@@ -123,13 +137,14 @@ class GpuSim:
         from the GPU without stepping."""
         self.batch.read_joint_pos(self._jp_gpu)
         self.batch.read_joint_vel(self._jv_gpu)
-        self.joint_pos = self._jp_gpu[:, self._perm].contiguous()
-        self.joint_vel = self._jv_gpu[:, self._perm].contiguous()
+        # copy_ into the persistent buffers (don't rebind) so callers who stashed a reference
+        # to joint_pos/joint_vel see this step's data instead of a stale tensor.
+        self.joint_pos.copy_(self._jp_gpu[:, self._perm])
+        self.joint_vel.copy_(self._jv_gpu[:, self._perm])
         if self.read_root:
-            self.batch.read_root_pose(self._rp_gpu)
-            self.batch.read_root_linvel(self._rlv_gpu)
-            self.batch.read_root_angvel(self._rav_gpu)
-            self.root_pose, self.root_linvel, self.root_angvel = self._rp_gpu, self._rlv_gpu, self._rav_gpu
+            self.batch.read_root_pose(self.root_pose)        # in-place -> identity stable
+            self.batch.read_root_linvel(self.root_linvel)
+            self.batch.read_root_angvel(self.root_angvel)
         if self.read_links:
             self.batch.read_link_pose(self._lp_gpu)      # in-place -> the [K, max_links, ...] views update
             self.batch.read_link_linvel(self._llv_gpu)
@@ -148,15 +163,22 @@ class GpuSim:
 
     def apply_drive_target(self, target):
         """Set per-DOF PD drive position targets, [K, dof] add-order."""
+        # Build the GPU buffer FIRST, then sync, then write: PhysX consumes the pointer on its
+        # own CUDA stream with no start-event, so the scatter must be drained before the write
+        # is enqueued. Syncing before _to_gpu would leave the scatter racing PhysX's read.
+        gpu = self._to_gpu(target)
         torch.cuda.synchronize()
-        self.batch.write_joint_target_pos(self._to_gpu(target))
+        self.batch.write_joint_target_pos(gpu)
 
     def set_joint_state(self, idx, pos, vel):
         """Reset the joints of envs `idx` to `pos`/`vel` ([m, dof] add-order) — for episode resets."""
+        # Prepare every device buffer PhysX will read (subset indices + remapped pos/vel) before
+        # the sync, so none of them is still being written on torch's stream when PhysX reads it.
         sub = self._gpu_idx[idx].contiguous()
+        gpu_pos, gpu_vel = self._to_gpu(pos), self._to_gpu(vel)
         torch.cuda.synchronize()
-        self.batch.write_subset_joint_pos(self._to_gpu(pos), sub)
-        self.batch.write_subset_joint_vel(self._to_gpu(vel), sub)
+        self.batch.write_subset_joint_pos(gpu_pos, sub)
+        self.batch.write_subset_joint_vel(gpu_vel, sub)
 
     def set_root_state(self, idx, pose, linvel=None, angvel=None):
         """Reset the floating base of envs `idx`: pose [m,7] in PhysX layout [qx,qy,qz,qw, px,py,pz]
@@ -164,9 +186,12 @@ class GpuSim:
         for teleporting a free-base robot on reset."""
         sub = self._gpu_idx[idx].contiguous()
         m = pose.shape[0]
+        # Materialize all the contiguous device buffers PhysX will read before the sync, so the
+        # sync actually covers them (PhysX reads on its own stream with no start-event).
+        gpu_pose = pose.contiguous()
+        gpu_linvel = (linvel if linvel is not None else torch.zeros(m, 3, device=self.device)).contiguous()
+        gpu_angvel = (angvel if angvel is not None else torch.zeros(m, 3, device=self.device)).contiguous()
         torch.cuda.synchronize()
-        self.batch.write_subset_root_pose(pose.contiguous(), sub)
-        self.batch.write_subset_root_linvel((linvel if linvel is not None
-                                             else torch.zeros(m, 3, device=self.device)).contiguous(), sub)
-        self.batch.write_subset_root_angvel((angvel if angvel is not None
-                                             else torch.zeros(m, 3, device=self.device)).contiguous(), sub)
+        self.batch.write_subset_root_pose(gpu_pose, sub)
+        self.batch.write_subset_root_linvel(gpu_linvel, sub)
+        self.batch.write_subset_root_angvel(gpu_angvel, sub)
