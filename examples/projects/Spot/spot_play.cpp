@@ -111,6 +111,7 @@ namespace {
         renderer->toneMappingExposure = 1.1f;
 
         auto scene = Scene::create();
+        scene->fog = FogExp2(0x7ea9d0, .05f);
         scene->background = Color(0x7ea9d0);
         scene->add(HemisphereLight::create(0xd0e4f7, 0x4a5a6a, 1.15f));
         auto sun = DirectionalLight::create(0xffffff, 2.8f);
@@ -132,6 +133,10 @@ namespace {
         scene->add(sunTarget);
         sun->setTarget(*sunTarget);
         const Vector3 sunOffset(6, -5, 11);// keeps the light DIRECTION constant while following
+
+        auto grid = GridHelper::create(120, 120, 0x3a4654, 0x2c343d);
+        grid->rotation.x = math::PI/2;
+        scene->add(grid);
 
         auto floorMat = MeshStandardMaterial::create();
         floorMat->color = Color(0x4a6f9a);
