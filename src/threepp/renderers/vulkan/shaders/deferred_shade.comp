@@ -2604,7 +2604,17 @@ void main() {
         // get in the accumulation). So a fast camera PAN (no disocclusion, but a
         // short effective history) ALSO gets more rays — killing the pan "cloud",
         // not just disocclusions. Disoccl (ph=0) → 8, pan → 4, static → 2.
-        const float capF  = mix(48.0, 6.0, smoothstep(0.002, 0.03, length(mv)));
+        // WORLD-MOTION term: a body panel that is SCREEN-static but WORLD-moving
+        // (car paint under a chase/POV cam) has mv≈0 yet its GI integrand changes
+        // every frame as the surrounding trees/road/grass sweep past. A screen-only
+        // cap pins history at 48 and the 1/48 EMA chases a non-stationary signal
+        // forever (colour boil + lag), AND keeps the pixel in the 1-ray static tier.
+        // Fold in camera world motion (the chase-cam proxy reflReproject already
+        // uses) so these surfaces get a shorter responsive history and drop into the
+        // 2-ray tier — more samples on a tracking mean = less boil. Collapses to
+        // length(mv) when the camera is still (byte-identical static-settle).
+        const float giCamNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(length(worldPos - camPos), 0.25);
+        const float capF  = mix(48.0, 6.0, smoothstep(0.002, 0.03, max(length(mv), giCamNdc)));
         const float effPh = min(ph, capF);
         // Tiers 8/3/1 (was 8/4/2): converged static pixels ride 1 ray/frame —
         // the TAA now actually converges statics, so the long-history tier can
@@ -2741,7 +2751,26 @@ void main() {
         // threshold aligns with specNEET's upper edge so the handoff is exact).
         const float kReflStochastic = 0.25;
         uint reflSeed = pcgHash(uint(px.x) + pcgHash(uint(px.y) + pcgHash(pc.frame * 2654435761u + 7u)));
-        vec3 Rd = (roughness < kReflStochastic) ? R : sampleGGXReflection(V, N, roughness, reflSeed);
+        // MOTION GUARD — a single per-frame GGX-importance sample only resolves once
+        // the temporal accumulation has averaged many frames of it. A glossy panel
+        // that is SCREEN-stationary but WORLD-moving (car paint under a chase / POV
+        // cam: the reflected trees, road and sky sweep past every frame) gets a SHORT
+        // reflection history — reflReproject folds camera world-motion into its cap
+        // and the content-antilag collapses it further — so the 1-spp lobe sample
+        // never converges and boils as F0-tinted speckle (worst on saturated coloured
+        // metals like rally-red paint). There the DETERMINISTIC mirror ray is the
+        // better estimator: identical every frame (zero sample noise), with the
+        // reflection denoise's roughness-scaled blur supplying the gloss and the
+        // content-antilag tracking the moving reflection. The stochastic lobe stays
+        // for SETTLED surfaces, whose long history converges it (parallax-correct
+        // roughening). The motion proxy mirrors reflReproject's mvLen (screen-space
+        // surface motion OR camera world motion) so the estimator choice matches the
+        // history the pixel will actually receive.
+        const vec2  reflMv     = texture(gbufMotionTex, uv).rg;
+        const float reflCamNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(length(worldPos - camPos), 0.25);
+        const bool  reflMoving = max(length(reflMv), reflCamNdc) > 0.004;
+        vec3 Rd = (roughness < kReflStochastic || reflMoving)
+                      ? R : sampleGGXReflection(V, N, roughness, reflSeed);
         // BELOW-HORIZON guard: plain NDF sampling (no VNDF) reflects under the
         // surface for a good fraction of samples at grazing view / high roughness.
         // Those rays start at shadowOrig pointing INTO the surface → graze the
@@ -2896,7 +2925,13 @@ void main() {
         // keep the long clean history; moving pixels get a short responsive one.
         // Temporal analogue of the TAA velocity bump: decouples static cleanliness
         // from motion lag (so we don't have to trade one for the other).
-        const float capF = mix(48.0, 6.0, smoothstep(0.002, 0.03, length(motionGL)));
+        // Same camera-world-motion term as the adaptive-tier cap above (:2607): a
+        // screen-static / world-moving surface (chase-cam car paint) must NOT pin
+        // its history at 48 and chase a non-stationary GI integrand — fold in the
+        // camera world flow so it tracks. Collapses to length(motionGL) when the
+        // camera is still.
+        const float giCamNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(length(worldPos - camPos), 0.25);
+        const float capF = mix(48.0, 6.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc)));
         // Skip frames carry the history UNCHANGED (no new sample → no histLen
         // increment, no blend); trace frames accumulate as before.
         const float histLen = giSkip ? max(prevT.a, 1.0)
