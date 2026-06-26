@@ -2788,8 +2788,22 @@ void main() {
         vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
                                /*cheapHits=*/true);// reflection channel: blur+temporal absorb
         gReflEmitterScale = 1.0;
-        const float rl = max(max(r.r, r.g), r.b);// firefly clamp the single sample
-        if (rl > pc.fireflyClamp) r *= pc.fireflyClamp / rl;
+        // Roughness-aware reflection clamp (moving/deterministic path only). A glossy
+        // surface integrates a bright point source — the sun, a sky-gap between trees —
+        // over its WHOLE BRDF lobe, so the peak is spread thin and dim. The stochastic
+        // lobe (settled surfaces) does that for free, but the DETERMINISTIC mirror ray
+        // used while MOVING reflects the source at FULL radiance and the gloss blur only
+        // smears it into a bright BLOB (the "env-map-probe" speckles on the moving car /
+        // floor). Cap the reflected radiance toward a glossy ceiling as roughness rises:
+        // near-mirror keeps the loose clamp (a sharp bright sun reflection IS correct);
+        // glossy paint dims bright sources to a lobe-appropriate peak. min() never loosens
+        // a tighter user fireflyClamp and stays 1e30-sentinel-safe; applied only on the
+        // deterministic path so the settled stochastic lobe integral stays unbiased.
+        const float reflClamp = reflMoving
+                ? min(pc.fireflyClamp, mix(30.0, 4.0, smoothstep(0.05, 0.30, roughness)))
+                : pc.fireflyClamp;
+        const float rl = max(max(r.r, r.g), r.b);
+        if (rl > reflClamp) r *= reflClamp / rl;
         reflOut = r * (F0 * ab.x + ab.y) * reflBlend;
     }
     if (demodIndirect) {
