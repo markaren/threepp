@@ -1,16 +1,4 @@
-// Ocean — Vulkan PT demo of FFT-displaced water using DisplacedMesh.
-//
-// A three-cascade Phillips spectrum + GPU IFFT chain feeds vertex positions
-// directly into the BLAS each frame; the path tracer's existing transmission
-// BSDF handles refraction, Beer-Lambert absorption, and reflections. A simple
-// sandy floor sits below the surface so caustics from the photon-mapping
-// pass become visible as the sun moves.
-//
-// Built out well past the original single-cascade prototype: foam + Kelvin
-// wake, an adaptive vertex warp that packs density around the vessel, a
-// procedural archipelago ring, a lighthouse with a day/night toggle and a
-// procedural night sky, a maneuvering-model boat (manual + waypoint
-// autopilot) with buoys, plus path-traced LIDAR and a radar HUD.
+// Vulkan PT ocean demo — FFT-displaced water, path-traced refraction/caustics, LIDAR and radar.
 
 #include "threepp/audio/Audio.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
@@ -58,7 +46,6 @@ using namespace threepp;
 
 namespace {
 
-    // Boat input state — captured by KeyListener, polled each frame.
     struct BoatInput : KeyListener {
         bool W = false, A = false, S = false, D = false;
         bool shotRequest = false;// F12: dump the next frame to aaa_caps/ (artifact reports)
@@ -75,50 +62,26 @@ namespace {
         }
     };
 
-    // Persistent boat state — a reduced 3-DOF maneuvering model (surge, sway,
-    // yaw) in the horizontal plane, with wave-driven heave/pitch/roll layered
-    // on top each frame.
-    //   • Surge: engine thrust vs quadratic hull drag — natural top speed
-    //     (~14 kn for a vessel of Gunnerus's size) and a long coast-down.
-    //   • Yaw: first-order Nomoto response. The rudder commands a steady-state
-    //     turn rate proportional to flow over the blade; hull yaw inertia makes
-    //     the rate build/decay over T ≈ L/u seconds instead of snapping.
-    //   • Sway: centripetal coupling gives the outward drift a displacement
-    //     hull carries through a turn (velocity lags heading by the drift angle).
-    //   • Actuators: the rudder slews at a finite rate and the throttle spools
-    //     like an engine telegraph. Manual keys and the waypoint autopilot
-    //     both drive these same actuators, so motion is identical either way.
+    // 3-DOF maneuvering model (surge/sway/yaw) + wave-driven heave/pitch/roll.
     struct BoatState {
-        Vector3 position{0.f, 0.f, 0.f};  // world; y unused (heave is separate)
-        float   yaw          = 0.f;       // heading, radians around +Y
-        float   yawRate      = 0.f;       // r, rad/s (state — yaw inertia)
-        float   forwardSpeed = 0.f;       // surge u, m/s along +heading
-        float   swaySpeed    = 0.f;       // sway v, m/s lateral (drift in turns)
-        float   rudder       = 0.f;       // actual rudder deflection, radians
-        float   throttle     = 0.f;       // engine telegraph state ∈ [−1, 1]
-        bool    aground      = false;     // keel touching (island shores / sills)
-        float   smoothPitch  = 0.f;       // radians, low-passed from wave tilt
-        float   smoothRoll   = 0.f;       // radians
-        float   y            = 0.f;       // metres, spring-damped toward wave height
-        float   vY           = 0.f;       // m/s, heave velocity (state for the spring-damper)
+        Vector3 position{0.f, 0.f, 0.f};
+        float   yaw          = 0.f;       // heading, radians
+        float   yawRate      = 0.f;       // rad/s
+        float   forwardSpeed = 0.f;       // surge, m/s
+        float   swaySpeed    = 0.f;       // sway, m/s
+        float   rudder       = 0.f;       // radians
+        float   throttle     = 0.f;       // ∈ [−1, 1]
+        bool    aground      = false;
+        float   smoothPitch  = 0.f;       // radians, low-passed
+        float   smoothRoll   = 0.f;       // radians, low-passed
+        float   y            = 0.f;       // heave, metres
+        float   vY           = 0.f;       // heave velocity, m/s
     };
-}// namespace
-
-namespace {
-
-    constexpr float kTileSize    = 1000.0f;  // metres — full mesh extent and cascade-0 tile
-    constexpr uint32_t kFftSize  = 1024;     // FFT resolution per cascade — drives wave detail, NOT mesh density.
-    constexpr float kPlaneEdge   = kTileSize;  // mesh extends one full FFT tile in X and Z
-    // Mesh density is decoupled from FFT size: the water_displace.comp samples
-    // the height texture via normalised UVs (u = i / (gridDim-1)) so the mesh
-    // can be any tessellation while the wave field stays at kFftSize². Halving
-    // the subdivision from kFftSize-1 to kFftSize/2-1 drops the vertex count
-    // from ~1 M to ~262 K — a 4× win on BLAS rebuild/refit and the per-vertex
-    // displace dispatch, while wave geometry stays crisp (vertex spacing ~2 m
-    // still resolves λ ≥ 4 m, and Phillips 1/k⁴ puts most energy above that).
-    // Mesh resolution per side. 512 vertices over the 1 km tile (~2 m spacing);
-    // the water material + spectrum now come from threepp::Ocean (objects/Ocean.hpp).
-    constexpr uint32_t kOceanRes = kFftSize / 2;
+    constexpr float kTileSize    = 1000.0f;  // metres
+    // FFT res drives wave detail; mesh density is independent (sampled via normalised UVs).
+    constexpr uint32_t kFftSize  = 1024;
+    constexpr float kPlaneEdge   = kTileSize;
+    constexpr uint32_t kOceanRes = kFftSize / 2;  // 512 verts/side ≈ 2 m spacing over 1 km tile
 
     auto makeSandMaterial() {
         return MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.02,0.02,0.02)).roughness(1.0f));
@@ -126,20 +89,7 @@ namespace {
 
 }// namespace
 
-// ── Procedural enclosing archipelago ────────────────────────────────────────
-// A ring of rocky islands around the play area (r ≈ 385–495 m) so the scene
-// reads as a sheltered Norwegian skerry bay instead of bare open horizon.
-// Deterministic value-noise FBM drives everything: an angular "mass plan"
-// (periodic by construction — noise sampled on a circle) picks where islands
-// rise and where passes stay open sea; a radial bump profile dives both
-// shores below the sand floor so the rims bury cleanly; ridged FBM adds the
-// rocky relief. Surface detail comes from three maps baked in the mesh's own
-// polar parameterisation (the Vulkan PT has no vertex-colour path for
-// meshes): an albedo map layering two granite tones, strata banding, scree,
-// grass / heather / lichen niches and a wet waterline; a tangent-space
-// normal map carrying creased-slab relief far below the vertex grid; and a
-// roughness map that turns the wet band glossy — all derived from the same
-// height field.
+// Procedural archipelago ring (r 385–495 m): value-noise FBM height field with baked albedo/normal/roughness maps.
 namespace island {
 
     constexpr float kInnerR = 385.f;// boat waypoints reach ~320 m — keep clear water
@@ -254,12 +204,7 @@ namespace island {
         std::shared_ptr<DataTexture> rough;
     };
 
-    // Albedo + tangent-space normal + roughness in the mesh's polar
-    // parameterisation (u = angle, v = radius): one texel ≈ 0.13 m of
-    // coastline, 0.11 m radially. Each texel re-evaluates the height field —
-    // centre + 4 neighbours give the slope normal AND the Laplacian
-    // (crest/hollow) from the same five probes — so every mask tracks the
-    // actual geometry. Rows bake in parallel; the pass is a one-off at startup.
+    // Bake albedo/normal/roughness in polar UV (u = angle, v = radius); rows run in parallel.
     BakedMaps bakeMaps() {
         const int W = 20480, H = 1024;
         std::vector<unsigned char> albPx(static_cast<size_t>(W) * H * 4);
@@ -475,13 +420,7 @@ namespace island {
     }
 
     std::shared_ptr<Mesh> build() {
-        // 8192 angular columns ≈ 0.34 m spacing at mid-ring, 256 radial rows
-        // ≈ 0.43 m — fine enough to carry the new sub-metre relief in heightAt
-        // as real geometry instead of normal-map fakery. The seam column is
-        // duplicated (u = 0 and u = 1) so UVs never wrap. ~2.1 M verts /
-        // ~4.2 M tris, static BLAS built once; rows fill in parallel
-        // (≈ 10 M height-field probes). Cheap for ray tracing (one static
-        // BLAS) and trivial for the deferred raster pass on a modern GPU.
+        // 8192 angular × 256 radial (≈0.34/0.43 m spacing); seam column duplicated for clean UVs.
         const int NA = 8192, NR = 256;
         std::vector<float> pos(static_cast<size_t>(NA + 1) * (NR + 1) * 3);
         std::vector<float> nrm(static_cast<size_t>(NA + 1) * (NR + 1) * 3);
@@ -539,14 +478,8 @@ namespace island {
 
 }// namespace island
 
-// ── Procedural looping audio (engine + ocean/wind ambience) ─────────────────
-// Same temp-WAV approach as the Shooter example: the Audio API loads files,
-// so the loops are synthesised once at startup and written to the temp dir.
-// Seamless looping: every deterministic component (engine harmonics, swell /
-// gust LFOs) is given an exact integer number of cycles over the loop length,
-// then the synth renders an extra tail whose start is crossfaded back onto
-// the head — periodic terms pass through the wrap unchanged while the noise
-// and one-pole filter states blend across it.
+// Procedural audio: engine + ocean/wind ambience synthesised to temp WAV, seamlessly looped.
+// Seamless loops: periodic terms wrap naturally; a tail crossfade blends filter state at the seam.
 namespace {
 
     struct OnePole {
@@ -788,16 +721,7 @@ namespace {
 
 int main(int argc, char** argv) {
 
-    // ── Headless capture (dev iteration loop) ───────────────────────────────
-    //   vulkan_ocean --shot <name.png> [--frames N] [--night] [--pt]
-    //                [--vista] [--close] [--island] [--toggle]
-    // Fixed aerial camera, N warm-up frames (TAA/denoiser converge), one PNG
-    // into <project>/aaa_caps/, exit. --night starts in night mode; --pt
-    // captures the path-traced reference instead of the deferred default;
-    // --vista frames a high oblique overview (archipelago ring + lighthouse);
-    // --close is a near-surface grazing view for surface-artifact hunting;
-    // --island frames a close terrain view of one archipelago island;
-    // --toggle starts in day and flips to night mid-run.
+    // --shot <name.png> [--frames N] [--night] [--pt] [--vista] [--close] [--island] [--toggle]
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
@@ -822,7 +746,7 @@ int main(int argc, char** argv) {
     const capture::Args capArgs = capture::parseArgs(argc, argv);
     int shotFrame = 0;
 
-    Canvas canvas("Vulkan PT  Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
+    Canvas canvas("Vulkan Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
     VulkanRenderer renderer(canvas);
     renderer.setDenoise(true);
     renderer.setRestirDIEnabled(true);
@@ -840,8 +764,10 @@ int main(int argc, char** argv) {
                          "/textures/env/autumn_field_puresky_2k.hdr");
 
     Scene scene;
-    scene.background = env;
-    scene.environment = env;
+    if (env) {
+        scene.background = env;
+        scene.environment = env;
+    }
 
     // Sun-like directional light. The HDR env already contains a sun (env
     // CDF + MIS will importance-sample it), so the directional is mostly
@@ -869,17 +795,6 @@ int main(int argc, char** argv) {
     // one BLAS build; the lighthouse beam grazes its cliffs at night.
     scene.add(island::build());
 
-    // Ocean surface — the first-party threepp::Ocean (objects/Ocean.hpp) builds
-    // the plane, the transmissive water material, and the three-cascade Phillips
-    // spectrum from these options:
-    //   size       = 1 km tile = cascade-0 swell wavelength.
-    //   resolution = kFftSize/2 → 512² verts (mesh density is decoupled from the
-    //                kFftSize² wave field — see the kOceanRes note above).
-    //   fftSize    = cascade-0 FFT resolution; cascades 1 & 2 use half.
-    // The mid/fine cascade tiles (100 m / 8 m), choppiness (0.55) and waveScale
-    // (1.0) keep Ocean's defaults. Everything the boat drives — warp / wake /
-    // hull-exclusion / foam — is set per-frame on this same object below (Ocean
-    // is-a DisplacedMesh).
     Ocean::Options oceanOpts;
     oceanOpts.size       = kTileSize;
     oceanOpts.resolution = kOceanRes;
@@ -893,17 +808,8 @@ int main(int argc, char** argv) {
     scene.add(ocean);
 
     // ── Lighthouse (scene centre) ───────────────────────────────────────────
-    // Norwegian-coast station built from procedural primitives: noise-displaced
-    // granite skerry, concrete pads, lathe-profiled white masonry tower (plinth
-    // → concave taper → corbelled gallery), railed gallery deck, red watch
-    // room, glazed lantern (transmission glass between mullions), domed roof
-    // with ventilator finial, and a small service hut. The LAMP is the
-    // night-mode hero: an emissive mesh (area light for the PT / deferred
-    // emissive paths) + a rotating SpotLight whose beam the deferred
-    // volumetric march renders as the classic sweeping fan. A rotating
-    // occluder hood around the lamp gives the emissive area light the same
-    // directionality as the spot — the lantern flares only when the beam
-    // sweeps your way, like the real optic.
+    // Procedural Norwegian-coast station: skerry → lathe tower → glazed lantern.
+    // Rotating lamp hood gives the emissive area light the same directionality as the SpotLight.
     auto lampMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
             .color(Color(1.f, 0.95f, 0.8f)).roughness(0.4f).metalness(0.f));
     lampMat->emissive = Color(1.f, 0.85f, 0.55f);
@@ -1130,11 +1036,7 @@ int main(int argc, char** argv) {
     moon->setTarget(moonTarget);
     scene.add(moon);
 
-    // ── Procedural night sky (equirect, RGBA float) ─────────────────────────
-    // Deep-blue elevation gradient + faint horizon glow + star field + a moon
-    // disc bright enough that the PT's env CDF importance-samples it (it acts
-    // as the night "sun"). Built once; the night toggle swaps scene.environment
-    // / background and the renderer re-runs PMREM + descriptor rewrites.
+    // Procedural night sky equirect: gradient + horizon glow + moon disc (bright enough for env CDF IS).
     std::shared_ptr<Texture> nightEnv;
     {
         // 2048×1024: one texel ≈ 0.18° ≈ ~4 screen px at this FOV — stars stay
@@ -1177,12 +1079,7 @@ int main(int argc, char** argv) {
                 data[i + 0] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 1.f;
             }
         }
-        // NO baked stars: a star is sub-texel at ANY practical env resolution,
-        // so after bilinear magnification (+ TAA upscale) every baked star
-        // renders as a ~14 px blob. Stars come from the renderer's procedural
-        // direction-space star field instead (setDeferredStarfield) — crisp
-        // points at every resolution/FOV. The env keeps what magnifies well:
-        // gradient, horizon glow, moon (which also feeds reflections + PT CDF).
+        // Stars via setDeferredStarfield (not baked) — baked stars blur to ~14 px blobs after bilinear+TAA.
         Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
         nightEnv = Texture::create(img);
         nightEnv->format = Format::RGBA;
@@ -1236,21 +1133,21 @@ int main(int argc, char** argv) {
     constexpr float kBoatLength = 28.0f;
     constexpr float kBoatBeam   = 9.0f;
 
-    // ── Maneuvering model constants (R/V Gunnerus-ish, 28 m displacement hull) ──
-    constexpr float kMaxSpeed    = 7.2f;  // m/s ≈ 14 kn, full ahead
-    constexpr float kMaxAccel    = 0.55f; // m/s² at full throttle from rest
-    constexpr float kDragQuad    = kMaxAccel / (kMaxSpeed * kMaxSpeed);// drag balances thrust at kMaxSpeed
-    constexpr float kAsternFrac  = 0.25f; // astern thrust fraction → ~3.5 m/s astern
+    // Maneuvering model constants — Nomoto/Norrbin for a 28 m displacement hull (R/V Gunnerus-ish).
+    constexpr float kMaxSpeed    = 7.2f;  // m/s ≈ 14 kn
+    constexpr float kMaxAccel    = 0.55f; // m/s²
+    constexpr float kDragQuad    = kMaxAccel / (kMaxSpeed * kMaxSpeed);
+    constexpr float kAsternFrac  = 0.25f; // astern thrust fraction
     constexpr float kRudderMax   = 0.61f; // 35° hard-over
-    constexpr float kRudderRate  = 0.30f; // rad/s actuator slew — hard-over in ~2 s
-    constexpr float kTurnGain    = 1.f / (70.f * kRudderMax);// r_ss = gain·flow·δ → ~70 m radius hard-over (≈2.5 L)
-    constexpr float kPropWash    = 2.0f;  // m/s of extra rudder flow per unit ahead throttle (kick-turn from rest)
-    constexpr float kTurnDrag    = 0.5f;  // surge drag ∝ |r|·u — speed bleeds off through a hard turn
-    constexpr float kSwayCouple  = 1.45f; // centripetal sway forcing — ~10° drift angle in a hard turn
+    constexpr float kRudderRate  = 0.30f; // rad/s actuator slew
+    constexpr float kTurnGain    = 1.f / (70.f * kRudderMax);// r_ss = gain·flow·δ, ≈2.5 L turning radius
+    constexpr float kPropWash    = 2.0f;  // m/s extra rudder flow per unit ahead throttle
+    constexpr float kTurnDrag    = 0.5f;  // surge drag ∝ |r|·u in turns
+    constexpr float kSwayCouple  = 1.45f; // centripetal sway
     constexpr float kSwayDamp    = 0.8f;  // 1/s lateral damping
-    constexpr float kTurnHeel    = 0.08f; // rad of outward heel per (m/s · rad/s) — CG above lateral pressure centre
-    constexpr float kSpeedTrim   = 0.021f;// rad of bow-up squat trim at full speed
-    constexpr float kDraft       = 2.5f;  // m — grounding test depth (island sills top out at −2 m)
+    constexpr float kTurnHeel    = 0.08f; // rad outward heel per (m/s · rad/s)
+    constexpr float kSpeedTrim   = 0.021f;// rad bow-up trim at full speed
+    constexpr float kDraft       = 2.5f;  // m, grounding depth
 
     GLTFLoader gltfLoader;
     auto boat = loadAsync([&gltfLoader]() -> std::shared_ptr<Group> {
@@ -1569,12 +1466,7 @@ int main(int argc, char** argv) {
     constexpr int   kMaxRadarTargets  = 16;
     std::array<float, kMaxRadarTargets> radarBlipIntensity{};
 
-    // ── LIDAR mast (mounted above the Gunnerus bow, forward-facing 180°) ──
-    // OS0-128 beam pattern restricted to the forward hemisphere — matches
-    // typical maritime "bow-mounted" sensor coverage, and avoids the
-    // beams that would otherwise have to crawl through the wheelhouse and
-    // hull bbox behind the sensor origin. Intensity is physically correct
-    // via the same closest-hit BSDF the path tracer uses.
+    // ── LIDAR mast: OS0-128 forward hemisphere (bow-mounted, avoids wheelhouse occlusion) ──
     constexpr float kLidarMountHeight  = 11.0f;      // m above waterline — clears wheelhouse + mast roof
     constexpr float kLidarMountForward = 8.0f;       // m forward of boat origin (near the bow)
     constexpr int   kLidarMaxBeams     = 1100000;    // OS0-128 forward × maxReturns 4 × samples 4
@@ -1610,10 +1502,7 @@ int main(int argc, char** argv) {
     int   lidarLastReturns = 0;
     float lidarLastScanMs  = 0.f;
 
-    // ── LIDAR point-cloud overlay ──────────────────────────────────────────
-    // One vertex per return, intensity-mapped colour. Vulkan PT auto-detects
-    // Points objects and routes them through the POINT_LIST overlay pipeline,
-    // excluded from the TLAS so beams don't see their own visualisation.
+    // ── LIDAR point-cloud overlay (Points object, excluded from TLAS) ────────
     auto lidarCloudGeom = BufferGeometry::create();
     lidarCloudGeom->setAttribute("position",
                                   FloatBufferAttribute::create(std::vector<float>(kLidarMaxBeams * 3), 3));
@@ -1628,10 +1517,7 @@ int main(int argc, char** argv) {
     lidarCloud->frustumCulled = false;
     scene.add(lidarCloud);
 
-    // ── LIDAR readout panel (screen-space sprite, top-left below FPS) ──────
-    // 720×128 RGBA8 grid laid out as (azimuth × elevation); same colormap as
-    // the cloud. We tag it sRGB so the sampler decodes correctly and the
-    // bytes we write display vibrantly post-pipeline.
+    // ── LIDAR readout panel (screen-space sprite, azimuth × elevation grid) ──
     constexpr unsigned int kLidarPanelW = 720;
     constexpr unsigned int kLidarPanelH = 128;
     constexpr float        kLidarPanelDispW = 360.f;
@@ -1654,12 +1540,7 @@ int main(int argc, char** argv) {
 
     std::vector<LidarReturn> lidarReturns;
 
-    // ── Time-of-flight waveform synthesis ──────────────────────────────
-    // The discrete returns above are what the host gets from the GPU
-    // pipeline; a real LIDAR detector sees a continuous waveform that's
-    // the Gaussian-pulse convolution of those returns. We synthesise
-    // that waveform CPU-side and plot a single representative beam in
-    // ImGui so the demo shows both views (point cloud + analog signal).
+    // ── Time-of-flight waveform synthesis (Gaussian-pulse convolution of discrete returns) ──
     LidarWaveformParams lidarWavParams;
     lidarWavParams.maxRange   = 120.f;
     lidarWavParams.bins       = 256;
@@ -1783,7 +1664,6 @@ int main(int argc, char** argv) {
             renderer.setRenderScale(renderScale);
         }
         ImGui::Separator();
-
 
         ImGui::TextUnformatted("Underwater fog");
         ImGui::SliderFloat("Density (1/m)", &uwFogDensity, 0.01f, 0.20f, "%.3f");
