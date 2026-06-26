@@ -24,6 +24,7 @@
 
 #include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/audio/Audio.hpp"
+#include "threepp/audio/WavFile.hpp"
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/extras/SpriteInteractor.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
@@ -171,32 +172,6 @@ namespace {
     // ========================================================================
     //  Procedural placeholder sound effects
     // ========================================================================
-    // 16-bit mono PCM WAV writer + a few quick synths. The Audio API loads
-    // from a file path, so we render these to a temp dir at startup.
-
-    void writeWav(const fs::path& path, const std::vector<float>& samples, int sr = 44100) {
-        std::ofstream f(path, std::ios::binary);
-        auto u32 = [&](uint32_t v) { f.write(reinterpret_cast<char*>(&v), 4); };
-        auto u16 = [&](uint16_t v) { f.write(reinterpret_cast<char*>(&v), 2); };
-        const uint32_t dataBytes = static_cast<uint32_t>(samples.size()) * 2u;
-        f.write("RIFF", 4);
-        u32(36 + dataBytes);
-        f.write("WAVE", 4);
-        f.write("fmt ", 4);
-        u32(16);
-        u16(1);// PCM
-        u16(1);// mono
-        u32(sr);
-        u32(sr * 2);
-        u16(2);
-        u16(16);
-        f.write("data", 4);
-        u32(dataBytes);
-        for (float x : samples) {
-            const auto q = static_cast<int16_t>(std::lround(std::clamp(x, -1.f, 1.f) * 32767.f));
-            f.write(reinterpret_cast<const char*>(&q), 2);
-        }
-    }
 
     std::vector<float> synthShot(int sr = 44100) {
         const int n = sr * 18 / 100;// 0.18s
@@ -489,7 +464,7 @@ namespace {
                     } else {
                         for (size_t k = 0; k < sp.variants.size(); ++k) {// render the synth fallback(s)
                             auto p = (dir / (sp.name + std::to_string(k) + ".wav")).string();
-                            writeWav(p, sp.variants[k]);
+                            threepp::audio::writeWav(p, sp.variants[k]);
                             paths.push_back(std::move(p));
                         }
                     }
@@ -505,7 +480,7 @@ namespace {
                 // far blasts are clearly quieter + directional without dropping out.
                 {
                     std::string boomPath = fs::exists(boomFile) ? boomFile : (dir / "boom.wav").string();
-                    if (!fs::exists(boomFile)) writeWav(boomPath, synthBoom());
+                    if (!fs::exists(boomFile)) threepp::audio::writeWav(boomPath, synthBoom());
                     for (int i = 0; i < 4; ++i) {
                         auto a = std::make_unique<PositionalAudio>(*listener, boomPath);
                         a->setVolume(0.9f);// blast is the loudest cue in the game
