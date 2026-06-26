@@ -3,30 +3,6 @@
 
 using namespace threepp;
 
-namespace {
-
-    std::vector<float> flatten(const std::vector<Vector3>& positions) {
-        std::vector<float> res;
-        for (const auto& p : positions) {
-            res.emplace_back(p.x);
-            res.emplace_back(p.y);
-            res.emplace_back(p.z);
-        }
-        return res;
-    }
-
-    std::vector<float> createColorBuffer(size_t numPoints, const Color& c) {
-        std::vector<float> res;
-        for (unsigned i = 0; i < numPoints; i++) {
-            res.emplace_back(c.r);
-            res.emplace_back(c.g);
-            res.emplace_back(c.b);
-        }
-        return res;
-    }
-
-}// namespace
-
 int main() {
 
     Canvas canvas("ConvexGeometry", {{"aa", 4}});
@@ -41,17 +17,24 @@ int main() {
 
     constexpr int numPoints = 100;
     std::vector<Vector3> pts;
-    pts.reserve(numPoints);
-    for (auto i = 0; i < numPoints; i++) {
-        pts.emplace_back(math::randFloatSpread(20), math::randFloatSpread(20), math::randFloatSpread(20));
+    std::shared_ptr<ConvexGeometry> convexGeometry;
+
+    // Random point sets are occasionally degenerate or trigger precision failures
+    // in quickhull. Retry with a fresh sample until it succeeds.
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        pts.clear();
+        pts.reserve(numPoints);
+        for (auto i = 0; i < numPoints; i++) {
+            pts.emplace_back(math::randFloatSpread(20), math::randFloatSpread(20), math::randFloatSpread(20));
+        }
+        try {
+            convexGeometry = ConvexGeometry::create(pts);
+            break;
+        } catch (const std::runtime_error&) {
+            if (attempt == 9) throw;
+        }
     }
 
-    auto pointsGeometry = BufferGeometry::create();
-    pointsGeometry->setAttribute("color", FloatBufferAttribute::create(createColorBuffer(numPoints, Color::red), 3));
-    pointsGeometry->setAttribute("position", FloatBufferAttribute::create(flatten(pts), 3));
-    pointsGeometry->computeBoundingBox();
-
-    auto convexGeometry = ConvexGeometry::create(pts);
     auto convexMaterial = MeshBasicMaterial::create();
     convexMaterial->color = Color::gray;
     convexMaterial->transparent = true;
@@ -59,15 +42,31 @@ int main() {
     auto convex = Mesh::create(convexGeometry, convexMaterial);
     scene->add(convex);
 
-    for (auto i = 0; i < numPoints; i++) {
-        const auto& p = pts[i];
-        if (convexGeometry->containsPoint(p, -0.1)) {
-            pointsGeometry->getAttribute<float>("color")->setXYZ(i, 0, 0, 0);
+    // Collect unique hull vertex positions from the geometry's position buffer.
+    // The quickhull algo copies exact float values from pts, so exact equality works.
+    auto* posAttr = convexGeometry->getAttribute<float>("position");
+    std::vector<Vector3> hullVerts;
+    for (size_t i = 0; i < posAttr->count(); i++) {
+        Vector3 v(posAttr->getX(i), posAttr->getY(i), posAttr->getZ(i));
+        bool dup = false;
+        for (const auto& hv : hullVerts) {
+            if (hv.x == v.x && hv.y == v.y && hv.z == v.z) { dup = true; break; }
         }
+        if (!dup) hullVerts.push_back(v);
     }
 
-    auto points = Points::create(pointsGeometry, PointsMaterial::create(PointsMaterial::Params{}.vertexColors(true)));
-    convex->add(points);
+    constexpr float sphereRadius = 0.3f;
+    auto spheres = InstancedMesh::create(SphereGeometry::create(sphereRadius, 8, 6),
+                                         MeshBasicMaterial::create(),
+                                         numPoints);
+    Matrix4 matrix;
+    for (auto i = 0; i < numPoints; i++) {
+        const auto& p = pts[i];
+        matrix.setPosition(p);
+        spheres->setMatrixAt(i, matrix);
+        spheres->setColorAt(i, convexGeometry->containsPoint(p, -sphereRadius) ? Color::black : Color::red);
+    }
+    convex->add(spheres);
 
     auto lineMaterial = LineBasicMaterial::create(LineBasicMaterial::Params{}.color(Color::black));
     auto edges = LineSegments::create(WireframeGeometry::create(*convexGeometry), lineMaterial);
