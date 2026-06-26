@@ -202,7 +202,21 @@ void main() {
         // Convergence-narrowing only makes sense where stochastic lobe samples
         // actually accumulate (roughness ≥ 0.25).
         const float detT        = isGlass ? 1.0 : (1.0 - smoothstep(0.20, 0.30, rough));
-        const float widenT      = max(max(1.0 - convT, noiseT), detT);
+        // Blur width = max of noiseT (ACTUAL residual per-sample variance) and detT
+        // (the deterministic-mirror→gloss blur). The old extra term `1.0 - convT`
+        // widened the blur whenever temporal history was SHORT — a proxy for "the
+        // 1-spp GGX sample is noisy, blur it to hide the boil." That proxy is now
+        // WRONG: the shade pass traces a DETERMINISTIC mirror ray on moving surfaces
+        // (the screen-static/world-moving boil fix), so a short history under CAMERA
+        // MOTION now carries a CLEAN sample, not a noisy one — and widening a clean,
+        // view-dependent reflection just SMEARED its reflected detail into a trail as
+        // the view rotated (the "shiny surfaces smear when turning" report, worst on
+        // curved reflectors whose reflection slides fastest). noiseT (built from the
+        // temporal E[L²]) already widens exactly where there is REAL variance — e.g.
+        // a still camera's freshly-disoccluded GGX reflection — so it covers what the
+        // history proxy stood in for, without paying the motion smear. Converged
+        // pixels are unaffected (1-convT was ~0 there already).
+        const float widenT      = max(noiseT, detT);
         const float narrowSigma = clamp(baseSigma, 0.6, 1.3);// converged floor (mild, roughness-aware)
         const float sigma       = clamp(mix(narrowSigma, baseSigma, widenT), 0.6, 5.0);
         const float inv2s2  = 1.0 / (2.0 * sigma * sigma);

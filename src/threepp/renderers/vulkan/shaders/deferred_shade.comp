@@ -2716,13 +2716,20 @@ void main() {
     // CHECKERBOARD reflections (OPPOSITE parity to giSkip → an eligible pixel
     // traces exactly ONE indirect channel per frame): with ≥4 frames of usable
     // history, skip the whole traceRadiance chain and HOLD the accumulation.
-    // reflReproject's policy already encodes when holding is safe: near-mirror
-    // under camera motion hard-resets (histCap < 1.5 → not usable), so the
-    // deterministic mirror ray keeps full rate exactly where the reflection is
-    // view-dependent; rough and static pixels ride their history instead. A
-    // static mirror's ray is deterministic, so its held value IS the ray's value.
+    // reflReproject's policy vetoes holding under CAMERA motion (near-mirror
+    // hard-resets, histCap < 1.5) — but that is NOT the only way a held reflection
+    // goes stale. At a STATIC camera reflecting MOVING content (an orbiting lamp /
+    // gem, a car driving past a parked mirror) the reproject succeeds, so the held
+    // half shows the moving object at its PREVIOUS position while the traced half
+    // shows it CURRENT — interleaved every frame into a DOUBLED, offset reflection
+    // (plus a visible checkerboard) that the sharp near-mirror blur cannot hide.
+    // So only checkerboard the STOCHASTIC/rough reflections (roughness ≥
+    // kReflStochastic 0.25): their wide roughness blur absorbs any held/traced
+    // alternation, and their GGX trace is where the 2× perf saving actually matters.
+    // Near-mirror DETERMINISTIC reflections trace fresh every frame — a single
+    // mirror ray, cheap, and stale-hold-free (the cause of the pbr_showcase double).
     bool reflSkip = false;
-    if (demodIndirect && reflBlend > 0.0 && opaqueRefl &&
+    if (demodIndirect && reflBlend > 0.0 && opaqueRefl && roughness >= 0.25 &&
         ((((px.x ^ px.y) ^ int(pc.frame)) & 1) == 0)) {
         vec2 rUv; float rCap;
         if (reflReproject(uv, N, roughness, length(worldPos - camPos), rUv, rCap))
