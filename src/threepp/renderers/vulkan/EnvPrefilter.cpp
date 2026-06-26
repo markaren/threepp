@@ -337,7 +337,12 @@ namespace threepp::vulkan {
                 const float r = static_cast<float>(mip) /
                                 static_cast<float>(out.mipLevels - 1);
                 pc.alpha      = r * r;// GGX α = roughness²
-                pc.numSamples = 64u;
+                // 512 (was 64): a tiny, very bright HDR sun under a narrow lobe needs
+                // many samples to integrate smoothly — 64 left it quantized into
+                // discrete bright lumps. Paired with the per-texel Cranley-Patterson
+                // rotation in the shader (decorrelates the residual into absorbable
+                // noise). One-shot per env upload, so essentially free at runtime.
+                pc.numSamples = 512u;
                 vkCmdPushConstants(cb, pipelineLayout_,
                                    VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
                 vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,

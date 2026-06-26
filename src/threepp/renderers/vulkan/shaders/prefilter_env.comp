@@ -42,6 +42,24 @@ vec2 hammersley(uint i, uint N) {
     return vec2(float(i) / float(N), radicalInverse_VdC(i));
 }
 
+// Per-output-texel 2D hash (PCG) → a Cranley-Patterson rotation of the sample
+// set. Without it EVERY texel integrates the SAME fixed Hammersley directions,
+// so the undersampling error of a tiny bright sun is spatially CORRELATED into
+// coherent bright lumps (the "env-map-probe" blobs). Rotating the sequence by a
+// per-texel offset decorrelates neighbours → the residual becomes high-frequency
+// noise that the LINEAR mip filtering + reflection denoise average away, instead
+// of blobs. Energy-unbiased (just reshuffles where each texel samples the lobe).
+uint pcg(uint v) {
+    v = v * 747796405u + 2891336453u;
+    uint s = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
+    return (s >> 22u) ^ s;
+}
+vec2 hash2(uvec2 p) {
+    const uint h  = pcg(p.x + pcg(p.y));
+    const uint h2 = pcg(h);
+    return vec2(float(h) * 2.3283064365386963e-10, float(h2) * 2.3283064365386963e-10);
+}
+
 // GGX importance sample of the half-vector around N, in world space.
 vec3 importanceSampleGGX(vec2 u, vec3 N, float a) {
     const float phi = TWO_PI * u.x;
@@ -87,10 +105,18 @@ void main() {
         return;
     }
 
+    // Per-texel rotation ONLY on the sharp/narrow-lobe mips (alpha < 0.25, i.e.
+    // roughness < 0.5) where the undersampling error is COHERENT blobs. On the WIDE
+    // mips (high roughness — esp. the widest mip the DIFFUSE IBL reads) the integral
+    // is already smooth, so rotating just turns a smooth correlated bias into
+    // per-texel NOISE that crawls as the surface normal sweeps → "movement noise on
+    // diffuse materials". Leave those un-rotated (their fixed-sequence error is a
+    // faint, stable, view-independent bias).
+    const vec2 cp = (pc.alpha < 0.25) ? hash2(uvec2(p)) : vec2(0.0);
     vec3  prefiltered = vec3(0.0);
     float totalWeight = 0.0;
     for (uint i = 0u; i < pc.numSamples; ++i) {
-        const vec2 xi = hammersley(i, pc.numSamples);
+        const vec2 xi = fract(hammersley(i, pc.numSamples) + cp);
         const vec3 H  = importanceSampleGGX(xi, N, pc.alpha);
         const vec3 L  = normalize(2.0 * dot(N, H) * H - N);
         const float NdotL = max(dot(N, L), 0.0);
