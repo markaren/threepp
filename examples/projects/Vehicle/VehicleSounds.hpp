@@ -18,6 +18,7 @@
 // cycles over the loop length; noise/filter states crossfade over the seam.
 
 #include "threepp/audio/Audio.hpp"
+#include "threepp/audio/WavFile.hpp"
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/extras/physx/PhysxVehicle.hpp"
 #include "threepp/math/MathUtils.hpp"
@@ -27,7 +28,6 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <random>
@@ -86,30 +86,6 @@ namespace threepp::vehiclesound {
             return out;
         }
 
-        // 16-bit mono PCM WAV writer (verbatim from the Shooter example).
-        inline void writeWav(const std::filesystem::path& path, const std::vector<float>& samples, int sr = 44100) {
-            std::ofstream f(path, std::ios::binary);
-            auto u32 = [&](std::uint32_t v) { f.write(reinterpret_cast<char*>(&v), 4); };
-            auto u16 = [&](std::uint16_t v) { f.write(reinterpret_cast<char*>(&v), 2); };
-            const auto dataBytes = static_cast<std::uint32_t>(samples.size()) * 2u;
-            f.write("RIFF", 4);
-            u32(36 + dataBytes);
-            f.write("WAVE", 4);
-            f.write("fmt ", 4);
-            u32(16);
-            u16(1);// PCM
-            u16(1);// mono
-            u32(sr);
-            u32(sr * 2);
-            u16(2);
-            u16(16);
-            f.write("data", 4);
-            u32(dataBytes);
-            for (float x : samples) {
-                const auto q = static_cast<std::int16_t>(std::lround(std::clamp(x, -1.f, 1.f) * 32767.f));
-                f.write(reinterpret_cast<const char*>(&q), 2);
-            }
-        }
 
         // Road/rolling noise, 2 s loop: deep low-passed rumble + a 13 Hz
         // texture flutter (26 exact cycles) that reads as seams/grain.
@@ -275,7 +251,7 @@ namespace threepp::vehiclesound {
                 std::filesystem::create_directories(dir);
                 auto wav = [&](const char* name, const std::vector<float>& s) {
                     const auto p = dir / name;
-                    d::writeWav(p, s);
+                    threepp::audio::writeWav(p, s);
                     return p;
                 };
                 const auto roadPath  = wav("road.wav", d::synthRoadLoop());

@@ -74,7 +74,7 @@ namespace drive {
                 std::filesystem::create_directories(dir);
                 auto wav = [&](const char* name, const std::vector<float>& s) {
                     const auto p = dir / name;
-                    vd::writeWav(p, s);
+                    threepp::audio::writeWav(p, s);
                     return p;
                 };
                 const auto roadPath = wav("road.wav", vd::synthRoadLoop());

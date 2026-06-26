@@ -1,6 +1,7 @@
 // Vulkan PT ocean demo — FFT-displaced water, path-traced refraction/caustics, LIDAR and radar.
 
 #include "threepp/audio/Audio.hpp"
+#include "threepp/audio/WavFile.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
@@ -34,7 +35,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <numeric>
@@ -97,10 +97,6 @@ namespace island {
     constexpr float kPeakH  = 55.f; // tallest summits (m)
     constexpr float kSkirt  = 7.f;  // rim depth — below the sand floor (-5 m)
 
-    float smoothstepf(float e0, float e1, float x) {
-        const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
-        return t * t * (3.f - 2.f * t);
-    }
 
     float hashf(int xi, int zi) {
         uint32_t h = static_cast<uint32_t>(xi) * 374761393u + static_cast<uint32_t>(zi) * 668265263u;
@@ -148,7 +144,7 @@ namespace island {
         const float a = std::atan2(z, x);
         const float m0 = 0.65f * vnoise(7.3f + std::cos(a) * 2.9f, 3.1f + std::sin(a) * 2.9f) +
                          0.35f * vnoise(13.7f + std::cos(a) * 5.3f, 23.9f + std::sin(a) * 5.3f);
-        const float m = smoothstepf(0.27f, 0.60f, m0);
+        const float m = math::smoothstep(0.27f, 0.60f, m0);
 
         // ridged FBM (fold-over of signed noise) = sharp rocky crests
         const float ridge = 1.f - std::abs(2.f * fbm(x * 0.035f, z * 0.035f, 4) - 1.f);
@@ -244,7 +240,7 @@ namespace island {
 
                 // two-tone base: pale weathered granite vs darker gneiss,
                 // blended at island scale so each face reads as its own mass
-                const float t = smoothstepf(0.35f, 0.65f, tone);
+                const float t = math::smoothstep(0.35f, 0.65f, tone);
                 float cr = 0.26f + 0.20f * t;
                 float cg = 0.245f + 0.195f * t;
                 float cb = 0.235f + 0.175f * t;
@@ -255,7 +251,7 @@ namespace island {
                 cb += speck * 0.9f;
                 // wandering sub-horizontal strata bands on steep faces
                 const float strata = 1.f + 0.09f * std::sin(h * 0.75f + 6.f * warp) *
-                                                 smoothstepf(0.85f, 0.55f, ny);
+                                                 math::smoothstep(0.85f, 0.55f, ny);
                 // crest/hollow shading from the Laplacian
                 const float cav = 1.f + 0.14f * crest;
                 cr *= strata * cav;
@@ -263,18 +259,18 @@ namespace island {
                 cb *= strata * cav;
 
                 // scree aprons: gentle low benches at the cliff feet collect debris
-                const float scree = smoothstepf(0.60f, 0.78f, ny) * smoothstepf(1.2f, 2.6f, h) *
-                                    (1.f - smoothstepf(5.f, 13.f, h)) *
-                                    smoothstepf(0.35f, 0.65f, vegS) * 0.55f;
+                const float scree = math::smoothstep(0.60f, 0.78f, ny) * math::smoothstep(1.2f, 2.6f, h) *
+                                    (1.f - math::smoothstep(5.f, 13.f, h)) *
+                                    math::smoothstep(0.35f, 0.65f, vegS) * 0.55f;
                 cr += (0.41f - cr) * scree;
                 cg += (0.375f - cg) * scree;
                 cb += (0.315f - cb) * scree;
 
                 // heather/shrub on mid slopes, its own patch noise
                 const float hePatch = fbm(wx * 0.019f + 57.f, wz * 0.019f + 91.f, 2);
-                const float heather = smoothstepf(0.45f, 0.62f, ny) * smoothstepf(1.5f, 3.5f, h) *
-                                      (1.f - smoothstepf(22.f, 34.f, h)) *
-                                      smoothstepf(0.45f, 0.62f, hePatch);
+                const float heather = math::smoothstep(0.45f, 0.62f, ny) * math::smoothstep(1.5f, 3.5f, h) *
+                                      (1.f - math::smoothstep(22.f, 34.f, h)) *
+                                      math::smoothstep(0.45f, 0.62f, hePatch);
                 cr += (0.205f + 0.05f * hePatch - cr) * heather;
                 cg += (0.17f + 0.05f * hePatch - cg) * heather;
                 cb += (0.105f - cb) * heather;
@@ -283,22 +279,22 @@ namespace island {
                 // the Laplacian feeds the patch threshold
                 const float gPatch = 0.55f * vegL + 0.30f * vegS +
                                      0.15f * std::clamp(lap * 1.5f, 0.f, 1.f);
-                const float grass = smoothstepf(0.60f, 0.80f, ny) * smoothstepf(0.8f, 2.6f, h) *
-                                    (1.f - smoothstepf(24.f, 38.f, h)) *
-                                    smoothstepf(0.42f, 0.58f, gPatch);
+                const float grass = math::smoothstep(0.60f, 0.80f, ny) * math::smoothstep(0.8f, 2.6f, h) *
+                                    (1.f - math::smoothstep(24.f, 38.f, h)) *
+                                    math::smoothstep(0.42f, 0.58f, gPatch);
                 cr += (0.13f + 0.07f * vegS - cr) * grass;
                 cg += (0.27f + 0.08f * vegL - cg) * grass;
                 cb += (0.085f - cb) * grass;
 
                 // pale lichen crusts on exposed high rock
-                const float lich = smoothstepf(8.f, 20.f, h) *
-                                   smoothstepf(0.55f, 0.75f, fbm(wx * 0.15f + 13.f, wz * 0.15f + 29.f, 2)) *
+                const float lich = math::smoothstep(8.f, 20.f, h) *
+                                   math::smoothstep(0.55f, 0.75f, fbm(wx * 0.15f + 13.f, wz * 0.15f + 29.f, 2)) *
                                    std::clamp(0.5f + 0.5f * crest, 0.f, 1.f) * 0.30f;
                 cr += (0.50f - cr) * lich;
                 cg += (0.51f - cg) * lich;
                 cb += (0.46f - cb) * lich;
                 // summits bleach toward bare washed rock
-                const float alt = 1.f + 0.08f * smoothstepf(28.f, 52.f, h);
+                const float alt = 1.f + 0.08f * math::smoothstep(28.f, 52.f, h);
                 cr *= alt;
                 cg *= alt;
                 cb *= alt;
@@ -310,10 +306,10 @@ namespace island {
                 // contour line. Deep blue-green, varied stand to stand.
                 const float forestStand = fbm(wx * 0.020f + 13.f, wz * 0.020f + 47.f, 3);// λ ≈ 50 m
                 const float forestEdge  = fbm(wx * 0.13f + 61.f, wz * 0.13f + 29.f, 2);  // λ ≈ 8 m
-                const float forest = smoothstepf(0.40f, 0.58f, ny) *
-                                     smoothstepf(1.5f, 4.0f, h) *
-                                     (1.f - smoothstepf(26.f, 36.f, h)) *
-                                     smoothstepf(0.34f, 0.52f, 0.6f * forestStand + 0.4f * forestEdge);
+                const float forest = math::smoothstep(0.40f, 0.58f, ny) *
+                                     math::smoothstep(1.5f, 4.0f, h) *
+                                     (1.f - math::smoothstep(26.f, 36.f, h)) *
+                                     math::smoothstep(0.34f, 0.52f, 0.6f * forestStand + 0.4f * forestEdge);
                 cr += (0.045f + 0.030f * forestStand - cr) * forest;
                 cg += (0.135f + 0.060f * forestStand - cg) * forest;
                 cb += (0.050f + 0.020f * forestStand - cb) * forest;
@@ -326,21 +322,21 @@ namespace island {
                 // scale snow reads as summit caps + gully streaks, not full
                 // alpine cover — matching a low Norwegian coastal massif.
                 const float snowPatch = fbm(wx * 0.05f + 91.f, wz * 0.05f + 5.f, 2);
-                const float snowSlope = smoothstepf(0.42f, 0.72f, ny);
-                const float snowfield = smoothstepf(26.f, 42.f, h);
-                const float couloir   = std::clamp(lap * 1.4f, 0.f, 1.f) * smoothstepf(16.f, 28.f, h);
+                const float snowSlope = math::smoothstep(0.42f, 0.72f, ny);
+                const float snowfield = math::smoothstep(26.f, 42.f, h);
+                const float couloir   = std::clamp(lap * 1.4f, 0.f, 1.f) * math::smoothstep(16.f, 28.f, h);
                 float snow = snowSlope * std::clamp(std::max(snowfield, couloir), 0.f, 1.f);
-                snow *= 0.6f + 0.4f * smoothstepf(0.35f, 0.65f, snowPatch);
+                snow *= 0.6f + 0.4f * math::smoothstep(0.35f, 0.65f, snowPatch);
                 cr += (0.92f - cr) * snow;
                 cg += (0.94f - cg) * snow;
                 cb += (0.98f - cb) * snow;
 
                 // algae film straddling the waterline, then the dark wet band
-                const float algae = (1.f - smoothstepf(0.6f, 1.4f, std::abs(h - 0.3f))) * 0.5f;
+                const float algae = (1.f - math::smoothstep(0.6f, 1.4f, std::abs(h - 0.3f))) * 0.5f;
                 cr += (0.10f - cr) * algae;
                 cg += (0.15f - cg) * algae;
                 cb += (0.10f - cb) * algae;
-                const float wet = (1.f - smoothstepf(0.4f, 2.2f, h)) * 0.85f;
+                const float wet = (1.f - math::smoothstep(0.4f, 2.2f, h)) * 0.85f;
                 cr += (0.095f - cr) * wet;
                 cg += (0.095f - cg) * wet;
                 cb += (0.09f - cb) * wet;
@@ -352,12 +348,12 @@ namespace island {
                 // as the radius row changes. Gated to steep rock between the
                 // splash zone and the snow source above. Bright and slightly
                 // blue; the glossy wet sheen is added in the roughness block.
-                const float fallRegion = smoothstepf(0.60f, 0.82f, fbm(a * 2.5f + 11.f, 4.0f, 2));
+                const float fallRegion = math::smoothstep(0.60f, 0.82f, fbm(a * 2.5f + 11.f, 4.0f, 2));
                 const float fallStripe = std::pow(std::max(0.f, std::sin(a * 48.f + 6.f * fbm(a * 9.f, 2.f, 2))), 60.f);
                 const float fall = fallRegion * fallStripe *
-                                   smoothstepf(0.30f, 0.55f, 1.f - ny) *
-                                   smoothstepf(4.f, 9.f, h) *
-                                   (1.f - smoothstepf(34.f, 44.f, h));
+                                   math::smoothstep(0.30f, 0.55f, 1.f - ny) *
+                                   math::smoothstep(4.f, 9.f, h) *
+                                   (1.f - math::smoothstep(34.f, 44.f, h));
                 cr += (0.82f - cr) * fall;
                 cg += (0.86f - cg) * fall;
                 cb += (0.92f - cb) * fall;
@@ -513,30 +509,6 @@ namespace {
         return out;
     }
 
-    // 16-bit mono PCM WAV writer (verbatim from the Shooter example).
-    void writeWav(const std::filesystem::path& path, const std::vector<float>& samples, int sr = 44100) {
-        std::ofstream f(path, std::ios::binary);
-        auto u32 = [&](uint32_t v) { f.write(reinterpret_cast<char*>(&v), 4); };
-        auto u16 = [&](uint16_t v) { f.write(reinterpret_cast<char*>(&v), 2); };
-        const uint32_t dataBytes = static_cast<uint32_t>(samples.size()) * 2u;
-        f.write("RIFF", 4);
-        u32(36 + dataBytes);
-        f.write("WAVE", 4);
-        f.write("fmt ", 4);
-        u32(16);
-        u16(1);// PCM
-        u16(1);// mono
-        u32(sr);
-        u32(sr * 2);
-        u16(2);
-        u16(16);
-        f.write("data", 4);
-        u32(dataBytes);
-        for (float x : samples) {
-            const auto q = static_cast<int16_t>(std::lround(std::clamp(x, -1.f, 1.f) * 32767.f));
-            f.write(reinterpret_cast<const char*>(&q), 2);
-        }
-    }
 
     // Marine diesel at mid RPM, 2 s loop. Firing rate f0 = 27 Hz (54 exact
     // cycles): harmonic stack for the tonal drone, a |sin|³ "chug" envelope
@@ -654,9 +626,9 @@ namespace {
                 const auto enginePath = dir / "engine_loop.wav";
                 const auto wavesPath  = dir / "waves_loop.wav";
                 const auto windPath   = dir / "wind_loop.wav";
-                writeWav(enginePath, synthEngineLoop());
-                writeWav(wavesPath, synthOceanLoop());
-                writeWav(windPath, synthWindLoop());
+                audio::writeWav(enginePath, synthEngineLoop());
+                audio::writeWav(wavesPath, synthOceanLoop());
+                audio::writeWav(windPath, synthWindLoop());
 
                 listener = std::make_unique<AudioListener>();
                 // Engine: full volume within ~10 m (the side/deck camera),
@@ -1563,9 +1535,9 @@ int main(int argc, char** argv) {
             kFftSize, kTileSize);
         ImGui::Text("Speed: %.1f kn (%.1f m/s)   Heading: %.0f°",
                     bs.forwardSpeed * 1.94384f, bs.forwardSpeed,
-                    bs.yaw * 180.f / 3.14159f);
+                    bs.yaw * math::RAD2DEG);
         ImGui::Text("Telegraph: %+4.0f%%   Rudder: %+5.1f°%s",
-                    bs.throttle * 100.f, bs.rudder * 180.f / 3.14159f,
+                    bs.throttle * 100.f, bs.rudder * math::RAD2DEG,
                     bs.aground ? "   AGROUND!" : "");
         ImGui::Text("Pos: %7.1f, %7.1f", bs.position.x, bs.position.z);
         ImGui::Text("Keys  W:%d  A:%d  S:%d  D:%d   (C = cycle camera)",
@@ -1775,7 +1747,7 @@ int main(int argc, char** argv) {
             dl->AddCircleFilled(center, R, IM_COL32(8, 24, 8, 235), 64);
             // Range rings — 4 concentric, at 25/50/75/100% of range
             for (int k = 1; k <= 4; ++k) {
-                const float r = R * (float)k / 4.f;
+                const float r = R * static_cast<float>(k) / 4.f;
                 dl->AddCircle(center, r, IM_COL32(0, 130, 0, 200), 64, 1.0f);
             }
             // Cross-hairs (vertical = vessel forward; horizontal = abeam)
@@ -1793,9 +1765,9 @@ int main(int argc, char** argv) {
             constexpr float trailArc   = 1.4f;
             constexpr float step       = trailArc / trailSteps;
             for (int k = 0; k < trailSteps; ++k) {
-                const float a0 = radarSweepAngle - (float)k       * step;
-                const float a1 = radarSweepAngle - (float)(k + 1) * step;
-                const int alpha = static_cast<int>(140.f * (1.f - (float)k / trailSteps));
+                const float a0 = radarSweepAngle - static_cast<float>(k) * step;
+                const float a1 = radarSweepAngle - static_cast<float>(k + 1) * step;
+                const int alpha = static_cast<int>(140.f * (1.f - static_cast<float>(k) / trailSteps));
                 dl->AddTriangleFilled(center, scopePos(a0, R), scopePos(a1, R),
                                       IM_COL32(40, 220, 40, alpha));
             }
@@ -1815,9 +1787,9 @@ int main(int argc, char** argv) {
                 const float r       = (dist / radarRangeM) * R;
                 const ImVec2 pos    = scopePos(bearing, r);
                 dl->AddCircleFilled(pos, 7.f,
-                                    IM_COL32(120, 255, 120, (int)(90.f * a)), 14);
+                                    IM_COL32(120, 255, 120, static_cast<int>(90.f * a)), 14);
                 dl->AddCircleFilled(pos, 3.5f,
-                                    IM_COL32(200, 255, 200, (int)(255.f * a)), 12);
+                                    IM_COL32(200, 255, 200, static_cast<int>(255.f * a)), 12);
             }
 
             // Own-ship marker (triangle pointing forward = up)
@@ -1831,7 +1803,7 @@ int main(int argc, char** argv) {
             // Reserve the drawn area + readouts below.
             ImGui::Dummy(ImVec2(scopeDim, scopeDim));
             ImGui::Text("Range: %.0f m   Heading: %.0f°",
-                        radarRangeM, bs.yaw * 180.f / 3.14159f);
+                        radarRangeM, bs.yaw * math::RAD2DEG);
             ImGui::SliderFloat("##rng", &radarRangeM, 100.f, 1000.f, "Range %.0f m");
             ImGui::End();
         }
@@ -1850,6 +1822,11 @@ int main(int argc, char** argv) {
     });
 
     Clock clock;
+    auto lidarIntensityColor = [](float intensity, Color& col) {
+        const float t = std::clamp(intensity * 3.f, 0.f, 1.f);
+        col.setHSL((1.f - t) * 0.66f, 1.f, 0.5f);
+    };
+
     canvas.animate([&] {
         const float dt = std::min(clock.getDelta(), 0.1f);  // clamp dt — pause / breakpoints shouldn't teleport the boat
         fpsAccum += dt;
@@ -2001,7 +1978,7 @@ int main(int argc, char** argv) {
         // alpha = 1 − exp(−2π · cutoff · dt). With cascade 2 masked out
         // the input is already smoother; 1 Hz cutoff (was 3 Hz) is the
         // additional damping that finishes off the rock-terrain feel.
-        const float alpha = 1.f - std::exp(-2.f * 3.14159f * 1.f * dt);
+        const float alpha = 1.f - std::exp(-math::TWO_PI * dt);
         bs.smoothPitch += (pitch - bs.smoothPitch) * alpha;
         bs.smoothRoll  += (roll  - bs.smoothRoll)  * alpha;
 
@@ -2012,7 +1989,7 @@ int main(int argc, char** argv) {
         // (k = (2π·f)²), damping ratio ζ ≈ 0.7 (slightly under-damped → one
         // gentle overshoot then settles). Yields a believable "settling on
         // a wave" rhythm where the boat lags the surface a beat.
-        const float omega = 2.f * 3.14159f * 0.8f;
+        const float omega = math::TWO_PI * 0.8f;
         const float k     = omega * omega;
         const float c     = 2.f * 0.7f * omega;
         const float yErr  = hCentre - bs.y;
@@ -2183,9 +2160,9 @@ int main(int argc, char** argv) {
             constexpr float kRadius  = 1.6f;
             for (int side = -1; side <= 1; side += 2) {
                 for (int i = 0; i < kSamples; ++i) {
-                    const float t       = float(i) / float(kSamples - 1);
+                    const float t       = static_cast<float>(i) / static_cast<float>(kSamples - 1);
                     const float localZ  = L - 2.0f * L * t;       // +L (bow) → -L (stern)
-                    const float localX  = float(side) * (hullHalfWidth(t) + 0.2f);
+                    const float localX  = static_cast<float>(side) * (hullHalfWidth(t) + 0.2f);
                     const float worldX  = bs.position.x + cosY * localX + sinY * localZ;
                     const float worldZ  = bs.position.z - sinY * localX + cosY * localZ;
                     ocean->addFoamDisturbance(worldX, worldZ, kRadius, baseI);
@@ -2212,7 +2189,7 @@ int main(int argc, char** argv) {
         // mask as the boat (swells + mid; cascade-2 chop is too fine to push
         // a buoy meaningfully).
         if (!buoyStates.empty() && buoyRoot) {
-            constexpr float kBuoyOmega = 2.f * 3.14159f * 1.6f;
+            constexpr float kBuoyOmega = math::TWO_PI * 1.6f;
             constexpr float kBuoyK     = kBuoyOmega * kBuoyOmega;
             constexpr float kBuoyC     = 2.f * 0.55f * kBuoyOmega;
             for (size_t i = 0; i < buoyStates.size(); ++i) {
@@ -2238,7 +2215,7 @@ int main(int argc, char** argv) {
         // decay toward zero. The ImGui block below renders the scope.
         if (radarOn) {
             const float prevSweep = radarSweepAngle;
-            const float twoPi     = 2.f * 3.14159265f;
+            const float twoPi     = math::TWO_PI;
             const float omega     = twoPi / kRadarSweepPeriod;
             radarSweepAngle = std::fmod(radarSweepAngle + omega * dt, twoPi);
             const float decay     = std::exp(-dt / kRadarBlipTau);
@@ -2434,7 +2411,7 @@ int main(int argc, char** argv) {
             const float target = std::clamp(submerge / 0.5f, 0.f, 1.f);
             // Temporal smoothing so the fog doesn't flash when waves wash
             // over the camera near the waterline (~4 Hz cutoff).
-            const float fogAlpha = 1.f - std::exp(-2.f * 3.14159f * 4.f * dt);
+            const float fogAlpha = 1.f - std::exp(-math::TWO_PI * 4.f * dt);
             uwDepthSmooth += (target - uwDepthSmooth) * fogAlpha;
 
             if (uwDepthSmooth > 0.001f) {
@@ -2567,8 +2544,7 @@ int main(int argc, char** argv) {
                 if (r.returnNo <= 0) continue;// miss / sub-threshold
                 ++validHits;
                 if (vi >= cloudPos->count()) break;
-                const float t = std::clamp(r.intensity * 3.f, 0.f, 1.f);
-                col.setHSL((1.f - t) * 0.66f, 1.f, 0.5f);
+                lidarIntensityColor(r.intensity, col);
                 cloudPos->setXYZ(vi, r.position.x, r.position.y, r.position.z);
                 cloudCol->setXYZ(vi, col.r, col.g, col.b);
                 ++vi;
@@ -2612,8 +2588,7 @@ int main(int argc, char** argv) {
                                                 0, static_cast<int>(kLidarPanelW) - 1);
                     const int py0 = std::clamp(ei * static_cast<int>(kLidarPanelH) / numElev,
                                                 0, static_cast<int>(kLidarPanelH) - 1);
-                    const float t = std::clamp(r.intensity * 3.f, 0.f, 1.f);
-                    col.setHSL((1.f - t) * 0.66f, 1.f, 0.5f);
+                    lidarIntensityColor(r.intensity, col);
                     const unsigned char rByte = static_cast<unsigned char>(col.r * 255.f);
                     const unsigned char gByte = static_cast<unsigned char>(col.g * 255.f);
                     const unsigned char bByte = static_cast<unsigned char>(col.b * 255.f);
