@@ -11,6 +11,7 @@ if (TARGET unofficial::omniverse-physx-sdk::sdk)
     add_subdirectory(Vehicle)
     add_subdirectory(Drive)
     add_subdirectory(Shooter)
+    add_subdirectory(Spot)
 endif ()
 
 if (THREEPP_WITH_WGPU)
