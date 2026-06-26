@@ -91,7 +91,7 @@ def _resolve_model(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=os.path.join(_HERE, "spot_steps.pt"))
-    ap.add_argument("--amp", type=float, default=0.4, help="bump amplitude of the display terrain")
+    ap.add_argument("--amp", type=float, default=0.1, help="bump amplitude of the display terrain")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--check", type=int, default=0)
     ap.add_argument("--analytic", action="store_true",
