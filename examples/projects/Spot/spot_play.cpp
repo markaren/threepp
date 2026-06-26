@@ -87,13 +87,7 @@ namespace {
         return ok ? 0 : 1;
     }
 
-    int runInteractive(const SpotPolicy& policy, bool useVulkan, const std::string& assetsDir) {
-        std::optional<GraphicsAPI> api;
-#ifdef SPOT_WITH_VULKAN
-        if (useVulkan) api = GraphicsAPI::Vulkan;
-#else
-        if (useVulkan) std::cerr << "[spot] built without Vulkan support; falling back to OpenGL\n";
-#endif
+    int runInteractive(const SpotPolicy& policy, const std::string& assetsDir) {
 
         PhysxWorld world(spotWorldSettings());
         auto ground = Mesh::create(BoxGeometry::create(80, 80, 1.0f), MeshStandardMaterial::create());
@@ -105,7 +99,7 @@ namespace {
         ctrl.hold(world, 150);
 
         Canvas canvas(Canvas::Parameters().title("threepp - Spot (native C++ policy)").size(1100, 640).antialiasing(4));
-        auto renderer = createRenderer(canvas, api);
+        auto renderer = createRenderer(canvas);
         renderer->shadowMap().enabled = true;
         renderer->toneMapping = ToneMapping::ACESFilmic;
         renderer->toneMappingExposure = 1.1f;
@@ -218,12 +212,10 @@ namespace {
 int main(int argc, char** argv) {
     std::string policyPath = defaultPolicyPath();
     std::string assetsDir = defaultAssetsDir();
-    bool useVulkan = false;
     int checkSteps = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--vulkan") useVulkan = true;
-        else if (a == "--policy" && i + 1 < argc) policyPath = argv[++i];
+        if (a == "--policy" && i + 1 < argc) policyPath = argv[++i];
         else if (a == "--assets" && i + 1 < argc) assetsDir = argv[++i];
         else if (a == "--no-visuals") assetsDir.clear();
         else if (a == "--check") checkSteps = (i + 1 < argc) ? std::stoi(argv[++i]) : 200;
@@ -240,5 +232,5 @@ int main(int argc, char** argv) {
     std::cout << "[spot] policy " << policyPath << "  in=" << policy.inputDim()
               << " out=" << policy.outputDim() << "\n";
 
-    return checkSteps > 0 ? runCheck(policy, checkSteps) : runInteractive(policy, useVulkan, assetsDir);
+    return checkSteps > 0 ? runCheck(policy, checkSteps) : runInteractive(policy, assetsDir);
 }
