@@ -295,8 +295,11 @@ def main():
     field    = gen.get_field()
     terr_tex = gen.bake_splat_texture(tparams)
     terr_geo = build_terrain_zup(field, WORLD_SZ, float(args.amplitude))
-    h0 = float(gen.height_at(0.0, 0.0, tparams))
-    print(f"[terrain] done  h_origin={h0:.3f} m")
+    # Sample terrain under the four feet + base to find the highest point in the
+    # footprint — prevents spawning any foot inside the mesh on sloped ground.
+    _FEET = ((0.30, 0.17), (0.30, -0.17), (-0.30, 0.17), (-0.30, -0.17), (0.0, 0.0))
+    h0 = max(float(gen.height_at(dx, dy, tparams)) for dx, dy in _FEET)
+    print(f"[terrain] done  h_footprint={h0:.3f} m")
 
     # ── physics ───────────────────────────────────────────────────────────────
     world = tp.PhysxWorld(gravity=tp.Vector3(0, 0, -9.81), fixed_timestep=0.002, max_substeps=20)
@@ -313,7 +316,7 @@ def main():
             art.set_drive_targets(default_q[add_to_isaac].astype(np.float32))
             world.step(0.02)
 
-    art.reset(tp.Vector3(0.0, 0.0, Z0 + h0))
+    art.reset(tp.Vector3(0.0, 0.0, Z0 + h0 + 0.02))
     settle()
     print("[spot] standing")
 
@@ -377,7 +380,8 @@ def main():
     space_held= [False]
 
     def reset():
-        art.reset(tp.Vector3(0.0, 0.0, spawn_z))
+        rh = max(float(gen.height_at(dx, dy, tparams)) for dx, dy in _FEET)
+        art.reset(tp.Vector3(0.0, 0.0, Z0 + rh + 0.02))
         last_act[:] = 0.0
         hdg_lock[0] = None
         settle(40)
