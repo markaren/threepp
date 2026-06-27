@@ -36,7 +36,7 @@ GRAV = np.array([0.0, 0.0, -1.0])
 # ── constants ──────────────────────────────────────────────────────────────────
 WORLD_SZ   = 80.0
 AMPLITUDE  = 10.8
-TREE_COUNT = 45
+TREE_COUNT = 60
 CLEAR_R    = 7.0     # no trees within this radius of spawn
 SENSOR_W   = 160
 SENSOR_H   = 120
