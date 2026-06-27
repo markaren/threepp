@@ -79,9 +79,8 @@ def main():
     ground.receive_shadow = True
     scene.add(ground)
 
-    # ---- tree group (replaced each rebuild) ----
-    tree_group = tp.Group()
-    scene.add(tree_group)
+    # ---- current tree meshes (swapped each rebuild) ----
+    current_meshes = [None, None]  # [trunk, leaf]
 
     params = tp.TreeParams()
     tp.apply_tree_preset(0, params)   # start as Oak
@@ -144,15 +143,20 @@ def main():
             return
         trunk_geo, trunk_mat, leaf_geo, leaf_mat = pending[0]
         pending[0] = None
-        for child in list(tree_group.children):
-            tree_group.remove(child)
+        # Remove old meshes by reference (avoids iterating children as T&)
+        if current_meshes[0] is not None:
+            scene.remove(current_meshes[0])
+        if current_meshes[1] is not None:
+            scene.remove(current_meshes[1])
         trunk = tp.Mesh(trunk_geo, trunk_mat)
         trunk.cast_shadow = True
         trunk.receive_shadow = True
         leaf  = tp.Mesh(leaf_geo, leaf_mat)
         leaf.cast_shadow = True
-        tree_group.add(trunk)
-        tree_group.add(leaf)
+        scene.add(trunk)
+        scene.add(leaf)
+        current_meshes[0] = trunk
+        current_meshes[1] = leaf
 
     camera = tp.PerspectiveCamera(50, canvas.aspect(), 0.1, 200)
     camera.position.set(0, 6, 14)
