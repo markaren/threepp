@@ -6,21 +6,29 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
 #include "threepp/threepp.hpp"
 
+#include <cstring>
+
 using namespace threepp;
 
-int main() {
+int main(int argc, char** argv) {
+
+    bool usePT = false;
+    for (int i = 1; i < argc; ++i)
+        if (std::strcmp(argv[i], "--pt") == 0) usePT = true;
 
     Canvas canvas("Vulkan animation", {{"vsync", false}});
 
-    VulkanRenderer renderer(canvas);
+    std::unique_ptr<VulkanRendererCore> rendererPtr =
+            usePT ? std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanPathTracer>(canvas))
+                  : std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanRenderer>(canvas));
+    VulkanRendererCore& renderer = *rendererPtr;
+    auto* pt = dynamic_cast<VulkanPathTracer*>(&renderer);
     renderer.outputColorSpace = ColorSpace::sRGB;
     renderer.toneMapping = ToneMapping::ACESFilmic;
-    // Raster-first deferred base (Phase 2): clean analytic shade + IBL, no PT
-    // noise. Toggle to ReferencePT in the UI for an A/B against the path tracer.
-    renderer.setRenderMode(VulkanRenderer::RenderMode::RasterFirst);
 
     // ---- Scene objects ----
     TextureLoader tl;
@@ -144,21 +152,9 @@ int main() {
         ImGui::Begin("Vulkan");
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Separator();
+        ImGui::TextDisabled(pt ? "Mode: Path tracer (--pt)" : "Mode: Deferred (default)");
 
-        // Render mode: RasterFirst (clean analytic raster base + IBL) vs
-        // ReferencePT (full path tracer). 0 = RasterFirst, 1 = ReferencePT.
-        static int renderMode = 0;
-        const char* modeItems[] = {"RasterFirst (raster base)", "ReferencePT (path tracer)"};
-        if (ImGui::Combo("Render mode", &renderMode, modeItems, IM_ARRAYSIZE(modeItems))) {
-            renderer.setRenderMode(renderMode == 0
-                                           ? VulkanRenderer::RenderMode::RasterFirst
-                                           : VulkanRenderer::RenderMode::ReferencePT);
-            renderer.resetAccumulation();
-        }
-
-        // Raster G-buffer debug views. "Albedo" exercises the raster-first
-        // material attachment (linear base colour in rgb, metalness in alpha) —
-        // here it should show the uv-grid texture sampled in the raster pass.
+        // Raster G-buffer debug views.
         static int debugView = 0;
         const char* dbgItems[] = {"Off", "Normal", "Motion", "InstanceID", "Albedo"};
         if (ImGui::Combo("Debug view", &debugView, dbgItems, IM_ARRAYSIZE(dbgItems)))
@@ -167,7 +163,7 @@ int main() {
         ImGui::Checkbox("AnimateBox", &animate);
 
         if (ImGui::Checkbox("EnclosingBox", &showEnclosingBox)) {
-            renderer.resetAccumulation();
+            if (pt) pt->resetAccumulation();
         }
 
         ImGui::SliderFloat("Exposure", &renderer.toneMappingExposure, 0.1f, 2.0f);

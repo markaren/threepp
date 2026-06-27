@@ -10,9 +10,6 @@
 // bloom/TAA/overlay post-stack) with VulkanRenderer through VulkanRendererCore;
 // the two differ only in how the scene is shaded.
 //
-// NOTE: the path-tracer-specific knobs (samples-per-pixel, max bounces, ReSTIR,
-// firefly clamp, …) are being migrated onto this class as the peer split lands;
-// until then they remain on VulkanRenderer.
 
 #ifndef THREEPP_VULKANPATHTRACER_HPP
 #define THREEPP_VULKANPATHTRACER_HPP
@@ -44,10 +41,6 @@ namespace threepp {
         void setSilhouetteMsaaExtra(uint32_t extra);
         [[nodiscard]] uint32_t silhouetteMsaaExtra() const;
 
-        // Per-NEE-sample firefly clamp. Default 30.0; 0 disables (1e30 sentinel).
-        void setFireflyClamp(float cap);
-        [[nodiscard]] float fireflyClamp() const;
-
         // Max real scatter events per path. Default 4. Clamped to [1, 16].
         // Changing the value resets accumulation.
         void setMaxBounces(int bounces);
@@ -59,11 +52,6 @@ namespace threepp {
 
         void setPerSppJitterHybrid(bool enabled);
         [[nodiscard]] bool perSppJitterHybrid() const;
-
-        // ReSTIR DI master toggle (streaming RIS + temporal + spatial reuse at
-        // primary surfaces). Off (default) falls back to per-light NEE.
-        void setRestirDIEnabled(bool enabled);
-        [[nodiscard]] bool restirDIEnabled() const;
 
         // ReSTIR DI visibility reuse (Bitterli 2020 §5). Default on.
         void setRestirDIVisibilityReuse(bool enabled);

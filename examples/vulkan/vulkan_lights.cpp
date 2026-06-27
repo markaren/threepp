@@ -11,7 +11,7 @@
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/RectAreaLight.hpp"
 #include "threepp/lights/SpotLight.hpp"
-#include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -90,7 +90,7 @@ namespace {
 int main() {
 
     Canvas canvas("Vulkan PT - Lights", {{"vsync", false}, {"size", WindowSize{1700, 900}}});
-    VulkanRenderer renderer(canvas);
+    VulkanPathTracer renderer(canvas);
 
     Scene scene;
     scene.background = Color(0.02f, 0.02f, 0.02f);

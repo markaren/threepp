@@ -54,7 +54,6 @@ namespace {
     public:
         explicit PyVulkanRenderer(Canvas& canvas, int flush_frames)
             : canvas_(canvas), renderer_(canvas), flush_(flush_frames < 1 ? 1 : flush_frames) {
-            renderer_.setRenderMode(VulkanRenderer::RenderMode::RasterFirst);
         }
 
         void render(Object3D& scene, Camera& camera) {

@@ -18,6 +18,7 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Ocean.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/threepp.hpp"
 
@@ -46,17 +47,20 @@ int main(int argc, char** argv) {
     if (capArgs.frames) shotFrames = *capArgs.frames;
 
     Canvas canvas("Vulkan PT - Ocean (minimal)", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
-    VulkanRenderer renderer(canvas);
+    std::unique_ptr<VulkanRendererCore> rendererPtr =
+            shotPT ? std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanPathTracer>(canvas))
+                   : std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanRenderer>(canvas));
+    VulkanRendererCore& renderer = *rendererPtr;
+    auto* pt = dynamic_cast<VulkanPathTracer*>(&renderer);
     renderer.setDenoise(true);
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(6.0f);
-    renderer.setMaxBounces(2);
+    if (pt) pt->setMaxBounces(2);
     // Trace at slightly reduced resolution; TAA upsamples by accumulating
     // jittered low-res samples into the full-res history.
     renderer.setRenderScale(0.9f);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 0.7f;
-    if (shotPT) renderer.setRenderMode(VulkanRenderer::RenderMode::ReferencePT);
 
     RGBELoader rgbe;
     auto env = rgbe.load(std::string(DATA_FOLDER) +

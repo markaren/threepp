@@ -10,7 +10,7 @@
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
-#include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/threepp.hpp"
 
 #include <iostream>
@@ -130,7 +130,7 @@ int main() {
     Canvas canvas("Vulkan PT — Showcase",
                   {{"vsync", false}, {"size", WindowSize{1600, 1000}}});
 
-    VulkanRenderer renderer(canvas);
+    VulkanPathTracer renderer(canvas);
 
     Scene scene;
     scene.background = Color::black;

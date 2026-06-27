@@ -29,6 +29,7 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
 #include "capture_util.hpp"// examples/vulkan (shared via target include dir)
@@ -94,27 +95,30 @@ int main(int argc, char** argv) {
     // Construction throws without a Vulkan/RT GPU (or a display) — treat that as
     // a CTest skip rather than a failure.
     std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
+    std::unique_ptr<VulkanRendererCore> rendererPtr;
     try {
         canvasPtr = std::make_unique<Canvas>(
                 Canvas::Parameters().title("VulkanGolden_test").size(kW, kH).vsync(false));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
+        if (usePT)
+            rendererPtr = std::make_unique<VulkanPathTracer>(*canvasPtr);
+        else
+            rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
     } catch (const std::exception& e) {
         std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
         return kSkipCode;
     }
     Canvas& canvas = *canvasPtr;
-    VulkanRenderer& renderer = *rendererPtr;
+    VulkanRendererCore& renderer = *rendererPtr;
+    auto* pt = dynamic_cast<VulkanPathTracer*>(&renderer);
 
     renderer.setDenoise(true);
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(6.0f);
-    renderer.setMaxBounces(4);
+    if (pt) pt->setMaxBounces(4);
     renderer.setRenderScale(1.0f);// full-res readback, no upscale variance
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
     renderer.setClearColor(Color(0.f, 0.f, 0.f));
-    if (usePT) renderer.setRenderMode(VulkanRenderer::RenderMode::ReferencePT);
 
     RGBELoader rgbe;
     auto env = rgbe.load(std::string(DATA_FOLDER) + "/textures/env/autumn_field_puresky_2k.hdr");
@@ -244,7 +248,7 @@ int main(int argc, char** argv) {
 
         frame = 0;
         if (++sceneIdx >= scenes.size()) finish();// prints summary + exits
-        renderer.resetAccumulation();// next scene starts clean (renderer is built now)
+        if (pt) pt->resetAccumulation();// next scene starts clean (renderer is built now)
         buildCurrent();
     });
     return 0;

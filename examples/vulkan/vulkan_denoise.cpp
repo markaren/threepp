@@ -19,7 +19,7 @@
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -102,7 +102,7 @@ int main() {
 
     Canvas canvas("Vulkan PT - Denoiser Showcase", {{"vsync", false}});
 
-    VulkanRenderer renderer(canvas);
+    VulkanPathTracer renderer(canvas);
     renderer.outputColorSpace    = ColorSpace::sRGB;
     renderer.toneMapping         = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;

@@ -1798,7 +1798,6 @@ namespace threepp {
         // PT-accent passes land, so this currently only stores the user's
         // preference and does not yet branch the frame graph. Default
         // ReferencePT keeps today's behaviour byte-for-byte.
-        VulkanRenderer::RenderMode renderMode_ = VulkanRenderer::RenderMode::RasterFirst;
 
         // Debug: gate raygen to exit immediately after step-0 primary trace
         // so pathTraceMs measures roughly the primary-trace cost. See
@@ -1875,10 +1874,6 @@ namespace threepp {
         // called when Idle apply immediately as before.
         bool pendingRenderScaleRealloc_ = false;
         bool pendingAccumulationReset_  = false;
-        // Set by setRenderMode; refreshes the deferred (RasterFirst) descriptor
-        // set at the next GPU-idle point so a runtime mode toggle doesn't leave
-        // it stale.
-        bool pendingDeferredRewrite_    = false;
 
         explicit CoreImpl(Canvas& c) : canvas(c), size(c.size()) {
             ctx = std::make_unique<VulkanContext>(
@@ -7540,7 +7535,7 @@ namespace threepp {
                 // textures via the ids/UV attachments (which the decal pipeline
                 // write-masks), so there decals stay on the stochastic
                 // screen-door path that the PT accumulator converges.
-                const bool isDecal = renderMode_ == VulkanRenderer::RenderMode::RasterFirst &&
+                const bool isDecal = decalsEnabled() &&
                                      (i < matDescsCached_.size()) &&
                                      (matDescsCached_[i].alphaCutoff == -2.0f);
                 const int b = isDecal ? 3 : bucketOf(wantCull);
@@ -13100,6 +13095,11 @@ namespace threepp {
                                          VkExtent2D ext, VkExtent2D ptExt,
                                          uint32_t exposureBits) = 0;
 
+        // True when decal meshes (layer-tagged as decals) should be drawn
+        // into the raster G-buffer. Deferred renders decals; the PT leaf skips
+        // them (the megakernel doesn't consume the G-buffer decal attachment).
+        virtual bool decalsEnabled() const = 0;
+
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
 
             // ── Split-screen pane region ───────────────────────────────────
@@ -14826,22 +14826,15 @@ namespace threepp {
             // pool / clear images — both unsafe with an open cmd buffer in the
             // prior frame. We're past the fence wait now so the GPU is idle for
             // *this* slot at minimum; vkDeviceWaitIdle below drains the rest.
-            if (pendingRenderScaleRealloc_ || pendingAccumulationReset_ || pendingDeferredRewrite_) {
+            if (pendingRenderScaleRealloc_ || pendingAccumulationReset_) {
                 vkDeviceWaitIdle(d);
                 if (pendingRenderScaleRealloc_) {
                     reallocateRenderExtentResources();// also rewrites deferred descriptors
                     pendingRenderScaleRealloc_ = false;
-                    pendingDeferredRewrite_    = false;
                 }
                 if (pendingAccumulationReset_) {
                     clearGbufImages();
                     pendingAccumulationReset_ = false;
-                }
-                if (pendingDeferredRewrite_) {
-                    // Runtime render-mode toggle: re-point the deferred set at the
-                    // current per-frame resources (GPU idle from the wait above).
-                    rewriteDeferredDescriptors();
-                    pendingDeferredRewrite_ = false;
                 }
             }
 
@@ -15224,6 +15217,8 @@ namespace threepp {
     // until the B2/C partition moves it into VulkanPathTracer::Impl.
     struct VulkanRenderer::Impl : VulkanRendererCore::CoreImpl {
         using CoreImpl::CoreImpl;
+
+        bool decalsEnabled() const override { return true; }
 
         void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
                                  VkExtent2D ext, VkExtent2D ptExt,
@@ -15802,15 +15797,6 @@ namespace threepp {
         core()->fogWaterSurfaceY_ = y;
     }
 
-    void VulkanRenderer::setSamplesPerPixel(int spp) {
-        const uint32_t v = static_cast<uint32_t>(std::max(1, spp));
-        pimpl_->samplesPerPixel_ = v;
-    }
-
-    int VulkanRenderer::samplesPerPixel() const {
-        return static_cast<int>(pimpl_->samplesPerPixel_);
-    }
-
     void VulkanRendererCore::setRenderScale(float scale) {
         core()->setRenderScale(scale);
     }
@@ -15875,53 +15861,13 @@ namespace threepp {
         return core()->sharpenStrength_;
     }
 
-    void VulkanRenderer::setSilhouetteMsaaExtra(uint32_t extra) {
-        // Cap at 31 so spp + extra fits comfortably in the Halton stride
-        // (subIdx = sampleIndex * spp + s); also guards against pathological
-        // values that would tank framerate on edge-heavy scenes.
-        pimpl_->edgeMsaaExtra_ = (extra > 31u) ? 31u : extra;
+    void VulkanRendererCore::setFireflyClamp(float cap) {
+        core()->fireflyClamp_ = (cap <= 0.0f) ? 1e30f : cap;
     }
 
-    uint32_t VulkanRenderer::silhouetteMsaaExtra() const {
-        return pimpl_->edgeMsaaExtra_;
-    }
-
-    void VulkanRenderer::setFireflyClamp(float cap) {
-        pimpl_->fireflyClamp_ = (cap <= 0.0f) ? 1e30f : cap;
-    }
-
-    float VulkanRenderer::fireflyClamp() const {
-        const float v = pimpl_->fireflyClamp_;
+    float VulkanRendererCore::fireflyClamp() const {
+        const float v = core()->fireflyClamp_;
         return (v > 1e20f) ? 0.0f : v;
-    }
-
-    void VulkanRenderer::setMaxBounces(int bounces) {
-        // raygen also clamps; clamp on the host too so maxBounces() reads back
-        // the actual value used and accumulation resets only on real changes.
-        const int clamped = (bounces < 1) ? 1 : (bounces > 16 ? 16 : bounces);
-        const uint32_t v = static_cast<uint32_t>(clamped);
-        if (pimpl_->maxBounces_ == v) return;
-        pimpl_->maxBounces_ = v;
-        pimpl_->resetAccumulation();
-    }
-
-    int VulkanRenderer::maxBounces() const {
-        return static_cast<int>(pimpl_->maxBounces_);
-    }
-
-    void VulkanRenderer::setRenderMode(RenderMode mode) {
-        if (pimpl_->renderMode_ == mode) return;
-        pimpl_->renderMode_ = mode;
-        // The deferred (RasterFirst) descriptor set is only rewritten on scene
-        // build / resize / env change — never on a mode toggle. Switching modes
-        // at runtime can otherwise leave it stale (manifested as a black scene
-        // until a window resize forced a rewrite). Flag a refresh, processed at
-        // the next frame's GPU-idle point (beginFrameForPT).
-        pimpl_->pendingDeferredRewrite_ = true;
-    }
-
-    VulkanRenderer::RenderMode VulkanRenderer::renderMode() const {
-        return pimpl_->renderMode_;
     }
 
     VulkanRendererCore::SoftBodyInteropHandle
@@ -15942,78 +15888,20 @@ namespace threepp {
         core()->disableSoftBodyInterop(mesh);
     }
 
-    void VulkanRenderer::resetAccumulation() {
-        pimpl_->resetAccumulation();
-    }
-
-    void VulkanRenderer::setPerSppJitterHybrid(bool enabled) {
-        pimpl_->perSppJitterHybrid_ = enabled;
-    }
-
-    bool VulkanRenderer::perSppJitterHybrid() const {
-        return pimpl_->perSppJitterHybrid_;
-    }
-
-    void VulkanRenderer::setRestirDIEnabled(bool enabled) {
-        if (pimpl_->restirDIEnabled_ == enabled) return;
-        pimpl_->restirDIEnabled_ = enabled;
+    void VulkanRendererCore::setRestirDIEnabled(bool enabled) {
+        if (core()->restirDIEnabled_ == enabled) return;
+        core()->restirDIEnabled_ = enabled;
         // ReSTIR is unbiased, so toggling it changes the convergence rate, not
         // the converged mean — on a settled frame the running-mean accumulator
         // would hide the switch entirely. Reset accumulation so the change is
         // actually visible. Gated on sceneBuilt_: before the first render there
         // is nothing accumulated and the gbuf/reservoir images aren't allocated
         // yet (clearGbufImages would touch null handles).
-        if (pimpl_->sceneBuilt_) pimpl_->resetAccumulation();
+        if (core()->sceneBuilt_) core()->resetAccumulation();
     }
 
-    bool VulkanRenderer::restirDIEnabled() const {
-        return pimpl_->restirDIEnabled_;
-    }
-
-    void VulkanRenderer::setRestirDIVisibilityReuse(bool enabled) {
-        if (pimpl_->restirDIVisibilityReuse_ == enabled) return;
-        pimpl_->restirDIVisibilityReuse_ = enabled;
-        // Changes the sampling, not the converged mean — reset so it's visible
-        // on a settled frame (same reasoning + pre-first-render gate as
-        // setRestirDIEnabled).
-        if (pimpl_->sceneBuilt_) pimpl_->resetAccumulation();
-    }
-
-    bool VulkanRenderer::restirDIVisibilityReuse() const {
-        return pimpl_->restirDIVisibilityReuse_;
-    }
-
-    void VulkanRenderer::setRestirGIEnabled(bool enabled) {
-        // Both raygen variants (SER + fallback) are pre-built at init when
-        // the device supports SER, so this is just a flag flip — the
-        // dispatch site reads `activeRtVariant()` each frame and binds the
-        // appropriate pipeline + SBT regions. No GPU work, no rebuild.
-        // (We attempted a runtime rebuild here originally; NVIDIA drivers
-        // hang on a second vkCreateRayTracingPipelinesKHR against the same
-        // pipeline layout, hence the pre-build-both workaround.)
-        if (pimpl_->restirGIEnabled_ == enabled) return;
-        pimpl_->restirGIEnabled_ = enabled;
-        // Reset accumulation so the toggle is visible on a settled frame — same
-        // reasoning as setRestirDIEnabled. Gated on sceneBuilt_ for the same
-        // pre-first-render safety.
-        if (pimpl_->sceneBuilt_) pimpl_->resetAccumulation();
-    }
-
-    bool VulkanRenderer::restirGIEnabled() const {
-        return pimpl_->restirGIEnabled_;
-    }
-
-    void VulkanRenderer::setSerEnabled(bool enabled) {
-        // Pure flag flip — shouldUseSerRaygen() folds this in and
-        // activeRtVariant() picks the matching pre-built raygen each frame
-        // (same mechanism as setRestirGIEnabled; no pipeline rebuild). SER is
-        // a performance-only optimization, so the image is unchanged and no
-        // accumulation reset is needed.
-        pimpl_->serEnabled_ = enabled;
-    }
-
-    bool VulkanRenderer::serEnabled() const {
-        return pimpl_->serEnabled_;
+    bool VulkanRendererCore::restirDIEnabled() const {
+        return core()->restirDIEnabled_;
     }
 
     VulkanRendererCore::FrameTimings VulkanRendererCore::lastFrameTimings() const {
@@ -16056,14 +15944,6 @@ namespace threepp {
         }
     }
 
-    void VulkanRenderer::setMeasurePrimaryTraceOnly(bool enabled) {
-        pimpl_->measurePrimaryTraceOnly_ = enabled;
-    }
-
-    bool VulkanRenderer::measurePrimaryTraceOnly() const {
-        return pimpl_->measurePrimaryTraceOnly_;
-    }
-
     // ── VulkanPathTracer ──────────────────────────────────────────────────────
     // The reference path tracer. Shares CoreImpl for all infra (TLAS/BLAS, material
     // buffers, raster G-buffer prepass, post-stack). PT-only state (accumImages, RT
@@ -16072,6 +15952,8 @@ namespace threepp {
     // dispatches the full megakernel path-trace + à-trous denoise pass.
     struct VulkanPathTracer::Impl : VulkanRendererCore::CoreImpl {
         using CoreImpl::CoreImpl;
+
+        bool decalsEnabled() const override { return false; }
 
         void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
                                  VkExtent2D ext, VkExtent2D ptExt,
@@ -16236,7 +16118,6 @@ namespace threepp {
     VulkanPathTracer::VulkanPathTracer(Canvas& canvas) {
         canvas.initWindow(GraphicsAPI::Vulkan);
         pimpl_ = std::make_unique<Impl>(canvas);
-        pimpl_->renderMode_ = VulkanRenderer::RenderMode::ReferencePT;
         canvas.setFrameEndCallback([this] {
             if (pimpl_) pimpl_->endFrame();
         });
@@ -16263,14 +16144,6 @@ namespace threepp {
         return pimpl_->edgeMsaaExtra_;
     }
 
-    void VulkanPathTracer::setFireflyClamp(float cap) {
-        pimpl_->fireflyClamp_ = (cap <= 0.f) ? 1e30f : cap;
-    }
-
-    float VulkanPathTracer::fireflyClamp() const {
-        return pimpl_->fireflyClamp_;
-    }
-
     void VulkanPathTracer::setMaxBounces(int bounces) {
         const int clamped = std::clamp(bounces, 1, 16);
         if (clamped == pimpl_->maxBounces_) return;
@@ -16292,15 +16165,6 @@ namespace threepp {
 
     bool VulkanPathTracer::perSppJitterHybrid() const {
         return pimpl_->perSppJitterHybrid_;
-    }
-
-    void VulkanPathTracer::setRestirDIEnabled(bool enabled) {
-        pimpl_->restirDIEnabled_ = enabled;
-        if (pimpl_->sceneBuilt_) pimpl_->resetAccumulation();
-    }
-
-    bool VulkanPathTracer::restirDIEnabled() const {
-        return pimpl_->restirDIEnabled_;
     }
 
     void VulkanPathTracer::setRestirDIVisibilityReuse(bool enabled) {

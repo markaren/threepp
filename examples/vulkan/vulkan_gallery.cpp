@@ -13,7 +13,7 @@
 #include "threepp/lights/RectAreaLight.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -217,7 +217,7 @@ namespace {
 int main() {
 
     Canvas canvas("Vulkan Material Gallery", {{"vsync", false}, {"size", WindowSize{1280, 720}}});
-    VulkanRenderer renderer(canvas);
+    VulkanPathTracer renderer(canvas);
 
     // ---- Scene ----
     Scene scene;

@@ -153,6 +153,17 @@ namespace threepp {
         void setDeferredDenoise(bool enabled);
         [[nodiscard]] bool deferredDenoise() const;
 
+        // Per-NEE-sample firefly clamp used by both the deferred highlight suppress
+        // and the PT megakernel. Default 30.0; 0 disables (1e30 sentinel).
+        void setFireflyClamp(float cap);
+        [[nodiscard]] float fireflyClamp() const;
+
+        // ReSTIR DI master toggle (streaming RIS + temporal + spatial reuse at
+        // primary surfaces). Active in the PT megakernel and as a deferred NEE
+        // optimization. Off (default) falls back to per-light NEE.
+        void setRestirDIEnabled(bool enabled);
+        [[nodiscard]] bool restirDIEnabled() const;
+
         // HDR bloom, added in linear HDR before the tone-map curve. 0 disables.
         void setBloomIntensity(float intensity);
         [[nodiscard]] float bloomIntensity() const;

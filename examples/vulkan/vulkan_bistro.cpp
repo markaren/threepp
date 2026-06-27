@@ -1,6 +1,7 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/loaders/FBXLoader.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/threepp.hpp"
@@ -29,12 +30,11 @@ int main(int argc, char** argv) {
     Canvas canvas("Bistro scene",
                   {{"vsync", false}});
 
-    VulkanRenderer renderer(canvas);
+    VulkanPathTracer renderer(canvas);
     renderer.outputColorSpace = ColorSpace::sRGB;
     renderer.toneMapping = ToneMapping::Neutral;
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(8.f);
-    renderer.setDeferredAO(true);
     renderer.setRenderScale(0.75);
 
 
