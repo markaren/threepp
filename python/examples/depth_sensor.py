@@ -150,12 +150,16 @@ def main():
         sensor.range_noise = state["noise"]
         props.visible = True
         cloud.visible = False
+        if surface_ref[0] is not None:
+            surface_ref[0].visible = False   # don't scan the reconstructed surface
         if state["rgbd"]:
             pts, cols = sensor.scan_rgbd(renderer, scene)
         else:
             pts = sensor.scan(renderer, scene)
             cols = distance_colors(pts, (sensor.position.x, sensor.position.y, sensor.position.z))
         cloud.visible = True
+        if surface_ref[0] is not None:
+            surface_ref[0].visible = state["show_surface"]
         n = int(pts.shape[0])
         state["npts"] = n
         if n:
