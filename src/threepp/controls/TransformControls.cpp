@@ -573,6 +573,10 @@ void TransformControls::updateMatrixWorld(bool force) {
     Object3D::updateMatrixWorld(true);
 }
 
+bool TransformControls::isDragging() const {
+    return pimpl_->state.dragging;
+}
+
 TransformControls& TransformControls::attach(Object3D& object) {
 
     pimpl_->attach(object);

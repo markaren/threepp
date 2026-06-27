@@ -464,12 +464,9 @@ struct OrbitControls::Impl {
             : scope(scope), mouseMoveListener(mouseMoveListener) {}
 
         void onMouseUp(int, const Vector2&) override {
-            if (scope.enabled) {
-
-                scope.pimpl_->canvas.removeMouseListener(*mouseMoveListener);
-                scope.pimpl_->canvas.removeMouseListener(*this);
-                scope.pimpl_->state = NONE;
-            }
+            scope.pimpl_->canvas.removeMouseListener(*mouseMoveListener);
+            scope.pimpl_->canvas.removeMouseListener(*this);
+            scope.pimpl_->state = NONE;
         }
     };
 

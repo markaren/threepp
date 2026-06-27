@@ -37,6 +37,8 @@ namespace threepp {
 
         void setScaleSnap(std::optional<float> snap);
 
+        [[nodiscard]] bool isDragging() const;
+
         TransformControls& attach(Object3D& object);
 
         TransformControls& detach();
