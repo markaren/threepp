@@ -534,22 +534,25 @@ def main():
         camera.position.lerp(tp.Vector3(float(des[0]), float(des[1]), float(des[2])), LAG)
         camera.look_at(float(p[0] + fwd[0] * 0.5), float(p[1] + fwd[1] * 0.5), float(p[2]) + 0.2)
 
-        # Render before scan: on Vulkan the TLAS is built here; hiding the SLAM surface now
-        # excludes it from the depth-sensor trace.  On GL the sensor does its own re-render
-        # so the hide/show around scanner.scan() below is what actually matters.
         do_scan = (fc[0] % SCAN_EVERY == 0)
         _extra  = [o for o in (slam._surf[0], trail.line) if o is not None]
-        if do_scan:
-            for o in _extra: o.visible = False
-        rend.render(scene, camera)
-        if ui:
-            ui.render(draw_ui)
 
-        # Depth scan (after render so Vulkan uses the just-built clean TLAS)
         if do_scan:
+            # Vulkan: TLAS is built during render(); the slam surface must be absent from that
+            # TLAS or the depth sensor hits it, accumulates wrong heights, and the reconstruction
+            # drifts upward via positive feedback.  Hide slam → pre-scan render (clean TLAS) →
+            # scan → restore slam → display render.  GL's sensor does its own internal re-render
+            # with self.hide applied, so the pre-scan render is a no-op for GL correctness (but
+            # harmless).  Slam is always visible in the final display render → no flicker.
+            for o in _extra: o.visible = False
+            rend.render(scene, camera)         # Vulkan: builds TLAS without slam
             ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
             slam.insert(_scanner_pts(scanner))
-            for o in _extra: o.visible = True
+            for o in _extra: o.visible = True  # restore before the display render below
+
+        rend.render(scene, camera)             # display render — slam always visible here
+        if ui:
+            ui.render(draw_ui)
 
     print(__doc__)
     canvas.animate(frame)
