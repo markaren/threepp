@@ -54,6 +54,7 @@ ground = tp.Mesh(tp.PlaneGeometry(20, 20), tp.MeshStandardMaterial())
 ground.receive_shadow = True
 ground.rotate_x(-math.pi / 2)
 scene.add(ground)
+scene.add(tp.GridHelper(20, 20))
 
 # ---- transform controls ------------------------------------------------------
 tc = tp.TransformControls(camera, canvas)

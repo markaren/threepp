@@ -26,6 +26,7 @@ pybind11_add_module(threepp_py
         src/bind_animation.cpp
         src/bind_cameras.cpp
         src/bind_lights.cpp
+        src/bind_helpers.cpp
         src/bind_render.cpp
         src/bind_loaders.cpp
         src/bind_robot.cpp

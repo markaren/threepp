@@ -45,6 +45,7 @@ namespace threepp_py {
     void init_animation(py::module_& m);
     void init_cameras(py::module_& m);
     void init_lights(py::module_& m);
+    void init_helpers(py::module_& m); // AxesHelper, GridHelper, ArrowHelper, box/camera/skeleton/light helpers
     void init_render(py::module_& m);
     void init_loaders(py::module_& m);
     void init_robot(py::module_& m); // URDFLoader + Robot (articulated Object3D)
