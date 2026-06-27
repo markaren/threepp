@@ -30,7 +30,7 @@ from spot_deploy import (build_spot, fetch_assets, SpotController,
 
 # ── constants ──────────────────────────────────────────────────────────────────
 WORLD_SZ   = 80.0
-AMPLITUDE  = 0.8
+AMPLITUDE  = 10.8
 TREE_COUNT = 45
 CLEAR_R    = 7.0     # no trees within this radius of spawn
 SENSOR_W   = 160
@@ -47,7 +47,8 @@ def build_terrain_zup(field, world_size, amplitude):
     half = world_size / 2.0
     lin  = np.linspace(-half, half, dim, dtype=np.float32)
     X, Y = np.meshgrid(lin, lin, indexing='ij')
-    Z    = (field * amplitude).astype(np.float32)
+    # field is stored field_[iz][ix] (Z outer, X inner) — transpose so first index → world X
+    Z    = (field.T * amplitude).astype(np.float32)
     U, V = np.meshgrid(np.linspace(0, 1, dim, dtype=np.float32),
                        np.linspace(0, 1, dim, dtype=np.float32), indexing='ij')
 
@@ -287,16 +288,21 @@ def main():
 
     # ── assets ────────────────────────────────────────────────────────────────
     assets = fetch_assets()
-    policy = torch.jit.load(os.path.join(assets, "spot_steps.pt"), map_location="cpu").eval()
+    policy = torch.jit.load(os.path.join(assets, "spot_policy.pt"), map_location="cpu").eval()
 
     # ── terrain ───────────────────────────────────────────────────────────────
     print("[terrain] generating ...")
     tparams = tp.TerrainParams()
-    tp.apply_terrain_preset(1, tparams)      # Rolling Hills (gentle, walkable)
-    tparams.resolution  = 128
-    tparams.world_size  = WORLD_SZ
-    tparams.amplitude   = float(args.amplitude)
-    tparams.ao_strength = 8.0
+    tp.apply_terrain_preset(1, tparams)          # Rolling Hills base shape
+    tparams.resolution    = 192                  # 192² cells — fast physics trimesh
+    tparams.world_size    = WORLD_SZ
+    tparams.amplitude     = float(args.amplitude)# physical height in metres (height_at must agree)
+    tparams.feature_scale = 45.0                 # preset is 430 m for 1600 m world; scale to 80 m
+    tparams.octaves       = 7                    # more detail layers
+    tparams.warp          = 0.40                 # organic domain warp
+    tparams.falloff       = tp.TerrainFalloff.Off# preset's radial bowl looks wrong at 80 m
+    tparams.erosion       = tp.ErosionType.Off   # thermal grooves are too fine at this scale
+    tparams.ao_strength   = 8.0
 
     gen  = tp.TerrainGenerator(args.seed)
     gen.build_field(tparams)
