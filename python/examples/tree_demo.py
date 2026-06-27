@@ -59,7 +59,7 @@ def main():
     canvas = tp.Canvas("threepp - Procedural Tree", width=1100, height=750,
                        antialiasing=4, headless=headless)
     renderer = tp.GLRenderer(canvas)
-    renderer.shadow_map_enabled = True
+    renderer.shadow_map_enabled = False
     renderer.tone_mapping = tp.ToneMapping.ACESFilmic
     renderer.tone_mapping_exposure = 1.15
 
@@ -69,14 +69,12 @@ def main():
     scene.add(tp.HemisphereLight(0xcfe8ff, 0x304020, 0.9))
     sun = tp.DirectionalLight(0xfff5e0, 3.5)
     sun.position.set(8, 14, 6)
-    sun.cast_shadow = True
     scene.add(sun)
 
     ground = tp.Mesh(tp.PlaneGeometry(40, 40), tp.MeshStandardMaterial())
     ground.material.color    = 0x3a4a2a
     ground.material.roughness = 0.95
     ground.rotation.x = -math.pi / 2
-    ground.receive_shadow = True
     scene.add(ground)
 
     # ---- current tree meshes (swapped each rebuild) ----
@@ -149,10 +147,7 @@ def main():
         if current_meshes[1] is not None:
             scene.remove(current_meshes[1])
         trunk = tp.Mesh(trunk_geo, trunk_mat)
-        trunk.cast_shadow = True
-        trunk.receive_shadow = True
         leaf  = tp.Mesh(leaf_geo, leaf_mat)
-        leaf.cast_shadow = True
         scene.add(trunk)
         scene.add(leaf)
         current_meshes[0] = trunk
