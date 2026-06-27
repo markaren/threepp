@@ -149,7 +149,9 @@ namespace threepp_py {
                          auto tex = DataTexture::create(ImageData(std::move(buf)),
                                                         static_cast<unsigned int>(d),
                                                         static_cast<unsigned int>(d));
-                         tex->colorSpace = ColorSpace::sRGB;
+                         tex->colorSpace  = ColorSpace::sRGB;
+                         tex->magFilter   = Filter::Linear;
+                         tex->minFilter   = Filter::Linear;
                          tex->needsUpdate();
                          std::shared_ptr<Texture> t = tex;
                          return t;
