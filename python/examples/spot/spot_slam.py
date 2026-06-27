@@ -83,9 +83,13 @@ def build_terrain_zup(field, world_size, amplitude):
 
 
 # ── trees ──────────────────────────────────────────────────────────────────────
-def scatter_trees(scene, gen, params, n=TREE_COUNT, seed=0):
+def scatter_trees(scene, gen, params, n=TREE_COUNT, seed=0, world=None):
+    """Scatter trees. When `world` is given, add a static box collider per trunk
+    (a "tree stub") so Spot bumps into the trunks; the leafy canopy stays
+    non-colliding. Returns the list of collider proxy meshes (keep them alive)."""
     rng  = np.random.default_rng(seed)
     half = params.world_size / 2.0 - 4.0
+    proxies = []
 
     bark_alb, _ = tp.make_bark_textures(128, seed, [0.34, 0.22, 0.12])
     trunk_mat = tp.MeshStandardMaterial()
@@ -129,8 +133,17 @@ def scatter_trees(scene, gen, params, n=TREE_COUNT, seed=0):
             m.scale.set(scale, scale, scale)
             m.cast_shadow = True
             scene.add(m)
+        if world is not None:
+            # Tall thin box collider on the lower trunk (covers Spot's height);
+            # the canopy above it is leaves → no collision.
+            tw  = 0.35 * scale
+            stub = tp.Mesh(tp.BoxGeometry(tw, tw, 2.5), trunk_mat)
+            stub.position.set(px, py, hz + 1.25)
+            world.add_static(stub)
+            proxies.append(stub)
         placed += 1
     print(f"[trees] placed {placed}/{n}")
+    return proxies
 
 
 # ── stones ───────────────────────────────────────────────────────────────────────
@@ -163,9 +176,12 @@ def make_rock_geometry(seed):
     return g
 
 
-def scatter_stones(scene, gen, params, n=35, seed=0):
+def scatter_stones(scene, gen, params, n=35, seed=0, world=None):
+    """Scatter boulders. When `world` is given, add a static sphere collider per
+    stone so Spot bumps into them. Returns the collider proxy meshes."""
     rng  = np.random.default_rng(seed + 7)
     half = params.world_size / 2.0 - 4.0
+    proxies = []
     rgeos = [make_rock_geometry(s) for s in (1, 2, 3)]
     mat = tp.MeshStandardMaterial()
     mat.color = 0x4e4a44
@@ -188,8 +204,14 @@ def scatter_stones(scene, gen, params, n=35, seed=0):
         m.cast_shadow = True
         m.receive_shadow = True
         scene.add(m)
+        if world is not None:
+            sph = tp.Mesh(tp.SphereGeometry(s * 0.8, 8, 6), mat)
+            sph.position.set(px, py, hz + s * 0.30)
+            world.add_static(sph)
+            proxies.append(sph)
         placed += 1
     print(f"[stones] placed {placed}/{n}")
+    return proxies
 
 
 # ── bushes (shrub-variant trees, like forest_demo) ────────────────────────────────
@@ -551,9 +573,12 @@ def main():
         scene.add(m)
 
     print("[trees] scattering ...")
-    scatter_trees(scene, gen, tparams, seed=args.seed)
+    # Trees + stones get static colliders (Spot bumps trunks/boulders); bushes stay
+    # soft (walk-through). Keep the proxy meshes alive for the whole run.
+    phys_proxies = []
+    phys_proxies += scatter_trees(scene, gen, tparams, seed=args.seed, world=world)
     scatter_bushes(scene, gen, tparams, seed=args.seed)
-    scatter_stones(scene, gen, tparams, seed=args.seed)
+    phys_proxies += scatter_stones(scene, gen, tparams, seed=args.seed, world=world)
 
     print("[grass] building ...")
     grass_geo, n_grass = build_grass_field(gen, tparams, GRASS_BLADES, GRASS_RADIUS,
