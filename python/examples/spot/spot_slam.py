@@ -29,9 +29,9 @@ from spot_deploy import (build_spot, fetch_assets, SpotController,
                          default_q, add_to_isaac, ACTION_SCALE, Z0)
 
 # ── constants ──────────────────────────────────────────────────────────────────
-WORLD_SZ   = 40.0
-AMPLITUDE  = 0.25
-TREE_COUNT = 25
+WORLD_SZ   = 80.0
+AMPLITUDE  = 0.8
+TREE_COUNT = 45
 CLEAR_R    = 7.0     # no trees within this radius of spawn
 SENSOR_W   = 160
 SENSOR_H   = 120
@@ -182,10 +182,10 @@ class DepthCam:
 class SlamMapper:
     """Accumulates scan hits → VoxelGrid → marching-cubes surface (background thread)."""
 
-    VOXEL = 0.18
-    CELL  = 0.22
-    RAD   = 0.55
-    ISO   = 0.45
+    VOXEL = 0.12
+    CELL  = 0.14
+    RAD   = 0.22   # tight: surface hugs scan hits rather than ballooning above them
+    ISO   = 0.55
 
     def __init__(self, scene):
         self.scene   = scene
@@ -209,7 +209,7 @@ class SlamMapper:
 
     def _worker(self, pts):
         try:
-            field = tp.splat_points_to_field(pts, self.CELL, self.RAD, max_nodes=3_000_000)
+            field = tp.splat_points_to_field(pts, self.CELL, self.RAD, max_nodes=6_000_000)
             iso   = tp.marching_cubes(field, self.ISO)
             with self._lock:
                 self._pending[0] = iso if not iso.empty else None
@@ -287,7 +287,7 @@ def main():
 
     # ── assets ────────────────────────────────────────────────────────────────
     assets = fetch_assets()
-    policy = torch.jit.load(os.path.join(assets, "spot_policy.pt"), map_location="cpu").eval()
+    policy = torch.jit.load(os.path.join(assets, "spot_steps.pt"), map_location="cpu").eval()
 
     # ── terrain ───────────────────────────────────────────────────────────────
     print("[terrain] generating ...")
