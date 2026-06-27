@@ -68,6 +68,7 @@ PYBIND11_MODULE(threepp, m) {
     tp::init_helpers(m);// after lights: light helpers reference light types
     tp::init_audio(m);      // AudioListener + Audio + PositionalAudio
     tp::init_pointcloud(m); // VoxelGrid, ICP, MarchingCubes
+    tp::init_terrain(m);    // TerrainGenerator + TerrainParams
     tp::init_vegetation(m); // TreeGenerator, TreeTextures
     tp::init_render(m);
     tp::init_loaders(m);// returns Group/Texture/BufferGeometry + GLTFResult

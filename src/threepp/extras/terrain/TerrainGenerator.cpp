@@ -13,6 +13,65 @@
 
 namespace threepp::terrain {
 
+    void applyPreset(int preset, TerrainParams& p) {
+        switch (preset) {
+            case 0:// Alpine — ridged peaks
+                p.noiseType = NoiseType::Ridged;
+                p.worldSize = 1200.f; p.featureScale = 520.f; p.octaves = 6;
+                p.lacunarity = 2.0f; p.gain = 0.5f; p.amplitude = 480.f;
+                p.warp = 0.45f; p.ridgeSharpness = 0.5f; p.heightExponent = 1.25f;
+                p.terraces = 0; p.falloff = Falloff::Radial; p.falloffStart = 0.62f;
+                p.erosion = ErosionType::Both;
+                p.droplets = 110000; p.erodeSpeed = 0.4f; p.erosionRadius = 3;
+                p.talusAngle = 42.f; p.thermalIterations = 22;
+                p.rockColor = {0.39f,0.36f,0.33f}; p.grassColor = {0.29f,0.33f,0.19f};
+                p.screeColor = {0.49f,0.46f,0.42f}; p.snowColor = {0.90f,0.91f,0.93f};
+                p.snowLine = 0.5f; p.slopeGrassMax = 0.28f; p.slopeRockMin = 0.55f;
+                break;
+            case 1:// Rolling Hills — soft fBm
+                p.noiseType = NoiseType::fBm;
+                p.worldSize = 1600.f; p.featureScale = 430.f; p.octaves = 6;
+                p.lacunarity = 2.0f; p.gain = 0.5f; p.amplitude = 300.f;
+                p.warp = 0.3f; p.ridgeSharpness = 0.0f; p.heightExponent = 1.0f;
+                p.terraces = 0; p.falloff = Falloff::Radial; p.falloffStart = 0.8f;
+                p.erosion = ErosionType::Thermal;
+                p.talusAngle = 32.f; p.thermalIterations = 40;
+                p.snowLine = 0.9f; p.slopeGrassMax = 0.4f;
+                p.rockColor = {0.39f,0.36f,0.33f}; p.grassColor = {0.30f,0.40f,0.18f};
+                p.screeColor = {0.49f,0.46f,0.42f}; p.snowColor = {0.90f,0.91f,0.93f};
+                p.slopeRockMin = 0.55f;
+                break;
+            case 2:// Desert Mesa — terraced strata
+                p.noiseType = NoiseType::Hybrid;
+                p.worldSize = 1400.f; p.featureScale = 520.f; p.octaves = 6;
+                p.lacunarity = 2.0f; p.gain = 0.45f; p.amplitude = 320.f;
+                p.warp = 0.25f; p.ridgeSharpness = 0.2f; p.heightExponent = 1.0f;
+                p.terraces = 10; p.falloff = Falloff::Radial; p.falloffStart = 0.72f;
+                p.erosion = ErosionType::Hydraulic;
+                p.droplets = 60000; p.erodeSpeed = 0.3f; p.depositSpeed = 0.4f;
+                p.snowLine = 1.1f;
+                p.rockColor = {0.46f,0.31f,0.22f}; p.grassColor = {0.60f,0.49f,0.33f};
+                p.screeColor = {0.66f,0.52f,0.38f}; p.snowColor = {0.90f,0.91f,0.93f};
+                p.slopeGrassMax = 0.28f; p.slopeRockMin = 0.55f;
+                break;
+            case 3:// Volcanic — single radial cone
+                p.noiseType = NoiseType::Ridged;
+                p.worldSize = 1200.f; p.featureScale = 360.f; p.octaves = 6;
+                p.lacunarity = 2.2f; p.gain = 0.55f; p.amplitude = 600.f;
+                p.warp = 0.35f; p.ridgeSharpness = 0.45f; p.heightExponent = 1.4f;
+                p.terraces = 0; p.falloff = Falloff::Radial; p.falloffStart = 0.5f;
+                p.erosion = ErosionType::Both;
+                p.droplets = 100000; p.erodeSpeed = 0.45f; p.erosionRadius = 2;
+                p.talusAngle = 40.f; p.thermalIterations = 22;
+                p.snowLine = 1.1f;
+                p.rockColor = {0.20f,0.18f,0.17f}; p.screeColor = {0.30f,0.27f,0.25f};
+                p.grassColor = {0.24f,0.23f,0.21f}; p.snowColor = {0.90f,0.91f,0.93f};
+                p.slopeGrassMax = 0.28f; p.slopeRockMin = 0.55f;
+                break;
+            default: break;
+        }
+    }
+
     std::string toJson(const TerrainParams& p) {
         nlohmann::json j;
         j["format"] = "threepp-terrain-1";

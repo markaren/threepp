@@ -202,6 +202,9 @@ namespace threepp::terrain {
             return makeGeometry(tp);
         }
 
+        // Raw [0,1] height field (dim×dim, row-major). Empty until buildField().
+        [[nodiscard]] const std::vector<float>& getField() const { return field_; }
+
         // Single-sample procedural elevation in metres (no erosion). Useful for
         // physics/placement queries; the mesh path uses the eroded field.
         [[nodiscard]] float heightAt(float wx, float wz, const TerrainParams& tp) const {
@@ -570,6 +573,11 @@ namespace threepp::terrain {
         std::vector<float> field_;// [0,1] faded base height per vertex (eroded in place)
         int dim_ = 0;
     };
+
+    // ── Named presets (implemented in TerrainGenerator.cpp) ──────────────────
+    // preset: 0=Alpine, 1=Rolling Hills, 2=Desert Mesa, 3=Volcanic.
+    // Fills p with the complete parameter set for that landscape type.
+    void applyPreset(int preset, TerrainParams& p);
 
     // ── Config (de)serialisation (implemented in TerrainGenerator.cpp) ────────
     // Round-trip the full TerrainParams to/from JSON. Generation is deterministic,

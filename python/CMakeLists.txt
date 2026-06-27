@@ -29,6 +29,7 @@ pybind11_add_module(threepp_py
         src/bind_helpers.cpp
         src/bind_audio.cpp
         src/bind_pointcloud.cpp
+        src/bind_terrain.cpp
         src/bind_vegetation.cpp
         src/bind_render.cpp
         src/bind_loaders.cpp
