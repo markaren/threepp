@@ -199,12 +199,13 @@ class SlamMapper:
             return
         geo = tp.iso_mesh_to_geometry(iso)
         mat = tp.MeshStandardMaterial()
-        mat.color       = 0x44aaff
-        mat.roughness   = 0.35
-        mat.metalness   = 0.10
+        mat.color       = 0x55bbff
         mat.side        = tp.Side.Double
-        mat.transparent = True
-        mat.opacity     = 0.55
+        # Wireframe routes the mesh through the renderer's raster overlay path: on Vulkan it
+        # gets the kSnapWire flag → EXCLUDED from the path-tracer TLAS (so the depth sensor
+        # never hits its own reconstruction → no self-contamination), and is drawn depth-tested
+        # over the PT frame. On GL it simply renders as wireframe (still hidden during scans).
+        mat.wireframe   = True
         mesh = tp.Mesh(geo, mat); mesh.frustum_culled = False
         if self._surf[0] is not None:
             self.scene.remove(self._surf[0])
@@ -364,11 +365,15 @@ def main():
 
     # ── SLAM objects ──────────────────────────────────────────────────────────
     half = WORLD_SZ / 2.0
+    # Vulkan's depth sensor traces the TLAS from the last render(); GL re-renders internally.
+    is_vulkan = type(rend).__name__ == "VulkanRenderer"
     scanner = ForwardDepthScanner(rend, scene, meshes,
                                   bounds=(-half, half, -half, half),
                                   cell=0.15, far=SENSOR_FAR,
                                   mount_fwd=0.95, mount_up=-0.10,
                                   pitch_deg=40.0, fov_y=90.0)
+    if is_vulkan:
+        rend.render(scene, camera)   # build an initial TLAS so prewarm's scans have geometry
     scanner.prewarm(art.root_state())
     slam    = SlamMapper(scene)
     trail   = PathTrail(scene)
@@ -534,23 +539,22 @@ def main():
         camera.position.lerp(tp.Vector3(float(des[0]), float(des[1]), float(des[2])), LAG)
         camera.look_at(float(p[0] + fwd[0] * 0.5), float(p[1] + fwd[1] * 0.5), float(p[2]) + 0.2)
 
-        do_scan = (fc[0] % SCAN_EVERY == 0)
-        _extra  = [o for o in (slam._surf[0], trail.line) if o is not None]
-
-        if do_scan:
-            # Vulkan: TLAS is built during render(); the slam surface must be absent from that
-            # TLAS or the depth sensor hits it, accumulates wrong heights, and the reconstruction
-            # drifts upward via positive feedback.  Hide slam → pre-scan render (clean TLAS) →
-            # scan → restore slam → display render.  GL's sensor does its own internal re-render
-            # with self.hide applied, so the pre-scan render is a no-op for GL correctness (but
-            # harmless).  Slam is always visible in the final display render → no flicker.
-            for o in _extra: o.visible = False
-            rend.render(scene, camera)         # Vulkan: builds TLAS without slam
-            ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
+        if fc[0] % SCAN_EVERY == 0:
+            if is_vulkan:
+                # The SLAM surface is wireframe → excluded from the PT TLAS; the trail (Line)
+                # and point cloud (Points) are never ray-traced either. scan() traces the TLAS
+                # from the previous frame's render() → clean, no hiding/extra render needed.
+                ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
+            else:
+                # GL: the sensor re-renders the scene, so hide the SLAM surface + trail (the
+                # scanner already hides the robot + its own cloud/grid).
+                _extra = [o for o in (slam._surf[0], trail.line) if o is not None]
+                for o in _extra: o.visible = False
+                ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
+                for o in _extra: o.visible = True
             slam.insert(_scanner_pts(scanner))
-            for o in _extra: o.visible = True  # restore before the display render below
 
-        rend.render(scene, camera)             # display render — slam always visible here
+        rend.render(scene, camera)             # single render per frame — no flicker
         if ui:
             ui.render(draw_ui)
 
