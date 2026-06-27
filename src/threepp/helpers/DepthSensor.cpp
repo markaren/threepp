@@ -89,6 +89,14 @@ namespace {
         if (rangeNoise > 0.f) noiseDist = std::normal_distribution{0.f, rangeNoise};
 
         for (const auto& ret : returns) {
+            // A depth camera measures geometry, not atmosphere. The path-traced
+            // LIDAR back-end emits sentinel returns the per-LidarTypes.hpp contract
+            // says callers must drop (hitInstanceId < 0): -1 = miss, -2 = volume
+            // scatter (fog / haze / participating media). Without this filter, any
+            // scene with fog set fills the cloud with mid-air fog-scatter points —
+            // the raster (GL) DepthSensor never sees fog, so this also restores
+            // GL/Vulkan parity.
+            if (ret.hitInstanceId < 0) continue;
             Vector3 p = ret.position;
             if (noiseDist) {
                 // perturb the hit along its beam to mirror DepthSensor's range noise
