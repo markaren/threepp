@@ -211,6 +211,15 @@ class SlamMapper:
         self._surf[0] = mesh
         self.scene.add(mesh)
 
+    def clear(self):
+        """Remove the displayed surface and discard all accumulated data."""
+        with self._lock:
+            self._pending[0] = None
+        self.grid.clear()
+        if self._surf[0] is not None:
+            self.scene.remove(self._surf[0])
+            self._surf[0] = None
+
     @property
     def busy(self):  return self._busy[0]
     @property
@@ -373,7 +382,7 @@ def main():
         hdg_lock[0] = None
         settle(40)
         scanner.clear_map(); scanner.prewarm(art.root_state())
-        slam.grid.clear()
+        slam.clear()
         trail.clear()
 
     # ── headless ──────────────────────────────────────────────────────────────
