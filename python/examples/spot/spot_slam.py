@@ -8,7 +8,7 @@ to reconstruct the growing SLAM surface (semi-transparent blue) over the ground 
     python spot_slam.py --seed 7 --amplitude 0.20
     python spot_slam.py --shot out.png
 
-Controls: W/S = fwd/back  A/D = strafe  Q/E = turn  |  SPACE = toggle auto-forward  |  R = reset
+Controls: W/S = fwd/back  A/D = strafe  Q/E = turn  |  SPACE = auto-forward  |  R = reset  |  mouse = orbit/zoom
 """
 import argparse, math, os, sys, threading, time
 import numpy as np
@@ -25,6 +25,7 @@ except Exception:
 
 import threepp as tp
 from threepp.rl import load_policy
+from threepp.utils import fetch_file
 from spot_deploy import (build_spot, fetch_assets,
                          _quat_to_R, _quat_from_R,
                          default_q, isaac_to_add, add_to_isaac, ACTION_SCALE, Z0)
@@ -47,22 +48,6 @@ GRASS_BLADES = 12000 # merged GrassMesh blade count (GPU-wind on Vulkan); tune f
 GRASS_RADIUS = 32.0  # grass disk radius around spawn (fog hides >25 m anyway)
 HDR_URL = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/noon_grass_2k.hdr"
 
-
-def fetch_hdr(url, name):
-    """Download an HDRI to ~/.cache/threepp/hdri once (cached) and return its path."""
-    import pathlib, shutil, urllib.request
-    cache = pathlib.Path.home() / ".cache" / "threepp" / "hdri"
-    cache.mkdir(parents=True, exist_ok=True)
-    dest = cache / name
-    if dest.exists() and dest.stat().st_size > 0:
-        return str(dest)
-    print(f"[hdri] downloading {name} ...")
-    req = urllib.request.Request(url, headers={"User-Agent": "threepp-spot-demo"})
-    tmp = dest.with_name(dest.name + ".part")
-    with urllib.request.urlopen(req) as resp, open(tmp, "wb") as f:
-        shutil.copyfileobj(resp, f)
-    tmp.replace(dest)
-    return str(dest)
 
 
 # ── terrain ────────────────────────────────────────────────────────────────────
@@ -459,6 +444,7 @@ class SlamMapper:
         self._surf   = [None]
         self._pending= [None]
         self._busy   = [False]
+        self._visible= [True]
         self._lock   = threading.Lock()
 
     def insert(self, pts):
@@ -498,6 +484,7 @@ class SlamMapper:
         # over the PT frame. On GL it simply renders as wireframe (still hidden during scans).
         mat.wireframe   = True
         mesh = tp.Mesh(geo, mat); mesh.frustum_culled = False
+        mesh.visible = self._visible[0]
         if self._surf[0] is not None:
             self.scene.remove(self._surf[0])
         self._surf[0] = mesh
@@ -516,6 +503,14 @@ class SlamMapper:
     def busy(self):  return self._busy[0]
     @property
     def voxels(self): return self.grid.voxel_count
+
+    @property
+    def visible(self): return self._visible[0]
+    @visible.setter
+    def visible(self, v):
+        self._visible[0] = v
+        if self._surf[0] is not None:
+            self._surf[0].visible = v
 
 
 # ── path trail ────────────────────────────────────────────────────────────────
@@ -625,7 +620,7 @@ def main():
     # HDR environment: equirect Radiance map drives image-based lighting (the Vulkan
     # PT importance-samples it) and serves as the sky backdrop. Cached on first run.
     try:
-        env = tp.RGBELoader().load(fetch_hdr(HDR_URL, "noon_grass_2k.hdr"))
+        env = tp.RGBELoader().load(fetch_file(HDR_URL, "~/.cache/threepp/hdri", "noon_grass_2k.hdr"))
         # The renderer samples env maps Y-up (latitude = asin(dir.y)); this scene is
         # Z-up, so pitch the HDRI -90° about X to stand the sky overhead.
         env = tp.rotate_equirect(env, -90.0, 0.0, 0.0)
@@ -683,14 +678,22 @@ def main():
     scene.add(grass)
     print(f"[grass] {n_grass} blades")
 
-    # ── camera (Z-up chase cam) ───────────────────────────────────────────────
+    # ── camera + orbit controls ───────────────────────────────────────────────
     w, h = canvas.size()
     camera = tp.PerspectiveCamera(50, w / h, 0.05, 200)
     camera.up.set(0, 0, 1)
     spawn_z = Z0 + h0
     camera.position.set(-3.0, -3.0, spawn_z + 1.8)
-    camera.look_at(0.0, 0.0, spawn_z + 0.3)
-    BACK, HEIGHT, LAG = 3.5, 1.8, 0.08
+    _init_tgt = np.array([0.0, 0.0, spawn_z + 0.3])
+    _prev_tgt = [_init_tgt.copy()]    # tracks last target so we can apply delta to camera
+    controls = tp.OrbitControls(camera, canvas)
+    controls.target.set(*_init_tgt.tolist())
+    controls.enable_damping = True
+    controls.damping_factor = 0.10
+    controls.enable_pan    = False    # pan would shift target away from Spot
+    controls.min_distance  = 1.5
+    controls.max_distance  = 30.0
+    controls.update()
 
     # ── SLAM objects ──────────────────────────────────────────────────────────
     half = WORLD_SZ / 2.0
@@ -803,12 +806,13 @@ def main():
         _, scanner.show_grid  = tp.imgui.checkbox("show scan grid", scanner.show_grid)
         tp.imgui.separator()
         tp.imgui.text(f"SLAM  voxels: {slam.voxels}  {'[rebuilding]' if slam.busy else ''}")
+        _, slam.visible = tp.imgui.checkbox("show SLAM mesh", slam.visible)
         if tp.imgui.button("rebuild surface now") and not slam.busy:
             slam.trigger_rebuild()
         if tp.imgui.button("reset (R)"):
             reset()
         tp.imgui.separator()
-        tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   WASD + QE")
+        tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   WASD+QE  mouse=orbit/zoom")
         tp.imgui.end()
 
     def frame():
@@ -860,13 +864,18 @@ def main():
         else:
             r_held[0] = False
 
-        # chase cam
-        p   = np.array(rs[:3], float)
-        fwd = R[:, 0].copy(); fwd[2] = 0.0
-        nrm = np.linalg.norm(fwd); fwd = fwd / nrm if nrm > 1e-6 else np.array([1.0, 0.0, 0.0])
-        des = p - fwd * BACK + np.array([0.0, 0.0, HEIGHT])
-        camera.position.lerp(tp.Vector3(float(des[0]), float(des[1]), float(des[2])), LAG)
-        camera.look_at(float(p[0] + fwd[0] * 0.5), float(p[1] + fwd[1] * 0.5), float(p[2]) + 0.2)
+        # Follow Spot: shift camera by same delta as target so OrbitControls
+        # sees an unchanged spherical offset (stays in orbit around Spot
+        # rather than fixed in world space while Spot walks away).
+        p = np.array(rs[:3], float)
+        new_tgt = np.array([float(p[0]), float(p[1]), float(p[2]) + 0.3])
+        delta = new_tgt - _prev_tgt[0]
+        _prev_tgt[0] = new_tgt
+        cp = camera.position
+        camera.position.set(cp.x + delta[0], cp.y + delta[1], cp.z + delta[2])
+        controls.target.set(float(new_tgt[0]), float(new_tgt[1]), float(new_tgt[2]))
+        controls.enabled = not (ui and ui.want_capture_mouse)
+        controls.update()
 
         if fc[0] % SCAN_EVERY == 0:
             if is_vulkan:

@@ -30,7 +30,6 @@ import shutil
 import struct
 import sys
 import tempfile
-import urllib.request
 import zipfile
 import zlib
 
@@ -47,18 +46,6 @@ ASSET_URLS = {"spot_policy.pt": _ISAAC + "spot_policy.pt",
 URDF_ZIP_URL = "https://raw.githubusercontent.com/boston-dynamics/spot-sdk/master/files/spot_base_urdf.zip"
 
 
-def _download(url, dest):
-    if dest.exists() and dest.stat().st_size > 0:
-        return dest
-    print(f"  downloading {dest.name} ...")
-    req = urllib.request.Request(url, headers={"User-Agent": "threepp-spot-demo"})
-    tmp = dest.with_name(dest.name + ".part")
-    with urllib.request.urlopen(req) as resp, open(tmp, "wb") as f:
-        shutil.copyfileobj(resp, f)
-    tmp.replace(dest)
-    return dest
-
-
 def fetch_assets():
     """Download the Spot policy (+ params + URDF) on demand; return the cache folder."""
     cache = pathlib.Path.home() / ".cache" / "threepp" / "spot"
@@ -66,15 +53,15 @@ def fetch_assets():
     print(f"[spot] assets dir: {cache}")
     if any(not (cache / f).exists() for f in ("spot_policy.pt", "spot_env.yaml", "model.urdf")):
         print("[spot] some assets missing — downloading (one-time; cached for later runs)")
-    _download(ASSET_URLS["spot_policy.pt"], cache / "spot_policy.pt")    # required by the demo
+    fetch_file(ASSET_URLS["spot_policy.pt"], cache, "spot_policy.pt")    # required by the demo
     for name in ("spot_env.yaml",):                                      # for reference / the importer
         try:
-            _download(ASSET_URLS[name], cache / name)
+            fetch_file(ASSET_URLS[name], cache, name)
         except Exception as e:                                          # noqa: BLE001
             print(f"  (skipped {name}: {e})")
     if not (cache / "model.urdf").exists():                             # URDF zip -> extract + flatten
         try:
-            zp = _download(URDF_ZIP_URL, cache / "spot_base_urdf.zip")
+            zp = fetch_file(URDF_ZIP_URL, cache, "spot_base_urdf.zip")
             with zipfile.ZipFile(zp) as z:
                 z.extractall(cache)
             found = next(cache.rglob("model.urdf"), None)
@@ -87,6 +74,7 @@ def fetch_assets():
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import threepp as tp
+from threepp.utils import fetch_file
 
 # --------------------------------------------------------------------------- #
 #  Isaac Lab contract (Spot velocity task)
