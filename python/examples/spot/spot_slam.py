@@ -389,7 +389,10 @@ def main():
             ctrl.step(world, cmd)
         rs = art.root_state()
         for _ in range(20):
-            pts = depth_cam.scan(rs); slam.insert(pts)
+            trail.line.visible = False
+            pts = depth_cam.scan(rs)
+            trail.line.visible = True
+            slam.insert(pts)
         slam.trigger_rebuild()
         time.sleep(1.2)
         slam.apply_pending()
@@ -471,9 +474,12 @@ def main():
         ctrl.step(world, np.array([vx, vy, wz], np.float32))
         rs = art.root_state()
 
-        # depth scan + SLAM
+        # depth scan + SLAM  (hide map surface + trail so they don't self-interfere)
         if fc[0] % SCAN_EVERY == 0:
+            _extra = [o for o in (slam._surf[0], trail.line) if o is not None]
+            for o in _extra: o.visible = False
             pts = depth_cam.scan(rs)
+            for o in _extra: o.visible = True
             slam.insert(pts)
         if fc[0] % MC_FRAMES == 0:
             slam.trigger_rebuild()
