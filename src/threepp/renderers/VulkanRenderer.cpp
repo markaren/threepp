@@ -1,4 +1,11 @@
-﻿// VulkanRenderer — hardware ray-traced renderer with dynamic scene rebuild.
+﻿// Shared implementation unit for VulkanRendererCore + VulkanRenderer + VulkanPathTracer.
+//
+// Architecture: VulkanRendererCore (abstract base) ← VulkanRenderer (deferred G-buffer +
+// ray-query accents) / VulkanPathTracer (iterative path tracer). The three classes share a
+// single CoreImpl struct (TLAS/BLAS, scene fingerprint, raster G-buffer, TAA/bloom, fog,
+// lights, skinning, ocean/water, LIDAR, env-PMREM, camera UBOs, GPU timings). Each leaf
+// adds its own Impl : CoreImpl (VulkanRenderer::Impl carries DeferredShade; VulkanPathTracer::Impl
+// carries the RT pipeline, accum images, denoiser, ReSTIR, photon-caustics, env-CDF).
 //
 // On every render() we walk the scene and fingerprint each visible Mesh
 // (geometry/material identity + world matrix + PBR scalars). When the
@@ -8,16 +15,11 @@
 // bindings 0/3/4 across every descriptor set. BLAS records stay cached by
 // BufferGeometry pointer so static geometry is never re-traced.
 //
-// Two render modes (RenderMode):
-//   • ReferencePT — an iterative path tracer driven from raygen: each
-//     closest_hit returns direct radiance (Lambert + VNDF-sampled GGX against
-//     AmbientLight/DirectionalLights with shadow rays, plus emissive/ReSTIR
-//     area lights) + a sampled bounce direction; raygen loops to kMaxBounces
-//     with Russian Roulette, accumulating into a persistent rgba32f image that
-//     resets on camera/env/scene change.
-//   • RasterFirst — a hybrid: a raster G-buffer supplies primary visibility,
-//     then deferred_shade.comp lights it analytically and adds ray-query
-//     accents (shadows, reflections, AO/GI), denoised + TAA-resolved.
+// VulkanRenderer (deferred): G-buffer supplies primary visibility,
+//   then deferred_shade.comp lights it analytically and adds ray-query
+//   accents (shadows, reflections, AO/GI), denoised + TAA-resolved.
+// VulkanPathTracer: raygen path tracer; closest_hit returns radiance +
+//   bounce direction; accumulates into a persistent rgba32f image.
 // Both sample `scene.environment` / `scene.background` HDR equirects (GGX-
 // prefiltered into a PMREM mip chain) for the background miss and IBL.
 
@@ -1600,19 +1602,12 @@ namespace threepp {
         // skips the bloom passes (composite still owns the tone map).
         std::unique_ptr<vulkan::BloomPass> bloom_;
         float bloomIntensity_ = 0.0f;
-        // Phase-2 GI path (RasterFirst): ON now activates REAL stochastic 1-bounce
-        // GI (colour bleed, no AO/sky hacks) + temporal accumulation + à-trous.
-        // OFF falls back to the clean deterministic AO+far≈sky approximation.
-        // Default ON to ship the Phase-2 GI. CAVEATS (follow-ups): GI bounce uses
-        // full traceRadiance (expensive in emitter-heavy scenes — cheap sun+emissive
-        // bounce pending); no reproject/disocclusion yet → MOTION GHOSTS (ping-pong
-        // history reproject pending). setDenoise(false) → clean fallback.
-        // (One flag for BOTH paths — denoiseEnabled_ — so a single toggle
-        // follows the active RenderMode; setDeferredDenoise is an alias.)
-        // Ray-traced env ambient occlusion / GI (RasterFirst). ON: gives the
-        // "dirty realistic" PT-like grounding (contact darkening + 1-bounce GI).
-        // Uses the deterministic Fibonacci 64-sample gather (clean + settles), so
-        // it's the realistic look WITHOUT the old per-frame flicker.
+        // Deferred GI path: ON activates stochastic 1-bounce GI (colour bleed) +
+        // temporal accumulation + à-trous. OFF falls back to the deterministic
+        // AO+far≈sky approximation. setDenoise(false) → clean fallback.
+        // Ray-traced env ambient occlusion / GI. ON: gives the "dirty realistic"
+        // PT-like grounding (contact darkening + 1-bounce GI). Uses the deterministic
+        // Fibonacci 64-sample gather (clean + settles), no per-frame flicker.
         bool  deferredAO_ = true;
         // Deferred volumetric spot-light beams (ray-marched single scattering in
         // deferred_shade.comp). σ = 0 disables (the march is skipped entirely).
@@ -1621,10 +1616,9 @@ namespace threepp {
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
 
-        // Raster-first deferred lighting (RenderMode::RasterFirst). Shades the
-        // material G-buffer analytically into bloom_->sceneHdr, replacing the
-        // raygen + denoise stages; bloom + TAA finish the frame unchanged. Owns
-        // no images and does not touch rtDsLayout, so ReferencePT is unaffected.
+        // Deferred shade pass (VulkanRenderer only). Shades the material G-buffer
+        // analytically into bloom_->sceneHdr; bloom + TAA finish the frame unchanged.
+        // Owns no images and does not touch rtDsLayout.
         std::unique_ptr<vulkan::DeferredShade> deferredShade_;
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
         float bloomClamp_ = 0.0f;    // per-tap HDR cap before the bright pass; <= 0 = off
@@ -1793,15 +1787,9 @@ namespace threepp {
         };
         HybridDebugView hybridDebugView_ = HybridDebugView::Off;
 
-        // Shading strategy (see VulkanRenderer::RenderMode in the public
-        // header). RasterFirst aliases ReferencePT until the deferred base +
-        // PT-accent passes land, so this currently only stores the user's
-        // preference and does not yet branch the frame graph. Default
-        // ReferencePT keeps today's behaviour byte-for-byte.
-
         // Debug: gate raygen to exit immediately after step-0 primary trace
         // so pathTraceMs measures roughly the primary-trace cost. See
-        // VulkanRenderer::setMeasurePrimaryTraceOnly.
+        // VulkanPathTracer::setMeasurePrimaryTraceOnly.
         bool measurePrimaryTraceOnly_ = false;
 
         // Per-frame-in-flight camera UBO (viewInverse + projInverse).
@@ -1939,7 +1927,7 @@ namespace threepp {
             // created above by this point.
             // The deferred base traces ray-query shadow rays, so only stand it
             // up when the device supports VK_KHR_ray_query. Without it,
-            // deferredShade_ stays null and RasterFirst falls back to ReferencePT.
+            // deferredShade_ stays null if ray query is unavailable.
             if (ctx->rayQuerySupported()) {
                 deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
             }
@@ -7530,8 +7518,8 @@ namespace threepp {
                                 : VK_CULL_MODE_BACK_BIT;
                 // Blend decals (alphaCutoff == -2 sentinel from materialFromMesh)
                 // go to bucket [3]: drawn last, with the albedo-blend pipeline.
-                // RasterFirst only — its shade reads the blended albedo
-                // attachment. ReferencePT's hybrid raygen re-samples material
+                // Deferred (VulkanRenderer) only — its shade reads the blended albedo
+                // attachment. VulkanPathTracer's hybrid raygen re-samples material
                 // textures via the ids/UV attachments (which the decal pipeline
                 // write-masks), so there decals stay on the stochastic
                 // screen-door path that the PT accumulator converges.
@@ -7560,7 +7548,7 @@ namespace threepp {
                 di.indexAddr   = indexed ? rec->index.address : 0ull;
                 // Per-vertex color: only when the material opts in (vertexColors)
                 // and the geometry uploaded a color buffer — matches the
-                // GeometryDesc::colorAddress gate so RasterFirst and ReferencePT
+                // GeometryDesc::colorAddress gate so VulkanRenderer and VulkanPathTracer
                 // agree. gbuffer.frag multiplies albedo by the interpolated value.
                 {
                     const auto dmat = en.mesh->material();
@@ -8962,8 +8950,8 @@ namespace threepp {
             deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
             deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                                     VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-            // Consumed by raygen (ReferencePT) AND the deferred shade compute
-            // pass (RasterFirst) — make the attachments visible to both stages.
+            // Consumed by raygen (VulkanPathTracer) AND the deferred shade compute
+            // pass (VulkanRenderer) — make the attachments visible to both stages.
             deps[1].dstStageMask  = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
             deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
@@ -9452,7 +9440,7 @@ namespace threepp {
 
             // DECAL_PASS=1 specialization flips gbuffer.frag from the stochastic
             // screen-door to "emit texture alpha as the blend factor". The
-            // regular pipelines keep DECAL_PASS=0, so in ReferencePT mode (where
+            // regular pipelines keep DECAL_PASS=0, so in VulkanPathTracer (where
             // decals draw with the regular pipeline) they stay on the screen-door.
             const uint32_t kDecalPassOn = 1u;
             VkSpecializationMapEntry decalSpecEntry{0, 0, sizeof(uint32_t)};
@@ -10538,7 +10526,7 @@ namespace threepp {
             // come from the scene build; before then there's nothing to bind and
             // the deferred pass can't dispatch anyway. allocateAndUpdateDescriptors
             // (which runs right after the TLAS build) calls this, so the first
-            // valid write lands before the first RasterFirst dispatch.
+            // valid write lands before the first deferred dispatch.
             if (!deferredShade_ || tlas == VK_NULL_HANDLE) return;
             std::array<VkBuffer, kFramesInFlight>    camBufs{};
             std::array<VkBuffer, kFramesInFlight>    lightBufs{};
@@ -10961,7 +10949,7 @@ namespace threepp {
             // the PT set (binding 8) and deferred-compute set (binding 11) are
             // rewritten here; the gbuffer raster set (binding 3) is refreshed
             // lazily by invalidating its per-frame validity flag. All three must
-            // see the new image views or the (default RasterFirst) gbuffer keeps
+            // see the new image views or the (deferred) gbuffer keeps
             // sampling the freed view.
             rewriteSceneDescriptors();
             rasterMatTexValid_.fill(0);
@@ -12951,7 +12939,7 @@ namespace threepp {
                                    static_cast<uint32_t>(writes.size()),
                                    writes.data(), 0, nullptr);
 
-            // RasterFirst: the deferred descriptor set holds its OWN copies of
+            // Deferred (VulkanRenderer): the deferred descriptor set holds its OWN copies of
             // the scene-dependent handles — mats (binding 9), geom descs (10),
             // the bindless material-texture array (11), the emissive-tri buffer
             // (12) and the TLAS (8). A rebuild above freed and recreated those
@@ -13810,12 +13798,8 @@ namespace threepp {
             uint32_t exposureBits;
             std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
 
-            // RenderMode::ReferencePT — the path tracer shades everything
-            // (photon caustics + raygen + à-trous denoise). RenderMode::
-            // RasterFirst replaces this entire block with one analytic
-            // deferred-shade compute pass; bloom + TAA below are shared.
-            // RasterFirst also falls back here when ray query is unsupported
-            // (deferredShade_ == null), so it never renders a black frame.
+            // Dispatch to the leaf renderer (VulkanPathTracer: PT raygen + denoiser;
+            // VulkanRenderer: deferred shade compute); bloom + TAA below are shared.
             recordSceneDispatch(cb, setIdx, ext, ptExt, exposureBits);
 
             // ── Bloom + tone-map/sRGB composite (HDR post stack) ───────────────
@@ -15211,10 +15195,8 @@ namespace threepp {
         }
     };
 
-    // The deferred renderer's pImpl. Holds deferred-specific state; the bulk of
-    // shared infra lives in the inherited VulkanRendererCore::CoreImpl. The PT-only
-    // state (accumImages, RT pipelines, denoiser, ReSTIR, ...) remains in CoreImpl
-    // until the B2/C partition moves it into VulkanPathTracer::Impl.
+    // Deferred renderer's pImpl — adds DeferredShade and deferred-specific state
+    // atop the shared VulkanRendererCore::CoreImpl infrastructure.
     struct VulkanRenderer::Impl : VulkanRendererCore::CoreImpl {
         using CoreImpl::CoreImpl;
 
@@ -15223,7 +15205,7 @@ namespace threepp {
         void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
                                  VkExtent2D ext, VkExtent2D ptExt,
                                  uint32_t exposureBits) override {
-            // ── RenderMode::RasterFirst — analytic deferred base ───────────
+            // ── VulkanRenderer deferred dispatch ───────────────────────────
             // Shade the raster material G-buffer (direct analytic lights +
             // split-sum specular IBL + approximate diffuse IBL) straight
             // into bloom_->sceneHdr. No path tracing, no denoise — the base
