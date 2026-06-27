@@ -383,7 +383,7 @@ def main():
 
     # ── state ─────────────────────────────────────────────────────────────────
     fc        = [0]
-    auto_fwd  = [True]
+    auto_fwd  = [False]
     hdg_lock  = [None]
     r_held    = [False]
     space_held= [False]
