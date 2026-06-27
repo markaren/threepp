@@ -27,6 +27,7 @@ pybind11_add_module(threepp_py
         src/bind_cameras.cpp
         src/bind_lights.cpp
         src/bind_helpers.cpp
+        src/bind_audio.cpp
         src/bind_render.cpp
         src/bind_loaders.cpp
         src/bind_robot.cpp
@@ -54,6 +55,10 @@ set_target_properties(threepp PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Vulkan ImGui path is #ifdef'd out and falls through to GL on a Vulkan window).
 if (THREEPP_WITH_VULKAN)
     target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_VULKAN THREEPP_WITH_VULKAN)
+endif ()
+
+if (THREEPP_WITH_AUDIO)
+    target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_AUDIO)
 endif ()
 
 # FBXLoader (OpenFBX) is compiled into the threepp static lib only when threepp
