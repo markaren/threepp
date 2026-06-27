@@ -323,7 +323,7 @@ def main():
     # ── canvas + renderer ─────────────────────────────────────────────────────
     canvas = tp.Canvas("threepp · Spot SLAM", width=1200, height=720,
                        antialiasing=4, headless=headless)
-    rend = tp.GLRenderer(canvas)
+    rend = tp.VulkanRenderer(canvas)
     rend.shadow_map_enabled       = True
     rend.tone_mapping             = tp.ToneMapping.ACESFilmic
     rend.tone_mapping_exposure    = 1.1
@@ -366,7 +366,9 @@ def main():
     half = WORLD_SZ / 2.0
     scanner = ForwardDepthScanner(rend, scene, meshes,
                                   bounds=(-half, half, -half, half),
-                                  cell=0.15, far=SENSOR_FAR)
+                                  cell=0.15, far=SENSOR_FAR,
+                                  mount_fwd=0.95, mount_up=-0.10,
+                                  pitch_deg=40.0, fov_y=90.0)
     scanner.prewarm(art.root_state())
     slam    = SlamMapper(scene)
     trail   = PathTrail(scene)
@@ -391,12 +393,24 @@ def main():
         slam.clear()
         trail.clear()
 
+    def _save_frame(path):
+        """Renderer-agnostic screenshot: GL takes only path; Vulkan takes scene+camera+path."""
+        try:
+            rend.save_frame(path)
+        except TypeError:
+            rend.save_frame(scene, camera, path)
+
     # ── headless ──────────────────────────────────────────────────────────────
     if headless:
         cmd = np.array([1.0, 0.0, 0.0], np.float32)
-        for _ in range(150):
+        # Vulkan: scan() uses the TLAS from the last render(), so render before each scan.
+        # GL: scan() re-renders internally anyway; the extra render() is a cheap no-op for screenshots.
+        rend.render(scene, camera)
+        for i in range(150):
             rs = art.root_state()
-            ahead, h_here = scanner.scan(rs)
+            if i % SCAN_EVERY == 0:
+                rend.render(scene, camera)   # refresh TLAS for Vulkan
+                ahead, h_here = scanner.scan(rs)
             obs = v2_obs(art, last_act, cmd, ahead, h_here)
             with torch.no_grad():
                 a = ac.act_mean(torch.from_numpy(obs)[None])[0].numpy()
@@ -404,10 +418,11 @@ def main():
             art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
             world.step(0.02)
         rs = art.root_state()
+        trail.line.visible = False
         for _ in range(20):
-            trail.line.visible = False
+            rend.render(scene, camera)
             ahead, h_here = scanner.scan(rs)
-            trail.line.visible = True
+        trail.line.visible = True
         slam.insert(_scanner_pts(scanner))
         slam.trigger_rebuild()
         time.sleep(1.2)
@@ -419,7 +434,7 @@ def main():
         camera.position.set(float(eye[0]), float(eye[1]), float(eye[2]))
         camera.look_at(float(p[0]), float(p[1]), float(p[2]) + 0.3)
         rend.render(scene, camera)
-        rend.save_frame(args.shot)
+        _save_frame(args.shot)
         print(f"saved {args.shot}")
         return
 
@@ -490,16 +505,7 @@ def main():
             err = (yaw - hdg_lock[0] + math.pi) % (2 * math.pi) - math.pi
             wz  = float(np.clip(-2.0 * err, -1.0, 1.0))
 
-        # scan → obs → policy → step
-        # Re-render the depth sensor only every SCAN_EVERY frames; reuse cached obs otherwise.
-        rs = art.root_state()
-        if fc[0] % SCAN_EVERY == 0:
-            _extra = [o for o in (slam._surf[0], trail.line) if o is not None]
-            for o in _extra: o.visible = False
-            ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
-            for o in _extra: o.visible = True
-            slam.insert(_scanner_pts(scanner))
-
+        # obs → policy → step
         cmd   = np.array([vx, vy, wz], np.float32)
         obs   = v2_obs(art, last_act, cmd, ahead_cache[0], h_here_cache[0])
         with torch.no_grad():
@@ -528,9 +534,22 @@ def main():
         camera.position.lerp(tp.Vector3(float(des[0]), float(des[1]), float(des[2])), LAG)
         camera.look_at(float(p[0] + fwd[0] * 0.5), float(p[1] + fwd[1] * 0.5), float(p[2]) + 0.2)
 
+        # Render before scan: on Vulkan the TLAS is built here; hiding the SLAM surface now
+        # excludes it from the depth-sensor trace.  On GL the sensor does its own re-render
+        # so the hide/show around scanner.scan() below is what actually matters.
+        do_scan = (fc[0] % SCAN_EVERY == 0)
+        _extra  = [o for o in (slam._surf[0], trail.line) if o is not None]
+        if do_scan:
+            for o in _extra: o.visible = False
         rend.render(scene, camera)
         if ui:
             ui.render(draw_ui)
+
+        # Depth scan (after render so Vulkan uses the just-built clean TLAS)
+        if do_scan:
+            ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
+            slam.insert(_scanner_pts(scanner))
+            for o in _extra: o.visible = True
 
     print(__doc__)
     canvas.animate(frame)
