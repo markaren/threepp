@@ -1,5 +1,5 @@
 // The rendering layer: Canvas (window / headless surface), GLRenderer (draws a
-// scene and reads pixels back as numpy), and OrbitControls.
+// scene and reads pixels back as numpy), OrbitControls, and TransformControls.
 #include "bindings.hpp"
 
 #include <pybind11/functional.h>
@@ -10,6 +10,7 @@
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/constants.hpp"
 #include "threepp/controls/OrbitControls.hpp"
+#include "threepp/controls/TransformControls.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/helpers/LidarModel.hpp"
@@ -280,6 +281,34 @@ namespace threepp_py {
                 }, py::arg("renderer"), py::arg("scene"),
                    "RGB-D scan -> (points (N,3) float32 world-space, colors (N,3) float32 in [0,1]). On GL the "
                    "colors are sampled sRGB; on Vulkan they are LIDAR intensity as greyscale.");
+
+        // ---- TransformControls -----------------------------------------------
+        py::class_<TransformControls, Object3D, std::shared_ptr<TransformControls>>(m, "TransformControls")
+                .def(py::init([](Camera& camera, Canvas& canvas) {
+                         return std::make_shared<TransformControls>(camera, canvas);
+                     }),
+                     py::arg("camera"), py::arg("canvas"),
+                     py::keep_alive<1, 2>(), py::keep_alive<1, 3>())
+                .def_readwrite("enabled", &TransformControls::enabled)
+                .def_readwrite("show_x", &TransformControls::showX)
+                .def_readwrite("show_y", &TransformControls::showY)
+                .def_readwrite("show_z", &TransformControls::showZ)
+                .def("set_mode", &TransformControls::setMode, py::arg("mode"),
+                     "Mode: 'translate' | 'rotate' | 'scale'")
+                .def("set_space", &TransformControls::setSpace, py::arg("space"),
+                     "Space: 'world' | 'local'")
+                .def("get_space", &TransformControls::getSpace)
+                .def("set_size", &TransformControls::setSize, py::arg("size"))
+                .def("set_translation_snap", &TransformControls::setTranslationSnap, py::arg("snap"))
+                .def("set_rotation_snap", &TransformControls::setRotationSnap, py::arg("snap"))
+                .def("set_scale_snap", &TransformControls::setScaleSnap, py::arg("snap"))
+                .def_property_readonly("dragging", &TransformControls::isDragging,
+                     "True while the user is actively dragging the gizmo.")
+                .def("attach", [](TransformControls& self, const py::handle& obj) -> TransformControls& {
+                         return self.attach(*as_object3d(obj));
+                     }, py::arg("object"), py::return_value_policy::reference,
+                     "Attach the gizmo to an Object3D. Add the TransformControls itself to the scene.")
+                .def("detach", &TransformControls::detach, py::return_value_policy::reference);
 
         // ---- OrbitControls ---------------------------------------------------
         py::class_<OrbitControls>(m, "OrbitControls")
