@@ -41,7 +41,7 @@ CLEAR_R    = 7.0     # no trees within this radius of spawn
 SENSOR_W   = 160
 SENSOR_H   = 120
 SENSOR_FAR = 8.0
-SCAN_EVERY = 2       # depth scan every N physics steps  (~15 Hz)
+SCAN_EVERY = 3       # depth scan every N frames; result cached for policy (~17 Hz)
 MC_FRAMES  = 90      # trigger SLAM rebuild every N rendered frames
 
 
@@ -336,7 +336,7 @@ def main():
     sun = tp.DirectionalLight(0xfff8e0, 2.8)
     sun.position.set(15, -10, 20)
     sun.cast_shadow = True
-    sun.set_shadow_frustum(-WORLD_SZ / 2, WORLD_SZ / 2, WORLD_SZ / 2, -WORLD_SZ / 2)
+    sun.set_shadow_frustum(-18, 18, 18, -18)  # fog hides >25 m; no need for full world frustum
     sun.set_shadow_bias(-0.0005)
     scene.add(sun)
 
@@ -366,11 +366,13 @@ def main():
     half = WORLD_SZ / 2.0
     scanner = ForwardDepthScanner(rend, scene, meshes,
                                   bounds=(-half, half, -half, half),
-                                  cell=0.08, far=SENSOR_FAR)
+                                  cell=0.15, far=SENSOR_FAR)
     scanner.prewarm(art.root_state())
     slam    = SlamMapper(scene)
     trail   = PathTrail(scene)
-    last_act = np.zeros(12, np.float32)
+    last_act    = np.zeros(12, np.float32)
+    ahead_cache = [np.zeros(45, np.float32)]   # last sensor reading; reused on skipped frames
+    h_here_cache= [h0]
 
     # ── state ─────────────────────────────────────────────────────────────────
     fc        = [0]
@@ -489,24 +491,23 @@ def main():
             wz  = float(np.clip(-2.0 * err, -1.0, 1.0))
 
         # scan → obs → policy → step
-        rs    = art.root_state()
-        _extra = [o for o in (slam._surf[0], trail.line) if o is not None]
-        for o in _extra: o.visible = False
-        ahead, h_here = scanner.scan(rs)
-        for o in _extra: o.visible = True
+        # Re-render the depth sensor only every SCAN_EVERY frames; reuse cached obs otherwise.
+        rs = art.root_state()
+        if fc[0] % SCAN_EVERY == 0:
+            _extra = [o for o in (slam._surf[0], trail.line) if o is not None]
+            for o in _extra: o.visible = False
+            ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
+            for o in _extra: o.visible = True
+            slam.insert(_scanner_pts(scanner))
 
         cmd   = np.array([vx, vy, wz], np.float32)
-        obs   = v2_obs(art, last_act, cmd, ahead, h_here)
+        obs   = v2_obs(art, last_act, cmd, ahead_cache[0], h_here_cache[0])
         with torch.no_grad():
             a = ac.act_mean(torch.from_numpy(obs)[None])[0].numpy()
         last_act[:] = a
         art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
         world.step(0.02)
         rs = art.root_state()
-
-        # SLAM: insert elevation-map snapshot every MC_FRAMES
-        if fc[0] % SCAN_EVERY == 0:
-            slam.insert(_scanner_pts(scanner))
         if fc[0] % MC_FRAMES == 0:
             slam.trigger_rebuild()
         slam.apply_pending()
