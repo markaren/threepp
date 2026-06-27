@@ -157,13 +157,18 @@ namespace threepp_py {
               [](const py::array_t<float, py::array::c_style | py::array::forcecast>& arr,
                  float cell_size, float radius, std::size_t max_nodes) {
                   auto pts = numpyToPoints(arr);
+                  py::gil_scoped_release release;
                   return splatPointsToField(pts, cell_size, radius, max_nodes);
               },
               py::arg("points"), py::arg("cell_size"), py::arg("radius"),
               py::arg("max_nodes") = std::size_t(8'000'000),
               "Build a union-of-balls scalar field from an (N,3) point array.");
 
-        m.def("marching_cubes", &marchingCubes,
+        m.def("marching_cubes",
+              [](const ScalarField& f, float isolevel) {
+                  py::gil_scoped_release release;
+                  return marchingCubes(f, isolevel);
+              },
               py::arg("field"), py::arg("isolevel") = 0.5f,
               "Extract an isosurface mesh from a ScalarField. Returns an IsoMesh.");
 
