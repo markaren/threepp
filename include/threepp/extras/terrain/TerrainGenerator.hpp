@@ -102,6 +102,11 @@ namespace threepp::terrain {
         float slopeGrassMax = 0.28f;// grass → scree slope
         float slopeRockMin = 0.55f; // scree → rock slope
         float bandEdge = 0.07f;     // transition softness
+        // Baked AO: discrete-Laplacian curvature darkens concave folds. Reduce
+        // aoStrength (or set to 0) when viewing without IBL — the term was tuned
+        // for a path-tracer scene with strong ambient fill.
+        float aoStrength = 40.f;    // curvature multiplier (0 = no baked AO)
+        float aoMax = 0.30f;        // maximum darkening fraction (0..1)
         std::array<float, 3> rockColor = {0.39f, 0.36f, 0.33f};// neutral grey-brown
         std::array<float, 3> grassColor = {0.29f, 0.33f, 0.19f};// muted olive ("low+flat" band; sand/ash for other presets)
         std::array<float, 3> screeColor = {0.49f, 0.46f, 0.42f};
@@ -263,7 +268,7 @@ namespace threepp::terrain {
                     const float n2 = noise2(static_cast<float>(x) * 0.8f, static_cast<float>(z) * 0.8f);
                     const float varia = std::clamp(1.f + 0.15f * n1 + 0.08f * n2, 0.65f, 1.25f);
                     const float curv = field_[at(xm, z)] + field_[at(xp, z)] + field_[at(x, zm)] + field_[at(x, zp)] - 4.f * hC;
-                    const float ao = 1.f - std::clamp(-curv * 45.f, 0.f, 0.35f);// valleys/creases darker
+                    const float ao = 1.f - std::clamp(-curv * tp.aoStrength, 0.f, tp.aoMax);
 
                     const float inv = (varia * ao) / total;
                     const float r = (tp.grassColor[0] * wGrass + tp.screeColor[0] * wScree + tp.rockColor[0] * wRock + tp.snowColor[0] * wSnow) * inv;

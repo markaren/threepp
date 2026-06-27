@@ -64,7 +64,8 @@ def main():
     gen = tp.TerrainGenerator(1337)
     params = tp.TerrainParams()
     tp.apply_terrain_preset(0, params)      # start as Alpine
-    params.resolution = 256                  # demo resolution
+    params.resolution = 512                  # higher res → smoother splat
+    params.ao_strength = 10.0               # GL has no IBL fill; baked AO must be subtle
 
     pending   = [None]   # result from worker: (geometry, texture) or None
     rebuilding = [False]
@@ -172,6 +173,8 @@ def main():
         for i, name in enumerate(PRESET_NAMES):
             if imgui.button(name):
                 tp.apply_terrain_preset(i, params)
+                params.resolution  = 512
+                params.ao_strength = 10.0
                 trigger_rebuild()
             if i < len(PRESET_NAMES) - 1:
                 imgui.same_line()
@@ -242,6 +245,7 @@ def main():
         controls.update()
         renderer.render(scene, camera)
         if ui:
+            controls.enabled = not ui.want_capture_mouse
             ui.render(draw_ui)
 
         if args.shot and terrain_mesh[0] is not None and not rebuilding[0]:
