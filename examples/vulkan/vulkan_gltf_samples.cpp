@@ -3,6 +3,7 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/FogExp2.hpp"
 #include "threepp/threepp.hpp"
@@ -70,11 +71,13 @@ int main(int argc, char** argv) {
     // 1 Normal, 2 Motion, 3 InstanceID, 4 Albedo.
     std::string shotPath;
     int shotFrames = 120, shotFrame = 0, cliDebugView = 0;
+    bool usePT = false;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (a == "--debug" && i + 1 < argc) cliDebugView = std::atoi(argv[++i]);
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (a == "--pt") usePT = true;
     }
     if (!fs::exists(modelFolder) || !fs::is_directory(modelFolder)) {
         std::cerr << "Invalid folder path: " << fs::absolute(modelFolder) << std::endl;
@@ -90,8 +93,11 @@ int main(int argc, char** argv) {
 
     Canvas canvas("Vulkan PT - GLTF Samples", {{"vsync", false}});
 
-    VulkanRenderer renderer(canvas);
-    renderer.setRenderMode(VulkanRenderer::RenderMode::RasterFirst);
+    std::unique_ptr<VulkanRendererCore> rendererPtr =
+            usePT ? std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanPathTracer>(canvas))
+                  : std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanRenderer>(canvas));
+    VulkanRendererCore& renderer = *rendererPtr;
+    auto* pt = dynamic_cast<VulkanPathTracer*>(&renderer);
     renderer.setHybridDebugView(cliDebugView);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
@@ -204,7 +210,7 @@ int main(int argc, char** argv) {
     float exposure = renderer.toneMappingExposure;
     int toneMode = static_cast<int>(renderer.toneMapping);
     bool dirLight = sun->visible;
-    int spp = renderer.samplesPerPixel();
+    int spp = pt ? pt->samplesPerPixel() : 1;
     bool fogOn = false;
     float fogDensity = 0.05f;
     float fogColor[3] = {0.55f, 0.6f, 0.7f};
@@ -222,17 +228,7 @@ int main(int argc, char** argv) {
         ImGui::Text("Model: %s", currentModel >= 0 ? models[currentModel].name.c_str() : "none");
         if (loadedModel && loadedModel->isLoading()) ImGui::Text("Loading...");
         ImGui::Text("Left/Right arrows to browse");
-
-        // Render mode: RasterFirst (clean analytic raster base + IBL) vs
-        // ReferencePT (full path tracer). 0 = RasterFirst, 1 = ReferencePT.
-        static int renderMode = 0;
-        const char* modeItems[] = {"RasterFirst (raster base)", "ReferencePT (path tracer)"};
-        if (ImGui::Combo("Render mode", &renderMode, modeItems, IM_ARRAYSIZE(modeItems))) {
-            renderer.setRenderMode(renderMode == 0
-                                           ? VulkanRenderer::RenderMode::RasterFirst
-                                           : VulkanRenderer::RenderMode::ReferencePT);
-            renderer.resetAccumulation();
-        }
+        ImGui::TextDisabled(pt ? "Mode: Path tracer (--pt)" : "Mode: Deferred (default)");
 
         // Raster G-buffer debug views. "Albedo" exercises the new raster-first
         // material attachment (linear base colour in rgb, metalness in alpha).
@@ -267,18 +263,22 @@ int main(int argc, char** argv) {
             renderer.setDenoise(denoise);
         }
 
-        bool perSpp = renderer.perSppJitterHybrid();
-        if (ImGui::Checkbox("Per-spp AA jitter", &perSpp))
-            renderer.setPerSppJitterHybrid(perSpp);
+        if (pt) {
+            bool perSpp = pt->perSppJitterHybrid();
+            if (ImGui::Checkbox("Per-spp AA jitter", &perSpp))
+                pt->setPerSppJitterHybrid(perSpp);
+        }
 
         bool restirDI = renderer.restirDIEnabled();
         if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
             renderer.setRestirDIEnabled(restirDI);
         }
 
-        bool restirGI = renderer.restirGIEnabled();
-        if (ImGui::Checkbox("ReSTIR GI", &restirGI)) {
-            renderer.setRestirGIEnabled(restirGI);
+        if (pt) {
+            bool restirGI = pt->restirGIEnabled();
+            if (ImGui::Checkbox("ReSTIR GI", &restirGI)) {
+                pt->setRestirGIEnabled(restirGI);
+            }
         }
 
         if (ImGui::CollapsingHeader("Fog (FogExp2 + HG)")) {
@@ -291,8 +291,8 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
-            renderer.setSamplesPerPixel(spp);
+        if (pt && ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
+            pt->setSamplesPerPixel(spp);
 
         ImGui::End();
     });

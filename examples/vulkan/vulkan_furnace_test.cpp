@@ -32,7 +32,7 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/textures/Texture.hpp"
 #include "threepp/threepp.hpp"
 
@@ -151,7 +151,7 @@ namespace {
 int main() {
     Canvas canvas("Vulkan PT - White Furnace (Env-only)", {{"vsync", false}});
 
-    VulkanRenderer renderer(canvas);
+    VulkanPathTracer renderer(canvas);
     // Raw linear readback: 1.0 ↔ 255, no tone curve, no sRGB encode.
     renderer.outputColorSpace = ColorSpace::Linear;
     renderer.toneMapping = ToneMapping::None;
