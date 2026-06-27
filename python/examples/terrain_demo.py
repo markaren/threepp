@@ -131,6 +131,8 @@ def main():
         dst.slope_grass_max   = src.slope_grass_max
         dst.slope_rock_min    = src.slope_rock_min
         dst.band_edge         = src.band_edge
+        dst.ao_strength       = src.ao_strength
+        dst.ao_max            = src.ao_max
         dst.rock_color        = list(src.rock_color)
         dst.grass_color       = list(src.grass_color)
         dst.scree_color       = list(src.scree_color)
@@ -156,6 +158,10 @@ def main():
             scene.remove(terrain_mesh[0])
         scene.add(mesh)
         terrain_mesh[0] = mesh
+
+        def on_resize(w, h):
+            camera.aspect = w / max(h, 1); camera.update_projection_matrix(); renderer.set_size(w, h)
+        canvas.on_window_resize(on_resize)
 
     # ── ImGui ────────────────────────────────────────────────────────────────
     imgui = tp.imgui  # widget functions must be called inside ui.render(callback)
