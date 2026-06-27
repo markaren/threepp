@@ -24,9 +24,14 @@ except Exception:
     pass
 
 import threepp as tp
-from spot_deploy import (build_spot, fetch_assets, SpotController,
+from threepp.rl import load_policy
+from spot_deploy import (build_spot, fetch_assets,
                          _quat_to_R, _quat_from_R,
-                         default_q, add_to_isaac, ACTION_SCALE, Z0)
+                         default_q, isaac_to_add, add_to_isaac, ACTION_SCALE, Z0)
+from spot_depth_scan import ForwardDepthScanner
+from spot_terrain_env import VX_HI, VY_HI, WZ_HI
+
+GRAV = np.array([0.0, 0.0, -1.0])
 
 # ── constants ──────────────────────────────────────────────────────────────────
 WORLD_SZ   = 80.0
@@ -124,59 +129,28 @@ def scatter_trees(scene, gen, params, n=TREE_COUNT, seed=0):
     print(f"[trees] placed {placed}/{n}")
 
 
-# ── depth camera ───────────────────────────────────────────────────────────────
-def _height_ramp(z, lo=0.0, hi=AMPLITUDE):
-    t = np.clip((z - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
-    r = np.clip(1.5 - np.abs(t - 1.0) * 2.0, 0.0, 1.0)
-    g = np.clip(1.5 - np.abs(t - 0.5) * 2.5, 0.0, 1.0)
-    b = np.clip(1.5 - np.abs(t - 0.0) * 2.0, 0.0, 1.0)
-    return np.stack([r, g, b], 1).astype(np.float32)
+# ── policy observation (94-d: mirrors SpotStepsEnv) ───────────────────────────
+def v2_obs(art, last_act, cmd, ahead, h_here):
+    rs, rv = art.root_state(), art.root_velocity()
+    R = _quat_to_R(rs[3:7]); Rt = R.T
+    lin_b = Rt @ rv[0:3]; ang_b = Rt @ rv[3:6]; proj_g = Rt @ GRAV
+    jp_isaac = art.joint_positions()[isaac_to_add]
+    jv_isaac = art.joint_velocities()[isaac_to_add]
+    qpos = jp_isaac - default_q
+    return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
+                           [float(rs[2]) - h_here], ahead]).astype(np.float32)
 
 
-class DepthCam:
-    """Body-mounted forward depth camera → world-space point cloud."""
-
-    def __init__(self, renderer, scene, robot_meshes, *,
-                 fov_y=90.0, pitch_deg=45.0, mount_fwd=0.35, mount_up=0.20):
-        p = math.radians(pitch_deg); sp, cp = math.sin(p), math.cos(p)
-        self.R_mount     = np.array([[0, sp, -cp], [-1, 0, 0], [0, cp, sp]], float)
-        self.mount_local = np.array([mount_fwd, 0.0, mount_up], float)
-        self.renderer = renderer
-        self.scene    = scene
-        self.sensor   = tp.DepthSensor(fov_y=fov_y, width=SENSOR_W, height=SENSOR_H,
-                                       near=0.05, far=SENSOR_FAR)
-
-        cap = SENSOR_W * SENSOR_H
-        g   = tp.BufferGeometry()
-        g.set_attribute("position", np.zeros((cap, 3), np.float32))
-        g.set_attribute("color",    np.zeros((cap, 3), np.float32))
-        g.set_draw_range(0, 0)
-        pm = tp.PointsMaterial(); pm.size = 0.05; pm.size_attenuation = True
-        pm.vertex_colors = True
-        self.cloud = tp.Points(g, pm); self.cloud.frustum_culled = False
-        self._g = g; self._cap = cap
-        scene.add(self.cloud)
-        self._hide = list(robot_meshes) + [self.cloud]
-
-    def scan(self, rs):
-        x, y, z = float(rs[0]), float(rs[1]), float(rs[2])
-        R  = _quat_to_R(rs[3:7])
-        wp = np.array([x, y, z]) + R @ self.mount_local
-        self.sensor.position.set(float(wp[0]), float(wp[1]), float(wp[2]))
-        q  = _quat_from_R(R @ self.R_mount)
-        self.sensor.quaternion.set(float(q[0]), float(q[1]), float(q[2]), float(q[3]))
-
-        saved = [(o, o.visible) for o in self._hide]
-        for o, _ in saved: o.visible = False
-        pts = self.sensor.scan(self.renderer, self.scene)
-        for o, v in saved: o.visible = v
-
-        n = min(int(pts.shape[0]), self._cap)
-        if n:
-            self._g.update_attribute("position", np.ascontiguousarray(pts[:n]))
-            self._g.update_attribute("color",    _height_ramp(pts[:n, 2]))
-        self._g.set_draw_range(0, n)
-        return pts
+def _scanner_pts(scanner):
+    """Convert the accumulated elevation map H → world-space 3-D points for the SLAM mapper."""
+    valid = ~np.isnan(scanner.H)
+    if not valid.any():
+        return np.empty((0, 3), np.float32)
+    ix = np.where(valid)[0].astype(np.float32)
+    iy = np.where(valid)[1].astype(np.float32)
+    return np.stack([ix * scanner.cell + scanner.x0,
+                     iy * scanner.cell + scanner.y0,
+                     scanner.H[valid]], axis=1).astype(np.float32)
 
 
 # ── SLAM mapper ────────────────────────────────────────────────────────────────
@@ -288,7 +262,10 @@ def main():
 
     # ── assets ────────────────────────────────────────────────────────────────
     assets = fetch_assets()
-    policy = torch.jit.load(os.path.join(assets, "spot_policy.pt"), map_location="cpu").eval()
+    model_path = os.path.join(_HERE, "spot_steps.pt")
+    ac, _norm, _meta = load_policy(model_path, device="cpu")
+    ac.eval()
+    print(f"[policy] {os.path.basename(model_path)}")
 
     # ── terrain ───────────────────────────────────────────────────────────────
     print("[terrain] generating ...")
@@ -321,9 +298,14 @@ def main():
     world.add_static_trimesh(terr_phys)
 
     art, meshes = build_spot(world, assets)
-    ctrl = SpotController(art, policy)
+
+    def settle(n=80):
+        for _ in range(n):
+            art.set_drive_targets(default_q[add_to_isaac].astype(np.float32))
+            world.step(0.02)
+
     art.reset(tp.Vector3(0.0, 0.0, Z0 + h0))
-    ctrl.hold(world, 120)
+    settle()
     print("[spot] standing")
 
     # ── canvas + renderer ─────────────────────────────────────────────────────
@@ -369,9 +351,14 @@ def main():
     BACK, HEIGHT, LAG = 3.5, 1.8, 0.08
 
     # ── SLAM objects ──────────────────────────────────────────────────────────
-    depth_cam = DepthCam(rend, scene, meshes)
-    slam      = SlamMapper(scene)
-    trail     = PathTrail(scene)
+    half = WORLD_SZ / 2.0
+    scanner = ForwardDepthScanner(rend, scene, meshes,
+                                  bounds=(-half, half, -half, half),
+                                  cell=0.08, far=SENSOR_FAR)
+    scanner.prewarm(art.root_state())
+    slam    = SlamMapper(scene)
+    trail   = PathTrail(scene)
+    last_act = np.zeros(12, np.float32)
 
     # ── state ─────────────────────────────────────────────────────────────────
     fc        = [0]
@@ -382,9 +369,10 @@ def main():
 
     def reset():
         art.reset(tp.Vector3(0.0, 0.0, spawn_z))
-        ctrl.last_action[:] = 0.0
+        last_act[:] = 0.0
         hdg_lock[0] = None
-        ctrl.hold(world, 40)
+        settle(40)
+        scanner.clear_map(); scanner.prewarm(art.root_state())
         slam.grid.clear()
         trail.clear()
 
@@ -392,13 +380,20 @@ def main():
     if headless:
         cmd = np.array([1.0, 0.0, 0.0], np.float32)
         for _ in range(150):
-            ctrl.step(world, cmd)
+            rs = art.root_state()
+            ahead, h_here = scanner.scan(rs)
+            obs = v2_obs(art, last_act, cmd, ahead, h_here)
+            with torch.no_grad():
+                a = ac.act_mean(torch.from_numpy(obs)[None])[0].numpy()
+            last_act[:] = a
+            art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
+            world.step(0.02)
         rs = art.root_state()
         for _ in range(20):
             trail.line.visible = False
-            pts = depth_cam.scan(rs)
+            ahead, h_here = scanner.scan(rs)
             trail.line.visible = True
-            slam.insert(pts)
+        slam.insert(_scanner_pts(scanner))
         slam.trigger_rebuild()
         time.sleep(1.2)
         slam.apply_pending()
@@ -435,10 +430,13 @@ def main():
         _, auto_fwd[0] = tp.imgui.checkbox("auto-forward (SPACE)", auto_fwd[0])
         tp.imgui.separator()
         tp.imgui.text("Depth camera")
-        chg, v = tp.imgui.slider_float("range noise (m)", depth_cam.sensor.range_noise, 0.0, 0.10)
-        if chg: depth_cam.sensor.range_noise = v
-        chg, v = tp.imgui.slider_float("point size", depth_cam.cloud.material.size, 0.02, 0.12)
-        if chg: depth_cam.cloud.material.size = v
+        chg, v = tp.imgui.slider_float("range noise (m)", scanner.sensor.range_noise, 0.0, 0.10)
+        if chg: scanner.sensor.range_noise = v
+        if scanner.cloud is not None:
+            chg, v = tp.imgui.slider_float("point size", scanner.cloud.material.size, 0.02, 0.12)
+            if chg: scanner.cloud.material.size = v
+        _, scanner.show_cloud = tp.imgui.checkbox("show cloud", scanner.show_cloud)
+        _, scanner.show_grid  = tp.imgui.checkbox("show scan grid", scanner.show_grid)
         tp.imgui.separator()
         tp.imgui.text(f"SLAM  voxels: {slam.voxels}  {'[rebuilding]' if slam.busy else ''}")
         if tp.imgui.button("rebuild surface now") and not slam.busy:
@@ -477,16 +475,25 @@ def main():
             err = (yaw - hdg_lock[0] + math.pi) % (2 * math.pi) - math.pi
             wz  = float(np.clip(-2.0 * err, -1.0, 1.0))
 
-        ctrl.step(world, np.array([vx, vy, wz], np.float32))
+        # scan → obs → policy → step
+        rs    = art.root_state()
+        _extra = [o for o in (slam._surf[0], trail.line) if o is not None]
+        for o in _extra: o.visible = False
+        ahead, h_here = scanner.scan(rs)
+        for o in _extra: o.visible = True
+
+        cmd   = np.array([vx, vy, wz], np.float32)
+        obs   = v2_obs(art, last_act, cmd, ahead, h_here)
+        with torch.no_grad():
+            a = ac.act_mean(torch.from_numpy(obs)[None])[0].numpy()
+        last_act[:] = a
+        art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
+        world.step(0.02)
         rs = art.root_state()
 
-        # depth scan + SLAM  (hide map surface + trail so they don't self-interfere)
+        # SLAM: insert elevation-map snapshot every MC_FRAMES
         if fc[0] % SCAN_EVERY == 0:
-            _extra = [o for o in (slam._surf[0], trail.line) if o is not None]
-            for o in _extra: o.visible = False
-            pts = depth_cam.scan(rs)
-            for o in _extra: o.visible = True
-            slam.insert(pts)
+            slam.insert(_scanner_pts(scanner))
         if fc[0] % MC_FRAMES == 0:
             slam.trigger_rebuild()
         slam.apply_pending()
