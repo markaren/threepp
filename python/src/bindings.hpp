@@ -48,6 +48,7 @@ namespace threepp_py {
     void init_helpers(py::module_& m); // AxesHelper, GridHelper, ArrowHelper, box/camera/skeleton/light helpers
     void init_audio(py::module_& m);     // AudioListener, Audio, PositionalAudio; no-op unless THREEPP_WITH_AUDIO
     void init_pointcloud(py::module_& m); // VoxelGrid, ICP, MarchingCubes
+    void init_terrain(py::module_& m);   // TerrainGenerator + TerrainParams
     void init_vegetation(py::module_& m); // TreeGenerator, TreeTextures
     void init_render(py::module_& m);
     void init_loaders(py::module_& m);
