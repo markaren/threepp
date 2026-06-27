@@ -14,6 +14,7 @@ import argparse
 import math
 import os
 import sys
+import threading
 
 import numpy as np
 
@@ -110,15 +111,36 @@ def main():
 
     # ---- incremental VoxelGrid map + surface mesh ----
     map_grid = tp.VoxelGrid(MAP_VOXEL, max_points_per_voxel=3, min_spacing=0.07)
-    surface_ref = [None]  # current surface Mesh (or None)
+    surface_ref  = [None]   # current surface Mesh
+    pending_iso  = [None]   # IsoMesh produced by background thread
+    rebuild_lock = threading.Lock()
+    rebuild_busy = [False]  # True while a background build is running
 
-    def rebuild_surface():
-        pts = map_grid.collect()       # (N,3) float32
-        if len(pts) < 20:
-            return
-        field = tp.splat_points_to_field(pts, SURF_CELL, SURF_RAD)
+    def _rebuild_worker(pts_snapshot):
+        field = tp.splat_points_to_field(pts_snapshot, SURF_CELL, SURF_RAD)
         iso   = tp.marching_cubes(field, SURF_ISO)
-        if iso.empty:
+        with rebuild_lock:
+            pending_iso[0] = iso if not iso.empty else None
+            rebuild_busy[0] = False
+
+    def trigger_rebuild():
+        """Snapshot the map and kick off a background rebuild (no-op if one is running)."""
+        with rebuild_lock:
+            if rebuild_busy[0]:
+                return
+            pts = map_grid.collect()
+            if len(pts) < 20:
+                return
+            rebuild_busy[0] = True
+        t = threading.Thread(target=_rebuild_worker, args=(pts,), daemon=True)
+        t.start()
+
+    def apply_pending_surface():
+        """Call from main thread each frame: swap in a finished IsoMesh if ready."""
+        with rebuild_lock:
+            iso = pending_iso[0]
+            pending_iso[0] = None
+        if iso is None:
             return
         geom = tp.iso_mesh_to_geometry(iso)
         mat  = tp.MeshStandardMaterial()
@@ -132,7 +154,7 @@ def main():
         surface_ref[0] = new_mesh
         if state["show_surface"]:
             scene.add(new_mesh)
-        state["surf_verts"] = len(iso.positions) // 3   # triangles
+        state["surf_verts"] = len(iso.positions) // 3
 
     camera = tp.PerspectiveCamera(55, canvas.aspect(), 0.1, 200)
     camera.position.set(9, 7, 9)
@@ -224,8 +246,10 @@ def main():
                 surface_ref[0] = None
         tp.imgui.text(f"map: {map_grid.voxel_count} voxels  ({map_grid.size} pts)")
 
-        if tp.imgui.button("rebuild surface"):
-            rebuild_surface()
+        busy = rebuild_busy[0]
+        if tp.imgui.button("rebuild surface" if not busy else "rebuilding..."):
+            if not busy:
+                trigger_rebuild()
         tp.imgui.same_line()
         ch, state["show_surface"] = tp.imgui.checkbox("show", state["show_surface"])
         if ch and surface_ref[0] is not None:
@@ -247,12 +271,15 @@ def main():
             state["yaw"] = clock.get_elapsed_time() * 0.6
         do_scan()
 
-        # auto-rebuild surface while accumulating
+        # apply any finished background surface build
+        apply_pending_surface()
+
+        # kick off a new background build periodically while accumulating
         state["frame_count"] += 1
         if (state["accumulate"] and state["show_surface"] and
                 state["frame_count"] % AUTO_REBUILD_FRAMES == 0 and
                 map_grid.voxel_count > 50):
-            rebuild_surface()
+            trigger_rebuild()
 
         controls.update()
         renderer.render(scene, camera)
