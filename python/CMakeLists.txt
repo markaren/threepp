@@ -28,6 +28,7 @@ pybind11_add_module(threepp_py
         src/bind_lights.cpp
         src/bind_helpers.cpp
         src/bind_audio.cpp
+        src/bind_pointcloud.cpp
         src/bind_render.cpp
         src/bind_loaders.cpp
         src/bind_robot.cpp
