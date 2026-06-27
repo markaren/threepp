@@ -34,7 +34,6 @@ int main(int argc, char** argv) {
     renderer.toneMapping = ToneMapping::Neutral;
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(8.f);
-    renderer.setDeferredAO(true);
     renderer.setRenderScale(0.75);
 
 
@@ -75,8 +74,6 @@ int main(int argc, char** argv) {
     // ---- UI ----
     bool denoiserOn = renderer.denoise();
     bool restdirOn = renderer.restirDIEnabled();
-    bool restdirVisReuse = renderer.restirDIVisibilityReuse();
-    bool restdirGiOn = renderer.restirGIEnabled();
     float renderScale = renderer.renderScale();
     // Tone-map dropdown state, initialized from the renderer's current setting so
     // the label matches what's actually applied at startup. The selection maps
@@ -112,12 +109,6 @@ int main(int argc, char** argv) {
         }
         if (ImGui::Checkbox("REsTDIR DI", &restdirOn)) {
             renderer.setRestirDIEnabled(restdirOn);
-        }
-        if (ImGui::Checkbox("  DI visibility reuse", &restdirVisReuse)) {
-            renderer.setRestirDIVisibilityReuse(restdirVisReuse);
-        }
-        if (ImGui::Checkbox("REsTDIR GI", &restdirGiOn)) {
-            renderer.setRestirGIEnabled(restdirGiOn);
         }
 
         if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f)) {

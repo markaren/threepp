@@ -14,6 +14,7 @@
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/FogExp2.hpp"
 #include "threepp/threepp.hpp"
@@ -127,10 +128,13 @@ int main(int argc, char** argv) {
     }
 
     Canvas canvas("Vulkan PT - Fog", {{"vsync", false}});
-    VulkanRenderer renderer(canvas);
+    std::unique_ptr<VulkanRendererCore> rendererPtr =
+            shotPT ? std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanPathTracer>(canvas))
+                   : std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanRenderer>(canvas));
+    VulkanRendererCore& renderer = *rendererPtr;
+    auto* pt = dynamic_cast<VulkanPathTracer*>(&renderer);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 0.9f;
-    if (shotPT) renderer.setRenderMode(VulkanRenderer::RenderMode::ReferencePT);
 
     Scene scene;
     scene.background = Color::black;
@@ -166,7 +170,7 @@ int main(int argc, char** argv) {
     float fogDensity = 0.08f;
     float fogColor[3] = {0.55f, 0.55f, 0.62f};
     float fogG = 0.6f;// HG anisotropy: forward-scattering god rays by default
-    int spp = renderer.samplesPerPixel();
+    int spp = pt ? pt->samplesPerPixel() : 1;
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -190,8 +194,8 @@ int main(int argc, char** argv) {
         }
 
         ImGui::Separator();
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
-            renderer.setSamplesPerPixel(spp);
+        if (pt && ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
+            pt->setSamplesPerPixel(spp);
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");

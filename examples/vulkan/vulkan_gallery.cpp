@@ -9,11 +9,9 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
-#include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/RectAreaLight.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -349,7 +347,6 @@ int main() {
     bool restirOn = renderer.restirDIEnabled();
     bool rectOn = true;
     float rectIntensity = rectLight->intensity;
-    int spp = renderer.samplesPerPixel();
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -378,9 +375,6 @@ int main() {
         }
 
         ImGui::Separator();
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16)) {
-            renderer.setSamplesPerPixel(spp);
-        }
 
         ImGui::Separator();
         if (ImGui::Checkbox("Denoiser", &denoiseOn)) {

@@ -1,4 +1,4 @@
-// DeferredShade — raster-first deferred lighting pass (RenderMode::RasterFirst).
+// DeferredShade — deferred lighting pass used by VulkanRenderer.
 //
 // Reads the material G-buffer (normal+roughness, albedo+metalness, depth, IDs)
 // produced by the raster prepass and shades a clean, analytic, noise-free base

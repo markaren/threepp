@@ -19,7 +19,6 @@
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -163,12 +162,9 @@ int main() {
     // ---- UI state ----
     bool denoiserOn   = renderer.denoise();
     bool restirOn     = renderer.restirDIEnabled();
-    bool restirGiOn   = renderer.restirGIEnabled();
-    bool perSppJitter = renderer.perSppJitterHybrid();
     bool rotating     = true;
     float rotSpeed    = 0.5f;
     float exposure    = renderer.toneMappingExposure;
-    int spp           = renderer.samplesPerPixel();
     float bloomInt    = renderer.bloomIntensity();
     float bloomThresh = renderer.bloomThreshold();
     float bloomClamp  = renderer.bloomClamp();
@@ -196,15 +192,9 @@ int main() {
             renderer.setDenoise(denoiserOn);
         if (ImGui::Checkbox("ReSTIR DI", &restirOn))
             renderer.setRestirDIEnabled(restirOn);
-        if (ImGui::Checkbox("ReSTIR GI", &restirGiOn))
-            renderer.setRestirGIEnabled(restirGiOn);
-        if (ImGui::Checkbox("Per-spp AA jitter", &perSppJitter))
-            renderer.setPerSppJitterHybrid(perSppJitter);
 
         if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
             renderer.toneMappingExposure = exposure;
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 8))
-            renderer.setSamplesPerPixel(spp);
 
         ImGui::Separator();
         ImGui::TextDisabled("AAA post");

@@ -25,7 +25,7 @@
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/threepp.hpp"
 
 #include <array>
@@ -382,7 +382,7 @@ int main() {
     Canvas canvas("VulkanRenderer — The Jewel Room (ReSTIR test)",
                   {{"vsync", false}});
 
-    VulkanRenderer renderer(canvas);
+    VulkanPathTracer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
 

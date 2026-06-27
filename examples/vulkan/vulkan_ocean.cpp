@@ -23,6 +23,7 @@
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/DisplacedMesh.hpp"
 #include "threepp/objects/Ocean.hpp"
+#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
@@ -697,7 +698,6 @@ int main(int argc, char** argv) {
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
-    bool shotPT     = false;
     bool shotVista  = false;
     bool shotClose  = false;// near-surface grazing view — surface-artifact hunting
     bool shotIsland = false;// low close-up of the −X archipelago island (terrain-detail capture)
@@ -706,7 +706,6 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--night") == 0) startNight = true;
-        else if (std::strcmp(argv[i], "--pt") == 0) shotPT = true;
         else if (std::strcmp(argv[i], "--vista") == 0) shotVista = true;
         else if (std::strcmp(argv[i], "--close") == 0) shotClose = true;
         else if (std::strcmp(argv[i], "--island") == 0) shotIsland = true;
@@ -719,17 +718,18 @@ int main(int argc, char** argv) {
     int shotFrame = 0;
 
     Canvas canvas("Vulkan Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
-    VulkanRenderer renderer(canvas);
+
+    auto renderer = VulkanRenderer(canvas);
+
     renderer.setDenoise(true);
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(6.0f);
-    renderer.setMaxBounces(2);
+
     // Trace PT at lower resolution; TAA upsamples to full swapchain by
     // accumulating jittered low-res samples into the full-res history.
     renderer.setRenderScale(0.9f);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 0.7f;
-    if (shotPT) renderer.setRenderMode(VulkanRenderer::RenderMode::ReferencePT);// --pt: capture the PT reference
 
     RGBELoader rgbe;
     auto env = rgbe.load(std::string(DATA_FOLDER) +
@@ -1397,21 +1397,9 @@ int main(int argc, char** argv) {
     float windTheta = ocean->params.windTheta;
     float exposure  = renderer.toneMappingExposure;
     int   toneMode  = static_cast<int>(renderer.toneMapping);
-    bool  ptMode    = renderer.renderMode() == VulkanRenderer::RenderMode::ReferencePT;
-    int   spp       = renderer.samplesPerPixel();
     float renderScale = renderer.renderScale();
     float fps = 0.f, fpsAccum = 0.f;
     int   fpsFrames = 0;
-
-    // ── Primary-trace cost measurement ─────────────────────────────────
-    // Toggle `setMeasurePrimaryTraceOnly` and watch the delta on
-    // pathTraceMs. EMA-smoothed so the readouts don't dance frame-to-frame;
-    // both numbers persist across toggle changes so the comparison stays
-    // visible after flipping back to "full".
-    bool measurePrimaryOnly = renderer.measurePrimaryTraceOnly();
-    float fullPtMs = 0.f;
-    float primaryOnlyMs = 0.f;
-    constexpr float ptEmaAlpha = 0.10f;
 
     // ── Underwater fog parameters ─────────────────────────────────────────
     // Controlled by ImGui; applied per-frame when the camera is submerged.
@@ -1564,19 +1552,6 @@ int main(int argc, char** argv) {
         }
         ImGui::Separator();
 
-        ImGui::TextUnformatted("Rendering");
-        // Switch between the real-time deferred path (RasterFirst: a raster
-        // G-buffer with ray-traced reflections/refraction/shadows) and the full
-        // path-traced reference (ReferencePT: slower, the ground-truth image the
-        // deferred path approximates). Both displace the ocean and refract.
-        if (ImGui::Checkbox("Path-traced reference", &ptMode)) {
-            renderer.setRenderMode(ptMode ? VulkanRenderer::RenderMode::ReferencePT
-                                          : VulkanRenderer::RenderMode::RasterFirst);
-        }
-        ImGui::TextDisabled("%s", ptMode ? "ReferencePT — full path tracer"
-                                         : "RasterFirst — deferred + RT accents");
-        ImGui::Separator();
-
         if (ImGui::SliderFloat("Wave scale", &waveScale, 0.f, 3.f, "%.2f")) {
             ocean->params.waveScale = waveScale;
         }
@@ -1616,21 +1591,7 @@ int main(int argc, char** argv) {
         if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
             renderer.setRestirDIEnabled(restirDI);
         }
-        if (renderer.renderMode() == VulkanRenderer::RenderMode::ReferencePT) {
-            bool restirGI = renderer.restirGIEnabled();
-            if (ImGui::Checkbox("ReSTIR GI", &restirGI)) {
-                renderer.setRestirGIEnabled(restirGI);
-            }
-            if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16)) {
-                renderer.setSamplesPerPixel(spp);
-            }
-            // Silhouette MSAA: extra primary rays at edge pixels only.
-            // 0 disables; default 7 → 8× MSAA at edges.
-            int edgeMsaa = static_cast<int>(renderer.silhouetteMsaaExtra());
-            if (ImGui::SliderInt("Silhouette MSAA extras", &edgeMsaa, 0, 15)) {
-                renderer.setSilhouetteMsaaExtra(static_cast<uint32_t>(edgeMsaa));
-            }
-        }
+
         // Path-trace render scale: < 1 traces fewer pixels, then upscales.
         if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f")) {
             renderer.setRenderScale(renderScale);

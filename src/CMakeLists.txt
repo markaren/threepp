@@ -597,7 +597,9 @@ endif ()
 
 if (THREEPP_WITH_VULKAN)
     list(APPEND publicHeaders
+            "threepp/renderers/VulkanRendererCore.hpp"
             "threepp/renderers/VulkanRenderer.hpp"
+            "threepp/renderers/VulkanPathTracer.hpp"
             "threepp/helpers/PathTracedLidarSensor.hpp"
             # FFT-displaced ocean: the renderer is the only consumer (recognised
             # via dynamic_cast), so the object types live with it under Vulkan.
