@@ -13092,244 +13092,13 @@ namespace threepp {
             reallocateRenderExtentResources();
         }
 
-        // Records the PT pipeline body into an already-open command buffer.
-        // beginFrame() is responsible for vkBeginCommandBuffer + timing-pool
-        // reset *before* this call; endFrame() handles the overlay/ImGui
-        // pass, the swapchain → PRESENT_SRC transition, vkEndCommandBuffer,
-        // and submission *after*. On exit, the swapchain image is in
-        // VK_IMAGE_LAYOUT_GENERAL (per the post-TAA / upscale path) so the
-        // endFrame transitions can rely on a known layout.
         // Mode-specific scene shade. Called from recordCommandBuffer between the
-        // shared G-buffer/AS head and the shared bloom/TAA tail. CoreImpl
-        // dispatches both modes via renderMode_; the peer split (later stages)
-        // overrides this per leaf — VulkanRenderer does the analytic deferred
-        // shade, VulkanPathTracer the reference path trace.
+        // shared G-buffer/AS head and the shared bloom/TAA tail. Each leaf
+        // overrides this once: VulkanRenderer::Impl dispatches the analytic
+        // deferred shade; VulkanPathTracer::Impl dispatches the reference PT.
         virtual void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
                                          VkExtent2D ext, VkExtent2D ptExt,
-                                         uint32_t exposureBits) {
-            if (renderMode_ == VulkanRenderer::RenderMode::ReferencePT || !deferredShade_) {
-
-            // ── Photon emit pass ────────────────────────────────────────────────
-            // Two gates: (1) sceneHasGlass_ — no transmissive material means
-            // there's no chance of caustics anywhere, and the chit gather is
-            // gated on the same flag. (2) glassVisibleThisFrame_ — even when
-            // glass exists, skip the 512×512 emit pass on frames where no
-            // glass AABB is in the camera frustum. The world-grid photon
-            // store keeps the last emit visible to gather for free, so a few
-            // frames of "stale" caustics persist after the camera pans away;
-            // they're refreshed the moment glass re-enters view.
-            //
-            // First-frame safety: chit's gather is gated on sceneHasGlass_
-            // alone (not visibility), so if a scene starts with glass but
-            // glass is not in the initial frustum we'd let gather read
-            // device-local photonCountBuf before anyone has written it.
-            // Shim a one-shot zero-fill so the gather always sees a valid
-            // (all-zero) count buffer.
-            if (sceneHasGlass_ && !glassVisibleThisFrame_ && !photon_->isInitialized()) {
-                photon_->recordZeroFillCounts(cb);
-            }
-            if (sceneHasGlass_ && glassVisibleThisFrame_) {
-                gpuTimings_->begin(cb, TP_PhotonEmit, currentFrame);
-                // exposureBits hoisted above the mode branch.
-                const uint32_t motionFlagsPhoton =
-                        (motionThisFrame_      ? 1u : 0u) |
-                        (cameraMovedThisFrame_ ? 2u : 0u) |
-                        (sceneHasGlass_        ? 4u : 0u);
-                uint32_t emPowerBits;
-                std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
-                uint32_t envSumBitsPhoton;
-                std::memcpy(&envSumBitsPhoton, &envCdfTotalSum_, sizeof(envSumBitsPhoton));
-                uint32_t fireflyBitsPhoton;
-                std::memcpy(&fireflyBitsPhoton, &fireflyClamp_, sizeof(fireflyBitsPhoton));
-                uint32_t oceanFineBitsPhoton;
-                std::memcpy(&oceanFineBitsPhoton, &oceanFineTileSize, sizeof(oceanFineBitsPhoton));
-                vulkan::PhotonCaustics::EmitPushConstants push{};
-                push.v[0]  = sampleIndex;
-                push.v[1]  = envImage.mipLevels;
-                push.v[2]  = static_cast<uint32_t>(toneMapping_);
-                push.v[3]  = exposureBits;
-                push.v[4]  = motionFlagsPhoton;
-                push.v[5]  = emissiveTriCountThisFrame_;
-                push.v[6]  = emPowerBits;
-                push.v[7]  = samplesPerPixel_;
-                push.v[8]  = envCdfWidth_;
-                push.v[9]  = envCdfHeight_;
-                push.v[10] = envSumBitsPhoton;
-                push.v[11] = fireflyBitsPhoton;
-                push.v[12] = oceanFineBitsPhoton;
-                photon_->recordEmitPass(cb, descriptorSets[setIdx], push);
-                gpuTimings_->end(cb, TP_PhotonEmit, currentFrame);
-            }
-            // ── End photon emit ─────────────────────────────────────────────────
-
-            const RtPipelineVariant& rtv = activeRtVariant();
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rtv.pipeline);
-            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                                    rtPipelineLayout, 0, 1,
-                                    &descriptorSets[setIdx], 0, nullptr);
-
-            // [0] sampleIndex (raygen), [1] PMREM mip count (closest_hit),
-            // [2] ToneMapping enum, [3] exposure as float bits,
-            // [4] motionFlags (bit 0 = any motion, bit 1 = camera moved,
-            //                  bit 2 = scene has any glass material,
-            //                  bit 3 = hybrid mode (gbuffer drives reproject
-            //                          + primary jitter is disabled),
-            //                  bit 4 = ReSTIR DI enabled (RIS at primary;
-            //                          chit falls back to classic NEE when off),
-            //                  bit 5 = perSppJitter (hybrid sub-pixel jitter
-            //                          is taken per-sample instead of once),
-            //                  bit 6 = ReSTIR GI enabled (Stage 1a single-
-            //                          sample indirect reservoir at primary;
-            //                          off = classic bounce-1 continuation),
-            //                  bit 7 = measure primary trace only — raygen
-            //                          exits the step + spp loops immediately
-            //                          after the step-0 traceRayEXT; debug
-            //                          knob for sizing the bounce-0-on-raster
-            //                          opportunity, image goes black),
-            //                  bit 8 = ReSTIR DI visibility reuse (shadow-test
-            //                          the RIS pick before reuse, discard if
-            //                          occluded; only set when bit 4 is too),
-            // [5] emissiveCount, [6] emissiveTotalPower (float bits).
-            // Per-instance moved bits live in the binding 21 SSBO.
-            // (exposure / exposureBits hoisted above the mode branch.)
-            const uint32_t motionFlags =
-                    (motionThisFrame_           ? 1u   : 0u) |
-                    (cameraMovedThisFrame_      ? 2u   : 0u) |
-                    (sceneHasGlass_             ? 4u   : 0u) |
-                    (restirDIEnabled_           ? 16u  : 0u) |
-                    (perSppJitterHybrid_        ? 32u  : 0u) |
-                    (restirGIEnabled_           ? 64u  : 0u) |
-                    (measurePrimaryTraceOnly_   ? 128u : 0u) |
-                    ((restirDIEnabled_ && restirDIVisibilityReuse_) ? 256u : 0u);
-            uint32_t emPowerBits;
-            std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
-            uint32_t envSumBits;
-            std::memcpy(&envSumBits, &envCdfTotalSum_, sizeof(envSumBits));
-            uint32_t fireflyBits;
-            std::memcpy(&fireflyBits, &fireflyClamp_, sizeof(fireflyBits));
-            uint32_t oceanFineBits;
-            std::memcpy(&oceanFineBits, &oceanFineTileSize, sizeof(oceanFineBits));
-            uint32_t oceanFoamBits;
-            std::memcpy(&oceanFoamBits, &oceanFoamTileSize, sizeof(oceanFoamBits));
-            const uint32_t pc[16] = {
-                    sampleIndex,
-                    envImage.mipLevels,
-                    static_cast<uint32_t>(toneMapping_),
-                    exposureBits,
-                    motionFlags,
-                    emissiveTriCountThisFrame_,
-                    emPowerBits,
-                    samplesPerPixel_,
-                    envCdfWidth_,
-                    envCdfHeight_,
-                    envSumBits,
-                    fireflyBits,
-                    oceanFineBits,
-                    edgeMsaaExtra_,
-                    oceanFoamBits,
-                    maxBounces_,
-            };
-            vkCmdPushConstants(cb, rtPipelineLayout,
-                               VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                       VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                       VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
-                                       VK_SHADER_STAGE_MISS_BIT_KHR,
-                               0, sizeof(pc), pc);
-
-            // (ext / ptExt hoisted above the mode branch.)
-            gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
-            ctx->rt().cmdTraceRays(cb, &rtv.rgenRegion, &rtv.missRegion, &rtv.hitRegion,
-                                   &callRegion, regionRenderExt_.width, regionRenderExt_.height, 1);
-            gpuTimings_->end(cb, TP_PathTrace, currentFrame);
-
-            // ── Spatial denoiser: 2-pass à-trous + finalize tonemap + sRGB ──────
-            // RT writes accumImage + gbufImage; denoise pipeline reads them.
-            // outImage is owned by the finalize pass (raygen.rgen tail was
-            // stripped). All ping-pong slots stay GENERAL throughout. The
-            // RT_SHADER → COMPUTE_SHADER barrier is recorded inside
-            // Denoiser::recordDispatch.
-            gpuTimings_->begin(cb, TP_Denoise, currentFrame);
-            denoiser_->recordDispatch(cb, descriptorSets[setIdx], regionRenderExt_,
-                                      denoiseEnabled_,
-                                      static_cast<uint32_t>(toneMapping_),
-                                      exposureBits,
-                                      envIsBgColor);
-            gpuTimings_->end(cb, TP_Denoise, currentFrame);
-            // ── End denoise ─────────────────────────────────────────────────────
-
-            } else {
-                // ── RenderMode::RasterFirst — analytic deferred base ───────────
-                // Shade the raster material G-buffer (direct analytic lights +
-                // split-sum specular IBL + approximate diffuse IBL) straight
-                // into bloom_->sceneHdr. No path tracing, no denoise — the base
-                // is noise-free. The raster G-buffer pass already ran and its
-                // render-pass dependency makes it visible to COMPUTE; bloom's
-                // leading barrier makes this write visible to the composite.
-                // Per-frame BLAS refits (skinned / deformable meshes) are fenced
-                // only to the RT pipeline stage by the build barriers above. The
-                // deferred pass traverses the same acceleration structures via
-                // ray query from COMPUTE, so add an AS-build → compute fence here.
-                // No-op for static scenes (no pending AS write this frame).
-                // ALSO carries the GI-reproject cross-frame dependency: this
-                // frame's deferred shade SAMPLES the OTHER frame-in-flight's
-                // indirect image (last frame's accumulated GI history). Make the
-                // prev frame's COMPUTE write to it visible to this frame's COMPUTE
-                // read (the GPU executes frames sequentially per queue, so this is a
-                // cache-visibility barrier, not ordering).
-                {
-                    VkMemoryBarrier2 asbar{};
-                    asbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                    asbar.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    asbar.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
-                                          VK_ACCESS_2_SHADER_WRITE_BIT;
-                    asbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    asbar.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                          VK_ACCESS_2_SHADER_READ_BIT;
-                    VkDependencyInfo asdep{};
-                    asdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    asdep.memoryBarrierCount = 1;
-                    asdep.pMemoryBarriers = &asbar;
-                    vkCmdPipelineBarrier2(cb, &asdep);
-                }
-                gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
-                deferredShade_->recordDispatch(cb, currentFrame,
-                                               regionRenderExt_.width, regionRenderExt_.height,
-                                               envImage.mipLevels, /*shadows=*/true,
-                                               /*ao=*/deferredAO_, sampleIndex,
-                                               emissiveTriCountThisFrame_,
-                                               emissiveTotalPowerThisFrame_,
-                                               fireflyClamp_,
-                                               oceanFineTileSize, oceanFoamTileSize,
-                                               denoiseEnabled_, restirDIEnabled_,
-                                               deferredVolDensity_, deferredVolAniso_,
-                                               deferredStarIntensity_,
-                                               deferredCamDeltaLen_, deferredCamRotAngle_,
-                                               static_cast<float>(glfwGetTime()));
-                gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
-                // Spatial denoise of the demodulated diffuse-indirect + recombine.
-                // Barrier: the shade wrote sceneHdr + the indirect image (both
-                // GENERAL storage); the denoise reads the indirect 5×5 neighbourhood
-                // and read-modify-writes sceneHdr — compute→compute RAW/WAR.
-                if (denoiseEnabled_) {
-                    VkMemoryBarrier2 denoiseBar{};
-                    denoiseBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                    denoiseBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    denoiseBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    denoiseBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    denoiseBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                               VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    VkDependencyInfo denoiseDep{};
-                    denoiseDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    denoiseDep.memoryBarrierCount = 1;
-                    denoiseDep.pMemoryBarriers = &denoiseBar;
-                    vkCmdPipelineBarrier2(cb, &denoiseDep);
-                    gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
-                    deferredShade_->recordDenoiseDispatch(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height);
-                    gpuTimings_->end(cb, TP_Denoise, currentFrame);
-                }
-            }
-        }
+                                         uint32_t exposureBits) = 0;
 
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
 
@@ -15449,11 +15218,87 @@ namespace threepp {
         }
     };
 
-    // The deferred renderer's pImpl. For now it is a thin derived shell over the
-    // shared CoreImpl (which still carries both the deferred and the reference-PT
-    // state); subsequent stages migrate the PT-only state into VulkanPathTracer.
+    // The deferred renderer's pImpl. Holds deferred-specific state; the bulk of
+    // shared infra lives in the inherited VulkanRendererCore::CoreImpl. The PT-only
+    // state (accumImages, RT pipelines, denoiser, ReSTIR, ...) remains in CoreImpl
+    // until the B2/C partition moves it into VulkanPathTracer::Impl.
     struct VulkanRenderer::Impl : VulkanRendererCore::CoreImpl {
         using CoreImpl::CoreImpl;
+
+        void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
+                                 VkExtent2D ext, VkExtent2D ptExt,
+                                 uint32_t exposureBits) override {
+            // ── RenderMode::RasterFirst — analytic deferred base ───────────
+            // Shade the raster material G-buffer (direct analytic lights +
+            // split-sum specular IBL + approximate diffuse IBL) straight
+            // into bloom_->sceneHdr. No path tracing, no denoise — the base
+            // is noise-free. The raster G-buffer pass already ran and its
+            // render-pass dependency makes it visible to COMPUTE; bloom's
+            // leading barrier makes this write visible to the composite.
+            // Per-frame BLAS refits (skinned / deformable meshes) are fenced
+            // only to the RT pipeline stage by the build barriers above. The
+            // deferred pass traverses the same acceleration structures via
+            // ray query from COMPUTE, so add an AS-build → compute fence here.
+            // No-op for static scenes (no pending AS write this frame).
+            // ALSO carries the GI-reproject cross-frame dependency: this
+            // frame's deferred shade SAMPLES the OTHER frame-in-flight's
+            // indirect image (last frame's accumulated GI history). Make the
+            // prev frame's COMPUTE write to it visible to this frame's COMPUTE
+            // read (the GPU executes frames sequentially per queue, so this is a
+            // cache-visibility barrier, not ordering).
+            {
+                VkMemoryBarrier2 asbar{};
+                asbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                asbar.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                asbar.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
+                                      VK_ACCESS_2_SHADER_WRITE_BIT;
+                asbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                asbar.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                      VK_ACCESS_2_SHADER_READ_BIT;
+                VkDependencyInfo asdep{};
+                asdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                asdep.memoryBarrierCount = 1;
+                asdep.pMemoryBarriers = &asbar;
+                vkCmdPipelineBarrier2(cb, &asdep);
+            }
+            gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
+            deferredShade_->recordDispatch(cb, currentFrame,
+                                           regionRenderExt_.width, regionRenderExt_.height,
+                                           envImage.mipLevels, /*shadows=*/true,
+                                           /*ao=*/deferredAO_, sampleIndex,
+                                           emissiveTriCountThisFrame_,
+                                           emissiveTotalPowerThisFrame_,
+                                           fireflyClamp_,
+                                           oceanFineTileSize, oceanFoamTileSize,
+                                           denoiseEnabled_, restirDIEnabled_,
+                                           deferredVolDensity_, deferredVolAniso_,
+                                           deferredStarIntensity_,
+                                           deferredCamDeltaLen_, deferredCamRotAngle_,
+                                           static_cast<float>(glfwGetTime()));
+            gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
+            // Spatial denoise of the demodulated diffuse-indirect + recombine.
+            // Barrier: the shade wrote sceneHdr + the indirect image (both
+            // GENERAL storage); the denoise reads the indirect 5×5 neighbourhood
+            // and read-modify-writes sceneHdr — compute→compute RAW/WAR.
+            if (denoiseEnabled_) {
+                VkMemoryBarrier2 denoiseBar{};
+                denoiseBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                denoiseBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                denoiseBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                denoiseBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                denoiseBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                           VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                VkDependencyInfo denoiseDep{};
+                denoiseDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                denoiseDep.memoryBarrierCount = 1;
+                denoiseDep.pMemoryBarriers = &denoiseBar;
+                vkCmdPipelineBarrier2(cb, &denoiseDep);
+                gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
+                deferredShade_->recordDenoiseDispatch(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height);
+                gpuTimings_->end(cb, TP_Denoise, currentFrame);
+            }
+        }
     };
 
     VulkanRendererCore::CoreImpl* VulkanRenderer::coreImpl() const {
@@ -16220,12 +16065,166 @@ namespace threepp {
     }
 
     // ── VulkanPathTracer ──────────────────────────────────────────────────────
-    // The reference path tracer. For now it shares CoreImpl wholesale with
-    // VulkanRenderer and selects the path-traced shade via renderMode_; the peer
-    // split (subsequent stages) migrates the PT-only state into this leaf's Impl
-    // and replaces the renderMode_ select with a recordSceneDispatch override.
+    // The reference path tracer. Shares CoreImpl for all infra (TLAS/BLAS, material
+    // buffers, raster G-buffer prepass, post-stack). PT-only state (accumImages, RT
+    // pipelines, denoiser, ReSTIR reservoirs, photon caustics, env-CDF) is still in
+    // CoreImpl and will be moved here in B2/C. The virtual recordSceneDispatch
+    // dispatches the full megakernel path-trace + à-trous denoise pass.
     struct VulkanPathTracer::Impl : VulkanRendererCore::CoreImpl {
         using CoreImpl::CoreImpl;
+
+        void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
+                                 VkExtent2D ext, VkExtent2D ptExt,
+                                 uint32_t exposureBits) override {
+
+            // ── Photon emit pass ────────────────────────────────────────────────
+            // Two gates: (1) sceneHasGlass_ — no transmissive material means
+            // there's no chance of caustics anywhere, and the chit gather is
+            // gated on the same flag. (2) glassVisibleThisFrame_ — even when
+            // glass exists, skip the 512×512 emit pass on frames where no
+            // glass AABB is in the camera frustum. The world-grid photon
+            // store keeps the last emit visible to gather for free, so a few
+            // frames of "stale" caustics persist after the camera pans away;
+            // they're refreshed the moment glass re-enters view.
+            //
+            // First-frame safety: chit's gather is gated on sceneHasGlass_
+            // alone (not visibility), so if a scene starts with glass but
+            // glass is not in the initial frustum we'd let gather read
+            // device-local photonCountBuf before anyone has written it.
+            // Shim a one-shot zero-fill so the gather always sees a valid
+            // (all-zero) count buffer.
+            if (sceneHasGlass_ && !glassVisibleThisFrame_ && !photon_->isInitialized()) {
+                photon_->recordZeroFillCounts(cb);
+            }
+            if (sceneHasGlass_ && glassVisibleThisFrame_) {
+                gpuTimings_->begin(cb, TP_PhotonEmit, currentFrame);
+                // exposureBits hoisted above the mode branch.
+                const uint32_t motionFlagsPhoton =
+                        (motionThisFrame_      ? 1u : 0u) |
+                        (cameraMovedThisFrame_ ? 2u : 0u) |
+                        (sceneHasGlass_        ? 4u : 0u);
+                uint32_t emPowerBits;
+                std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
+                uint32_t envSumBitsPhoton;
+                std::memcpy(&envSumBitsPhoton, &envCdfTotalSum_, sizeof(envSumBitsPhoton));
+                uint32_t fireflyBitsPhoton;
+                std::memcpy(&fireflyBitsPhoton, &fireflyClamp_, sizeof(fireflyBitsPhoton));
+                uint32_t oceanFineBitsPhoton;
+                std::memcpy(&oceanFineBitsPhoton, &oceanFineTileSize, sizeof(oceanFineBitsPhoton));
+                vulkan::PhotonCaustics::EmitPushConstants push{};
+                push.v[0]  = sampleIndex;
+                push.v[1]  = envImage.mipLevels;
+                push.v[2]  = static_cast<uint32_t>(toneMapping_);
+                push.v[3]  = exposureBits;
+                push.v[4]  = motionFlagsPhoton;
+                push.v[5]  = emissiveTriCountThisFrame_;
+                push.v[6]  = emPowerBits;
+                push.v[7]  = samplesPerPixel_;
+                push.v[8]  = envCdfWidth_;
+                push.v[9]  = envCdfHeight_;
+                push.v[10] = envSumBitsPhoton;
+                push.v[11] = fireflyBitsPhoton;
+                push.v[12] = oceanFineBitsPhoton;
+                photon_->recordEmitPass(cb, descriptorSets[setIdx], push);
+                gpuTimings_->end(cb, TP_PhotonEmit, currentFrame);
+            }
+            // ── End photon emit ─────────────────────────────────────────────────
+
+            const RtPipelineVariant& rtv = activeRtVariant();
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rtv.pipeline);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+                                    rtPipelineLayout, 0, 1,
+                                    &descriptorSets[setIdx], 0, nullptr);
+
+            // [0] sampleIndex (raygen), [1] PMREM mip count (closest_hit),
+            // [2] ToneMapping enum, [3] exposure as float bits,
+            // [4] motionFlags (bit 0 = any motion, bit 1 = camera moved,
+            //                  bit 2 = scene has any glass material,
+            //                  bit 3 = hybrid mode (gbuffer drives reproject
+            //                          + primary jitter is disabled),
+            //                  bit 4 = ReSTIR DI enabled (RIS at primary;
+            //                          chit falls back to classic NEE when off),
+            //                  bit 5 = perSppJitter (hybrid sub-pixel jitter
+            //                          is taken per-sample instead of once),
+            //                  bit 6 = ReSTIR GI enabled (Stage 1a single-
+            //                          sample indirect reservoir at primary;
+            //                          off = classic bounce-1 continuation),
+            //                  bit 7 = measure primary trace only — raygen
+            //                          exits the step + spp loops immediately
+            //                          after the step-0 traceRayEXT; debug
+            //                          knob for sizing the bounce-0-on-raster
+            //                          opportunity, image goes black),
+            //                  bit 8 = ReSTIR DI visibility reuse (shadow-test
+            //                          the RIS pick before reuse, discard if
+            //                          occluded; only set when bit 4 is too),
+            // [5] emissiveCount, [6] emissiveTotalPower (float bits).
+            // Per-instance moved bits live in the binding 21 SSBO.
+            // (exposure / exposureBits hoisted above the mode branch.)
+            const uint32_t motionFlags =
+                    (motionThisFrame_           ? 1u   : 0u) |
+                    (cameraMovedThisFrame_      ? 2u   : 0u) |
+                    (sceneHasGlass_             ? 4u   : 0u) |
+                    (restirDIEnabled_           ? 16u  : 0u) |
+                    (perSppJitterHybrid_        ? 32u  : 0u) |
+                    (restirGIEnabled_           ? 64u  : 0u) |
+                    (measurePrimaryTraceOnly_   ? 128u : 0u) |
+                    ((restirDIEnabled_ && restirDIVisibilityReuse_) ? 256u : 0u);
+            uint32_t emPowerBits;
+            std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
+            uint32_t envSumBits;
+            std::memcpy(&envSumBits, &envCdfTotalSum_, sizeof(envSumBits));
+            uint32_t fireflyBits;
+            std::memcpy(&fireflyBits, &fireflyClamp_, sizeof(fireflyBits));
+            uint32_t oceanFineBits;
+            std::memcpy(&oceanFineBits, &oceanFineTileSize, sizeof(oceanFineBits));
+            uint32_t oceanFoamBits;
+            std::memcpy(&oceanFoamBits, &oceanFoamTileSize, sizeof(oceanFoamBits));
+            const uint32_t pc[16] = {
+                    sampleIndex,
+                    envImage.mipLevels,
+                    static_cast<uint32_t>(toneMapping_),
+                    exposureBits,
+                    motionFlags,
+                    emissiveTriCountThisFrame_,
+                    emPowerBits,
+                    samplesPerPixel_,
+                    envCdfWidth_,
+                    envCdfHeight_,
+                    envSumBits,
+                    fireflyBits,
+                    oceanFineBits,
+                    edgeMsaaExtra_,
+                    oceanFoamBits,
+                    maxBounces_,
+            };
+            vkCmdPushConstants(cb, rtPipelineLayout,
+                               VK_SHADER_STAGE_RAYGEN_BIT_KHR |
+                                       VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                       VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
+                                       VK_SHADER_STAGE_MISS_BIT_KHR,
+                               0, sizeof(pc), pc);
+
+            // (ext / ptExt hoisted above the mode branch.)
+            gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
+            ctx->rt().cmdTraceRays(cb, &rtv.rgenRegion, &rtv.missRegion, &rtv.hitRegion,
+                                   &callRegion, regionRenderExt_.width, regionRenderExt_.height, 1);
+            gpuTimings_->end(cb, TP_PathTrace, currentFrame);
+
+            // ── Spatial denoiser: 2-pass à-trous + finalize tonemap + sRGB ──────
+            // RT writes accumImage + gbufImage; denoise pipeline reads them.
+            // outImage is owned by the finalize pass (raygen.rgen tail was
+            // stripped). All ping-pong slots stay GENERAL throughout. The
+            // RT_SHADER → COMPUTE_SHADER barrier is recorded inside
+            // Denoiser::recordDispatch.
+            gpuTimings_->begin(cb, TP_Denoise, currentFrame);
+            denoiser_->recordDispatch(cb, descriptorSets[setIdx], regionRenderExt_,
+                                      denoiseEnabled_,
+                                      static_cast<uint32_t>(toneMapping_),
+                                      exposureBits,
+                                      envIsBgColor);
+            gpuTimings_->end(cb, TP_Denoise, currentFrame);
+            // ── End denoise ─────────────────────────────────────────────────────
+        }
     };
 
     VulkanRendererCore::CoreImpl* VulkanPathTracer::coreImpl() const {
@@ -16244,5 +16243,98 @@ namespace threepp {
     }
 
     VulkanPathTracer::~VulkanPathTracer() = default;
+
+
+    // ── VulkanPathTracer PT-specific setters ─────────────────────────────────
+
+    void VulkanPathTracer::setSamplesPerPixel(int spp) {
+        pimpl_->samplesPerPixel_ = std::max(1, spp);
+    }
+
+    int VulkanPathTracer::samplesPerPixel() const {
+        return pimpl_->samplesPerPixel_;
+    }
+
+    void VulkanPathTracer::setSilhouetteMsaaExtra(uint32_t extra) {
+        pimpl_->edgeMsaaExtra_ = extra;
+    }
+
+    uint32_t VulkanPathTracer::silhouetteMsaaExtra() const {
+        return pimpl_->edgeMsaaExtra_;
+    }
+
+    void VulkanPathTracer::setFireflyClamp(float cap) {
+        pimpl_->fireflyClamp_ = (cap <= 0.f) ? 1e30f : cap;
+    }
+
+    float VulkanPathTracer::fireflyClamp() const {
+        return pimpl_->fireflyClamp_;
+    }
+
+    void VulkanPathTracer::setMaxBounces(int bounces) {
+        const int clamped = std::clamp(bounces, 1, 16);
+        if (clamped == pimpl_->maxBounces_) return;
+        pimpl_->maxBounces_ = clamped;
+        if (pimpl_->sceneBuilt_) pimpl_->resetAccumulation();
+    }
+
+    int VulkanPathTracer::maxBounces() const {
+        return pimpl_->maxBounces_;
+    }
+
+    void VulkanPathTracer::resetAccumulation() {
+        pimpl_->resetAccumulation();
+    }
+
+    void VulkanPathTracer::setPerSppJitterHybrid(bool enabled) {
+        pimpl_->perSppJitterHybrid_ = enabled;
+    }
+
+    bool VulkanPathTracer::perSppJitterHybrid() const {
+        return pimpl_->perSppJitterHybrid_;
+    }
+
+    void VulkanPathTracer::setRestirDIEnabled(bool enabled) {
+        pimpl_->restirDIEnabled_ = enabled;
+        if (pimpl_->sceneBuilt_) pimpl_->resetAccumulation();
+    }
+
+    bool VulkanPathTracer::restirDIEnabled() const {
+        return pimpl_->restirDIEnabled_;
+    }
+
+    void VulkanPathTracer::setRestirDIVisibilityReuse(bool enabled) {
+        pimpl_->restirDIVisibilityReuse_ = enabled;
+        if (pimpl_->sceneBuilt_) pimpl_->resetAccumulation();
+    }
+
+    bool VulkanPathTracer::restirDIVisibilityReuse() const {
+        return pimpl_->restirDIVisibilityReuse_;
+    }
+
+    void VulkanPathTracer::setRestirGIEnabled(bool enabled) {
+        pimpl_->restirGIEnabled_ = enabled;
+        if (pimpl_->sceneBuilt_) pimpl_->resetAccumulation();
+    }
+
+    bool VulkanPathTracer::restirGIEnabled() const {
+        return pimpl_->restirGIEnabled_;
+    }
+
+    void VulkanPathTracer::setSerEnabled(bool enabled) {
+        pimpl_->serEnabled_ = enabled;
+    }
+
+    bool VulkanPathTracer::serEnabled() const {
+        return pimpl_->serEnabled_;
+    }
+
+    void VulkanPathTracer::setMeasurePrimaryTraceOnly(bool enabled) {
+        pimpl_->measurePrimaryTraceOnly_ = enabled;
+    }
+
+    bool VulkanPathTracer::measurePrimaryTraceOnly() const {
+        return pimpl_->measurePrimaryTraceOnly_;
+    }
 
 }// namespace threepp
