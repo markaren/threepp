@@ -1,17 +1,14 @@
-"""DepthSensor showcase — a sweeping GPU depth camera that produces a live, colored point cloud.
+"""DepthSensor showcase — live colored point cloud + incremental VoxelGrid map + marching-cubes surface.
 
-A `tp.DepthSensor` sits in the middle of a ring of colored props and slowly sweeps in yaw (and gently
-in pitch). Every frame it renders the scene from its own viewpoint, reads the depth (and color) back,
-and reprojects to a world-space point cloud which is drawn with per-point colors. Orbit with the mouse.
+A `tp.DepthSensor` sits in the middle of a ring of colored props and sweeps in yaw. Every frame it
+produces an (N,3) numpy point cloud. Toggle "accumulate map" in the panel to feed each scan into a
+VoxelGrid map; hit "rebuild surface" (or let it auto-rebuild every 90 frames) to run marching cubes
+and show the reconstructed surface alongside the raw cloud.
 
     python depth_sensor.py                 # interactive window
     python depth_sensor.py --shot out.png  # headless: one scan, saved to a PNG
 
-Controls: drag to orbit, scroll to zoom. ImGui panel (if built): range-noise, point size, RGB-D vs
-distance coloring, and sweep on/off.
-
-Showcases the Python bindings added for DepthSensor.scan / scan_rgbd (numpy point cloud + colors) and
-BufferGeometry.set_attribute / update_attribute / set_draw_range (a fixed-capacity dynamic point cloud).
+Controls: drag to orbit, scroll to zoom.
 """
 import argparse
 import math
@@ -23,9 +20,13 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import threepp as tp
 
-SENSOR_W, SENSOR_H = 160, 120        # depth-image resolution -> up to W*H points per scan
+SENSOR_W, SENSOR_H = 160, 120
 MAXPTS = SENSOR_W * SENSOR_H
 FAR = 18.0
+MAP_VOXEL  = 0.12   # map accumulation voxel size
+SURF_CELL  = 0.18   # marching-cubes grid cell
+SURF_RAD   = 0.38   # union-of-balls radius (should be > SURF_CELL)
+SURF_ISO   = 0.45   # isosurface level
 
 
 def build_scene():
@@ -37,15 +38,13 @@ def build_scene():
     sun.cast_shadow = True
     scene.add(sun)
 
-    # dark ground so the colored props (and their colored points) pop
     ground = tp.Mesh(tp.PlaneGeometry(60, 60), tp.MeshStandardMaterial())
     ground.material.color = 0x2a2f37
     ground.material.roughness = 0.95
-    ground.rotation.x = -math.pi / 2          # plane is XY; lay it flat (Y-up world)
+    ground.rotation.x = -math.pi / 2
     ground.receive_shadow = True
     scene.add(ground)
 
-    # a ring of vividly colored props at varied radius/height -> varied color AND depth to sense
     props = tp.Group()
     palette = [0xff5252, 0xffb142, 0xffe14d, 0x6ddf6d, 0x4dd0e1, 0x5c8dff, 0xb96dff, 0xff6db4]
     n = 14
@@ -53,8 +52,7 @@ def build_scene():
         a = 2 * math.pi * i / n
         r = 5.0 + 1.6 * math.sin(i * 1.7)
         col = palette[i % len(palette)]
-        tall = (i % 3 == 0)
-        h = 2.4 if tall else 1.0
+        h = 2.4 if (i % 3 == 0) else 1.0
         if i % 2 == 0:
             m = tp.Mesh(tp.BoxGeometry(0.9, h, 0.9), tp.MeshStandardMaterial())
         else:
@@ -70,7 +68,6 @@ def build_scene():
 
 
 def distance_colors(pts, origin):
-    """Map per-point distance from the sensor to a blue->cyan->green->red ramp (for the non-RGB-D mode)."""
     d = np.linalg.norm(pts - np.asarray(origin, np.float32), axis=1)
     t = np.clip(d / FAR, 0.0, 1.0)
     r = np.clip(1.5 - np.abs(t - 1.0) * 2.0, 0.0, 1.0)
@@ -81,11 +78,12 @@ def distance_colors(pts, origin):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--shot", metavar="PNG", help="headless: scan once from a 3/4 angle and save a PNG")
+    ap.add_argument("--shot", metavar="PNG", help="headless: scan once and save PNG")
     args = ap.parse_args()
     headless = bool(args.shot)
 
-    canvas = tp.Canvas("threepp - DepthSensor", width=1000, height=680, antialiasing=4, headless=headless)
+    canvas = tp.Canvas("threepp - DepthSensor + SLAM", width=1100, height=700,
+                       antialiasing=4, headless=headless)
     renderer = tp.GLRenderer(canvas)
     renderer.shadow_map_enabled = True
     renderer.tone_mapping = tp.ToneMapping.ACESFilmic
@@ -93,38 +91,65 @@ def main():
 
     scene, props = build_scene()
 
-    # the sensor: a GPU depth camera at human height in the middle of the ring. Default orientation
-    # looks down -z (camera convention); we aim it by setting rotation (NOT look_at, which orients a
-    # plain Object3D the opposite way). It is NOT added to the scene — scan() refreshes its own matrix.
     sensor = tp.DepthSensor(fov_y=58, width=SENSOR_W, height=SENSOR_H, near=0.1, far=FAR)
     sensor.position.set(0, 1.1, 0)
     sensor.range_noise = 0.015
 
-    # the visualized point cloud: a fixed-capacity dynamic Points object (allocate MAXPTS once, then
-    # update in place + draw range each frame -> no per-frame GPU buffer churn).
-    geom = tp.BufferGeometry()
-    geom.set_attribute("position", np.zeros((MAXPTS, 3), np.float32))
-    geom.set_attribute("color", np.zeros((MAXPTS, 3), np.float32))
-    geom.set_draw_range(0, 0)
+    # ---- live point cloud (fixed capacity, updated in place) ----
+    cloud_geom = tp.BufferGeometry()
+    cloud_geom.set_attribute("position", np.zeros((MAXPTS, 3), np.float32))
+    cloud_geom.set_attribute("color",    np.zeros((MAXPTS, 3), np.float32))
+    cloud_geom.set_draw_range(0, 0)
     pmat = tp.PointsMaterial()
     pmat.size = 0.07
     pmat.size_attenuation = True
     pmat.vertex_colors = True
-    cloud = tp.Points(geom, pmat)
+    cloud = tp.Points(cloud_geom, pmat)
     cloud.frustum_culled = False
     scene.add(cloud)
+
+    # ---- incremental VoxelGrid map + surface mesh ----
+    map_grid = tp.VoxelGrid(MAP_VOXEL, max_points_per_voxel=3, min_spacing=0.07)
+    surface_ref = [None]  # current surface Mesh (or None)
+
+    def rebuild_surface():
+        pts = map_grid.collect()       # (N,3) float32
+        if len(pts) < 20:
+            return
+        field = tp.splat_points_to_field(pts, SURF_CELL, SURF_RAD)
+        iso   = tp.marching_cubes(field, SURF_ISO)
+        if iso.empty:
+            return
+        geom = tp.iso_mesh_to_geometry(iso)
+        mat  = tp.MeshStandardMaterial()
+        mat.color     = 0x88bbff
+        mat.roughness = 0.45
+        mat.metalness = 0.05
+        mat.side      = tp.Side.Double
+        new_mesh = tp.Mesh(geom, mat)
+        if surface_ref[0] is not None:
+            scene.remove(surface_ref[0])
+        surface_ref[0] = new_mesh
+        if state["show_surface"]:
+            scene.add(new_mesh)
+        state["surf_verts"] = len(iso.positions) // 3   # triangles
 
     camera = tp.PerspectiveCamera(55, canvas.aspect(), 0.1, 200)
     camera.position.set(9, 7, 9)
 
-    state = {"rgbd": True, "sweep": True, "props": False, "size": 0.07, "noise": 0.015, "yaw": 0.0, "npts": 0}
+    state = {
+        "rgbd": True, "sweep": True, "props": False,
+        "size": 0.07, "noise": 0.015, "yaw": 0.0, "npts": 0,
+        "accumulate": False, "show_surface": False,
+        "surf_verts": 0, "frame_count": 0,
+    }
 
     def do_scan():
         sensor.rotation.y = state["yaw"]
-        sensor.rotation.x = -0.18 + 0.12 * math.sin(state["yaw"] * 0.7)   # gentle pitch bob
+        sensor.rotation.x = -0.18 + 0.12 * math.sin(state["yaw"] * 0.7)
         sensor.range_noise = state["noise"]
-        props.visible = True                           # the sensor must see the props (scan needs them)
-        cloud.visible = False                          # but hide the cloud so it doesn't scan itself
+        props.visible = True
+        cloud.visible = False
         if state["rgbd"]:
             pts, cols = sensor.scan_rgbd(renderer, scene)
         else:
@@ -134,12 +159,15 @@ def main():
         n = int(pts.shape[0])
         state["npts"] = n
         if n:
-            geom.update_attribute("position", pts)
-            geom.update_attribute("color", cols)
-        geom.set_draw_range(0, n)
-        props.visible = state["props"]                 # hide the solids for a clean "sensor data only" view
+            cloud_geom.update_attribute("position", pts)
+            cloud_geom.update_attribute("color", cols)
+            if state["accumulate"]:
+                map_grid.insert_array(pts)
+        cloud_geom.set_draw_range(0, n)
+        props.visible = state["props"]
+        return pts
 
-    # ---- headless still: render the reconstructed point cloud alone (props hidden) ----
+    # ---- headless ----
     if headless:
         state["yaw"] = 0.9
         state["props"] = False
@@ -149,7 +177,7 @@ def main():
         camera.look_at(0, 1.0, 0)
         renderer.render(scene, camera)
         renderer.save_frame(args.shot)
-        print(f"saved {args.shot}  ({state['npts']} points, props hidden = sensor data only)")
+        print(f"saved {args.shot}  ({state['npts']} points)")
         return
 
     # ---- interactive ----
@@ -168,23 +196,60 @@ def main():
 
     def draw_ui():
         tp.imgui.set_next_window_pos(12, 12)
-        tp.imgui.set_next_window_size(300, 0)
-        tp.imgui.begin("DepthSensor")
-        tp.imgui.text(f"{SENSOR_W}x{SENSOR_H} depth image -> {state['npts']} points")
-        _, state["rgbd"] = tp.imgui.checkbox("RGB-D colors (off = by distance)", state["rgbd"])
-        _, state["props"] = tp.imgui.checkbox("show props (off = sensor data only)", state["props"])
-        _, state["sweep"] = tp.imgui.checkbox("sweep", state["sweep"])
+        tp.imgui.set_next_window_size(310, 0)
+        tp.imgui.begin("DepthSensor + map")
+
+        tp.imgui.text(f"{SENSOR_W}x{SENSOR_H}  ->  {state['npts']} pts/frame")
+        _, state["rgbd"]  = tp.imgui.checkbox("RGB-D colors", state["rgbd"])
+        _, state["props"] = tp.imgui.checkbox("show props",   state["props"])
+        _, state["sweep"] = tp.imgui.checkbox("sweep",        state["sweep"])
         _, state["noise"] = tp.imgui.slider_float("range noise (m)", state["noise"], 0.0, 0.15)
         changed, state["size"] = tp.imgui.slider_float("point size", state["size"], 0.01, 0.15)
         if changed:
             pmat.size = state["size"]
+
+        tp.imgui.separator()
+        tp.imgui.text("— Map & surface —")
+        _, state["accumulate"] = tp.imgui.checkbox("accumulate map", state["accumulate"])
+        tp.imgui.same_line()
+        if tp.imgui.button("clear"):
+            map_grid.clear()
+            state["surf_verts"] = 0
+            if surface_ref[0] is not None:
+                scene.remove(surface_ref[0])
+                surface_ref[0] = None
+        tp.imgui.text(f"map: {map_grid.voxel_count} voxels  ({map_grid.size} pts)")
+
+        if tp.imgui.button("rebuild surface"):
+            rebuild_surface()
+        tp.imgui.same_line()
+        ch, state["show_surface"] = tp.imgui.checkbox("show", state["show_surface"])
+        if ch and surface_ref[0] is not None:
+            if state["show_surface"]:
+                scene.add(surface_ref[0])
+            else:
+                scene.remove(surface_ref[0])
+        if state["surf_verts"]:
+            tp.imgui.text(f"surface: {state['surf_verts']} tris")
+
+        tp.imgui.separator()
         tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   drag to orbit")
         tp.imgui.end()
+
+    AUTO_REBUILD_FRAMES = 90  # auto-rebuild surface every N frames while accumulating
 
     def frame():
         if state["sweep"]:
             state["yaw"] = clock.get_elapsed_time() * 0.6
         do_scan()
+
+        # auto-rebuild surface while accumulating
+        state["frame_count"] += 1
+        if (state["accumulate"] and state["show_surface"] and
+                state["frame_count"] % AUTO_REBUILD_FRAMES == 0 and
+                map_grid.voxel_count > 50):
+            rebuild_surface()
+
         controls.update()
         renderer.render(scene, camera)
         if ui is not None:
