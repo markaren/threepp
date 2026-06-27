@@ -65,6 +65,7 @@ PYBIND11_MODULE(threepp, m) {
     tp::init_animation(m);// before loaders: GLTFResult.animations is a list of AnimationClip
     tp::init_cameras(m);
     tp::init_lights(m);
+    tp::init_helpers(m);// after lights: light helpers reference light types
     tp::init_render(m);
     tp::init_loaders(m);// returns Group/Texture/BufferGeometry + GLTFResult
     tp::init_robot(m);  // URDFLoader + Robot (needs Object3D from init_core)
