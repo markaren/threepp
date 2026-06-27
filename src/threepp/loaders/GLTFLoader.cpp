@@ -31,6 +31,8 @@
 
 #include <unordered_set>
 
+#include "meshoptimizer.h"
+
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
@@ -185,6 +187,9 @@ namespace threepp {
             // meshIdx -> primIdx -> list of variant mappings
             std::unordered_map<int, std::unordered_map<int, std::vector<PrimVariantMapping>>> primVariantData;
 
+            // Cache of decoded EXT_meshopt_compression bufferViews (keyed by bufferView index)
+            std::unordered_map<int, std::vector<uint8_t>> meshoptCache;
+
             // -----------------------------------------------------------------------
             //  Buffer/accessor helpers
             // -----------------------------------------------------------------------
@@ -218,23 +223,74 @@ namespace threepp {
                 int numComponents;
             };
 
+            // Decode a KHR_meshopt_compression bufferView on first access and cache it.
+            const std::vector<uint8_t>& decodeMeshoptBV(int bvIdx) {
+                auto it = meshoptCache.find(bvIdx);
+                if (it != meshoptCache.end()) return it->second;
+
+                const auto& ext = gltf["bufferViews"][bvIdx]["extensions"]["KHR_meshopt_compression"];
+                int bufIdx        = ext["buffer"].get<int>();
+                size_t byteOffset = ext.value("byteOffset", 0);
+                size_t byteLength = ext["byteLength"].get<size_t>();
+                size_t byteStride = ext["byteStride"].get<size_t>();
+                size_t count      = ext["count"].get<size_t>();
+                std::string mode  = ext["mode"].get<std::string>();
+                std::string filter = ext.value("filter", "NONE");
+
+                const auto& compressed = resolveBuffer(bufIdx);
+                const uint8_t* src = compressed.data() + byteOffset;
+
+                auto& decoded = meshoptCache[bvIdx];
+                decoded.resize(count * byteStride);
+
+                int rc = 0;
+                if (mode == "ATTRIBUTES")
+                    rc = meshopt_decodeVertexBuffer(decoded.data(), count, byteStride, src, byteLength);
+                else if (mode == "TRIANGLES")
+                    rc = meshopt_decodeIndexBuffer(decoded.data(), count, byteStride, src, byteLength);
+                else if (mode == "INDICES")
+                    rc = meshopt_decodeIndexSequence(decoded.data(), count, byteStride, src, byteLength);
+                else
+                    throw std::runtime_error("EXT_meshopt_compression: unknown mode '" + mode + "'");
+
+                if (rc != 0)
+                    throw std::runtime_error("EXT_meshopt_compression: decode failed (bufferView " + std::to_string(bvIdx) + ")");
+
+                if (filter == "OCTAHEDRAL")
+                    meshopt_decodeFilterOct(decoded.data(), count, byteStride);
+                else if (filter == "QUATERNION")
+                    meshopt_decodeFilterQuat(decoded.data(), count, byteStride);
+                else if (filter == "EXPONENTIAL")
+                    meshopt_decodeFilterExp(decoded.data(), count, byteStride);
+                else if (filter == "COLOR")
+                    meshopt_decodeFilterColor(decoded.data(), count, byteStride);
+
+                return decoded;
+            }
+
             AccessorData getAccessor(int accessorIdx) {
                 const auto& acc = gltf["accessors"][accessorIdx];
                 int bvIdx = acc["bufferView"].get<int>();
                 const auto& bv = gltf["bufferViews"][bvIdx];
-                int bufIdx = bv["buffer"].get<int>();
-                size_t bvOffset = bv.value("byteOffset", 0);
-                size_t bvStride = bv.value("byteStride", 0);
                 size_t accOff = acc.value("byteOffset", 0);
                 size_t count = acc["count"].get<size_t>();
                 int ct = acc["componentType"].get<int>();
                 std::string type = acc["type"].get<std::string>();
                 int nc = typeCount(type);
 
+                if (bv.contains("extensions") &&
+                    bv["extensions"].contains("KHR_meshopt_compression")) {
+                    size_t byteStride = bv["extensions"]["KHR_meshopt_compression"]["byteStride"].get<size_t>();
+                    const auto& decoded = decodeMeshoptBV(bvIdx);
+                    return {decoded.data() + accOff, byteStride, count, ct, nc};
+                }
+
+                int bufIdx = bv["buffer"].get<int>();
+                size_t bvOffset = bv.value("byteOffset", 0);
+                size_t bvStride = bv.value("byteStride", 0);
                 const auto& buf = resolveBuffer(bufIdx);
                 const uint8_t* base = buf.data() + bvOffset + accOff;
                 size_t stride = bvStride > 0 ? bvStride : static_cast<size_t>(componentSize(ct) * nc);
-
                 return {base, stride, count, ct, nc};
             }
 

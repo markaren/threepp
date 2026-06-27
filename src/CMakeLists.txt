@@ -292,8 +292,11 @@ set(sources
 
         "external/pugixml/pugixml.cpp"
         "external/meshoptimizer/allocator.cpp"
+        "external/meshoptimizer/indexcodec.cpp"
         "external/meshoptimizer/indexgenerator.cpp"
         "external/meshoptimizer/simplifier.cpp"
+        "external/meshoptimizer/vertexcodec.cpp"
+        "external/meshoptimizer/vertexfilter.cpp"
 
         "threepp/animation/AnimationAction.cpp"
         "threepp/animation/AnimationClip.cpp"
