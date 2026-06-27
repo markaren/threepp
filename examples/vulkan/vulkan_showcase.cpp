@@ -10,7 +10,6 @@
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
-#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/threepp.hpp"
 
 #include <iostream>
@@ -127,10 +126,10 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Vulkan PT — Showcase",
+    Canvas canvas("Vulkan Showcase",
                   {{"vsync", false}, {"size", WindowSize{1600, 1000}}});
 
-    VulkanPathTracer renderer(canvas);
+    VulkanRenderer renderer(canvas);
 
     Scene scene;
     scene.background = Color::black;
@@ -200,7 +199,6 @@ int main() {
     controls.update();
 
     bool spin = true;
-    int spp = renderer.samplesPerPixel();
     float renderScale = renderer.renderScale();
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
@@ -225,14 +223,6 @@ int main() {
         bool restirDI = renderer.restirDIEnabled();
         if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
             renderer.setRestirDIEnabled(restirDI);
-        }
-        bool restirGI = renderer.restirGIEnabled();
-        if (ImGui::Checkbox("ReSTIR GI", &restirGI)) {
-            renderer.setRestirGIEnabled(restirGI);
-        }
-
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16)) {
-            renderer.setSamplesPerPixel(spp);
         }
 
         // Path-trace render scale: < 1 traces fewer pixels, then upscales.

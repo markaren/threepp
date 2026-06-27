@@ -1,7 +1,6 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/loaders/FBXLoader.hpp"
-#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/threepp.hpp"
@@ -30,7 +29,7 @@ int main(int argc, char** argv) {
     Canvas canvas("Bistro scene",
                   {{"vsync", false}});
 
-    VulkanPathTracer renderer(canvas);
+    VulkanRenderer renderer(canvas);
     renderer.outputColorSpace = ColorSpace::sRGB;
     renderer.toneMapping = ToneMapping::Neutral;
     renderer.setRestirDIEnabled(true);
@@ -75,8 +74,6 @@ int main(int argc, char** argv) {
     // ---- UI ----
     bool denoiserOn = renderer.denoise();
     bool restdirOn = renderer.restirDIEnabled();
-    bool restdirVisReuse = renderer.restirDIVisibilityReuse();
-    bool restdirGiOn = renderer.restirGIEnabled();
     float renderScale = renderer.renderScale();
     // Tone-map dropdown state, initialized from the renderer's current setting so
     // the label matches what's actually applied at startup. The selection maps
@@ -112,12 +109,6 @@ int main(int argc, char** argv) {
         }
         if (ImGui::Checkbox("REsTDIR DI", &restdirOn)) {
             renderer.setRestirDIEnabled(restdirOn);
-        }
-        if (ImGui::Checkbox("  DI visibility reuse", &restdirVisReuse)) {
-            renderer.setRestirDIVisibilityReuse(restdirVisReuse);
-        }
-        if (ImGui::Checkbox("REsTDIR GI", &restdirGiOn)) {
-            renderer.setRestirGIEnabled(restdirGiOn);
         }
 
         if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f)) {

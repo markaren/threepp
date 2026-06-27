@@ -18,7 +18,6 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Ocean.hpp"
-#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/threepp.hpp"
 
@@ -37,25 +36,20 @@ int main(int argc, char** argv) {
     // ── Headless capture (dev iteration): N warm-up frames then one PNG ──────
     std::string shotPath;
     int shotFrames = 240, shotFrame = 0;
-    bool shotPT = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
-        else if (std::strcmp(argv[i], "--pt") == 0) shotPT = true;
     }
     const capture::Args capArgs = capture::parseArgs(argc, argv);
     if (capArgs.frames) shotFrames = *capArgs.frames;
 
     Canvas canvas("Vulkan PT - Ocean (minimal)", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
-    std::unique_ptr<VulkanRendererCore> rendererPtr =
-            shotPT ? std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanPathTracer>(canvas))
-                   : std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanRenderer>(canvas));
-    VulkanRendererCore& renderer = *rendererPtr;
-    auto* pt = dynamic_cast<VulkanPathTracer*>(&renderer);
+
+    auto renderer = VulkanRenderer(canvas);
     renderer.setDenoise(true);
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(6.0f);
-    if (pt) pt->setMaxBounces(2);
+
     // Trace at slightly reduced resolution; TAA upsamples by accumulating
     // jittered low-res samples into the full-res history.
     renderer.setRenderScale(0.9f);
@@ -67,8 +61,10 @@ int main(int argc, char** argv) {
                          "/textures/env/autumn_field_puresky_2k.hdr");
 
     Scene scene;
-    scene.background = env;  // sky shows wherever rays miss the water
-    scene.environment = env; // image-based lighting for the surface
+    if (env) {
+        scene.background = env;  // sky shows wherever rays miss the water
+        scene.environment = env; // image-based lighting for the surface
+    }
 
     // Gentle sun — the HDR already carries one (env CDF + MIS importance-sample
     // it); this mostly drives the photon-mapped caustics on the sand floor.

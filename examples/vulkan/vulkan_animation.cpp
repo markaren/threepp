@@ -6,8 +6,6 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
-#include "threepp/renderers/VulkanPathTracer.hpp"
-#include "threepp/renderers/WgpuRenderer.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cstring>
@@ -16,17 +14,9 @@ using namespace threepp;
 
 int main(int argc, char** argv) {
 
-    bool usePT = false;
-    for (int i = 1; i < argc; ++i)
-        if (std::strcmp(argv[i], "--pt") == 0) usePT = true;
-
     Canvas canvas("Vulkan animation", {{"vsync", false}});
 
-    std::unique_ptr<VulkanRendererCore> rendererPtr =
-            usePT ? std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanPathTracer>(canvas))
-                  : std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanRenderer>(canvas));
-    VulkanRendererCore& renderer = *rendererPtr;
-    auto* pt = dynamic_cast<VulkanPathTracer*>(&renderer);
+    auto renderer = VulkanRenderer(canvas);
     renderer.outputColorSpace = ColorSpace::sRGB;
     renderer.toneMapping = ToneMapping::ACESFilmic;
 
@@ -139,20 +129,12 @@ int main(int argc, char** argv) {
     float fpsAccum = 0.f;
     int fpsFrames = 0;
 
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
-        if (ev.key == Key::T) {
-            // pathTracerOn = !pathTracerOn;
-        }
-    });
-    canvas.addKeyListener(keyAdapter);
-
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({});
         ImGui::SetNextWindowSize({});
         ImGui::Begin("Vulkan");
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Separator();
-        ImGui::TextDisabled(pt ? "Mode: Path tracer (--pt)" : "Mode: Deferred (default)");
 
         // Raster G-buffer debug views.
         static int debugView = 0;
@@ -161,11 +143,7 @@ int main(int argc, char** argv) {
             renderer.setHybridDebugView(debugView);
 
         ImGui::Checkbox("AnimateBox", &animate);
-
-        if (ImGui::Checkbox("EnclosingBox", &showEnclosingBox)) {
-            if (pt) pt->resetAccumulation();
-        }
-
+        ImGui::Checkbox("EnclosingBox", &showEnclosingBox);
         ImGui::SliderFloat("Exposure", &renderer.toneMappingExposure, 0.1f, 2.0f);
 
         if (ImGui::Checkbox("Denoiser", &denoiserOn)) {

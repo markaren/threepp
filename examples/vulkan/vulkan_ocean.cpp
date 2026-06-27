@@ -698,7 +698,6 @@ int main(int argc, char** argv) {
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
-    bool shotPT     = false;
     bool shotVista  = false;
     bool shotClose  = false;// near-surface grazing view — surface-artifact hunting
     bool shotIsland = false;// low close-up of the −X archipelago island (terrain-detail capture)
@@ -707,7 +706,6 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--night") == 0) startNight = true;
-        else if (std::strcmp(argv[i], "--pt") == 0) shotPT = true;
         else if (std::strcmp(argv[i], "--vista") == 0) shotVista = true;
         else if (std::strcmp(argv[i], "--close") == 0) shotClose = true;
         else if (std::strcmp(argv[i], "--island") == 0) shotIsland = true;
@@ -720,17 +718,13 @@ int main(int argc, char** argv) {
     int shotFrame = 0;
 
     Canvas canvas("Vulkan Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
-    std::unique_ptr<VulkanRendererCore> rendererPtr =
-            shotPT ? std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanPathTracer>(canvas))
-                   : std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanRenderer>(canvas));
-    VulkanRendererCore& renderer = *rendererPtr;
-    auto* pt = dynamic_cast<VulkanPathTracer*>(&renderer);
-    auto* dr = dynamic_cast<VulkanRenderer*>(&renderer);
-    const bool ptMode = (pt != nullptr);
+
+    auto renderer = VulkanRenderer(canvas);
+
     renderer.setDenoise(true);
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(6.0f);
-    if (pt) pt->setMaxBounces(2);
+
     // Trace PT at lower resolution; TAA upsamples to full swapchain by
     // accumulating jittered low-res samples into the full-res history.
     renderer.setRenderScale(0.9f);
@@ -1083,7 +1077,8 @@ int main(int argc, char** argv) {
             // intensity keeps the through-window flare reading at distance.
             lampMat->emissiveIntensity = 45.f;
             hoodMat->emissiveIntensity = 8.f;// soft all-round lens glow
-            if (dr) { dr->setDeferredVolumetrics(hazeDensity, 0.6f); dr->setDeferredStarfield(1.0f); }
+            renderer.setDeferredVolumetrics(hazeDensity, 0.6f);
+            renderer.setDeferredStarfield(1.0f);
             renderer.toneMappingExposure = 1.15f;
         } else {
             scene.background  = env;
@@ -1093,7 +1088,8 @@ int main(int argc, char** argv) {
             beam->intensity = 0.f;
             lampMat->emissiveIntensity = 0.f;
             hoodMat->emissiveIntensity = 0.f;
-            if (dr) { dr->setDeferredVolumetrics(0.f, 0.6f); dr->setDeferredStarfield(0.f); }
+            renderer.setDeferredVolumetrics(0.f, 0.6f);
+            renderer.setDeferredStarfield(0.f);
             renderer.toneMappingExposure = 0.7f;
         }
         // Material PBR values live in a GPU MaterialDesc refreshed on version
@@ -1401,20 +1397,9 @@ int main(int argc, char** argv) {
     float windTheta = ocean->params.windTheta;
     float exposure  = renderer.toneMappingExposure;
     int   toneMode  = static_cast<int>(renderer.toneMapping);
-    int   spp       = pt ? pt->samplesPerPixel() : 1;
     float renderScale = renderer.renderScale();
     float fps = 0.f, fpsAccum = 0.f;
     int   fpsFrames = 0;
-
-    // ── Primary-trace cost measurement ─────────────────────────────────
-    // Toggle `setMeasurePrimaryTraceOnly` and watch the delta on
-    // pathTraceMs. EMA-smoothed so the readouts don't dance frame-to-frame;
-    // both numbers persist across toggle changes so the comparison stays
-    // visible after flipping back to "full".
-    bool measurePrimaryOnly = pt ? pt->measurePrimaryTraceOnly() : false;
-    float fullPtMs = 0.f;
-    float primaryOnlyMs = 0.f;
-    constexpr float ptEmaAlpha = 0.10f;
 
     // ── Underwater fog parameters ─────────────────────────────────────────
     // Controlled by ImGui; applied per-frame when the camera is submerged.
@@ -1567,11 +1552,6 @@ int main(int argc, char** argv) {
         }
         ImGui::Separator();
 
-        ImGui::TextUnformatted("Rendering");
-        ImGui::TextDisabled(ptMode ? "ReferencePT — full path tracer (--pt)"
-                                   : "RasterFirst — deferred + RT accents");
-        ImGui::Separator();
-
         if (ImGui::SliderFloat("Wave scale", &waveScale, 0.f, 3.f, "%.2f")) {
             ocean->params.waveScale = waveScale;
         }
@@ -1588,8 +1568,8 @@ int main(int argc, char** argv) {
         }
         if (night) {
             ImGui::SliderFloat("Beam speed (rad/s)", &beamSpeed, 0.f, 2.f, "%.2f");
-            if (dr && ImGui::SliderFloat("Haze density (1/m)", &hazeDensity, 0.f, 0.08f, "%.3f")) {
-                dr->setDeferredVolumetrics(hazeDensity, 0.6f);
+            if (ImGui::SliderFloat("Haze density (1/m)", &hazeDensity, 0.f, 0.08f, "%.3f")) {
+                renderer.setDeferredVolumetrics(hazeDensity, 0.6f);
             }
         }
         ImGui::Separator();
@@ -1611,21 +1591,7 @@ int main(int argc, char** argv) {
         if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
             renderer.setRestirDIEnabled(restirDI);
         }
-        if (pt) {
-            bool restirGI = pt->restirGIEnabled();
-            if (ImGui::Checkbox("ReSTIR GI", &restirGI)) {
-                pt->setRestirGIEnabled(restirGI);
-            }
-            if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16)) {
-                pt->setSamplesPerPixel(spp);
-            }
-            // Silhouette MSAA: extra primary rays at edge pixels only.
-            // 0 disables; default 7 → 8× MSAA at edges.
-            int edgeMsaa = static_cast<int>(pt->silhouetteMsaaExtra());
-            if (ImGui::SliderInt("Silhouette MSAA extras", &edgeMsaa, 0, 15)) {
-                pt->setSilhouetteMsaaExtra(static_cast<uint32_t>(edgeMsaa));
-            }
-        }
+
         // Path-trace render scale: < 1 traces fewer pixels, then upscales.
         if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f")) {
             renderer.setRenderScale(renderScale);
@@ -2525,7 +2491,7 @@ int main(int argc, char** argv) {
         // last frame's data when re-rendered next frame.
         if (lidarEnabled) {
             const auto t0 = std::chrono::steady_clock::now();
-            if (dr) lidarSensor->scan(*dr, lidarReturns);
+            lidarSensor->scan(renderer, lidarReturns);
             const auto t1 = std::chrono::steady_clock::now();
             lidarLastScanMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
 
