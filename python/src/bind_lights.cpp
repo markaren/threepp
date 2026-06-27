@@ -3,6 +3,8 @@
 // optional intensity in C++; here it is exposed as a plain float defaulting to 1.
 #include "bindings.hpp"
 
+#include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/lights/light_interfaces.hpp"
 #include "threepp/lights/lights.hpp"
 #include "threepp/math/MathUtils.hpp"
 
@@ -35,7 +37,26 @@ namespace threepp_py {
                 // internal defaultTarget (not shared_ptr-owned), so use the reference
                 // policy (cf. Object3D.parent) — the returned target must not outlive
                 // the light.
-                .def("get_target", [](DirectionalLight& l) -> const Object3D& { return l.target(); }, py::return_value_policy::reference);
+                .def("get_target", [](DirectionalLight& l) -> const Object3D& { return l.target(); }, py::return_value_policy::reference)
+                // Shadow-camera ortho frustum. Call after constructing the light to
+                // widen the shadow coverage area; default is ±1 (very tight).
+                .def("set_shadow_frustum",
+                     [](DirectionalLight& l, float left, float right, float top, float bottom) {
+                         auto* cam = dynamic_cast<OrthographicCamera*>(l.shadow->camera.get());
+                         if (!cam) return;
+                         cam->left   = left;
+                         cam->right  = right;
+                         cam->top    = top;
+                         cam->bottom = bottom;
+                         cam->updateProjectionMatrix();
+                     },
+                     py::arg("left") = -10.f, py::arg("right") = 10.f,
+                     py::arg("top") = 10.f, py::arg("bottom") = -10.f,
+                     "Resize the directional-light shadow ortho frustum. "
+                     "Call after creation; default ±1 clips almost everything.")
+                .def("set_shadow_bias",
+                     [](DirectionalLight& l, float bias) { l.shadow->bias = bias; },
+                     py::arg("bias") = 0.f);
 
         // ---- PointLight ------------------------------------------------------
         py::class_<PointLight, Light, std::shared_ptr<PointLight>>(m, "PointLight")
