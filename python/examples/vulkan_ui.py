@@ -39,7 +39,7 @@ mat = tp.MeshStandardMaterial()
 mat.color = 0xff8800
 mat.roughness = 0.4
 mat.metalness = 0.2
-knot = tp.Mesh(tp.TorusKnotGeometry(0.7, 0.25), mat)
+knot = tp.Mesh(tp.TorusKnotGeometry(0.7, 0.25, 128, 64), mat)
 scene.add(knot)
 
 ground = tp.Mesh(tp.PlaneGeometry(40, 40), tp.MeshStandardMaterial())
@@ -63,12 +63,15 @@ def draw_ui():
     tp.imgui.set_next_window_pos(10, 10)
     tp.imgui.set_next_window_size(290, 0)
     tp.imgui.begin("Material & Scene (Vulkan)")
-    _, state["roughness"] = tp.imgui.slider_float("roughness", state["roughness"], 0.0, 1.0)
-    mat.roughness = state["roughness"]
-    _, state["metalness"] = tp.imgui.slider_float("metalness", state["metalness"], 0.0, 1.0)
-    mat.metalness = state["metalness"]
-    _, state["color"] = tp.imgui.color_edit3("color", state["color"])
-    mat.color = tp.Color(*state["color"])
+    changed = False
+    ch, state["roughness"] = tp.imgui.slider_float("roughness", state["roughness"], 0.0, 1.0)
+    changed |= ch; mat.roughness = state["roughness"]
+    ch, state["metalness"] = tp.imgui.slider_float("metalness", state["metalness"], 0.0, 1.0)
+    changed |= ch; mat.metalness = state["metalness"]
+    ch, state["color"] = tp.imgui.color_edit3("color", state["color"])
+    changed |= ch; mat.color = tp.Color(*state["color"])
+    if changed:
+        mat.needs_update()
     tp.imgui.separator()
     _, state["spin"] = tp.imgui.checkbox("spin", state["spin"])
     _, state["speed"] = tp.imgui.slider_float("speed", state["speed"], 0.0, 3.0)
