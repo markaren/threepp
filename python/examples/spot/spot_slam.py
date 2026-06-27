@@ -45,6 +45,24 @@ SCAN_EVERY = 3       # depth scan every N frames; result cached for policy (~17 
 MC_FRAMES  = 90      # trigger SLAM rebuild every N rendered frames
 GRASS_BLADES = 12000 # merged GrassMesh blade count (GPU-wind on Vulkan); tune for FPS
 GRASS_RADIUS = 22.0  # grass disk radius around spawn (fog hides >25 m anyway)
+HDR_URL = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/noon_grass_2k.hdr"
+
+
+def fetch_hdr(url, name):
+    """Download an HDRI to ~/.cache/threepp/hdri once (cached) and return its path."""
+    import pathlib, shutil, urllib.request
+    cache = pathlib.Path.home() / ".cache" / "threepp" / "hdri"
+    cache.mkdir(parents=True, exist_ok=True)
+    dest = cache / name
+    if dest.exists() and dest.stat().st_size > 0:
+        return str(dest)
+    print(f"[hdri] downloading {name} ...")
+    req = urllib.request.Request(url, headers={"User-Agent": "threepp-spot-demo"})
+    tmp = dest.with_name(dest.name + ".part")
+    with urllib.request.urlopen(req) as resp, open(tmp, "wb") as f:
+        shutil.copyfileobj(resp, f)
+    tmp.replace(dest)
+    return str(dest)
 
 
 # ── terrain ────────────────────────────────────────────────────────────────────
@@ -82,8 +100,18 @@ def build_terrain_zup(field, world_size, amplitude):
     return g
 
 
+# ── scatter helpers ──────────────────────────────────────────────────────────────
+def _in_pond(px, py, hz, pond):
+    """True if (px,py) at terrain height hz is at/below the pond waterline and near
+    its centre — used to keep vegetation out of open water. pond = (cx,cy,wl)|None."""
+    if pond is None:
+        return False
+    cx, cy, wl = pond
+    return math.hypot(px - cx, py - cy) < 17.0 and hz < wl + 0.2
+
+
 # ── trees ──────────────────────────────────────────────────────────────────────
-def scatter_trees(scene, gen, params, n=TREE_COUNT, seed=0, world=None):
+def scatter_trees(scene, gen, params, n=TREE_COUNT, seed=0, world=None, pond=None):
     """Scatter trees. When `world` is given, add a static box collider per trunk
     (a "tree stub") so Spot bumps into the trunks; the leafy canopy stays
     non-colliding. Returns the list of collider proxy meshes (keep them alive)."""
@@ -119,12 +147,14 @@ def scatter_trees(scene, gen, params, n=TREE_COUNT, seed=0, world=None):
         px, py = float(rng.uniform(-half, half)), float(rng.uniform(-half, half))
         if math.hypot(px, py) < CLEAR_R:
             continue
+        hz = float(gen.height_at(px, py, params))
+        if _in_pond(px, py, hz, pond):       # don't plant trees in open water
+            continue
         tree_seed = int(rng.integers(0, 100_000))
         tgen.reseed(tree_seed)
         tgen.build_skeleton(tpar)
         trunk_geo = tgen.make_trunk_geometry(tpar)
         leaf_geo  = tgen.make_leaf_geometry(tpar)
-        hz    = float(gen.height_at(px, py, params))
         scale = float(rng.uniform(0.7, 1.3))
         for geo, mat in ((trunk_geo, trunk_mat), (leaf_geo, leaf_mat)):
             m = tp.Mesh(geo, mat)
@@ -176,7 +206,7 @@ def make_rock_geometry(seed):
     return g
 
 
-def scatter_stones(scene, gen, params, n=35, seed=0, world=None):
+def scatter_stones(scene, gen, params, n=35, seed=0, world=None, pond=None):
     """Scatter boulders. When `world` is given, add a static sphere collider per
     stone so Spot bumps into them. Returns the collider proxy meshes."""
     rng  = np.random.default_rng(seed + 7)
@@ -194,6 +224,8 @@ def scatter_stones(scene, gen, params, n=35, seed=0, world=None):
         if math.hypot(px, py) < 2.5:
             continue
         hz = float(gen.height_at(px, py, params))
+        if _in_pond(px, py, hz, pond):
+            continue
         s  = 0.30 + float(rng.uniform()) * 0.55
         m  = tp.Mesh(rgeos[int(rng.integers(0, len(rgeos)))], mat)
         m.position.set(px, py, hz + s * 0.30)   # mostly proud of the ground, partly embedded
@@ -215,7 +247,7 @@ def scatter_stones(scene, gen, params, n=35, seed=0, world=None):
 
 
 # ── bushes (shrub-variant trees, like forest_demo) ────────────────────────────────
-def scatter_bushes(scene, gen, params, n=50, seed=0):
+def scatter_bushes(scene, gen, params, n=50, seed=0, pond=None):
     rng  = np.random.default_rng(seed + 3)
     half = params.world_size / 2.0 - 4.0
 
@@ -253,6 +285,8 @@ def scatter_bushes(scene, gen, params, n=50, seed=0):
         if math.hypot(px, py) < 3.0:
             continue
         hz = float(gen.height_at(px, py, params))
+        if _in_pond(px, py, hz, pond):       # keep bushes out of open water
+            continue
         trunk_geo, leaf_geo = variants[int(rng.integers(0, len(variants)))]
         s  = 0.7 + float(rng.uniform()) * 0.7
         for geo, mat in ((trunk_geo, trunk_mat), (leaf_geo, leaf_mat)):
@@ -267,7 +301,7 @@ def scatter_bushes(scene, gen, params, n=50, seed=0):
 
 
 # ── grass ────────────────────────────────────────────────────────────────────────
-def build_grass_field(gen, params, n_blades, radius, seed, clear_r=0.0):
+def build_grass_field(gen, params, n_blades, radius, seed, clear_r=0.0, pond=None):
     """One merged GrassMesh geometry (non-indexed triangle soup) for the Vulkan
     GPU-wind path. Blades are Y-up in local space (the wind compute bends local
     X/Z, keeping Y), and the field is baked so rotation.x=pi/2 on the mesh stands
@@ -316,6 +350,8 @@ def build_grass_field(gen, params, n_blades, radius, seed, clear_r=0.0):
         if math.hypot(cx, cy0) < clear_r:
             continue
         hz = float(gen.height_at(cx, cy0, params))
+        if _in_pond(cx, cy0, hz, pond):      # no grass tufts in open water
+            continue
         for _ in range(TUFT):
             xs.append(cx + rng.uniform(-SPREAD, SPREAD))
             ys.append(cy0 + rng.uniform(-SPREAD, SPREAD))
@@ -348,6 +384,40 @@ def build_grass_field(gen, params, n_blades, radius, seed, clear_r=0.0):
     g.set_attribute("color",      np.ascontiguousarray(np.tile(sc, (n, 1))))
     g.set_attribute("heightFrac", np.ascontiguousarray(np.tile(sh, n)[:, None]))
     return g, n
+
+
+# ── pond (Vulkan FFT ocean) ───────────────────────────────────────────────────────
+def add_pond(scene, gen, params, max_r=20.0, exclude_r=7.0, depth=1.4):
+    """Drop an FFT water surface into the deepest terrain basin within an annulus
+    [exclude_r, max_r] around spawn (Vulkan only — tp.Ocean is absent on GL
+    builds). Searching a disk (vs a forward box) lands in a real bowl with terrain
+    rising on all sides, so the flat water plane reads as a contained pond rather
+    than a hillside flood. Returns (pond, water_level) or (None, None). The
+    renderer auto-animates the waves each frame."""
+    if not hasattr(tp, "Ocean"):
+        print("[pond] skipped (needs the Vulkan build)")
+        return None, None
+    best = None
+    for x in np.linspace(-max_r, max_r, 49):
+        for y in np.linspace(-max_r, max_r, 49):
+            r = math.hypot(float(x), float(y))
+            if not (exclude_r <= r <= max_r):
+                continue
+            h = float(gen.height_at(float(x), float(y), params))
+            if best is None or h < best[2]:
+                best = (float(x), float(y), h)
+    lx, ly, lh = best
+    wl = lh + depth
+    pond = tp.Ocean(size=32.0, resolution=128, wind_speed=3.0, wind_theta=0.5,
+                    choppiness=0.4, wave_scale=0.4, fft_size=256)
+    pond.params.tile_size_0 = 28.0     # small tiles → pond-scale ripples, not ocean swell
+    pond.params.tile_size_1 = 7.0
+    pond.params.tile_size_2 = 0.0
+    pond.rotation.x = math.pi / 2      # Y-up ocean → Z-up world (waves rise in +Z)
+    pond.position.set(lx, ly, wl-1)
+    scene.add(pond)
+    print(f"[pond] basin ({lx:.1f},{ly:.1f})  water_level={wl:.2f} m")
+    return pond, wl
 
 
 # ── policy observation (94-d: mirrors SpotStepsEnv) ───────────────────────────
@@ -552,9 +622,22 @@ def main():
 
     # ── scene ─────────────────────────────────────────────────────────────────
     scene = tp.Scene()
-    scene.background = tp.Background(0x8ab4d4)
+    # HDR environment: equirect Radiance map drives image-based lighting (the Vulkan
+    # PT importance-samples it) and serves as the sky backdrop. Cached on first run.
+    try:
+        env = tp.RGBELoader().load(fetch_hdr(HDR_URL, "noon_grass_2k.hdr"))
+        # The renderer samples env maps Y-up (latitude = asin(dir.y)); this scene is
+        # Z-up, so pitch the HDRI -90° about X to stand the sky overhead.
+        env = tp.rotate_equirect(env, -90.0, 0.0, 0.0)
+        scene.environment = env
+        scene.background  = env
+        hemi_intensity = 0.25          # HDR provides the ambient fill; keep only a touch
+    except Exception as e:
+        print(f"[hdri] unavailable ({e}); falling back to flat sky")
+        scene.background = tp.Background(0x8ab4d4)
+        hemi_intensity = 0.9
     scene.set_fog(0x8ab4d4, 25.0, 80.0)
-    scene.add(tp.HemisphereLight(0xd0e8ff, 0x3a4820, 0.9))
+    scene.add(tp.HemisphereLight(0xd0e8ff, 0x3a4820, hemi_intensity))
     sun = tp.DirectionalLight(0xfff8e0, 2.8)
     sun.position.set(15, -10, 20)
     sun.cast_shadow = True
@@ -572,17 +655,22 @@ def main():
         m.cast_shadow = True
         scene.add(m)
 
+    # Pond first, so vegetation can avoid standing in open water.
+    print("[pond] searching for a basin ...")
+    pond_obj, pond_wl = add_pond(scene, gen, tparams)
+    pond = (pond_obj.position.x, pond_obj.position.y, pond_wl) if pond_obj else None
+
     print("[trees] scattering ...")
     # Trees + stones get static colliders (Spot bumps trunks/boulders); bushes stay
     # soft (walk-through). Keep the proxy meshes alive for the whole run.
     phys_proxies = []
-    phys_proxies += scatter_trees(scene, gen, tparams, seed=args.seed, world=world)
-    scatter_bushes(scene, gen, tparams, seed=args.seed)
-    phys_proxies += scatter_stones(scene, gen, tparams, seed=args.seed, world=world)
+    phys_proxies += scatter_trees(scene, gen, tparams, seed=args.seed, world=world, pond=pond)
+    scatter_bushes(scene, gen, tparams, seed=args.seed, pond=pond)
+    phys_proxies += scatter_stones(scene, gen, tparams, seed=args.seed, world=world, pond=pond)
 
     print("[grass] building ...")
     grass_geo, n_grass = build_grass_field(gen, tparams, GRASS_BLADES, GRASS_RADIUS,
-                                           args.seed, clear_r=1.0)
+                                           args.seed, clear_r=1.0, pond=pond)
     grass_mat = tp.MeshStandardMaterial()
     grass_mat.vertex_colors = True
     grass_mat.roughness     = 0.95
