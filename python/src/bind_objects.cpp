@@ -8,6 +8,7 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/PointsMaterial.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
+#include "threepp/objects/GrassMesh.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Line.hpp"
@@ -125,6 +126,29 @@ namespace threepp_py {
                 .def("instance_color_needs_update", [](InstancedMesh& im) {
                     if (auto* c = im.instanceColor()) c->needsUpdate();
                 });
+
+        // ---- GrassMesh -------------------------------------------------------
+        // Mesh subclass whose vertices are GPU wind-displaced by the Vulkan path
+        // tracer's grass-wind compute pass (renders as a plain static Mesh on
+        // GL/WebGPU). Inherits Mesh's concrete Object3D API via its non-virtual
+        // Mesh parent (same as InstancedMesh). The geometry must be ONE merged
+        // blade field carrying a per-vertex float "heightFrac" attribute (0 at a
+        // blade's base, 1 at its tip) that drives the wind sway weighting.
+        auto grass = py::class_<GrassMesh, Mesh, std::shared_ptr<GrassMesh>>(m, "GrassMesh");
+        grass.def(py::init([](std::shared_ptr<BufferGeometry> g, const py::object& mat) {
+                      return GrassMesh::create(std::move(g), as_material(mat));
+                  }),
+                  py::arg("geometry"), py::arg("material"))
+                .def_property("wind_strength",
+                              [](GrassMesh& g) { return g.params.windStrength; },
+                              [](GrassMesh& g, float v) { g.params.windStrength = v; })
+                .def_property("wind_dir",
+                              [](GrassMesh& g) { return g.params.windDir; },
+                              [](GrassMesh& g, const Vector2& v) { g.params.windDir = v; })
+                .def_property("time",
+                              [](GrassMesh& g) { return g.params.time; },
+                              [](GrassMesh& g, float v) { g.params.time = v; },
+                              "Animation clock (seconds); set per frame to advance the wind.");
 
         // ---- Points ----------------------------------------------------------
         auto points = py::class_<Points, Object3D, std::shared_ptr<Points>>(m, "Points");
