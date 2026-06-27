@@ -43,6 +43,8 @@ SENSOR_H   = 120
 SENSOR_FAR = 8.0
 SCAN_EVERY = 3       # depth scan every N frames; result cached for policy (~17 Hz)
 MC_FRAMES  = 90      # trigger SLAM rebuild every N rendered frames
+GRASS_BLADES = 12000 # merged GrassMesh blade count (GPU-wind on Vulkan); tune for FPS
+GRASS_RADIUS = 22.0  # grass disk radius around spawn (fog hides >25 m anyway)
 
 
 # ── terrain ────────────────────────────────────────────────────────────────────
@@ -91,9 +93,11 @@ def scatter_trees(scene, gen, params, n=TREE_COUNT, seed=0):
     trunk_mat.roughness = 0.85
 
     leaf_mat = tp.MeshStandardMaterial()
-    leaf_mat.color     = 0x3a7c2a
-    leaf_mat.roughness = 0.9
-    leaf_mat.side      = tp.Side.Double
+    leaf_mat.map           = tp.make_leaf_texture(256, seed, [0.18, 0.42, 0.14])  # RGBA leaf-cluster cutout
+    leaf_mat.alpha_test    = 0.5     # discard the transparent gaps → leafy silhouette, not solid cards
+    leaf_mat.roughness     = 0.9
+    leaf_mat.side          = tp.Side.Double
+    leaf_mat.vertex_colors = True    # per-leaf tint variation baked into the geometry
 
     tpar = tp.TreeParams()
     tp.apply_tree_preset(0, tpar)     # Oak baseline
@@ -127,6 +131,201 @@ def scatter_trees(scene, gen, params, n=TREE_COUNT, seed=0):
             scene.add(m)
         placed += 1
     print(f"[trees] placed {placed}/{n}")
+
+
+# ── stones ───────────────────────────────────────────────────────────────────────
+def make_rock_geometry(seed):
+    """Low-poly faceted boulder: a 5x7 sphere displaced by a few smooth lumps
+    (port of forest_demo's makeRock). Non-indexed soup; pair with flat_shading."""
+    rng = np.random.default_rng(seed)
+    lat_segs, lon_segs = 5, 7
+    p1, p2, p3 = rng.uniform(-math.pi, math.pi, 3)
+    theta = np.linspace(0, math.pi, lat_segs + 1, dtype=np.float32)
+    phi   = np.linspace(0, 2 * math.pi, lon_segs + 1, dtype=np.float32)
+    T, P  = np.meshgrid(theta, phi, indexing='ij')              # (6,8)
+    sinT, cosT = np.sin(T), np.cos(T)
+    nx, ny, nz = sinT * np.cos(P), cosT, sinT * np.sin(P)
+    disp = (1.0 + 0.30 * np.sin(2 * P + p1) * sinT + 0.24 * np.cos(3 * P + p2)
+            + 0.22 * np.sin(3 * T + p3) + 0.14 * np.cos(5 * P + 4 * T + p1))
+    disp = np.clip(disp, 0.6, 1.5)
+    pos = np.stack([nx * disp, ny * disp, nz * disp], -1).reshape(-1, 3)
+    nrm = np.stack([nx, ny, nz], -1).reshape(-1, 3)
+    rowV = lon_segs + 1
+    idx = []
+    for la in range(lat_segs):
+        for lo in range(lon_segs):
+            a = la * rowV + lo; b = a + rowV
+            idx += [a, a + 1, b, a + 1, b + 1, b]            # CCW from outside
+    idx = np.array(idx, np.int64)
+    g = tp.BufferGeometry()
+    g.set_attribute("position", np.ascontiguousarray(pos[idx], np.float32))
+    g.set_attribute("normal",   np.ascontiguousarray(nrm[idx], np.float32))
+    return g
+
+
+def scatter_stones(scene, gen, params, n=35, seed=0):
+    rng  = np.random.default_rng(seed + 7)
+    half = params.world_size / 2.0 - 4.0
+    rgeos = [make_rock_geometry(s) for s in (1, 2, 3)]
+    mat = tp.MeshStandardMaterial()
+    mat.color = 0x4e4a44
+    mat.roughness = 1.0
+    mat.flat_shading = True            # crisp facets on the low-poly boulders
+    placed = attempts = 0
+    while placed < n and attempts < n * 15:
+        attempts += 1
+        px, py = float(rng.uniform(-half, half)), float(rng.uniform(-half, half))
+        if math.hypot(px, py) < 2.5:
+            continue
+        hz = float(gen.height_at(px, py, params))
+        s  = 0.30 + float(rng.uniform()) * 0.55
+        m  = tp.Mesh(rgeos[int(rng.integers(0, len(rgeos)))], mat)
+        m.position.set(px, py, hz + s * 0.30)   # mostly proud of the ground, partly embedded
+        m.scale.set(s, s, s * 0.8)              # slightly squashed boulders
+        m.rotation.x = float(rng.uniform(0, 2 * math.pi))
+        m.rotation.y = float(rng.uniform(0, 2 * math.pi))
+        m.rotation.z = float(rng.uniform(0, 2 * math.pi))
+        m.cast_shadow = True
+        m.receive_shadow = True
+        scene.add(m)
+        placed += 1
+    print(f"[stones] placed {placed}/{n}")
+
+
+# ── bushes (shrub-variant trees, like forest_demo) ────────────────────────────────
+def scatter_bushes(scene, gen, params, n=50, seed=0):
+    rng  = np.random.default_rng(seed + 3)
+    half = params.world_size / 2.0 - 4.0
+
+    bark_alb, _ = tp.make_bark_textures(64, seed, [0.30, 0.22, 0.12])
+    trunk_mat = tp.MeshStandardMaterial(); trunk_mat.map = bark_alb; trunk_mat.roughness = 0.9
+    leaf_mat  = tp.MeshStandardMaterial()
+    leaf_mat.map           = tp.make_leaf_texture(256, seed + 5, [0.14, 0.36, 0.12])
+    leaf_mat.alpha_test    = 0.5
+    leaf_mat.roughness     = 0.9
+    leaf_mat.side          = tp.Side.Double
+    leaf_mat.vertex_colors = True
+
+    # A few reusable shrub variants (short trunk, wide low hemisphere crown).
+    tgen = tp.TreeGenerator(0)
+    variants = []
+    for s in (11, 22, 33):
+        tpar = tp.TreeParams()
+        tpar.seed = s
+        tpar.trunk_height = 0.45; tpar.trunk_radius = 0.06
+        tpar.crown_shape = tp.CrownShape.Hemisphere
+        tpar.crown_radius_x = 1.1; tpar.crown_radius_z = 1.1; tpar.crown_height = 1.2
+        tpar.attractor_count = 260; tpar.influence_distance = 2.0; tpar.kill_distance = 0.45
+        tpar.segment_length = 0.22; tpar.max_iterations = 130; tpar.randomness = 0.12
+        tpar.radial_segments = 5
+        tpar.leaf_style = tp.LeafStyle.CrossQuad
+        tpar.leaf_size = 0.45; tpar.leaf_density = 0.95
+        tpar.leaves_per_cluster = 5; tpar.leaf_spread = 0.35
+        tgen.reseed(s); tgen.build_skeleton(tpar)
+        variants.append((tgen.make_trunk_geometry(tpar), tgen.make_leaf_geometry(tpar)))
+
+    placed = attempts = 0
+    while placed < n and attempts < n * 15:
+        attempts += 1
+        px, py = float(rng.uniform(-half, half)), float(rng.uniform(-half, half))
+        if math.hypot(px, py) < 3.0:
+            continue
+        hz = float(gen.height_at(px, py, params))
+        trunk_geo, leaf_geo = variants[int(rng.integers(0, len(variants)))]
+        s  = 0.7 + float(rng.uniform()) * 0.7
+        for geo, mat in ((trunk_geo, trunk_mat), (leaf_geo, leaf_mat)):
+            m = tp.Mesh(geo, mat)
+            m.rotation.x = math.pi / 2     # Y-up → Z-up (like the trees)
+            m.position.set(px, py, hz)
+            m.scale.set(s, s, s)
+            m.cast_shadow = True
+            scene.add(m)
+        placed += 1
+    print(f"[bushes] placed {placed}/{n}")
+
+
+# ── grass ────────────────────────────────────────────────────────────────────────
+def build_grass_field(gen, params, n_blades, radius, seed, clear_r=0.0):
+    """One merged GrassMesh geometry (non-indexed triangle soup) for the Vulkan
+    GPU-wind path. Blades are Y-up in local space (the wind compute bends local
+    X/Z, keeping Y), and the field is baked so rotation.x=pi/2 on the mesh stands
+    them up at terrain height in the Z-up world — same convention as the trees.
+    Returns (geometry, blade_count). Needs a per-vertex 'heightFrac' attribute
+    (0 at base, 1 at tip) which drives the sway weighting."""
+    rng = np.random.default_rng(seed + 4242)
+    seg, wbase = 4, 0.05
+    rows = seg + 1
+    t = np.linspace(0.0, 1.0, rows, dtype=np.float32)          # height fraction per row
+    w = wbase * (1.0 - t)                                       # taper to a point at the tip
+
+    # 10-vertex blade template (Y-up): two verts (L/R) per row
+    tpl_pos = np.empty((rows, 2, 3), np.float32)
+    tpl_pos[:, 0] = np.stack([-w, t, np.zeros_like(t)], 1)
+    tpl_pos[:, 1] = np.stack([ w, t, np.zeros_like(t)], 1)
+    tpl_pos = tpl_pos.reshape(-1, 3)                            # (10,3)
+    tpl_hf  = np.repeat(t, 2)                                   # heightFrac = blade-local y
+    tpl_uv  = np.stack([np.tile([0.0, 1.0], rows), tpl_hf], 1).astype(np.float32)
+    c_bot = np.array([0.06, 0.13, 0.04], np.float32)
+    c_top = np.array([0.22, 0.40, 0.13], np.float32)
+    tpl_col = (c_bot + (c_top - c_bot) * tpl_hf[:, None]).astype(np.float32)
+    n0 = np.array([0.0, 0.85, 0.53], np.float32); n0 /= np.linalg.norm(n0)
+    tpl_nrm = np.tile(n0, (rows * 2, 1))
+
+    # expand 10 indexed verts → 24-vertex non-indexed soup (set_index isn't bound):
+    # two triangles per segment, winding matching makeGrassField()
+    soup = []
+    for s in range(seg):
+        a = s * 2
+        soup += [a, a + 1, a + 2, a + 1, a + 3, a + 2]
+    soup = np.array(soup, np.int64)                            # (24,)
+    sp, sh, su, sc, sn = (tpl_pos[soup], tpl_hf[soup], tpl_uv[soup],
+                          tpl_col[soup], tpl_nrm[soup])         # (24, …)
+    V = soup.shape[0]
+
+    # scatter blades in TUFTS (grass grows in clumps) over a disk, skipping a
+    # clearing around spawn. One terrain-height query per tuft (blades in a tuft
+    # are within a few cm, terrain is locally flat) keeps the build cheap.
+    TUFT, SPREAD = 6, 0.12        # blades per tuft, max in-tuft offset (m)
+    xs, ys, hs, yaws, sxs, hgts, tries = [], [], [], [], [], [], 0
+    while len(xs) < n_blades and tries < n_blades * 4:
+        tries += 1
+        ang = rng.uniform(0, 2 * math.pi); rr = math.sqrt(rng.uniform(0, 1)) * radius
+        cx, cy0 = math.cos(ang) * rr, math.sin(ang) * rr
+        if math.hypot(cx, cy0) < clear_r:
+            continue
+        hz = float(gen.height_at(cx, cy0, params))
+        for _ in range(TUFT):
+            xs.append(cx + rng.uniform(-SPREAD, SPREAD))
+            ys.append(cy0 + rng.uniform(-SPREAD, SPREAD))
+            hs.append(hz)
+            yaws.append(rng.uniform(0, 2 * math.pi))
+            sxs.append(0.7 + rng.uniform(0, 1) * 0.6)
+            hgts.append(0.10 + rng.uniform(0, 1) * 0.14)   # short meadow grass
+    n = len(xs)
+    wx  = np.array(xs, np.float32);  wy = np.array(ys, np.float32);  h = np.array(hs, np.float32)
+    yaw = np.array(yaws, np.float32); sx = np.array(sxs, np.float32); hg = np.array(hgts, np.float32)
+    cy, sy = np.cos(yaw)[:, None], np.sin(yaw)[:, None]
+
+    # per-blade: scale (sx,hg,sx) → R_y(yaw) → translate to merged-local (wx, h, -wy)
+    P  = sp[None] * np.stack([sx, hg, sx], 1)[:, None, :]       # (n,V,3)
+    px =  P[:, :, 0] * cy + P[:, :, 2] * sy + wx[:, None]
+    py =  P[:, :, 1] +                         h[:, None]
+    pz = -P[:, :, 0] * sy + P[:, :, 2] * cy + (-wy)[:, None]
+    pos = np.stack([px, py, pz], -1).reshape(-1, 3).astype(np.float32)
+
+    nx =  sn[None, :, 0] * cy + sn[None, :, 2] * sy
+    ny =  np.tile(sn[:, 1][None], (n, 1))
+    nz = -sn[None, :, 0] * sy + sn[None, :, 2] * cy
+    nrm = np.stack([nx, ny, nz], -1).reshape(-1, 3).astype(np.float32)
+    nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-6)
+
+    g = tp.BufferGeometry()
+    g.set_attribute("position",   np.ascontiguousarray(pos))
+    g.set_attribute("normal",     np.ascontiguousarray(nrm))
+    g.set_attribute("uv",         np.ascontiguousarray(np.tile(su, (n, 1))))
+    g.set_attribute("color",      np.ascontiguousarray(np.tile(sc, (n, 1))))
+    g.set_attribute("heightFrac", np.ascontiguousarray(np.tile(sh, n)[:, None]))
+    return g, n
 
 
 # ── policy observation (94-d: mirrors SpotStepsEnv) ───────────────────────────
@@ -353,6 +552,23 @@ def main():
 
     print("[trees] scattering ...")
     scatter_trees(scene, gen, tparams, seed=args.seed)
+    scatter_bushes(scene, gen, tparams, seed=args.seed)
+    scatter_stones(scene, gen, tparams, seed=args.seed)
+
+    print("[grass] building ...")
+    grass_geo, n_grass = build_grass_field(gen, tparams, GRASS_BLADES, GRASS_RADIUS,
+                                           args.seed, clear_r=1.0)
+    grass_mat = tp.MeshStandardMaterial()
+    grass_mat.vertex_colors = True
+    grass_mat.roughness     = 0.95
+    grass_mat.side          = tp.Side.Double
+    grass = tp.GrassMesh(grass_geo, grass_mat)
+    grass.rotation.x   = math.pi / 2      # Y-up blades → Z-up world (like the trees)
+    grass.wind_dir     = tp.Vector2(0.8, 0.6)
+    grass.wind_strength = 0.15
+    grass.frustum_culled = False
+    scene.add(grass)
+    print(f"[grass] {n_grass} blades")
 
     # ── camera (Z-up chase cam) ───────────────────────────────────────────────
     w, h = canvas.size()
@@ -554,11 +770,13 @@ def main():
                 for o in _extra: o.visible = True
             slam.insert(_scanner_pts(scanner))
 
+        grass.time = time.perf_counter() - t0  # advance GPU wind (Vulkan)
         rend.render(scene, camera)             # single render per frame — no flicker
         if ui:
             ui.render(draw_ui)
 
     print(__doc__)
+    t0 = time.perf_counter()
     canvas.animate(frame)
 
 
