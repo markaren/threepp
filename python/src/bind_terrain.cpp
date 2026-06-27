@@ -70,6 +70,8 @@ namespace threepp_py {
                 .def_readwrite("slope_grass_max",   &TerrainParams::slopeGrassMax)
                 .def_readwrite("slope_rock_min",    &TerrainParams::slopeRockMin)
                 .def_readwrite("band_edge",         &TerrainParams::bandEdge)
+                .def_readwrite("ao_strength",       &TerrainParams::aoStrength)
+                .def_readwrite("ao_max",            &TerrainParams::aoMax)
                 .def_property("rock_color",
                         [](const TerrainParams& p) { return std::vector<float>(p.rockColor.begin(),  p.rockColor.end()); },
                         [](TerrainParams& p, const std::vector<float>& c) { if (c.size() >= 3) p.rockColor  = {c[0],c[1],c[2]}; })
