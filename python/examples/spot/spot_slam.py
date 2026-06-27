@@ -8,7 +8,7 @@ to reconstruct the growing SLAM surface (semi-transparent blue) over the ground 
     python spot_slam.py --seed 7 --amplitude 0.20
     python spot_slam.py --shot out.png
 
-Controls: UP/DOWN/LEFT/RIGHT + N/M = drive  |  SPACE = toggle auto-forward  |  R = reset
+Controls: W/S = fwd/back  A/D = strafe  Q/E = turn  |  SPACE = toggle auto-forward  |  R = reset
 """
 import argparse, math, os, sys, threading, time
 import numpy as np
@@ -44,7 +44,7 @@ SENSOR_FAR = 8.0
 SCAN_EVERY = 3       # depth scan every N frames; result cached for policy (~17 Hz)
 MC_FRAMES  = 90      # trigger SLAM rebuild every N rendered frames
 GRASS_BLADES = 12000 # merged GrassMesh blade count (GPU-wind on Vulkan); tune for FPS
-GRASS_RADIUS = 22.0  # grass disk radius around spawn (fog hides >25 m anyway)
+GRASS_RADIUS = 32.0  # grass disk radius around spawn (fog hides >25 m anyway)
 HDR_URL = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/noon_grass_2k.hdr"
 
 
@@ -808,7 +808,7 @@ def main():
         if tp.imgui.button("reset (R)"):
             reset()
         tp.imgui.separator()
-        tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   UP/DN/LT/RT + N/M")
+        tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   WASD + QE")
         tp.imgui.end()
 
     def frame():
@@ -821,10 +821,10 @@ def main():
         else:
             space_held[0] = False
 
-        # keyboard command
-        vx = (1.5 if down("UP", "KP8") else 0.0) - (1.0 if down("DOWN", "KP2") else 0.0)
-        vy = (1.0 if down("LEFT", "KP4") else 0.0) - (1.0 if down("RIGHT", "KP6") else 0.0)
-        wz_key = (1.5 if down("N", "KP7") else 0.0) - (1.5 if down("M", "KP9") else 0.0)
+        # keyboard command — WASD drive, QE turn (numpad kept as an alternate)
+        vx = (1.5 if down("W", "KP8") else 0.0) - (1.0 if down("S", "KP2") else 0.0)
+        vy = (1.0 if down("A", "KP4") else 0.0) - (1.0 if down("D", "KP6") else 0.0)
+        wz_key = (1.5 if down("Q", "KP7") else 0.0) - (1.5 if down("E", "KP9") else 0.0)
         if auto_fwd[0] and vx == 0.0 and vy == 0.0 and wz_key == 0.0:
             vx = 1.0
 
