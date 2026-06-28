@@ -714,15 +714,8 @@ int main(int argc, char** argv) {
     renderer->toneMappingExposure = 1.0f;
 
     if (auto pt = dynamic_cast<VulkanRenderer*>(renderer.get())) {
-        // pt->setSamplesPerPixel(2);// path trace a few samples per frame to converge over time
-        // The hybrid PT anti-aliases via TAA on the raster G-buffer, which the
-        // shooter's constant motion keeps rejecting → jaggy edges while moving.
-        // Silhouette MSAA fires extra primary rays at detected edge pixels every
-        // frame (motion-independent), so crank it from the 8x default to 16x for
-        // clean edges; edge pixels are only ~10% of the frame so the cost is local.
-        // pt->setSilhouetteMsaaExtra(8);// (N+1)x = 16x MSAA at silhouette pixels
-        // pt->setBloomIntensity(1);
-        // pt->setSharpenStrength(0.5f);
+
+
     }
 
     // Pointer-lock mouse-look: cursor hidden + grabbed while playing (raw,
