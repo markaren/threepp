@@ -59,6 +59,23 @@ namespace threepp {
         // space, pixel-crisp at any resolution/FOV. 0 disables; ~1.0 = night sky.
         void setDeferredStarfield(float intensity);
 
+        // ── Automatic exposure (eye adaptation) ──────────────────────────────
+        // When enabled the renderer samples the log2-luma histogram of the
+        // rendered frame each tick and drives toneMappingExposure toward the
+        // value that maps the scene's weighted-average luminance to 18% gray,
+        // using an asymmetric EMA (fast constriction, slow dilation).
+        // toneMappingExposure is IGNORED while auto-exposure is active.
+        void setAutoExposure(bool enabled);
+        [[nodiscard]] bool autoExposure() const;
+
+        // EV per second for brightness adaptation (default 2.0).
+        // Dilation (scene-darkens) is applied at 0.5× this speed.
+        void setAutoExposureSpeed(float evPerSecond);
+
+        // Exposure clamp in EV relative to 1.0 (default -3 to +3 EV).
+        // E.g. setAutoExposureRange(-2, 4) limits to 0.25× .. 16× exposure.
+        void setAutoExposureRange(float minEV, float maxEV);
+
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;

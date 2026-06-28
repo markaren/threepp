@@ -1760,6 +1760,7 @@ class VectorKeyframeTrack(KeyframeTrack):
 class VulkanRenderer:
     denoise: bool  # Toggle the deferred denoiser (SVGF + temporal). Default on. Off uses the deterministic 64-ray AO.
     deferred_ao: bool  # Toggle ray-traced ambient occlusion / diffuse GI. Default on.
+    auto_exposure: bool  # Eye adaptation via log-luma histogram. Off by default; ignores tone_mapping_exposure when on.
     def __init__(self, canvas: Canvas, flush_frames: int = 3) -> None:
         """
         Deferred (RasterFirst) Vulkan renderer. Pass a headless Canvas created with vsync=False.

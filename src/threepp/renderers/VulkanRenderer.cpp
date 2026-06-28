@@ -37,6 +37,7 @@
 #include "vulkan/OverlayPass.hpp"
 #include "vulkan/VulkanFrameTypes.hpp"
 #include "vulkan/TaaResolve.hpp"
+#include "vulkan/AutoExposure.hpp"
 #include "vulkan/BloomPass.hpp"
 #include "vulkan/DeferredShade.hpp"
 #include "vulkan/WaterDisplacePipeline.hpp"
@@ -221,6 +222,10 @@ namespace threepp {
         // resets the accumulator (tone mapping is display-only).
         ToneMapping toneMapping_ = ToneMapping::None;
         float       toneMappingExposure_ = 1.f;
+
+        // Wall-clock time of the last beginFrameForPT() call, used to compute
+        // dt for the onBeginFrameForPT() hook (auto-exposure, etc.).
+        double lastFrameTime_ = 0.0;
 
         std::unique_ptr<VulkanContext> ctx;
 
@@ -1925,6 +1930,7 @@ namespace threepp {
             // target); the bloom ping-pong buffers are half that.
             bloom_ = std::make_unique<vulkan::BloomPass>(*ctx, cmdPool, kFramesInFlight);
             bloom_->createImages(renderExtent().width, renderExtent().height);
+            onAfterBloomCreateImages();
             // Raster-first deferred lighting pass. Writes bloom_->sceneHdr, so
             // it must exist after bloom_; its descriptors reference the camera /
             // lights UBOs, the env image, the raster gbuffer and sceneHdr — all
@@ -13040,6 +13046,7 @@ namespace threepp {
                                    outExt.width, outExt.height);
             }
             bloom_->createImages(renderExtent().width, renderExtent().height);
+            onAfterBloomCreateImages();
             vkDestroyDescriptorPool(ctx->device(), descriptorPool, nullptr);
             descriptorPool = VK_NULL_HANDLE;
             descriptorSets.clear();
@@ -13100,6 +13107,22 @@ namespace threepp {
         // into the raster G-buffer. Deferred renders decals; the PT leaf skips
         // them (the megakernel doesn't consume the G-buffer decal attachment).
         virtual bool decalsEnabled() const = 0;
+
+        // Called once after bloom_->createImages() (initial creation and resize).
+        // Implementations that hold references to sceneHdr views (e.g. auto-exposure)
+        // override to rewire their descriptor sets.
+        virtual void onAfterBloomCreateImages() {}
+
+        // Called from beginFrameForPT() after the per-frame fence wait and all
+        // CPU-side setup, immediately before recordCommandBuffer(). Implementations
+        // can do per-frame CPU readbacks here (histograms, timings) since the prior
+        // GPU slot for this frame index is guaranteed retired.
+        // dt = seconds since the last call to this function (0 on first call).
+        virtual void onBeginFrameForPT(uint32_t /*frame*/, float /*dt*/) {}
+
+        // Exposure value used for this frame's composite push constant.
+        // Overridden by VulkanRenderer::Impl when auto-exposure is active.
+        [[nodiscard]] virtual float currentExposure() const { return toneMappingExposure_; }
 
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
 
@@ -13807,7 +13830,7 @@ namespace threepp {
             // Path-trace / deferred render extent — equals `ext` unless
             // renderScale_ < 1, in which case TAA upsamples to the swapchain.
             const VkExtent2D ptExt = renderExtent();
-            const float exposure   = toneMappingExposure_;
+            const float exposure   = currentExposure();
             uint32_t exposureBits;
             std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
 
@@ -14931,6 +14954,15 @@ namespace threepp {
             }
 
             vkResetFences(d, 1, &inFlight[currentFrame]);
+            // Per-frame hook: CPU readbacks (e.g. auto-exposure histogram) that are
+            // safe only after the current slot's prior GPU work is retired (fence above).
+            {
+                const double now = glfwGetTime();
+                const float  dt  = (lastFrameTime_ > 0.0)
+                                   ? static_cast<float>(now - lastFrameTime_) : 0.016f;
+                lastFrameTime_ = now;
+                onBeginFrameForPT(currentFrame, dt);
+            }
             vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
             beginCommandRecording(cmdBuffers[currentFrame]);
             // Record the full PT body into the now-open cmd buffer. Leaves
@@ -15213,6 +15245,45 @@ namespace threepp {
     struct VulkanRenderer::Impl : VulkanRendererCore::CoreImpl {
         using CoreImpl::CoreImpl;
 
+        // ── Auto-exposure state ───────────────────────────────────────────────
+        std::unique_ptr<vulkan::AutoExposure> autoExposure_;
+        bool   autoExposureEnabled_ = false;
+        float  autoExpSpeed_        = 2.0f;
+        float  autoExpMinEV_        = -3.0f;
+        float  autoExpMaxEV_        =  3.0f;
+
+        // Called once after bloom_->createImages(); wires sceneHdr views.
+        void onAfterBloomCreateImages() override {
+            if (!autoExposure_) return;
+            VkImageView views[kFramesInFlight];
+            for (uint32_t f = 0; f < kFramesInFlight; ++f)
+                views[f] = bloom_->sceneHdrView(f);
+            autoExposure_->rewriteDescriptors(views);
+        }
+
+        // CPU per-frame tick: lazy-init, then read histogram + advance EMA.
+        void onBeginFrameForPT(uint32_t frame, float dt) override {
+            if (!autoExposureEnabled_) return;
+            if (!autoExposure_) {
+                autoExposure_ = std::make_unique<vulkan::AutoExposure>(*ctx, kFramesInFlight);
+                autoExposure_->adaptSpeed = autoExpSpeed_;
+                autoExposure_->minEV      = autoExpMinEV_;
+                autoExposure_->maxEV      = autoExpMaxEV_;
+                VkImageView views[kFramesInFlight];
+                for (uint32_t f = 0; f < kFramesInFlight; ++f)
+                    views[f] = bloom_->sceneHdrView(f);
+                autoExposure_->rewriteDescriptors(views);
+            }
+            autoExposure_->tick(frame, dt);
+        }
+
+        // Return adapted exposure when auto-exposure is active.
+        [[nodiscard]] float currentExposure() const override {
+            if (autoExposureEnabled_ && autoExposure_)
+                return autoExposure_->exposure();
+            return toneMappingExposure_;
+        }
+
         bool decalsEnabled() const override { return true; }
 
         void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
@@ -15287,6 +15358,26 @@ namespace threepp {
                 gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
                 deferredShade_->recordDenoiseDispatch(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height);
                 gpuTimings_->end(cb, TP_Denoise, currentFrame);
+            }
+            // Auto-exposure: histogram over the final sceneHdr. sceneHdr writes
+            // (deferred shade + optional denoise) are already visible via the
+            // barriers above; bloom's leading barrier will also make them visible,
+            // so this fits naturally in the gap. recordDispatch() inserts its own
+            // fill→compute barrier to zero the SSBO before sampling.
+            if (autoExposureEnabled_ && autoExposure_) {
+                VkMemoryBarrier2 lumBar{};
+                lumBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                lumBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                lumBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                lumBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                lumBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                VkDependencyInfo lumDep{};
+                lumDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                lumDep.memoryBarrierCount = 1;
+                lumDep.pMemoryBarriers    = &lumBar;
+                vkCmdPipelineBarrier2(cb, &lumDep);
+                autoExposure_->recordDispatch(cb, currentFrame,
+                                             regionRenderExt_.width, regionRenderExt_.height);
             }
         }
     };
@@ -15891,6 +15982,28 @@ namespace threepp {
 
     void VulkanRenderer::setDeferredStarfield(float intensity) {
         pimpl_->deferredStarIntensity_ = std::max(intensity, 0.f);
+    }
+
+    void VulkanRenderer::setAutoExposure(bool enabled) {
+        pimpl_->autoExposureEnabled_ = enabled;
+    }
+
+    bool VulkanRenderer::autoExposure() const {
+        return pimpl_->autoExposureEnabled_;
+    }
+
+    void VulkanRenderer::setAutoExposureSpeed(float evPerSecond) {
+        pimpl_->autoExpSpeed_ = std::max(evPerSecond, 0.01f);
+        if (pimpl_->autoExposure_) pimpl_->autoExposure_->adaptSpeed = pimpl_->autoExpSpeed_;
+    }
+
+    void VulkanRenderer::setAutoExposureRange(float minEV, float maxEV) {
+        pimpl_->autoExpMinEV_ = minEV;
+        pimpl_->autoExpMaxEV_ = maxEV;
+        if (pimpl_->autoExposure_) {
+            pimpl_->autoExposure_->minEV = minEV;
+            pimpl_->autoExposure_->maxEV = maxEV;
+        }
     }
 
     void VulkanRendererCore::disableSoftBodyInterop(const Mesh& mesh) {

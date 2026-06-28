@@ -310,7 +310,26 @@ namespace threepp_py {
                 // is active. This gives an outdoor scene true volume vs flat distance haze.
                 .def_property("volumetric_fog",
                               [](PyVulkanRenderer& r) { return r.native().volumetricFog(); },
-                              [](PyVulkanRenderer& r, bool v) { r.native().setVolumetricFog(v); });
+                              [](PyVulkanRenderer& r, bool v) { r.native().setVolumetricFog(v); })
+                // Automatic exposure (eye adaptation). When enabled the renderer
+                // samples the scene's log-luma histogram each frame and adapts
+                // toneMappingExposure automatically. toneMappingExposure is ignored
+                // while auto_exposure is True.
+                .def_property("auto_exposure",
+                              [](PyVulkanRenderer& r) { return r.native().autoExposure(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setAutoExposure(v); },
+                              "Toggle automatic exposure / eye adaptation (default off). "
+                              "Drives tone-mapping exposure toward 18% gray for the scene's "
+                              "weighted-average luminance. tone_mapping_exposure is ignored "
+                              "while this is True.")
+                .def("set_auto_exposure_speed",
+                     [](PyVulkanRenderer& r, float s) { r.native().setAutoExposureSpeed(s); },
+                     py::arg("ev_per_second"),
+                     "Adaptation speed in EV/s (default 2.0). Darkening is applied at 0.5× speed.")
+                .def("set_auto_exposure_range",
+                     [](PyVulkanRenderer& r, float lo, float hi) { r.native().setAutoExposureRange(lo, hi); },
+                     py::arg("min_ev"), py::arg("max_ev"),
+                     "EV clamp for auto-exposure relative to linear 1.0 (default -3 to +3).");
 
         m.attr("HAS_VULKAN") = true;
     }

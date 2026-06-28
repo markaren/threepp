@@ -1,0 +1,35 @@
+#version 460
+// Log2-luma histogram for automatic exposure adaptation.
+// 128 uint bins cover log2(L) in [-8, +8] (i.e. EV -8..+8 relative to linear 1.0).
+// The CPU reads this histogram the following frame (1-frame pipeline lag, safe via
+// framesInFlight fencing), computes a weighted-percentile EV and applies an EMA to
+// derive toneMappingExposure. Binding 1 is zeroed by vkCmdFillBuffer before dispatch.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sceneHdr;
+layout(set = 0, binding = 1) buffer HistBuf { uint bins[128]; };
+
+layout(push_constant) uniform Pc { uint width, height; } pc;
+
+shared uint localBins[128];
+
+void main() {
+    const uint li = gl_LocalInvocationIndex;
+    if (li < 128u) localBins[li] = 0u;
+    barrier();
+    memoryBarrierShared();
+
+    const ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    if (coord.x < int(pc.width) && coord.y < int(pc.height)) {
+        vec3 c = texelFetch(sceneHdr, coord, 0).rgb;
+        float L = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
+        // Map log2(L) in [-8, +8] -> [0, 1] -> bin [0, 127].
+        float t = clamp((log2(L) + 8.0) * (1.0 / 16.0), 0.0, 1.0);
+        atomicAdd(localBins[uint(t * 127.0)], 1u);
+    }
+    barrier();
+    memoryBarrierShared();
+
+    if (li < 128u && localBins[li] > 0u)
+        atomicAdd(bins[li], localBins[li]);
+}

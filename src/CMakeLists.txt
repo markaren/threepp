@@ -612,6 +612,7 @@ if (THREEPP_WITH_VULKAN)
     list(APPEND privateHeaders
             "threepp/renderers/vulkan/VulkanContext.hpp"
             "threepp/renderers/vulkan/VulkanResources.hpp"
+            "threepp/renderers/vulkan/AutoExposure.hpp"
             "threepp/renderers/vulkan/LidarScanner.hpp"
             "threepp/renderers/vulkan/PhotonCaustics.hpp"
             "threepp/renderers/vulkan/Denoiser.hpp"
@@ -644,6 +645,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/GpuTimings.cpp"
             "threepp/renderers/vulkan/OverlayPass.cpp"
             "threepp/renderers/vulkan/TaaResolve.cpp"
+            "threepp/renderers/vulkan/AutoExposure.cpp"
             "threepp/renderers/vulkan/BloomPass.cpp"
             "threepp/renderers/vulkan/DeferredShade.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
@@ -987,6 +989,11 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/composite.comp"
         kCompositeCompSpv
         _composite_spv_h)
+    # Auto-exposure: log2-luma histogram over sceneHdr. See AutoExposure.{hpp,cpp}.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lum_histogram.comp"
+        kLumHistogramCompSpv
+        _lum_histogram_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
         kDeferredShadeCompSpv
