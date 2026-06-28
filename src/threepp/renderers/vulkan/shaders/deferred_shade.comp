@@ -111,6 +111,11 @@ layout(set = 0, binding = 14) uniform sampler2D oceanFoamWorld;
 // chain (no shimmer under TAA) and 2 fetches replace ~20 hash evaluations.
 // Mirrors RT binding 45.
 layout(set = 0, binding = 34) uniform sampler2D foamDetailTex;
+// 64×64 R8 void-and-cluster blue-noise tile (the SAME tile the PT path binds at
+// its set's binding 27). Used to dither the stochastic GI hemisphere directions
+// so the 1-spp residual is high-frequency (à-trous-removable) instead of the
+// low-frequency clumps white noise leaves behind — the AO speckle.
+layout(set = 0, binding = 35) uniform sampler2D blueNoiseTex;
 layout(set = 0, binding = 15) uniform sampler2D gbufUvTex;     // .rg = primary surface UV (emissive-map sample)
 // Demodulated diffuse-indirect irradiance (gatherEnv AO/GI, PRE-albedo). Written
 // here, spatially denoised + recombined by deferred_denoise.comp. vec4(0) where
@@ -1115,6 +1120,27 @@ float gReflEmitterScale = 1.0;
 //    temporally accumulated (TAA) by the caller.
 //  • DENOISER OFF → the deterministic Fibonacci AO + gated "far≈sky" approximation
 //    (noise-free WITHOUT a denoiser; the clean fallback for non-denoised scenes).
+// Blue-noise tile lookup — mirrors raygen.rgen's helper exactly (same step
+// rates, same 64-wrap), so the deferred GI dithers off the same void-and-cluster
+// tile the PT uses. Two `salt` values step the lookup along different irrational
+// rates → decorrelated x/y samples.
+float blueNoiseDef(uvec2 px, uint frame, uint salt) {
+    const ivec2 step = ivec2(47, 17) * int(salt + 1u);
+    const ivec2 cell = ivec2(px) + step * int(frame);
+    const vec2  uv   = (vec2(cell & 63) + 0.5) / 64.0;
+    return texture(blueNoiseTex, uv).r;
+}
+// Van der Corput radical inverse (base 2) — the second dimension of the
+// per-pixel Hammersley point set.
+float radicalInverse2(uint bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;// × 1/2^32
+}
+
 vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stochastic, int nGI, out float openness) {
     const float maxLod  = float(max(pc.envMipCount, 1u) - 1u);
     const vec3 up = abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
@@ -1128,10 +1154,21 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
         uint seed = uint(px.x) * 1973u + uint(px.y) * 9277u + frame * 26699u + 0x9e3779b9u;
         const int N_GI = nGI;// adaptive: fresh/disoccluded pixels get more rays so they
                              // converge with SAMPLES (crisp) instead of a wide blur (cloud)
+        // BLUE-NOISE DITHERED cosine hemisphere sampling (Heitz & Belcour 2019).
+        // The hemisphere (u1,u2) is a per-sample Hammersley base (stratified WITHIN
+        // the pixel → clean integration) rotated by a per-pixel/per-frame blue-noise
+        // offset (Cranley-Patterson). The result is decorrelated ACROSS neighbouring
+        // pixels in a BLUE-NOISE pattern, so the SVGF à-trous averages the 1-spp
+        // residual cleanly. Plain white noise (the old rnd(seed)×2) leaves
+        // low-frequency clumps the edge-stopping filter can't separate from signal —
+        // the AO "speckle". The offset animates with `frame`, so the temporal
+        // accumulator still integrates fresh directions every frame.
+        const vec2 bnOff = vec2(blueNoiseDef(uvec2(px), frame, 0u),
+                                blueNoiseDef(uvec2(px), frame, 1u));
         vec3 acc = vec3(0.0);
         for (int s = 0; s < N_GI; ++s) {
-            const float u1 = rnd(seed);
-            const float u2 = rnd(seed);
+            const float u1 = fract((float(s) + 0.5) / float(N_GI) + bnOff.x);
+            const float u2 = fract(radicalInverse2(uint(s))         + bnOff.y);
             const float r   = sqrt(u1);
             const float phi = TWO_PI * u2;
             const vec3  hemi = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));

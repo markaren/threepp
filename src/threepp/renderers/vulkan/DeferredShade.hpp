@@ -80,6 +80,11 @@ namespace threepp::vulkan {
             // renderer startup, mipped, SHADER_READ_ONLY. Mirrors RT binding 45.
             VkImageView        foamDetailView    = VK_NULL_HANDLE;
             VkSampler          foamDetailSampler = VK_NULL_HANDLE;
+            // 64×64 R8 void-and-cluster blue-noise tile (the renderer's shared
+            // blueNoiseImage, also bound by the PT path) — dithers the stochastic
+            // GI hemisphere directions. Sampled through gbufSampler_ (NEAREST is
+            // correct: the shader computes exact texel-center UVs).
+            VkImageView        blueNoise = VK_NULL_HANDLE;
         };
         void rewriteDescriptors(const DescriptorWriteInputs& in);
 

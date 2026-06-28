@@ -10618,6 +10618,10 @@ namespace threepp {
             in.oceanFoamSampler = oceanFoamSampler;
             in.foamDetailView    = foamDetailImage.view;
             in.foamDetailSampler = foamDetailImage.sampler;
+            // Shared blue-noise tile (also bound by the PT path) — dithers the
+            // deferred GI hemisphere directions so the 1-spp residual denoises
+            // cleanly instead of showing as AO speckle.
+            in.blueNoise         = blueNoiseImage.view;
             // ReSTIR DI reservoir ping-pong — the same 2 physical images the PT path
             // uses (created unconditionally in createAccumImage). rewriteDescriptors
             // picks write/read slots per frame. Locals must outlive the call below.
