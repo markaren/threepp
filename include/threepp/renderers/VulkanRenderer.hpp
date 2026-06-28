@@ -33,9 +33,10 @@ namespace threepp {
 
         // ── Deferred shading knobs ────────────────────────────────────────────
 
-        // Ray-traced env ambient-occlusion / GI. OFF by default — occlusion-testing
-        // the IBL makes the HDRI appear to cast shadows. On = soft RT AO/GI (costs
-        // occlusion rays; pair with setDenoise for noise).
+        // Ray-traced env ambient-occlusion / GI. ON by default — soft RT AO/GI
+        // (costs occlusion rays; paired with setDenoise, also on by default, to keep
+        // the 1-spp gather noise-free). Turn OFF to drop the per-pixel ray cost, or
+        // if occlusion-testing the IBL makes a bright HDRI look like it casts shadows.
         void setDeferredAO(bool enabled);
         [[nodiscard]] bool deferredAO() const;
 
