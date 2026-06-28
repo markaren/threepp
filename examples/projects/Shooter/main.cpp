@@ -79,609 +79,12 @@ namespace glfwc {
 
 namespace {
 
-    // ---- tuning constants --------------------------------------------------
-    constexpr float kArena = 28.f;// half-extent of the play area
-    constexpr float kPlayerRadius = 0.35f;
-    constexpr float kPlayerLen = 1.1f;                              // capsule cylinder segment
-    constexpr float kPlayerHalf = kPlayerLen * 0.5f + kPlayerRadius;// centre->foot
-    constexpr float kWalkSpeed = 2.1f;
-    constexpr float kRunSpeed = 6.4f;
-    constexpr float kJumpSpeed = 5.2f;
-    constexpr float kMouseSens = 0.0026f;
-    constexpr float kFireInterval = 0.11f;
-    constexpr float kReloadTime = 1.25f;
-    constexpr int kMagSize = 12;
-    constexpr int kMaxDecals = 48;// bullet-impact decals before the oldest recycles
-    constexpr float kEnemySpeed = 2.3f;
-    constexpr int kEnemyHp = 3;
-    constexpr int kMaxEnemies = 6;
-    constexpr float kEnemyAttackRange = 1.7f;
-
-    // ---- grenade -----------------------------------------------------------
-    constexpr float kThrowTime = 1.1f;   // throw animation + cooldown
-    constexpr float kThrowRelease = 0.75f;// seconds into the throw when it leaves the hand
-    constexpr float kGrenadeSpeed = 13.f;// launch speed (m/s) along aim
-    constexpr float kGrenadeFuse = 1.4f; // seconds to detonation
-    constexpr float kBlastRadius = 4.5f; // explosion kill/knockback radius
-
-    // ---- camera (over-the-shoulder third person + right-click ADS zoom) ----
-    constexpr float kCamShoulder = 0.7f;    // hip over-the-shoulder offset (screen-right, m)
-    constexpr float kCamShoulderAds = 0.5f; // tighter shoulder while aiming
-    constexpr float kCamDistAds = 2.6f;     // camera pull-in distance while aiming
-    constexpr float kFovHip = 70.f;         // base vertical FOV (matches the camera ctor)
-    constexpr float kFovAds = 50.f;         // zoomed FOV while aiming
-    constexpr float kZoomSpeed = 12.f;      // ADS ease-in/out rate (per second)
-    constexpr float kInspectSpeed = 8.f;    // middle-mouse face-the-player swing rate
-    // Camera-wall collision: keep the boom from clipping through level geometry.
-    constexpr float kCamMinDist = 0.6f;     // closest the camera may pull toward the player
-    constexpr float kCamSkin = 0.25f;       // stop short of the wall so the near plane clears it
-    constexpr float kCamReturnSpeed = 6.f;  // ease-out rate once the obstruction passes
-    // Upper-body aim tilt: the spine is pitched by (aim pitch × gain) so the held
-    // rifle tracks the target vertically while both hands stay on it. 1.0 = gun
-    // matches the aim; lower = less lean. Flip the sign if the torso bends the
-    // wrong way (depends on the imported bone axes).
-    constexpr float kSpinePitchGain = 1.0f;
-
-    // ---- recoil ------------------------------------------------------------
-    constexpr float kRecoilPerShot = 0.015f;// rad of upward aim kick per shot
-    constexpr float kRecoilMax = 0.13f;     // cap on accumulated kick (~7.5 deg)
-    constexpr float kRecoilYawKick = 0.009f;// rad of random horizontal kick per shot
-    constexpr float kRecoilRecover = 9.f;   // recovery rate toward zero (per second)
-
-    // ---- enemy navigation (flow-field grid; built after the props are placed)
-    constexpr float kNavCell = 1.0f;    // grid cell size (m)
-    constexpr float kSeparation = 1.4f; // bots ease apart within this distance (m)
-
-    // ---- death ragdoll -----------------------------------------------------
-    constexpr float kRagdollTtl = 30.0f;// seconds a corpse ragdoll lingers before removal
-
-    // ---- SWAT player tuning (assets/swat.glb, built by scripts/mixamo_to_glb.py)
-    // The player is the Mixamo "Ch15" SWAT model with a full rifle-handling clip
-    // set (aim / fire / reload / strafe / run / jump / hit). The model faces +Z,
-    // so we spin the rig to camera-forward; flip by ±PI if it ends up back-to-front.
-    constexpr float kModelYaw = 0.f;
-    constexpr float kCharHeight = 1.7f;// target skeleton span (≈ standing height, metres)
-
-    // ---- palette -----------------------------------------------------------
-    constexpr int kHudCyan = 0x35c2ff;
-    constexpr int kHudGood = 0x47e07a;
-    constexpr int kHudWarn = 0xff4d4d;
-    constexpr int kPanel = 0x0e1b2a;
-    constexpr int kPanelEdge = 0x1d3b57;
-
-    // ---- HUD scale -----------------------------------------------------------
-    // Every HUD dimension here is a design unit: a logical pixel at 100% (96
-    // dpi). GLFW window coordinates are physical pixels on Windows/X11, so the
-    // overlay must scale by the monitor content scale or it draws half-size on
-    // a 200% display while text (formerly the only thing scaled) stays large —
-    // hence overlapping widgets. The whole overlay lives in two coordinate
-    // systems: SVG meshes render through `uiCam` (group transforms apply), so a
-    // widget GROUP is scaled by uiScale and its baked geometry + child offsets
-    // ride along; screen-space sprites (TextSprite, hit targets) bypass the
-    // scene graph — the renderer composes their matrix from screenAnchor +
-    // position — so makeText and the explicit sprite scales below carry uiScale
-    // themselves. On macOS window coords are already logical points (the
-    // renderer compensates via pixelRatio), so this stays 1.
-    float uiScale = 1.f;
-
-    std::mt19937 rng{1337};
-    float frand(float a, float b) {
-        return a + (b - a) * std::uniform_real_distribution<float>(0.f, 1.f)(rng);
-    }
-
-    // ========================================================================
-    //  Procedural placeholder sound effects
-    // ========================================================================
-
-    std::vector<float> synthShot(int sr = 44100) {
-        const int n = sr * 18 / 100;// 0.18s
-        std::vector<float> s(n);
-        for (int i = 0; i < n; ++i) {
-            const float t = static_cast<float>(i) / sr;
-            const float env = std::exp(-t * 22.f);
-            const float noise = frand(-1.f, 1.f);
-            const float thump = std::sin(2.f * math::PI * 70.f * t) * std::exp(-t * 12.f);
-            s[i] = std::clamp((noise * 0.8f + thump * 0.6f) * env, -1.f, 1.f);
-        }
-        return s;
-    }
-
-    std::vector<float> synthClick(int sr = 44100) {
-        const int n = sr * 3 / 100;
-        std::vector<float> s(n);
-        for (int i = 0; i < n; ++i) {
-            const float t = static_cast<float>(i) / sr;
-            s[i] = frand(-1.f, 1.f) * std::exp(-t * 120.f) * 0.5f;
-        }
-        return s;
-    }
-
-    std::vector<float> synthReload(int sr = 44100) {
-        const int n = sr * 35 / 100;
-        std::vector<float> s(n, 0.f);
-        auto clickAt = [&](float at, float amp) {
-            const int start = static_cast<int>(at * sr);
-            for (int i = 0; i < sr * 3 / 100 && start + i < n; ++i) {
-                const float t = static_cast<float>(i) / sr;
-                s[start + i] += frand(-1.f, 1.f) * std::exp(-t * 90.f) * amp;
-            }
-        };
-        clickAt(0.f, 0.5f);
-        clickAt(0.16f, 0.4f);
-        clickAt(0.30f, 0.6f);
-        return s;
-    }
-
-    // ---- DSP helpers for the impact/step synths ----------------------------
-    // One-pole low-pass; band-limited noise = lp(high cut) - lp(low cut).
-    // Raw frand() noise reads as static hiss — every "physical" sound below
-    // band-shapes it first.
-    struct OnePole {
-        float y = 0.f;
-        float operator()(float x, float a) {
-            y += a * (x - y);
-            return y;
-        }
-    };
-    float lpAlpha(float cutoffHz, int sr) {
-        return 1.f - std::exp(-2.f * math::PI * cutoffHz / static_cast<float>(sr));
-    }
-    // Scale to a known peak so layering tweaks can't silently clip or vanish.
-    std::vector<float> normalized(std::vector<float> s, float peak) {
-        float m = 0.f;
-        for (float x : s) m = std::max(m, std::abs(x));
-        if (m > 1e-6f)
-            for (float& x : s) x *= peak / m;
-        return s;
-    }
-
-    // Bullet-into-body thwack: band-passed noise crack + a pitch-dropping body
-    // thump + a duller low "wet" layer. Seeded so the bank renders a few
-    // distinct variants (the old sound was a single 1.4 kHz sine ping — pure
-    // arcade beep). Doubles as the hit-marker audio cue, which is why the
-    // crack keeps some mid-band brightness.
-    std::vector<float> synthHit(uint32_t seed, int sr = 44100) {
-        std::mt19937 r(seed);
-        auto rf = [&](float a, float b) { return a + (b - a) * std::uniform_real_distribution<float>(0.f, 1.f)(r); };
-        auto rn = [&] { return std::uniform_real_distribution<float>(-1.f, 1.f)(r); };
-        const int n = sr * 9 / 100;
-        std::vector<float> s(n);
-        const float f0 = rf(190.f, 240.f);
-        OnePole lpHi, lpLo, lpWet;
-        const float aHi = lpAlpha(rf(2600.f, 3400.f), sr);
-        const float aLo = lpAlpha(800.f, sr);
-        const float aWet = lpAlpha(550.f, sr);
-        float phase = 0.f;
-        for (int i = 0; i < n; ++i) {
-            const float t = static_cast<float>(i) / sr;
-            const float f = 80.f + f0 * std::exp(-t * 35.f);
-            phase += 2.f * math::PI * f / sr;
-            const float w = rn();
-            const float thump = std::sin(phase) * std::exp(-t * 38.f) * 0.8f;
-            const float crack = (lpHi(w, aHi) - lpLo(w, aLo)) * std::exp(-t * 70.f) * 1.6f;
-            const float wet = lpWet(w, aWet) * std::exp(-t * 22.f) * 0.9f;
-            s[i] = thump + crack + wet;
-        }
-        return normalized(std::move(s), 0.75f);
-    }
-
-    // Kill confirm: a deeper double knock (second hit ~70 ms behind the first)
-    // with a low noise tail, so a lethal hit reads instantly different from a
-    // normal one.
-    std::vector<float> synthKill(uint32_t seed, int sr = 44100) {
-        std::mt19937 r(seed);
-        auto rf = [&](float a, float b) { return a + (b - a) * std::uniform_real_distribution<float>(0.f, 1.f)(r); };
-        auto rn = [&] { return std::uniform_real_distribution<float>(-1.f, 1.f)(r); };
-        const int n = sr * 30 / 100;
-        std::vector<float> s(n, 0.f);
-        auto knock = [&](float at, float f0, float amp) {
-            const int start = static_cast<int>(at * sr);
-            float phase = 0.f;
-            for (int i = 0; start + i < n; ++i) {
-                const float t = static_cast<float>(i) / sr;
-                const float f = f0 * (0.45f + 0.55f * std::exp(-t * 28.f));
-                phase += 2.f * math::PI * f / sr;
-                s[start + i] += std::sin(phase) * std::exp(-t * 22.f) * amp;
-            }
-        };
-        knock(0.f, rf(120.f, 145.f), 1.f);
-        knock(rf(0.06f, 0.08f), rf(90.f, 110.f), 0.65f);
-        OnePole lp;
-        const float aLp = lpAlpha(420.f, sr);
-        for (int i = 0; i < n; ++i) {
-            const float t = static_cast<float>(i) / sr;
-            s[i] += lp(rn(), aLp) * std::exp(-t * 14.f) * 0.7f;
-        }
-        return normalized(std::move(s), 0.8f);
-    }
-
-    std::vector<float> synthThud(int sr = 44100) {
-        const int n = sr * 14 / 100;
-        std::vector<float> s(n);
-        for (int i = 0; i < n; ++i) {
-            const float t = static_cast<float>(i) / sr;
-            const float tone = std::sin(2.f * math::PI * 180.f * t);
-            s[i] = (tone * 0.6f + frand(-1.f, 1.f) * 0.4f) * std::exp(-t * 24.f);
-        }
-        return s;
-    }
-
-    std::vector<float> synthBoom(int sr = 44100) {
-        const int n = sr * 90 / 100;// 0.9s
-        std::vector<float> s(n);
-        for (int i = 0; i < n; ++i) {
-            const float t = static_cast<float>(i) / sr;
-            const float env = std::exp(-t * 5.f);
-            const float sub = std::sin(2.f * math::PI * (90.f - 50.f * t) * t);// downward sweep
-            const float crack = frand(-1.f, 1.f) * std::exp(-t * 18.f);        // initial crack
-            const float rumble = frand(-1.f, 1.f) * env;
-            s[i] = std::clamp((sub * 0.7f + crack * 0.6f + rumble * 0.4f) * env, -1.f, 1.f);
-        }
-        return s;
-    }
-
-    // Player-hit cue: a body thump under a falling tone (phase-accumulated so
-    // the sweep is clean) with a slight vibrato and a breathy band-passed
-    // layer — less "game-over beep" than the old bare descending sine.
-    std::vector<float> synthHurt(int sr = 44100) {
-        const int n = sr * 30 / 100;
-        std::vector<float> s(n);
-        OnePole lpHi, lpLo;
-        const float aHi = lpAlpha(1400.f, sr);
-        const float aLo = lpAlpha(500.f, sr);
-        float phase = 0.f, phaseT = 0.f;
-        for (int i = 0; i < n; ++i) {
-            const float t = static_cast<float>(i) / sr;
-            const float f = 150.f + 180.f * std::exp(-t * 7.f) + 12.f * std::sin(2.f * math::PI * 9.f * t);
-            phaseT += 2.f * math::PI * f / sr;
-            const float tone = std::sin(phaseT) * std::exp(-t * 8.f) * 0.7f;
-            phase += 2.f * math::PI * (70.f + 100.f * std::exp(-t * 40.f)) / sr;
-            const float thump = std::sin(phase) * std::exp(-t * 30.f) * 0.8f;
-            const float w = frand(-1.f, 1.f);
-            const float breath = (lpHi(w, aHi) - lpLo(w, aLo)) * std::exp(-t * 12.f) * 0.6f;
-            s[i] = tone + thump + breath;
-        }
-        return normalized(std::move(s), 0.7f);
-    }
-
-    // One footstep on gritty sand/concrete: a soft pitch-dropping heel thump,
-    // then a band-passed scuff whose amplitude is re-modulated by slow noise
-    // (the "grit" crunch). Seeded — the bank renders several distinct variants
-    // and cycles them, so successive steps never replay one identical sample
-    // (the old step was a single 70 ms white-noise tick).
-    std::vector<float> synthStep(uint32_t seed, int sr = 44100) {
-        std::mt19937 r(seed);
-        auto rf = [&](float a, float b) { return a + (b - a) * std::uniform_real_distribution<float>(0.f, 1.f)(r); };
-        auto rn = [&] { return std::uniform_real_distribution<float>(-1.f, 1.f)(r); };
-        const int n = static_cast<int>(static_cast<float>(sr) * rf(0.10f, 0.13f));
-        std::vector<float> s(n);
-        const float f0 = rf(110.f, 150.f);
-        const float scuffAt = rf(0.008f, 0.018f);// sole contact lags the heel strike
-        OnePole lpHi, lpHi2, lpLo, grit;
-        const float aHi = lpAlpha(rf(1900.f, 2700.f), sr);
-        const float aLo = lpAlpha(rf(320.f, 460.f), sr);
-        const float aGrit = lpAlpha(rf(60.f, 90.f), sr);
-        float phase = 0.f;
-        for (int i = 0; i < n; ++i) {
-            const float t = static_cast<float>(i) / sr;
-            phase += 2.f * math::PI * (55.f + f0 * std::exp(-t * 30.f)) / sr;
-            const float heel = std::sin(phase) * std::exp(-t * 45.f) * 0.8f;
-            const float w = rn();
-            // cascade the high cut (12 dB/oct): one pole leaves enough leakage
-            // above the cutoff that the scuff hisses instead of crunching
-            const float band = lpHi2(lpHi(w, aHi), aHi) - lpLo(w, aLo);
-            // slow-noise modulation makes the scuff crunch instead of hiss
-            const float tex = std::clamp(0.35f + 9.f * std::abs(grit(rn(), aGrit)), 0.f, 1.f);
-            const float ts = t - scuffAt;
-            const float scuff = ts > 0.f ? band * tex * std::exp(-ts * 32.f) * 1.4f : 0.f;
-            s[i] = heel + scuff;
-        }
-        return normalized(std::move(s), 0.6f);
-    }
-
-    // A pooled, retriggerable sound: round-robins a few voices so rapid fire
-    // overlaps instead of cutting itself off. Voices may hold different synth
-    // variants of the same sound, so the rotation also cycles variants. Each
-    // play() takes a volume scale + playback rate — re-rolling those per
-    // trigger is what keeps repeated one-shots (steps, hits) from sounding
-    // machine-gunned. Degrades to a no-op if the audio device or file failed
-    // to initialise.
-    struct Sound {
-        std::vector<std::unique_ptr<Audio>> voices;
-        size_t next = 0;
-        float volume = 0.6f;
-        void play(float volScale = 1.f, float rate = 1.f) {
-            if (voices.empty()) return;
-            auto& v = voices[next];
-            v->stop();
-            v->seekToStart();// rewind so re-fire restarts from frame 0
-            v->setVolume(volume * volScale);
-            v->setPlaybackRate(rate);
-            v->play();
-            next = (next + 1) % voices.size();
-        }
-    };
-
-    // Like Sound, but spatialised: playAt() drops the source at a world position so
-    // the blast pans + attenuates relative to the camera-mounted AudioListener.
-    struct PositionalSound {
-        std::vector<std::unique_ptr<PositionalAudio>> voices;
-        size_t next = 0;
-        void playAt(const Vector3& p, float rate = 1.f) {
-            if (voices.empty()) return;
-            auto& v = voices[next];
-            v->stop();
-            v->seekToStart();
-            v->setPlaybackRate(rate);
-            v->position.copy(p);
-            v->updateMatrixWorld(true);// push the new source position to the audio engine
-            v->play();
-            next = (next + 1) % voices.size();
-        }
-    };
-
-    struct SoundBank {
-        std::unique_ptr<AudioListener> listener;
-        Sound shot, empty, reload, hit, thud, hurt, step, metal;
-        PositionalSound boom;// grenade blast — spatialised at the detonation point
-        bool ok = false;
-
-        void init(Object3D& attachTo) {
-            try {
-                const fs::path dir = fs::temp_directory_path() / "threepp_tps_sounds";
-                fs::create_directories(dir);
-                struct Spec {
-                    const char* name;                         // temp WAV base name (synth fallback)
-                    std::vector<std::vector<float>> variants;// synth renders; voice i loads variant i % N
-                    Sound* dst;
-                    int voices;
-                    std::string file;// external audio file; used instead of synth when set
-                };
-
-                // Real submachine-gun sample for the gun; the rest stay
-                // procedural. Falls back to the synth shot if the file is absent.
-                const std::string assets = std::string(DATA_FOLDER) + "/sounds/";
-                const std::string gunFile = assets + "freesound_community-submachine-gun-79846.mp3";
-                const std::string reloadFile = assets + "freesound_community-1911-reload-6248.mp3";
-                const std::string metalFile = assets + "freesound_community-hard-metal-impact-43052.mp3";
-                const std::string boomFile = assets + "grenade_explosion.mp3";
-                std::vector<Spec> specs{
-                        {"shot", {synthShot()}, &shot, 6, fs::exists(gunFile) ? gunFile : std::string{}},
-                        {"empty", {synthClick()}, &empty, 2, {}},
-                        {"reload", {synthReload()}, &reload, 2, fs::exists(reloadFile) ? reloadFile : std::string{}},
-                        {"hit", {synthHit(11), synthHit(22), synthHit(33)}, &hit, 6, {}},
-                        {"metal", {synthThud()}, &metal, 4, fs::exists(metalFile) ? metalFile : std::string{}},
-                        {"thud", {synthKill(41), synthKill(42)}, &thud, 4, {}},
-                        {"hurt", {synthHurt()}, &hurt, 2, {}},
-                        {"step", {synthStep(1), synthStep(2), synthStep(3), synthStep(4)}, &step, 4, {}}};
-
-                listener = std::make_unique<AudioListener>();
-                attachTo.addRef(*listener);
-                for (auto& sp : specs) {
-                    std::vector<std::string> paths;
-                    if (!sp.file.empty()) {
-                        paths.push_back(sp.file);// external sample (e.g. the gun MP3)
-                    } else {
-                        for (size_t k = 0; k < sp.variants.size(); ++k) {// render the synth fallback(s)
-                            auto p = (dir / (sp.name + std::to_string(k) + ".wav")).string();
-                            threepp::audio::writeWav(p, sp.variants[k]);
-                            paths.push_back(std::move(p));
-                        }
-                    }
-                    for (int i = 0; i < sp.voices; ++i) {
-                        auto a = std::make_unique<Audio>(*listener, paths[i % paths.size()]);
-                        a->setVolume(0.6f);
-                        sp.dst->voices.push_back(std::move(a));
-                    }
-                }
-
-                // grenade blast: spatialised. Stays at full volume within ~15 m of the
-                // camera (covers most of the arena), then a shallow inverse rolloff so
-                // far blasts are clearly quieter + directional without dropping out.
-                {
-                    std::string boomPath = fs::exists(boomFile) ? boomFile : (dir / "boom.wav").string();
-                    if (!fs::exists(boomFile)) threepp::audio::writeWav(boomPath, synthBoom());
-                    for (int i = 0; i < 4; ++i) {
-                        auto a = std::make_unique<PositionalAudio>(*listener, boomPath);
-                        a->setVolume(0.9f);// blast is the loudest cue in the game
-                        a->setDistanceModel(PositionalAudio::DistanceModel::Inverse);
-                        a->setMinDistance(15.f);  // full-volume radius
-                        a->setRolloffFactor(0.35f);// shallow falloff beyond it
-                        boom.voices.push_back(std::move(a));
-                    }
-                }
-                ok = true;
-            } catch (const std::exception& e) {
-                std::cerr << "[audio] disabled: " << e.what() << "\n";
-            }
-        }
-    };
-
-    // ========================================================================
-    //  SVG HUD toolkit (condensed from examples/loaders/svg_ui.cpp)
-    // ========================================================================
-
-    std::shared_ptr<Group> buildSvg(const std::vector<SVGLoader::SVGData>& svgData) {
-        auto group = Group::create();
-        for (const auto& data : svgData) {
-            const auto& fill = data.style.fill;
-            if (fill && *fill != "none") {
-                auto m = MeshBasicMaterial::create();
-                m->color.copy(data.path.color);
-                m->opacity = data.style.fillOpacity;
-                m->transparent = true;
-                m->depthTest = false;
-                m->depthWrite = false;
-                m->side = Side::Double;
-                auto mesh = Mesh::create(ShapeGeometry::create(SVGLoader::createShapes(data)), m);
-                mesh->name = data.style.id;
-                group->add(mesh);
-            }
-            const auto& stroke = data.style.stroke;
-            if (stroke && *stroke != "none") {
-                auto sMat = MeshBasicMaterial::create();
-                sMat->color.setStyle(*stroke);
-                sMat->opacity = data.style.strokeOpacity;
-                sMat->transparent = true;
-                sMat->depthTest = false;
-                sMat->depthWrite = false;
-                sMat->side = Side::Double;
-                for (const auto& subPath : data.path.subPaths) {
-                    auto sg = SVGLoader::pointsToStroke(subPath->getPoints(), data.style);
-                    if (sg) group->add(Mesh::create(sg, sMat));
-                }
-            }
-        }
-        return group;
-    }
-
-    std::shared_ptr<Group> svgFromString(const std::string& svg) {
-        SVGLoader loader;
-        return buildSvg(loader.parse(svg));
-    }
-
-    std::string hex(int rgb) {
-        std::ostringstream os;
-        os << '#' << std::hex << std::setfill('0') << std::setw(6) << (rgb & 0xffffff);
-        return os.str();
-    }
-
-    float wrapPi(float a) {
-        while (a > math::PI) a -= 2.f * math::PI;
-        while (a < -math::PI) a += 2.f * math::PI;
-        return a;
-    }
-
-    // Annular wedge (donut slice) path, polyline-sampled — no SVG arc-flag
-    // pitfalls. Centred on the origin, opening toward +y (screen-up in the
-    // y-up UI overlay), spanning ±halfDeg. rInner = 0 gives a pie slice.
-    std::string wedgePath(float rInner, float rOuter, float halfDeg) {
-        std::ostringstream d;
-        const int N = 18;
-        auto ang = [&](int i) { return (90.f - halfDeg + 2.f * halfDeg * i / N) * math::DEG2RAD; };
-        for (int i = 0; i <= N; ++i)
-            d << (i == 0 ? "M" : "L") << rOuter * std::cos(ang(i)) << "," << rOuter * std::sin(ang(i)) << " ";
-        if (rInner > 0.f)
-            for (int i = N; i >= 0; --i)
-                d << "L" << rInner * std::cos(ang(i)) << "," << rInner * std::sin(ang(i)) << " ";
-        else
-            d << "L0,0 ";
-        d << "Z";
-        return d.str();
-    }
-
-    // Owned-material rect (so we can recolour / rescale it). Built from <rect>.
-    struct RectMesh {
-        std::shared_ptr<Mesh> mesh;
-        std::shared_ptr<MeshBasicMaterial> material;
-    };
-    RectMesh rect(float w, float h, int color, float opacity = 1.f) {
-        std::ostringstream svg;
-        svg << R"(<svg xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width=")" << w
-            << R"(" height=")" << h << R"(" fill="#ffffff"/></svg>)";
-        SVGLoader loader;
-        auto data = loader.parse(svg.str());
-        auto mat = MeshBasicMaterial::create();
-        mat->color = Color(color);
-        mat->opacity = opacity;
-        mat->transparent = true;
-        mat->depthTest = false;
-        mat->depthWrite = false;
-        mat->side = Side::Double;
-        auto geo = ShapeGeometry::create(SVGLoader::createShapes(data.front()));
-        return {Mesh::create(geo, mat), mat};
-    }
-
-    // Rounded, border-stroked panel — the HUD framing primitive (<rect rx> + stroke).
-    std::shared_ptr<Group> panel(float w, float h, float rx, int fill, float fillOp,
-                                 int edge, float edgeW) {
-        std::ostringstream svg;
-        svg << R"(<svg xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width=")" << w
-            << R"(" height=")" << h << R"(" rx=")" << rx << R"(" fill=")" << hex(fill)
-            << R"(" fill-opacity=")" << fillOp << R"(" stroke=")" << hex(edge)
-            << R"(" stroke-width=")" << edgeW << R"("/></svg>)";
-        return svgFromString(svg.str());
-    }
-
-    // Collect every MeshBasicMaterial under an svgFromString group, so HUD
-    // pieces built from full SVG documents stay restylable per frame.
-    std::vector<std::shared_ptr<MeshBasicMaterial>> svgMats(const std::shared_ptr<Group>& g) {
-        std::vector<std::shared_ptr<MeshBasicMaterial>> out;
-        g->traverseType<Mesh>([&](Mesh& m) {
-            if (auto mat = std::dynamic_pointer_cast<MeshBasicMaterial>(m.material())) out.push_back(mat);
-        });
-        return out;
-    }
-
-    std::shared_ptr<TextSprite> makeText(const Font& font, const std::string& text, int color,
-                                         float px, float ax, float ay, float ox, float oy,
-                                         TextSprite::HorizontalAlignment h = TextSprite::HorizontalAlignment::Left,
-                                         TextSprite::VerticalAlignment v = TextSprite::VerticalAlignment::Center) {
-        // screen-space sprites bypass the scene graph, so scale px size AND
-        // pixel offsets here (uiScale, not a parent group transform)
-        auto t = TextSprite::create(font, px * uiScale);
-        t->setColor(Color(color));
-        t->setText(text);
-        t->setHorizontalAlignment(h);
-        t->setVerticalAlignment(v);
-        t->screenSpace = true;
-        t->screenAnchor.set(ax, ay);
-        t->position.set(ox * uiScale, oy * uiScale, 0.f);
-        return t;
-    }
-
-    // A text readout that only re-rasterises when its content changes.
-    struct Readout {
-        std::shared_ptr<TextSprite> sprite;
-        std::string last;
-        void set(const std::string& s) {
-            if (s == last) return;
-            last = s;
-            sprite->setText(s);
-        }
-    };
-
-    // Responsive anchoring: position = anchor*viewport + pixel offset, re-applied
-    // on resize. Mirrors the svg_ui layout helper.
-    struct Layout {
-        std::vector<std::function<void(float, float)>> fns;
-        void add(const std::shared_ptr<Object3D>& g, float ax, float ay, float ox, float oy, float z) {
-            fns.emplace_back([=](float W, float H) { g->position.set(ax * W + ox * uiScale, ay * H + oy * uiScale, z); });
-        }
-        void addRaw(std::function<void(float, float)> fn) { fns.emplace_back(std::move(fn)); }
-        void apply(float W, float H) {
-            for (auto& f : fns) f(W, H);
-        }
-    };
-
-    // ========================================================================
-    //  Game entities
-    // ========================================================================
-
-    // One jointed limb of a death ragdoll (spawned when the enemy dies).
-    struct RagdollPart {
-        std::shared_ptr<Mesh> mesh;
-        PxRigidDynamic* body = nullptr;
-    };
-
-    struct Enemy {
-        std::shared_ptr<Mesh> visual;// capsule body (added to scene)
-        std::shared_ptr<MeshStandardMaterial> mat;
-        PxRigidDynamic* body = nullptr;
-        int hp = kEnemyHp;
-        bool alive = true;
-        float deadTtl = 0.f;
-        float attackCd = 0.f;
-        // death ragdoll: the live capsule becomes the torso, these are the limbs
-        // jointed to it; both vectors are populated in killEnemy, freed in removeEnemy.
-        std::vector<RagdollPart> parts;
-        std::vector<PxJoint*> joints;
-    };
-
-    struct Ephemeral {// short-lived visual (tracer / flash / spark)
-        std::shared_ptr<Object3D> obj;
-        float ttl;
-    };
+// clang-format off
+#include "shooter_constants.hpp"
+#include "shooter_audio.hpp"
+#include "shooter_hud.hpp"
+#include "shooter_entities.hpp"
+// clang-format on
 
 }// namespace
 
@@ -872,11 +275,6 @@ int main(int argc, char** argv) {
     addBox({0, 0.5f, 17}, {6.f, 1.f, 1.2f}, sandstoneMat);
 
     // ---- dynamic crates (shootable / pushable) — home pose kept for restart -
-    struct Dynamic {
-        std::shared_ptr<Mesh> mesh;
-        PxRigidDynamic* body;
-        Vector3 home;
-    };
     std::vector<Dynamic> dynamics;
     auto crateGeo = BoxGeometry::create(1.f, 1.f, 1.f);
     auto spawnCrateStack = [&](float cx, float cz, int height) {
@@ -995,20 +393,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<AnimationMixer> mixer;
 
     // Named clips resolved to actions. Locomotion clips loop; one-shots play once.
-    struct PlayerAnims {
-        AnimationAction* idle = nullptr;    // rifle aiming idle
-        AnimationAction* walk = nullptr;    // walking
-        AnimationAction* walkBack = nullptr;// walking backwards
-        AnimationAction* run = nullptr;     // rifle run
-        AnimationAction* runBack = nullptr; // run backwards
-        AnimationAction* strafeL = nullptr; // strafe left
-        AnimationAction* strafeR = nullptr; // strafe right
-        AnimationAction* fire = nullptr;    // firing rifle
-        AnimationAction* reload = nullptr;  // reloading
-        AnimationAction* jump = nullptr;    // rifle jump
-        AnimationAction* hit = nullptr;     // hit reaction
-        AnimationAction* grenade = nullptr; // toss grenade (additive overlay)
-    } pa;
+    PlayerAnims pa;
     AnimationAction* currentA = nullptr;
     Object3D* handBone = nullptr;
     Object3D* leftHandBone = nullptr;// left hand -> rifle fore-grip (defines the barrel line)
@@ -1045,7 +430,7 @@ int main(int argc, char** argv) {
             });
             const float skelH = maxY - minY;
             const float modelH = skelH > 1e-4f ? skelH : 1.f;
-            model->scale *= kCharHeight / modelH;// skeleton span ≈ standing height
+            model->scale *= kCharHeight / modelH;// skeleton span â‰ˆ standing height
             playerRig->add(model);
 
             mixer = std::make_unique<AnimationMixer>(*model);
@@ -1090,7 +475,7 @@ int main(int argc, char** argv) {
             for (auto* a : {pa.idle, pa.walk, pa.walkBack, pa.run, pa.runBack,
                             pa.strafeL, pa.strafeR, pa.fire, pa.jump, pa.reload, pa.hit, pa.grenade})
                 if (a) a->setLoop(Loop::Repeat);
-            if (pa.reload) pa.reload->setDuration(kReloadTime); // one play-through ≈ reload time
+            if (pa.reload) pa.reload->setDuration(kReloadTime); // one play-through â‰ˆ reload time
             if (pa.grenade) pa.grenade->setDuration(kThrowTime);// one throw spans the cooldown
             // Stretch the jump clip to span the airtime so it plays ONCE (it's
             // shorter than the ~1s jump, so at natural speed it loops mid-air =
@@ -1196,7 +581,7 @@ int main(int argc, char** argv) {
     Vector3 aimDir(0.f, 0.f, 1.f);// camera forward; where shots + grenades go (matches the crosshair)
     Vector3 playerPos{0, kPlayerHalf, 0};
 
-    // landing-edge detection (jump-clip → locomotion transition)
+    // landing-edge detection (jump-clip â†’ locomotion transition)
     bool wasGrounded = true;
 
     // ===== enemies ==========================================================
@@ -1330,7 +715,7 @@ int main(int argc, char** argv) {
     // ===== ejected shell casings ============================================
     // Spent brass tossed from the breech on each shot. Simulated as cheap
     // ballistic props (gravity + tumble + a damped ground bounce, TTL-recycled) —
-    // NOT physics bodies, since spawning a rigid actor ~9×/s would churn the
+    // NOT physics bodies, since spawning a rigid actor ~9Ã—/s would churn the
     // scene + acceleration structures.
     auto casingGeo = CylinderGeometry::create(0.011f, 0.011f, 0.05f, 8);
     auto casingMat = MeshStandardMaterial::create(
@@ -1357,7 +742,7 @@ int main(int argc, char** argv) {
     bool firedEmpty = false;// debounce empty click
     bool gameOver = false;
     float hitMarkerT = 0.f;// >0 while the hit marker flashes
-    bool  hitWasKill = false;// last hit was a kill → red, popped marker + score float
+    bool  hitWasKill = false;// last hit was a kill â†’ red, popped marker + score float
     float scorePopT  = 0.f;  // >0 while the "+100" kill pop floats up
     float chipHealth = 100.f;// damage-lag bar: eases down toward `health`
     float chSpread   = 6.f;  // crosshair tick spread (eased toward dynamic target)
@@ -1612,11 +997,6 @@ int main(int argc, char** argv) {
     auto grenadeGeo = SphereGeometry::create(0.09f, 12, 8);
     auto grenadeMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0x2f3b24).roughness(0.55f).metalness(0.35f));
     auto blastGeo = SphereGeometry::create(0.6f, 12, 8);
-    struct Grenade {
-        std::shared_ptr<Mesh> mesh;
-        PxRigidDynamic* body;
-        float fuse;
-    };
     std::vector<Grenade> grenades;
     float throwTimer = 0.f;      // >0 while a throw is in progress (also the cooldown)
     bool grenadeReleased = false;// has this throw spawned its projectile yet?
@@ -1804,8 +1184,8 @@ int main(int argc, char** argv) {
                               TextSprite::HorizontalAlignment::Right)};
     ui->add(aliveTxt.sprite);
 
-    // ── compass strip (top-centre) ──────────────────────────────────────────
-    // Cardinal labels + 15° ticks slide horizontally with camera yaw under a
+    // â”€â”€ compass strip (top-centre) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Cardinal labels + 15Â° ticks slide horizontally with camera yaw under a
     // fixed caret; a numeric heading readout sits below the caret. Ticks are
     // SVG rects inside a top-centre-anchored group; labels are independent
     // screen-space TextSprites (they anchor themselves), both driven by the
@@ -1851,7 +1231,7 @@ int main(int argc, char** argv) {
                                 TextSprite::HorizontalAlignment::Center)};
     ui->add(headingTxt.sprite);
 
-    // ── radar (top-right) ───────────────────────────────────────────────────
+    // â”€â”€ radar (top-right) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Heading-up scope: rings + cross from one SVG document, a rotating sweep
     // wedge, hostile blips from a small pool, a north tick that orbits with
     // yaw, and the player as a centre dot. Same instrument the ocean demo
@@ -2354,7 +1734,7 @@ int main(int argc, char** argv) {
                 std::sin(effPitch) * effDist + 0.4f,
                 -std::cos(effYaw) * std::cos(effPitch) * effDist);
         aimDir.copy(aimOff).multiplyScalar(-1.f).normalize();// camera forward = the crosshair ray
-        // Camera placement: yaw swings up to 180° toward the player while inspecting,
+        // Camera placement: yaw swings up to 180Â° toward the player while inspecting,
         // so the camera ends up in front looking back at the character's face. The
         // screen-right shoulder slide keeps the over-the-shoulder framing otherwise.
         const float viewYaw = effYaw + inspectT * math::PI;
@@ -2651,7 +2031,7 @@ int main(int argc, char** argv) {
         // compass: slide marks under the caret; heading readout
         {
             for (auto& m : compassMarks) {
-                // screen-right = bearing-(90°) in this scene's mirrored frame,
+                // screen-right = bearing-(90Â°) in this scene's mirrored frame,
                 // so marks move LEFT as bearing increases (matches the radar)
                 const float dx = -wrapPi(m.ang - camYaw) * kCompassPxPerRad;
                 const bool vis = std::abs(dx) < kCompassHalfW;
