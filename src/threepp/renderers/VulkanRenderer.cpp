@@ -1626,8 +1626,8 @@ namespace threepp {
         std::unique_ptr<vulkan::DeferredShade> deferredShade_;
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
         float bloomClamp_ = 0.0f;    // per-tap HDR cap before the bright pass; <= 0 = off
-        float sharpenStrength_ = 0.0f;// post-TAA RCAS amount; 0 = off
-        float taaBlendAlpha_ = 0.1f;// 10% current, 90% history at the reference rate;
+        float sharpenStrength_ = 0.5f;// post-TAA RCAS amount; 0 = off
+        float taaBlendAlpha_ = 0.16f;// 10% current, 90% history at the reference rate;
                                     // frame-rate-corrected per frame (see taaPrevTimeSec_)
         // Wall-clock anchor for the frame-rate-aware TAA blend. taaBlendAlpha_ is a
         // per-FRAME new-sample weight, so holding it fixed ties the history half-life
