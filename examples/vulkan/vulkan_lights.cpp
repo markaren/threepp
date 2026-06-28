@@ -174,8 +174,7 @@ int main() {
     float rectIntensity = rectLight->intensity;
     float neonIntensity = neonMat->emissiveIntensity;
     float ambIntensity = 0.0f;
-    float exposure = renderer.toneMappingExposure;
-    int toneMode = static_cast<int>(renderer.toneMapping);
+
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -232,11 +231,6 @@ int main() {
             ambient->intensity = ambIntensity;
 
         ImGui::Separator();
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f, "%.2f"))
-            renderer.toneMappingExposure = exposure;
-        const char* toneItems[] = {"None", "Linear", "Reinhard", "Cineon", "ACESFilmic"};
-        if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems)))
-            renderer.toneMapping = static_cast<ToneMapping>(toneMode);
 
         ImGui::Separator();
         bool restirDI = renderer.restirDIEnabled();
