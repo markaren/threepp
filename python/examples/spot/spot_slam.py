@@ -45,7 +45,7 @@ SENSOR_FAR = 8.0
 SCAN_EVERY = 3       # depth scan every N frames; result cached for policy (~17 Hz)
 MC_FRAMES  = 90      # trigger SLAM rebuild every N rendered frames
 GRASS_BLADES = 12000 # merged GrassMesh blade count (GPU-wind on Vulkan); tune for FPS
-GRASS_RADIUS = 32.0  # grass disk radius around spawn (fog hides >25 m anyway)
+GRASS_RADIUS = 42.0  # grass disk radius around spawn (fog hides >25 m anyway)
 HDR_URL = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/noon_grass_2k.hdr"
 
 
@@ -92,7 +92,7 @@ def _in_pond(px, py, hz, pond):
     if pond is None:
         return False
     cx, cy, wl = pond
-    return math.hypot(px - cx, py - cy) < 17.0 and hz < wl + 0.2
+    return math.hypot(px - cx, py - cy) < 12.0 and hz < wl + 0.2
 
 
 # ── trees ──────────────────────────────────────────────────────────────────────
