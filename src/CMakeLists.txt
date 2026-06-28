@@ -630,6 +630,7 @@ if (THREEPP_WITH_VULKAN)
     )
     list(APPEND sources
             "threepp/renderers/VulkanRenderer.cpp"
+            "threepp/renderers/VulkanPathTracer.cpp"
             "threepp/helpers/PathTracedLidarSensor.cpp"
             "threepp/objects/DisplacedMesh.cpp"
             "threepp/objects/Ocean.cpp"
