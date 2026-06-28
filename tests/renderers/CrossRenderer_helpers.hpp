@@ -282,7 +282,7 @@ namespace crosstest {
     inline AvgColor centerPixel(const std::vector<unsigned char>& px, int w, int h) {
         int cx = w / 2, cy = h / 2;
         int i = (cy * w + cx) * 3;
-        return {(double)px[i], (double)px[i + 1], (double)px[i + 2]};
+        return {static_cast<double>(px[i]), static_cast<double>(px[i + 1]), static_cast<double>(px[i + 2])};
     }
 
     inline double avgXPosition(const std::vector<unsigned char>& pixels, int width, int height) {

@@ -38,7 +38,7 @@ namespace threepp::vulkan {
         }
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = uint32_t(bb.size());
+        dlci.bindingCount = static_cast<uint32_t>(bb.size());
         dlci.pBindings    = bb.data();
         check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(displace)");

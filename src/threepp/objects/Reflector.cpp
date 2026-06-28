@@ -79,7 +79,7 @@ struct Reflector::Impl {
 
         renderTarget = std::make_unique<RenderTarget>(textureWidth, textureHeight, parameters);
 
-        if (!math::isPowerOfTwo((int) textureWidth) || !math::isPowerOfTwo((int) textureHeight)) {
+        if (!math::isPowerOfTwo(static_cast<int>(textureWidth)) || !math::isPowerOfTwo(static_cast<int>(textureHeight))) {
 
             renderTarget->texture->generateMipmaps = false;
         }

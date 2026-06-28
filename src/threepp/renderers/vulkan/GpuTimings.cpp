@@ -93,7 +93,7 @@ namespace threepp::vulkan {
                     VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
             if (r != VK_SUCCESS) return 0.f;
             if (pair[1] < pair[0]) return 0.f;
-            return float(pair[1] - pair[0]) * toMs;
+            return static_cast<float>(pair[1] - pair[0]) * toMs;
         };
         lastTimings_.rasterGbufMs = pairMs(TP_RasterGbuf);
         // Overlay timings collapse the depth prepass + draw pair into a

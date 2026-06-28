@@ -900,9 +900,9 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         if (sp->screenSpace) {
             // Pixel position = anchor·viewport + position.xy.
             // Negative offsets read as "from the opposite edge".
-            const float pxX = sp->screenAnchor.x * float(extEarly.width)
+            const float pxX = sp->screenAnchor.x * static_cast<float>(extEarly.width)
                             + static_cast<float>(sp->position.x);
-            const float pxY = sp->screenAnchor.y * float(extEarly.height)
+            const float pxY = sp->screenAnchor.y * static_cast<float>(extEarly.height)
                             + static_cast<float>(sp->position.y);
             // Compose: T(pxX,pxY,0) * R(quaternion) * S(scale). Reuse
             // the sprite's own quaternion + scale (TextSprite::applyScale
@@ -1069,13 +1069,13 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
 
     // Split-screen: clip to the region sub-rect (regionW == 0 → full frame).
     const bool   regionActive = regionW > 0u && regionH > 0u;
-    const float  rgx = regionActive ? float(regionX) : 0.f;
-    const float  rgy = regionActive ? float(regionY) : 0.f;
-    const float  rgw = regionActive ? float(regionW) : float(ext.width);
-    const float  rgh = regionActive ? float(regionH) : float(ext.height);
+    const float  rgx = regionActive ? static_cast<float>(regionX) : 0.f;
+    const float  rgy = regionActive ? static_cast<float>(regionY) : 0.f;
+    const float  rgw = regionActive ? static_cast<float>(regionW) : static_cast<float>(ext.width);
+    const float  rgh = regionActive ? static_cast<float>(regionH) : static_cast<float>(ext.height);
     VkViewport vp{rgx, rgy, rgw, rgh, 0.f, 1.f};
     vkCmdSetViewport(cb, 0, 1, &vp);
-    VkRect2D sc{{int32_t(rgx), int32_t(rgy)}, {uint32_t(rgw), uint32_t(rgh)}};
+    VkRect2D sc{{static_cast<int32_t>(rgx), static_cast<int32_t>(rgy)}, {static_cast<uint32_t>(rgw), static_cast<uint32_t>(rgh)}};
     vkCmdSetScissor(cb, 0, 1, &sc);
 
     // ── Filled Mesh overlays ────────────────────────────────────────

@@ -114,8 +114,8 @@ namespace threepp::vulkan {
         if (surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, surface_, nullptr);
 
         if (debugMessenger_ != VK_NULL_HANDLE) {
-            auto fn = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(
-                    instance_, "vkDestroyDebugUtilsMessengerEXT");
+            auto fn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(
+                    instance_, "vkDestroyDebugUtilsMessengerEXT"));
             if (fn) fn(instance_, debugMessenger_, nullptr);
         }
         if (instance_ != VK_NULL_HANDLE) vkDestroyInstance(instance_, nullptr);
@@ -235,8 +235,8 @@ namespace threepp::vulkan {
                 VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
         ci.pfnUserCallback = debugCallback;
 
-        auto fn = (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(
-                instance_, "vkCreateDebugUtilsMessengerEXT");
+        auto fn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(
+                instance_, "vkCreateDebugUtilsMessengerEXT"));
         if (fn) check(fn(instance_, &ci, nullptr, &debugMessenger_), "vkCreateDebugUtilsMessengerEXT");
     }
 

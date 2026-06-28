@@ -378,7 +378,7 @@ namespace threepp::vulkan {
                 for (int b = 0; b < 7; ++b) {
                     w[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                     w[b].dstSet          = descSets_[idx];
-                    w[b].dstBinding      = uint32_t(b);
+                    w[b].dstBinding      = static_cast<uint32_t>(b);
                     w[b].descriptorCount = 1;
                 }
                 w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;

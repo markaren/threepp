@@ -10,7 +10,7 @@ using namespace threepp;
 
 
 Vector4::Vector4(int x, int y, int z, int w)
-    : x((float) x), y((float) y), z((float) z), w((float) w) {}
+    : x(static_cast<float>(x)), y(static_cast<float>(y)), z(static_cast<float>(z)), w(static_cast<float>(w)) {}
 
 Vector4::Vector4(float x, float y, float z, float w)
     : x(x), y(y), z(z), w(w) {}

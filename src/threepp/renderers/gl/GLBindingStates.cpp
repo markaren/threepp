@@ -224,11 +224,11 @@ struct GLBindingStates::Impl {
 
         if (type == GL_INT || type == GL_UNSIGNED_INT) {
 
-            glVertexAttribIPointer(index, size, type, stride, (GLvoid*) offset);
+            glVertexAttribIPointer(index, size, type, stride, reinterpret_cast<void*>(offset));
 
         } else {
 
-            glVertexAttribPointer(index, size, type, normalized, stride, (GLvoid*) offset);
+            glVertexAttribPointer(index, size, type, normalized, stride, reinterpret_cast<void*>(offset));
         }
     }
 
@@ -313,10 +313,10 @@ struct GLBindingStates::Impl {
 
                     glBindBuffer(GL_ARRAY_BUFFER, buffer);
 
-                    glVertexAttribPointer(programAttribute + 0, 4, type, false, 64, (void*) 0);
-                    glVertexAttribPointer(programAttribute + 1, 4, type, false, 64, (void*) 16);
-                    glVertexAttribPointer(programAttribute + 2, 4, type, false, 64, (void*) 32);
-                    glVertexAttribPointer(programAttribute + 3, 4, type, false, 64, (void*) 48);
+                    glVertexAttribPointer(programAttribute + 0, 4, type, false, 64, reinterpret_cast<void*>(0));
+                    glVertexAttribPointer(programAttribute + 1, 4, type, false, 64, reinterpret_cast<void*>(16));
+                    glVertexAttribPointer(programAttribute + 2, 4, type, false, 64, reinterpret_cast<void*>(32));
+                    glVertexAttribPointer(programAttribute + 3, 4, type, false, 64, reinterpret_cast<void*>(48));
 
                 } else if (name == "instanceColor") {
 

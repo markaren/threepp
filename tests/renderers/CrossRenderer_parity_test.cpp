@@ -333,7 +333,7 @@ TEST_CASE("Cross: depth ordering is consistent", "[wgpu]") {
     auto centerColor = [](const std::vector<unsigned char>& px, int w, int h) {
         int cx = w / 2, cy = h / 2;
         int i = (cy * w + cx) * 3;
-        return AvgColor{(double)px[i], (double)px[i + 1], (double)px[i + 2]};
+        return AvgColor{static_cast<double>(px[i]), static_cast<double>(px[i + 1]), static_cast<double>(px[i + 2])};
     };
 
     auto glCenter = centerColor(renderWithGL(*scene, *camera, clearColor), RT_WIDTH, RT_HEIGHT);

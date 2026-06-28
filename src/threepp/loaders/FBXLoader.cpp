@@ -33,10 +33,10 @@ namespace threepp {
         // Matrix4::set takes elements in row-major reading order.
         Matrix4 toMatrix4(const ofbx::DMatrix& m) {
             return Matrix4().set(
-                (float)m.m[0],  (float)m.m[4],  (float)m.m[8],  (float)m.m[12],
-                (float)m.m[1],  (float)m.m[5],  (float)m.m[9],  (float)m.m[13],
-                (float)m.m[2],  (float)m.m[6],  (float)m.m[10], (float)m.m[14],
-                (float)m.m[3],  (float)m.m[7],  (float)m.m[11], (float)m.m[15]);
+                static_cast<float>(m.m[0]),  static_cast<float>(m.m[4]),  static_cast<float>(m.m[8]),  static_cast<float>(m.m[12]),
+                static_cast<float>(m.m[1]),  static_cast<float>(m.m[5]),  static_cast<float>(m.m[9]),  static_cast<float>(m.m[13]),
+                static_cast<float>(m.m[2]),  static_cast<float>(m.m[6]),  static_cast<float>(m.m[10]), static_cast<float>(m.m[14]),
+                static_cast<float>(m.m[3]),  static_cast<float>(m.m[7]),  static_cast<float>(m.m[11]), static_cast<float>(m.m[15]));
         }
 
         // Build a non-indexed BufferGeometry from one GeometryPartition.
@@ -66,23 +66,23 @@ namespace threepp {
             for (int pi = 0; pi < partition.polygon_count; ++pi) {
                 const auto& polygon = partition.polygons[pi];
                 // Returns number of resulting indices (numTriangles * 3).
-                const int indexCount = (int)ofbx::triangulate(geomData, polygon, triIndices.data());
+                const int indexCount = static_cast<int>(ofbx::triangulate(geomData, polygon, triIndices.data()));
                 for (int ti = 0; ti < indexCount; ++ti) {
                     const int fv = triIndices[ti];
                     const auto p = positions.get(fv);
-                    posData.push_back((float)p.x);
-                    posData.push_back((float)p.y);
-                    posData.push_back((float)p.z);
+                    posData.push_back(static_cast<float>(p.x));
+                    posData.push_back(static_cast<float>(p.y));
+                    posData.push_back(static_cast<float>(p.z));
                     if (hasNormals) {
                         const auto n = normals.get(fv);
-                        normData.push_back((float)n.x);
-                        normData.push_back((float)n.y);
-                        normData.push_back((float)n.z);
+                        normData.push_back(static_cast<float>(n.x));
+                        normData.push_back(static_cast<float>(n.y));
+                        normData.push_back(static_cast<float>(n.z));
                     }
                     if (hasUVs) {
                         const auto uv = uvs.get(fv);
-                        uvData.push_back((float)uv.x);
-                        uvData.push_back((float)uv.y);
+                        uvData.push_back(static_cast<float>(uv.x));
+                        uvData.push_back(static_cast<float>(uv.y));
                     }
                 }
             }

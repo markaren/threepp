@@ -299,8 +299,8 @@ gl::GLState::GLState(): maxTextures(glGetParameteri(GL_MAX_COMBINED_TEXTURE_IMAG
     glGetIntegerv(GL_SCISSOR_BOX, scissorParam);
     glGetIntegerv(GL_VIEWPORT, viewportParam);
 
-    currentScissor.set((float) scissorParam[0], (float) scissorParam[1], (float) scissorParam[2], (float) scissorParam[3]);
-    currentViewport.set((float) viewportParam[0], (float) viewportParam[1], (float) viewportParam[2], (float) viewportParam[3]);
+    currentScissor.set(static_cast<float>(scissorParam[0]), static_cast<float>(scissorParam[1]), static_cast<float>(scissorParam[2]), static_cast<float>(scissorParam[3]));
+    currentViewport.set(static_cast<float>(viewportParam[0]), static_cast<float>(viewportParam[1]), static_cast<float>(viewportParam[2]), static_cast<float>(viewportParam[3]));
 
     auto enableLambda = [&](int id) {
         enable(id);
@@ -674,7 +674,7 @@ void gl::GLState::setScissorTest(bool scissorTest) {
 
 void gl::GLState::activeTexture(std::optional<GLenum> glSlot) {
 
-    if (!glSlot) glSlot = (GLenum) (GL_TEXTURE0 + maxTextures - 1);
+    if (!glSlot) glSlot = static_cast<GLenum>(GL_TEXTURE0 + maxTextures - 1);
 
     if (currentTextureSlot != glSlot) {
 
@@ -742,7 +742,7 @@ void gl::GLState::scissor(const Vector4& scissor) {
 
     if (!currentScissor.equals(scissor)) {
 
-        glScissor((GLint) scissor.x, (GLint) scissor.y, (GLsizei) scissor.z, (GLsizei) scissor.w);
+        glScissor(static_cast<GLint>(scissor.x), static_cast<GLint>(scissor.y), static_cast<GLsizei>(scissor.z), static_cast<GLsizei>(scissor.w));
         currentScissor.copy(scissor);
     }
 }
@@ -751,7 +751,7 @@ void gl::GLState::viewport(const Vector4& viewport) {
 
     if (!currentViewport.equals(viewport)) {
 
-        glViewport((GLint) viewport.x, (GLint) viewport.y, (GLsizei) viewport.z, (GLsizei) viewport.w);
+        glViewport(static_cast<GLint>(viewport.x), static_cast<GLint>(viewport.y), static_cast<GLsizei>(viewport.z), static_cast<GLsizei>(viewport.w));
         currentViewport.copy(viewport);
     }
 }

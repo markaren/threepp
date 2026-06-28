@@ -474,7 +474,7 @@ namespace threepp {
                     newChildren.reserve(positions.size());
                     for (size_t i = 0; i < positions.size(); ++i) {
                         int pi = (i < protoIndices.size()) ? protoIndices[i] : 0;
-                        if (pi < 0 || pi >= (int)protoPrims.size() || !protoPrims[pi]) continue;
+                        if (pi < 0 || pi >= static_cast<int>(protoPrims.size()) || !protoPrims[pi]) continue;
                         tinyusdz::PrimSpec inst = *protoPrims[pi];  // deep copy
                         const std::string instName = "__inst_" + std::to_string(i);
                         inst.name() = instName;

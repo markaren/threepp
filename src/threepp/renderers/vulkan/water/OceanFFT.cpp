@@ -31,7 +31,7 @@ namespace threepp::water {
         void check(VkResult r, const char* what) {
             if (r != VK_SUCCESS) {
                 throw std::runtime_error(std::string("OceanFFT: ") + what +
-                                         " failed (VkResult=" + std::to_string(int(r)) + ")");
+                                         " failed (VkResult=" + std::to_string(static_cast<int>(r)) + ")");
             }
         }
 
@@ -373,7 +373,7 @@ namespace threepp::water {
         };
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = uint32_t(bindings.size());
+        dlci.bindingCount = static_cast<uint32_t>(bindings.size());
         dlci.pBindings    = bindings.data();
         check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &dsl_),
               "vkCreateDescriptorSetLayout(phillips)");
@@ -396,7 +396,7 @@ namespace threepp::water {
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = 1;
-        dpci.poolSizeCount = uint32_t(poolSizes.size());
+        dpci.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
         dpci.pPoolSizes    = poolSizes.data();
         // We also need a UBO entry — extend the pool sizes with one. Combined here
         // for one-shot allocation.
@@ -405,7 +405,7 @@ namespace threepp::water {
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1},
         };
-        dpci.poolSizeCount = uint32_t(poolSizesAll.size());
+        dpci.poolSizeCount = static_cast<uint32_t>(poolSizesAll.size());
         dpci.pPoolSizes    = poolSizesAll.data();
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &pool_),
               "vkCreateDescriptorPool(phillips)");
@@ -453,7 +453,7 @@ namespace threepp::water {
         writes[2].descriptorCount = 1;
         writes[2].pBufferInfo = &paramInfo;
 
-        vkUpdateDescriptorSets(ctx_.device(), uint32_t(writes.size()), writes.data(), 0, nullptr);
+        vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
     void PhillipsSpectrum::recordCompute(VkCommandBuffer cb) {
@@ -510,7 +510,7 @@ namespace threepp::water {
         };
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = uint32_t(bindings.size());
+        dlci.bindingCount = static_cast<uint32_t>(bindings.size());
         dlci.pBindings    = bindings.data();
         check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &dsl_),
               "vkCreateDescriptorSetLayout(dyn)");
@@ -534,7 +534,7 @@ namespace threepp::water {
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = 1;
-        dpci.poolSizeCount = uint32_t(poolSizes.size());
+        dpci.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
         dpci.pPoolSizes    = poolSizes.data();
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &pool_),
               "vkCreateDescriptorPool(dyn)");
@@ -587,7 +587,7 @@ namespace threepp::water {
         writes[3].dstBinding = 3; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[3].pImageInfo = &dispInfo;
         writes[4].dstBinding = 4; writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         writes[4].pBufferInfo = &pInfo;
         writes[5].dstBinding = 5; writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[5].pImageInfo = &jacInfo;
-        vkUpdateDescriptorSets(ctx_.device(), uint32_t(writes.size()), writes.data(), 0, nullptr);
+        vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
     void DynamicSpectrum::recordCompute(VkCommandBuffer cb, float elapsedSeconds) {
@@ -638,7 +638,7 @@ namespace threepp::water {
 
     IFFT::IFFT(vulkan::VulkanContext& ctx, uint32_t textureSize)
         : ctx_(ctx), textureSize_(textureSize),
-          logSize_(uint32_t(std::log2(double(textureSize)))) {
+          logSize_(static_cast<uint32_t>(std::log2(static_cast<double>(textureSize)))) {
         sampler_ = makeNearestSampler(ctx_);
         createTwiddleImage();
         createPipelines();
@@ -685,7 +685,7 @@ namespace threepp::water {
         };
         VkDescriptorSetLayoutCreateInfo dlciB{};
         dlciB.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlciB.bindingCount = uint32_t(bbb.size());
+        dlciB.bindingCount = static_cast<uint32_t>(bbb.size());
         dlciB.pBindings    = bbb.data();
         check(vkCreateDescriptorSetLayout(ctx_.device(), &dlciB, nullptr, &dslButterfly_),
               "vkCreateDescriptorSetLayout(butterfly)");
@@ -719,7 +719,7 @@ namespace threepp::water {
         };
         VkDescriptorSetLayoutCreateInfo dlciP{};
         dlciP.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlciP.bindingCount = uint32_t(pbb.size());
+        dlciP.bindingCount = static_cast<uint32_t>(pbb.size());
         dlciP.pBindings    = pbb.data();
         check(vkCreateDescriptorSetLayout(ctx_.device(), &dlciP, nullptr, &dslPermute_),
               "vkCreateDescriptorSetLayout(permute)");
@@ -744,7 +744,7 @@ namespace threepp::water {
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = 1 + 4 + 2;
-        dpci.poolSizeCount = uint32_t(poolSizes.size());
+        dpci.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
         dpci.pPoolSizes    = poolSizes.data();
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &pool_),
               "vkCreateDescriptorPool(ifft)");
@@ -804,7 +804,7 @@ namespace threepp::water {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeTwiddle_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layoutTwiddle_,
                                 0, 1, &dsTwiddle_, 0, nullptr);
-        const int32_t sz = int32_t(textureSize_);
+        const int32_t sz = static_cast<int32_t>(textureSize_);
         vkCmdPushConstants(cb, layoutTwiddle_, VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(sz), &sz);
         // 8-tall workgroup, x = logSize, y = textureSize/2.
@@ -837,7 +837,7 @@ namespace threepp::water {
             w[0].dstBinding = 0; w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[0].pImageInfo = &twInfo;
             w[1].dstBinding = 1; w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[1].pImageInfo = &read;
             w[2].dstBinding = 2; w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          w[2].pImageInfo = &write;
-            vkUpdateDescriptorSets(ctx_.device(), uint32_t(w.size()), w.data(), 0, nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         };
         writeButterfly(dsHorizontal_[0], aSampled, bStorage);
         writeButterfly(dsHorizontal_[1], bSampled, aStorage);
@@ -849,7 +849,7 @@ namespace threepp::water {
             for (auto& e : w) { e.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; e.dstSet = ds; e.descriptorCount = 1; }
             w[0].dstBinding = 0; w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[0].pImageInfo = &read;
             w[1].dstBinding = 1; w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          w[1].pImageInfo = &write;
-            vkUpdateDescriptorSets(ctx_.device(), uint32_t(w.size()), w.data(), 0, nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         };
         // dsPermute_[0]: read a, write b
         // dsPermute_[1]: read b, write a
@@ -882,7 +882,7 @@ namespace threepp::water {
             VkDescriptorSet ds = pingPong ? dsHorizontal_[0] : dsHorizontal_[1];
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layoutButterfly_,
                                     0, 1, &ds, 0, nullptr);
-            const int32_t s = int32_t(step);
+            const int32_t s = static_cast<int32_t>(step);
             vkCmdPushConstants(cb, layoutButterfly_, VK_SHADER_STAGE_COMPUTE_BIT,
                                0, sizeof(s), &s);
             const uint32_t g = groupCountFor(textureSize_);
@@ -898,7 +898,7 @@ namespace threepp::water {
             VkDescriptorSet ds = pingPong ? dsVertical_[0] : dsVertical_[1];
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layoutButterfly_,
                                     0, 1, &ds, 0, nullptr);
-            const int32_t s = int32_t(step);
+            const int32_t s = static_cast<int32_t>(step);
             vkCmdPushConstants(cb, layoutButterfly_, VK_SHADER_STAGE_COMPUTE_BIT,
                                0, sizeof(s), &s);
             const uint32_t g = groupCountFor(textureSize_);

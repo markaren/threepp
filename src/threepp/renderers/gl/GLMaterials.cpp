@@ -182,7 +182,7 @@ struct GLMaterials::Impl {
     void refreshUniformsPhong(UniformMap& uniforms, MeshPhongMaterial* material) {
 
         uniforms.at("specular").value<Color>().copy(material->specular);
-        uniforms.at("shininess").value<float>() = std::max(material->shininess, (float) 1E-4);// to prevent pow( 0.0, 0.0 )
+        uniforms.at("shininess").value<float>() = std::max(material->shininess, static_cast<float>(1E-4));// to prevent pow( 0.0, 0.0 )
 
         if (material->emissiveMap) {
 

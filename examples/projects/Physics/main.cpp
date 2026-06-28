@@ -231,7 +231,7 @@ int main() {
 
     // A scatter of bouncy props near the paddle for it to swat around.
     auto spawnRandomProp = [&](const Vector3& pos) {
-        const Color c = kBrightColors[irand(0, (int) kBrightColors.size() - 1)];
+        const Color c = kBrightColors[irand(0, static_cast<int>(kBrightColors.size()) - 1)];
         std::shared_ptr<Mesh> mesh;
         switch (irand(0, 2)) {
             case 0: mesh = shadowMesh(BoxGeometry::create(0.7f, 0.7f, 0.7f), matte(c, 0.5f)); break;
@@ -392,7 +392,7 @@ int main() {
                                         ? Vector3(raycaster.ray.direction).normalize()
                                         : Vector3(controls.target).sub(camera->position).normalize();
             auto ball = shadowMesh(SphereGeometry::create(0.5f, 20, 14),
-                                   matte(kBrightColors[irand(0, (int) kBrightColors.size() - 1)], 0.4f));
+                                   matte(kBrightColors[irand(0, static_cast<int>(kBrightColors.size()) - 1)], 0.4f));
             ball->position.copy(camera->position + dir * 1.5f);
             auto* a = addProp(ball, 90.f, bouncyMat);
             a->setLinearVelocity(toPxVec3(dir * 42.f));

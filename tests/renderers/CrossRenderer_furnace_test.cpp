@@ -433,7 +433,7 @@ TEST_CASE("Furnace: real-HDR floor/sky parity (diagnostic)", "[.][hdrparity]") {
         for (int rowFromTop = 6; rowFromTop <= 22; rowFromTop += 4) {
             const int row = isGL ? RT_HEIGHT - 1 - rowFromTop : rowFromTop;
             const int i = (row * RT_WIDTH + RT_WIDTH / 2) * 3;
-            os << " [" << rowFromTop << "] " << (int) px[i] << "," << (int) px[i + 1] << "," << (int) px[i + 2];
+            os << " [" << rowFromTop << "] " << static_cast<int>(px[i]) << "," << static_cast<int>(px[i + 1]) << "," << static_cast<int>(px[i + 2]);
         }
         rgb = os.str();
     };
