@@ -268,6 +268,22 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().bloomClamp(); },
                               [](PyVulkanRenderer& r, float v) { r.native().setBloomClamp(v); },
                               "Bloom input clamp to stabilise flickery ultra-bright highlights. <=0 disables (default); typical 8-32.")
+                // Denoiser toggle (SVGF à-trous + temporal accumulation). ON by
+                // default. With it ON the deferred GI/AO is a stochastic ~1-spp gather
+                // cleaned by the denoiser; OFF switches to the deterministic 64-ray AO
+                // (noise-free, no GI colour, higher per-pixel cost). Equivalent to the
+                // THREEPP_DENOISE=0 startup env var, but flippable per frame.
+                .def_property("denoise",
+                              [](PyVulkanRenderer& r) { return r.native().denoise(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setDenoise(v); },
+                              "Toggle the deferred denoiser (SVGF + temporal). Default on. "
+                              "Off uses the deterministic 64-ray AO (noise-free, no GI colour).")
+                // Ray-traced env ambient-occlusion / 1-bounce diffuse GI. ON by
+                // default. Off drops the per-pixel occlusion rays (flat ambient IBL).
+                .def_property("deferred_ao",
+                              [](PyVulkanRenderer& r) { return r.native().deferredAO(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setDeferredAO(v); },
+                              "Toggle ray-traced ambient occlusion / diffuse GI. Default on.")
                 .def("set_flush_frames", &PyVulkanRenderer::set_flush_frames, py::arg("n"),
                      "Frames driven per render() to flush the MAILBOX swapchain (default 3; "
                      "raise to 4+ for fast-moving dynamic scenes).")

@@ -1758,6 +1758,8 @@ class VectorKeyframeTrack(KeyframeTrack):
     def __init__(self, name: str, times: list[float], values: list[float], interpolation: Interpolation | None = None) -> None:
         ...
 class VulkanRenderer:
+    denoise: bool  # Toggle the deferred denoiser (SVGF + temporal). Default on. Off uses the deterministic 64-ray AO.
+    deferred_ao: bool  # Toggle ray-traced ambient occlusion / diffuse GI. Default on.
     def __init__(self, canvas: Canvas, flush_frames: int = 3) -> None:
         """
         Deferred (RasterFirst) Vulkan renderer. Pass a headless Canvas created with vsync=False.
