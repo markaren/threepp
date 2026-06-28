@@ -590,8 +590,9 @@ def main():
     terr_geo = build_terrain_zup(field, WORLD_SZ, float(args.amplitude))
     # Sample terrain under the four feet + base to find the highest point in the
     # footprint — prevents spawning any foot inside the mesh on sloped ground.
+    SPAWN_X, SPAWN_Y = -2.0, 0.0   # 2 m back from origin, facing +Y (90° CCW)
     _FEET = ((0.30, 0.17), (0.30, -0.17), (-0.30, 0.17), (-0.30, -0.17), (0.0, 0.0))
-    h0 = max(float(gen.height_at(dx, dy, tparams)) for dx, dy in _FEET)
+    h0 = max(float(gen.height_at(SPAWN_X + dx, SPAWN_Y + dy, tparams)) for dx, dy in _FEET)
     print(f"[terrain] done  h_footprint={h0:.3f} m")
 
     # ── physics ───────────────────────────────────────────────────────────────
@@ -609,7 +610,9 @@ def main():
             art.set_drive_targets(default_q[add_to_isaac].astype(np.float32))
             world.step(0.02)
 
-    art.reset(tp.Vector3(0.0, 0.0, Z0 + h0 + 0.02))
+    _s = math.sqrt(2) / 2
+    _spawn_quat = tp.Quaternion(0.0, 0.0, _s, _s)  # 90° CCW around Z
+    art.reset(tp.Vector3(SPAWN_X, SPAWN_Y, Z0 + h0 + 0.1), _spawn_quat)
     settle()
     print("[spot] standing")
 
@@ -693,8 +696,8 @@ def main():
     camera = tp.PerspectiveCamera(50, w / h, 0.05, 200)
     camera.up.set(0, 0, 1)
     spawn_z = Z0 + h0
-    camera.position.set(-3.0, -3.0, spawn_z + 1.8)
-    _init_tgt = np.array([0.0, 0.0, spawn_z + 0.3])
+    camera.position.set(SPAWN_X - 3.0, SPAWN_Y - 3.0, spawn_z + 1.8)
+    _init_tgt = np.array([SPAWN_X, SPAWN_Y, spawn_z + 0.3])
     _prev_tgt = [_init_tgt.copy()]    # tracks last target so we can apply delta to camera
     controls = tp.OrbitControls(camera, canvas)
     controls.target.set(*_init_tgt.tolist())
@@ -732,8 +735,8 @@ def main():
     r_held    = [False]
 
     def reset():
-        rh = max(float(gen.height_at(dx, dy, tparams)) for dx, dy in _FEET)
-        art.reset(tp.Vector3(0.0, 0.0, Z0 + rh + 0.02))
+        rh = max(float(gen.height_at(SPAWN_X + dx, SPAWN_Y + dy, tparams)) for dx, dy in _FEET)
+        art.reset(tp.Vector3(SPAWN_X, SPAWN_Y, Z0 + rh + 0.02), _spawn_quat)
         last_act[:] = 0.0
         hdg_lock[0] = None
         settle(40)
