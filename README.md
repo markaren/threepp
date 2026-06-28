@@ -21,6 +21,7 @@ and modern backends: OpenGL, WebGPU, and a real-time path-tracing Vulkan rendere
 * Three rendering backends behind one scene graph: OpenGL 3.3 raster, WebGPU raster,
   and a Vulkan **real-time path tracer** (ReSTIR DI/GI, denoising,
   hybrid raster-first deferred mode)
+* **Python bindings** — pybind11 bindings for the core scene API; renders to NumPy arrays
 * FFT-displaced ocean, water & sky shaders, PMREM environment maps
 * Path-traced sensor simulation: LIDAR, depth sensor, event camera
 * Built-in model loaders [Binary STL, OBJ/MTL, glTF, COLLADA, USD, FBX, SVG, URDF]
@@ -158,6 +159,35 @@ int main() {
 
 Swap `GLRenderer` for `VulkanRenderer` (real-time path tracing) or `WgpuRenderer` —
 the scene code stays the same.
+
+### Python
+
+The same scene graph is available from Python:
+
+```python
+import threepp as tp
+
+canvas = tp.Canvas("offscreen", width=800, height=600, headless=True)
+renderer = tp.GLRenderer(canvas)
+
+scene = tp.Scene()
+camera = tp.PerspectiveCamera(75, 800 / 600, 0.1, 100)
+camera.position.z = 5
+
+mat = tp.MeshStandardMaterial()
+mat.color = 0x00aaff
+scene.add(tp.Mesh(tp.BoxGeometry(), mat))
+scene.add(tp.HemisphereLight())
+
+renderer.render(scene, camera)
+pixels = renderer.read_pixels()   # (H, W, 3) uint8 NumPy array
+renderer.save_frame("out.png")
+```
+
+Build the wheel from source (OpenGL backend; Vulkan and PhysX remain opt-in CMake builds):
+```shell
+pip install .
+```
 
 Looking for more? The [examples](examples) folder is the de-facto documentation,
 covering everything from geometries and loaders to full demo applications.
