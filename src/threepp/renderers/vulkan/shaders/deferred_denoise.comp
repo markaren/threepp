@@ -312,8 +312,48 @@ void main() {
     const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
     const float planeScale = 1.0 / max(0.035 * length(Pc - camPos), 1e-3);
 
-    const vec4  cC   = readSrc(px);
-    const float lumC = dot(cC.rgb, LUMA);
+    vec4  cC   = readSrc(px);
+    float lumC = dot(cC.rgb, LUMA);
+
+    // DESPECKLE (sparse-outlier clamp) — pass 0 only, short history only.
+    // The variance-guided à-trous below treats a LONE dark/bright GI sample as a
+    // luminance EDGE and preserves it instead of blurring it: that is the AO speckle
+    // that pops during MOTION, when the temporal accumulator (which averages such
+    // outliers away over many frames on a held view) has collapsed to a short
+    // history. Pull the center toward its same-surface 3×3 neighbourhood (luminance
+    // mean ± σ, rgb rescaled to keep hue) BEFORE the blur, so an isolated dot is
+    // brought into range while a smooth AO gradient (center ≈ local mean) is
+    // untouched. Gated on histLen so a CONVERGED static pixel is byte-identical —
+    // this only acts where the dots actually appear.
+    if (pc.srcMode == 0u) {
+        const float hist0 = imageLoad(indirectImage, px).a;
+        if (hist0 < 8.0) {
+            const uint cid = texelFetch(gbufIdsTex, px, 0).x;
+            vec3 cs = vec3(0.0); float s = 0.0, s2 = 0.0, n = 0.0;
+            for (int dy = -3; dy <= 3; ++dy)
+            for (int dx = -3; dx <= 3; ++dx) {
+                const ivec2 q = clamp(px + ivec2(dx, dy), ivec2(0), mx);
+                if (texelFetch(gbufIdsTex, q, 0).x != cid) continue;// same surface only
+                const vec3  c = imageLoad(indirectImage, q).rgb;
+                cs += c; const float l = dot(c, LUMA); s += l; s2 += l * l; n += 1.0;
+            }
+            const vec3  mc = cs / max(n, 1.0);                     // neighbourhood mean colour
+            const float m  = s / max(n, 1.0);
+            const float sd = sqrt(max(s2 / max(n, 1.0) - m * m, 0.0));
+            // 1) clamp the lone outlier into range (kills isolated dark/bright sparks).
+            const float cl = clamp(lumC, max(m - sd, 0.0), m + sd + 1e-3);
+            if (lumC > 1e-4) cC.rgb *= cl / lumC;
+            // 2) during the SHORTEST histories (heavy motion) the whole 5×5 is 1-spp
+            // noisy, so the clamp's own reference is noisy — additionally BLEND toward
+            // the 5×5 mean (≈5× variance reduction). Strength fades to 0 by histLen=8,
+            // so a settled/static view is byte-identical. Purely spatial → no ghosting
+            // (unlike raising the temporal cap), trading a little AO contact detail
+            // only while actually moving — exactly where the speckle lived.
+            const float blend = clamp((8.0 - hist0) / 8.0, 0.0, 1.0) * 0.92;
+            cC.rgb = mix(cC.rgb, mc, blend);
+            lumC = dot(cC.rgb, LUMA);
+        }
+    }
 
     // Center variance: pass 0 ESTIMATES it (temporal moment, or a 5×5 spatial
     // fallback when the history is too short for a reliable moment); later passes
@@ -357,7 +397,8 @@ void main() {
         const vec3  Pq = worldFromDepth(q, texelFetch(gbufDepthTex, q, 0).x);
         const float wz = exp(-abs(dot(Pq - Pc, Nc)) * planeScale);// tangent-plane edge stop
         const float hk = atrousH(abs(dx)) * atrousH(abs(dy));     // à-trous wavelet weight
-        const vec4  sq = readSrc(q);
+        // Center tap uses the despeckled cC (readSrc would re-read the raw outlier).
+        const vec4  sq = (dx == 0 && dy == 0) ? cC : readSrc(q);
         const float lumQ = dot(sq.rgb, LUMA);
         const float wl = exp(-abs(lumC - lumQ) / lumPhi);// variance-guided luminance edge stop
         const float w  = wn * wz * hk * wl;
