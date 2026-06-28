@@ -523,8 +523,14 @@ class PathTrail:
         g.set_draw_range(0, 0)
         mat = tp.LineBasicMaterial(); mat.color = 0xffffff
         self.line = tp.Line(g, mat); self.line.frustum_culled = False
+        self.line.visible = False
         self._g   = g; self._pts = []; self._prev = None
         scene.add(self.line)
+
+    @property
+    def visible(self): return self.line.visible
+    @visible.setter
+    def visible(self, v): self.line.visible = v
 
     def update(self, rs):
         p = (float(rs[0]), float(rs[1]), float(rs[2]) + 0.06)
@@ -762,11 +768,9 @@ def main():
             art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
             world.step(0.02)
         rs = art.root_state()
-        trail.line.visible = False
         for _ in range(20):
             rend.render(scene, camera)
             ahead, h_here = scanner.scan(rs)
-        trail.line.visible = True
         slam.insert(_scanner_pts(scanner))
         slam.trigger_rebuild()
         time.sleep(1.2)
@@ -813,7 +817,8 @@ def main():
         _, scanner.show_grid  = tp.imgui.checkbox("show scan grid", scanner.show_grid)
         tp.imgui.separator()
         tp.imgui.text(f"SLAM  voxels: {slam.voxels}  {'[rebuilding]' if slam.busy else ''}")
-        _, slam.visible = tp.imgui.checkbox("show SLAM mesh", slam.visible)
+        _, slam.visible  = tp.imgui.checkbox("show SLAM mesh", slam.visible)
+        _, trail.visible = tp.imgui.checkbox("show path trail", trail.visible)
         if tp.imgui.button("rebuild surface now") and not slam.busy:
             slam.trigger_rebuild()
         if tp.imgui.button("reset (R)"):
@@ -904,10 +909,10 @@ def main():
             else:
                 # GL: the sensor re-renders the scene, so hide the SLAM surface + trail (the
                 # scanner already hides the robot + its own cloud/grid).
-                _extra = [o for o in (slam._surf[0], trail.line) if o is not None]
-                for o in _extra: o.visible = False
+                _extra = [(o, o.visible) for o in (slam._surf[0], trail.line) if o is not None]
+                for o, _ in _extra: o.visible = False
                 ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
-                for o in _extra: o.visible = True
+                for o, v in _extra: o.visible = v
             slam.insert(_scanner_pts(scanner))
 
         grass.time = time.perf_counter() - t0  # advance GPU wind (Vulkan)
