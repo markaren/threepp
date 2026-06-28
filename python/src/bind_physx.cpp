@@ -201,9 +201,9 @@ namespace threepp_py {
                      "domain randomization; default uses the world's shared material. Returns an ArticulationLink.")
                 .def("finalize", &Articulation::finalize,
                      "Add the finished articulation to the scene. No links may be added afterwards.")
-                .def("reset", &Articulation::reset, py::arg("position"),
-                     "Episode reset: teleport the root upright to `position` with zero velocity and "
-                     "zero all joint positions/velocities (back to the neutral build pose).")
+                .def("reset", &Articulation::reset, py::arg("position"), py::arg("quaternion") = Quaternion(),
+                     "Episode reset: teleport the root to `position` with optional `quaternion` orientation "
+                     "(default upright/identity), zero velocity, and zero all joint positions/velocities.")
                 .def("set_joint_positions",
                      [](Articulation& a, py::array_t<float, py::array::c_style | py::array::forcecast> arr) {
                          a.setJointPositions(arr.data(), static_cast<std::size_t>(arr.size()));

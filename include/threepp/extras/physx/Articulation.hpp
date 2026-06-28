@@ -154,11 +154,11 @@ namespace threepp {
         // Episode reset: teleport the root to `pos` upright with zero velocity and
         // zero every joint position/velocity (back to the neutral build pose). The
         // bound visuals snap to the new state on the next world.step().
-        void reset(const Vector3& pos) {
+        void reset(const Vector3& pos, const Quaternion& quat = Quaternion()) {
             using namespace ::physx;
             if (!finalized_) throw std::runtime_error("Articulation.reset: finalize() first");
             cpuOnly("reset");
-            art_->setRootGlobalPose(PxTransform(toPxVec3(pos), PxQuat(PxIdentity)), false);
+            art_->setRootGlobalPose(PxTransform(toPxVec3(pos), toPxQuat(quat)), false);
             if (!cache_) cache_ = art_->createCache();
             art_->zeroCache(*cache_);
             art_->applyCache(*cache_,
