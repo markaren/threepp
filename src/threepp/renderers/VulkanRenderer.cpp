@@ -649,7 +649,7 @@ namespace threepp {
             float color[3];      // inscatter tint (sRGB-linear)
             float anisotropy;    // HG g, clamped [-0.95, 0.95] by setFogAnisotropy
             float waterSurfaceY; // world-Y of the water surface; 1e30 = no limit
-            float _pad[3];
+            float worldUp[3];    // world up axis (= camera.up) for sky aerial perspective
         };
         static_assert(sizeof(GpuFogUbo) == 48);
         std::array<Buffer, kFramesInFlight> fogUbos{};
@@ -1613,6 +1613,10 @@ namespace threepp {
         // deferred_shade.comp). σ = 0 disables (the march is skipped entirely).
         float deferredVolDensity_ = 0.f;
         float deferredVolAniso_   = 0.55f;
+        // Deferred DIRECTIONAL-light volumetric fog (sun shafts + aerial glow,
+        // ray-marched with RT shadow rays). Opt-in (per-step shadow-ray cost);
+        // only contributes when scene.fog is set. See volumetricDirScatter().
+        bool  deferredVolFog_     = false;
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
 
@@ -8090,8 +8094,13 @@ namespace threepp {
         // to sigma_t; linear Fog reaches ~63% extinction at farPlane via
         // sigma = 1 / (far - near). Hash detect changes so the per-pixel motion
         // path halves FC and the new fog state converges quickly.
-        void updateFogUbo(uint32_t frame, Object3D& scene) {
+        void updateFogUbo(uint32_t frame, Object3D& scene, Camera& camera) {
             GpuFogUbo ubo{};
+            // World up (for the sky aerial-perspective fog band) — these scenes set
+            // camera.up to the world up (Z-up for the Spot stack, Y-up elsewhere).
+            ubo.worldUp[0] = camera.up.x;
+            ubo.worldUp[1] = camera.up.y;
+            ubo.worldUp[2] = camera.up.z;
 
             if (auto* sc = dynamic_cast<Scene*>(&scene); sc && sc->fog.has_value()) {
                 float sigma = 0.f;
@@ -14836,7 +14845,7 @@ namespace threepp {
 
             updateCameraUbo(currentFrame, camera);
             updateLightsUbo(currentFrame, scene);
-            updateFogUbo(currentFrame, scene);
+            updateFogUbo(currentFrame, scene, camera);
             // Safe to write motionMatBuffers[currentFrame] now that the
             // inFlight[currentFrame] fence has been signaled — the GPU has
             // finished its previous use of this slot.
@@ -15248,7 +15257,7 @@ namespace threepp {
                                            emissiveTotalPowerThisFrame_,
                                            fireflyClamp_,
                                            oceanFineTileSize, oceanFoamTileSize,
-                                           denoiseEnabled_, restirDIEnabled_,
+                                           denoiseEnabled_, restirDIEnabled_, deferredVolFog_,
                                            deferredVolDensity_, deferredVolAniso_,
                                            deferredStarIntensity_,
                                            deferredCamDeltaLen_, deferredCamRotAngle_,
@@ -15860,6 +15869,20 @@ namespace threepp {
     void VulkanRenderer::setDeferredVolumetrics(float density, float anisotropy) {
         pimpl_->deferredVolDensity_ = std::max(density, 0.f);
         pimpl_->deferredVolAniso_   = std::clamp(anisotropy, -0.95f, 0.95f);
+    }
+
+    void VulkanRenderer::setVolumetricFog(bool enabled) {
+        if (enabled != pimpl_->deferredVolFog_) {
+            pimpl_->deferredVolFog_ = enabled;
+            // Toggling changes inscatter every pixel → drop TAA history so the
+            // shafts appear/vanish without a ghosted cross-fade.
+            pimpl_->motionThisFrame_      = true;
+            pimpl_->cameraMovedThisFrame_ = true;
+        }
+    }
+
+    bool VulkanRenderer::volumetricFog() const {
+        return pimpl_->deferredVolFog_;
     }
 
     void VulkanRenderer::setDeferredStarfield(float intensity) {

@@ -413,7 +413,7 @@ namespace threepp::vulkan {
                                        uint32_t emissiveCount, float emissiveTotalPower,
                                        float fireflyClamp,
                                        float oceanFineTileSize, float oceanFoamTileSize,
-                                       bool denoise, bool restirDI,
+                                       bool denoise, bool restirDI, bool volFog,
                                        float volDensity, float volAniso,
                                        float starIntensity,
                                        float camDeltaLen, float camRotAngle,
@@ -422,7 +422,7 @@ namespace threepp::vulkan {
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
         const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u) | (denoise ? 4u : 0u)
-                             | (restirDI ? 8u : 0u);
+                             | (restirDI ? 8u : 0u) | (volFog ? 16u : 0u);
         uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits, starBits,
                 camDeltaBits, camRotBits, timeBits;
         std::memcpy(&emPowerBits,   &emissiveTotalPower, sizeof(emPowerBits));

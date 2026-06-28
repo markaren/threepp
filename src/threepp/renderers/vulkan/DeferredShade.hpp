@@ -106,7 +106,7 @@ namespace threepp::vulkan {
                             uint32_t emissiveCount, float emissiveTotalPower,
                             float fireflyClamp,
                             float oceanFineTileSize, float oceanFoamTileSize,
-                            bool denoise, bool restirDI,
+                            bool denoise, bool restirDI, bool volFog,
                             float volDensity, float volAniso,
                             float starIntensity,
                             float camDeltaLen, float camRotAngle,

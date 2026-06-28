@@ -17,6 +17,7 @@
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/scenes/Fog.hpp"
+#include "threepp/scenes/FogExp2.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
 
@@ -208,6 +209,13 @@ namespace threepp_py {
                 .def_readwrite("near", &Fog::nearPlane)
                 .def_readwrite("far", &Fog::farPlane);
 
+        py::class_<FogExp2>(m, "FogExp2")
+                .def(py::init<const Color&, float>(), py::arg("color"), py::arg("density") = 0.00025f,
+                     "Exponential (Beer-Lambert) participating-media fog. density = σ_t (extinction per metre). "
+                     "On Vulkan this drives full volumetric single-scattering; on GL it falls back to GL_EXP2.")
+                .def_readwrite("color",   &FogExp2::color)
+                .def_readwrite("density", &FogExp2::density);
+
         // ---- Scene -----------------------------------------------------------
         py::class_<Scene, Object3D, std::shared_ptr<Scene>>(m, "Scene")
                 .def(py::init(&Scene::create))
@@ -232,6 +240,11 @@ namespace threepp_py {
                 // under the hood; this avoids exposing the variant to Python.)
                 .def("set_fog", [](Scene& s, const Color& c, float near, float far) { s.fog = Fog(c, near, far); },
                      py::arg("color"), py::arg("near") = 1.f, py::arg("far") = 1000.f)
+                .def("set_fog_exp2", [](Scene& s, const Color& c, float density) { s.fog = FogExp2(c, density); },
+                     py::arg("color"), py::arg("density") = 0.02f,
+                     "Exponential participating-media fog. On Vulkan: Beer-Lambert + volumetric scattering. "
+                     "Call renderer.fog_anisotropy to tune the Henyey-Greenstein phase (0 = isotropic, "
+                     "+0.9 = forward god-rays, -0.9 = back-scatter halo).")
                 .def("clear_fog", [](Scene& s) { s.fog.reset(); });
     }
 

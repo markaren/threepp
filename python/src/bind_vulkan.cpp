@@ -280,7 +280,21 @@ namespace threepp_py {
                      py::arg("x"), py::arg("y"), py::arg("width"), py::arg("height"))
                 .def("set_scissor_test", &PyVulkanRenderer::set_scissor_test, py::arg("enabled"))
                 .def("save_frame", &PyVulkanRenderer::save_frame, py::arg("scene"), py::arg("camera"), py::arg("path"))
-                .def("size", &PyVulkanRenderer::size);
+                .def("size", &PyVulkanRenderer::size)
+                // Volumetric fog: Henyey-Greenstein phase anisotropy.
+                // Clamped to [-0.95, 0.95]. Only takes effect when scene.set_fog_exp2() is active.
+                // 0 = isotropic scattering, +0.9 = forward god-rays, -0.9 = back-scatter halo.
+                .def_property("fog_anisotropy",
+                              [](PyVulkanRenderer& r) { return r.native().getFogAnisotropy(); },
+                              [](PyVulkanRenderer& r, float g) { r.native().setFogAnisotropy(g); })
+                // Volumetric directional-light fog (sun shafts + aerial glow). Ray-marches
+                // the air column with RT shadow rays so trees/terrain carve real light
+                // shafts; the haze brightens toward the sun via fog_anisotropy. Opt-in
+                // (per-step shadow-ray cost); only contributes when scene.set_fog_exp2()
+                // is active. This gives an outdoor scene true volume vs flat distance haze.
+                .def_property("volumetric_fog",
+                              [](PyVulkanRenderer& r) { return r.native().volumetricFog(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setVolumetricFog(v); });
 
         m.attr("HAS_VULKAN") = true;
     }

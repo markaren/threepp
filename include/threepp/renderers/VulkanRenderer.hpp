@@ -44,6 +44,16 @@ namespace threepp {
         // off, no cost); `anisotropy` is the Henyey-Greenstein g.
         void setDeferredVolumetrics(float density, float anisotropy = 0.55f);
 
+        // Volumetric DIRECTIONAL-light fog: ray-marches the camera→surface air
+        // column, tracing an RT shadow ray toward each sun per step so trees and
+        // terrain carve real light shafts, and brightens the haze toward the sun
+        // via the Henyey-Greenstein phase (driven by setFogAnisotropy). Only
+        // contributes when scene.fog is set; opt-in because of the per-step
+        // shadow-ray cost. This is what gives an outdoor (sun-lit) deferred scene
+        // genuine volume rather than flat distance-faded haze.
+        void setVolumetricFog(bool enabled);
+        [[nodiscard]] bool volumetricFog() const;
+
         // Procedural star field on SKY pixels — hash-based points in direction
         // space, pixel-crisp at any resolution/FOV. 0 disables; ~1.0 = night sky.
         void setDeferredStarfield(float intensity);

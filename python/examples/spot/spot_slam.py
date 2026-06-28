@@ -631,7 +631,11 @@ def main():
         print(f"[hdri] unavailable ({e}); falling back to flat sky")
         scene.background = tp.Background(0x8ab4d4)
         hemi_intensity = 0.9
-    scene.set_fog(0x8ab4d4, 25.0, 80.0)
+    # Volumetric exponential fog (Beer-Lambert + single-scattering on Vulkan).
+    # density = σ_t (extinction per metre); 0.02 ≈ 61% transmitted at 25 m.
+    _fog_density  = [0.02]
+    _fog_color    = 0x8ab4d4
+    scene.set_fog_exp2(_fog_color, _fog_density[0])
     scene.add(tp.HemisphereLight(0xd0e8ff, 0x3a4820, hemi_intensity))
     sun = tp.DirectionalLight(0xfff8e0, 2.8)
     sun.position.set(15, -10, 20)
@@ -699,6 +703,9 @@ def main():
     half = WORLD_SZ / 2.0
     # Vulkan's depth sensor traces the TLAS from the last render(); GL re-renders internally.
     is_vulkan = type(rend).__name__ == "VulkanRenderer"
+    if is_vulkan:
+        rend.fog_anisotropy = 0.6    # forward scatter → sun-ward glow + god-ray shafts
+        rend.volumetric_fog = True   # ray-marched sun shafts through the trees (real volume)
     scanner = ForwardDepthScanner(rend, scene, meshes,
                                   bounds=(-half, half, -half, half),
                                   cell=0.15, far=SENSOR_FAR,
@@ -811,6 +818,17 @@ def main():
             slam.trigger_rebuild()
         if tp.imgui.button("reset (R)"):
             reset()
+        tp.imgui.separator()
+        tp.imgui.text("Fog (volumetric on Vulkan)")
+        chg, v = tp.imgui.slider_float("density", _fog_density[0], 0.002, 0.15)
+        if chg:
+            _fog_density[0] = v
+            scene.set_fog_exp2(_fog_color, v)
+        if is_vulkan:
+            _, rend.volumetric_fog = tp.imgui.checkbox("sun shafts (volumetric)", rend.volumetric_fog)
+            chg, v = tp.imgui.slider_float("anisotropy g", rend.fog_anisotropy, -0.9, 0.9)
+            if chg:
+                rend.fog_anisotropy = v
         tp.imgui.separator()
         tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   WASD+QE  mouse=orbit/zoom")
         tp.imgui.end()

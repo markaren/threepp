@@ -155,6 +155,7 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     vec3  color;         // inscatter tint = single-scattering albedo
     float anisotropy;    // HG g (drives the volumetric beam phase when fog is on)
     float waterSurfaceY; // world-Y medium cap; 1e30 = unbounded
+    vec3  worldUp;       // world up axis (= camera.up) for sky aerial perspective
 } fog;
 
 layout(push_constant) uniform Pc {
@@ -2333,6 +2334,26 @@ vec3 applySceneFog(vec3 col, vec3 ro, vec3 hit) {
                         + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
     return col * tr + fog.color * fogLight * (vec3(1.0) - tr);
 }
+// ── Sky aerial perspective (deferred) ────────────────────────────────────────
+// The HDR background is infinitely far, so applySceneFog never touches it — a
+// foggy scene then shows distant geometry fading to fog colour against a crisp,
+// full-bright sky: the fog "wall" never closes and the HDR shines through. Blend
+// the sky toward the SAME inscatter colour distant geometry fades to, weighted to
+// the HORIZON (where the view ray crosses the most medium) and fading out toward
+// the zenith — aerial perspective / a horizon haze band. Density drives overall
+// strength so thin fog barely tints the sky and thick fog closes it off. The
+// volumetric sun glow is added AFTER this, so it still blooms through the haze.
+vec3 applySkyFog(vec3 sky, vec3 dir) {
+    if (fog.enabled < 0.5) return sky;
+    const float sigma = max(dot(fog.sigmaT, vec3(1.0 / 3.0)), 0.0);
+    if (sigma <= 0.0) return sky;
+    const vec3  up       = (dot(fog.worldUp, fog.worldUp) > 1e-6) ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
+    const float elev     = clamp(dot(dir, up), 0.0, 1.0);                 // 0 horizon .. 1 zenith
+    const float band     = exp(-elev * 2.5);                              // haze concentrated near the horizon
+    const float strength = 1.0 - exp(-sigma * 45.0);                      // density → how much sky is obscured
+    const vec3  fogLight = lights.ambient + sampleEnvLod(up, float(max(pc.envMipCount, 1u) - 1u));
+    return mix(sky, fog.color * fogLight, band * strength);
+}
 // ── Procedural star field (sky pixels) ───────────────────────────────────────
 // Hash-based stars evaluated in DIRECTION space — resolution-independent and
 // pixel-crisp at any FOV/zoom. Baked env-texture stars are sub-texel features,
@@ -2423,6 +2444,49 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     return sum;
 }
 
+// ── Directional-light volumetric single scattering (god rays / aerial glow) ───
+// Ray-marches the camera→surface (or →sky-cap) segment; at each step an RT shadow
+// ray toward each sun carves real light shafts through trees/terrain, and the
+// Henyey-Greenstein phase brightens the haze TOWARD the sun (the "volume" a flat
+// extinction haze lacks). This is the directional sibling of volumetricSpotScatter
+// (which only sees spotlights) — outdoor scenes have a DirectionalLight, so without
+// this the deferred fog is just distance-faded flat colour. Gated on fog.enabled
+// AND the volumetric-fog flag (bit 4) so the per-step shadow-ray cost is opt-in;
+// the per-pixel jittered step offset relies on TAA to average into smooth shafts.
+vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
+    if (fog.enabled < 0.5 || (pc.flags & 16u) == 0u || lights.dirCount == 0u) return vec3(0.0);
+    const float sigma = max(dot(fog.sigmaT, vec3(1.0 / 3.0)), 0.0);
+    if (sigma <= 0.0) return vec3(0.0);
+    const float hgG       = fog.anisotropy;
+    const vec3  medAlbedo = fog.color;
+    // Cap the march where transmittance is essentially extinct (σ·t ≈ 4) so a sky
+    // pixel's huge tMax doesn't spend steps on fully-attenuated distance.
+    const float march = min(tMax, 4.0 / sigma);
+    if (march <= 0.0) return vec3(0.0);
+
+    const int   STEPS  = 16;
+    uint        seed   = pcgHash(uint(px.x) * 7919u + pcgHash(uint(px.y) * 104729u + pc.frame * 6271u));
+    const float jitter = rnd(seed);
+    const float dt     = march / float(STEPS);
+
+    vec3 sum = vec3(0.0);
+    for (int s = 0; s < STEPS; ++s) {
+        const float t     = (float(s) + jitter) * dt;
+        const float trCam = exp(-sigma * t);          // camera→x transmittance
+        if (trCam < 0.003) break;                     // remaining contribution negligible
+        const vec3 x = ro + rd * t;
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+            const vec3  L     = normalize(lights.dirLights[i].direction);
+            const float vis   = shadowVis(x, L, 1e30); // tree/terrain shaft occlusion
+            if (vis <= 0.0) continue;
+            const float phase = hgPhase(dot(L, rd), hgG);// forward glow toward the sun
+            sum += lights.dirLights[i].color * (phase * vis * trCam);
+        }
+    }
+    // σ_s = σ_t · albedo: the medium tint scales the in-scattered radiance.
+    return sum * medAlbedo * (sigma * dt);
+}
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
@@ -2449,9 +2513,10 @@ void main() {
         const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
         // Sky pixels march the beams too — a lighthouse beam against the night
         // sky is exactly where the volumetric is most visible.
-        const vec3 sky = sampleEnvLod(dirWS, 0.0)
-                       + proceduralStars(dirWS)
-                       + volumetricSpotScatter(camPos, dirWS, 2000.0, px);
+        vec3 sky = applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
+        // Volumetric sun glow / god rays added on top → blooms THROUGH the haze.
+        sky += volumetricSpotScatter(camPos, dirWS, 2000.0, px)
+             + volumetricDirScatter(camPos, dirWS, 2000.0, px);
         imageStore(outImage, px, vec4(sky, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         return;
@@ -2873,6 +2938,7 @@ void main() {
 
     lit = applySceneFog(lit, camPos, worldPos);// extinction first; the beam march carries its own
     lit += volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
+    lit += volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);// sun shafts / aerial glow
     imageStore(outImage, px, vec4(lit, 1.0));
     // SVGF TEMPORAL stage for the demod GI — now with REPROJECTION (kills motion
     // ghosting). Read the 1-frame GI history (the OTHER fif index, giPrevTex) at
