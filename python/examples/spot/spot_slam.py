@@ -8,7 +8,7 @@ to reconstruct the growing SLAM surface (semi-transparent blue) over the ground 
     python spot_slam.py --seed 7 --amplitude 0.20
     python spot_slam.py --shot out.png
 
-Controls: W/S = fwd/back  A/D = strafe  Q/E = turn  |  SPACE = auto-forward  |  R = reset  |  mouse = orbit/zoom
+Controls: W/S = fwd/back  A/D = strafe  Q/E = turn  |  R = reset  |  mouse = orbit/zoom
 """
 import argparse, math, os, sys, threading, time
 import numpy as np
@@ -728,10 +728,8 @@ def main():
 
     # ── state ─────────────────────────────────────────────────────────────────
     fc        = [0]
-    auto_fwd  = [False]
     hdg_lock  = [None]
     r_held    = [False]
-    space_held= [False]
 
     def reset():
         rh = max(float(gen.height_at(dx, dy, tparams)) for dx, dy in _FEET)
@@ -805,7 +803,6 @@ def main():
 
         rs = art.root_state()
         tp.imgui.text(f"pos  x={rs[0]:+.1f}  y={rs[1]:+.1f}  z={rs[2]:.2f} m")
-        _, auto_fwd[0] = tp.imgui.checkbox("auto-forward (SPACE)", auto_fwd[0])
         tp.imgui.separator()
         tp.imgui.text("Depth camera")
         chg, v = tp.imgui.slider_float("range noise (m)", scanner.sensor.range_noise, 0.0, 0.10)
@@ -841,19 +838,10 @@ def main():
     def frame():
         fc[0] += 1
 
-        # SPACE toggles auto-forward
-        if down("SPACE"):
-            if not space_held[0]: auto_fwd[0] = not auto_fwd[0]
-            space_held[0] = True
-        else:
-            space_held[0] = False
-
         # keyboard command — WASD drive, QE turn (numpad kept as an alternate)
         vx = (1.5 if down("W", "KP8") else 0.0) - (1.0 if down("S", "KP2") else 0.0)
         vy = (1.0 if down("A", "KP4") else 0.0) - (1.0 if down("D", "KP6") else 0.0)
         wz_key = (1.5 if down("Q", "KP7") else 0.0) - (1.5 if down("E", "KP9") else 0.0)
-        if auto_fwd[0] and vx == 0.0 and vy == 0.0 and wz_key == 0.0:
-            vx = 1.0
 
         # heading hold
         rs  = art.root_state()
