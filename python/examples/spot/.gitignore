@@ -1,2 +1,3 @@
 ﻿*.pt
 __pycache__/
+*.csv

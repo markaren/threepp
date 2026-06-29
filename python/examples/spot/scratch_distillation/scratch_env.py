@@ -41,13 +41,29 @@ sys.path.insert(0, _SPOT_DIR)  # spot_deploy / spot_terrain_env
 
 import threepp as tp
 from threepp.rl import GpuSim
-from spot_deploy import (build_spot, fetch_assets, default_q, add_to_isaac, isaac_to_add,
+from spot_deploy import (build_spot, default_q, add_to_isaac, isaac_to_add,
                          ACTION_SCALE, GAINS)
 from spot_terrain_env import (quat_rotate_inverse, up_z, heading_cossin, _flat_ground,
                                CONTROL_HZ, DT, SUBSTEPS, SPACING, SPAWN_Z)
 from scratch_clock import (OBS_DIM, CLOCK0, ACT_DIM, N_PROPRIO, GAIT_PERIOD,
                             advance, clock_obs, leg_phase, desired_stance, reset_phi, DUTY)
 from foot_contact import foot_world, contact_soft, FEET, H_C
+
+# --------------------------------------------------------------------------- #
+#  Isaac teacher — reward ORACLE for the from-scratch gait (imitation-reward signal only; its weights
+#  NEVER enter the student, and the terrain trainers no longer warm-start from it). Fetched HERE, with
+#  its sole consumer, rather than in spot_deploy's general (now Isaac-free) asset fetcher.
+# --------------------------------------------------------------------------- #
+def fetch_isaac_teacher():
+    """Download the Isaac Lab Spot policy to the shared threepp cache; return its local path."""
+    import pathlib
+    from threepp.utils import fetch_file
+    url = ("https://omniverse-content-production.s3-us-west-2.amazonaws.com/"
+           "Assets/Isaac/5.1/Isaac/Samples/Policies/Spot_Policies/spot_policy.pt")
+    cache = pathlib.Path.home() / ".cache" / "threepp" / "spot"
+    cache.mkdir(parents=True, exist_ok=True)
+    return fetch_file(url, cache, "spot_policy.pt")
+
 
 # --------------------------------------------------------------------------- #
 #  Constants
@@ -152,9 +168,7 @@ class SpotScratchEnv:
         self.phi      = z(num_envs)              # phase clock ∈ [0,1)
 
         # Load the teacher (Isaac flat walker) — reward oracle only; weights never enter student.
-        self.imit_policy = torch.jit.load(
-            os.path.join(fetch_assets(), "spot_policy.pt"), map_location=dev
-        ).eval()
+        self.imit_policy = torch.jit.load(fetch_isaac_teacher(), map_location=dev).eval()
 
         # Logging metrics (updated each step like terrain env).
         self.last_track    = 0.0

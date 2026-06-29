@@ -17,6 +17,7 @@ import torch
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 sys.path.insert(0, _HERE)
+sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))   # scratch_clock / scratch_env
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -31,6 +32,8 @@ from spot_deploy import (build_spot, fetch_assets,
                          default_q, isaac_to_add, add_to_isaac, ACTION_SCALE, Z0)
 from spot_depth_scan import ForwardDepthScanner
 from spot_terrain_env import VX_HI, VY_HI, WZ_HI
+from scratch_env import STIFF_GAINS
+from scratch_clock import GAIT_PERIOD
 
 GRAV = np.array([0.0, 0.0, -1.0])
 
@@ -405,16 +408,17 @@ def add_pond(scene, gen, params, max_r=20.0, exclude_r=7.0, depth=1.4):
     return pond, wl
 
 
-# ── policy observation (94-d: mirrors SpotStepsEnv) ───────────────────────────
-def v2_obs(art, last_act, cmd, ahead, h_here):
+# ── policy observation (96-d clock: mirrors SpotStepsEnv) ─────────────────────
+def v2_obs(art, last_act, cmd, ahead, h_here, phi):
     rs, rv = art.root_state(), art.root_velocity()
     R = _quat_to_R(rs[3:7]); Rt = R.T
     lin_b = Rt @ rv[0:3]; ang_b = Rt @ rv[3:6]; proj_g = Rt @ GRAV
     jp_isaac = art.joint_positions()[isaac_to_add]
     jv_isaac = art.joint_velocities()[isaac_to_add]
     qpos = jp_isaac - default_q
+    clk = [math.sin(2 * math.pi * phi), math.cos(2 * math.pi * phi)]   # [48:50] phase clock
     return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
-                           [float(rs[2]) - h_here], ahead]).astype(np.float32)
+                           clk, [float(rs[2]) - h_here], ahead]).astype(np.float32)
 
 
 def _scanner_pts(scanner):
@@ -557,6 +561,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed",      type=int,   default=42)
     ap.add_argument("--amplitude", type=float, default=AMPLITUDE)
+    ap.add_argument("--model",     default=os.path.join(_HERE, "spot_steps.pt"),
+                    help="policy checkpoint (falls back to <model>_latest.pt)")
     ap.add_argument("--shot",      metavar="PNG")
     args = ap.parse_args()
     assert tp.HAS_PHYSX, "needs a PhysX-enabled threepp build"
@@ -564,8 +570,11 @@ def main():
 
     # ── assets ────────────────────────────────────────────────────────────────
     assets = fetch_assets()
-    model_path = os.path.join(_HERE, "spot_steps.pt")
-    ac, _norm, _meta = load_policy(model_path, device="cpu")
+    model_path = args.model
+    if not os.path.exists(model_path):
+        _latest = os.path.splitext(model_path)[0] + "_latest.pt"
+        model_path = _latest if os.path.exists(_latest) else model_path
+    ac, norm, _meta = load_policy(model_path, device="cpu")
     ac.eval()
     print(f"[policy] {os.path.basename(model_path)}")
 
@@ -603,7 +612,7 @@ def main():
     terr_phys = tp.Mesh(terr_geo, tp.MeshStandardMaterial())
     world.add_static_trimesh(terr_phys)
 
-    art, meshes = build_spot(world, assets)
+    art, meshes = build_spot(world, assets, gains=STIFF_GAINS)   # stiff gains (90) = base gait's plant
 
     def settle(n=80):
         for _ in range(n):
@@ -733,12 +742,15 @@ def main():
     fc        = [0]
     hdg_lock  = [None]
     r_held    = [False]
+    gphi      = [0.0]    # gait phase clock ∈ [0,1); advanced +0.02/GAIT_PERIOD per control tick
+    vx_hi     = [float(VX_HI)]    # live forward-speed cap (UI slider sets it)
 
     def reset():
         rh = max(float(gen.height_at(SPAWN_X + dx, SPAWN_Y + dy, tparams)) for dx, dy in _FEET)
         art.reset(tp.Vector3(SPAWN_X, SPAWN_Y, Z0 + rh + 0.02), _spawn_quat)
         last_act[:] = 0.0
         hdg_lock[0] = None
+        gphi[0] = 0.0
         settle(40)
         scanner.clear_map(); scanner.prewarm(art.root_state())
         slam.clear()
@@ -762,12 +774,16 @@ def main():
             if i % SCAN_EVERY == 0:
                 rend.render(scene, camera)   # refresh TLAS for Vulkan
                 ahead, h_here = scanner.scan(rs)
-            obs = v2_obs(art, last_act, cmd, ahead, h_here)
+            obs = v2_obs(art, last_act, cmd, ahead, h_here, gphi[0])
             with torch.no_grad():
-                a = ac.act_mean(torch.from_numpy(obs)[None])[0].numpy()
+                obs_t = torch.from_numpy(obs)[None]
+                if norm is not None:
+                    obs_t = norm.norm(obs_t)
+                a = ac.act_mean(obs_t)[0].numpy()
             last_act[:] = a
             art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
             world.step(0.02)
+            gphi[0] = (gphi[0] + 0.02 / GAIT_PERIOD) % 1.0
         rs = art.root_state()
         for _ in range(20):
             rend.render(scene, camera)
@@ -806,6 +822,7 @@ def main():
 
         rs = art.root_state()
         tp.imgui.text(f"pos  x={rs[0]:+.1f}  y={rs[1]:+.1f}  z={rs[2]:.2f} m")
+        _, vx_hi[0] = tp.imgui.slider_float("forward speed vx (VX_HI)", vx_hi[0], 0.0, VX_HI)
         tp.imgui.separator()
         tp.imgui.text("Depth camera")
         chg, v = tp.imgui.slider_float("range noise (m)", scanner.sensor.range_noise, 0.0, 0.10)
@@ -842,7 +859,7 @@ def main():
         fc[0] += 1
 
         # keyboard command — WASD drive, QE turn (numpad kept as an alternate)
-        vx = (1.5 if down("W", "KP8") else 0.0) - (1.0 if down("S", "KP2") else 0.0)
+        vx = (vx_hi[0] if down("W", "KP8") else 0.0) - (1.0 if down("S", "KP2") else 0.0)
         vy = (1.0 if down("A", "KP4") else 0.0) - (1.0 if down("D", "KP6") else 0.0)
         wz_key = (1.5 if down("Q", "KP7") else 0.0) - (1.5 if down("E", "KP9") else 0.0)
 
@@ -859,12 +876,16 @@ def main():
 
         # obs → policy → step
         cmd   = np.array([vx, vy, wz], np.float32)
-        obs   = v2_obs(art, last_act, cmd, ahead_cache[0], h_here_cache[0])
+        obs   = v2_obs(art, last_act, cmd, ahead_cache[0], h_here_cache[0], gphi[0])
         with torch.no_grad():
-            a = ac.act_mean(torch.from_numpy(obs)[None])[0].numpy()
+            obs_t = torch.from_numpy(obs)[None]
+            if norm is not None:
+                obs_t = norm.norm(obs_t)
+            a = ac.act_mean(obs_t)[0].numpy()
         last_act[:] = a
         art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
         world.step(0.02)
+        gphi[0] = (gphi[0] + 0.02 / GAIT_PERIOD) % 1.0
         rs = art.root_state()
         if fc[0] % MC_FRAMES == 0:
             slam.trigger_rebuild()

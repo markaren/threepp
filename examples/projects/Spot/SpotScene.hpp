@@ -45,6 +45,7 @@ namespace spot {
     // ── Isaac Spot velocity-task contract ──────────────────────────────────
     constexpr float ACTION_SCALE = 0.2f;
     constexpr float Z0 = 0.72f;// build height (straight-leg stance just above ground)
+    constexpr float GAIT_PERIOD = 0.5f;// phase-clock period (s); matches scratch_clock.GAIT_PERIOD
 
     // Default joint pose in ISAAC (type-grouped) order: [hx×4, hy×4, kn×4].
     // hips: left +0.1 / right -0.1; thighs: front 0.9 / hind 1.1; knees -1.5.
@@ -153,7 +154,8 @@ namespace spot {
                                const std::string& assetsDir = "") {
         using namespace threepp;
 
-        // kinematics + Isaac PD gains (stiffness, damping, effort) + link masses
+        // kinematics + stiff PD gains (stiffness 90, damping, effort) + link masses — stiffness 90
+        // matches scratch_env.STIFF_GAINS, the plant the clock base gait was trained on (Isaac default 60 sags)
         constexpr float HIP_X = 0.29785f, HIP_Y = 0.055f, HY_Y = 0.1108f;
         constexpr float MASS_BASE = 13.0f, MASS_HIP = 1.2f, MASS_ULEG = 2.0f, MASS_LLEG = 0.55f;
         const float ox = baseX, oy = baseY;
@@ -197,17 +199,17 @@ namespace spot {
             auto hm = detail::capsule(0.06f, 0.045f, mid.addVectors(Jhx, Jhy).multiplyScalar(0.5f),
                                       dir.subVectors(Jhy, Jhx), 0x303030, hv);
             ArticulationLink hip = art.addLink(&base, *hm, MASS_HIP / hv, {1, 0, 0}, {Jhx.x, Jhx.y, Jhx.z},
-                                               true, -0.7854f, 0.7854f, 60.f, 1.5f, 45.f, hxDef, "revolute", 0.f, nullptr);
+                                               true, -0.7854f, 0.7854f, 90.f, 1.5f, 45.f, hxDef, "revolute", 0.f, nullptr);
 
             auto um = detail::capsule(0.30f, 0.045f, mid.addVectors(Jhy, Jkn).multiplyScalar(0.5f),
                                       dir.subVectors(Jkn, Jhy), 0xffc24d, uv);
             ArticulationLink uleg = art.addLink(&hip, *um, MASS_ULEG / uv, {0, 1, 0}, {Jhy.x, Jhy.y, Jhy.z},
-                                                true, -0.8988f, 2.295f, 60.f, 1.5f, 45.f, hyDef, "revolute", 0.f, nullptr);
+                                                true, -0.8988f, 2.295f, 90.f, 1.5f, 45.f, hyDef, "revolute", 0.f, nullptr);
 
             auto lm = detail::capsule(0.30f, 0.028f, mid.addVectors(Jkn, Jft).multiplyScalar(0.5f),
                                       dir.subVectors(Jft, Jkn), 0x303030, lv);
             art.addLink(&uleg, *lm, MASS_LLEG / lv, {0, 1, 0}, {Jkn.x, Jkn.y, Jkn.z},
-                        true, -2.7929f, -0.247f, 60.f, 1.5f, 115.f, -1.5f, "revolute", 0.f, nullptr);
+                        true, -2.7929f, -0.247f, 90.f, 1.5f, 115.f, -1.5f, "revolute", 0.f, nullptr);
 
             robot.meshes.push_back(hm);
             robot.meshes.push_back(um);
@@ -228,22 +230,23 @@ namespace spot {
         return robot;
     }
 
-    // Builds the 48-d Isaac observation, runs the policy, applies joint targets.
-    // Mirrors spot_deploy.py:SpotController (deterministic act_mean for deploy).
+    // Builds the 50-d clock observation, runs the policy, applies joint targets.
+    // Mirrors python/examples/spot/scratch_distillation (SpotScratchEnv): the flat clock base gait.
     class SpotController {
     public:
         SpotController(threepp::Articulation& art, const SpotPolicy& policy)
             : art_(art), policy_(policy) { last_.fill(0.f); }
 
-        // 48-d obs: [lin_b(3), ang_b(3), proj_g(3), cmd(3), qpos(12), qvel(12), last_action(12)],
-        // velocities + gravity rotated into the body frame; qpos/qvel/action in ISAAC order.
-        [[nodiscard]] std::array<float, 48> obs(const std::array<float, 3>& cmd) const {
+        // 50-d obs: [lin_b(3), ang_b(3), proj_g(3), cmd(3), qpos(12), qvel(12), last_action(12), clock(2)],
+        // velocities + gravity rotated into the body frame; qpos/qvel/action in ISAAC order; clock =
+        // [sin(2*pi*phi), cos(2*pi*phi)] — the gait phase the base policy was trained with (scratch_clock).
+        [[nodiscard]] std::array<float, 50> obs(const std::array<float, 3>& cmd) const {
             const auto rs = art_.rootState();    // [px,py,pz, qx,qy,qz,qw]
             const auto rv = art_.rootVelocity();// [vx,vy,vz, wx,wy,wz]
             float R[3][3];
             quatToR(rs[3], rs[4], rs[5], rs[6], R);// body->world; R^T = world->body
 
-            std::array<float, 48> o{};
+            std::array<float, 50> o{};
             int k = 0;
             for (int i = 0; i < 3; ++i) {// lin_b = R^T · v_lin
                 float s = 0;
@@ -263,6 +266,9 @@ namespace spot {
             for (int i = 0; i < 12; ++i) o[k++] = jp[ISAAC_TO_ADD[i]] - DEFAULT_Q[i];
             for (int i = 0; i < 12; ++i) o[k++] = jv[ISAAC_TO_ADD[i]];
             for (int i = 0; i < 12; ++i) o[k++] = last_[i];
+            const float ang = 2.0f * threepp::math::PI * phi_;// clock = [sin, cos] of the gait phase
+            o[k++] = std::sin(ang);
+            o[k++] = std::cos(ang);
             return o;
         }
 
@@ -279,10 +285,13 @@ namespace spot {
             }
             art_.setDriveTargets(tgt, 12);
             world.step(0.02f);
+            // advance the phase clock AFTER the substep so phi aligns with the NEXT obs (matches training)
+            phi_ = std::fmod(phi_ + 0.02f / GAIT_PERIOD, 1.0f);
         }
 
         // Hold the default stand pose for n ticks (settle on spawn).
         void hold(threepp::PhysxWorld& world, int n) {
+            phi_ = 0.f;// reset the phase clock; the settle does NOT advance it (matches training reset)
             float tgt[12];
             for (int i = 0; i < 12; ++i) tgt[i] = DEFAULT_Q[ADD_TO_ISAAC[i]];
             for (int k = 0; k < n; ++k) {
@@ -297,6 +306,7 @@ namespace spot {
         threepp::Articulation& art_;
         const SpotPolicy& policy_;
         std::array<float, 12> last_{};
+        float phi_ = 0.f;// gait phase clock in [0,1); advanced +DT/GAIT_PERIOD each step()
     };
 
 }// namespace spot

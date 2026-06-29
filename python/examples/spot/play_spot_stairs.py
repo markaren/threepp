@@ -1,10 +1,10 @@
 """Watch the spotv2 velocity-tracking policy DRIVE on tent terrain — single Spot, CPU deploy + render,
-hot-reloading the checkpoint as train_spot_terrain.py writes it. STEER it yourself and watch it track.
+hot-reloading the checkpoint as train_spot_stairs.py writes it. STEER it yourself and watch it track.
 
-    python play_spot_terrain.py                     # live window; forward DepthSensor scan
-    python play_spot_terrain.py --model spot_terrain_latest.pt
-    python play_spot_terrain.py --analytic          # privileged exact-height oracle (the old fake scan)
-    python play_spot_terrain.py --check 400         # headless smoke (no window): drive forward, print clearance
+    python play_spot_stairs.py                     # live window; forward DepthSensor scan
+    python play_spot_stairs.py --model spot_terrain_latest.pt
+    python play_spot_stairs.py --analytic          # privileged exact-height oracle (the old fake scan)
+    python play_spot_stairs.py --check 400         # headless smoke (no window): drive forward, print clearance
 
 DRIVE (body frame, +x fwd / +y left):
     forward  UP / KP8        back     DOWN / KP2
@@ -13,9 +13,10 @@ DRIVE (body frame, +x fwd / +y left):
     R = reset to start    (ImGui: tent rise / #steps, auto-forward, heading-hold)
 
 This is the v2 (velocity-command) policy: it STEERS from the command in obs[9:12] — there is no lane-hold
-crutch. The obs is the 58-d SpotTerrainEnv layout, byte-for-byte (heading-relative 9-probe scan, 2-D tent
-height: in-lane vs flat off-lane), on RAW obs (no normalizer). CPU world uses tgs_pcm + 0.005 substeps to
-match the GpuSim training contact model. Policy runs on CPU to leave the GPU to the trainer.
+crutch. The obs is the 96-d clock layout [proprio(48)|clock(2)|base_above(1)|scan(45)], normalized by the
+checkpoint's RunningNorm, with a phase clock advanced at the training rate (GAIT_PERIOD). Spot is built at
+the base gait's STIFF_GAINS (90). CPU world uses tgs_pcm + 0.005 substeps to match the GpuSim training
+contact model. Policy runs on CPU to leave the GPU to the trainer.
 """
 import argparse
 import math
@@ -35,11 +36,15 @@ try:                                                  # the Windows cp1252 conso
 except Exception:
     pass
 
+sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))   # scratch_clock / scratch_env
+
 import threepp as tp
 from threepp.rl import load_policy
 from spot_deploy import (build_spot, fetch_assets, grid_texture, _quat_to_R,
                          default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, Z0)
 from spot_terrain_env import scan_xy_np, STAIR_X0, LAND_LEN, HALF_W, VX_HI, VY_HI, WZ_HI
+from scratch_env import STIFF_GAINS
+from scratch_clock import GAIT_PERIOD
 from spot_depth_scan import ForwardDepthScanner
 
 DISP = 820
@@ -74,8 +79,9 @@ def analytic_scan(art, rise, run, n):
     return ahead, h_here
 
 
-def v2_obs(art, last_act, cmd, ahead, h_here):
-    """94-d SpotTerrainEnv obs. `ahead` (45) + `h_here` come from the depth sensor OR the oracle."""
+def v2_obs(art, last_act, cmd, ahead, h_here, phi):
+    """96-d clock obs: [proprio(48)|clock(2)|base_above(1)|scan(45)]. `ahead` (45) + `h_here` come
+    from the depth sensor OR the oracle. `phi` is the current phase scalar ∈ [0,1)."""
     rs, rv = art.root_state(), art.root_velocity()
     R = _quat_to_R(rs[3:7]); Rt = R.T
     lin_b, ang_b, proj_g = Rt @ rv[0:3], Rt @ rv[3:6], Rt @ GRAV
@@ -83,8 +89,9 @@ def v2_obs(art, last_act, cmd, ahead, h_here):
     jv_isaac = art.joint_velocities()[isaac_to_add]
     qpos = jp_isaac - default_q                                    # default_q is isaac order
     z = float(rs[2])
+    clk = [math.sin(2 * math.pi * phi), math.cos(2 * math.pi * phi)]
     return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, jv_isaac, last_act,
-                           [z - h_here], ahead]).astype(np.float32)
+                           clk, [z - h_here], ahead]).astype(np.float32)
 
 
 def _resolve_model(path):
@@ -112,11 +119,11 @@ def main():
     args = ap.parse_args()
     model = _resolve_model(args.model)
     if not os.path.exists(model):
-        print(f"No policy at {model} — run train_spot_terrain.py first."); sys.exit(0)
+        print(f"No policy at {model} — run train_spot_stairs.py first."); sys.exit(0)
     live = args.check == 0
     dev = "cpu"                                                    # leave the GPU to the trainer
-    ac, _, _ = load_policy(model, device=dev)
-    pol = {"ac": ac, "mt": os.path.getmtime(model), "reloads": 0}
+    ac, norm, _ = load_policy(model, device=dev)
+    pol = {"ac": ac, "norm": norm, "mt": os.path.getmtime(model), "reloads": 0}
     print(f"[policy] {os.path.basename(model)}")
 
     # tgs_pcm + 0.005 substep -> matches the GpuSim TGS+PCM training contact model on CPU. --pgs uses
@@ -128,7 +135,7 @@ def main():
     print(f"[solver] {'PGS/0.002 (PhysX default CPU solver)' if args.pgs else 'tgs_pcm/0.005 (matches GpuSim training)'}")
     ground = tp.Mesh(tp.BoxGeometry(60, 30, 1.0), tp.MeshStandardMaterial()); ground.position.set(20, 0, -0.5)
     world.add_static(ground)
-    art, meshes = build_spot(world, fetch_assets())               # default Isaac gains (the warm-start regime)
+    art, meshes = build_spot(world, fetch_assets(), gains=STIFF_GAINS)   # stiff gains (90) = base gait's plant
 
     canvas = tp.Canvas("spotv2 - drive on terrain", width=DISP, height=DISP, headless=not live)
     rend = tp.GLRenderer(canvas); rend.shadow_map_enabled = True
@@ -179,7 +186,7 @@ def main():
     cam = tp.PerspectiveCamera(46, 1.0, 0.05, 120); cam.up.set(0, 0, 1)
     cam.position.set(-2.6, -2.7, 1.4)
     state = {"last_act": np.zeros(12, np.float32), "hdg_lock": None,
-             "auto_fwd": True, "hdg_hold": True, "cmd": (0.0, 0.0, 0.0)}
+             "auto_fwd": True, "hdg_hold": True, "cmd": (0.0, 0.0, 0.0), "phi": 0.0, "vx_hi": float(VX_HI)}
     BACK, HEIGHT, LAG = 2.8, 1.4, 0.10
 
     def settle(n):
@@ -188,13 +195,13 @@ def main():
 
     def reset_spot():
         art.reset(tp.Vector3(0, 0, Z0)); state["last_act"] = np.zeros(12, np.float32)
-        state["hdg_lock"] = None; settle(40)
+        state["hdg_lock"] = None; state["phi"] = 0.0; settle(40)
         if scanner is not None:                                       # forget stale terrain, then pre-fill from here
             scanner.clear_map(); scanner.prewarm(art.root_state())
 
     def key_cmd():
         d = lambda *ks: any(canvas.is_key_down(k) for k in ks)
-        vx = (VX_HI if d("UP", "KP8") else 0.0) - (1.0 if d("DOWN", "KP2") else 0.0)
+        vx = (state["vx_hi"] if d("UP", "KP8") else 0.0) - (1.0 if d("DOWN", "KP2") else 0.0)
         vy = (VY_HI if d("LEFT", "KP4") else 0.0) - (VY_HI if d("RIGHT", "KP6") else 0.0)
         turn = (WZ_HI if d("N", "KP7") else 0.0) - (WZ_HI if d("M", "KP9") else 0.0)
         return vx, vy, turn
@@ -202,7 +209,7 @@ def main():
     def control_tick(use_keys=True):
         vx, vy, turn = key_cmd() if use_keys else (0.0, 0.0, 0.0)
         if state["auto_fwd"] and vx == 0.0 and vy == 0.0 and turn == 0.0:
-            vx = CRUISE                                           # idle -> cruise into the tent
+            vx = min(CRUISE, state["vx_hi"])                     # idle -> cruise into the tent (capped by speed slider)
         rs0 = art.root_state(); R0 = _quat_to_R(rs0[3:7])
         yaw = math.atan2(float(R0[1, 0]), float(R0[0, 0]))
         if turn != 0.0 or not state["hdg_hold"]:                 # heading-hold = deploy convenience (small wz)
@@ -216,11 +223,16 @@ def main():
         ahead, h_here = (scanner.scan(art.root_state()) if scanner is not None
                          else analytic_scan(art, built["rise"], built["run"], built["n"]))
         with torch.no_grad():
-            obs = v2_obs(art, state["last_act"], cmd, ahead, h_here)
-            a = pol["ac"].act_mean(torch.from_numpy(obs)[None])[0].numpy()
+            obs = v2_obs(art, state["last_act"], cmd, ahead, h_here, state["phi"])
+            obs_t = torch.from_numpy(obs)[None]                             # [1, 96]
+            if pol["norm"] is not None:
+                obs_t = pol["norm"].norm(obs_t)
+            a = pol["ac"].act_mean(obs_t)[0].numpy()
         state["last_act"] = a                                    # NO clamp: isaac action range ~+-8
         art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
         world.step(0.02)
+        # Advance clock AFTER the physics step (aligns with the next obs, same as training)
+        state["phi"] = (state["phi"] + 0.02 / GAIT_PERIOD) % 1.0
 
     def render_chase():
         rs = art.root_state(); p = np.array(rs[0:3], float)
@@ -263,6 +275,7 @@ def main():
         rs = art.root_state(); h = terr_h(float(rs[0]), float(rs[1]), built["rise"], built["run"], built["n"])
         tp.imgui.text(f"clearance over terrain: {float(rs[2]) - h:.2f} m")
         _, state["auto_fwd"] = tp.imgui.checkbox("auto-forward (idle)", state["auto_fwd"])
+        _, state["vx_hi"] = tp.imgui.slider_float("forward speed vx (VX_HI)", state["vx_hi"], 0.0, VX_HI)
         _, state["hdg_hold"] = tp.imgui.checkbox("heading-hold (no-turn)", state["hdg_hold"])
         if scanner is not None:
             tp.imgui.text("scan: forward DepthSensor + elevation map")
@@ -291,7 +304,7 @@ def main():
             try:
                 mt = os.path.getmtime(model)
                 if mt != pol["mt"]:
-                    pol["ac"], _, _ = load_policy(model, device=dev); pol["mt"] = mt
+                    pol["ac"], pol["norm"], _ = load_policy(model, device=dev); pol["mt"] = mt
                     pol["reloads"] += 1; reset_spot(); print(f"[reload] {os.path.basename(model)} (#{pol['reloads']})")
             except Exception:
                 pass

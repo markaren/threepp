@@ -99,7 +99,7 @@ def flat_obs(art, last_act, cmd, phi):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default=os.path.join(_HERE, "scratch_flat.pt"),
+    ap.add_argument("--model", default=os.path.join(_HERE, "scratch_flat_latest.pt"),
                     help="checkpoint path (default: scratch_flat.pt, falls back to scratch_flat_latest.pt)")
     ap.add_argument("--check", type=int, default=0,
                     help="headless smoke: run N control ticks driving forward, print base pos + up_ok, exit")

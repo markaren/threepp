@@ -179,14 +179,13 @@ if __name__ == "__main__":
             import threepp as tp
             if tp.HAS_PHYSX:
                 from threepp.rl import GpuSim
-                from spot_deploy import fetch_assets, default_q, add_to_isaac, isaac_to_add
+                from spot_deploy import default_q, add_to_isaac, isaac_to_add
+                from scratch_env import fetch_isaac_teacher
                 from spot_terrain_env import SpotGpu, _flat_ground, SPACING, DT, SUBSTEPS
                 from scratch_clock import reset_phi
 
                 K = 64
-                assets = fetch_assets()
-                teacher = torch.jit.load(
-                    os.path.join(assets, "spot_policy.pt"), map_location="cuda").eval()
+                teacher = torch.jit.load(fetch_isaac_teacher(), map_location="cuda").eval()
 
                 sim = GpuSim(K, lambda w, i: SpotGpu(w, i, SPACING),
                              gravity=(0.0, 0.0, -9.81), spacing=SPACING,
