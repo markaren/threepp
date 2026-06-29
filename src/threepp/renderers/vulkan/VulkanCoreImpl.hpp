@@ -3,27 +3,27 @@
 // VMA_IMPLEMENTATION must be #defined in VulkanRenderer.cpp BEFORE including this file.
 #pragma once
 
-#include "vulkan/VulkanContext.hpp"
-#include "vulkan/VulkanResources.hpp"
-#include "vulkan/Denoiser.hpp"
-#include "vulkan/EnvPrefilter.hpp"
-#include "vulkan/EventCameraDetector.hpp"
-#include "vulkan/LidarScanner.hpp"
-#include "vulkan/PhotonCaustics.hpp"
-#include "vulkan/SkinningPipeline.hpp"
-#include "vulkan/TetSkinningPipeline.hpp"
-#include "vulkan/GpuTimings.hpp"
-#include "vulkan/OverlayPass.hpp"
-#include "vulkan/VulkanFrameTypes.hpp"
-#include "vulkan/TaaResolve.hpp"
-#include "vulkan/AutoExposure.hpp"
-#include "vulkan/BloomPass.hpp"
-#include "vulkan/DeferredShade.hpp"
-#include "vulkan/WaterDisplacePipeline.hpp"
-#include "vulkan/FoamWorldPipeline.hpp"
-#include "vulkan/GrassWindPipeline.hpp"
-#include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
-#include "wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
+#include "VulkanContext.hpp"
+#include "VulkanResources.hpp"
+#include "Denoiser.hpp"
+#include "EnvPrefilter.hpp"
+#include "EventCameraDetector.hpp"
+#include "LidarScanner.hpp"
+#include "PhotonCaustics.hpp"
+#include "SkinningPipeline.hpp"
+#include "TetSkinningPipeline.hpp"
+#include "GpuTimings.hpp"
+#include "OverlayPass.hpp"
+#include "VulkanFrameTypes.hpp"
+#include "TaaResolve.hpp"
+#include "AutoExposure.hpp"
+#include "BloomPass.hpp"
+#include "DeferredShade.hpp"
+#include "WaterDisplacePipeline.hpp"
+#include "FoamWorldPipeline.hpp"
+#include "GrassWindPipeline.hpp"
+#include "shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
+#include "../wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/cameras/OrthographicCamera.hpp"
