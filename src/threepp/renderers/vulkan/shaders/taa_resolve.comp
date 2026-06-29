@@ -50,6 +50,10 @@ layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D taaHistoryWriteI
 // share similar color, e.g. boat-edge over water).
 layout(set = 0, binding = 5) uniform usampler2D gbufIdsCurrTex;
 layout(set = 0, binding = 6) uniform usampler2D gbufIdsPrevTex;
+// Prev-frame depth buffer (reversed-Z), sampled at the reprojected UV for
+// depth-based disocclusion (see linZ + depthDisocc in main). Same image the
+// deferred GI/reflection disocclusion uses (gbufDepthPrevTex there).
+layout(set = 0, binding = 7) uniform sampler2D gbufDepthPrevTex;
 
 layout(push_constant) uniform Pc {
     float blendAlpha;// base new-sample weight (0.1 = strong AA, slow ghost decay)
@@ -86,6 +90,11 @@ layout(push_constant) uniform Pc {
     uint  physInH;
     uint  physOutW;
     uint  physOutH;
+    // Reverse-Z view-depth linearization terms (A,B,C,D): viewZ = (A·d+B)/(C·d+D),
+    // taken from the inverse reverse-Z projection's z/w rows. Lets the depth
+    // disocclusion gate compare surfaces in linear view-Z (matches deferred_shade).
+    // All-zero ⇒ disocclusion disabled (caller supplied no camera depth params).
+    vec4  depthLin;
 } pc;
 
 // Catmull-Rom history reconstruction (5-tap, bilinear-fused).
@@ -182,6 +191,12 @@ vec3 clipAABB(vec3 aabbMin, vec3 aabbMax, vec3 q) {
     const vec3 a = abs(v / extent);
     const float ma = max(a.x, max(a.y, a.z));
     return (ma > 1.0) ? (center + v / ma) : q;
+}
+
+// Reverse-Z NDC depth → linear view-space Z, via the inverse-projection z/w rows
+// packed in pc.depthLin. Used only for the depth disocclusion gate below.
+float linZ(float d) {
+    return (pc.depthLin.x * d + pc.depthLin.y) / (pc.depthLin.z * d + pc.depthLin.w);
 }
 
 void main() {
@@ -290,6 +305,28 @@ void main() {
             }
     }
 
+    // DEPTH-BASED DISOCCLUSION (FSR2 / deferred_shade idea). The current
+    // surface's OWN previous NDC depth (motion .b) vs what the prev depth
+    // buffer actually held at the reprojected spot. A >10% view-Z mismatch
+    // means the history reprojected onto a DIFFERENT surface — the trailing
+    // edge behind a moving object (the "motion ring"), or an object edge
+    // sweeping across the static sky (sky writes no motion vectors, so the
+    // colour/motion gates miss it → "sky-edge ghost"). MOTION-GATED: on a
+    // STATIC view a jittering silhouette flips coverage frame-to-frame, so
+    // surfD/bufD alternate and a raw test would false-fire EVERY frame (the
+    // mesh-ID reject lesson). But dilatedMotionPx≈0 there, so the gate stays
+    // off and the YCoCg variance clip keeps handling static edges EXACTLY as
+    // before — this term only adds hard-clip strength where the neighbourhood
+    // is genuinely moving. depthLin all-zero ⇒ disabled (no camera params).
+    float depthDisocc = 0.0;
+    if (reprojValid && (pc.depthLin.z != 0.0 || pc.depthLin.w != 0.0)) {
+        const float surfD = texture(gbufMotionTex, uvIn).b;               // this surface's prev NDC depth
+        const float bufD  = texture(gbufDepthPrevTex, prevUv * inScale).x;// prev depth buffer at reproject
+        const float svz   = linZ(surfD);
+        const bool  mismatch = abs(svz - linZ(bufD)) > 0.1 * max(abs(svz), 1e-3);
+        depthDisocc = mismatch ? clamp(dilatedMotionPx * 0.6, 0.0, 1.0) : 0.0;
+    }
+
     vec3 history = curr;
     float devStreak = 0.0;// consecutive strongly-deviating frames (carried in history .a)
     if (reprojValid && cnt > 0.5) {
@@ -337,6 +374,9 @@ void main() {
         // reference frames and the backstop fires immediately, instead of
         // leaving 3 frames × N px of discrete stale bands behind the edge.
         devStreak = (devK > 2.0) ? min(texture(taaHistoryReadTex, prevUv * outScale).a + pc.dtFrames, 8.0) : 0.0;
+        // A real disocclusion is a fresh surface — drop any carried streak so the
+        // pixel restarts clean instead of inheriting the vacated surface's history.
+        if (depthDisocc > 0.5) devStreak = 0.0;
         // Instant σ-term, gated on DILATED motion: during continuous camera
         // motion the streak's 3-frame ramp re-arms on every freshly-vacated
         // pixel, leaving a steady-state stale rim trailing edges across the
@@ -350,9 +390,10 @@ void main() {
         // under jitter has ~0 dilated motion and is untouched (keeps its jitter-
         // miss protection via the devStreak path).
         const float instantDev = smoothstep(0.8, 2.5, devK) * clamp(dilatedMotionPx * 2.0, 0.0, 1.0);
-        const float rate = max(max(clamp(motionLen * 0.5, 0.0, 1.0),// real pixel motion → hard
-                                   instantDev),                     // deviation + motion context → hard now
-                               smoothstep(2.5, 3.5, devStreak));    // persistent deviation → hard (static backstop)
+        const float rate = max(max(max(clamp(motionLen * 0.5, 0.0, 1.0),// real pixel motion → hard
+                                       instantDev),                 // deviation + motion context → hard now
+                                   smoothstep(2.5, 3.5, devStreak)),// persistent deviation → hard (static backstop)
+                               depthDisocc);                        // depth says different surface → hard
         // Soft floor is per-frame too — 15 % of the clip per REFERENCE frame
         // compounds to the same wall-clock decay at any fps (0.85^dtFrames),
         // instead of 5× slower at 30 fps than at 144.
@@ -399,7 +440,10 @@ void main() {
     // stability — the behaviour the comments above guard — is unchanged).
     const float motionRelax = clamp(dilatedMotionPx * 0.5, 0.0, 1.0);
     antiFlicker = mix(antiFlicker, 1.0, motionRelax);
-    const float a = clamp((pc.blendAlpha + velocityBump) * antiFlicker, 0.01, 1.0);
+    // Depth disocclusion also drives the blend toward current: the clipped
+    // history above is at best the neighbourhood mean, but a freshly revealed
+    // surface should read its own current sample, not a clip of stale colour.
+    const float a = max(clamp((pc.blendAlpha + velocityBump) * antiFlicker, 0.01, 1.0), depthDisocc);
     const vec3 result = reprojValid ? mix(history, curr, a) : curr;
 
     // When a downstream RCAS pass owns the swapchain write, skip it here but

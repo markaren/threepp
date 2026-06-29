@@ -1548,6 +1548,11 @@ namespace threepp {
                                             0.f, 1.f, 0.f, 0.f,
                                             0.f, 0.f, 1.f, 0.f,
                                             0.f, 0.f, 0.f, 1.f};
+        // Reverse-Z view-depth linearization (A,B,C,D) for the TAA depth
+        // disocclusion gate: viewZ = (A·d + B)/(C·d + D). Set each frame in
+        // uploadRasterCameraUbo from the inverse reverse-Z projection. Zero
+        // until the first real frame ⇒ shader leaves the depth gate disabled.
+        std::array<float, 4> taaDepthLin_{};
         float rasterPrevJitter_[2]{};
         bool  rasterPrevJitterValid_ = false;
         // Camera WORLD motion this frame (translation m, forward-rotation rad)
@@ -1758,9 +1763,11 @@ namespace threepp {
             }
             return false;
         }
-        // Sub-pixel jitter sequence index for raster TAA. Cycles within a
-        // small period (16 frames) — long enough to look stable, short enough
-        // to avoid ever-growing index drift.
+        // Free-running sub-pixel jitter sequence index for raster TAA. The
+        // active Halton(2,3) period is derived per frame from the upscale ratio
+        // (see jitterPhaseCount_) and applied as a modulo at the read sites, so
+        // the sequence length tracks renderScale (8 at native, more when
+        // upscaling) instead of a fixed 16.
         uint32_t haltonFrame_ = 0;
         // G-buffer debug-view mode: blit one G-buffer channel onto the
         // swapchain instead of running the path tracer. Lets us see the
@@ -7023,7 +7030,8 @@ namespace threepp {
             // size in clip space (2/width) must use the resolution raygen +
             // the raster gbuffer actually run at, not the swapchain extent.
             const VkExtent2D ext = renderExtent();
-            const uint32_t hi = haltonFrame_ + 1u;
+            const uint32_t phaseCount = jitterPhaseCount_(ext, ctx->swapchainExtent());
+            const uint32_t hi = (haltonFrame_ % phaseCount) + 1u;
             const float jx = halton_(hi, 2) - 0.5f;
             const float jy = halton_(hi, 3) - 0.5f;
             const float jClipX = 2.f * jx / float(ext.width);
@@ -7122,6 +7130,21 @@ namespace threepp {
             return r;
         }
 
+        // FSR2-style jitter phase count: the Halton(2,3) sequence length must
+        // scale with the upscale ratio so the sub-pixel samples fully cover the
+        // higher-res OUTPUT grid — 8 at native, 8·ratio² when upsampling (≈18 at
+        // 1.5×, 32 at 2×, 72 at 3×). A fixed period under-samples the grid the
+        // moment renderScale < 1, leaving residual aliasing the temporal resolve
+        // can't reconstruct. Mirrors ffxFsr2GetJitterPhaseCount. ratio = max over
+        // both axes (they're equal under uniform renderScale); clamped to [8,128].
+        static uint32_t jitterPhaseCount_(VkExtent2D render, VkExtent2D display) {
+            const float rx = render.width  > 0u ? float(display.width)  / float(render.width)  : 1.f;
+            const float ry = render.height > 0u ? float(display.height) / float(render.height) : 1.f;
+            const float ratio = std::max(rx, ry);
+            const uint32_t n = static_cast<uint32_t>(8.f * ratio * ratio + 0.5f);
+            return std::clamp(n, 8u, 128u);
+        }
+
         // Cache per-entry cull mode from a freshly-built matDescs array.
         // Called wherever matDescs is uploaded so the gbuffer draw loop can
         // pick BACK-cull (Front, default fast path), FRONT-cull (Back), or
@@ -7213,7 +7236,11 @@ namespace threepp {
             const VkExtent2D ext = renderExtent();
             // Sub-pixel offset in [-0.5, +0.5] per axis. Halton(2,3) is the
             // industry-standard low-discrepancy sequence for primary AA.
-            const uint32_t hi = haltonFrame_ + 1u;
+            // Phase count scales with the upscale ratio (FSR2-style) so the
+            // sequence covers the output grid when renderScale < 1; matches
+            // updateCameraUbo's value this frame (same extents → same count).
+            const uint32_t phaseCount = jitterPhaseCount_(ext, ctx->swapchainExtent());
+            const uint32_t hi = (haltonFrame_ % phaseCount) + 1u;
             const float jx = halton_(hi, 2) - 0.5f;
             const float jy = halton_(hi, 3) - 0.5f;
             // Map sub-pixel offset to clip-space: one pixel spans 2/width of
@@ -7296,6 +7323,16 @@ namespace threepp {
                 sky.multiplyMatrices(prevVPm, invCurr);
                 std::memcpy(taaSkyReproj_.data(), sky.elements.data(), 64);
             }
+            // Reverse-Z view-depth linearization (A,B,C,D) for the TAA depth
+            // disocclusion gate: viewZ = (A·d + B)/(C·d + D), from the inverse
+            // reverse-Z projection's z/w rows. Mirrors deferred_shade's
+            // cam.projInverse Z unprojection so both passes gate identically.
+            {
+                Matrix4 projInv;
+                projInv.copy(proj).invert();
+                const auto& pe = projInv.elements;// column-major [col*4 + row]
+                taaDepthLin_ = {pe[10], pe[14], pe[11], pe[15]};
+            }
             std::memcpy(rasterPrevVP_, vpUnj.elements.data(), 64);
             rasterPrevVPValid_ = true;
             rasterPrevJitter_[0] = jClipX;
@@ -7325,9 +7362,11 @@ namespace threepp {
                 std::memcpy(deferredCamPrevFwd_, fwd, sizeof(fwd));
                 deferredCamPrevValid_ = true;
             }
-            // 16-frame Halton cycle: longer than the eye notices, short
-            // enough that any drift in the host counter never overflows.
-            haltonFrame_ = (haltonFrame_ + 1u) & 15u;
+            // Free-running jitter index. The active Halton period is derived
+            // per-read from the upscale ratio (jitterPhaseCount_) and applied as
+            // a modulo, so the sequence length tracks renderScale instead of a
+            // fixed 16. uint32 wrap is harmless — the modulo re-bases each frame.
+            haltonFrame_ = haltonFrame_ + 1u;
 
             // Refresh the per-frame descriptor set. Bindings 0-2 (UBO,
             // motionMat, matDescs) are tiny, and motionMat/matDescs handles can
@@ -10481,15 +10520,18 @@ namespace threepp {
         void rewriteTaaDescriptors() {
             std::array<VkImageView, kFramesInFlight> motionViews{};
             std::array<VkImageView, kFramesInFlight> idsViews{};
+            std::array<VkImageView, kFramesInFlight> depthViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 motionViews[f] = rasterGbufs[f].motion.view;
                 idsViews[f]    = rasterGbufs[f].ids.view;
+                depthViews[f]  = rasterGbufs[f].depth.view;
             }
             const auto& swapViews = ctx->swapchainImageViews();
             vulkan::TaaResolve::DescriptorWriteInputs in{};
             in.gbufSampler        = gbufSampler_;
             in.gbufMotionPerFrame = motionViews.data();
             in.gbufIdsPerFrame    = idsViews.data();
+            in.gbufDepthPerFrame  = depthViews.data();
             in.swapchainViews     = swapViews.data();
             taa_->rewriteDescriptors(in);
         }
@@ -13875,7 +13917,8 @@ namespace threepp {
                                 sharpenStrength_ > 0.0f, sharpenStrength_,
                                 taaSkyReproj_.data(),
                                 static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
-                                ptExt.width, ptExt.height, ext.width, ext.height);
+                                ptExt.width, ptExt.height, ext.width, ext.height,
+                                taaDepthLin_.data());
             gpuTimings_->end(cb, TP_TAA, currentFrame);
             // ── End raster TAA ─────────────────────────────────────────────────
 

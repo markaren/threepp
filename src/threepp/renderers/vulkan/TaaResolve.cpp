@@ -170,7 +170,7 @@ namespace threepp::vulkan {
         //   0..2: combined image samplers — taaInput, historyRead, gbufMotion
         //   3..4: storage images          — swapOut, historyWrite
         //   5..6: combined image samplers — gbufIds (curr + prev)
-        VkDescriptorSetLayoutBinding bindings[7]{};
+        VkDescriptorSetLayoutBinding bindings[8]{};
         for (int i = 0; i < 3; ++i) {
             bindings[i].binding         = i;
             bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -193,10 +193,15 @@ namespace threepp::vulkan {
         bindings[6].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[6].descriptorCount = 1;
         bindings[6].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        // Binding 7: prev-frame depth (sampled) for depth-based disocclusion.
+        bindings[7].binding         = 7;
+        bindings[7].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[7].descriptorCount = 1;
+        bindings[7].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 7;
+        dlci.bindingCount = 8;
         dlci.pBindings    = bindings;
         check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(taa)");
@@ -204,7 +209,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pcRange{};
         pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pcRange.offset     = 0;
-        pcRange.size       = 112;// scalars + dstOffset(@28) + mat4 skyReproj(@32) + phys dims(@96)
+        pcRange.size       = 128;// scalars + dstOffset(@28) + mat4 skyReproj(@32) + phys dims(@96) + depthLin(@112)
 
         VkPipelineLayoutCreateInfo plci{};
         plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -296,10 +301,10 @@ namespace threepp::vulkan {
     void TaaResolve::createDescriptorPool() {
         const uint32_t totalSets = imageCount_ * framesInFlight_;
         VkDescriptorPoolSize sizes[2]{};
-        // Main resolve set: 5 sampled + 2 storage. RCAS set: 1 sampled + 1
+        // Main resolve set: 6 sampled + 2 storage. RCAS set: 1 sampled + 1
         // storage. Both families × totalSets, sharing this pool.
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = totalSets * (5 + 1);
+        sizes[0].descriptorCount = totalSets * (6 + 1);
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[1].descriptorCount = totalSets * (2 + 1);
 
@@ -374,8 +379,22 @@ namespace threepp::vulkan {
                 idsPrevI.imageView   = inputs.gbufIdsPerFrame[prevFrame];
                 idsPrevI.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-                VkWriteDescriptorSet w[7]{};
-                for (int b = 0; b < 7; ++b) {
+                // Binding 7: PREV-frame depth (the other fif slot), sampled at the
+                // reprojected UV for depth-based disocclusion. DEPTH_STENCIL_READ_ONLY
+                // layout — the same image+layout the deferred shade pass already reads.
+                // Fallback to the motion view (type-safe float sampler2D) if no depth
+                // source is supplied; the shader's depthLin is then zero → never sampled.
+                VkDescriptorImageInfo depthPrevI{};
+                depthPrevI.sampler     = inputs.gbufSampler;
+                depthPrevI.imageView   = inputs.gbufDepthPerFrame
+                                             ? inputs.gbufDepthPerFrame[prevFrame]
+                                             : inputs.gbufMotionPerFrame[prevFrame];
+                depthPrevI.imageLayout = inputs.gbufDepthPerFrame
+                                             ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                             : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+                VkWriteDescriptorSet w[8]{};
+                for (int b = 0; b < 8; ++b) {
                     w[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                     w[b].dstSet          = descSets_[idx];
                     w[b].dstBinding      = static_cast<uint32_t>(b);
@@ -395,7 +414,9 @@ namespace threepp::vulkan {
                 w[5].pImageInfo = &idsCurrI;
                 w[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w[6].pImageInfo = &idsPrevI;
-                vkUpdateDescriptorSets(ctx_.device(), 7, w, 0, nullptr);
+                w[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w[7].pImageInfo = &depthPrevI;
+                vkUpdateDescriptorSets(ctx_.device(), 8, w, 0, nullptr);
 
                 // RCAS set: this frame's resolved output lives in the history
                 // WRITE slot (writeSlot) → sample it, sharpen, write swapchain.
@@ -441,7 +462,8 @@ namespace threepp::vulkan {
                                    uint32_t physInW,
                                    uint32_t physInH,
                                    uint32_t physOutW,
-                                   uint32_t physOutH) {
+                                   uint32_t physOutH,
+                                   const float* depthLin) {
         // Physical (full texture) sizes default to the region sizes → scale 1.
         if (physInW == 0)  physInW  = inWidth;
         if (physInH == 0)  physInH  = inHeight;
@@ -492,7 +514,7 @@ namespace threepp::vulkan {
         // input w/h (the render extent the samples were traced at).
         // Layout mirrors the shader's std430 push block: 7 scalars, 4 bytes
         // of pad, then the column-major mat4 at offset 32.
-        float pc[28] = {};
+        float pc[32] = {};
         std::memcpy(&pc[0], &alphaBits, 4);
         const uint32_t dims[4] = {outWidth, outHeight, inWidth, inHeight};
         std::memcpy(&pc[1], dims, 16);
@@ -504,6 +526,9 @@ namespace threepp::vulkan {
         std::memcpy(&pc[8], skyReproj, 64);// offset 32: mat4
         const uint32_t physDims[4] = {physInW, physInH, physOutW, physOutH};
         std::memcpy(&pc[24], physDims, 16);// offset 96: full texture sizes
+        // offset 112: reverse-Z viewZ linearization (A,B,C,D) for depth
+        // disocclusion. Null ⇒ leave zero ⇒ shader disables the gate.
+        if (depthLin) std::memcpy(&pc[28], depthLin, 16);
         vkCmdPushConstants(cb, pipelineLayout_,
                            VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(pc), pc);

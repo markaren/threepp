@@ -60,6 +60,7 @@ namespace threepp::vulkan {
             VkSampler          gbufSampler         = VK_NULL_HANDLE;
             const VkImageView* gbufMotionPerFrame  = nullptr;// [framesInFlight]
             const VkImageView* gbufIdsPerFrame     = nullptr;// [framesInFlight]
+            const VkImageView* gbufDepthPerFrame   = nullptr;// [framesInFlight] (prev slot → depth disocclusion)
             const VkImageView* swapchainViews      = nullptr;// [imageCount]
         };
         void rewriteDescriptors(const DescriptorWriteInputs& inputs);
@@ -100,7 +101,8 @@ namespace threepp::vulkan {
                            uint32_t physInW = 0,
                            uint32_t physInH = 0,
                            uint32_t physOutW = 0,
-                           uint32_t physOutH = 0);
+                           uint32_t physOutH = 0,
+                           const float* depthLin = nullptr);// 4 floats: reverse-Z viewZ linearization (A,B,C,D)
 
         // Denoise writes its output here when TAA is active (replaces the
         // direct-to-swapchain write of non-TAA mode).
