@@ -66,6 +66,7 @@ CRUISE = 0.8         # auto-forward speed when idle
 
 GRAV = np.array([0.0, 0.0, -1.0])
 DISP = 820
+EDGE = 35.0  # auto-reset when the base leaves this XY half-extent (ground is 80x80 -> +/-40; 5 m margin)
 
 
 def _resolve_model(path):
@@ -292,7 +293,7 @@ def main():
         tp.imgui.text(f"obs: 50-d scratch (48 proprio + 2 clock), normalized")
         _, state["auto_fwd"]  = tp.imgui.checkbox("auto-forward (idle)", state["auto_fwd"])
         _, state["hdg_hold"]  = tp.imgui.checkbox("heading-hold (no-turn)", state["hdg_hold"])
-        tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   R = reset")
+        tp.imgui.text(f"{tp.imgui.get_framerate():.0f} fps   |   R = reset (auto-resets at plane edge)")
         tp.imgui.end()
 
     def frame():
@@ -322,6 +323,12 @@ def main():
                 pass
 
         control_tick(use_keys=True)
+
+        rs = art.root_state()
+        if abs(float(rs[0])) > EDGE or abs(float(rs[1])) > EDGE:
+            print(f"[auto-reset] left the plane at ({float(rs[0]):+.1f}, {float(rs[1]):+.1f})")
+            reset_spot()
+
         render_chase()
         ui.render(draw_ui)
 
