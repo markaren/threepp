@@ -1,0 +1,4 @@
+# Trained/exported policy artifacts — derivatives of the Isaac Lab Spot walker
+# (NVIDIA Isaac Sim license); regenerate locally, never commit.
+*.tpnn
+*_ref.bin
