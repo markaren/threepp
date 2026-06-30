@@ -3,9 +3,10 @@
     python train_kuka_grasp.py --envs 2048 --iters 2000        # full run
     python train_kuka_grasp.py --envs 256 --iters 60 --smoke   # quick smoke test
 
-Drives the env curriculum (cube spawn region grows; grasp-lock assist anneals to 0 → pure friction
-grasp) from the PPO log callback, and checkpoints the best policy by success rate. Watch a checkpoint
-with `python play_kuka_grasp.py --model kuka_grasp_best.pt`.
+Drives the env curriculum (cube spawn region grows; graduated reset height start_high 0→1 so the arm
+starts from "at the cube" → "anywhere up to the DEFAULT_Q home") from the PPO log callback, and
+checkpoints the best policy by success rate. Watch a checkpoint with
+`python play_kuka_grasp.py --model kuka_grasp_best.pt`.
 """
 import argparse
 import os
@@ -61,7 +62,7 @@ def main():
         ppo.meta["iter"] = it    # record the curriculum stage so play can match the spawn region
         print(f"{msg} | reach {env.last_reach:.3f} grasp {env.last_grasp_rate:.2f} "
               f"lift {env.last_lift:.3f} succ {env.last_success_rate:.2f} "
-              f"spawn {env.spawn_half[0]:.2f}x{env.spawn_half[1]:.2f} assist {env.assist_frac:.2f}")
+              f"spawn {env.spawn_half[0]:.2f}x{env.spawn_half[1]:.2f} startH {env.start_high:.2f}")
         ppo.save(latest_path)
         if env.last_success_rate >= best[0]:
             best[0] = env.last_success_rate

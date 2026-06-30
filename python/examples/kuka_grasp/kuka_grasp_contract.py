@@ -72,7 +72,8 @@ FINGER_LOWER = -0.020                # prismatic limit: closed (fingers squeeze 
 FINGER_UPPER = 0.035                 # prismatic limit: open (gap clears the cube)
 GRIP_OPEN = 0.035                    # finger target → open  (gap ≈ 0.10 m)
 GRIP_CLOSE = -0.020                  # finger target → squeeze a 0.07 m cube (firm, at the finger limit)
-TIP_Z = 0.200                        # grasp point: link_7 + (0,0,TIP_Z) in link_7 frame (between finger tips)
+TIP_Z = 0.200                        # DEPRECATED: the grasp point is now the FINGER-LINK MIDPOINT (see
+                                     # tip_state); this fixed offset sat ~0.13 m below the real fingers.
 
 # --------------------------------------------------------------------------- #
 #  Scene geometry (Z-up, metres)
@@ -96,9 +97,9 @@ DROP_FAIL_DZ = 0.10            # cube knocked this far below the table top → t
 #  Observation layout (assembled in kuka_grasp_env._obs via torch.cat)
 # --------------------------------------------------------------------------- #
 #   arm qpos_rel (7)  · arm qvel·scale (7)  · gripper opening+vel (2)
-#   · tip pos, table-relative (3)  · tip→cube vector (3)  · cube up-axis (3)
-#   · cube linvel (3)  · last_action (8)  · grasp/lift flags (2)
-OBS_DIM = 7 + 7 + 2 + 3 + 3 + 3 + 3 + ACT_DIM + 2   # = 38
+#   · tip pos, table-relative (3)  · tip→cube vector (3)  · tool approach axis (3)
+#   · cube up-axis (3)  · cube linvel (3)  · last_action (8)  · grasp/lift flags (2)
+OBS_DIM = 7 + 7 + 2 + 3 + 3 + 3 + 3 + 3 + ACT_DIM + 2   # = 41
 QVEL_SCALE = 0.1
 
-assert OBS_DIM == 38, OBS_DIM
+assert OBS_DIM == 41, OBS_DIM

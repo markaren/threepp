@@ -244,7 +244,7 @@ def _inspect():
         flange, fl, fr = lp[7, 4:7], lp[8, 4:7], lp[9, 4:7]
         gap = float(np.linalg.norm(fl - fr))
         R = _quat_to_R(lp[7, 0:4])
-        tip = flange + R[:, 2] * C.TIP_Z          # tip = grasp point, TIP_Z down the approach axis
+        tip = 0.5 * (fl + fr)                     # grasp point = MIDPOINT of the finger links (real)
         return flange, tip, gap, R[:, 2]
 
     # Target: tip hovering ~0.06 m above the cube top, over the table centre, tool pointing down.

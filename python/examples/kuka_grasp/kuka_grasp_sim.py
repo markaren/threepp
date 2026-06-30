@@ -178,14 +178,19 @@ class KukaGraspSim:
 
     # ---- derived state ------------------------------------------------------
     def tip_state(self):
-        """Grasp point (between the finger tips) + tool approach axis, world frame.
-        tip = flange_pos + R(flange_quat) @ (0,0,TIP_Z);  approach = R[:,2]."""
-        fp = self.link_pose[:, FLANGE_LINK]
-        quat, pos = fp[:, 0:4], fp[:, 4:7]
-        local = torch.zeros(self.K, 3, device=self.device)
-        local[:, 2] = C.TIP_Z
-        tip = pos + quat_rotate(quat, local)
-        approach = quat_rotate(quat, torch.tensor([0.0, 0.0, 1.0], device=self.device).expand(self.K, 3))
+        """Grasp point = MIDPOINT of the two finger links (the real point where the cube is held) +
+        the tool approach axis from the flange.
+
+        Previously this was flange_pos + R(flange_quat)@(0,0,TIP_Z), but TIP_Z=0.20 placed that point
+        ~0.13 m BELOW the actual fingers (flange link origin is well above the finger pads). So every
+        reward/firm test that used `tip` thought the gripper was at the cube while the fingers hovered a
+        gripper-length above it — the grasp could never physically close. Using the finger midpoint makes
+        the grasp point coincide with the fingers, so reach/vert/firm are honest and the cube is reachable."""
+        fl = self.link_pose[:, FINGER_L_LINK, 4:7]
+        fr = self.link_pose[:, FINGER_R_LINK, 4:7]
+        tip = 0.5 * (fl + fr)
+        approach = quat_rotate(self.link_pose[:, FLANGE_LINK, 0:4],
+                               torch.tensor([0.0, 0.0, 1.0], device=self.device).expand(self.K, 3))
         return tip, approach
 
     def cube_position(self):
