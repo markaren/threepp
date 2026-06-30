@@ -14,6 +14,8 @@ joint/link order, the finger gap at open/closed, and the flange-tip world pose a
 """
 import ctypes
 import os
+import re
+import struct
 import sys
 
 import numpy as np
@@ -69,17 +71,48 @@ def _finger_xml():
     return "\n".join(out)
 
 
+def _stl_bbox(path):
+    """Axis-aligned bbox (center, size) of a binary STL — the loader's own mesh-collision
+    approximation, computed once here so the per-env URDF load needs no file I/O."""
+    with open(path, "rb") as f:
+        data = f.read()
+    n = struct.unpack_from("<I", data, 80)[0]
+    verts = np.frombuffer(data[84:84 + n * 50], dtype=np.uint8).reshape(n, 50)[:, 12:48]
+    verts = verts.copy().view("<f4").reshape(n * 3, 3)
+    mn, mx = verts.min(0), verts.max(0)
+    center = (mn + mx) * 0.5
+    size = np.maximum(mx - mn, 1e-3)
+    return center, size
+
+
+def _bake_collisions(text):
+    """Replace every <collision> mesh with the equivalent primitive <box> (its bbox). This is what
+    the loader does internally anyway, but baking it here means each of the K per-env load_articulation
+    calls reads ZERO STL files — the difference between a seconds build and a many-minutes build at
+    large K. Visual <mesh> tags are left untouched (only loaded when render_visuals=True)."""
+    pat = re.compile(r'<collision>\s*<origin[^>]*/>\s*<geometry>\s*<mesh filename="([^"]+)"\s*/>\s*'
+                     r'</geometry>\s*</collision>', re.DOTALL)
+
+    def repl(m):
+        c, s = _stl_bbox(m.group(1))
+        return (f'<collision><origin rpy="0 0 0" xyz="{c[0]:.6f} {c[1]:.6f} {c[2]:.6f}"/>'
+                f'<geometry><box size="{s[0]:.6f} {s[1]:.6f} {s[2]:.6f}"/></geometry></collision>')
+
+    return pat.sub(repl, text)
+
+
 def generate_combined_urdf(dest=None):
     """Read the stock KUKA URDF, rewrite its mesh paths to absolute (so the combined URDF resolves
-    from anywhere), inject the two prismatic finger links onto link_7, and write the result.
-    Returns the path to the combined URDF. Regenerated each call (cheap, keeps geometry in sync
-    with the contract)."""
+    from anywhere), BAKE arm collision meshes into primitive boxes (so per-env loads do no file I/O),
+    inject the two prismatic finger links onto link_7, and write the result. Returns the path."""
     src = find_kuka_urdf()
     src_dir = os.path.dirname(src).replace("\\", "/")
     with open(src, "r", encoding="utf-8") as f:
         text = f.read()
     # rewrite relative mesh filenames -> absolute (forward slashes) so location is irrelevant
     text = text.replace('filename="lbr_iiwa_14_r820/', f'filename="{src_dir}/lbr_iiwa_14_r820/')
+    # bake collision meshes -> boxes (no per-env STL reads); keep visuals as meshes
+    text = _bake_collisions(text)
     # inject the gripper subtree just before </robot>
     text = text.replace("</robot>", _finger_xml() + "\n</robot>")
     if dest is None:
