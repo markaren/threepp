@@ -14,7 +14,10 @@
 // the file and works for any exported MLP.
 //
 //   .tpnn  layout (little-endian):
-//     char[4]  magic   = "TPN1"
+//     char[4]  magic   = "TPN1" (MLP only) or "TPN2" (leading obs-norm block + MLP)
+//     [TPN2 only]  u32 normDim;  f32[normDim] mean;  f32[normDim] var;  f32 clip
+//                  -> applied as clamp((x-mean)/sqrt(var+1e-8), +-clip) before layer 0,
+//                     matching threepp.rl.RunningNorm.norm (the trainer's normalize_obs=True).
 //     u32      numLayers
 //     repeated numLayers times:
 //       u32    inDim
@@ -58,10 +61,22 @@ namespace spot {
 
             char magic[4];
             f.read(magic, 4);
-            if (f.gcount() != 4 || magic[0] != 'T' || magic[1] != 'P' || magic[2] != 'N' || magic[3] != '1')
-                throw std::runtime_error("SpotPolicy: bad magic in " + path + " (expected TPN1)");
+            if (f.gcount() != 4 || magic[0] != 'T' || magic[1] != 'P' || magic[2] != 'N' ||
+                (magic[3] != '1' && magic[3] != '2'))
+                throw std::runtime_error("SpotPolicy: bad magic in " + path + " (expected TPN1/TPN2)");
 
             SpotPolicy p;
+            if (magic[3] == '2') {// leading obs-normalizer block (mean/var/clip)
+                p.hasNorm_ = true;
+                const std::uint32_t nd = readU32(f);
+                if (nd == 0 || nd > 65536)
+                    throw std::runtime_error("SpotPolicy: implausible normDim in " + path);
+                p.mean_.resize(nd);
+                p.var_.resize(nd);
+                f.read(reinterpret_cast<char*>(p.mean_.data()), static_cast<std::streamsize>(nd * sizeof(float)));
+                f.read(reinterpret_cast<char*>(p.var_.data()), static_cast<std::streamsize>(nd * sizeof(float)));
+                f.read(reinterpret_cast<char*>(&p.clip_), sizeof(float));
+            }
             const std::uint32_t numLayers = readU32(f);
             if (numLayers == 0 || numLayers > 64)
                 throw std::runtime_error("SpotPolicy: implausible numLayers in " + path);
@@ -83,6 +98,8 @@ namespace spot {
                         static_cast<std::streamsize>(L.b.size() * sizeof(float)));
             }
             if (!f) throw std::runtime_error("SpotPolicy: truncated file " + path);
+            if (p.hasNorm_ && p.mean_.size() != p.layers_.front().in)
+                throw std::runtime_error("SpotPolicy: norm dim != layer-0 input dim in " + path);
             return p;
         }
 
@@ -99,6 +116,12 @@ namespace spot {
                 throw std::runtime_error("SpotPolicy: obs size " + std::to_string(n) +
                                          " != input dim " + std::to_string(layers_.front().in));
             std::vector<float> cur(obs, obs + n), nxt;
+            if (hasNorm_) {// clamp((x-mean)/sqrt(var+1e-8), +-clip) — matches threepp.rl.RunningNorm.norm
+                for (std::size_t i = 0; i < n; ++i) {
+                    const float v = (cur[i] - mean_[i]) / std::sqrt(var_[i] + 1e-8f);
+                    cur[i] = v < -clip_ ? -clip_ : (v > clip_ ? clip_ : v);
+                }
+            }
             for (const Layer& L : layers_) {
                 nxt.assign(L.out, 0.0f);
                 for (std::uint32_t o = 0; o < L.out; ++o) {
@@ -125,6 +148,9 @@ namespace spot {
         }
 
         std::vector<Layer> layers_;
+        bool hasNorm_ = false;
+        std::vector<float> mean_, var_;// obs normalizer stats (TPN2); applied before layer 0
+        float clip_ = 10.0f;
     };
 
 }// namespace spot

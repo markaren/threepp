@@ -1,13 +1,11 @@
-"""spotv2 — train the velocity-tracking policy to climb DISCRETE STAIRS with an adaptive curriculum.
+"""spotv2 — STAIRS/terrain trainer: warm-start from scratch_flat_best.pt (50-d clock base gait,
+normalize_obs=True, stiff gains) into the 96-d clock+terrain obs, then PPO-fine-tune.
 
-    python train_spot_steps.py --iters 1500                       # warm-starts from scratch_flat_best.pt (default)
-    python train_spot_steps.py --score spot_steps.pt              # deterministic track/flat/fell + curriculum level
-    python train_spot_steps.py --eval  spot_steps.pt              # flat-steering regression vs the base gait
+    python train_spot_stairs.py --iters 1500
+    python train_spot_stairs.py --eval spot_terrain.pt     # held-out flat-steering regression vs base gait
 
-The curriculum (per-env level, promote on clearing the tent / demote on a fall) lives in SpotStepsEnv.
-The warm-start transfers the 50-d clock base gait (scratch_flat_best.pt, normalize_obs=True, stiff gains)
-into the 96-d AC: input cols [0:50] copied (proprio+clock), terrain cols [50:96] zero-init; RunningNorm
-expanded with matching stats (terrain dims left at fresh default mean=0/var=1 so they adapt freely).
+Shared helpers (warmstart_scratch_to_terrain, sanity_walk, stochastic_flat_baseline, eval_flat_steering)
+are defined here and imported by train_spot_heightfield.
 """
 import argparse
 import os
@@ -19,12 +17,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "spot"))
-sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))
+sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))   # for load_policy on scratch_flat_best.pt
 
 import threepp as tp
-from spot_terrain_env import quat_rotate_inverse
-from spot_steps_env import ACT_DIM, CONFIG, HIDDEN, N_LEVELS, RISERS, SpotStepsEnv
-from spot_steps_symmetry import make_aux_loss
+from spot_terrain_env import ACT_DIM, CONFIG, HIDDEN, SpotTerrainEnv
 from threepp.rl import PPO, load_policy
 
 
@@ -33,7 +29,7 @@ def warmstart_scratch_to_terrain(ac, norm, scratch_path, n_keep=50, device="cuda
 
     Input-layer cols [0:n_keep] copied (proprio+clock), terrain cols zero-init; deeper layers +
     log_std copied verbatim. The obs RunningNorm is expanded: proprio+clock stats kept, terrain
-    dims left at the fresh default (mean 0 / var 1), count reset so the norm adapts to the steps
+    dims left at the fresh default (mean 0 / var 1), count reset so the norm adapts to the terrain
     distribution during fine-tune (sanity_walk pre-train still sees the loaded proprio stats =
     bit-identical base gait)."""
     src_ac, src_norm, src_meta = load_policy(scratch_path, device=device)
@@ -65,7 +61,7 @@ def sanity_walk(env, ac, norm, steps=300):
     for _ in range(steps):
         obs, _, _, _, _ = env.step(ac.act_mean(norm.norm(obs)))
     print(f"warm-start sanity ({steps} steps): track={env.last_track:.3f}  flat_track={env.last_flat_track:.3f}  "
-          f"level={env.last_level:.2f}  fell/step={env.last_fell:.3f}")
+          f"climb={env.ep_max_climb.mean().item() if hasattr(env, 'ep_max_climb') else 'n/a'}  fell/step={env.last_fell:.3f}")
     return env.last_flat_track
 
 
@@ -84,35 +80,11 @@ def stochastic_flat_baseline(env, ac, norm, steps=240, warm=80):
 
 
 @torch.no_grad()
-def score_checkpoint(policy_path, k=512, device="cuda", steps=900, warm=200):
-    """Deterministic track/flat/fell + the curriculum LEVEL it climbs to (how tall a riser it handles).
-    The env starts every stair env at level 0 and promotes as the policy clears tents."""
-    if not tp.HAS_PHYSX or not torch.cuda.is_available():
-        print("need PhysX + CUDA"); return None
-    env = SpotStepsEnv(num_envs=k, device=device)
-    ac, norm, _ = load_policy(policy_path, device=device)
-    pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
-    obs = env.reset()
-    trk, flt, fl = [], [], []
-    for t in range(steps):
-        obs, _, _, _, _ = env.step(pol(obs))
-        if t >= warm:
-            trk.append(env.last_track); flt.append(env.last_flat_track); fl.append(env.last_fell)
-    m = lambda a: sum(a) / max(1, len(a))
-    lvl = env.last_level
-    riser = RISERS[min(int(round(lvl)), N_LEVELS - 1)]
-    print(f"[score] {os.path.basename(policy_path)}  (deterministic, K={k}, {steps - warm} steps)")
-    print(f"        track {m(trk):.3f}/2.0   flat {m(flt):.3f}/2.0   fell/step {m(fl):.4f}   "
-          f"curriculum level {lvl:.2f}/{N_LEVELS - 1}  (~{riser:.02f} m risers)")
-    return m(trk), m(flt), m(fl), lvl
-
-
-@torch.no_grad()
 def eval_flat_steering(policy_path, k=512, device="cuda"):
     """Held-out steering regression on FLAT ground vs the scratch base gait (the real steering test)."""
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); return
-    env = SpotStepsEnv(num_envs=k, device=device, flat_only=True)
+    env = SpotTerrainEnv(num_envs=k, device=device, flat_only=True)
     ac, norm, _ = load_policy(policy_path, device=device)
     pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     # Base gait teacher (50-d, norm-aware): compare against it so steering regression is defined
@@ -135,65 +107,50 @@ def eval_flat_steering(policy_path, k=512, device="cuda"):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--envs", type=int, default=2048)        # ~52k stair boxes -> builds fine; 2x throughput vs 1024
+    ap.add_argument("--envs", type=int, default=2048)
     ap.add_argument("--iters", type=int, default=1500)
     ap.add_argument("--horizon", type=int, default=32)
-    ap.add_argument("--lr", type=float, default=1e-4)
-    ap.add_argument("--gate", type=float, default=0.90)
-    ap.add_argument("--out", default=os.path.join(_HERE, "spot_steps.pt"))
-    ap.add_argument("--warmstart", default=os.path.join(_HERE, "scratch_distillation", "scratch_flat_best.pt"),
-                    help="50-d clock base gait (.pt) to expand into 96-d; default = scratch_flat_best.pt")
-    ap.add_argument("--fell_max", type=float, default=0.006)
-    ap.add_argument("--sym_coef", type=float, default=1.0)   # left-right symmetry augmentation (kills the veer)
-    ap.add_argument("--eval", default="")
-    ap.add_argument("--score", default="")
+    ap.add_argument("--lr", type=float, default=1e-4)        # gentle: adapt the gait, don't forget it
+    ap.add_argument("--rise_max", type=float, default=0.20)  # top step height in the graded lanes (curriculum lever)
+    ap.add_argument("--gate", type=float, default=0.90)      # keep flat steering >= gate * the teacher's flat tracking
+    ap.add_argument("--out", default=os.path.join(_HERE, "spot_terrain.pt"))
+    ap.add_argument("--eval", default="")                    # path to a .pt -> run the flat-steering regression and exit
     args = ap.parse_args()
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); sys.exit(0)
-    if args.score:
-        score_checkpoint(args.score); return
     if args.eval:
         eval_flat_steering(args.eval); return
 
-    env = SpotStepsEnv(num_envs=args.envs, device="cuda")
-    aux = make_aux_loss(args.sym_coef) if args.sym_coef > 0 else None
+    env = SpotTerrainEnv(num_envs=args.envs, device="cuda", rise_max=args.rise_max)
     ppo = PPO(env, ACT_DIM, hidden=HIDDEN, lr=args.lr, horizon=args.horizon,
-              log_std_init=-1.5, entropy=0.0, normalize_obs=True, meta=CONFIG, aux_loss=aux)
-    if aux is not None:
-        print(f"symmetry augmentation ON (coef {args.sym_coef})")
-    if args.warmstart and os.path.exists(args.warmstart):
-        warmstart_scratch_to_terrain(ppo.ac, ppo.norm,
-                                     args.warmstart, n_keep=50, device="cuda")
-    else:
-        print(f"(warmstart path not found: {args.warmstart} — starting from scratch)")
-    sanity_walk(env, ppo.ac, ppo.norm)
-    flat0 = stochastic_flat_baseline(env, ppo.ac, ppo.norm)
+              log_std_init=-1.5, entropy=0.0, normalize_obs=True, meta=CONFIG)
+    warmstart_scratch_to_terrain(ppo.ac, ppo.norm,
+                                 os.path.join(_HERE, "scratch_distillation", "scratch_flat_best.pt"),
+                                 device="cuda")
+    sanity_walk(env, ppo.ac, ppo.norm)                        # transplant quality (deterministic): tracks + climbs?
+    flat0 = stochastic_flat_baseline(env, ppo.ac, ppo.norm)  # gate baseline, calibrated to the stochastic rollouts
     gate = args.gate * flat0
     print(f"flat-steering gate = {gate:.3f}  (= {args.gate:.2f} x warm-start STOCHASTIC flat tracking {flat0:.3f})")
 
-    latest = os.path.splitext(args.out)[0] + "_latest.pt"
+    latest = os.path.splitext(args.out)[0] + "_latest.pt"     # always-current policy (resume / final)
     best = [-1e9]
 
     def log(msg):
-        trk, ftrk, lvl = env.last_track, env.last_flat_track, env.last_level
+        trk, ftrk, c = env.last_track, env.last_flat_track, env.last_climb
         ppo.save(latest)
-        ok = ftrk >= gate and env.last_fell <= args.fell_max
-        # STAIRS: the objective is climb HEIGHT (curriculum level), not track — track DROPS with
-        # difficulty, so best-by-track would pick the easy early checkpoint. Select by level (track ties).
-        score = lvl + 0.01 * trk
+        ok = ftrk >= gate                                     # steering still good?
         mark = ""
-        if score > best[0] and ok:
-            best[0] = score
+        if trk > best[0] and ok:                              # best overall tracking SUBJECT TO steering preserved
+            best[0] = trk
             ppo.save(args.out)
             mark = "  <- saved best"
         print(f"{msg} | track {trk:.3f} | flat {ftrk:.3f}{'' if ok else ' LOW!'} | "
-              f"level {lvl:.2f}/{N_LEVELS - 1} | clear {env.last_clear:.2f} | "
-              f"fell {env.last_fell:.3f}{mark}")
+              f"climb {c:.2f} | fell {env.last_fell:.3f}{mark}")
 
     ppo.learn(args.iters, log_every=20, on_log=log)
     ppo.save(latest)
-    print(f"saved -> {args.out} (best level-score {best[0]:.3f}, steering gate {gate:.3f}) + {latest} (final)")
-    print(f"next: python {os.path.basename(__file__)} --score {args.out}")
+    print(f"saved -> {args.out} (best track {best[0]:.3f}, steering gate {gate:.3f}) + {latest} (final)")
+    print(f"next: python {os.path.basename(__file__)} --eval {args.out}   # confirm steering preserved")
 
 
 if __name__ == "__main__":

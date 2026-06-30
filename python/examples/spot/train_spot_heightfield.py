@@ -1,13 +1,13 @@
 """spotv2 — train the velocity-tracking policy on the SMOOTH heightfield terrain (spot_heightfield_env).
 
     python train_spot_heightfield.py --iters 1500
-    python train_spot_heightfield.py --warmstart spot_rough.pt --amp_max 0.18   # continue from a box-rough policy
+    python train_spot_heightfield.py --warmstart spot_terrain.pt --amp_max 0.18  # continue from the stairs/terrain policy
     python train_spot_heightfield.py --score spot_hf.pt                          # deterministic quality
     python train_spot_heightfield.py --eval  spot_hf.pt                          # flat-steering regression
 
-Same recipe/tooling as train_spot_rough (warm-start, Pareto steering gate, --warmstart ramp, --score),
-only the env is the continuous heightfield. Because the box-rough policy already walks gentle bumps, a
-clean start is to --warmstart from spot_rough.pt onto the (smoother but taller) heightfield.
+Warm-starts from scratch_flat_best.pt (50-d clock base gait, normalize_obs=True, stiff gains=90)
+via warmstart_scratch_to_terrain (defined in train_spot_stairs). --sym_coef uses the 96-d mirror
+from spot_steps_symmetry (same as train_spot_steps).
 """
 import argparse
 import os
@@ -21,10 +21,9 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "spot"))
 
 import threepp as tp
-from spot_deploy import fetch_assets
 from spot_heightfield_env import ACT_DIM, CONFIG, HF_AMP_MAX, HIDDEN, SpotHeightfieldEnv
-from spot_symmetry import make_aux_loss
-from train_spot_terrain import warmstart_from_isaac, sanity_walk, stochastic_flat_baseline
+from spot_steps_symmetry import make_aux_loss
+from train_spot_stairs import warmstart_scratch_to_terrain, sanity_walk, stochastic_flat_baseline
 from threepp.rl import PPO, load_policy
 
 
@@ -34,11 +33,12 @@ def score_checkpoint(policy_path, k=512, amp_max=HF_AMP_MAX, device="cuda", step
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); return None
     env = SpotHeightfieldEnv(num_envs=k, device=device, amp_max=amp_max)
-    ac, _, _ = load_policy(policy_path, device=device)
+    ac, norm, _ = load_policy(policy_path, device=device)
+    pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
     obs = env.reset()
     trk, flt, fl = [], [], []
     for t in range(steps):
-        obs, _, _, _, _ = env.step(ac.act_mean(obs))
+        obs, _, _, _, _ = env.step(pol(obs))
         if t >= warm:
             trk.append(env.last_track); flt.append(env.last_flat_track); fl.append(env.last_fell)
     m = lambda a: sum(a) / max(1, len(a))
@@ -49,17 +49,19 @@ def score_checkpoint(policy_path, k=512, amp_max=HF_AMP_MAX, device="cuda", step
 
 @torch.no_grad()
 def eval_flat_steering(policy_path, k=512, device="cuda"):
-    """Held-out steering regression on FLAT ground vs the Isaac teacher (PASS = within ~1.10x)."""
+    """Held-out steering regression on FLAT ground vs the scratch base gait (PASS = within ~1.10x)."""
     if not tp.HAS_PHYSX or not torch.cuda.is_available():
         print("need PhysX + CUDA"); return
     env = SpotHeightfieldEnv(num_envs=k, device=device, flat_only=True)
-    ac, _, _ = load_policy(policy_path, device=device)
-    teacher = env.imit_policy
-    pol = lambda o: ac.act_mean(o)
-    tea = lambda o: teacher(o[:, :48])
+    ac, norm, _ = load_policy(policy_path, device=device)
+    pol = (lambda o: ac.act_mean(norm.norm(o))) if norm is not None else ac.act_mean
+    # Compare vs the base gait (50-d, norm-aware) — same starting point as the fine-tune.
+    base_path = os.path.join(_HERE, "scratch_distillation", "scratch_flat_best.pt")
+    base_ac, base_norm, _ = load_policy(base_path, device=device)
+    tea = lambda o: base_ac.act_mean(base_norm.norm(o[:, :50]))
     grid = [(1.0, 0.0, 0.0), (0.0, 0.0, 0.0), (-0.5, 0.0, 0.0), (0.0, 0.5, 0.0),
             (0.0, -0.5, 0.0), (0.0, 0.0, 1.0), (0.0, 0.0, -1.0), (1.0, 0.0, 0.5)]
-    print(f"flat-steering regression ({os.path.basename(policy_path)} vs Isaac teacher, K={k}):")
+    print(f"flat-steering regression ({os.path.basename(policy_path)} vs base gait, K={k}):")
     print("   cmd[vx,vy,wz]      policy_err   teacher_err   ratio")
     worst = 0.0
     for cmd in grid:
@@ -80,7 +82,7 @@ def main():
     ap.add_argument("--gate", type=float, default=0.90)
     ap.add_argument("--out", default=os.path.join(_HERE, "spot_hf.pt"))
     ap.add_argument("--warmstart", default="",
-                    help="continue from a previous .pt (e.g. spot_rough.pt or a prior spot_hf.pt) instead of Isaac")
+                    help="continue from a previous .pt (e.g. spot_terrain.pt or a prior spot_hf.pt) instead of scratch_flat")
     ap.add_argument("--fell_max", type=float, default=0.005)
     ap.add_argument("--sym_coef", type=float, default=1.0)   # left-right symmetry augmentation weight (0 = off)
     ap.add_argument("--eval", default="")
@@ -96,17 +98,21 @@ def main():
     env = SpotHeightfieldEnv(num_envs=args.envs, device="cuda", amp_max=args.amp_max)
     aux = make_aux_loss(args.sym_coef) if args.sym_coef > 0 else None
     ppo = PPO(env, ACT_DIM, hidden=HIDDEN, lr=args.lr, horizon=args.horizon,
-              log_std_init=-1.5, entropy=0.0, normalize_obs=False, meta=CONFIG, aux_loss=aux)
+              log_std_init=-1.5, entropy=0.0, normalize_obs=True, meta=CONFIG, aux_loss=aux)
     if aux is not None:
         print(f"symmetry augmentation ON (coef {args.sym_coef})")
-    if args.warmstart:
-        src, _, _ = load_policy(args.warmstart, device="cuda")
+    if args.warmstart:                                        # continue from a prior 96-d normalized .pt
+        src, src_norm, _ = load_policy(args.warmstart, device="cuda")
         ppo.ac.load_state_dict(src.state_dict())
-        print(f"continued from checkpoint {os.path.basename(args.warmstart)} (full actor+critic+log_std)")
+        if ppo.norm is not None and src_norm is not None:
+            ppo.norm.load(src_norm.state())
+        print(f"continued from checkpoint {os.path.basename(args.warmstart)} (full actor+critic+log_std+norm)")
     else:
-        warmstart_from_isaac(ppo.ac, os.path.join(fetch_assets(), "spot_policy.pt"), device="cuda")
-    sanity_walk(env, ppo.ac)
-    flat0 = stochastic_flat_baseline(env, ppo.ac)
+        warmstart_scratch_to_terrain(ppo.ac, ppo.norm,
+                                     os.path.join(_HERE, "scratch_distillation", "scratch_flat_best.pt"),
+                                     device="cuda")
+    sanity_walk(env, ppo.ac, ppo.norm)
+    flat0 = stochastic_flat_baseline(env, ppo.ac, ppo.norm)
     gate = args.gate * flat0
     print(f"flat-steering gate = {gate:.3f}  (= {args.gate:.2f} x warm-start STOCHASTIC flat tracking {flat0:.3f})")
 

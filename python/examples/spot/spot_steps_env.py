@@ -1,8 +1,8 @@
 """spotv2 — DISCRETE STAIRS with an ADAPTIVE per-env difficulty curriculum.
 
-Stairs are the hard case (the flat Isaac walker stalled at ~0.17 m because it can't lift its feet over a
-tall riser). Two things make this attempt different: (1) warm-start from spot_hf.pt — it already has a
-rough-terrain foot-lifting gait AND preserved steering, not the flat walker; (2) an ADAPTIVE terrain-level
+Stairs are the hard case (a flat walker stalled at ~0.17 m because it can't lift its feet over a
+tall riser). Two things make this attempt different: (1) warm-start from scratch_flat_best.pt — it has the
+clock-augmented flat gait (OBS_DIM=50, normalize_obs=True, stiff gains=90); (2) an ADAPTIVE terrain-level
 curriculum so each env only faces a riser it has earned.
 
 Curriculum design (works within GpuSim's static terrain — terrain is built once, only the robot moves):
@@ -12,8 +12,9 @@ each STAIR lane is a strip of constant-difficulty BANDS along +x; band j is a fl
 (forward distance > CLEAR_DIST) and DEMOTES if it fell — so envs start at the smallest riser and ramp only
 as the policy improves. FLAT_FRAC of lanes are kept flat (no tents) for full-steering replay.
 
-Same 58-d obs + velocity-tracking + scan-gated imitation-anchor reward as the rest of spotv2, so
-train_spot_steps.py / play_spot_steps.py reuse the machinery. Warm-start: spot_hf.pt.
+New obs layout: [0:48] proprio | [48:50] clock | [50:51] base_above | [51:96] scan (45)  =  OBS_DIM=96.
+First 50 dims byte-identical to scratch_flat → warm-start copies cols [0:50], terrain cols zero-init.
+Anchor = scratch_flat_best.pt (50-d, norm-aware); stiff gains (90) on both training and deploy robots.
 """
 import os
 import sys
@@ -25,15 +26,20 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "spot"))
+sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))   # scratch_clock / scratch_env
 
 import threepp as tp
-from threepp.rl import GpuSim
-from spot_deploy import default_q, add_to_isaac, isaac_to_add, ACTION_SCALE, fetch_assets
-from spot_terrain_env import (quat_rotate_inverse, up_z, heading_cossin, SpotGpu, _flat_ground,
-                              scan_offsets, scan_xy,
-                              CONTROL_HZ, DT, SUBSTEPS, SPACING, SPAWN_Z, PROBE_DX, OBS_DIM, ACT_DIM,
+from threepp.rl import GpuSim, load_policy
+from spot_deploy import build_spot, default_q, add_to_isaac, isaac_to_add, ACTION_SCALE
+from spot_terrain_env import (quat_rotate_inverse, up_z, heading_cossin, _flat_ground,
+                              scan_offsets, scan_xy, N_SCAN,
+                              CONTROL_HZ, DT, SUBSTEPS, SPACING, SPAWN_Z, PROBE_DX, ACT_DIM,
                               HIDDEN, HALF_W, VX_LO, VX_HI, VY_HI, WZ_HI, STAND_PROB,
                               FWD_DRIVE_FRAC, CMD_MIN, CMD_MAX, SIG)
+from scratch_clock import CLOCK0, CLOCK_DIM, GAIT_PERIOD, advance, clock_obs, reset_phi
+from scratch_env import STIFF_GAINS
+
+OBS_DIM = 48 + CLOCK_DIM + 1 + N_SCAN   # = 96: [proprio(48)|clock(2)|base_above(1)|scan(45)]
 
 # --------------------------------------------------------------------------- #
 #  Stair bands (the difficulty ladder along +x) + curriculum
@@ -67,7 +73,9 @@ CONFIG = {"control_hz": CONTROL_HZ, "dt": DT, "substeps": SUBSTEPS, "spacing": S
           "band_len": BAND_LEN, "episode_s": STEPS_EPISODE_S, "probe_dx": list(PROBE_DX),
           "obs_dim": OBS_DIM, "act_dim": ACT_DIM, "hidden": list(HIDDEN),
           "vx": [VX_LO, VX_HI], "vy_hi": VY_HI, "wz_hi": WZ_HI, "stand_prob": STAND_PROB,
-          "sig": SIG, "w_imit": W_IMIT}
+          "sig": SIG, "w_imit": W_IMIT,
+          "stiff_gains": {k: list(v) for k, v in STIFF_GAINS.items()},
+          "gait_period": GAIT_PERIOD}
 
 
 def _tent(t, riser, run=STEP_RUN, n=N_UP, land=LAND):
@@ -122,7 +130,12 @@ class SpotStepsEnv:
         if not flat_only:
             is_stairs_np[rng.random(num_envs) < FLAT_FRAC] = False     # FLAT lanes -> steering replay
         risers_np = np.array(RISERS, np.float32)
-        self.sim = GpuSim(num_envs, lambda world, i: SpotGpu(world, i, SPACING),
+        # Stiff gains (90) = same plant the base gait scratch_flat_best.pt was trained on.
+        class _SpotStepsRobot:
+            def __init__(self_, world, i):
+                self_.art, _ = build_spot(world, assets=None, base_xy=(0.0, i * SPACING),
+                                          gains=STIFF_GAINS)
+        self.sim = GpuSim(num_envs, lambda world, i: _SpotStepsRobot(world, i),
                           gravity=(0.0, 0.0, -9.81), spacing=SPACING, device=device, read_root=True,
                           build_world=lambda world: (_flat_ground(world, num_envs, SPACING),
                                                       _add_steps(world, num_envs, SPACING, is_stairs_np, risers_np)))
@@ -135,8 +148,10 @@ class SpotStepsEnv:
         self.risers = torch.from_numpy(risers_np).to(dev)                 # [N_LEVELS]
         self.is_stairs = torch.from_numpy(is_stairs_np).to(dev)           # [K] bool
         self.gx, self.gy = scan_offsets(dev)                              # [N_SCAN] heading-relative grid offsets
-        self.imit_policy = torch.jit.load(os.path.join(fetch_assets(), "spot_policy.pt"),
-                                          map_location=dev).eval()
+        # Anchor = the clock-aware base gait (50-d, normalize_obs=True); frozen throughout.
+        _scratch = os.path.join(_HERE, "scratch_distillation", "scratch_flat_best.pt")
+        self.anchor_ac, self.anchor_norm, _ = load_policy(_scratch, device=dev)
+        self.anchor_ac.eval()
         self.lane_y = torch.arange(num_envs, device=dev, dtype=torch.float32) * SPACING
         pos = torch.zeros(num_envs, 3, device=dev); pos[:, 1] = self.lane_y; pos[:, 2] = SPAWN_Z
         self.base_pose = GpuSim.make_root_pose(pos, quat=(0.0, 0.0, 0.0, 1.0), device=dev)
@@ -144,6 +159,7 @@ class SpotStepsEnv:
         self.steps = torch.zeros(num_envs, dtype=torch.long, device=dev)
         self.level = torch.zeros(num_envs, dtype=torch.long, device=dev)   # CURRICULUM: per-env difficulty band
         self.last_act = z(num_envs, ACT_DIM); self._last_obs = z(num_envs, OBS_DIM)
+        self.phi = z(num_envs)                                             # phase clock ∈ [0,1)
         self.up = z(num_envs); self.cmd = z(num_envs, 3)
         self.cmd_timer = torch.zeros(num_envs, dtype=torch.long, device=dev)
         self.ep_start_x = z(num_envs); self.ep_max_climb = z(num_envs)
@@ -194,8 +210,11 @@ class SpotStepsEnv:
         px, py = scan_xy(x, y, cyaw, syaw, self.gx, self.gy)
         ahead = (self._terrain_h(px, py) - h_here[:, None]).clamp(-1.0, 1.0)
         base_above = (zz - h_here).unsqueeze(-1)
+        clk = clock_obs(self.phi)                                          # [K,2] clock after last substep
+        # Layout: [proprio(48)|clock(2)|base_above(1)|scan(45)] = 96-d
+        # First 50 (proprio+clock) byte-identical to scratch_flat -> anchor reads obs[:,:50]
         obs = torch.cat([lin_b, ang_b, proj_g, self.cmd, qpos, jv_isaac, self.last_act,
-                         base_above, ahead], dim=1)
+                         clk, base_above, ahead], dim=1)
         self._last_obs = obs
         return obs
 
@@ -235,6 +254,7 @@ class SpotStepsEnv:
         self.sim.set_root_state(idx, pose)
         self.sim.set_joint_state(idx, self.stand_q_add[idx], torch.zeros(n, self.sim.dof, device=dev))
         self.steps[idx] = 0; self.last_act[idx] = 0.0
+        self.phi[idx] = reset_phi(n, dev)    # randomise phase (decorrelate batch; don't advance during settle)
         self.ep_start_x[idx] = sx; self.ep_max_climb[idx] = 0.0
         self._resample_cmd(idx)
         # stair lanes: force a forward command at spawn so the robot ATTEMPTS the tent (level evaluation)
@@ -260,6 +280,7 @@ class SpotStepsEnv:
         targets_isaac = self.default_q + ACTION_SCALE * a
         self.sim.apply_drive_target(targets_isaac[:, self.a2i])
         self.sim.substep(DT / SUBSTEPS, SUBSTEPS)                            # advance n substeps, read once
+        self.phi = advance(self.phi)                                          # clock after physics, before next obs
         self.steps += 1
         self.last_act = a
         self.cmd_timer -= 1
@@ -278,8 +299,9 @@ class SpotStepsEnv:
         ahead = self._terrain_h(px, py) - h_here[:, None]
         change = ahead.abs().max(dim=1).values
         w_imit = (1.0 - change / 0.10).clamp(0.0, 1.0)
-        isaac_a = self.imit_policy(self._last_obs[:, :48])
-        imit = w_imit * (a - isaac_a).pow(2).mean(dim=1)
+        # Anchor: the 50-d clock base gait with its frozen RunningNorm (obs[:,:50] = proprio+clock).
+        anchor_a = self.anchor_ac.act_mean(self.anchor_norm.norm(self._last_obs[:, :50]))
+        imit = w_imit * (a - anchor_a).pow(2).mean(dim=1)
         arate = a - prev_a
         fell = (self.up < 0.35) | (base_above < 0.18)
         self.ep_max_climb = torch.maximum(self.ep_max_climb, (x - self.ep_start_x).clamp_min(0.0))
@@ -352,7 +374,8 @@ if __name__ == "__main__":
     K = int(os.environ.get("K", "64"))
     env = SpotStepsEnv(num_envs=K)
     obs = env.reset()
-    print(f"obs {tuple(obs.shape)} (OBS_DIM={OBS_DIM}) finite={bool(torch.isfinite(obs).all())}  "
+    assert obs.shape == (K, 96), f"expected obs (K,96), got {tuple(obs.shape)}"
+    print(f"obs {tuple(obs.shape)} (OBS_DIM={OBS_DIM}=96) finite={bool(torch.isfinite(obs).all())}  "
           f"levels={N_LEVELS} risers={RISERS}")
     for _ in range(200):
         obs, rew, done, term, to = env.step(torch.zeros(K, ACT_DIM, device=env.sim.device))

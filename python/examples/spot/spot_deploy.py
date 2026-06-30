@@ -1,9 +1,9 @@
-"""Deploy an Isaac Lab locomotion policy on Boston Dynamics Spot in threepp.
+"""Deploy the clean-lineage from-scratch CLOCK gait on Boston Dynamics Spot in threepp.
 
-Loads a Spot URDF + a TorchScript policy exported from Isaac Lab's velocity
-locomotion task, builds Spot as a PhysX reduced-coordinate articulation, and runs
-the policy closed-loop. Drive it with the arrow keys or the numpad; the camera
-follows. Needs a PhysX-enabled threepp build (`tp.HAS_PHYSX`) + torch.
+Loads a Spot URDF + the from-scratch clock base gait (scratch_distillation/scratch_flat_best.pt:
+50-d obs = 48 proprio + 2 phase-clock dims, normalize_obs=True, stiff PD gains 90), builds Spot as a
+PhysX reduced-coordinate articulation, and runs the policy closed-loop. Drive it with the arrow keys
+or the numpad; the camera follows. Needs a PhysX-enabled threepp build (`tp.HAS_PHYSX`) + torch.
 
     forward   UP / NUM 8      backward   DOWN / NUM 2
     strafe L  LEFT / NUM 4    strafe R   RIGHT / NUM 6
@@ -12,15 +12,14 @@ follows. Needs a PhysX-enabled threepp build (`tp.HAS_PHYSX`) + torch.
     python spot_deploy.py                  # interactive — assets auto-download on first run
     python spot_deploy.py --shot out.png
 
-The Spot policy (+ params + URDF) download once to ~/.cache/threepp/spot; pass
---assets <folder> to use your own copy (it just needs `spot_policy.pt`). The
-policy is the Isaac Lab Spot velocity task (48-d obs, 12 joint-position actions,
-action_scale 0.2, PD 60/1.5, the standing default pose below).
+The Spot URDF visuals download once to ~/.cache/threepp/spot; pass
+--assets <folder> to use your own copy. The deployed policy is the from-scratch clock gait (50-d
+obs, 12 joint-position actions, action_scale 0.2, stiff PD 90/1.5, the standing default pose below)
+— pass --model <path> to deploy a different checkpoint.
 
-Sim-to-sim note: the URDF carries no inertials or collision, so masses are
-approximated and each link gets a Box/Capsule collider; the knee's remotized
-actuator is treated as a plain PD. It still transfers because threepp and Isaac
-Lab both run PhysX 5 — the obs/action contract just has to be exact.
+Build note: the URDF carries no inertials or collision, so masses are approximated and each link
+gets a Box/Capsule collider; the knee's remotized actuator is treated as a plain PD. The deploy
+build matches the threepp GpuSim plant the gait was trained on — the obs/action contract is exact.
 """
 import argparse
 import math
@@ -39,27 +38,18 @@ import torch
 # --------------------------------------------------------------------------- #
 #  On-demand assets (cached under ~/.cache/threepp/spot; downloaded once)
 # --------------------------------------------------------------------------- #
-_ISAAC = ("https://omniverse-content-production.s3-us-west-2.amazonaws.com/"
-          "Assets/Isaac/5.1/Isaac/Samples/Policies/Spot_Policies/")
-ASSET_URLS = {"spot_policy.pt": _ISAAC + "spot_policy.pt",
-              "spot_env.yaml": _ISAAC + "spot_env.yaml"}
 URDF_ZIP_URL = "https://raw.githubusercontent.com/boston-dynamics/spot-sdk/master/files/spot_base_urdf.zip"
 
 
 def fetch_assets():
-    """Download the Spot policy (+ params + URDF) on demand; return the cache folder."""
+    """Download the Spot URDF visuals (model.urdf + link_models/*.obj, from the Boston Dynamics SDK)
+    on demand; return the cache folder. The deployed policy ships in-repo (scratch_distillation/), so
+    NO policy is downloaded here — the Isaac base-gait reward oracle is fetched in scratch_env instead."""
     cache = pathlib.Path.home() / ".cache" / "threepp" / "spot"
     cache.mkdir(parents=True, exist_ok=True)
     print(f"[spot] assets dir: {cache}")
-    if any(not (cache / f).exists() for f in ("spot_policy.pt", "spot_env.yaml", "model.urdf")):
-        print("[spot] some assets missing — downloading (one-time; cached for later runs)")
-    fetch_file(ASSET_URLS["spot_policy.pt"], cache, "spot_policy.pt")    # required by the demo
-    for name in ("spot_env.yaml",):                                      # for reference / the importer
-        try:
-            fetch_file(ASSET_URLS[name], cache, name)
-        except Exception as e:                                          # noqa: BLE001
-            print(f"  (skipped {name}: {e})")
     if not (cache / "model.urdf").exists():                             # URDF zip -> extract + flatten
+        print("[spot] URDF visuals missing — downloading (one-time; cached for later runs)")
         try:
             zp = fetch_file(URDF_ZIP_URL, cache, "spot_base_urdf.zip")
             with zipfile.ZipFile(zp) as z:
@@ -99,8 +89,11 @@ HIP_X, HIP_Y, HY_Y = 0.29785, 0.055, 0.1108
 KN = np.array([0.025, 0.0, -0.32]); FOOT = np.array([0.0, 0.0, -0.34])
 LIM = {"hx": (-0.7854, 0.7854), "hy": (-0.8988, 2.295), "kn": (-2.7929, -0.247)}
 GAINS = {"hx": (60., 1.5, 45.), "hy": (60., 1.5, 45.), "kn": (60., 1.5, 115.)}
+STIFF_GAINS = {"hx": (90., 1.5, 45.), "hy": (90., 1.5, 45.), "kn": (90., 1.5, 115.)}  # = scratch_env.STIFF_GAINS; the from-scratch gait's stiffer plant (Isaac default 60 sags)
 MASS = {"base": 13.0, "hip": 1.2, "uleg": 2.0, "lleg": 0.55}
 Z0 = 0.72   # build height (zero-config straight legs start just above ground)
+GAIT_PERIOD = 0.5   # phase-clock period (s); = scratch_clock.GAIT_PERIOD (hardcoded — scratch_clock pulls
+                    # DT from spot_terrain_env -> spot_deploy, so importing it here would be a circular import)
 
 
 def _capsule(length, radius, center, direction, color):
@@ -228,10 +221,12 @@ def _attach_obj(collider, link_pos, name, color, assets):
 
 
 class SpotController:
-    """Builds the 48-d Isaac observation, runs the policy, applies joint targets."""
-    def __init__(self, art, policy):
-        self.art, self.policy = art, policy
+    """Builds the 50-d clock observation, applies the (normalized) policy, writes joint targets.
+    `ac`/`norm` come from threepp.rl.load_policy; the phase clock advances at GAIT_PERIOD."""
+    def __init__(self, art, ac, norm):
+        self.art, self.ac, self.norm = art, ac, norm
         self.last_action = np.zeros(12, np.float32)
+        self.phi = 0.0   # phase clock in [0,1)
 
     def obs(self, cmd):
         a = self.art
@@ -241,16 +236,22 @@ class SpotController:
         proj_g = Rt @ np.array([0, 0, -1.0])
         qpos = a.joint_positions()[isaac_to_add] - default_q
         qvel = a.joint_velocities()[isaac_to_add]
-        return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, qvel, self.last_action]).astype(np.float32)
+        clk = [math.sin(2 * math.pi * self.phi), math.cos(2 * math.pi * self.phi)]   # clock at [48:50]
+        return np.concatenate([lin_b, ang_b, proj_g, cmd, qpos, qvel, self.last_action, clk]).astype(np.float32)
 
     def step(self, world, cmd):
         with torch.no_grad():
-            a = self.policy(torch.from_numpy(self.obs(cmd))[None]).numpy()[0]
+            o = torch.from_numpy(self.obs(cmd))[None]
+            if self.norm is not None:
+                o = self.norm.norm(o)
+            a = self.ac.act_mean(o)[0].numpy()
         self.last_action = a
         self.art.set_drive_targets((default_q + ACTION_SCALE * a)[add_to_isaac].astype(np.float32))
         world.step(0.02)   # 10 x 0.002 substeps, matching Isaac's decimation
+        self.phi = (self.phi + 0.02 / GAIT_PERIOD) % 1.0   # advance clock AFTER the step (aligns the next obs)
 
     def hold(self, world, n):  # settle into a stand
+        self.phi = 0.0   # the settle does NOT advance the clock (matches training reset)
         for _ in range(n):
             self.art.set_drive_targets(default_q[add_to_isaac].astype(np.float32))
             world.step(0.02)
@@ -288,25 +289,31 @@ def grid_texture(repeat):
 
 
 def main():
+    from threepp.rl import load_policy   # lazy: threepp.rl pulls torch RL; keep the module import light for callers
+    _scratch = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "scratch_distillation", "scratch_flat_best.pt")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--assets", help="folder with spot_policy.pt "
+    ap.add_argument("--model", default=_scratch,
+                    help="policy checkpoint (default: the from-scratch clock gait scratch_flat_best.pt)")
+    ap.add_argument("--assets", help="folder with the Spot URDF visuals "
                                      "(default: download on demand to ~/.cache/threepp/spot)")
     ap.add_argument("--shot", metavar="PNG", help="render headless after a short walk and save")
     args = ap.parse_args()
     assert tp.HAS_PHYSX, "needs a PhysX-enabled threepp build"
     assets = args.assets or fetch_assets()
-    policy = torch.jit.load(os.path.join(assets, "spot_policy.pt"), map_location="cpu").eval()
+    ac, norm, _ = load_policy(args.model, device="cpu")
+    print(f"[spot] policy {os.path.basename(args.model)}  in={ac.actor[0].in_features}")
 
     world = tp.PhysxWorld(gravity=tp.Vector3(0, 0, -9.81), fixed_timestep=0.002, max_substeps=20)
     ground = tp.Mesh(tp.BoxGeometry(80, 80, 1.0), tp.MeshStandardMaterial())
     ground.position.set(0, 0, -0.5)
     world.add_static(ground)
-    art, meshes = build_spot(world, assets)   # assets -> render the URDF's link_models/*.obj
-    ctrl = SpotController(art, policy)
+    art, meshes = build_spot(world, assets, gains=STIFF_GAINS)   # stiff gains (90) = the scratch gait's plant
+    ctrl = SpotController(art, ac, norm)
     ctrl.hold(world, 150)   # stand up
 
     headless = bool(args.shot)
-    canvas = tp.Canvas("threepp - Spot (Isaac policy)", width=1100, height=640,
+    canvas = tp.Canvas("threepp - Spot (scratch clock gait)", width=1100, height=640,
                        antialiasing=4, headless=headless)
     rend = tp.GLRenderer(canvas)
     rend.shadow_map_enabled = True
