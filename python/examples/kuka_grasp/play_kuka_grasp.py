@@ -42,11 +42,35 @@ def _sync_meshes(env):
     cm.quaternion.set(float(cp[0]), float(cp[1]), float(cp[2]), float(cp[3]))
 
 
+def _run_eval(ac, norm, args, play_iter, apply_curriculum):
+    """Headless numeric eval of the DEPLOYED (deterministic, assist-off) policy over N envs —
+    measures whether the policy actually reaches/grasps/lifts at deploy time."""
+    env = KukaGraspEnv(num_envs=args.eval, device=args.device, render_visuals=False)
+    apply_curriculum(env)
+    obs = env.reset()
+    R, G, S = [], [], []
+    warm = 80
+    for t in range(warm + 300):
+        with torch.no_grad():
+            a = ac.act_mean(norm.norm(obs) if norm is not None else obs)
+        obs, _, _, _, _ = env.step(a)
+        if t >= warm:
+            R.append(env.last_reach)
+            G.append(env.last_grasp_rate)
+            S.append(env.last_success_rate)
+    print(f"[eval] N={args.eval}  spawn={float(env.spawn_half[0]):.2f}x{float(env.spawn_half[1]):.2f}  "
+          f"assist={env.assist_frac:.2f}  (iter~{play_iter})")
+    print(f"[eval] reach={np.mean(R):.3f} m   grasp_rate={np.mean(G):.2f}   success_rate={np.mean(S):.2f}")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default=os.path.join(_HERE, "kuka_grasp_best.pt"))
+    ap.add_argument("--model", default=os.path.join(_HERE, "kuka_grasp_latest.pt"))
     ap.add_argument("--shot", metavar="PNG", help="render headless and save a frame after a few grasps")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--eval", type=int, metavar="N", help="headless numeric eval over N envs (no render)")
+    ap.add_argument("--spawn", type=float, metavar="F",
+                    help="cube spawn breadth 0..1 (default: match the checkpoint's curriculum stage)")
     args = ap.parse_args()
 
     from threepp.rl import load_policy
@@ -61,8 +85,21 @@ def main():
     print(f"[play] policy: {args.model}")
     ac, norm, meta = load_policy(args.model, device=args.device)
 
+    # Match the spawn region to the curriculum stage the checkpoint was trained to — a policy that has
+    # only seen cubes near the table centre cannot reach cubes spawned across the whole table. The
+    # checkpoint records its iteration in meta; --spawn F (0..1) overrides (0=centre, 1=full table).
+    play_iter = int(meta.get("iter", 400))
+
+    def apply_play_curriculum(e):
+        e.set_iter(int(args.spawn * 1500) if args.spawn is not None else play_iter)
+        e.assist_frac = 0.0          # deploy: real friction grasp, no grasp-lock scaffold
+
+    if args.eval:
+        _run_eval(ac, norm, args, play_iter, apply_play_curriculum)
+        return
+
     env = KukaGraspEnv(num_envs=1, device=args.device, render_visuals=True)
-    env.set_iter(10_000)            # assist off, full spawn region — the real task
+    apply_play_curriculum(env)
     obs = env.reset()
 
     # ---- scene ----

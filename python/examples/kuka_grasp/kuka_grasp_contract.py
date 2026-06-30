@@ -71,7 +71,7 @@ FINGER_MOUNT_Z = 0.165               # prismatic joint origin: z below the flang
 FINGER_LOWER = -0.020                # prismatic limit: closed (fingers squeeze inward)
 FINGER_UPPER = 0.035                 # prismatic limit: open (gap clears the cube)
 GRIP_OPEN = 0.035                    # finger target → open  (gap ≈ 0.10 m)
-GRIP_CLOSE = -0.015                  # finger target → squeeze a 0.07 m cube
+GRIP_CLOSE = -0.020                  # finger target → squeeze a 0.07 m cube (firm, at the finger limit)
 TIP_Z = 0.200                        # grasp point: link_7 + (0,0,TIP_Z) in link_7 frame (between finger tips)
 
 # --------------------------------------------------------------------------- #
@@ -87,7 +87,7 @@ CUBE = 0.07                    # cube edge
 CUBE_HALF = CUBE / 2
 CUBE_REST_Z = TABLE_TOP_Z + CUBE_HALF   # cube CoM at rest on the table
 CUBE_DENSITY = 300.0           # → ~0.10 kg
-CUBE_FRICTION = 2.0            # high static/dynamic friction, "max" combine → grippy contact
+CUBE_FRICTION = 2.5            # high static/dynamic friction, "max" combine → grippy contact
 
 LIFT_SUCCESS_DZ = 0.12         # cube lifted this far above the table top → grasp success
 DROP_FAIL_DZ = 0.10            # cube knocked this far below the table top → terminal fail (off the table)

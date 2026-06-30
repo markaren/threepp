@@ -58,6 +58,7 @@ def main():
     def on_log(msg):
         it = _iter_of(msg)
         env.set_iter(it)
+        ppo.meta["iter"] = it    # record the curriculum stage so play can match the spawn region
         print(f"{msg} | reach {env.last_reach:.3f} grasp {env.last_grasp_rate:.2f} "
               f"lift {env.last_lift:.3f} succ {env.last_success_rate:.2f} "
               f"spawn {env.spawn_half[0]:.2f}x{env.spawn_half[1]:.2f} assist {env.assist_frac:.2f}")

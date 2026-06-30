@@ -29,20 +29,26 @@ from kuka_grasp_sim import KukaGraspSim  # noqa: E402
 # --------------------------------------------------------------------------- #
 W_REACH = 1.0
 K_REACH = 6.0          # exp(-K_REACH * ||tip - cube||)
-W_CENTER = 0.5
-K_CENTER = 18.0        # exp(-K_CENTER * lateral_xy) — centre the tip over the cube
-W_GRASP = 1.0          # per-step bonus while the gripper is closed around the cube
-W_LIFT = 22.0          # per metre of lift, gated on actually holding the cube
-W_SUCCESS = 5.0        # per-step bonus while holding the cube above the success height
+W_CENTER = 0.6
+K_CENTER = 22.0        # exp(-K_CENTER * lateral_xy) — centre the tip over the cube (sharp)
+W_CLOSE = 0.6          # dense: reward closing the fingers while positioned over the cube
+W_GRASP = 1.5          # per-step bonus for a real FIRM grasp
+W_LIFT = 24.0          # per metre of lift, GATED ON A FIRM GRASP (not a loose "held")
+W_SUCCESS = 6.0        # per-step bonus while holding the cube above the success height
 W_ACT_RATE = 0.004
 W_ACT_MAG = 0.001
 W_LIMIT = 0.08
 W_FALL = 3.0           # one-time penalty when the cube is knocked off the table
 
-GRASP_LAT = 0.035      # lateral tip↔cube distance for "between the fingers"
-GRASP_VERT = 0.055     # vertical tip↔cube distance for "fingers around the cube"
-GRASP_OPEN_MAX = 0.024 # finger opening below this == closed on the cube
-HELD_RADIUS = 0.08     # cube within this of the tip counts as held (gates the lift reward)
+# A FIRM grasp = tightly centred AND fingers closed on the cube. The lift reward and the grasp-lock
+# weld both require THIS (not a loose proximity), so the policy must learn a real, centred squeeze —
+# which is what holds by friction once the assist anneals away. (The earlier loose "held" let the
+# weld do the lifting, so the policy never learned to actually grip: deploy success was 0.)
+FIRM_LAT = 0.018       # lateral tip↔cube must be tight (was 0.035 — too loose, off-centre grips slip)
+FIRM_VERT = 0.045      # fingers vertically around the cube
+FIRM_OPEN = 0.018      # fingers genuinely closed on the cube
+OVER_LAT = 0.045       # loosely above the cube — gates the dense "close" reward
+OVER_VERT = 0.065
 LOST_MARGIN = 0.10     # cube this far beyond the table edge == knocked off → terminal fail
 
 ARM_RESET_NOISE = 0.05  # rad jitter on the arm reset posture
@@ -69,6 +75,7 @@ class KukaGraspEnv:
         self.spawn_half = torch.tensor([0.0, 0.0], device=dev)   # cube spawn region half-extent (x,y)
         self.assist_frac = 1.0                                    # fraction of envs with grasp-lock assist
         self.assisted = torch.zeros(num_envs, dtype=torch.bool, device=dev)
+        self.locked = torch.zeros(num_envs, dtype=torch.bool, device=dev)   # grasp-lock latch (assisted only)
 
         # metrics (read in on_log)
         self.last_reach = 0.0
@@ -82,16 +89,19 @@ class KukaGraspEnv:
     def set_iter(self, it):
         """Curriculum schedule. Early: cube near the table centre, arm resets pre-posed, full
         grasp-lock assist. Late: cube anywhere on the table, no assist (pure friction grasp)."""
-        t = min(max(it / 1500.0, 0.0), 1.0)        # 0→1 over the first 1500 iters
+        t = min(max(it / 1200.0, 0.0), 1.0)        # cube spawn region grows 0→full over 1200 iters
         sx = 0.02 + t * (C.TABLE_HALF[0] - 0.06)
         sy = 0.02 + t * (C.TABLE_HALF[1] - 0.06)
         self.spawn_half = torch.tensor([sx, sy], device=self.device)
-        self.assist_frac = float(max(0.0, 1.0 - it / 1000.0))   # full assist → 0 over 1000 iters
+        # assist anneals to 0 over 600 iters: a run to ~800 iters then has a clear pure-FRICTION phase
+        # (assist=0) at the end, so the final policy must hold the lift by friction, not the latch.
+        self.assist_frac = float(max(0.0, 1.0 - it / 600.0))
         self.cur_iter = it
 
     # ---- observation --------------------------------------------------------
     def _grasp_state(self):
-        """Return (lateral_xy, vert, dist, grasped, held) tensors describing the tip↔cube relation."""
+        """Return (tip, cube, lateral_xy, vert, dist, opening, firm) describing the tip↔cube relation.
+        `firm` = a real grasp: tightly centred + fingers closed on the cube."""
         tip, _ = self.sim.tip_state()
         cube = self.sim.cube_position()
         d = cube - tip
@@ -99,13 +109,12 @@ class KukaGraspEnv:
         vert = d[:, 2].abs()
         dist = torch.linalg.norm(d, dim=1)
         opening = self.sim.finger_opening()
-        grasped = (lateral < GRASP_LAT) & (vert < GRASP_VERT) & (opening < GRASP_OPEN_MAX)
-        held = dist < HELD_RADIUS
-        return tip, cube, lateral, vert, dist, opening, grasped, held
+        firm = (lateral < FIRM_LAT) & (vert < FIRM_VERT) & (opening < FIRM_OPEN)
+        return tip, cube, lateral, vert, dist, opening, firm
 
     def _obs(self):
         s = self.sim
-        tip, cube, lateral, vert, dist, opening, grasped, held = self._grasp_state()
+        tip, cube, lateral, vert, dist, opening, firm = self._grasp_state()
         # tip relative to this env's table centre (strip the per-env X offset)
         tip_rel = tip.clone()
         tip_rel[:, 0] -= self.env_x + C.TABLE_CX
@@ -113,7 +122,7 @@ class KukaGraspEnv:
         tip_rel[:, 2] -= C.TABLE_TOP_Z
         tip_to_cube = cube - tip                       # env_x cancels
         lift_frac = ((cube[:, 2] - C.CUBE_REST_Z) / C.LIFT_SUCCESS_DZ).clamp(0.0, 1.5)
-        flags = torch.stack([grasped.float(), lift_frac], dim=1)
+        flags = torch.stack([firm.float(), lift_frac], dim=1)
         finger_vel = 0.5 * (s.arm_jv[:, 7] + s.arm_jv[:, 8])
         obs = torch.cat([
             s.arm_jp[:, 0:7] - self.default_q,         # 7 arm qpos_rel
@@ -155,6 +164,7 @@ class KukaGraspEnv:
 
         self.steps[idx] = 0
         self.last_action[idx] = 0.0
+        self.locked[idx] = False
         # which of the reset envs get grasp-lock assist this episode
         self.assisted[idx] = torch.rand(n, generator=self.g, device=dev) < self.assist_frac
 
@@ -174,24 +184,29 @@ class KukaGraspEnv:
         self.sim.set_arm_targets(targets)
         self.sim.substep(C.SUBSTEPS)
 
-        tip, cube, lateral, vert, dist, opening, grasped, held = self._grasp_state()
+        tip, cube, lateral, vert, dist, opening, firm = self._grasp_state()
+        over_cube = (lateral < OVER_LAT) & (vert < OVER_VERT)
+        close_amt = ((C.GRIP_OPEN - opening) / (C.GRIP_OPEN - C.GRIP_CLOSE)).clamp(0.0, 1.0)
 
-        # --- grasp-lock scaffold: weld the cube to the tip when an assisted env brings the
-        #     CLOSING gripper onto the cube. Trigger on the COMMANDED close + proximity (not the
-        #     achieved finger gap) so the weld fires before a hard squeeze can eject the cube. ---
-        near = (lateral < GRASP_LAT) & (vert < GRASP_VERT)
-        weld = self.assisted & near & (a[:, 7] > 0.0)
+        # --- grasp-lock scaffold (LATCHED): an ASSISTED env that achieves a real FIRM grasp LATCHES
+        #     the cube to the tip and keeps it there until the gripper opens. The latch must be
+        #     INITIATED by a genuine centred-and-closed grasp (so the policy learns to grip), but it
+        #     then gives a STABLE held cube to learn the raise on — which the non-latched (momentary)
+        #     weld did not, so the policy gripped but never lifted. As assist anneals, fewer envs
+        #     latch and the friction grip must hold the lift on its own. ---
+        gripper_closed_cmd = a[:, 7] > 0.0
+        self.locked = (self.locked | (self.assisted & firm)) & gripper_closed_cmd
+        weld = self.locked
         if weld.any():
             widx = torch.nonzero(weld, as_tuple=False).squeeze(-1)
             self.sim.set_cube_state(widx, self.sim.make_pose(tip[widx], device=self.device))
             cube = cube.clone()
             cube[widx] = tip[widx]
-            dist = torch.linalg.norm(cube - tip, dim=1)
-            held = dist < HELD_RADIUS
+        firm_gate = firm | weld          # a latched cube counts as firmly grasped for lift/success
 
         self.steps += 1
         lift = (cube[:, 2] - C.CUBE_REST_Z).clamp(min=0.0)
-        success = held & (cube[:, 2] > C.CUBE_REST_Z + C.LIFT_SUCCESS_DZ)
+        success = firm_gate & (cube[:, 2] > C.CUBE_REST_Z + C.LIFT_SUCCESS_DZ)
         # terminal fail: cube knocked below the table OR batted off the table footprint. The lateral
         # check is essential — without it a cube swept sideways never resets and its distance inflates
         # the reach metric (and starves the reward) for the rest of the episode.
@@ -206,8 +221,9 @@ class KukaGraspEnv:
         rew = (
             W_REACH * torch.exp(-K_REACH * dist)
             + W_CENTER * torch.exp(-K_CENTER * lateral)
-            + W_GRASP * grasped.float()
-            + W_LIFT * lift * held.float()
+            + W_CLOSE * close_amt * over_cube.float()       # dense: close the fingers when over the cube
+            + W_GRASP * firm.float()                        # firm-grasp bonus (REAL grasp only)
+            + W_LIFT * lift * firm_gate.float()             # lift reward requires a firm grasp (or latch)
             + W_SUCCESS * success.float()
             - W_ACT_RATE * ((a - self.last_action) ** 2).sum(dim=1)
             - W_ACT_MAG * (a ** 2).sum(dim=1)
@@ -221,11 +237,11 @@ class KukaGraspEnv:
         done = timeout | fell
         is_timeout = timeout & ~fell           # fell is a true terminal (bootstrap 0)
 
-        # metrics
+        # metrics (grasp_rate / lift / success now all reflect a REAL firm grasp)
         self.last_reach = float(dist.mean())
-        self.last_grasp_rate = float(grasped.float().mean())
-        self.last_lift = float((lift * held.float()).mean())
-        self.last_success_rate = float(success.float().mean())
+        self.last_grasp_rate = float(firm.float().mean())          # REAL firm grasps (honest)
+        self.last_lift = float((lift * firm_gate.float()).mean())
+        self.last_success_rate = float(success.float().mean())     # incl. latched; deploy eval is honest
 
         term_obs = self._obs()                 # snapshot BEFORE auto-reset
         d = torch.nonzero(done, as_tuple=False).squeeze(-1)
