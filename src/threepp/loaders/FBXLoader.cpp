@@ -270,6 +270,31 @@ namespace threepp {
             return false;
         }
 
+        // Returns true when the material or diffuse-texture name marks foliage —
+        // leaf/plant cards that need alpha cutout. Bistro's cutout mask lives in
+        // the GPU-compressed BaseColor DDS alpha, which the CPU-side
+        // hasCutoutAlpha() scan can't read (it bails on compressed images). The
+        // renderer DOES decode that alpha into its albedo atlas (bcnDecompress),
+        // so a name match is enough to enable Material::alphaTest and get correct
+        // cutout. Harmless on solid foliage parts (e.g. trunks): their alpha is
+        // opaque, so the cutoff discards nothing.
+        bool looksLikeFoliage(const ofbx::Material* mat, const std::filesystem::path& diffPath) {
+            auto ciContains = [](const std::string& s, const char* needle) {
+                return std::search(s.begin(), s.end(), needle, needle + std::strlen(needle),
+                                   [](char a, char b){ return std::tolower(a) == std::tolower(b); }) != s.end();
+            };
+            static const char* const kKeywords[] = {
+                "foliage", "leaf", "leaves", "plant", "tree", "ivy",
+                "hedge", "flower", "grass", "fern", "vine", "bush", "shrub"};
+            const std::string matName(mat->name);
+            for (const char* kw : kKeywords) if (ciContains(matName, kw)) return true;
+            if (!diffPath.empty()) {
+                const std::string stem = diffPath.stem().string();
+                for (const char* kw : kKeywords) if (ciContains(stem, kw)) return true;
+            }
+            return false;
+        }
+
         // Apply normal map + emissive — shared between all material types.
         // Opacity/transmission is handled per-branch.
         template<typename M>
@@ -340,6 +365,9 @@ namespace threepp {
             // Resolve diffuse path for glass heuristic.
             const auto diffPath = resolveTexturePath(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir);
             const bool isGlass = looksLikeGlass(mat, diffPath);
+            // Foliage cutout: data-driven for uncompressed maps, name-based for
+            // Bistro's compressed DDS BaseColor (alpha the CPU scan can't read).
+            const bool isFoliage = looksLikeFoliage(mat, diffPath);
 
             if (isPBR) {
                 // ---- PBR / MeshPhysicalMaterial --------------------------------
@@ -348,6 +376,10 @@ namespace threepp {
                 if (auto tex = loadTex(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir, texLoader)) {
                     m->map = tex;
                     m->color.setHex(0xffffff);
+                    if (isFoliage) {// foliage/leaf cards → alpha cutout
+                        m->alphaTest = 0.5f;
+                        m->side      = Side::Double;// leaves visible from both faces
+                    }
                 }
                 if (auto tex = texLoader.load(specPath, ColorSpace::Linear)) {
                     tex->wrapS = TextureWrapping::Repeat;
@@ -384,6 +416,10 @@ namespace threepp {
                 if (auto tex = loadTex(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir, texLoader)) {
                     m->map = tex;
                     m->color.setHex(0xffffff);
+                    if (isFoliage) {// foliage/leaf cards → alpha cutout
+                        m->alphaTest = 0.5f;
+                        m->side      = Side::Double;// leaves visible from both faces
+                    }
                 }
                 // Specular color + shininess from FBX material properties.
                 const auto sc = mat->getSpecularColor();
