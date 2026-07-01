@@ -103,7 +103,9 @@ namespace threepp {
                                                    const URDFArticulationOptions& opts = {}) {
         URDFArticulationResult result;
         URDFLoader loader;
-        const URDFArticulationDesc desc = loader.parseArticulation(path);
+        // only load each link's <visual> mesh from disk when we will actually render it — otherwise this
+        // dominates a large batch build (~0.45 s/env for a detailed arm that never renders in training).
+        const URDFArticulationDesc desc = loader.parseArticulation(path, opts.renderVisuals);
         if (desc.links.empty()) return result;// unreadable / no single root
 
         auto art = std::make_unique<Articulation>(world, opts.fixedBase, opts.solverPositionIterations, !opts.selfCollision);

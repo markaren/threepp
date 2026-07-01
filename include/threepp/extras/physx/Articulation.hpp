@@ -230,6 +230,7 @@ namespace threepp {
                     joint->setDriveTarget(ax, driveTarget, false);// autowake=false: pre-scene
                 }
                 joints_.push_back(joint);
+                jointAxes_.push_back(ax);// remember the motion axis so bulk I/O uses eX for prismatic
             }
             // A PxArticulationLink is a PxRigidActor, so the rigid-body bind path
             // syncs the visual mesh to the simulated link pose.
@@ -271,14 +272,14 @@ namespace threepp {
             cpuOnly("joint_positions");
             std::vector<float> a(joints_.size());
             for (std::size_t i = 0; i < joints_.size(); ++i)
-                a[i] = joints_[i]->getJointPosition(::physx::PxArticulationAxis::eTWIST);
+                a[i] = joints_[i]->getJointPosition(jointAxes_[i]);// eX for prismatic, eTWIST for revolute
             return a;
         }
         [[nodiscard]] std::vector<float> jointVelocities() const {
             cpuOnly("joint_velocities");
             std::vector<float> a(joints_.size());
             for (std::size_t i = 0; i < joints_.size(); ++i)
-                a[i] = joints_[i]->getJointVelocity(::physx::PxArticulationAxis::eTWIST);
+                a[i] = joints_[i]->getJointVelocity(jointAxes_[i]);
             return a;
         }
         void setDriveTargets(const float* targets, std::size_t count) {
@@ -287,9 +288,10 @@ namespace threepp {
             const std::size_t n = std::min<std::size_t>(joints_.size(), count);
             // autowake=true on the last write: a policy that drives a settled robot
             // (e.g. after a reset/settle) must wake it, or the targets are ignored and
-            // the articulation stays frozen at its rest pose.
+            // the articulation stays frozen at its rest pose. Use each joint's own axis —
+            // eTWIST hardcoded here froze every PRISMATIC joint (e.g. parallel-jaw fingers).
             for (std::size_t i = 0; i < n; ++i)
-                joints_[i]->setDriveTarget(PxArticulationAxis::eTWIST, targets[i], i + 1 == n);
+                joints_[i]->setDriveTarget(jointAxes_[i], targets[i], i + 1 == n);
         }
 
         // For each joint (in add-order), its low-level DOF slot — the index it occupies
@@ -341,6 +343,7 @@ namespace threepp {
         ::physx::PxArticulationCache* cache_ = nullptr;
         ::physx::PxArticulationLink* rootLink_ = nullptr;
         std::vector<::physx::PxArticulationJointReducedCoordinate*> joints_;// non-root joints, add order
+        std::vector<::physx::PxArticulationAxis::Enum> jointAxes_;// each joint's motion axis (eTWIST rev / eX prism)
         bool finalized_ = false;
     };
 
