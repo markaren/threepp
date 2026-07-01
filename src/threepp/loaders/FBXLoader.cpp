@@ -17,11 +17,14 @@
 #include "ofbx.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace threepp {
@@ -182,6 +185,66 @@ namespace threepp {
                 tex->needsUpdate();
             }
             return tex;
+        }
+
+        // Parallel texture cache warm-up. stb_image decode is CPU-bound and was
+        // done serially per-material inside buildMaterial() — for a texture-heavy
+        // scene (Bistro: hundreds of 2K–4K maps) that serial decode dominates load
+        // time. Here we gather every UNIQUE texture path up front and decode them
+        // across a small thread pool INTO the (now thread-safe) TextureLoader
+        // cache, so the subsequent serial buildMaterial() pass only hits warm
+        // entries. Correctness: each unique path is decoded exactly once, with the
+        // colour space of its FIRST reference in mesh/slot order — identical to
+        // what the serial, path-keyed cache would have produced. Decode touches no
+        // GPU/GLFW state (uploads are deferred to first render), so it is safe off
+        // the main thread.
+        void warmTextureCacheParallel(const ofbx::IScene* scene,
+                                      const std::filesystem::path& baseDir,
+                                      TextureLoader& texLoader) {
+            struct Job { std::filesystem::path path; ColorSpace cs; };
+            std::vector<Job> jobs;
+            std::unordered_set<std::string> seen;
+
+            auto consider = [&](const ofbx::Texture* slot, ColorSpace cs) {
+                if (!slot) return;
+                auto p = resolveTexturePath(slot, baseDir);
+                if (p.empty() || !isSupportedImageFormat(p)) return;
+                if (seen.insert(p.string()).second) jobs.push_back({std::move(p), cs});
+            };
+
+            const int meshCount = scene->getMeshCount();
+            for (int mi = 0; mi < meshCount; ++mi) {
+                const ofbx::Mesh* fbxMesh = scene->getMesh(mi);
+                const int matCount = fbxMesh->getMaterialCount();
+                for (int k = 0; k < matCount; ++k) {
+                    const ofbx::Material* mat = fbxMesh->getMaterial(k);
+                    if (!mat) continue;
+                    // Same slot→colour-space mapping buildMaterial/applyCommon use.
+                    consider(mat->getTexture(ofbx::Texture::DIFFUSE),  ColorSpace::sRGB);
+                    consider(mat->getTexture(ofbx::Texture::SPECULAR), ColorSpace::Linear);
+                    consider(mat->getTexture(ofbx::Texture::NORMAL),   ColorSpace::Linear);
+                    consider(mat->getTexture(ofbx::Texture::EMISSIVE), ColorSpace::sRGB);
+                }
+            }
+
+            if (jobs.empty()) return;
+
+            // Bounded pool: cap concurrent decodes so peak transient memory (a 4K
+            // RGBA decode is ~64 MB) stays sane even when two FBX files load at
+            // once (each runs its own pool). 8 is plenty — decode saturates memory
+            // bandwidth well before then. Atomic index = simple load balancing.
+            const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+            const unsigned nThreads = std::min({hw, 8u, static_cast<unsigned>(jobs.size())});
+            std::atomic<size_t> next{0};
+            auto worker = [&]() {
+                for (size_t i = next.fetch_add(1); i < jobs.size(); i = next.fetch_add(1)) {
+                    texLoader.load(jobs[i].path, jobs[i].cs);
+                }
+            };
+            std::vector<std::thread> pool;
+            pool.reserve(nThreads);
+            for (unsigned t = 0; t < nThreads; ++t) pool.emplace_back(worker);
+            for (auto& th : pool) th.join();
         }
 
         // Returns true when the material name or diffuse texture name suggests glass.
@@ -377,6 +440,12 @@ namespace threepp {
         }
 
         const std::filesystem::path baseDir = path.parent_path();
+
+        // Decode every unique texture in parallel up front so the serial material
+        // build below hits warm (thread-safe) cache entries instead of decoding
+        // each map one-at-a-time — the dominant cost for texture-heavy scenes.
+        warmTextureCacheParallel(scene, baseDir, pimpl_->texLoader);
+
         auto root = Group::create();
         root->name = path.stem().string();
 
