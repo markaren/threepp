@@ -59,6 +59,18 @@ namespace threepp {
         // space, pixel-crisp at any resolution/FOV. 0 disables; ~1.0 = night sky.
         void setDeferredStarfield(float intensity);
 
+        // HDRI sun extraction (ON by default). The environment map's dominant
+        // compact bright source (the sun) is removed from the PMREM's glossy /
+        // rough mips at upload — a ~10⁴:1 disc cannot be Monte-Carlo prefiltered
+        // smoothly and shows up as bright blocky "spec blobs" in reflections —
+        // and its exact energy is re-injected as an analytic directional light:
+        // a sharp correct sun highlight (the ONLY sun reflection), soft RT
+        // shadows (setSunAngularRadius), GI bounce and volumetric shafts. The
+        // sky background and true mirror lookups (env mip 0) keep the visible
+        // sun disc. Toggling forces an env re-upload on the next frame.
+        void setEnvSunExtraction(bool enabled);
+        [[nodiscard]] bool envSunExtraction() const;
+
         // ── Automatic exposure (eye adaptation) ──────────────────────────────
         // When enabled the renderer samples the log2-luma histogram of the
         // rendered frame each tick and drives toneMappingExposure toward the

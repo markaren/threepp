@@ -11,6 +11,34 @@
 #include <string>
 #include <vector>
 
+namespace {
+
+    constexpr float kPi     = 3.14159265358979323846f;
+    constexpr float kTwoPi  = 6.28318530717958647692f;
+    constexpr float kDeg2Rad = kPi / 180.f;
+
+    inline float texelLum(const float* p) {
+        return 0.2126f * p[0] + 0.7152f * p[1] + 0.0722f * p[2];
+    }
+
+    // Direction + solid angle of equirect texel (x, y). MUST match the shaders'
+    // sampleEnvLod mapping (u = 0.5 + atan(z,x)/2π, v = 0.5 + asin(y)/π), or
+    // the re-injected analytic sun points away from the disc it replaced.
+    inline void texelDir(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                         float out[3], float* dOmega) {
+        const float u   = (static_cast<float>(x) + 0.5f) / static_cast<float>(w);
+        const float v   = (static_cast<float>(y) + 0.5f) / static_cast<float>(h);
+        const float phi = (u - 0.5f) * kTwoPi;
+        const float lat = (v - 0.5f) * kPi;
+        const float cl  = std::cos(lat);
+        out[0] = cl * std::cos(phi);
+        out[1] = std::sin(lat);
+        out[2] = cl * std::sin(phi);
+        if (dOmega) *dOmega = cl * (kTwoPi / static_cast<float>(w)) * (kPi / static_cast<float>(h));
+    }
+
+}// namespace
+
 namespace threepp::vulkan {
 
     EnvPrefilter::EnvPrefilter(VulkanContext& ctx, VkCommandPool cmdPool)
@@ -117,7 +145,98 @@ namespace threepp::vulkan {
 
     Image2D EnvPrefilter::buildPmrem(uint32_t w, uint32_t h,
                                      const float* pixels,
-                                     VkDeviceSize byteSize) {
+                                     VkDeviceSize byteSize,
+                                     bool extractSun,
+                                     SunExtract* outSun) {
+        if (outSun) *outSun = {};
+
+        // ── HDRI sun extraction (CPU, one-shot per env upload) ──────────────
+        // Detect a dominant compact bright source and build a sun-clamped copy
+        // to prefilter from. Detection: the peak texel must dominate the mean
+        // luminance by 200× (bright clouds/sky bands sit at ~10-50×) and clear
+        // an absolute HDR floor. The disc: every texel within 8° of the peak
+        // whose luminance exceeds 5% of it. Fill: the mean of the 8°-16°
+        // surround, so the replaced disc blends into the sky gradient (the
+        // sub-threshold halo/glow around the sun stays in the env — desirable).
+        std::vector<float> clamped;// sun-clamped prefilter source (empty = none)
+        bool sunFound = false;
+        if (extractSun && outSun && w > 1 && h > 1) {
+            const size_t n = static_cast<size_t>(w) * h;
+            float  maxL = 0.f; size_t maxI = 0; double sumL = 0.0;
+            for (size_t i = 0; i < n; ++i) {
+                const float L = texelLum(pixels + 4 * i);
+                sumL += L;
+                if (L > maxL) { maxL = L; maxI = i; }
+            }
+            const float meanL = static_cast<float>(sumL / static_cast<double>(n));
+            if (maxL > std::max(200.f * meanL, 32.f)) {
+                float pd[3];
+                texelDir(static_cast<uint32_t>(maxI % w), static_cast<uint32_t>(maxI / w), w, h, pd, nullptr);
+                const float cosRegion = std::cos(8.f * kDeg2Rad);
+                const float cosFill   = std::cos(16.f * kDeg2Rad);
+                const float thresh    = 0.05f * maxL;
+                double fill[3]{};
+                size_t fillN = 0;
+                std::vector<uint32_t> disc;
+                for (uint32_t y = 0; y < h; ++y) {
+                    for (uint32_t x = 0; x < w; ++x) {
+                        float d[3], dO;
+                        texelDir(x, y, w, h, d, &dO);
+                        const float c = d[0] * pd[0] + d[1] * pd[1] + d[2] * pd[2];
+                        if (c <= cosFill) continue;
+                        const float* p = pixels + 4 * (static_cast<size_t>(y) * w + x);
+                        if (c > cosRegion && texelLum(p) > thresh) {
+                            disc.push_back(y * w + x);
+                        } else {
+                            for (int k = 0; k < 3; ++k) fill[k] += p[k];
+                            ++fillN;
+                        }
+                    }
+                }
+                const float f[3] = {
+                        fillN ? static_cast<float>(fill[0] / static_cast<double>(fillN)) : 0.f,
+                        fillN ? static_cast<float>(fill[1] / static_cast<double>(fillN)) : 0.f,
+                        fillN ? static_cast<float>(fill[2] / static_cast<double>(fillN)) : 0.f};
+                // Energy accounting: the disc texels are REPLACED by the fill, so
+                // that much radiance stays in the env — the analytic light must
+                // carry only the EXCESS Σ max(L−fill,0)·dΩ, or the sun is counted
+                // ~twice and every lit surface brightens (washed-out pastels).
+                double E[3]{}, dAcc[3]{}, omega = 0.0;
+                for (const uint32_t idx : disc) {
+                    float d[3], dO;
+                    texelDir(idx % w, idx / w, w, h, d, &dO);
+                    const float* p = pixels + 4 * static_cast<size_t>(idx);
+                    const float ex[3] = {std::max(p[0] - f[0], 0.f),
+                                         std::max(p[1] - f[1], 0.f),
+                                         std::max(p[2] - f[2], 0.f)};
+                    const float exL = texelLum(ex);
+                    for (int k = 0; k < 3; ++k) {
+                        E[k]    += static_cast<double>(ex[k]) * dO;
+                        dAcc[k] += static_cast<double>(d[k]) * exL * dO;
+                    }
+                    omega += dO;
+                }
+                const double dl = std::sqrt(dAcc[0] * dAcc[0] + dAcc[1] * dAcc[1] + dAcc[2] * dAcc[2]);
+                if (omega > 0.0 && !disc.empty() && dl > 1e-12 &&
+                    (E[0] + E[1] + E[2]) > 1e-4) {
+                    for (int k = 0; k < 3; ++k) {
+                        outSun->dir[k]    = static_cast<float>(dAcc[k] / dl);
+                        outSun->colorE[k] = static_cast<float>(E[k]);
+                    }
+                    outSun->angularRadiusDeg = std::clamp(
+                            std::sqrt(static_cast<float>(omega) / kPi) / kDeg2Rad, 0.05f, 10.f);
+                    clamped.assign(pixels, pixels + 4 * n);
+                    for (const uint32_t idx : disc) {
+                        clamped[4 * static_cast<size_t>(idx) + 0] = f[0];
+                        clamped[4 * static_cast<size_t>(idx) + 1] = f[1];
+                        clamped[4 * static_cast<size_t>(idx) + 2] = f[2];
+                    }
+                    outSun->found = true;
+                    sunFound      = true;
+                }
+            }
+        }
+
         Image2D out{};
         out.width  = w;
         out.height = h;
@@ -157,9 +276,12 @@ namespace threepp::vulkan {
                 VMA_MEMORY_USAGE_AUTO,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        // Sun path: mip 0 first receives the CLAMPED copy so the prefilter
+        // dispatches integrate a sun-free source; the ORIGINAL is copied back
+        // over mip 0 in a second submission below (mirror/sky keep the disc).
         void* mapped = nullptr;
         vmaMapMemory(ctx_.allocator(), staging.alloc, &mapped);
-        std::memcpy(mapped, pixels, byteSize);
+        std::memcpy(mapped, sunFound ? clamped.data() : pixels, byteSize);
         vmaUnmapMemory(ctx_.allocator(), staging.alloc);
 
         // One-shot command buffer: upload mip 0, dispatch prefilter per mip,
@@ -359,8 +481,8 @@ namespace threepp::vulkan {
             }
         }
 
-        // Final transition: all mips → SHADER_READ_ONLY_OPTIMAL for sampling.
-        {
+        if (!sunFound) {
+            // Final transition: all mips → SHADER_READ_ONLY_OPTIMAL for sampling.
             VkImageMemoryBarrier br{};
             br.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             br.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
@@ -390,6 +512,65 @@ namespace threepp::vulkan {
         const VkResult wr = vkQueueWaitIdle(ctx_.graphicsQueue());
         if (wr != VK_SUCCESS) check(wr, "wait one-shot(prefilter)");
         vkFreeCommandBuffers(ctx_.device(), cmdPool_, 1, &cb);
+
+        // Sun path, second submission: mip 0 still holds the clamped source —
+        // restore the ORIGINAL equirect (sky / clear glass / mirror lookups keep
+        // the real sun disc; only mips 1+ stay sun-free), then finalize layouts.
+        if (sunFound) {
+            vmaMapMemory(ctx_.allocator(), staging.alloc, &mapped);
+            std::memcpy(mapped, pixels, byteSize);
+            vmaUnmapMemory(ctx_.allocator(), staging.alloc);
+
+            VkCommandBuffer cb2 = VK_NULL_HANDLE;
+            check(vkAllocateCommandBuffers(ctx_.device(), &cbai, &cb2),
+                  "alloc one-shot cb2(prefilter sun)");
+            check(vkBeginCommandBuffer(cb2, &cbi), "begin one-shot cb2(prefilter sun)");
+
+            VkImageMemoryBarrier br{};
+            br.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            br.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            br.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            br.image               = out.image;
+            br.subresourceRange.aspectMask   = VK_IMAGE_ASPECT_COLOR_BIT;
+            br.subresourceRange.baseMipLevel = 0;
+            br.subresourceRange.levelCount   = 1;
+            br.subresourceRange.layerCount   = 1;
+            // mip 0: GENERAL → TRANSFER_DST (prior submission already retired).
+            br.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            br.newLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            br.srcAccessMask = 0;
+            br.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(cb2,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &br);
+            vkCmdCopyBufferToImage(cb2, staging.handle, out.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            std::array<VkImageMemoryBarrier, 2> fin{};
+            fin[0] = br;
+            fin[0].oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            fin[0].newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            fin[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            fin[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            fin[1] = fin[0];
+            fin[1].oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            fin[1].srcAccessMask = 0;
+            fin[1].subresourceRange.baseMipLevel = 1;
+            fin[1].subresourceRange.levelCount   = out.mipLevels - 1;
+            const uint32_t finCount = (out.mipLevels > 1) ? 2u : 1u;
+            vkCmdPipelineBarrier(cb2,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                 0, 0, nullptr, 0, nullptr, finCount, fin.data());
+
+            check(vkEndCommandBuffer(cb2), "end one-shot cb2(prefilter sun)");
+            si.pCommandBuffers = &cb2;
+            const VkResult sr2 = vkQueueSubmit(ctx_.graphicsQueue(), 1, &si, VK_NULL_HANDLE);
+            if (sr2 != VK_SUCCESS) check(sr2, "submit one-shot cb2(prefilter sun)");
+            const VkResult wr2 = vkQueueWaitIdle(ctx_.graphicsQueue());
+            if (wr2 != VK_SUCCESS) check(wr2, "wait one-shot cb2(prefilter sun)");
+            vkFreeCommandBuffers(ctx_.device(), cmdPool_, 1, &cb2);
+        }
 
         destroyBuffer(ctx_.allocator(), staging);
         for (auto v : mipStorageViews) {

@@ -67,6 +67,10 @@ namespace threepp {
 
         bool decalsEnabled() const override { return true; }
 
+        // HDRI sun → analytic light (see CoreImpl::envSunExtractionWanted).
+        bool envSunExtraction_ = true;
+        bool envSunExtractionWanted() const override { return envSunExtraction_; }
+
         void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
                                  VkExtent2D ext, VkExtent2D ptExt,
                                  uint32_t exposureBits) override {
@@ -117,7 +121,8 @@ namespace threepp {
                                            deferredVolDensity_, deferredVolAniso_,
                                            deferredStarIntensity_,
                                            deferredCamDeltaLen_, deferredCamRotAngle_,
-                                           static_cast<float>(glfwGetTime()));
+                                           static_cast<float>(glfwGetTime()),
+                                           std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f));
             gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
             // Spatial denoise of the demodulated diffuse-indirect + recombine.
             // Barrier: the shade wrote sceneHdr + the indirect image (both
@@ -737,6 +742,14 @@ namespace threepp {
         return (v > 1e20f) ? 0.0f : v;
     }
 
+    void VulkanRendererCore::setSunAngularRadius(float degrees) {
+        core()->sunAngularRadiusDeg_ = std::max(0.f, degrees);
+    }
+
+    float VulkanRendererCore::sunAngularRadius() const {
+        return core()->sunAngularRadiusDeg_;
+    }
+
     VulkanRendererCore::SoftBodyInteropHandle
     VulkanRendererCore::enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy) {
         return core()->enableSoftBodyInterop(mesh, std::move(deviceCopy));
@@ -763,6 +776,21 @@ namespace threepp {
 
     void VulkanRenderer::setDeferredStarfield(float intensity) {
         pimpl_->deferredStarIntensity_ = std::max(intensity, 0.f);
+    }
+
+    void VulkanRenderer::setEnvSunExtraction(bool enabled) {
+        if (pimpl_->envSunExtraction_ == enabled) return;
+        pimpl_->envSunExtraction_ = enabled;
+        // Force the env re-upload path (refreshEnvTextureFromScene early-outs on
+        // a matching texture id) so the PMREM is rebuilt with/without the sun.
+        // The injected light disappears/reappears via updateLightsUbo the same
+        // frame; its UBO hash change resets accumulation.
+        pimpl_->envTextureIdUploaded = 0xFFFFFFFFu;
+        pimpl_->envSun_ = {};
+    }
+
+    bool VulkanRenderer::envSunExtraction() const {
+        return pimpl_->envSunExtraction_;
     }
 
     void VulkanRenderer::setAutoExposure(bool enabled) {

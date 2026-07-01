@@ -651,6 +651,10 @@ namespace threepp {
         bool envIsDefault  = true;
         bool envIsBgColor  = false;
         Color envBgColor{0.f, 0.f, 0.f};
+        // HDRI sun extracted at PMREM build (deferred only — see
+        // envSunExtractionWanted). found=false when no sun / extraction off.
+        // updateLightsUbo re-injects it as an analytic directional light.
+        vulkan::EnvPrefilter::SunExtract envSun_{};
 
         // Ocean fine-cascade normal-map source (binding 21 in rtDsLayout).
         // Default 1×1 dummy R32F, replaced with the active DisplacedMesh's
@@ -1091,6 +1095,12 @@ namespace threepp {
         // Per-NEE firefly clamp; pushed to shaders as float bits in slot [11].
         // 1e30f sentinel disables the clamp (set via setFireflyClamp(0)).
         float    fireflyClamp_ = 30.f;
+        // Directional-light angular RADIUS (degrees) for the deferred renderer's
+        // soft sun shadows — pushed to deferred_shade as tan(radians(deg)) in PC
+        // slot [16]. 0 = exact hard 1-ray shadow (old behaviour). Default 0.0°
+        // (the real sun subtends ~0.27°): thin occluders cast a stable narrow
+        // penumbra instead of a per-frame lit/shadow coin flip under TAA jitter.
+        float    sunAngularRadiusDeg_ = 0.0f;
         // Cached CDF blob (16 floats per tri) reused across frames when no
         // emissive mesh moved + entries-list size unchanged. The CPU walk in
         // buildAndUploadEmissiveTris is the dominant per-frame cost on
@@ -8076,6 +8086,23 @@ namespace threepp {
                 }
             });
 
+            // Extracted HDRI sun → analytic directional light (deferred leaf
+            // only). The PMREM's mips 1+ were built sun-free, so this light
+            // carries the disc's exact energy (colorE = Σ L·dΩ) instead:
+            // correct sharp GGX highlight, RT shadows (jittered soft via
+            // sunAngularRadiusDeg_), GI bounce, water glints, volumetric
+            // shafts — all through the existing dir-light paths. Injected
+            // BEFORE the hash below so toggling extraction resets accumulation.
+            if (envSunExtractionWanted() && envSun_.found && ubo.dirCount < kMaxDirLights) {
+                auto& g = ubo.dirLights[ubo.dirCount++];
+                g.direction[0] = envSun_.dir[0];
+                g.direction[1] = envSun_.dir[1];
+                g.direction[2] = envSun_.dir[2];
+                g.color[0] = envSun_.colorE[0];
+                g.color[1] = envSun_.colorE[1];
+                g.color[2] = envSun_.colorE[2];
+            }
+
             // FNV-1a 64-bit over the packed UBO. Counts + per-light state are
             // both included, so a hidden light (filtered out by `if (!o.visible)
             // return` above) zero-pads its slot and the hash flips. Any analytic-
@@ -11433,6 +11460,7 @@ namespace threepp {
                     envIsBgColor  = true;
                     envBgColor    = c;
                     envTextureIdUploaded = 0xFFFFFFFFu;
+                    envSun_ = {};
                     rebuildDefaultEnvCdfImages();// no importance sampling on solid colors
                     return true;
                 }
@@ -11441,6 +11469,7 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), ctx->device(), envImage);
                 createDefaultEnvImage();
                 envIsBgColor = false;
+                envSun_ = {};
                 rebuildDefaultEnvCdfImages();
                 return true;
             }
@@ -11471,8 +11500,11 @@ namespace threepp {
             // (1-r)² fade. Mip 0 is the source mirror, mip k is convolved with
             // GGX(α=(k/(N-1))²). closest_hit fades from mirror to fully diffuse
             // by walking the chain via textureLod.
+            // Deferred leaf: extract the HDRI sun (mips 1+ sun-free; the disc's
+            // energy returns via updateLightsUbo as an analytic dir light).
             envImage = envPrefilter_->buildPmrem(
-                    w, h, src.data(), 4u * w * h * sizeof(float));
+                    w, h, src.data(), 4u * w * h * sizeof(float),
+                    envSunExtractionWanted(), &envSun_);
             envIsDefault = false;
             envTextureIdUploaded = tex->id;
 
@@ -13128,6 +13160,17 @@ namespace threepp {
         // into the raster G-buffer. Deferred renders decals; the PT leaf skips
         // them (the megakernel doesn't consume the G-buffer decal attachment).
         virtual bool decalsEnabled() const = 0;
+
+        // HDRI sun extraction (deferred only). When true,
+        // refreshEnvTextureFromScene detects the env's dominant compact bright
+        // source, prefilters PMREM mips 1+ from a sun-clamped copy (no glossy /
+        // rough env lookup ever integrates the raw ~10⁴:1 disc — the "bright
+        // spec blobs in reflections" artifact), and updateLightsUbo re-injects
+        // the removed energy as an analytic directional light (sharp correct
+        // sun highlight, jittered soft RT shadows, GI bounce, water glints).
+        // The PT leaf keeps the raw env: its env-CDF NEE + MIS already handle
+        // HDRI suns without fireflies.
+        virtual bool envSunExtractionWanted() const { return false; }
 
         // Called once after bloom_->createImages() (initial creation and resize).
         // Implementations that hold references to sceneHdr views (e.g. auto-exposure)

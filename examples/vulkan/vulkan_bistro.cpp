@@ -59,10 +59,10 @@ int main(int argc, char** argv) {
     // the official Falcor scene multiplies every emissive factor by 1000 to get a
     // well-exposed image, so do the same here for interior lighting to read.
     loader.emissiveScale = 100.0f;
-    auto interior = loadAsync(loader, modelFolder / "BistroInterior_Wine.fbx");
+    // auto interior = loadAsync(loader, modelFolder / "BistroInterior_Wine.fbx");
     auto exterior = loadAsync(loader, modelFolder / "BistroExterior.fbx");
 
-    scene.add(interior);
+    // scene.add(interior);
     scene.add(exterior);
 
     auto toggleBistroLights = [&] {
@@ -75,6 +75,8 @@ int main(int argc, char** argv) {
     bool denoiserOn = renderer.denoise();
     bool restdirOn = renderer.restirDIEnabled();
     float renderScale = renderer.renderScale();
+    float sunSoftDeg = renderer.sunAngularRadius();
+    bool envSunOn = renderer.envSunExtraction();
     // Tone-map dropdown state, initialized from the renderer's current setting so
     // the label matches what's actually applied at startup. The selection maps
     // straight to ToneMapping (index 2 -> Reinhard, etc.).
@@ -113,6 +115,18 @@ int main(int argc, char** argv) {
 
         if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f)) {
             renderer.setRenderScale(renderScale);
+        }
+
+        // Sun-shadow softness (angular radius, deg). 0 = hard 1-ray shadow;
+        // the real sun is ~0.27°. Live-tunable to judge thin-occluder flicker.
+        if (ImGui::SliderFloat("Sun softness (deg)", &sunSoftDeg, 0.0f, 3.0f)) {
+            renderer.setSunAngularRadius(sunSoftDeg);
+        }
+
+        // HDRI sun → analytic light (kills the bright spec blobs in glossy /
+        // rough reflections). Toggling rebuilds the env PMREM next frame.
+        if (ImGui::Checkbox("Env sun extraction", &envSunOn)) {
+            renderer.setEnvSunExtraction(envSunOn);
         }
 
         if (ImGui::Button("Toggle bistro lights")) {

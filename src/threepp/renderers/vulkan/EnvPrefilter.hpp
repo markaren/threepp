@@ -36,6 +36,16 @@ namespace threepp::vulkan {
         EnvPrefilter(const EnvPrefilter&) = delete;
         EnvPrefilter& operator=(const EnvPrefilter&) = delete;
 
+        // Result of the optional HDRI sun extraction (see buildPmrem).
+        struct SunExtract {
+            bool  found            = false;
+            float dir[3]           = {0.f, 1.f, 0.f};// world dir TOWARD the sun (env mapping)
+            float colorE[3]        = {0.f, 0.f, 0.f};// disc irradiance E = Σ L·dΩ (RGB) — a
+                                                     // directional light of this color replaces
+                                                     // the disc's energy exactly
+            float angularRadiusDeg = 0.f;            // from the disc solid angle (Ω ≈ π·r²)
+        };
+
         // Allocate an env Image2D with a full GGX-prefiltered mip chain.
         // Uploads `pixels` (R32G32B32A32_SFLOAT equirect, `byteSize` bytes)
         // to mip 0, then dispatches prefilter_env.comp for mips 1..N-1.
@@ -43,9 +53,22 @@ namespace threepp::vulkan {
         // its sampler (LINEAR mipmap, LOD-clamp to mipLevels-1) ready for
         // closest_hit sampling. Caller owns the returned Image2D and is
         // responsible for destroying it via destroyImage2D.
+        //
+        // extractSun: detect the equirect's dominant compact bright source (an
+        // HDRI sun). When found, mips 1..N-1 are prefiltered from a SUN-CLAMPED
+        // copy (the disc replaced by its surround) while mip 0 keeps the
+        // original — so the sky background, clear glass and true mirror
+        // reflections still show the real sun disc, but no glossy/rough env
+        // lookup ever integrates the raw peak (the source of the blocky
+        // "env-probe" glare blobs even at 512 prefilter samples: a ~10⁴:1 disc
+        // cannot be Monte-Carlo prefiltered smoothly). The removed energy is
+        // reported in *outSun so the caller can re-inject it as an analytic
+        // directional light (correct sharp highlight + soft RT shadows).
         [[nodiscard]] Image2D buildPmrem(uint32_t w, uint32_t h,
                                          const float* pixels,
-                                         VkDeviceSize byteSize);
+                                         VkDeviceSize byteSize,
+                                         bool extractSun = false,
+                                         SunExtract* outSun = nullptr);
 
     private:
         VulkanContext&        ctx_;

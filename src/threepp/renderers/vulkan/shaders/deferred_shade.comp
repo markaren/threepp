@@ -180,6 +180,7 @@ layout(push_constant) uniform Pc {
     float camDelta;          // camera WORLD translation this frame (m)
     float camRot;            // camera forward-direction change this frame (rad)
     float timeSec;           // wall-clock seconds — foam noise drift (frame-rate independent)
+    float sunTanHalfAngle;   // tan(directional-light angular RADIUS) — soft sun-shadow cone; 0 = hard 1-ray shadow
 } pc;
 
 // ReBLUR-style TEMPORAL accumulation for the reflection (+ glass). Adaptive blend
@@ -541,6 +542,8 @@ float rnd(inout uint seed) {
     r = (r >> 22) ^ r;
     return float(r) * (1.0 / 4294967296.0);
 }
+
+// (sunShadowVis lives after blueNoiseDef — it dithers off the blue-noise tile.)
 
 // ── Value-noise / fBm (verbatim from shade_common.glsl) — foam shading only ──
 float hash21(vec2 p) {
@@ -1141,6 +1144,58 @@ float radicalInverse2(uint bits) {
     return float(bits) * 2.3283064365386963e-10;// × 1/2^32
 }
 
+// Soft directional-light (sun) visibility: average shadowVis over a stratified
+// disc of directions inside the sun cone (tanR = tan of the angular radius;
+// the real sun subtends ~0.27°). MULTI-RAY with a STATIC per-pixel dither,
+// because direct lighting is never denoised and the primary RNG stream is
+// temporally stable: a SINGLE static-jittered ray renders the penumbra as a
+// fixed binary dither ("pixelated" shadows), and a per-frame-jittered one
+// flickers (the property the static stream protects). The dither is the
+// BLUE-NOISE tile, not IGN: IGN is a gradient noise, smooth along diagonals,
+// so with a small sample set the penumbra's quantization error correlates
+// into a diagonal "weave" — the same failure family as the emissive "fence
+// weave". Blue noise has no directional structure; the error becomes fine
+// isotropic grain (the same reasoning as the GI hemisphere dither above).
+// ADAPTIVE: 3 probes (exact centre + two opposite rim points, per-pixel
+// rotated) — agreement means fully lit / fully occluded (the vast majority of
+// pixels, 3 rays; the centre probe keeps sub-cone thin occluders like chair
+// slats from being straddled). Disagreement = penumbra → 13 more rays complete
+// a golden-angle spiral (16 total → 17 visibility levels, the rect lights'
+// smoothness; 8 read too grainy), with a blue-noise Cranley-Patterson offset
+// on the RADIAL strata too so the ring quantization decorrelates per pixel.
+// Only penumbra pixels pay the full count, and radius 0 disables entirely.
+// Reflection/denoised hits (cheapHit) instead take ONE per-frame-ANIMATED
+// jittered ray — they ride the reflection SVGF temporal, which integrates it
+// (the rect-light SIDE=1 policy, verbatim).
+float sunShadowVis(vec3 orig, vec3 L, float tanR, bool cheapHit) {
+    if (tanR <= 0.0) return shadowVis(orig, L, 1e30);
+    const vec3 up = abs(L.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    const vec3 t  = normalize(cross(up, L));
+    const vec3 b  = cross(L, t);
+    const uvec2 px = uvec2(gl_GlobalInvocationID.xy);
+    const uint  fr = cheapHit ? pc.frame : 0u;// static at primaries, animated at cheapHit
+    const float bnRot = blueNoiseDef(px, fr, 0u);
+    const float bnRad = blueNoiseDef(px, fr, 1u);
+    const float rot   = TWO_PI * bnRot;
+    if (cheapHit) {
+        const vec3 d = t * cos(rot) + b * sin(rot);
+        return shadowVis(orig, normalize(L + d * (sqrt(bnRad) * tanR)), 1e30);
+    }
+    const vec3  rim = t * cos(rot) + b * sin(rot);
+    const float v0  = shadowVis(orig, L, 1e30);
+    const float v1  = shadowVis(orig, normalize(L + rim * (0.9 * tanR)), 1e30);
+    const float v2  = shadowVis(orig, normalize(L - rim * (0.9 * tanR)), 1e30);
+    if (v0 == v1 && v1 == v2) return v0;// binary 0/1 (TerminateOnFirstHit) → exact
+    float sum = v0 + v1 + v2;
+    const float GA = 2.39996323;
+    for (int i = 0; i < 13; ++i) {
+        const float a = rot + (float(i) + 1.0) * GA;
+        const float r = sqrt((float(i) + bnRad) / 13.0) * tanR;
+        sum += shadowVis(orig, normalize(L + (t * cos(a) + b * sin(a)) * r), 1e30);
+    }
+    return sum * (1.0 / 16.0);
+}
+
 vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stochastic, int nGI, out float openness) {
     const float maxLod  = float(max(pc.envMipCount, 1u) - 1u);
     const vec3 up = abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
@@ -1332,7 +1387,12 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         if (pickOne && i != pickIdx) continue;
         const vec3 L = normalize(lights.dirLights[i].direction);
         if (dot(N, L) <= 0.0) continue;
-        const float vis = (doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0) * wPick;
+        // Soft sun shadow: adaptive multi-ray disc visibility (see sunShadowVis;
+        // pc.sunTanHalfAngle = 0 → exact hard single-ray shadow). The BRDF
+        // response keeps the exact L — only the occlusion test softens.
+        const float vis = (doShadows
+                ? sunShadowVis(shadowOrig, L, pc.sunTanHalfAngle, cheapHit)
+                : 1.0) * wPick;
         if (vis <= 0.0) continue;
         lit += evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
                * lights.dirLights[i].color * vis;
@@ -2586,7 +2646,29 @@ void main() {
     SHADOW_EPS = max(1e-3, max(max(abs(worldPos.x), abs(worldPos.y)), abs(worldPos.z)) * 1e-5);
 
     vec3        N         = normalize(nTap.xyz * 2.0 - 1.0);// mutable: FFT chop below
-    const float roughness = clamp(nTap.w, 0.04, 1.0);
+    // GEOMETRIC SPECULAR AA (Kaplanyan-style): widen the GGX roughness by the
+    // 4-neighbour G-buffer normal variance, so sub-pixel normal detail (dense
+    // normal maps, curvature, distant meshes) shades with the roughness its
+    // pixel footprint actually spans. At 1 spp under the Halton jitter a
+    // sub-pixel glint otherwise flips bright/dark every frame — an alternating
+    // input TAA can never converge (the "distant edges shimmer" bug; the
+    // original fix measured 4.5× lower consecutive-frame diff on the ocean
+    // harness). kernel² capped at 0.04 so macro geometry edges don't go matte.
+    float specAaKernelSq = 0.0;
+    {
+        const ivec2 saMax = ivec2(int(pc.width), int(pc.height)) - 1;
+        const ivec2 saOff[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+        float varN = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            const vec4 nn = texelFetch(gbufNormalTex, clamp(px + saOff[i], ivec2(0), saMax), 0);
+            if (nn.w <= 0.0) continue;// sky (0) / unlit (<0) neighbours carry no surface normal
+            const vec3 dn = normalize(nn.xyz * 2.0 - 1.0) - N;
+            varN += dot(dn, dn) * 0.25;
+        }
+        specAaKernelSq = min(2.0 * varN, 0.04);
+    }
+    const float roughMat  = clamp(nTap.w, 0.04, 1.0);
+    const float roughness = min(sqrt(roughMat * roughMat + specAaKernelSq), 1.0);
     const float metalness = clamp(am.a, 0.0, 1.0);
 
     const MaterialDesc pm = mats[id - 1u];
@@ -2784,13 +2866,13 @@ void main() {
     // surfaces; the firefly clamp bounds glossy variance on moving ones. Above
     // ~0.7 roughness the lobe is so wide that prefiltered-env IBL is both
     // cheaper and indistinguishable, so RT bows out there.
-    // Specular: ONLY ray-traced reflections of real scene geometry on glossy /
-    // mirror surfaces. The env-IBL specular FALLBACK is intentionally DROPPED: on
-    // rough/matte surfaces it mirrored the HDRI sun as a blocky glare (envTex is a
-    // plain mipmapped equirect, not a smooth GGX PMREM, so the sun never spreads).
-    // Rough surfaces (reflBlend == 0, i.e. roughness ≳ 0.7 — all the game's matte
-    // materials) therefore now get NO env specular at all. Glossy surfaces still
-    // reflect the real scene (and the env on ray-miss) via the traced path.
+    // Specular env strategy: glossy/mirror surfaces (roughness ≲ 0.7) ray-trace
+    // real scene geometry (env at the roughness mip on miss); ROUGH surfaces take
+    // split-sum env-IBL specular off the PMREM below. The IBL fallback was once
+    // dropped because envTex was a plain mip chain (the HDRI sun mirrored as a
+    // blocky glare) — but EnvPrefilter has since GGX-prefiltered it (Karis
+    // PMREM), so the fallback is restored: without it every matte material had a
+    // Fresnel energy hole (rough metals read soot-black under bright HDRIs).
     const vec3  R         = reflect(-V, N);
     const vec2  ab        = envBRDFApprox(NdotV, roughness);
     const float reflBlend = 1.0 - smoothstep(0.55, 0.70, roughness);
@@ -2801,6 +2883,13 @@ void main() {
     // IS the gloss — and recombines. Pre-weighted by the spec BRDF × reflBlend so
     // the denoise just blurs + adds. Glass/sheen reflect inline below (excluded).
     const bool opaqueRefl = (pm.transmission <= 0.0) && (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
+    // Rough remainder (1 − reflBlend): split-sum env specular off the GGX PMREM.
+    // No visibility term (the standard split-sum caveat) — the traced band keeps
+    // true occlusion; this only fills the ≥0.7-roughness matte range where the
+    // lobe is wide and prefiltered env is indistinguishable from tracing.
+    if (opaqueRefl && reflBlend < 1.0) {
+        lit += sampleEnvLod(R, roughness * maxLod) * (F0 * ab.x + ab.y) * (1.0 - reflBlend);
+    }
     // ── Emitter-specular ESTIMATOR SPLIT by lobe width ──────────────────────
     // specNEET: 0 = near-mirror (the BRDF ray owns emitter spec — tight lobe hits
     // the emitter every frame, no variance, crisp lamp image), 1 = rough (the
@@ -2838,7 +2927,6 @@ void main() {
             reflSkip = rCap >= 4.0 && texture(reflAuxPrevTex, rUv).x >= 4.0;
     }
     if (reflBlend > 0.0 && opaqueRefl && !reflSkip) {
-        const float missLod = roughness * maxLod;// ray-miss reads the roughness-blurred env mip
         // Emitter self-emission scale for the ray (the other half of the split):
         // DIELECTRICS → 0: F0≈0.04, a reflected small emitter is ~invisible in the
         // PT, yet a full-radiance hit produced bright "probe speckles" (their faint
@@ -2878,6 +2966,18 @@ void main() {
         const vec2  reflMv     = texture(gbufMotionTex, uv).rg;
         const float reflCamNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(length(worldPos - camPos), 0.25);
         const bool  reflMoving = max(length(reflMv), reflCamNdc) > 0.004;
+        // Ray-miss env LOD: the roughness-blurred PMREM mip — FLOORED while
+        // MOVING. On the moving path the deterministic mirror ray reads the env
+        // near-sharp while the reflection history is collapsed (1-6 frames), so
+        // an HDRI sun texel arrives at full radiance with nothing to average
+        // it; the clamp below only caps the spike, leaving clamp-bright "dust"
+        // sweeping across curved surfaces. Two extra mips spread the sun over
+        // ~16× the texels (each ~16× dimmer) exactly while the history can't
+        // converge; a settled view re-sharpens. Scaled in by roughness so true
+        // mirrors (roughness < 0.02) keep their exact sharp reflection.
+        const float missLod = max(roughness * maxLod,
+                                  reflMoving ? min(2.0, maxLod) * smoothstep(0.02, 0.10, roughness)
+                                             : 0.0);
         vec3 Rd = (roughness < kReflStochastic || reflMoving)
                       ? R : sampleGGXReflection(V, N, roughness, reflSeed);
         // BELOW-HORIZON guard: plain NDF sampling (no VNDF) reflects under the

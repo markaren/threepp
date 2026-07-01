@@ -158,6 +158,15 @@ namespace threepp {
         void setFireflyClamp(float cap);
         [[nodiscard]] float fireflyClamp() const;
 
+        // Angular RADIUS (degrees) of directional lights for the deferred
+        // renderer's soft sun shadows: the primary shadow ray is jittered within
+        // this cone, so thin occluders (slats, railings, foliage) cast a narrow
+        // stable penumbra instead of a per-frame hard-shadow coin flip that TAA
+        // cannot converge. The real sun subtends ~0.27°; default 0.5. 0 restores
+        // the exact hard 1-ray shadow. No effect on the path tracer.
+        void setSunAngularRadius(float degrees);
+        [[nodiscard]] float sunAngularRadius() const;
+
         // ReSTIR DI master toggle (streaming RIS + temporal + spatial reuse at
         // primary surfaces). Active in the PT megakernel and as a deferred NEE
         // optimization. Off (default) falls back to per-light NEE.

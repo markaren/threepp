@@ -105,6 +105,8 @@ namespace threepp::vulkan {
         // vectors ~0) while its view-dependent reflection content slides.
         // timeSec: wall-clock seconds (frame-rate independent) — drives the
         // foam-noise drift so its speed doesn't scale with fps.
+        // sunTanHalfAngle: tan of the directional-light angular RADIUS — jitters
+        // the primary sun-shadow ray within that cone (0 = hard 1-ray shadow).
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t width, uint32_t height, uint32_t envMipCount,
                             bool shadows, bool ao, uint32_t frameCounter,
@@ -115,7 +117,7 @@ namespace threepp::vulkan {
                             float volDensity, float volAniso,
                             float starIntensity,
                             float camDeltaLen, float camRotAngle,
-                            float timeSec);
+                            float timeSec, float sunTanHalfAngle);
 
         // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
         // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor
