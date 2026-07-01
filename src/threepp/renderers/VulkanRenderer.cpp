@@ -843,6 +843,8 @@ namespace threepp {
             case V::Normal: return 1;
             case V::Motion: return 2;
             case V::Ids:    return 3;
+            case V::Albedo: return 4;
+            case V::Depth:  return 5;
             default:        return 0;
         }
     }
