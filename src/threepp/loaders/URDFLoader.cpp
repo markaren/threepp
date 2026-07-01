@@ -283,7 +283,8 @@ namespace {
 
     // Walk the URDF link/joint tree (root first) into a flat articulation description.
     URDFArticulationDesc buildArticulationDesc(const pugi::xml_node& robotNode,
-                                               const std::filesystem::path& path, Loader<Group>* loader) {
+                                               const std::filesystem::path& path, Loader<Group>* loader,
+                                               bool loadVisuals) {
         URDFArticulationDesc desc;
         std::map<std::string, pugi::xml_node> linkNodes;
         for (const auto link : robotNode.children("link"))
@@ -329,7 +330,7 @@ namespace {
                 L.hasMass = true;
                 L.mass = *m;
             }
-            L.visual = parseFirstVisual(linkNode, path, loader);
+            if (loadVisuals) L.visual = parseFirstVisual(linkNode, path, loader);
             const int myIdx = static_cast<int>(desc.links.size());
             desc.links.push_back(std::move(L));
             for (const auto& child : childLinks[name])
@@ -387,7 +388,7 @@ struct URDFLoader::Impl {
         return loadFromXml(doc, baseDir);
     }
 
-    URDFArticulationDesc parseArticulation(const std::filesystem::path& path) {
+    URDFArticulationDesc parseArticulation(const std::filesystem::path& path, bool loadVisuals = true) {
         pugi::xml_document doc;
         if (!doc.load_file(path.string().c_str())) return {};
 
@@ -397,10 +398,10 @@ struct URDFLoader::Impl {
             pugi::xml_document processed;
             proc.process(doc, processed);
             const auto robotNode = processed.child("robot");
-            return robotNode ? buildArticulationDesc(robotNode, path, loader.get()) : URDFArticulationDesc{};
+            return robotNode ? buildArticulationDesc(robotNode, path, loader.get(), loadVisuals) : URDFArticulationDesc{};
         }
         const auto robotNode = doc.child("robot");
-        return robotNode ? buildArticulationDesc(robotNode, path, loader.get()) : URDFArticulationDesc{};
+        return robotNode ? buildArticulationDesc(robotNode, path, loader.get(), loadVisuals) : URDFArticulationDesc{};
     }
 
     std::shared_ptr<Robot> loadFromXml(const pugi::xml_document& doc, const std::filesystem::path& path) {
@@ -510,9 +511,9 @@ std::shared_ptr<Robot> URDFLoader::parse(const std::filesystem::path& baseDir, c
     return pimpl_->parse(baseDir, xml);
 }
 
-URDFArticulationDesc URDFLoader::parseArticulation(const std::filesystem::path& path) {
+URDFArticulationDesc URDFLoader::parseArticulation(const std::filesystem::path& path, bool loadVisuals) {
 
-    return pimpl_->parseArticulation(path);
+    return pimpl_->parseArticulation(path, loadVisuals);
 }
 
 URDFLoader::~URDFLoader() = default;

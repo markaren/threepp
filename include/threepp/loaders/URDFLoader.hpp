@@ -71,7 +71,9 @@ namespace threepp {
         // Parse a URDF (xacro supported, same as load) into a flat articulation description for the
         // physics articulation builder (extras/physx/loadArticulation). Returns links in root-first
         // order; the description is empty if the file can't be read or has no single root link.
-        URDFArticulationDesc parseArticulation(const std::filesystem::path& path);
+        // loadVisuals=false skips loading each link's <visual> mesh from disk (the dominant cost for a
+        // large batch build that never renders) — the desc's `visual` fields are left null.
+        URDFArticulationDesc parseArticulation(const std::filesystem::path& path, bool loadVisuals = true);
 
         ~URDFLoader();
 
