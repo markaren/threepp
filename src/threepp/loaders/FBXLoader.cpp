@@ -6,6 +6,7 @@
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/SpotLight.hpp"
+#include "threepp/loaders/DDSLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
@@ -365,9 +366,12 @@ namespace threepp {
             // Resolve diffuse path for glass heuristic.
             const auto diffPath = resolveTexturePath(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir);
             const bool isGlass = looksLikeGlass(mat, diffPath);
-            // Foliage cutout: data-driven for uncompressed maps, name-based for
-            // Bistro's compressed DDS BaseColor (alpha the CPU scan can't read).
-            const bool isFoliage = looksLikeFoliage(mat, diffPath);
+            // Alpha cutout: name-keyword match for foliage (leaf cards etc, whose
+            // masks are often DXT5/explicit-alpha) OR a direct BC1 punch-through-
+            // alpha scan of the diffuse DDS -- this catches cutout materials the
+            // keyword list doesn't know about by name (chair lattice seats,
+            // wrought-iron railings/chains, mesh signage).
+            const bool needsAlphaCutout = looksLikeFoliage(mat, diffPath) || ddsHasCutoutAlpha(diffPath);
 
             if (isPBR) {
                 // ---- PBR / MeshPhysicalMaterial --------------------------------
@@ -376,9 +380,9 @@ namespace threepp {
                 if (auto tex = loadTex(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir, texLoader)) {
                     m->map = tex;
                     m->color.setHex(0xffffff);
-                    if (isFoliage) {// foliage/leaf cards → alpha cutout
+                    if (needsAlphaCutout) {// cutout mesh/lattice/foliage → alpha test
                         m->alphaTest = 0.5f;
-                        m->side      = Side::Double;// leaves visible from both faces
+                        m->side      = Side::Double;// thin cutout surfaces visible from both faces
                     }
                 }
                 if (auto tex = texLoader.load(specPath, ColorSpace::Linear)) {
@@ -406,6 +410,13 @@ namespace threepp {
                 }
                 m->transmission = opacity < 0.99f ? std::max(0.01f, 1.0f - opacity) : 1.0f;
                 m->setIor(1.5f);
+                // Clear glass → force smooth. MeshStandardMaterial defaults roughness
+                // to 1.0 and this branch has no roughness map to drive it down, so the
+                // renderer GGX-samples a wide rough lobe → the stochastic "boil" seen
+                // on wineglasses/bottles. Near-zero roughness makes it take the
+                // deterministic reflect/refract split instead (renderer clamps to its
+                // α≈0.02 floor). Frosted glass would need an authored roughness map.
+                m->roughness = 0.0f;
                 m->side = Side::Double;
                 applyCommon(*m, mat, baseDir, texLoader, emissiveScale);
                 return m;
@@ -416,9 +427,9 @@ namespace threepp {
                 if (auto tex = loadTex(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir, texLoader)) {
                     m->map = tex;
                     m->color.setHex(0xffffff);
-                    if (isFoliage) {// foliage/leaf cards → alpha cutout
+                    if (needsAlphaCutout) {// cutout mesh/lattice/foliage → alpha test
                         m->alphaTest = 0.5f;
-                        m->side      = Side::Double;// leaves visible from both faces
+                        m->side      = Side::Double;// thin cutout surfaces visible from both faces
                     }
                 }
                 // Specular color + shininess from FBX material properties.
