@@ -4,6 +4,10 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_GOOGLE_include_directive : enable
+// Per-hit material indices into albedoMaps[] are divergent across the wave —
+// nonuniformEXT is required or the descriptor load may be hoisted wave-uniform
+// (spec-UB; wrong texture per wave, jitter-dependent → flicker).
+#extension GL_EXT_nonuniform_qualifier : require
 
 #include "vulkan_shared.h"
 
@@ -641,7 +645,7 @@ void main() {
         if (mdesc.albedoTexIndex >= 0) {
             const int idxClamped = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
             const vec2 uvA = (mdesc.uvTransform * vec3(unlitUv, 1.0)).xy;
-            albedoSample = texture(albedoMaps[idxClamped], uvA).rgb;
+            albedoSample = texture(albedoMaps[nonuniformEXT(idxClamped)], uvA).rgb;
         }
         // Per-vertex color (material.vertexColors) — MeshBasicMaterial honours
         // it in three.js too. Same linear-space multiply as the lit path.
@@ -714,7 +718,7 @@ void main() {
                     const vec3 T = Tworld / Tlen;
                     const vec3 B = cross(N, T);
                     const int nidx = clamp(mdesc.normalTexIndex, 0, int(kMaxMaterialTextures) - 1);
-                    vec3 ns = texture(albedoMaps[nidx], (mdesc.uvTransformNormal * vec3(rawUv, 1.0)).xy).rgb * 2.0 - 1.0;
+                    vec3 ns = texture(albedoMaps[nonuniformEXT(nidx)], (mdesc.uvTransformNormal * vec3(rawUv, 1.0)).xy).rgb * 2.0 - 1.0;
                     ns.xy *= mdesc.normalScale;
                     ns.z = sqrt(max(0.0, 1.0 - dot(ns.xy, ns.xy)));
                     N = normalize(T * ns.x + B * ns.y + N * ns.z);
@@ -771,7 +775,7 @@ void main() {
     vec3 albedoSample = vec3(1.0);
     if (mdesc.albedoTexIndex >= 0) {
         const int idxClamped = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        albedoSample = texture(albedoMaps[idxClamped], uvAlbedo).rgb;
+        albedoSample = texture(albedoMaps[nonuniformEXT(idxClamped)], uvAlbedo).rgb;
     }
     vec3 albedo = mdesc.albedo * albedoSample;
 
@@ -796,11 +800,11 @@ void main() {
     float metalness = mdesc.metalness;
     if (mdesc.roughnessTexIndex >= 0) {
         const int i = clamp(mdesc.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        roughness *= texture(albedoMaps[i], uvRoughMetal).g;
+        roughness *= texture(albedoMaps[nonuniformEXT(i)], uvRoughMetal).g;
     }
     if (mdesc.metalnessTexIndex >= 0) {
         const int i = clamp(mdesc.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        metalness *= texture(albedoMaps[i], uvRoughMetal).b;
+        metalness *= texture(albedoMaps[nonuniformEXT(i)], uvRoughMetal).b;
     }
     roughness = clamp(roughness, 0.04, 1.0);
     metalness = clamp(metalness, 0.0,  1.0);
@@ -927,11 +931,11 @@ void main() {
         ccRough  = mdesc.clearcoatRoughness;
         if (mdesc.clearcoatTexIndex >= 0) {
             const int i = clamp(mdesc.clearcoatTexIndex, 0, int(kMaxMaterialTextures) - 1);
-            ccScalar *= texture(albedoMaps[i], uvClearcoat).r;
+            ccScalar *= texture(albedoMaps[nonuniformEXT(i)], uvClearcoat).r;
         }
         if (mdesc.clearcoatRoughnessTexIndex >= 0) {
             const int i = clamp(mdesc.clearcoatRoughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-            ccRough *= texture(albedoMaps[i], uvClearcoatRough).g;
+            ccRough *= texture(albedoMaps[nonuniformEXT(i)], uvClearcoatRough).g;
         }
     } else {
         ccScalar = 0.0;
@@ -977,7 +981,7 @@ void main() {
     float transmission = mdesc.transmission;
     if (mdesc.transmissionTexIndex >= 0) {
         const int i = clamp(mdesc.transmissionTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        transmission *= texture(albedoMaps[i], uvTransmission).r;
+        transmission *= texture(albedoMaps[nonuniformEXT(i)], uvTransmission).r;
     }
     // Foam suppresses transmission so whitecaps read as opaque whitewater
     // rather than tinted glass. Keyed off foamMask (the speckled visible
@@ -1167,7 +1171,7 @@ void main() {
         vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
         if (mdesc.emissiveTexIndex >= 0) {
             const int ei = clamp(mdesc.emissiveTexIndex, 0, int(kMaxMaterialTextures) - 1);
-            emissiveOut *= texture(albedoMaps[ei], uvEmissive).rgb;
+            emissiveOut *= texture(albedoMaps[nonuniformEXT(ei)], uvEmissive).rgb;
         }
         const float emLum0 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
         if (emLum0 > pc.fireflyClamp) emissiveOut *= pc.fireflyClamp / emLum0;
@@ -1764,7 +1768,7 @@ void main() {
     float ao = 1.0;
     if (mdesc.occlusionTexIndex >= 0) {
         const int oi = clamp(mdesc.occlusionTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        ao = texture(albedoMaps[oi], uvOcclusion).r;
+        ao = texture(albedoMaps[nonuniformEXT(oi)], uvOcclusion).r;
     }
     const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient * baseScale * ao;
 
@@ -1794,7 +1798,7 @@ void main() {
     vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
     if (mdesc.emissiveTexIndex >= 0) {
         const int ei = clamp(mdesc.emissiveTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        emissiveOut *= texture(albedoMaps[ei], uvEmissive).rgb;
+        emissiveOut *= texture(albedoMaps[nonuniformEXT(ei)], uvEmissive).rgb;
     }
     const float emLum1 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
     if (emLum1 > pc.fireflyClamp) emissiveOut *= pc.fireflyClamp / emLum1;

@@ -1,6 +1,15 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : enable
+// Divergent bindless indexing: material texture indices derive from
+// vInstanceIdx (a flat PER-INSTANCE input — NOT dynamically uniform), so
+// fragments of different instances/materials packed into one wave (small
+// distant triangles, silhouettes — exactly the thin-geometry case) index
+// DIFFERENT descriptors. Without nonuniformEXT that is spec-UB: the compiler
+// may hoist one wave-uniform descriptor load, so whichever lane wins defines
+// every lane's albedo/normal map — and the winner shifts with the TAA jitter
+// → per-frame texture flicker scaling with material diversity.
+#extension GL_EXT_nonuniform_qualifier : require
 
 #include "vulkan_shared.h"
 
@@ -153,7 +162,7 @@ void main() {
                 const vec3 B = cross(N, T);
                 const int nidx = clamp(m.normalTexIndex, 0, int(kMaxMaterialTextures) - 1);
                 const vec2 uvN = (m.uvTransformNormal * vec3(vUv, 1.0)).xy;
-                vec3 ns = texture(gbufAlbedoMaps[nidx], uvN).rgb * 2.0 - 1.0;
+                vec3 ns = texture(gbufAlbedoMaps[nonuniformEXT(nidx)], uvN).rgb * 2.0 - 1.0;
                 ns.xy *= m.normalScale;
                 ns.z = sqrt(max(0.0, 1.0 - dot(ns.xy, ns.xy)));
                 N = normalize(T * ns.x + B * ns.y + N * ns.z);
@@ -173,7 +182,7 @@ void main() {
     float albedoAlpha  = 1.0;
     if (m.albedoTexIndex >= 0) {
         const int  ai    = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        const vec4 texel = texture(gbufAlbedoMaps[ai], uvAlbedo);
+        const vec4 texel = texture(gbufAlbedoMaps[nonuniformEXT(ai)], uvAlbedo);
         albedoSample = texel.rgb;
         albedoAlpha  = texel.a;// linear (alpha is never sRGB-decoded) → matches chit
     }
@@ -197,11 +206,11 @@ void main() {
     if (roughness >= 0.0) {
         if (m.roughnessTexIndex >= 0) {
             const int i = clamp(m.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-            roughness *= texture(gbufAlbedoMaps[i], uvRoughMetal).g;
+            roughness *= texture(gbufAlbedoMaps[nonuniformEXT(i)], uvRoughMetal).g;
         }
         if (m.metalnessTexIndex >= 0) {
             const int i = clamp(m.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-            metalness *= texture(gbufAlbedoMaps[i], uvRoughMetal).b;
+            metalness *= texture(gbufAlbedoMaps[nonuniformEXT(i)], uvRoughMetal).b;
         }
         roughness = clamp(roughness, 0.04, 1.0);
         metalness = clamp(metalness, 0.0,  1.0);

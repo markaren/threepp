@@ -435,6 +435,13 @@ namespace threepp::vulkan {
         f12.bufferDeviceAddress = VK_TRUE;
         f12.descriptorIndexing = VK_TRUE;
         f12.runtimeDescriptorArray = VK_TRUE;
+        // nonuniformEXT() on the bindless albedoMaps[] indices (gbuffer.frag,
+        // deferred_shade.comp, closest_hit*.rahit/rchit). Per-hit/per-instance
+        // material indices are wave-DIVERGENT; without this feature + qualifier
+        // the descriptor load is spec-UB (may be hoisted wave-uniform → wrong
+        // texture per wave, TAA-jitter-dependent → flicker). NOT implied by
+        // descriptorIndexing above — it is a separate fine-grained feature bit.
+        f12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
         f12.scalarBlockLayout = VK_TRUE;// closest-hit reads GeometryDesc[] / normals via scalar layout
         f12.pNext = &f13;
 

@@ -4,6 +4,14 @@
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_GOOGLE_include_directive : enable
+// Divergent bindless indexing: albedoMaps[] indices come from per-hit / per-ray
+// material data, so neighbouring invocations index DIFFERENT descriptors.
+// Without nonuniformEXT that is spec-UB — the compiler may assume the index is
+// wave-uniform and hoist ONE descriptor load for the whole wave, so whichever
+// lane "wins" defines every lane's texture (and the winner shifts with the TAA
+// jitter's wave composition → per-frame texture flicker that scales with
+// material diversity). Requires shaderSampledImageArrayNonUniformIndexing.
+#extension GL_EXT_nonuniform_qualifier : require
 
 #include "vulkan_shared.h"// MaterialDesc
 
@@ -480,7 +488,7 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
     // Alpha-cutout (alphaCutoff > 0): occlude only where the texel is solid.
     const vec2  uv = fetchUvAt(instIdx, primId, bary);
     const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
-    const float a  = textureLod(albedoMaps[ti], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a;
+    const float a  = textureLod(albedoMaps[nonuniformEXT(ti)], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a;
     return a >= m.alphaCutoff;
 }
 
@@ -1608,7 +1616,7 @@ void fetchHit(int instIdx, int primId, vec2 bary, mat4x3 worldToObj,
 vec3 hitTex(int texIndex, mat3 uvXform, vec2 uv, vec3 fallback) {
     if (texIndex < 0) return fallback;
     const int i = clamp(texIndex, 0, int(kMaxMaterialTextures) - 1);
-    return fallback * textureLod(albedoMaps[i], (uvXform * vec3(uv, 1.0)).xy, 0.0).rgb;
+    return fallback * textureLod(albedoMaps[nonuniformEXT(i)], (uvXform * vec3(uv, 1.0)).xy, 0.0).rgb;
 }
 
 // Albedo-texture ALPHA at a hit — for alpha-testing cutouts and weighting
@@ -1618,7 +1626,7 @@ vec3 hitTex(int texIndex, mat3 uvXform, vec2 uv, vec3 fallback) {
 float hitTexAlpha(int texIndex, mat3 uvXform, vec2 uv) {
     if (texIndex < 0) return 1.0;
     const int i = clamp(texIndex, 0, int(kMaxMaterialTextures) - 1);
-    return textureLod(albedoMaps[i], (uvXform * vec3(uv, 1.0)).xy, 0.0).a;
+    return textureLod(albedoMaps[nonuniformEXT(i)], (uvXform * vec3(uv, 1.0)).xy, 0.0).a;
 }
 
 // GGX NDF importance-sampled microfacet half-vector around N (alpha=roughness²).
@@ -1761,10 +1769,10 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         float hRough = hm.roughness;
         float hMetal = hm.metalness;
         if (hm.roughnessTexIndex >= 0)
-            hRough *= textureLod(albedoMaps[clamp(hm.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1)],
+            hRough *= textureLod(albedoMaps[nonuniformEXT(clamp(hm.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1))],
                                  (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).g;
         if (hm.metalnessTexIndex >= 0)
-            hMetal *= textureLod(albedoMaps[clamp(hm.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1)],
+            hMetal *= textureLod(albedoMaps[nonuniformEXT(clamp(hm.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1))],
                                  (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).b;
         hRough = clamp(hRough, 0.04, 1.0);
         hMetal = clamp(hMetal, 0.0, 1.0);
