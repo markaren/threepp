@@ -284,6 +284,24 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().deferredAO(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDeferredAO(v); },
                               "Toggle ray-traced ambient occlusion / diffuse GI. Default on.")
+                // HDRI sun extraction: the env map's dominant bright disc is removed
+                // from the glossy/rough PMREM mips (kills the bright "spec blob"
+                // reflections) and re-injected as an analytic directional light with
+                // RT shadows. Default on. NOTE: enclosed interiors lit only through
+                // openings read darker (the old look leaked the sun into the ambient
+                // everywhere, unshadowed); disable per scene if that ambient is wanted.
+                .def_property("env_sun_extraction",
+                              [](PyVulkanRenderer& r) { return r.native().envSunExtraction(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setEnvSunExtraction(v); },
+                              "Extract the HDRI sun into an analytic light (default on). "
+                              "Toggling rebuilds the environment on the next frame.")
+                // Sun angular radius (deg) → soft directional shadows (adaptive
+                // multi-ray penumbra). 0 = hard single-ray shadow. Real sun ~0.27°.
+                .def_property("sun_angular_radius",
+                              [](PyVulkanRenderer& r) { return r.native().sunAngularRadius(); },
+                              [](PyVulkanRenderer& r, float d) { r.native().setSunAngularRadius(d); },
+                              "Directional-light angular radius in degrees for soft sun "
+                              "shadows (default 0.5; 0 = hard shadow).")
                 .def("set_flush_frames", &PyVulkanRenderer::set_flush_frames, py::arg("n"),
                      "Frames driven per render() to flush the MAILBOX swapchain (default 3; "
                      "raise to 4+ for fast-moving dynamic scenes).")
