@@ -632,6 +632,8 @@ def main():
     rend.shadow_map_enabled       = True
     rend.tone_mapping             = tp.ToneMapping.ACESFilmic
     rend.tone_mapping_exposure    = 1.1
+    if hasattr(rend, "gbuffer_msaa"):
+        rend.gbuffer_msaa = 2
 
     # ── scene ─────────────────────────────────────────────────────────────────
     scene = tp.Scene()
