@@ -48,7 +48,16 @@ vec3 probeShIrradiance(uint pIdx, vec3 n) {
 //   • validity: probes whose update rays mostly hit interior backfaces are
 //     inside geometry; their stored (black) SH is excluded.
 // All-invalid neighbourhoods return vec3(0) — the caller's direct terms stand.
-vec3 probeIrradiance(vec3 P, vec3 N) {
+//
+// `conf` (out) = valid-weight fraction: the share of the GEOMETRICALLY relevant
+// trilinear weight (position × backface) carried by VALID probes. 1 = the full
+// neighbourhood measured something; → 0 where the surrounding probes sit inside
+// geometry (thin shells, recessed cavities, models much smaller than a grid
+// cell) and the interpolation would be black not because the point is dark but
+// because nothing measured it. Callers that have a cheaper fallback fill (env /
+// ambient) should blend by conf instead of trusting a starved neighbourhood.
+vec3 probeIrradianceConf(vec3 P, vec3 N, out float conf) {
+    conf = 0.0;
     if (probeGrid.enabled < 0.5) return vec3(0.0);
     const float minSp = min(probeGrid.spacing.x,
                             min(probeGrid.spacing.y, probeGrid.spacing.z));
@@ -60,6 +69,7 @@ vec3 probeIrradiance(vec3 P, vec3 N) {
 
     vec3  sum  = vec3(0.0);
     float wSum = 0.0;
+    float wGeo = 0.0;// geometric weight ignoring validity — the conf denominator
     for (int c = 0; c < 8; ++c) {
         const ivec3 o    = ivec3(c & 1, (c >> 1) & 1, (c >> 2) & 1);
         const ivec3 pi   = base + o;
@@ -70,12 +80,18 @@ vec3 probeIrradiance(vec3 P, vec3 N) {
         const float dLen = length(toP);
         toP = (dLen > 1e-4) ? toP / dLen : N;
         const float ndp  = clamp(dot(toP, N) * 0.5 + 0.5, 0.0, 1.0);
-        const float w    = w3.x * w3.y * w3.z
-                         * (ndp * ndp)                       // backface fade
-                         * probeSh[pIdx * 4u + 0u].a;        // validity
+        const float wg   = w3.x * w3.y * w3.z * (ndp * ndp);// position × backface
+        wGeo += wg;
+        const float w    = wg * probeSh[pIdx * 4u + 0u].a;  // × validity
         if (w <= 1e-5) continue;
         sum  += w * probeShIrradiance(pIdx, N);
         wSum += w;
     }
+    conf = (wGeo > 1e-4) ? clamp(wSum / wGeo, 0.0, 1.0) : 0.0;
     return (wSum > 1e-3) ? sum / wSum : vec3(0.0);
+}
+
+vec3 probeIrradiance(vec3 P, vec3 N) {
+    float conf;
+    return probeIrradianceConf(P, N, conf);
 }

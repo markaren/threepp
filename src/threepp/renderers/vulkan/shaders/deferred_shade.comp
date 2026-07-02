@@ -1127,7 +1127,7 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
     return sum / float(EM_SAMPLES);
 }
 
-vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits);// fwd decl
+vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits, bool probeHitFill);// fwd decl
 vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed, out bool missed);// fwd decl (cheap 1-bounce GI)
 
 // Scales the DIRECT emission of traceRadiance's hits — the emitter-specular
@@ -1737,7 +1737,14 @@ vec3 sampleGGXReflectionFib(vec3 V, vec3 N, float roughness, int s, int count) {
 // reaches the screen UNBLURRED — clear glass (its denoise path is deliberately
 // sharp), additive/alpha-blend behind-traces straight into `lit` — must pass
 // false: the stochastic pick showed as per-pixel noise in the glass sphere.
-vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits) {
+// probeHitFill: hit diffuse fill source in probe-GI mode. REFLECTION callers
+// pass true — the probe field is the occlusion-correct interior irradiance
+// (the mirror-in-a-corridor fix). TRANSMISSION continuations (thin-shell /
+// refraction / behind-view — content directly under glass) pass false and
+// keep the env fill: a world-scale probe grid cannot resolve a glass-covered
+// cavity (watch dial, goggles, vitrines — probes there sit inside the case)
+// and "seen through clear glass" sees the same sky the glass surface sees.
+vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits, bool probeHitFill) {
     const int REFL_MAX_BOUNCES = 3;
     vec3  radiance   = vec3(0.0);
     vec3  tput       = vec3(1.0);
@@ -1809,11 +1816,27 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // Reflected-hit diffuse fill. PROBE-GI mode: the probe field IS the
         // occlusion-correct local irradiance (÷π for the diffInd convention) —
         // the crude env+ambient fill leaked full sky onto reflected interior
-        // walls (a mirror in a corridor showed sky-lit walls). Probes off keeps
-        // the original approximation.
-        const vec3 hitDiffInd = (probeGrid.enabled > 0.5)
-                ? probeIrradiance(hitP, hitN) * (1.0 / PI)
-                : sampleEnvLod(hitN, maxLod) + lights.ambient;
+        // walls (a mirror in a corridor showed sky-lit walls). Blend by the
+        // neighbourhood's VALIDITY confidence, not a hard switch: on surfaces
+        // whose surrounding probes sit inside geometry (a watch dial recessed
+        // behind its crystal, thin shells, models smaller than a grid cell)
+        // the interpolation is black because nothing MEASURED it, not because
+        // the point is dark — a hard switch rendered every glass-covered dial
+        // near-black. Low confidence falls back to the legacy env fill.
+        // Probes off keeps the original approximation.
+        vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient;
+        if (probeGrid.enabled > 0.5 && probeHitFill) {
+            float probeConf;
+            const vec3 probeFill = probeIrradianceConf(hitP, hitN, probeConf) * (1.0 / PI);
+            // SATURATED confidence: interior walls have partially-valid probe
+            // neighbourhoods (some of the 8 sit inside the wall), and a linear
+            // blend re-admitted (1−conf) of the full-sky fill — re-brightening
+            // the enclosed corridors the probe fill exists to fix. Any
+            // reasonably-measured neighbourhood (conf ≥ 0.25) is trusted
+            // outright; only a truly starved one (all 8 probes inside
+            // geometry) falls back to the env fill instead of black.
+            hitDiffInd = mix(hitDiffInd, probeFill, smoothstep(0.0, 0.25, probeConf));
+        }
         radiance += tput * hitAlpha * shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
                                               hEmissive * gReflEmitterScale,
                                               doShadows, hitDiffInd,
@@ -2008,7 +2031,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // per-pixel white speckle; smooth day skies are visually unchanged.
     const vec3 R = reflect(-V, N);
     const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod,
-                                            0.12 * maxLod, seed, /*cheapHits=*/true);// water: blur+temporal absorb
+                                            0.12 * maxLod, seed, /*cheapHits=*/true,// water: blur+temporal absorb
+                                            /*probeHitFill=*/true);
 
     // Transmission: ANALYTIC deep-water body — deliberately NOT a refraction
     // ray. A downward ray self-intersects this same choppy surface (adjacent
@@ -2339,7 +2363,8 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
         // Reflection (sky + scene) — multi-bounce / recursive.
         const vec3 R = reflect(-V, Ns);
         const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod, missLod, seed,
-                                                /*cheapHits=*/false);// glass shows hits SHARP — deterministic shading
+                                                /*cheapHits=*/false,// glass shows hits SHARP — deterministic shading
+                                                /*probeHitFill=*/true);
 
         vec3 transmitColor;
         if (pm.thinWalled != 0) {
@@ -2353,7 +2378,8 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
             const vec3 dT = -V;// straight-through (net-zero thin-shell bend)
             {
                 const vec3 behind = traceRadiance(P - N * SHADOW_EPS, dT, doShadows, maxLod, missLod, seed,
-                                                  /*cheapHits=*/false);// refracted content is sharp
+                                                  /*cheapHits=*/false,// refracted content is sharp
+                                                  /*probeHitFill=*/false);// content under glass: probes can't resolve the cavity
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));
@@ -2392,7 +2418,8 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
                                               : normalize(o);
                 }
                 const vec3 behind = traceRadiance(exitP + dOut * SHADOW_EPS, dOut, doShadows, maxLod, missLod, seed,
-                                                  /*cheapHits=*/false);// refracted content is sharp
+                                                  /*cheapHits=*/false,// refracted content is sharp
+                                                  /*probeHitFill=*/false);// content under glass: probes can't resolve the cavity
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(inDist / pm.attenuationDistance));
@@ -2958,6 +2985,12 @@ void main() {
     if (opaqueRefl && reflBlend < 1.0) {
         float envSpecVis = 1.0;
         if (probeGrid.enabled > 0.5) {
+            // Pure measured ratio — NO validity-confidence floor. A conf-mix
+            // toward 1.0 here re-admitted (1−conf) of the full-sky specular on
+            // every interior wall (probes near walls are only partially valid)
+            // and measurably re-brightened the Sponza corridors the probe
+            // model had fixed. The starved-neighbourhood concern belongs to
+            // the glass retrace fill (probeHitFill), not this term.
             const vec3  LUMW   = vec3(0.2126, 0.7152, 0.0722);
             const float actE   = dot(probeIrradiance(worldPos, N), LUMW) * (1.0 / PI);
             const float unoccE = dot(sampleEnvLod(N, maxLod), LUMW);
@@ -3063,7 +3096,8 @@ void main() {
         // the bounce-continuation guard inside traceRadiance.
         if (dot(Rd, N) <= 0.0) Rd = R;
         vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
-                               /*cheapHits=*/true);// reflection channel: blur+temporal absorb
+                               /*cheapHits=*/true,// reflection channel: blur+temporal absorb
+                               /*probeHitFill=*/true);
         gReflEmitterScale = 1.0;
         // Roughness-aware reflection clamp (moving/deterministic path only). A glossy
         // surface integrates a bright point source — the sun, a sky-gap between trees —
@@ -3110,7 +3144,8 @@ void main() {
         // (transmission>1 is the additive marker).
         const float strength = clamp(pm.transmission - 1.0, 0.0, 1.0);
         const vec3  behind   = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
-                                             /*cheapHits=*/false);// straight into lit, unblurred
+                                             /*cheapHits=*/false,// straight into lit, unblurred
+                                             /*probeHitFill=*/false);// content behind a blend surface
         lit = behind + lit * strength;
     } else if (pm.transmission > 0.0) {
         if (pm.ior < 1.05) {
@@ -3121,7 +3156,8 @@ void main() {
             // opaque geometry shaded as PBR; overlapping transparent isn't sorted.)
             const float opacity = 1.0 - clamp(pm.transmission, 0.0, 1.0);
             const vec3  behind  = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
-                                                /*cheapHits=*/false);// straight into lit, unblurred
+                                                /*cheapHits=*/false,// straight into lit, unblurred
+                                                /*probeHitFill=*/false);// content behind a blend surface
             lit = mix(behind, lit, opacity);
         } else {
             // REAL refractive glass (ior>1). ONE sharp Fresnel reflect+refract
