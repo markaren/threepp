@@ -82,6 +82,10 @@ int main(int argc, char** argv) {
     int winW = 0, winH = 0;// --size W H: window size (resolution-dependent behaviour)
     bool camSet = false;   // --cam px py pz tx ty tz: fixed camera (interior shots)
     float camV[6] = {};
+    int optSun = -1;       // --sun 0|1: hide/show the example's stand-in DirectionalLight
+    int churnN = 0;        // --churn N: add/remove a tiny cube every N frames (structural-rebuild stressor)
+    std::string envPath;   // --env <hdr>: environment override (default citrus orchard)
+    std::string sunPolicy; // --sunpolicy auto|always|off
     bool usePT = false;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -99,6 +103,10 @@ int main(int argc, char** argv) {
             for (int k = 0; k < 6; ++k) camV[k] = static_cast<float>(std::atof(argv[++i]));
             camSet = true;
         }
+        else if (a == "--sun" && i + 1 < argc) optSun = std::atoi(argv[++i]);
+        else if (a == "--churn" && i + 1 < argc) churnN = std::atoi(argv[++i]);
+        else if (a == "--env" && i + 1 < argc) envPath = argv[++i];
+        else if (a == "--sunpolicy" && i + 1 < argc) sunPolicy = argv[++i];
         else if (a == "--pt") usePT = true;
     }
     if (!fs::exists(modelFolder) || !fs::is_directory(modelFolder)) {
@@ -126,6 +134,9 @@ int main(int argc, char** argv) {
     if (auto* vr = dynamic_cast<VulkanRenderer*>(&renderer)) {
         if (optProbe >= 0) vr->setProbeGI(optProbe != 0);
         if (optSunExt >= 0) vr->setEnvSunExtraction(optSunExt != 0);
+        if (sunPolicy == "always") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Always);
+        else if (sunPolicy == "off") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Off);
+        else if (sunPolicy == "auto") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Auto);
     }
     if (optSunRad >= 0.f) renderer.setSunAngularRadius(optSunRad);
     renderer.setHybridDebugView(cliDebugView);
@@ -133,8 +144,9 @@ int main(int argc, char** argv) {
     renderer.toneMappingExposure = 1.0f;
 
     RGBELoader rgbe;
-    auto env = rgbe.load(std::string(DATA_FOLDER) +
-                         "/textures/env/citrus_orchard_road_puresky_2k.hdr");
+    auto env = rgbe.load(envPath.empty() ? std::string(DATA_FOLDER) +
+                                                   "/textures/env/citrus_orchard_road_puresky_2k.hdr"
+                                         : envPath);
 
     Scene scene;
     scene.background = env;
@@ -142,6 +154,7 @@ int main(int argc, char** argv) {
 
     auto sun = DirectionalLight::create(Color(0xffffff), 3.0f);
     sun->position.set(0.4f, 1.0f, 0.3f);
+    if (optSun >= 0) sun->visible = optSun != 0;
     scene.add(sun);
 
     PerspectiveCamera camera(50.f, canvas.aspect(), 0.01f, 1000.f);
@@ -341,8 +354,26 @@ int main(int argc, char** argv) {
         camera.updateProjectionMatrix();
     });
 
+    // --churn: a tiny far-corner cube toggled in/out of the scene every N
+    // frames — emulates gameplay spawn/despawn (tracers, casings, decals) to
+    // stress STRUCTURAL scene rebuilds without changing the visible image.
+    std::shared_ptr<Mesh> churnCube;
+    if (churnN > 0) {
+        churnCube = Mesh::create(BoxGeometry::create(0.01f, 0.01f, 0.01f),
+                                 MeshStandardMaterial::create());
+        // INSIDE the scene bounds (like gameplay spawns — tracers, casings):
+        // an out-of-bounds position would legitimately change the scene AABB
+        // and defeat the probe-grid hysteresis this flag exists to test.
+        churnCube->position.set(0.f, 0.5f, 0.f);
+    }
+    int churnFrame = 0;
+
     Clock clock;
     canvas.animate([&] {
+        if (churnCube && ++churnFrame % churnN == 0) {
+            if (churnCube->parent) scene.remove(*churnCube);
+            else scene.add(churnCube);
+        }
         const float dt = clock.getDelta();
         fpsAccum += dt;
         ++fpsFrames;
@@ -361,21 +392,33 @@ int main(int argc, char** argv) {
             scene.fog.reset();
         }
 
-        if (camSet) {// fixed interior camera overrides controls/fitCamera every frame
+        // Orbit only through the last stretch of the settle + the capture — a
+        // full-settle orbit sweeps the camera tens of degrees off the --cam pose.
+        const bool orbitNow = !shotPath.empty() && orbitDeg != 0.f && shotFrame >= shotFrames - 60;
+        if (orbitNow) {
+            // Constant slow orbit about the target's Y axis — exercises the
+            // temporal/reprojection paths a static capture never touches.
+            // With --cam it rotates the STORED base so the motion accumulates
+            // (re-applying the fixed pose each frame would cancel it).
+            const float a = orbitDeg * math::PI / 180.f;
+            if (camSet) {
+                const float rx = camV[0] - camV[3], rz = camV[2] - camV[5];
+                camV[0] = camV[3] + rx * std::cos(a) - rz * std::sin(a);
+                camV[2] = camV[5] + rx * std::sin(a) + rz * std::cos(a);
+                camera.position.set(camV[0], camV[1], camV[2]);
+                controls.target.set(camV[3], camV[4], camV[5]);
+            } else {
+                const Vector3 rel = camera.position.clone().sub(controls.target);
+                camera.position.set(controls.target.x + rel.x * std::cos(a) - rel.z * std::sin(a),
+                                    camera.position.y,
+                                    controls.target.z + rel.x * std::sin(a) + rel.z * std::cos(a));
+            }
+            camera.lookAt(controls.target);
+        } else if (camSet) {// fixed interior camera overrides controls/fitCamera
             camera.position.set(camV[0], camV[1], camV[2]);
             controls.target.set(camV[3], camV[4], camV[5]);
             camera.lookAt(controls.target);
-        }
-        if (!shotPath.empty() && orbitDeg != 0.f) {
-            // Constant slow orbit about the target's Y axis — exercises the
-            // temporal/reprojection paths a static capture never touches.
-            const float a = orbitDeg * math::PI / 180.f;
-            const Vector3 rel = camera.position.clone().sub(controls.target);
-            camera.position.set(controls.target.x + rel.x * std::cos(a) - rel.z * std::sin(a),
-                                camera.position.y,
-                                controls.target.z + rel.x * std::sin(a) + rel.z * std::cos(a));
-            camera.lookAt(controls.target);
-        } else {
+        } else if (shotPath.empty() || orbitDeg == 0.f) {
             controls.update();
         }
         renderer.render(scene, camera);
@@ -383,6 +426,13 @@ int main(int argc, char** argv) {
         if (shotPath.empty()) {
             ui.render();
         } else if (modelReady && ++shotFrame >= shotFrames) {
+            if (auto* vr = dynamic_cast<VulkanRenderer*>(&renderer); vr && shotFrame == shotFrames) {
+                const auto d = vr->envSunDirection();
+                const auto c = vr->envSunColor();
+                std::cout << "envSunFound=" << vr->envSunFound()
+                          << " dir=(" << d.x << "," << d.y << "," << d.z << ")"
+                          << " colorE=(" << c.x << "," << c.y << "," << c.z << ")" << std::endl;
+            }
             if (seqN > 0) {// consecutive-frame sequence (temporal-shake harness)
                 const auto stem = fs::path(shotPath).stem().string();
                 const auto ext  = fs::path(shotPath).extension().string();
