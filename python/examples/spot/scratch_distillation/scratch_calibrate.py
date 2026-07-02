@@ -102,8 +102,8 @@ def main():
     tip_z_trace   = []
 
     for t in range(TICKS):
-        # Freeze command
-        env.cmd        = FWD_CMD
+        # Freeze command (copy_, not rebind: cmd is a VecTask-registered buffer)
+        env.cmd.copy_(FWD_CMD)
         env.cmd_timer.fill_(10 ** 9)
 
         # Teacher acts on raw obs[:, :48]

@@ -40,7 +40,7 @@ sys.path.insert(0, _PYROOT)    # threepp / threepp.rl
 sys.path.insert(0, _SPOT_DIR)  # spot_deploy / spot_terrain_env
 
 import threepp as tp
-from threepp.rl import GpuSim
+from threepp.rl import GpuSim, VecTask
 from spot_deploy import (build_spot, default_q, add_to_isaac, isaac_to_add,
                          ACTION_SCALE, GAINS)
 from spot_terrain_env import (quat_rotate_inverse, up_z, heading_cossin, _flat_ground,
@@ -107,7 +107,7 @@ class _SpotScratch:
 # --------------------------------------------------------------------------- #
 #  SpotScratchEnv
 # --------------------------------------------------------------------------- #
-class SpotScratchEnv:
+class SpotScratchEnv(VecTask):
     """Flat-ground from-scratch phase-RL environment for Spot.
 
     Observation: OBS_DIM=50 (48 Isaac proprio + 2 clock dims).
@@ -121,11 +121,16 @@ class SpotScratchEnv:
         seed        : RNG seed (deterministic friction DR)
         tick_enabled: if False W_TICK stays 0 always (obs-clock-only baseline)
     """
+    control_hz = CONTROL_HZ
+    episode_s = EPISODE_S
+    act_dim = ACT_DIM
+    control = "drive"                # stiff position PD drives -> targets, not forces
+    substeps = SUBSTEPS
+    settle_steps = 20                # settle to a clean stand (default targets) after a full reset
+    clip_actions = None              # the policy emits ~[-8,8]; do NOT clamp
+
     def __init__(self, num_envs=2048, device="cuda", seed=0, tick_enabled=True):
-        self.K = num_envs
-        self.dt = DT
         self.tick_enabled = tick_enabled
-        self.max_steps = int(EPISODE_S * CONTROL_HZ)
 
         # Pre-generate per-env friction values deterministically (build-time DR).
         # Range U(0.6, 1.2): gentle enough that the low end doesn't destabilize early
@@ -134,17 +139,18 @@ class SpotScratchEnv:
         mu_arr = rng.uniform(0.6, 1.2, num_envs).astype(np.float32)
 
         # Build sim: flat ground + per-env Spot with friction DR + stiffer gains.
-        self.sim = GpuSim(
+        super().__init__(
             num_envs,
             lambda world, i: _SpotScratch(world, i, mu_arr),
             gravity=(0.0, 0.0, -9.81),
             spacing=SPACING,
             device=device,
+            seed=seed,
             read_root=True,
             read_links=True,
             build_world=lambda world: _flat_ground(world, num_envs, SPACING),
         )
-        dev = self.sim.device
+        dev = self.device
 
         self.default_q   = torch.from_numpy(default_q).to(dev)                  # [12] isaac order
         self.i2a         = torch.from_numpy(isaac_to_add.astype(np.int64)).to(dev)
@@ -159,13 +165,13 @@ class SpotScratchEnv:
         pos[:, 2] = SPAWN_Z
         self.base_pose = GpuSim.make_root_pose(pos, quat=(0.0, 0.0, 0.0, 1.0), device=dev)
 
-        z = lambda *s: torch.zeros(*s, device=dev)
-        self.steps    = torch.zeros(num_envs, dtype=torch.long, device=dev)
-        self.last_act = z(num_envs, ACT_DIM)
-        self._last_obs = z(num_envs, OBS_DIM)   # raw obs; teacher reads [:, :48]
-        self.cmd      = z(num_envs, 3)
-        self.cmd_timer = torch.zeros(num_envs, dtype=torch.long, device=dev)
-        self.phi      = z(num_envs)              # phase clock ∈ [0,1)
+        # per-episode state: registered so the base re-inits it on every reset, full or partial
+        self.last_act  = self.env_state((ACT_DIM,))
+        self.prev_act  = self.env_state((ACT_DIM,))
+        self.cmd       = self.env_state((3,))
+        self.cmd_timer = self.env_state((), init=0, dtype=torch.long)
+        self.phi       = self.env_state(())      # phase clock ∈ [0,1)
+        self._last_obs = torch.zeros(num_envs, OBS_DIM, device=dev)   # raw obs; teacher reads [:, :48]
 
         # Load the teacher (Isaac flat walker) — reward oracle only; weights never enter student.
         self.imit_policy = torch.jit.load(fetch_isaac_teacher(), map_location=dev).eval()
@@ -255,81 +261,47 @@ class SpotScratchEnv:
         self.cmd_timer[idx] = torch.randint(120, 321, (n,), device=dev)
 
     # --------------------------------------------------------------------- #
-    #  Observation assembly
+    #  The task (VecTask hooks)
     # --------------------------------------------------------------------- #
-    def _obs(self):
-        s   = self.sim
-        q   = s.root_quat                                         # [K,4]
-        lin_b   = quat_rotate_inverse(q, s.root_linvel)          # [K,3]
-        ang_b   = quat_rotate_inverse(q, s.root_angvel)          # [K,3]
-        proj_g  = quat_rotate_inverse(q, self.grav.expand(self.K, 3))
-        qpos    = s.joint_pos[:, self.i2a] - self.default_q      # [K,12] Isaac order
-        jv_isaac = s.joint_vel[:, self.i2a]                      # [K,12]
-        clk = clock_obs(self.phi)                                 # [K,2]
-        obs = torch.cat([lin_b, ang_b, proj_g, self.cmd, qpos, jv_isaac, self.last_act, clk], dim=1)
-        # Store raw obs; teacher reads [:, :48] (no clock).
-        self._last_obs = obs
-        return obs
-
-    # --------------------------------------------------------------------- #
-    #  Reset helpers
-    # --------------------------------------------------------------------- #
-    def _reset_idx(self, idx):
+    def on_reset(self, idx):
         n = idx.numel()
-        if n == 0:
-            return
-        dev = self.sim.device
+        dev = self.device
         pose = self.base_pose[idx].clone()
         self.sim.set_root_state(idx, pose)
         self.sim.set_joint_state(idx, self.stand_q_add[idx], torch.zeros(n, self.sim.dof, device=dev))
-        self.steps[idx]    = 0
-        self.last_act[idx] = 0.0
-        self.phi[idx]      = reset_phi(n, dev)   # randomise phase (decorrelate batch)
+        self.phi[idx] = reset_phi(n, dev)   # randomise phase (decorrelate batch)
         self._resample_cmd(idx)
 
-    def reset(self):
-        self._reset_idx(torch.arange(self.K, device=self.sim.device))
-        self.sim.read()
-        for _ in range(20):
-            self.sim.apply_drive_target(self.stand_q_add)
-            self.sim.substep(DT / SUBSTEPS, SUBSTEPS)
-        self.last_act.zero_()
-        return self._obs()
+    def act(self, a):
+        # FULL policy action (not a residual): isaac -> add-order drive targets. The settle loop
+        # feeds a=0, which lands exactly on the default stand targets.
+        self.prev_act.copy_(self.last_act)
+        self.last_act.copy_(a)
+        return (self.default_q + ACTION_SCALE * a)[:, self.a2i]
 
-    # --------------------------------------------------------------------- #
-    #  Step
-    # --------------------------------------------------------------------- #
-    @torch.no_grad()
-    def step(self, action):
-        a      = action
-        prev_a = self.last_act
-        targets_isaac = self.default_q + ACTION_SCALE * a
-        self.sim.apply_drive_target(targets_isaac[:, self.a2i])
-        self.sim.substep(DT / SUBSTEPS, SUBSTEPS)
-
+    def on_step(self, s):
         # Advance clock AFTER the physics substep so phi aligns with the NEXT obs.
-        self.phi = advance(self.phi)
-
-        self.steps += 1
-        self.last_act = a
+        self.phi.copy_(advance(self.phi))
         self.cmd_timer -= 1
         self._resample_cmd(torch.nonzero(self.cmd_timer <= 0, as_tuple=False).squeeze(-1))
 
-        # ----- state readout ----- #
-        q      = self.sim.root_quat
-        lin_b  = quat_rotate_inverse(q, self.sim.root_linvel)     # [K,3]
-        ang_b  = quat_rotate_inverse(q, self.sim.root_angvel)     # [K,3]
-        base_z = self.sim.root_position[:, 2]                     # [K]
-
+        # ----- state readout (stashed for terminated / reward_terms) ----- #
+        q = self.sim.root_quat
+        self._lin_b  = quat_rotate_inverse(q, self.sim.root_linvel)     # [K,3]
+        self._ang_b  = quat_rotate_inverse(q, self.sim.root_angvel)     # [K,3]
+        self._base_z = self.sim.root_position[:, 2]                     # [K]
         # Roll proxy (same formula as terrain env):  2(q1*q2 + q0*q3)
-        roll  = 2.0 * (q[:, 1] * q[:, 2] + q[:, 0] * q[:, 3])
+        self._roll  = 2.0 * (q[:, 1] * q[:, 2] + q[:, 0] * q[:, 3])
         # Pitch proxy: 2(q0*q1 - q2*q3)  (Isaac convention)
-        pitch = 2.0 * (q[:, 0] * q[:, 1] - q[:, 2] * q[:, 3])
+        self._pitch = 2.0 * (q[:, 0] * q[:, 1] - q[:, 2] * q[:, 3])
+        self._up_z = up_z(q)
 
-        # base_above used only for the fell check (NOT in obs).
-        base_above = base_z   # flat ground -> terrain height = 0
+    def terminated(self, s):
+        return (self._up_z < 0.5) | (self._base_z < 0.25)
 
-        fell = (up_z(q) < 0.5) | (base_z < 0.25)
+    def reward_terms(self, s, a):
+        fell = s.terminated
+        lin_b, ang_b, base_z = self._lin_b, self._ang_b, self._base_z
 
         # ----- tracking reward ----- #
         e_lin     = (self.cmd[:, 0] - lin_b[:, 0]).pow(2) + (self.cmd[:, 1] - lin_b[:, 1]).pow(2)
@@ -338,8 +310,7 @@ class SpotScratchEnv:
         track_ang = torch.exp(-e_ang / SIG)
 
         # ----- imitation reward (penalty, decays to 0) ----- #
-        it       = self.iter
-        ramp     = min(it / 50.0, 1.0)
+        ramp     = min(self.iter / 50.0, 1.0)
         a_t      = self.imit_policy(self._last_obs[:, :48])     # raw obs[:48] — no clock
         imit_div = (a - a_t).pow(2).mean(dim=1).clamp(0.0, 9.0)
         imit     = (~fell).float() * ramp * imit_div
@@ -358,36 +329,25 @@ class SpotScratchEnv:
         else:
             tip_pos, tip_vel = foot_world(self.sim)   # still compute for metrics
             contact = contact_soft(tip_pos[..., 2])
-            siek    = torch.zeros(self.K, device=self.sim.device)
+            siek    = torch.zeros(self.K, device=self.device)
             tick    = siek
 
-        # ----- full reward ----- #
-        arate = a - prev_a
-        rew = (3.0  * track_lin
-               + 1.5  * track_ang
-               + 0.05                                                          # alive
-               - 1.0  * roll.pow(2)                                            # lateral level
-               - 0.5  * pitch.pow(2)                                           # longitudinal level
-               - 0.3  * lin_b[:, 2].pow(2)                                    # vz damp
-               - 0.1  * (ang_b[:, 0].pow(2) + ang_b[:, 1].pow(2))            # roll/pitch rate damp
-               - 0.005 * arate.pow(2).mean(dim=1)                             # action rate
-               - 0.0002 * a.pow(2).mean(dim=1)                                # effort
-               - 2.0  * (base_z - 0.42).pow(2)                               # height anchor
-               - self.W_IMIT * imit                                            # imitation (decays)
-               - self.W_TICK * tick                                            # tick (optional)
-               - 5.0  * fell.float())                                          # fell penalty
-
-        # ----- episode termination ----- #
-        timeout = (self.steps >= self.max_steps) & ~fell
-        done    = fell | (self.steps >= self.max_steps)
-        term_obs = self._obs()
-        d = torch.nonzero(done, as_tuple=False).squeeze(-1)
-        if d.numel() > 0:
-            self._reset_idx(d)
-            self.sim.read()
-            obs = self._obs()
-        else:
-            obs = term_obs
+        arate = a - self.prev_act
+        terms = {
+            "track_lin": 3.0 * track_lin,
+            "track_ang": 1.5 * track_ang,
+            "alive": torch.full((self.K,), 0.05, device=self.device),
+            "roll": -1.0 * self._roll.pow(2),                            # lateral level
+            "pitch": -0.5 * self._pitch.pow(2),                          # longitudinal level
+            "vz": -0.3 * lin_b[:, 2].pow(2),                             # vz damp
+            "angrate": -0.1 * (ang_b[:, 0].pow(2) + ang_b[:, 1].pow(2)),   # roll/pitch rate damp
+            "arate": -0.005 * arate.pow(2).mean(dim=1),                  # action rate
+            "effort": -0.0002 * a.pow(2).mean(dim=1),
+            "height": -2.0 * (base_z - 0.42).pow(2),                     # height anchor
+            "imit": -self.W_IMIT * imit,                                 # imitation (decays)
+            "tick": -self.W_TICK * tick,                                 # tick (optional)
+            "fell": -5.0 * fell.float(),
+        }
 
         # ----- logging metrics ----- #
         self.last_track    = (track_lin + track_ang).mean().item()
@@ -399,8 +359,26 @@ class SpotScratchEnv:
         self.last_drift = lin_b[straight, 1].abs().mean().item() if straight.any() else 0.0
         # Per-leg duty (mean contact over this step)
         self.last_duty = contact.mean(dim=0).tolist()
+        return terms
 
-        return obs, rew, done, term_obs, timeout
+    # --------------------------------------------------------------------- #
+    #  Observation assembly
+    # --------------------------------------------------------------------- #
+    def observe(self, s):
+        q = s.root_quat                                          # [K,4]
+        lin_b   = quat_rotate_inverse(q, self.sim.root_linvel)   # [K,3]
+        ang_b   = quat_rotate_inverse(q, self.sim.root_angvel)   # [K,3]
+        proj_g  = quat_rotate_inverse(q, self.grav.expand(self.K, 3))
+        qpos    = s.joint_pos[:, self.i2a] - self.default_q      # [K,12] Isaac order
+        jv_isaac = s.joint_vel[:, self.i2a]                      # [K,12]
+        clk = clock_obs(self.phi)                                 # [K,2]
+        obs = torch.cat([lin_b, ang_b, proj_g, self.cmd, qpos, jv_isaac, self.last_act, clk], dim=1)
+        # Store raw obs; teacher reads [:, :48] (no clock).
+        self._last_obs = obs
+        return obs
+
+    def config(self):
+        return {**super().config(), **CONFIG}
 
     # --------------------------------------------------------------------- #
     #  Tracking evaluation (teacher/trainer calls this)
@@ -410,12 +388,12 @@ class SpotScratchEnv:
         """Hold a FIXED command and report mean tracking error
         ||lin_b_xy - cmd_xy|| + |ang_b_z - wz| over the last (steps-warm) ticks.
         act_fn(obs) -> [K,12] action (already norm-aware if normalize_obs=True)."""
-        dev = self.sim.device
+        dev = self.device
         c   = torch.tensor(cmd, device=dev, dtype=torch.float32).expand(self.K, 3).contiguous()
         obs = self.reset()
         errs = []
         for t in range(steps):
-            self.cmd        = c
+            self.cmd.copy_(c)
             self.cmd_timer.fill_(10 ** 9)
             obs, _, _, _, _ = self.step(act_fn(obs))
             if t >= warm:
@@ -446,7 +424,7 @@ if __name__ == "__main__":
     print(f"obs shape: {tuple(obs.shape)}  finite: {bool(torch.isfinite(obs).all())}")
 
     # --- 200 zero-action steps ---
-    dev = env.sim.device
+    dev = env.device
     zero_a = torch.zeros(K, ACT_DIM, device=dev)
     for step_i in range(200):
         obs, rew, done, term, to = env.step(zero_a)
@@ -461,4 +439,5 @@ if __name__ == "__main__":
     print(f"  duty(fl,fr,hl,hr) = {[round(d, 3) for d in env.last_duty]}")
     print(f"  rew_mean  = {rew.mean().item():+.3f}")
     print(f"  W_IMIT    = {env.W_IMIT:.3f}  W_TICK = {env.W_TICK:.3f}")
+    print("per-term:", env.stats_line() or "(no episode finished yet)")
     print("SPOT-SCRATCH ENV SELFTEST: PASS")

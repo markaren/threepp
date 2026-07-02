@@ -4,6 +4,10 @@ Warm-start from scratch_flat_best.pt (50-d clock base gait, normalize_obs=True, 
 into a 96-d obs: [proprio(48) | clock(2) | base_above(1) | scan(45)].  First 50 dims byte-identical
 to scratch_flat -> anchor reads obs[:,:50].
 
+The choreography — CUDA context, direct-GPU batch, steps/timeout bookkeeping, terminal-obs capture,
+partial resets — lives in threepp.rl (GpuSim + VecTask); this file is ONLY the task: the terrain,
+the 96-d observation, the named reward terms, and the reset.
+
 NOTE: scratch_clock imports DT from this module; scratch_env imports ~9 names from here.
 So THIS module MUST NOT import scratch_clock or scratch_env at module level (circular import).
 CLOCK_DIM is hardcoded below; the scratch_* imports happen LAZILY inside SpotTerrainEnv.__init__.
@@ -25,7 +29,7 @@ sys.path.insert(0, os.path.join(_EXAMPLES, "spot"))      # stable asset layer: s
 sys.path.insert(0, os.path.join(_HERE, "scratch_distillation"))
 
 import threepp as tp
-from threepp.rl import GpuSim, load_policy
+from threepp.rl import GpuSim, VecTask, load_policy
 from spot_deploy import (build_spot, default_q, add_to_isaac, isaac_to_add,
                          ACTION_SCALE)
 
@@ -199,7 +203,15 @@ def _tent_profile(x, rise, run, n_up, x0=STAIR_X0, land=LAND_LEN):
 # =============================================================================
 #  SpotTerrainEnv — velocity-command tracking on tent terrain
 # =============================================================================
-class SpotTerrainEnv:
+class SpotTerrainEnv(VecTask):
+    control_hz = CONTROL_HZ
+    episode_s = EPISODE_S
+    act_dim = ACT_DIM
+    control = "drive"                # stiff position PD drives -> targets, not forces
+    substeps = SUBSTEPS
+    settle_steps = 20                # settle to a clean stand (default targets) after a full reset
+    clip_actions = None              # the policy emits ~[-8,8] (default_q + ACTION_SCALE*a); do NOT clamp
+
     def __init__(self, num_envs=2048, device="cuda", seed=0, rise_max=RISE_MAX, flat_only=False):
         # Lazy imports: scratch_clock imports DT from this module, so importing it at module level
         # would be a circular import.  Everything is fully defined by call time -> no cycle here.
@@ -207,8 +219,6 @@ class SpotTerrainEnv:
         from scratch_env import STIFF_GAINS
         self._advance, self._clock_obs, self._reset_phi = _advance, _clock_obs, _reset_phi
 
-        self.K, self.dt = num_envs, DT
-        self.max_steps = int(EPISODE_S * CONTROL_HZ)
         rng = np.random.default_rng(seed)
         if flat_only:                                                # held-out flat-steering eval env
             rises = np.zeros(num_envs, np.float32)
@@ -221,11 +231,12 @@ class SpotTerrainEnv:
         class _StiffSpot:
             def __init__(self_, world, i):
                 self_.art, _ = build_spot(world, assets=None, base_xy=(0.0, i * SPACING), gains=STIFF_GAINS)
-        self.sim = GpuSim(num_envs, lambda world, i: _StiffSpot(world, i),
-                          gravity=(0.0, 0.0, -9.81), spacing=SPACING, device=device, read_root=True,
-                          build_world=lambda world: (_flat_ground(world, num_envs, SPACING),
-                                                      _add_tent(world, num_envs, SPACING, rises, runs, n_ups)))
-        dev = self.sim.device
+        super().__init__(num_envs, lambda world, i: _StiffSpot(world, i),
+                         gravity=(0.0, 0.0, -9.81), spacing=SPACING, device=device, seed=seed,
+                         read_root=True,
+                         build_world=lambda world: (_flat_ground(world, num_envs, SPACING),
+                                                    _add_tent(world, num_envs, SPACING, rises, runs, n_ups)))
+        dev = self.device
         self.default_q = torch.from_numpy(default_q).to(dev)                  # [12] isaac order
         self.i2a = torch.from_numpy(isaac_to_add.astype(np.int64)).to(dev)    # add -> isaac index
         self.a2i = torch.from_numpy(add_to_isaac.astype(np.int64)).to(dev)    # isaac -> add index
@@ -243,16 +254,16 @@ class SpotTerrainEnv:
         self.lane_y = torch.arange(num_envs, device=dev, dtype=torch.float32) * SPACING
         pos = torch.zeros(num_envs, 3, device=dev); pos[:, 1] = self.lane_y; pos[:, 2] = SPAWN_Z
         self.base_pose = GpuSim.make_root_pose(pos, quat=(0.0, 0.0, 0.0, 1.0), device=dev)   # [K,7] facing +x
-        z = lambda *s: torch.zeros(*s, device=dev)
-        self.steps = torch.zeros(num_envs, dtype=torch.long, device=dev)
-        self.last_act = z(num_envs, ACT_DIM)                                  # isaac-order action (for the obs)
-        self._last_obs = z(num_envs, OBS_DIM)                                 # obs the policy acted on (imitation input)
-        self.phi = z(num_envs)                                                # phase clock in [0,1)
-        self.up = z(num_envs)
-        self.cmd = z(num_envs, 3)                                             # [vx, vy, wz] body-frame velocity command
-        self.cmd_timer = torch.zeros(num_envs, dtype=torch.long, device=dev)
-        self.ep_max_climb = z(num_envs)                                       # peak terrain height under base this episode
-        self._resample_cmd(torch.arange(num_envs, device=dev))
+        # per-episode state: registered so the base re-inits it on every reset, full or partial
+        self.last_act = self.env_state((ACT_DIM,))       # isaac-order action (for the obs)
+        self.prev_act = self.env_state((ACT_DIM,))       # previous action (for the action-rate penalty)
+        self.phi = self.env_state(())                    # phase clock in [0,1)
+        self.cmd = self.env_state((3,))                  # [vx, vy, wz] body-frame velocity command
+        self.cmd_timer = self.env_state((), init=0, dtype=torch.long)
+        self.ep_max_climb = self.env_state(())           # peak terrain height under base this episode
+        self._last_obs = torch.zeros(num_envs, OBS_DIM, device=dev)   # obs the policy acted on (imitation input)
+        self.up = torch.zeros(num_envs, device=dev)
+        self._resample_cmd(torch.arange(num_envs, device=dev))        # valid cmd before the first reset()
         self.last_track = 0.0; self.last_flat_track = 0.0; self.last_climb = 0.0; self.last_fell = 0.0
 
     # ----- terrain (2-D: tent in-lane, flat outside the box width) -----
@@ -287,15 +298,105 @@ class SpotTerrainEnv:
         self.cmd[idx] = cmd
         self.cmd_timer[idx] = torch.randint(CMD_MIN, CMD_MAX + 1, (n,), device=dev)
 
-    def _obs(self):
-        s = self.sim
+    # ---- the task ---------------------------------------------------------------
+    def on_reset(self, idx):
+        n = idx.numel()
+        dev = self.device
+        pose = self.base_pose[idx].clone()                                   # [n,7] PhysX layout [quat(4), pos(3)]
+        on_tent = (torch.rand(n, device=dev) < TENT_SPAWN_FRAC) & self.is_tent[idx]
+        span = 2.0 * self.n_up[idx] * self.run[idx] + LAND_LEN               # full tent length (up + landing + down)
+        sx = STAIR_X0 + torch.rand(n, device=dev) * span                     # random point along the tent
+        sz = _tent_profile(sx, self.rise[idx], self.run[idx], self.n_up[idx]) + SPAWN_Z   # base = terrain + stand clearance
+        pose[:, 4] = torch.where(on_tent, sx, pose[:, 4])                    # x is index 4 (quat-first root layout)
+        pose[:, 6] = torch.where(on_tent, sz, pose[:, 6])                    # z is index 6
+        self.sim.set_root_state(idx, pose)
+        self.sim.set_joint_state(idx, self.stand_q_add[idx], torch.zeros(n, self.sim.dof, device=dev))
+        self.phi[idx] = self._reset_phi(n, dev)      # randomise phase (decorrelate batch)
+        self.ep_max_climb[idx] = _tent_profile(pose[:, 4], self.rise[idx], self.run[idx], self.n_up[idx])
+        self._resample_cmd(idx)
+        fwd = idx[on_tent]                                                   # spawned ON the tent -> force a forward cmd
+        if fwd.numel() > 0:
+            self.cmd[fwd, 0] = torch.empty(fwd.numel(), device=dev).uniform_(0.5, VX_HI)
+            self.cmd[fwd, 1:] = 0.0
+
+    def act(self, a):
+        # FULL policy action (not a residual): isaac -> add-order drive targets. The settle loop
+        # feeds a=0, which lands exactly on the default stand targets.
+        self.prev_act.copy_(self.last_act)
+        self.last_act.copy_(a)
+        return (self.default_q + ACTION_SCALE * a)[:, self.a2i]
+
+    def on_settled(self):
+        self.up = up_z(self.sim.root_quat)
+
+    def on_step(self, s):
+        self.phi.copy_(self._advance(self.phi))                              # clock after physics, before next obs
+        self.cmd_timer -= 1                                                  # in-episode velocity-command changes
+        self._resample_cmd(torch.nonzero(self.cmd_timer <= 0, as_tuple=False).squeeze(-1))
+
+        q = self.sim.root_quat
+        self.up = up_z(q)
+        x, y, zz = self.sim.root_position[:, 0], self.sim.root_position[:, 1], self.sim.root_position[:, 2]
+        self._roll = 2.0 * (q[:, 1] * q[:, 2] + q[:, 0] * q[:, 3])           # lateral-tilt proxy (keep level)
+        self._ang_b = quat_rotate_inverse(q, self.sim.root_angvel)
+        self._lin_b = quat_rotate_inverse(q, self.sim.root_linvel)
+        h_here = self._terrain_h(x, y)
+        self._base_above = zz - h_here
+        # scan (unclipped) for the imitation gate: anchor to the base gait only where terrain is flat
+        cyaw, syaw = heading_cossin(q)
+        px, py = scan_xy(x, y, cyaw, syaw, self.gx, self.gy)
+        ahead = self._terrain_h(px, py) - h_here[:, None]
+        change = ahead.abs().max(dim=1).values                               # nearest terrain change (up OR down)
+        self._w_imit = (1.0 - change / 0.10).clamp(0.0, 1.0)                 # 1 on TRUE flat -> 0 once a step nears
+        self.ep_max_climb.copy_(torch.maximum(self.ep_max_climb, h_here))    # peak terrain height under base (climb metric)
+
+    def terminated(self, s):
+        return (self.up < 0.35) | (self._base_above < 0.18)
+
+    def reward_terms(self, s, a):
+        # Anchor: the 50-d clock base gait with its frozen RunningNorm (obs[:,:50] = proprio+clock).
+        anchor_a = self.anchor_ac.act_mean(self.anchor_norm.norm(self._last_obs[:, :50]))
+        imit = self._w_imit * (a - anchor_a).pow(2).mean(dim=1)
+        arate = a - self.prev_act
+
+        # ** PRIMARY OBJECTIVE: track the commanded body-frame velocity (this IS the steering). **
+        e_lin = (self.cmd[:, 0] - self._lin_b[:, 0]).pow(2) + (self.cmd[:, 1] - self._lin_b[:, 1]).pow(2)
+        e_ang = (self.cmd[:, 2] - self._ang_b[:, 2]).pow(2)
+        track_lin = torch.exp(-e_lin / SIG)
+        track_ang = torch.exp(-e_ang / SIG)
+        terms = {
+            "track_lin": 3.0 * track_lin,                    # track commanded vx,vy (forward + strafe)
+            "track_ang": 1.5 * track_ang,                    # track commanded yaw rate (turn)
+            "alive": torch.full((self.K,), 0.05, device=self.device),
+            "roll": -1.0 * self._roll.pow(2),                # stay level — ROLL only (climbing legitimately PITCHES)
+            "vz": -0.1 * self._lin_b[:, 2].pow(2),           # LIGHT vertical-vel damp (climbing needs vz)
+            "angrate": -0.05 * (self._ang_b[:, 0].pow(2) + self._ang_b[:, 2].pow(2)),   # light roll/yaw-rate damp (pitch-rate left free)
+            "scrape": -3.0 * torch.relu(0.30 - self._base_above),   # anti-scrape: don't drag the body over the terrain
+            "arate": -0.001 * arate.pow(2).mean(dim=1),      # action rate (smooth; scaled for the ~+-7 action range)
+            "imit": -W_IMIT * imit,                          # BE the base gait on flat -> preserve the steering gait
+            "fell": -5.0 * s.terminated.float(),
+        }
+        # NOTE: foot terms (feet_air_time / clearance / slip) could plug in here. They are feasible
+        # without a new binding -- set GpuSim(..., read_links=True) and port spot_walk_env._foot_world()
+        # (link_pose/link_linvel give foot-tip kinematics; contact = tip_z < threshold). Omitted
+        # to isolate the command+reward-structure change as the single variable.
+        self.last_fell = s.terminated.float().mean().item()
+        self.last_track = (track_lin + track_ang).mean().item()
+        flat = ~self.is_tent                                                 # flat-lane tracking = the steering-regression proxy
+        self.last_flat_track = ((track_lin + track_ang)[flat]).mean().item() if bool(flat.any()) else float("nan")
+        return terms
+
+    def on_done(self, idx):
+        self.last_climb = self.ep_max_climb[idx].mean().item()
+
+    def observe(self, s):
         q = s.root_quat
-        lin_b = quat_rotate_inverse(q, s.root_linvel)
-        ang_b = quat_rotate_inverse(q, s.root_angvel)
+        lin_b = quat_rotate_inverse(q, self.sim.root_linvel)
+        ang_b = quat_rotate_inverse(q, self.sim.root_angvel)
         proj_g = quat_rotate_inverse(q, self.grav.expand(self.K, 3))
         qpos = s.joint_pos[:, self.i2a] - self.default_q                      # isaac-order joint deviation
         jv_isaac = s.joint_vel[:, self.i2a]
-        x, y, zz = s.root_position[:, 0], s.root_position[:, 1], s.root_position[:, 2]
+        x, y, zz = s.root_pos[:, 0], s.root_pos[:, 1], s.root_pos[:, 2]
         cyaw, syaw = heading_cossin(q)
         h_here = self._terrain_h(x, y)
         px, py = scan_xy(x, y, cyaw, syaw, self.gx, self.gy)                  # HEADING-relative 2-D scan grid
@@ -309,124 +410,20 @@ class SpotTerrainEnv:
         self._last_obs = obs
         return obs
 
-    def _reset_idx(self, idx):
-        n = idx.numel()
-        if n == 0:
-            return
-        dev = self.sim.device
-        pose = self.base_pose[idx].clone()                                   # [n,7] PhysX layout [quat(4), pos(3)]
-        on_tent = (torch.rand(n, device=dev) < TENT_SPAWN_FRAC) & self.is_tent[idx]
-        span = 2.0 * self.n_up[idx] * self.run[idx] + LAND_LEN               # full tent length (up + landing + down)
-        sx = STAIR_X0 + torch.rand(n, device=dev) * span                     # random point along the tent
-        sz = _tent_profile(sx, self.rise[idx], self.run[idx], self.n_up[idx]) + SPAWN_Z   # base = terrain + stand clearance
-        pose[:, 4] = torch.where(on_tent, sx, pose[:, 4])                    # x is index 4 (quat-first root layout)
-        pose[:, 6] = torch.where(on_tent, sz, pose[:, 6])                    # z is index 6
-        self.sim.set_root_state(idx, pose)
-        self.sim.set_joint_state(idx, self.stand_q_add[idx], torch.zeros(n, self.sim.dof, device=dev))
-        self.steps[idx] = 0; self.last_act[idx] = 0.0
-        self.phi[idx] = self._reset_phi(n, dev)      # randomise phase (decorrelate batch)
-        self.ep_max_climb[idx] = _tent_profile(pose[:, 4], self.rise[idx], self.run[idx], self.n_up[idx])
-        self._resample_cmd(idx)
-        fwd = idx[on_tent]                                                   # spawned ON the tent -> force a forward cmd
-        if fwd.numel() > 0:
-            self.cmd[fwd, 0] = torch.empty(fwd.numel(), device=dev).uniform_(0.5, VX_HI)
-            self.cmd[fwd, 1:] = 0.0
-
-    def reset(self):
-        self._reset_idx(torch.arange(self.K, device=self.sim.device))
-        self.sim.read()
-        for _ in range(20):                                                  # settle to a clean stand (default targets)
-            self.sim.apply_drive_target(self.stand_q_add)
-            self.sim.substep(DT / SUBSTEPS, SUBSTEPS)        # advance n substeps, read once
-        self.last_act.zero_()
-        self.up = up_z(self.sim.root_quat)
-        return self._obs()
-
-    @torch.no_grad()
-    def step(self, action):
-        # NO clamp: the policy emits actions in ~[-8, 8] (default_q + ACTION_SCALE*a is the joint
-        # target); clamping to [-1,1] would destroy the warm-started gait.
-        a = action
-        prev_a = self.last_act
-        targets_isaac = self.default_q + ACTION_SCALE * a                    # FULL policy action (not a residual)
-        self.sim.apply_drive_target(targets_isaac[:, self.a2i])              # isaac -> add-order drive targets
-        self.sim.substep(DT / SUBSTEPS, SUBSTEPS)                            # advance n substeps, read once
-        self.phi = self._advance(self.phi)                                   # clock after physics, before next obs
-        self.steps += 1
-        self.last_act = a
-        self.cmd_timer -= 1                                                  # in-episode velocity-command changes
-        self._resample_cmd(torch.nonzero(self.cmd_timer <= 0, as_tuple=False).squeeze(-1))
-
-        q = self.sim.root_quat
-        self.up = up_z(q)
-        x, y, zz = self.sim.root_position[:, 0], self.sim.root_position[:, 1], self.sim.root_position[:, 2]
-        roll = 2.0 * (q[:, 1] * q[:, 2] + q[:, 0] * q[:, 3])                  # lateral-tilt proxy (keep level)
-        ang_b = quat_rotate_inverse(q, self.sim.root_angvel)
-        lin_b = quat_rotate_inverse(q, self.sim.root_linvel)
-        h_here = self._terrain_h(x, y)
-        base_above = zz - h_here
-        # scan (unclipped) for the imitation gate: anchor to the base gait only where terrain is flat
-        cyaw, syaw = heading_cossin(q)
-        px, py = scan_xy(x, y, cyaw, syaw, self.gx, self.gy)
-        ahead = self._terrain_h(px, py) - h_here[:, None]
-        change = ahead.abs().max(dim=1).values                               # nearest terrain change (up OR down)
-        w_imit = (1.0 - change / 0.10).clamp(0.0, 1.0)                        # 1 on TRUE flat -> 0 once a step nears
-        # Anchor: the 50-d clock base gait with its frozen RunningNorm (obs[:,:50] = proprio+clock).
-        anchor_a = self.anchor_ac.act_mean(self.anchor_norm.norm(self._last_obs[:, :50]))
-        imit = w_imit * (a - anchor_a).pow(2).mean(dim=1)
-        arate = a - prev_a
-        fell = (self.up < 0.35) | (base_above < 0.18)
-
-        # ** PRIMARY OBJECTIVE: track the commanded body-frame velocity (this IS the steering). **
-        e_lin = (self.cmd[:, 0] - lin_b[:, 0]).pow(2) + (self.cmd[:, 1] - lin_b[:, 1]).pow(2)
-        e_ang = (self.cmd[:, 2] - ang_b[:, 2]).pow(2)
-        track_lin = torch.exp(-e_lin / SIG)
-        track_ang = torch.exp(-e_ang / SIG)
-        rew = (3.0 * track_lin                          # track commanded vx,vy (forward + strafe)
-               + 1.5 * track_ang                        # track commanded yaw rate (turn)
-               + 0.05                                   # alive
-               - 1.0 * roll.pow(2)                       # stay level — ROLL only (climbing legitimately PITCHES)
-               - 0.1 * lin_b[:, 2].pow(2)               # LIGHT vertical-vel damp (climbing needs vz)
-               - 0.05 * (ang_b[:, 0].pow(2) + ang_b[:, 2].pow(2))   # light roll/yaw-rate damp (pitch-rate left free)
-               - 3.0 * torch.relu(0.30 - base_above)    # anti-scrape: don't drag the body over the terrain
-               - 0.001 * arate.pow(2).mean(dim=1)       # action rate (smooth; scaled for the ~+-7 action range)
-               - W_IMIT * imit                          # BE the base gait on flat -> preserve the steering gait
-               - 5.0 * fell.float())
-        # NOTE: foot terms (feet_air_time / clearance / slip) could plug in here. They are feasible
-        # without a new binding -- set GpuSim(..., read_links=True) and port spot_walk_env._foot_world()
-        # (link_pose/link_linvel give foot-tip kinematics; contact = tip_z < threshold). Omitted
-        # to isolate the command+reward-structure change as the single variable.
-
-        self.ep_max_climb = torch.maximum(self.ep_max_climb, h_here)         # peak terrain height under base (climb metric)
-        timeout = (self.steps >= self.max_steps) & ~fell
-        done = fell | (self.steps >= self.max_steps)
-        term_obs = self._obs()
-        d = torch.nonzero(done, as_tuple=False).squeeze(-1)
-        if d.numel() > 0:
-            self.last_climb = self.ep_max_climb[d].mean().item()
-            self._reset_idx(d)
-            self.sim.read()
-            self.up = up_z(self.sim.root_quat)
-            obs = self._obs()
-        else:
-            obs = term_obs
-        self.last_fell = fell.float().mean().item()
-        self.last_track = (track_lin + track_ang).mean().item()
-        flat = ~self.is_tent                                                 # flat-lane tracking = the steering-regression proxy
-        self.last_flat_track = ((track_lin + track_ang)[flat]).mean().item() if bool(flat.any()) else float("nan")
-        return obs, rew, done, term_obs, timeout
+    def config(self):
+        return {**super().config(), **CONFIG}
 
     @torch.no_grad()
     def measure_tracking(self, act_fn, cmd, steps=160, warm=60):
         """Hold a FIXED command and report mean tracking error ||lin_b_xy - cmd_xy|| + |ang_b_z - wz|
         over the last (steps-warm) ticks. `act_fn(obs) -> [K,12]` isaac-order action. For the held-out
         flat-steering regression eval (run it on a flat_only env for both the policy and the teacher)."""
-        dev = self.sim.device
+        dev = self.device
         c = torch.tensor(cmd, device=dev, dtype=torch.float32).expand(self.K, 3).contiguous()
         obs = self.reset()
         errs = []
         for t in range(steps):
-            self.cmd = c                                                     # freeze the command (override resamples)
+            self.cmd.copy_(c)                                                # freeze the command (override resamples)
             self.cmd_timer.fill_(10 ** 9)
             obs, _, _, _, _ = self.step(act_fn(obs))
             if t >= warm:
@@ -447,8 +444,9 @@ if __name__ == "__main__":
     assert obs.shape == (K, 96), f"expected obs (K,96), got {tuple(obs.shape)}"
     print(f"obs {tuple(obs.shape)} (OBS_DIM={OBS_DIM}=96) finite={bool(torch.isfinite(obs).all())}")
     for _ in range(200):
-        obs, rew, done, term, to = env.step(torch.zeros(K, ACT_DIM, device=env.sim.device))
+        obs, rew, done, term, to = env.step(torch.zeros(K, ACT_DIM, device=env.device))
         assert torch.isfinite(obs).all() and torch.isfinite(rew).all()
     print(f"zero-action (stand): track={env.last_track:.3f}  flat_track={env.last_flat_track:.3f}  "
           f"climb={env.last_climb:.3f}  fell/step={env.last_fell:.3f}  rew={rew.mean().item():+.3f}")
+    print("per-term:", env.stats_line() or "(no episode finished yet)")
     print("SPOTV2-TERRAIN ENV SELFTEST: PASS")

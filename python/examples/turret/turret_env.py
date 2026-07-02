@@ -13,7 +13,10 @@ trainable pixel-RL task class — dressed as a missile-defense turret.
 
 K turrets live in one shared GL scene in regions spaced far apart (far-plane + frustum culling keep each
 camera to its own region); the reward/dynamics are vectorized torch on the GPU, only the per-frame render
-touches the CPU. Single source of truth: CONFIG (persisted to the checkpoint).
+touches the CPU. There is no physics sim here, so the task overrides VecTask.simulate() with its own
+dynamics (aim integration, ballistics, hit test, render) and the base still owns the steps/timeout
+bookkeeping, terminal-obs capture and auto-reset of the registered aim/cooldown state.
+Single source of truth: CONFIG (persisted to the checkpoint).
 """
 import math
 import os
@@ -27,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 sys.path.insert(0, _HERE)
 
 import threepp as tp
+from threepp.rl import VecTask
 
 # ---- single source of truth -------------------------------------------------
 CONTROL_HZ = 30
@@ -69,14 +73,15 @@ def aim_dir(yaw, pitch):
     return torch.stack([cp * torch.sin(yaw), torch.sin(pitch), cp * torch.cos(yaw)], dim=-1)
 
 
-class TurretEnv:
+class TurretEnv(VecTask):
+    control_hz = CONTROL_HZ
+    episode_s = EPISODE_S
+    act_dim = ACT_DIM
+
     def __init__(self, num_envs=64, device="cuda", seed=0):
         if not torch.cuda.is_available():
             raise RuntimeError("TurretEnv needs CUDA")
-        self.K, self.dt = num_envs, DT
-        self.device = torch.device(device)
-        self.max_steps = int(EPISODE_S * CONTROL_HZ)
-        self.g = torch.Generator(device=self.device).manual_seed(seed)
+        super().__init__(num_envs, None, device=device, seed=seed)   # sim-less: simulate() below
         dev = self.device
 
         # region centres (turret bases), spaced along X
@@ -84,20 +89,19 @@ class TurretEnv:
         self.center[:, 0] = torch.arange(self.K, device=dev) * SPACING
         self.cam_y = 1.0
 
-        # state
-        self.yaw = torch.zeros(self.K, device=dev)
-        self.pitch = torch.full((self.K,), 0.4, device=dev)
+        # aim + trigger state: registered so the base re-inits it on every reset
+        self.yaw = self.env_state(())
+        self.pitch = self.env_state((), init=0.4)
+        self.cooldown = self.env_state((), init=0, dtype=torch.long)
+        # projectiles respawn on their own schedule (hit / reached), not the episode's -> plain
+        # buffers, re-spawned wholesale in on_reset
         self.ppos = torch.zeros(self.K, N_PROJ, 3, device=dev)
         self.pvel = torch.zeros(self.K, N_PROJ, 3, device=dev)
         self.psize = torch.ones(self.K, N_PROJ, device=dev)
-        self.cooldown = torch.zeros(self.K, dtype=torch.long, device=dev)
-        self.steps = torch.zeros(self.K, dtype=torch.long, device=dev)
         self.frames = torch.zeros(self.K, FRAME_STACK, 3, H, W, dtype=torch.uint8, device=dev)
 
         self._build_scene()
         self._cpu_pos = np.zeros((self.K * N_PROJ, 3), np.float32)
-        self._spawn(torch.arange(self.K, device=dev).repeat_interleave(N_PROJ),
-                    torch.arange(N_PROJ, device=dev).repeat(self.K))
 
     # --- scene / rendering ----------------------------------------------------
     def _build_scene(self):
@@ -149,9 +153,6 @@ class TurretEnv:
         self.frames = torch.roll(self.frames, shifts=-1, dims=1)
         self.frames[:, -1] = frame
 
-    def _obs(self):
-        return self.frames.reshape(self.K, OBS_C, H, W)      # [K, 3*N, H, W] uint8
-
     # --- dynamics -------------------------------------------------------------
     def _rand(self, n, lo, hi):
         return torch.rand(n, device=self.device, generator=self.g) * (hi - lo) + lo
@@ -177,25 +178,23 @@ class TurretEnv:
         self.pvel[ke, je] = v
         self.psize[ke, je] = self._rand(n, SIZE_LO, SIZE_HI)
 
-    def reset(self):
-        ke = torch.arange(self.K, device=self.device).repeat_interleave(N_PROJ)
-        je = torch.arange(N_PROJ, device=self.device).repeat(self.K)
+    # --- the task ---------------------------------------------------------------
+    def on_reset(self, idx):
+        # yaw/pitch/cooldown are already re-initialized (registered env_state); spawn a fresh
+        # projectile volley around the reset aim and fill the frame stack with the fresh view
+        ke = idx.repeat_interleave(N_PROJ)
+        je = torch.arange(N_PROJ, device=self.device).repeat(idx.numel())
         self._spawn(ke, je)
-        self.yaw.zero_(); self.pitch.fill_(0.4); self.cooldown.zero_(); self.steps.zero_()
-        frame = self._render()
-        for _ in range(FRAME_STACK):
-            self._push_frame(frame)
-        return self._obs()
+        f = self._render()
+        self.frames[idx] = f[idx].unsqueeze(1).expand(-1, FRAME_STACK, -1, -1, -1)
 
-    @torch.no_grad()
-    def step(self, action):
-        a = action.clamp(-1.0, 1.0)
-        self.yaw = self.yaw + a[:, 0] * YAW_RATE
-        self.pitch = (self.pitch + a[:, 1] * PITCH_RATE).clamp(PITCH_LO, PITCH_HI)
-        self.pvel[:, :, 1] = self.pvel[:, :, 1] - GRAVITY * self.dt   # ballistic arc
-        self.ppos = self.ppos + self.pvel * self.dt
-        self.steps += 1
-        self.cooldown = (self.cooldown - 1).clamp_min(0)
+    def simulate(self, a):
+        # aim + ballistics
+        self.yaw += a[:, 0] * YAW_RATE
+        self.pitch.copy_((self.pitch + a[:, 1] * PITCH_RATE).clamp(PITCH_LO, PITCH_HI))
+        self.pvel[:, :, 1] -= GRAVITY * self.dt              # ballistic arc
+        self.ppos += self.pvel * self.dt
+        self.cooldown.copy_((self.cooldown - 1).clamp_min(0))
 
         d = aim_dir(self.yaw, self.pitch)                          # [K,3]
         rel = torch.nn.functional.normalize(self.ppos, dim=-1)     # dir to each projectile (turret-local)
@@ -206,42 +205,41 @@ class TurretEnv:
         # fire
         want = (a[:, 2] > 0.0) & (self.cooldown == 0)
         hit = want & (nearest_ang < HIT_CONE)
-        self.cooldown = torch.where(want, torch.full_like(self.cooldown, COOLDOWN), self.cooldown)
+        self.cooldown.copy_(torch.where(want, torch.full_like(self.cooldown, COOLDOWN), self.cooldown))
 
         # defense fail: any projectile within DEFENSE_R of the turret base
         dist = self.ppos.norm(dim=-1)                              # [K,N]
         reached = dist < DEFENSE_R                                 # [K,N]
 
-        # reward (dense): track nearest toward center + hit bonus - shot/miss - defense fail
-        r_track = 0.6 * torch.exp(-(nearest_ang / math.radians(8.0)) ** 2)
-        r_hit = 3.0 * hit.float()
-        r_miss = -0.15 * (want & ~hit).float()
-        r_fail = -2.0 * reached.any(dim=1).float()
-        rew = r_track + r_hit + r_miss + r_fail - 0.005
+        # stash for reward_terms (computed BEFORE the respawn overwrites the hit projectiles)
+        self._nearest_ang, self._hit, self._want, self._reached = nearest_ang, hit, want, reached
 
         # respawn hit projectiles + any that reached the turret
         resp = reached.clone()
         resp[torch.arange(self.K, device=self.device)[hit], nearest[hit]] = True
         ke, je = torch.nonzero(resp, as_tuple=True)
         self._spawn(ke, je)
-
-        done = self.steps >= self.max_steps                        # timeout only (soft penalties, no fatal terminal)
         self._push_frame(self._render())
-        term_obs = self._obs()
-        de = torch.nonzero(done, as_tuple=False).squeeze(-1)
-        if de.numel() > 0:
-            self.yaw[de] = 0.0; self.pitch[de] = 0.4; self.cooldown[de] = 0; self.steps[de] = 0
-            ke = de.repeat_interleave(N_PROJ); je = torch.arange(N_PROJ, device=self.device).repeat(de.numel())
-            self._spawn(ke, je)
-            f = self._render()
-            self.frames[de] = f[de].unsqueeze(1).expand(-1, FRAME_STACK, -1, -1, -1)
-            obs = self._obs()
-        else:
-            obs = term_obs
+
         # expose hit/fail rates for logging
         self.last_hit = hit.float().mean()
         self.last_fail = reached.any(dim=1).float().mean()
-        return obs, rew, done, term_obs, done   # is_timeout = done
+
+    def observe(self, s):
+        return self.frames.reshape(self.K, OBS_C, H, W)      # [K, 3*N, H, W] uint8
+
+    def reward_terms(self, s, a):
+        # dense: track nearest toward center + hit bonus - shot/miss - defense fail - time
+        return {
+            "track": 0.6 * torch.exp(-(self._nearest_ang / math.radians(8.0)) ** 2),
+            "hit": 3.0 * self._hit.float(),
+            "miss": -0.15 * (self._want & ~self._hit).float(),
+            "fail": -2.0 * self._reached.any(dim=1).float(),
+            "time": torch.full((self.K,), -0.005, device=self.device),
+        }
+
+    def config(self):
+        return {**super().config(), **CONFIG}
 
 
 if __name__ == "__main__":
@@ -264,5 +262,6 @@ if __name__ == "__main__":
         act = torch.stack([ay.clamp(-1, 1), ap.clamp(-1, 1), fire], dim=-1)
         obs, rew, done, term, to = env.step(act)
         hits += float(env.last_hit)
+    print("per-term:", env.stats_line() or "(no episode finished yet)")
     print("oracle controller: mean hit-rate/step=%.3f  (a working env should be clearly >0)" % (hits / 120))
     print("TURRET ENV SELFTEST: PASS" if hits / 120 > 0.02 else "TURRET ENV SELFTEST: SUSPICIOUS")
