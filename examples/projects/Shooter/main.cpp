@@ -174,6 +174,14 @@ int main(int argc, char** argv) {
     sun->shadow->camera->farPlane = 240.f;
     sun->shadow->camera->updateProjectionMatrix();
     scene->add(sun);
+    // ONE-SUN: the Vulkan renderers resolve the HDR env's sun themselves — the
+    // deferred extracts + injects it as the analytic sun (EnvSunPolicy::Auto,
+    // measured direction/energy from the HDRI), the path tracer importance-
+    // samples the disc directly. The raster stand-in above would OVERRIDE the
+    // measured sun (Auto defers to scene lights) with this hand-tuned
+    // approximation — hide it there so the env IS the sun. GL keeps it: raster
+    // cannot cast shadows from an env map.
+    if (dynamic_cast<VulkanRendererCore*>(renderer.get())) sun->visible = false;
 
     // ===== audio ============================================================
     SoundBank sfx;
