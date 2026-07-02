@@ -7385,6 +7385,11 @@ namespace threepp {
             // MSAA sample cloud translates as a unit each frame, so the
             // majority vote flips nearly as often as a point sample (measured:
             // dominant-of-4 under jitter cut edge flicker only ~7 %).
+            // (Measured: keeping the jitter at msaa>1 for the renderScale<1
+            // upsampler does NOT work — the upsampler re-amplifies the
+            // jittered coverage flips and edge flicker returns at full
+            // strength, 6.7k px/frame vs 5.1k at msaa=1. Unjittered MSAA
+            // upsampling is STABLE; its trade is spatial softness, not noise.)
             const bool rasterJitterOn = kRasterJitterEnabled && gbufMsaaSamples_ <= 1;
             const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
             const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
