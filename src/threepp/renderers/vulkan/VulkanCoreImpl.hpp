@@ -737,6 +737,15 @@ namespace threepp {
         };
         std::unordered_map<const Texture*, CachedTexture> textureCache;
         std::vector<uint32_t> freeTextureSlots;// slots reclaimed by prune
+        // Slots whose cache entry was found STALE at lookup (the original
+        // Texture died and a brand-new one was allocated at the recycled
+        // address — the raw-pointer key collides). The image cannot be
+        // destroyed at detection time: in-flight frames + bound descriptor
+        // sets may still reference it, and ensureMaterialTexture's callers
+        // include the lean material-patch path that deliberately avoids a
+        // device drain. The structural-rebuild prune (post-drain) destroys
+        // these and returns the slots to freeTextureSlots.
+        std::vector<uint32_t> retiredTextureSlots_;
         VkSampler textureSampler_ = VK_NULL_HANDLE;
 
         // Continuous-motion accumulation. Two ping-pong slots for the running
@@ -1140,6 +1149,12 @@ namespace threepp {
             std::shared_ptr<Texture> clearcoatTex;         // covers clearcoatMap swap
             std::shared_ptr<Texture> clearcoatRoughnessTex;// covers clearcoatRoughnessMap swap
             std::shared_ptr<Texture> emissiveTex;          // covers emissiveMap swap
+            std::shared_ptr<Texture> occlusionTex;         // covers aoMap swap — was MISSING: an
+                                                           // occlusion-map swap neither triggered a
+                                                           // structural rebuild nor got the held-
+                                                           // shared_ptr recycle protection, so its
+                                                           // dead predecessor's Texture* could be
+                                                           // reused and hit a stale textureCache slot
             uint32_t instanceIndex;// 0 for non-instanced; distinguishes sub-instances
             unsigned int matVersion = 0;// Material::version() — bumped by needsUpdate(),
                                         // KHR_animation_pointer, etc. Lets us skip the
@@ -5256,7 +5271,8 @@ namespace threepp {
                             transmissionTexOf(*m) != fp.transmissionTex ||
                             clearcoatTexOf(*m) != fp.clearcoatTex ||
                             clearcoatRoughnessTexOf(*m) != fp.clearcoatRoughnessTex ||
-                            emissiveTexOf(*m) != fp.emissiveTex) {
+                            emissiveTexOf(*m) != fp.emissiveTex ||
+                            occlusionTexOf(*m) != fp.occlusionTex) {
                             leanOk = false;// texture swap = STRUCTURAL — full path decides
                             break;
                         }
@@ -5380,6 +5396,7 @@ namespace threepp {
                     fp.clearcoatTex          = clearcoatTexOf(*m);
                     fp.clearcoatRoughnessTex = clearcoatRoughnessTexOf(*m);
                     fp.emissiveTex           = emissiveTexOf(*m);
+                    fp.occlusionTex          = occlusionTexOf(*m);
                     fp.instanceIndex         = en.instanceIndex;
                     fp.matrix                = en.worldMatrix;
                     const MaterialDesc md = materialFromMesh(*m);
@@ -5512,7 +5529,8 @@ namespace threepp {
                         a.transmissionTex != b.transmissionTex ||
                         a.clearcoatTex != b.clearcoatTex ||
                         a.clearcoatRoughnessTex != b.clearcoatRoughnessTex ||
-                        a.emissiveTex != b.emissiveTex) {
+                        a.emissiveTex != b.emissiveTex ||
+                        a.occlusionTex != b.occlusionTex) {
                         structuralSame = false;
                         break;
                     }
@@ -6137,6 +6155,18 @@ namespace threepp {
                         ++it;
                     }
                 }
+                // Slots retired by ensureMaterialTexture's stale-hit guard: the
+                // cache entry is already gone (so the loop above can't see
+                // them); destroy the orphaned images here — same drained
+                // context — and return the slots to the free list.
+                for (const uint32_t slot : retiredTextureSlots_) {
+                    if (slot < materialTextures.size() && materialTextures[slot].view) {
+                        destroyImage2D(ctx->allocator(), ctx->device(), materialTextures[slot]);
+                        materialTextures[slot] = {};
+                        freeTextureSlots.push_back(slot);
+                    }
+                }
+                retiredTextureSlots_.clear();
             }
 
             std::vector<VkAccelerationStructureInstanceKHR> instances;
@@ -10834,7 +10864,18 @@ namespace threepp {
             if (!texSp) return -1;
             const Texture* tex = texSp.get();
             if (auto it = textureCache.find(tex); it != textureCache.end()) {
-                return static_cast<int32_t>(it->second.slot);
+                // ADDRESS-RECYCLING guard: the key is a raw Texture*, so a
+                // brand-new Texture allocated at a dead one's address hits the
+                // dead entry. The fingerprint's held shared_ptrs prevent this
+                // for its map slots, but not for textures that died after the
+                // last prune. Only a LIVE original returns its cached slot;
+                // a stale hit retires the entry (deferred reclaim — see
+                // retiredTextureSlots_) and falls through to a fresh upload.
+                if (auto sp = it->second.ref.lock(); sp && sp.get() == tex) {
+                    return static_cast<int32_t>(it->second.slot);
+                }
+                retiredTextureSlots_.push_back(it->second.slot);
+                textureCache.erase(it);
             }
             if (freeTextureSlots.empty() && materialTextures.size() >= kMaxMaterialTextures) {
                 std::cerr << "[VulkanRenderer] material texture slots exhausted ("
