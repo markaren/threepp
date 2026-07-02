@@ -71,12 +71,34 @@ int main(int argc, char** argv) {
     // 1 Normal, 2 Motion, 3 InstanceID, 4 Albedo.
     std::string shotPath;
     int shotFrames = 120, shotFrame = 0, cliDebugView = 0;
+    // Dev harness: --seq N writes N CONSECUTIVE frames (shot stem + _000.png…)
+    // after the settle period — frame-to-frame diffs measure temporal shake.
+    // --probe/--sunext/--sunrad toggle the deferred features under test.
+    int seqN = 0, seqI = 0;
+    int optProbe = -1, optSunExt = -1;
+    float optSunRad = -1.f;
+    float orbitDeg = 0.f;// --orbit d: rotate the camera d° per frame during capture (motion-shake harness)
+    bool shotAnim = false;// --anim: keep animations playing during capture
+    int winW = 0, winH = 0;// --size W H: window size (resolution-dependent behaviour)
+    bool camSet = false;   // --cam px py pz tx ty tz: fixed camera (interior shots)
+    float camV[6] = {};
     bool usePT = false;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (a == "--debug" && i + 1 < argc) cliDebugView = std::atoi(argv[++i]);
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (a == "--seq" && i + 1 < argc) seqN = std::atoi(argv[++i]);
+        else if (a == "--probe" && i + 1 < argc) optProbe = std::atoi(argv[++i]);
+        else if (a == "--sunext" && i + 1 < argc) optSunExt = std::atoi(argv[++i]);
+        else if (a == "--sunrad" && i + 1 < argc) optSunRad = static_cast<float>(std::atof(argv[++i]));
+        else if (a == "--orbit" && i + 1 < argc) orbitDeg = static_cast<float>(std::atof(argv[++i]));
+        else if (a == "--anim") shotAnim = true;
+        else if (a == "--size" && i + 2 < argc) { winW = std::atoi(argv[++i]); winH = std::atoi(argv[++i]); }
+        else if (a == "--cam" && i + 6 < argc) {
+            for (int k = 0; k < 6; ++k) camV[k] = static_cast<float>(std::atof(argv[++i]));
+            camSet = true;
+        }
         else if (a == "--pt") usePT = true;
     }
     if (!fs::exists(modelFolder) || !fs::is_directory(modelFolder)) {
@@ -91,13 +113,21 @@ int main(int argc, char** argv) {
     }
     std::cout << "Found " << models.size() << " models. Use Left/Right (or P/N) to browse." << std::endl;
 
-    Canvas canvas("Vulkan PT - GLTF Samples", {{"vsync", false}});
+    Canvas canvas(Canvas::Parameters()
+                          .title("Vulkan PT - GLTF Samples")
+                          .vsync(false)
+                          .size(winW > 0 ? winW : 960, winH > 0 ? winH : 600));
 
     std::unique_ptr<VulkanRendererCore> rendererPtr =
             usePT ? std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanPathTracer>(canvas))
                   : std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanRenderer>(canvas));
     VulkanRendererCore& renderer = *rendererPtr;
     auto* pt = dynamic_cast<VulkanPathTracer*>(&renderer);
+    if (auto* vr = dynamic_cast<VulkanRenderer*>(&renderer)) {
+        if (optProbe >= 0) vr->setProbeGI(optProbe != 0);
+        if (optSunExt >= 0) vr->setEnvSunExtraction(optSunExt != 0);
+    }
+    if (optSunRad >= 0.f) renderer.setSunAngularRadius(optSunRad);
     renderer.setHybridDebugView(cliDebugView);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
@@ -121,6 +151,7 @@ int main(int argc, char** argv) {
     controls.update();
 
     GLTFLoader loader;
+    bool modelReady = false;// async load complete (gates the capture settle counter)
     int currentModel = -1;
     std::shared_ptr<AsyncGroup> loadedModel;
     std::unique_ptr<AnimationMixer> mixer;
@@ -183,13 +214,14 @@ int main(int argc, char** argv) {
 
         loadedModel->onLoaded([&](AsyncGroup& g) {
             fitCamera(g);
-            if (!g.animations.empty()) {
+            if (!g.animations.empty() && (shotPath.empty() || shotAnim)) {// capture harness: static scene unless --anim
                 mixer = std::make_unique<AnimationMixer>(g);
                 mixer->clipAction(g.animations.front())->play();
                 std::cout << "Playing animation: " << g.animations.front()->name()
                           << " (" << g.animations.size() << " clip(s))" << std::endl;
             }
             std::cout << "Loaded: " << models[currentModel].name << std::endl;
+            modelReady = true;// capture harness: --frames settle counts from HERE
         });
 
         scene.add(loadedModel);
@@ -329,16 +361,45 @@ int main(int argc, char** argv) {
             scene.fog.reset();
         }
 
-        controls.update();
+        if (camSet) {// fixed interior camera overrides controls/fitCamera every frame
+            camera.position.set(camV[0], camV[1], camV[2]);
+            controls.target.set(camV[3], camV[4], camV[5]);
+            camera.lookAt(controls.target);
+        }
+        if (!shotPath.empty() && orbitDeg != 0.f) {
+            // Constant slow orbit about the target's Y axis — exercises the
+            // temporal/reprojection paths a static capture never touches.
+            const float a = orbitDeg * math::PI / 180.f;
+            const Vector3 rel = camera.position.clone().sub(controls.target);
+            camera.position.set(controls.target.x + rel.x * std::cos(a) - rel.z * std::sin(a),
+                                camera.position.y,
+                                controls.target.z + rel.x * std::sin(a) + rel.z * std::cos(a));
+            camera.lookAt(controls.target);
+        } else {
+            controls.update();
+        }
         renderer.render(scene, camera);
 
         if (shotPath.empty()) {
             ui.render();
-        } else if (++shotFrame >= shotFrames) {
-            const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
-            renderer.writeFramebuffer(path);
-            std::cout << "wrote " << path.string() << std::endl;
-            std::exit(0);
+        } else if (modelReady && ++shotFrame >= shotFrames) {
+            if (seqN > 0) {// consecutive-frame sequence (temporal-shake harness)
+                const auto stem = fs::path(shotPath).stem().string();
+                const auto ext  = fs::path(shotPath).extension().string();
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), "_%03d", seqI);
+                const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / (stem + buf + ext);
+                renderer.writeFramebuffer(path);
+                if (++seqI >= seqN) {
+                    std::cout << "wrote " << seqN << " frames to aaa_caps/" << stem << "_*.png" << std::endl;
+                    std::exit(0);
+                }
+            } else {
+                const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
+                renderer.writeFramebuffer(path);
+                std::cout << "wrote " << path.string() << std::endl;
+                std::exit(0);
+            }
         }
     });
 
