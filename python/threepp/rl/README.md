@@ -1,13 +1,19 @@
 # threepp.rl — writing environments and training
 
 A small, **owned** RL stack for GPU-resident vectorized environments: a compact PPO
-(`ppo.py`), a direct-GPU PhysX batch (`sim.py`, `GpuSim`), and the building blocks
-(`ActorCritic`, `RunningNorm`, `compute_gae`). No `rl_games` / `rsl_rl` / Gym dependency —
-the whole thing is a few hundred readable lines you can audit and bend.
+(`ppo.py`), a direct-GPU PhysX batch (`sim.py`, `GpuSim`), an env-authoring base that owns the
+step/reset choreography (`task.py`, `VecTask`), and the building blocks (`ActorCritic`,
+`RunningNorm`, `compute_gae`). No `rl_games` / `rsl_rl` / Gym dependency — the whole thing is a
+few hundred readable lines you can audit and bend.
 
 ```python
-from threepp.rl import GpuSim, PPO, load_policy, save_policy, ActorCritic, RunningNorm
+from threepp.rl import GpuSim, VecTask, PPO, load_policy, save_policy, ActorCritic, RunningNorm
 ```
+
+For a **robot task**, subclass [`VecTask`](#robot-tasks-vectask--recommended) and write only the
+observation, the named reward terms, and the reset — the base handles everything below. The raw
+protocol is documented first because it *is* the contract (and non-physics envs implement it
+directly), but you rarely write it by hand anymore.
 
 This is the **GPU-vectorized** RL idiom (think Isaac Lab / rsl_rl / Brax), **not** the classic
 single-env Gym idiom. If you've only seen Gym tutorials, read [How this compares](#how-this-compares)
@@ -109,6 +115,88 @@ compute a `reward` as a sum of terms, decide `done`/`is_timeout`, snapshot `term
 auto-reset the finished lanes. The Spot examples (`python/examples/spot/`) are this exact pattern
 with a `GpuSim` PhysX world instead of two tensors — see below.
 
+---
+
+## Robot tasks: `VecTask` — recommended
+
+For physics tasks, the choreography above (steps/timeout bookkeeping, `terminal_obs` capture,
+partial resets, re-baselining EMA velocities and phase clocks) is identical in every env and easy
+to get subtly wrong. `VecTask` owns it; a task is only its task logic:
+
+```python
+from threepp.rl import VecTask
+
+class WalkEnv(VecTask):
+    control_hz = 30                  # dt = 1/control_hz
+    episode_s = 8.0                  # time-limit truncation
+    act_dim = 12
+    control = "drive"                # "drive" = PD position targets, "force" = generalized forces
+    settle_steps = 6                 # zero-action settle after a full reset (0 = off)
+
+    def __init__(self, num_envs, device="cuda"):
+        super().__init__(num_envs, build_robot=lambda world, i: MyRobot(world, i),
+                         read_root=True, device=device,
+                         build_world=lambda w: add_ground(w))
+        self.cmd = self.env_state((2,))          # registered: auto-reset on every episode end
+
+    def on_reset(self, idx):                     # set sim state (+ own buffers) for envs `idx`
+        self.sim.set_joint_state(idx, ...); self.sim.set_root_state(idx, ...)
+        self.cmd[idx] = sample_commands(idx.numel())
+
+    def act(self, a):                            # clamped action [-1,1] -> [K, dof] targets
+        return self.gait_targets() + a * RESIDUAL_SCALE
+
+    def observe(self, s):                        # s = RobotState (derived, refreshed per step)
+        return torch.cat([s.joint_pos, s.joint_vel, s.up[:, None], self.cmd], dim=-1)
+
+    def reward_terms(self, s, a):                # NAMED terms, each [K] — summed by the base
+        return {"track_v": 2.2 * torch.exp(-3.0 * (s.v_fwd - self.cmd[:, 0]) ** 2),
+                "upright": 0.6 * s.up.clamp_min(0.0),
+                "effort":  -0.04 * a.pow(2).mean(-1),
+                "fell":    -5.0 * s.terminated.float()}
+
+    def terminated(self, s):                     # true-failure terminals (default: none)
+        return s.up < 0.0
+```
+
+What the base gives you:
+
+- **`env_state(shape, init=...)`** — allocate per-env episode state (phase clocks, commands,
+  previous actions). The base masks it back to `init` on every reset, full or partial, so
+  forgetting a re-baseline is impossible.
+- **`RobotState` (`s`)** — derived state computed once per step: `joint_pos`/`joint_vel`
+  (add-order), and with `read_root=True`: `up`, `fwd_x`/`fwd_z`, `yaw`, EMA world velocity
+  `v_x`/`v_z`, wrap-safe `yaw_rate`, and the body-frame `v_fwd`/`v_lat` every locomotion reward
+  wants. The finite-difference baselines re-anchor automatically on reset (no spawn-teleport
+  velocity spikes). `s.terminated` holds this step's failure mask, so a fall penalty is one line.
+- **Named reward terms** — the base sums the dict for the trainer *and* accumulates per-term
+  per-step episode means. PPO's log line shows them (`stats_line()`), so when a policy converges
+  to the wrong optimum you can see *which* term dominates without adding prints:
+
+  ```
+  it   40 | ep_ret   -590.7 | ep_len   600 |   38.9k steps/s |  33.7s
+          up +0.130  up_bonus +0.413  energy -1.076  rail -0.205  effort -0.004  stabilize -0.265
+  ```
+- **`config()`** — the train/deploy contract. Extend it with every constant a deploy viewer must
+  reproduce (force scales, obs scales); a `PPO` constructed without `meta` persists it into the
+  checkpoint automatically.
+- Optional hooks: `on_step(s)` (periodic command resampling), `on_settled()` (e.g. zero a gait
+  clock the settle steps advanced), `on_done(idx)` (end-of-episode work that needs the pre-reset
+  buffer values — difficulty-curriculum promote/demote, episode metrics).
+- **`substeps`** — physics substeps per control step; the base uses `sim.substep()` (one state
+  read per control tick) when it is > 1.
+- **Sim-less tasks** — a task whose world is not a GpuSim (e.g. a rendered pixel env with
+  hand-rolled torch dynamics) passes `build_robot=None` and overrides `simulate(a)` instead of
+  `act()`; everything else (timeout bookkeeping, terminal-obs capture, `env_state()` auto-reset,
+  reward-term logging) still applies. See `examples/turret/turret_env.py`.
+
+Worked examples: `examples/cartpole/cartpole_env.py` (force control, timeout-only),
+`examples/spider/hexapod_gpu_env.py` (PD drive, free base, CPG clock, command resampling),
+`examples/spot/spot_terrain_env.py` / `spot_heightfield_env.py` / `spot_steps_env.py` (substeps,
+terrain scan, imitation anchor, adaptive curriculum via `on_done`),
+`examples/spot/scratch_distillation/scratch_env.py` (read_links foot contacts, iteration-driven
+schedules), and `examples/turret/turret_env.py` (sim-less pixel task).
+
 ### Physics-based envs (`GpuSim`)
 
 For robots, build the world on `GpuSim`, which runs `K` articulations in one direct-GPU PhysX scene:
@@ -186,7 +274,8 @@ copy the overlapping input-layer columns and zero-init the new ones (see
 
 ## Metrics & logging
 
-There is no per-step `info` dict. The convention is: stash scalars as **plain attributes** on the env
+`VecTask` envs get per-term reward means in the PPO log line for free (see above). Beyond that,
+there is no per-step `info` dict. The convention is: stash scalars as **plain attributes** on the env
 inside `step()`, and read them in `on_log`:
 
 ```python

@@ -30,9 +30,9 @@ def run(command, policy):
         env.cmd[:] = cmd                       # re-force each step (defeat resampling/reset)
         a = ac.act_mean(norm.norm(obs)) if policy else torch.zeros(env.K, ACT_DIM, device=dev)
         obs, _, _, _, _ = env.step(a)
-        fwd.append(env.ema_v[:, 0] * env.fx + env.ema_v[:, 1] * env.fz)
-        yaw.append(env.ema_w)
-        up.append(env.up)
+        fwd.append(env.state.v_fwd)
+        yaw.append(env.state.yaw_rate.clone())
+        up.append(env.state.up.clone())
     fwd, yaw, up = torch.stack(fwd), torch.stack(yaw), torch.stack(up)
     fell = (up[-150:].min(0).values < 0.0).float().mean().item() * 100
     return fwd[-150:].mean().item(), yaw[-150:].mean().item(), up[-150:].mean().item(), fell

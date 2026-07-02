@@ -24,7 +24,7 @@ dev = env.sim.device
 pos = torch.zeros(env.K, env.sim.dof, device=dev); pos[:, 1] = math.pi
 env.sim.set_joint_state(torch.arange(env.K, device=dev), pos, torch.zeros_like(pos))
 env.sim.step(env.dt)
-obs = env._obs()
+obs = env.observe(env.state)
 
 reached = torch.zeros(env.K, dtype=torch.bool, device=dev)
 t_up = torch.full((env.K,), -1.0, device=dev)

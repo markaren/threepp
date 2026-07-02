@@ -1,10 +1,10 @@
 """GPU-vectorized cart-pole SWING-UP (cart + single pole).
 
-The GPU plumbing — CUDA context, the direct-GPU batch, DOF-order remap, device buffers,
-sync — lives in GpuSim. This file is just the task: build the scene, define the observation,
-the reward, and the reset. The pole starts at a random angle (often hanging down), there is no
-fall termination, and the reward is the pole height — so the only way to score is to pump the
-cart and swing the pole up, then balance it.
+The choreography — CUDA context, direct-GPU batch, steps/timeout bookkeeping, terminal-obs
+capture, partial resets — lives in threepp.rl (GpuSim + VecTask). This file is ONLY the task:
+build the robot, define the observation, the reward terms, and the reset. The pole starts at a
+random angle (often hanging down), there is no fall termination, and the reward is the pole
+height — so the only way to score is to pump the cart and swing the pole up, then balance it.
 
 This module is the SINGLE SOURCE OF TRUTH for the cart-pole: the timestep, force scale, rail
 and observation (CONFIG + make_obs) live here and are imported by both the trainer and the
@@ -22,7 +22,7 @@ sys.path.insert(0, _HERE)
 
 import threepp as tp
 from cartpole import CartPole
-from threepp.rl import GpuSim
+from threepp.rl import VecTask
 
 # ---- single source of truth: config + observation ----------------------------
 CONTROL_HZ = 60
@@ -47,50 +47,36 @@ def make_obs(cart_x, cart_v, theta, theta_dot):
                         torch.sin(theta), torch.cos(theta), theta_dot * W_SCALE], dim=-1)
 
 
-class CartPoleEnv:
+class CartPoleEnv(VecTask):
+    control_hz = CONTROL_HZ
+    act_dim = ACT_DIM
+    control = "force"
+
     def __init__(self, num_envs=4096, episode_s=10.0, device="cuda", seed=0):
-        self.sim = GpuSim(num_envs, lambda world, i: CartPole(world, x0=i * 3.0), device=device)
-        self.K, self.dt = num_envs, DT
-        self.max_steps = int(episode_s * CONTROL_HZ)
-        self.g = torch.Generator(device=self.sim.device).manual_seed(seed)
-        self.steps = torch.zeros(num_envs, dtype=torch.long, device=self.sim.device)
+        self.episode_s = episode_s
+        super().__init__(num_envs, lambda world, i: CartPole(world, x0=i * 3.0),
+                         device=device, seed=seed)
 
-    def _start_state(self, n):
+    def on_reset(self, idx):
         # cart centred, pole at a random angle (often hanging down) -> learn to swing up
-        pos = torch.zeros(n, self.sim.dof, device=self.sim.device)
-        pos[:, 1] = (torch.rand(n, device=self.sim.device, generator=self.g) * 2 - 1) * math.pi
-        return pos, torch.zeros_like(pos)
+        n = idx.numel()
+        pos = torch.zeros(n, self.sim.dof, device=self.device)
+        pos[:, 1] = (torch.rand(n, device=self.device, generator=self.g) * 2 - 1) * math.pi
+        self.sim.set_joint_state(idx, pos, torch.zeros_like(pos))
 
-    def _obs(self):
-        jp, jv = self.sim.joint_pos, self.sim.joint_vel        # [K, dof] add-order: 0=cart, 1=pole
-        return make_obs(jp[:, 0], jv[:, 0], jp[:, 1], jv[:, 1])
-
-    def reset(self):
-        idx = torch.arange(self.K, device=self.sim.device)
-        self.sim.set_joint_state(idx, *self._start_state(self.K))
-        self.steps.zero_()
-        self.sim.step(self.dt)
-        return self._obs()
-
-    @torch.no_grad()
-    def step(self, actions):
-        """Returns (next_obs, reward, done, terminal_obs, is_timeout). Every done here IS a
-        timeout (this env has no failure terminal), so is_timeout = done — the trainer bootstraps
-        V(terminal_obs) on all of them. terminal_obs is the real post-step obs for done envs
-        (captured before reset overwrites it)."""
-        a = actions.clamp(-1.0, 1.0)
-        force = torch.zeros(self.K, self.sim.dof, device=self.sim.device)
+    def act(self, a):
+        force = torch.zeros(self.K, self.sim.dof, device=self.device)
         force[:, 0] = a[:, 0] * FORCE_SCALE                    # cart is joint 0
-        self.sim.apply_force(force)
-        self.sim.step(self.dt)
-        self.steps += 1
+        return force
 
-        jp, jv = self.sim.joint_pos, self.sim.joint_vel
-        # --- state ---
-        up = torch.cos(jp[:, 1])                               # +1 up, -1 hanging down
-        x_n = jp[:, 0] / RAIL                                  # normalized cart position (+-1 at the rail)
-        v_cart = jv[:, 0]                                      # cart velocity
-        v_pole = jv[:, 1]                                      # pole angular velocity
+    def observe(self, s):
+        # add-order: joint 0 = cart, joint 1 = pole
+        return make_obs(s.joint_pos[:, 0], s.joint_vel[:, 0], s.joint_pos[:, 1], s.joint_vel[:, 1])
+
+    def reward_terms(self, s, a):
+        up = torch.cos(s.joint_pos[:, 1])                      # +1 up, -1 hanging down
+        x_n = s.joint_pos[:, 0] / RAIL                         # normalized cart position (+-1 at the rail)
+        v_cart, v_pole = s.joint_vel[:, 0], s.joint_vel[:, 1]
         a_eff = a[:, 0]                                        # action effort
 
         # Continuous "uprightness" weight: ~1 when perfectly up, decaying smoothly as the pole falls.
@@ -104,28 +90,22 @@ class CartPoleEnv:
         # efficient pump instead of thrashing.
         energy_error = torch.abs((up - 1.0) + 0.1 * v_pole ** 2)
 
-        rew = (up                                              # point the pole up
-               + 2.5 * upright_weight                          # BONUS for being up (sharp-gated): makes the long
-                                                               #   resonant pump clearly worth it -> reliably escapes
-                                                               #   the "never move / stay down" local optimum
-               - 0.4 * energy_error                            # pump efficiently (stronger -> stronger pull off bottom)
-               - 5.0 * torch.relu(x_n.abs() - 0.5) ** 2        # soft wall: stay off the rail
-               - 0.01 * a_eff ** 2                             # mild action effort (glide, don't thrash)
-               # LQR-style stabilization, scaled by uprightness so it engages smoothly near the top:
-               - upright_weight * (1.0 * x_n ** 2              # lock the cart to centre
-                                   + 0.5 * v_cart ** 2         # kill cart velocity (minimize movement)
-                                   + 0.1 * v_pole ** 2))       # kill pole wobble
-        done = self.steps >= self.max_steps
-        term_obs = self._obs()
-        d = torch.nonzero(done, as_tuple=False).squeeze(-1)
-        if d.numel() > 0:
-            self.sim.set_joint_state(d, *self._start_state(d.numel()))
-            self.steps[d] = 0
-            self.sim.read()
-            obs = self._obs()
-        else:
-            obs = term_obs
-        return obs, rew, done, term_obs, done   # is_timeout = done (no failure terminal)
+        return {
+            "up": up,                                          # point the pole up
+            "up_bonus": 2.5 * upright_weight,                  # BONUS for being up (sharp-gated): makes the
+                                                               #   long resonant pump clearly worth it -> reliably
+                                                               #   escapes the "never move / stay down" optimum
+            "energy": -0.4 * energy_error,                     # pump efficiently (stronger -> stronger pull off bottom)
+            "rail": -5.0 * torch.relu(x_n.abs() - 0.5) ** 2,   # soft wall: stay off the rail
+            "effort": -0.01 * a_eff ** 2,                      # mild action effort (glide, don't thrash)
+            # LQR-style stabilization, scaled by uprightness so it engages smoothly near the top:
+            "stabilize": -upright_weight * (1.0 * x_n ** 2     # lock the cart to centre
+                                            + 0.5 * v_cart ** 2   # kill cart velocity (minimize movement)
+                                            + 0.1 * v_pole ** 2),  # kill pole wobble
+        }
+
+    def config(self):
+        return {**super().config(), **CONFIG}
 
 
 if __name__ == "__main__":
@@ -135,7 +115,9 @@ if __name__ == "__main__":
     obs = env.reset()
     print("obs", tuple(obs.shape), "finite", bool(torch.isfinite(obs).all()))
     for _ in range(300):
-        obs, rew, done, term, to = env.step(torch.rand(env.K, 1, device=env.sim.device) * 2 - 1)
+        obs, rew, done, term, to = env.step(torch.rand(env.K, 1, device=env.device) * 2 - 1)
         assert torch.isfinite(obs).all() and torch.isfinite(rew).all()
+    assert bool((to == done).all()), "timeout-only task: every done must be a truncation"
     print(f"300 steps ok; reward [{rew.min():.2f},{rew.max():.2f}]")
+    print("per-term:", env.stats_line() or "(no episode finished yet)")
     print("CARTPOLE ENV SELFTEST: PASS")

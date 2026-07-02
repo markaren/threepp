@@ -192,6 +192,9 @@ class PPO:
                  log_std_init=-0.5, max_grad_norm=1.0, target_kl=0.02, anneal_lr=True,
                  normalize_returns=True, normalize_obs=True, meta=None, device=None, aux_loss=None):
         self.env = env
+        if meta is None:   # a VecTask publishes its train/deploy contract via config()
+            cfg = getattr(env, "config", None)
+            meta = cfg() if callable(cfg) else None
         # aux_loss(ac, obs_minibatch) -> scalar, added to the PPO loss each minibatch (None = off).
         # General hook for extra objectives: symmetry augmentation, a BC/KL anchor to a reference policy, etc.
         self.aux_loss = aux_loss
@@ -308,6 +311,10 @@ class PPO:
                 rl = float(np.mean(recent_len[-400:])) if recent_len else float("nan")
                 msg = (f"it {it:4d} | ep_ret {rr:8.1f} | ep_len {rl:5.0f} | "
                        f"{total / el / 1e3:6.1f}k steps/s | {el:5.1f}s")
+                stats = getattr(self.env, "stats_line", None)   # VecTask per-term reward means
+                extra = stats() if callable(stats) else ""
+                if extra:
+                    msg += "\n        " + extra
                 (on_log or print)(msg)
                 recent_ret = recent_ret[-400:]; recent_len = recent_len[-400:]
         self.obs = obs
