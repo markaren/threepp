@@ -211,9 +211,28 @@ int main(int argc, char** argv) {
     RGBELoader hdrLoader;
     std::shared_ptr<Texture> hdr =
             hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/autumn_field_puresky_2k.hdr");
+    // Night mode dims the sun and swaps the background to a flat fog color, but
+    // scene->environment also drives IBL (GL/WGPU PMREM, Vulkan PT env CDF+NEE) —
+    // leaving it pointed at the bright daytime HDR made night reflections/ambient
+    // lighting stay day-bright. Pre-bake a dimmed copy to swap in at night instead.
+    std::shared_ptr<Texture> nightEnv;
     if (hdr) {
         scene->background = hdr;
         scene->environment = hdr;
+
+        constexpr float kNightEnvScale = 0.04f;
+        std::vector<float> dimmed = hdr->image().data<float>();
+        for (float& v: dimmed) v *= kNightEnvScale;
+        Image nightImage{std::move(dimmed), hdr->image().width(), hdr->image().height()};
+
+        nightEnv = Texture::create(nightImage);
+        nightEnv->name = "night_env";
+        nightEnv->format = Format::RGBA;
+        nightEnv->type = Type::Float;
+        nightEnv->colorSpace = ColorSpace::Linear;
+        nightEnv->mapping = Mapping::EquirectangularReflection;
+        nightEnv->wrapS = TextureWrapping::Repeat;
+        nightEnv->needsUpdate();
     }
 
     auto sun = DirectionalLight::create(Color(1.0f, 0.97f, 0.90f), 2.8f);
@@ -609,6 +628,13 @@ int main(int argc, char** argv) {
     Color nightFog(0.04f, 0.05f, 0.09f);
     scene->fog = Fog(dayFog, terr.worldSize * 0.3f, terr.worldSize * 0.95f);
 
+    // GrassField's sun/ambient uniforms match GrassField::Params' defaults for
+    // day; night mirrors the same ~0.064x sun-intensity and ~0.2x ambient-intensity
+    // ratio (and blue tint) applied to the scene sun/ambient below, so the swaying
+    // grass dims along with everything else instead of staying day-bright.
+    Vector3 grassSunDay(0.55f, 0.55f, 0.50f), grassAmbientDay(0.30f, 0.34f, 0.30f);
+    Vector3 grassSunNight(0.018f, 0.022f, 0.030f), grassAmbientNight(0.06f, 0.068f, 0.06f);
+
     // ── Cameras ─────────────────────────────────────────────────────────────
     auto camera = PerspectiveCamera::create(60.f, canvas.aspect(), 0.1f, 2000.f);
     camera->position.set(0, 6, -12);
@@ -725,16 +751,24 @@ int main(int argc, char** argv) {
             sun->color = Color(0.5f, 0.6f, 0.85f);
             if (ambient) ambient->intensity = 0.05f;
             scene->background = nightFog;
+            if (nightEnv) scene->environment = nightEnv;
             if (scene->fog) std::get<Fog>(*scene->fog) = Fog(nightFog, terr.worldSize * 0.18f, terr.worldSize * 0.7f);
-            if (windGrass) windGrass->setFog({nightFog.r, nightFog.g, nightFog.b}, terr.worldSize * 0.18f, terr.worldSize * 0.7f);
+            if (windGrass) {
+                windGrass->setFog({nightFog.r, nightFog.g, nightFog.b}, terr.worldSize * 0.18f, terr.worldSize * 0.7f);
+                windGrass->setSunAmbient(grassSunNight, grassAmbientNight);
+            }
             carRig->setHeadlights(true);
         } else {
             sun->intensity = 2.8f;
             sun->color = Color(1.0f, 0.97f, 0.90f);
             if (ambient) ambient->intensity = 0.25f;
             if (hdr) scene->background = hdr; else scene->background = dayFog;
+            if (hdr) scene->environment = hdr;
             if (scene->fog) std::get<Fog>(*scene->fog) = Fog(dayFog, terr.worldSize * 0.3f, terr.worldSize * 0.95f);
-            if (windGrass) windGrass->setFog({dayFog.r, dayFog.g, dayFog.b}, terr.worldSize * 0.3f, terr.worldSize * 0.95f);
+            if (windGrass) {
+                windGrass->setFog({dayFog.r, dayFog.g, dayFog.b}, terr.worldSize * 0.3f, terr.worldSize * 0.95f);
+                windGrass->setSunAmbient(grassSunDay, grassAmbientDay);
+            }
         }
     };
 

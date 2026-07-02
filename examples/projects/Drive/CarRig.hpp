@@ -278,7 +278,7 @@ namespace drive {
                 const float sx = (i == 0) ? +lampX : -lampX;
                 // SpotLight(color, intensity, distance, angle, penumbra, decay).
                 auto sl = SpotLight::create(Color(0xfff2d8), 0.f, 70.f,
-                                            math::degToRad(34.f), 0.45f, 1.4f);
+                                            math::degToRad(34.f), 0.45f, 0.4f);
                 sl->position.set(sx, 0.05f, lampZ);
                 sl->castShadow = false;// keep cheap; PT lights the cone regardless
                 // Aim forward (+Z) and slightly down via a target parented to the car.

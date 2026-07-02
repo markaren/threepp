@@ -64,6 +64,15 @@ namespace threepp {
             windMaterial_->uniforms.at("fogFar").setValue(far);
         }
 
+        // sunColor/ambient are baked shader uniforms (see fragmentShader()), not a
+        // hookup to the scene's DirectionalLight/AmbientLight — callers that swap
+        // those for a day/night cycle must mirror the change here too, or the
+        // grass stays lit at its initial brightness regardless of scene lighting.
+        void setSunAmbient(const Vector3& sunColor, const Vector3& ambient) {
+            windMaterial_->uniforms.at("sunColor").setValue(sunColor);
+            windMaterial_->uniforms.at("ambient").setValue(ambient);
+        }
+
         [[nodiscard]] ShaderMaterial& windMaterial() const { return *windMaterial_; }
 
         static std::shared_ptr<GrassField> create(size_t bladeCount, const Params& params) {
