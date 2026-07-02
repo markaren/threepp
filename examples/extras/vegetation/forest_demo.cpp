@@ -369,6 +369,7 @@ int main() {
         // Path tracer: GPU cost (pathTrace + denoise) scales with pixel count,
         // so render below native and TAA-upsample.
         vk->setRenderScale(0.8f);
+        vk->setGbufferMsaa(2);
     }
 #endif
 
