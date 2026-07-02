@@ -620,14 +620,40 @@ namespace threepp::vegetation {
                     nA.set(perpB.x * 0.4f, perpB.y * 0.4f + 1.f, perpB.z * 0.4f).normalize();
                     nB.set(perpA.x * 0.4f, perpA.y * 0.4f + 1.f, perpA.z * 0.4f).normalize();
 
+                    // DEPTH DE-TIE. Nearly-coplanar cards (cluster mates, or
+                    // single quads from two adjacent tips) raster at near-equal
+                    // depth; under a jittered projection (Vulkan TAA) the two
+                    // planes shift by DIFFERENT sub-pixel amounts each frame, so
+                    // the depth-test winner ALTERNATES — visible as 1-2
+                    // "z-fighting" leaves flickering per tree wherever the pair
+                    // also differs in normal/texel. A per-card random offset
+                    // along the card normal keeps overlapping cards decisively
+                    // separated; ±4% of leafSize is invisible inside a canopy.
+                    const float depthSep = tp.leafSize * 0.08f * (unit(rng) - 0.5f);
+
                     if (tp.leafStyle == LeafStyle::CrossQuad) {
                         // Proper 3D cross: two upright quads sharing the growth
-                        // axis, with perpendicular normals — one always faces
-                        // the viewer, no edge-on slivers.
-                        emitQuad(pos, perpA, axis, nA, hs, col);// spans perpA × axis
-                        emitQuad(pos, perpB, axis, nB, hs, col);// spans perpB × axis
+                        // axis — one always faces the viewer, no edge-on slivers.
+                        // ONE SHARED normal for both halves: the planes intersect
+                        // along the axis by design, and in the grazing band where
+                        // they raster at near-equal depth the jittered winner
+                        // alternates per frame. At that seam both quads sample
+                        // the same texel column (u=0.5) and share the tint, so
+                        // with a shared normal the G-buffer output is IDENTICAL
+                        // whichever quad wins — the alternation becomes
+                        // invisible. (Per-quad normals nA/nB made it flicker as
+                        // a brightness flip; both were heavily up-biased anyway,
+                        // so their average barely changes the lighting.)
+                        Vector3 nShared;
+                        nShared.addVectors(nA, nB).normalize();
+                        Vector3 posSep;
+                        posSep.copy(pos).addScaledVector(nShared, depthSep);
+                        emitQuad(posSep, perpA, axis, nShared, hs, col);// spans perpA × axis
+                        emitQuad(posSep, perpB, axis, nShared, hs, col);// spans perpB × axis
                     } else {
-                        emitQuad(pos, perpA, axis, nA, hs, col);
+                        Vector3 posSep;
+                        posSep.copy(pos).addScaledVector(nA, depthSep);
+                        emitQuad(posSep, perpA, axis, nA, hs, col);
                     }
                 }
             }
