@@ -19,6 +19,7 @@
 #include "AutoExposure.hpp"
 #include "BloomPass.hpp"
 #include "DeferredShade.hpp"
+#include "ProbeGI.hpp"
 #include "WaterDisplacePipeline.hpp"
 #include "FoamWorldPipeline.hpp"
 #include "GrassWindPipeline.hpp"
@@ -1638,6 +1639,17 @@ namespace threepp {
         // analytically into bloom_->sceneHdr; bloom + TAA finish the frame unchanged.
         // Owns no images and does not touch rtDsLayout.
         std::unique_ptr<vulkan::DeferredShade> deferredShade_;
+        // World-space irradiance probe grid (multi-bounce GI for the deferred
+        // gather — see vulkan/ProbeGI.hpp). Created alongside deferredShade_;
+        // its SH buffer + grid UBO back the deferred set's bindings 36/37, so
+        // it must exist whenever deferredShade_ does. probeGIEnabled_ gates the
+        // per-frame update dispatch AND the shader-side sampling (grid UBO
+        // enable) — default OFF (opt-in via VulkanRenderer::setProbeGI).
+        // probeGridDirty_ re-fits the grid to the scene AABB after each
+        // structural scene rebuild (new/removed meshes ⇒ new bounds).
+        std::unique_ptr<vulkan::ProbeGI> probeGI_;
+        bool probeGIEnabled_  = true;
+        bool probeGridDirty_  = true;
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
         float bloomClamp_ = 0.0f;    // per-tap HDR cap before the bright pass; <= 0 = off
         float sharpenStrength_ = 0.5f;// post-TAA RCAS amount; 0 = off
@@ -1951,6 +1963,10 @@ namespace threepp {
             // deferredShade_ stays null if ray query is unavailable.
             if (ctx->rayQuerySupported()) {
                 deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
+                // Probe grid backs the deferred set's bindings 36/37 (dummy-
+                // free: real buffers from construction, sampling gated by the
+                // grid UBO's enable flag until setProbeGI(true)).
+                probeGI_ = std::make_unique<vulkan::ProbeGI>(*ctx, kFramesInFlight);
             }
             createDescriptorPool();
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
@@ -5217,6 +5233,7 @@ namespace threepp {
             });
             lastVisibleEntries_ = std::move(built);
             lastVisibleLines_   = std::move(builtLines);
+            probeGridDirty_     = true;// scene structure changed → re-fit the probe grid
             }// !snapLean
 
             // Change flags shared by the LEAN in-place diff and the generic
@@ -10713,7 +10730,53 @@ namespace threepp {
             const VkImageView resWViews[2]   = {reservoirWImagesPP[0].view,   reservoirWImagesPP[1].view};
             in.reservoirPos     = resPosViews;
             in.reservoirW       = resWViews;
+            // Probe GI (bindings 36/37) — the SH store + per-frame grid UBO
+            // ProbeGI owns. Real buffers even when the feature is off (the
+            // grid UBO's enable flag gates sampling).
+            in.probeShBuf       = probeGI_->shBuffer();
+            in.probeGridUbo     = probeGI_->gridUbos();
             deferredShade_->rewriteDescriptors(in);
+            // The probe UPDATE pass consumes the same scene inputs (TLAS,
+            // lights, env, material/geometry/emissive buffers) — keep its set
+            // in lockstep with the deferred one.
+            {
+                vulkan::ProbeGI::DescriptorWriteInputs pin{};
+                pin.lightsUbo        = lightBufs.data();
+                pin.envView          = envImage.view;
+                pin.envSampler       = envImage.sampler;
+                pin.tlas             = tlas;
+                pin.materialBuf      = matBufs.data();
+                pin.geomDescBuf      = geometryDescsBuffer.handle;
+                pin.materialTex      = matTexInfos.data();
+                pin.materialTexCount = kMaxMaterialTextures;
+                pin.emissiveTriBuf   = emBufs.data();
+                probeGI_->rewriteDescriptors(pin);
+            }
+        }
+
+        // Fit the probe grid to the scene's world AABB (called when probe GI
+        // is enabled and the scene structure changed). Walks the canonical
+        // entry list with the same boundingBox·worldMatrix union the frustum
+        // cull uses; overlay/particle entries don't contribute geometry.
+        void fitProbeGridToScene() {
+            if (!probeGI_ || lastVisibleEntries_.empty()) return;
+            Box3 sceneBox;
+            for (const auto& en : lastVisibleEntries_) {
+                if (en.isOverlay || en.isParticle) continue;
+                auto geom = en.mesh->geometry();
+                if (!geom) continue;
+                if (!geom->boundingBox) geom->computeBoundingBox();
+                if (!geom->boundingBox) continue;
+                Box3 worldAabb = *geom->boundingBox;
+                Matrix4 w;
+                std::memcpy(w.elements.data(), en.worldMatrix.data(), 64);
+                worldAabb.applyMatrix4(w);
+                sceneBox.union_(worldAabb);
+            }
+            if (sceneBox.isEmpty()) return;
+            const float mn[3] = {sceneBox.min().x, sceneBox.min().y, sceneBox.min().z};
+            const float mx[3] = {sceneBox.max().x, sceneBox.max().y, sceneBox.max().z};
+            probeGI_->setGridBounds(mn, mx);
         }
 
 
@@ -15047,6 +15110,8 @@ namespace threepp {
                 if (deferredShade_) {
                     deferredShade_->rewriteEmissive(currentFrame,
                                                     emissiveTriBuffers[currentFrame].handle);
+                    probeGI_->rewriteEmissive(currentFrame,
+                                              emissiveTriBuffers[currentFrame].handle);
                 }
             }
             if (refreshEnvTextureFromScene(scene)) {

@@ -85,6 +85,11 @@ namespace threepp::vulkan {
             // GI hemisphere directions. Sampled through gbufSampler_ (NEAREST is
             // correct: the shader computes exact texel-center UVs).
             VkImageView        blueNoise = VK_NULL_HANDLE;
+            // World-space irradiance probe grid (ProbeGI, bindings 36/37).
+            // Always valid — ProbeGI allocates both at construction; the grid
+            // UBO's `enabled` flag gates all sampling when probe GI is off.
+            VkBuffer           probeShBuf   = VK_NULL_HANDLE;// SH-L1 store
+            const VkBuffer*    probeGridUbo = nullptr;       // [framesInFlight]
         };
         void rewriteDescriptors(const DescriptorWriteInputs& in);
 

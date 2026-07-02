@@ -284,6 +284,19 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().deferredAO(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDeferredAO(v); },
                               "Toggle ray-traced ambient occlusion / diffuse GI. Default on.")
+                // World-space irradiance probe grid (DDGI-lite): multi-bounce GI, and
+                // the switch from cosmetic to MEASURED ambient — enclosed interiors
+                // stop being "lit with no light" (ungated ambient/env-specular) and
+                // receive only what actually bounces in through openings. Default ON;
+                // converges over a few dozen frames after enable/scene load.
+                .def_property("probe_gi",
+                              [](PyVulkanRenderer& r) { return r.native().probeGI(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setProbeGI(v); },
+                              "Toggle the world-space irradiance probe grid (multi-bounce GI + "
+                              "occlusion-correct ambient). Default ON; needs deferred_ao + "
+                              "denoise on. Interiors read physically dark — pair with "
+                              "auto_exposure or a raised tone_mapping_exposure. False restores "
+                              "the legacy cosmetic ambient.")
                 // HDRI sun extraction: the env map's dominant bright disc is removed
                 // from the glossy/rough PMREM mips (kills the bright "spec blob"
                 // reflections) and re-injected as an analytic directional light with

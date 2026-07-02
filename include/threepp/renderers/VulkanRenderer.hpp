@@ -40,6 +40,28 @@ namespace threepp {
         void setDeferredAO(bool enabled);
         [[nodiscard]] bool deferredAO() const;
 
+        // World-space irradiance probe grid (DDGI-lite) — multi-bounce diffuse
+        // GI for the deferred gather. A 32×16×32 grid of SH-L1 probes is fitted
+        // to the scene AABB and refreshed round-robin (2048 probes × 64 rays
+        // per frame, ~sub-ms); the stochastic GI gather then adds each hit's
+        // probe irradiance, supplying the bounce-2..∞ + through-the-opening
+        // sky light a 1-bounce gather cannot.
+        // It ALSO switches the deferred ambient model from cosmetic to
+        // MEASURED: scene ambient is gated by the gather's real sky visibility,
+        // the rough split-sum env specular gets probe-derived specular
+        // occlusion, and reflected hits take probe irradiance instead of the
+        // env+ambient fill. Enclosed interiors therefore stop being "lit with
+        // no light" — they go honestly dark and receive only what bounces in
+        // through actual openings (e.g. the Sponza ground-floor corridors);
+        // pair with setAutoExposure for interior scenes.
+        // ON by default (≈ neutral outdoors; ~0.3 ms probe update). Requires
+        // setDeferredAO(true) + setDenoise(true) (the probe term rides the
+        // denoised GI channel); the cache converges over a few dozen frames
+        // after scene load. setProbeGI(false) restores the legacy cosmetic
+        // ambient (ungated env/ambient fill, no multi-bounce).
+        void setProbeGI(bool enabled);
+        [[nodiscard]] bool probeGI() const;
+
         // Volumetric SPOT-light beams: ray-marched single scattering through a
         // uniform thin haze. `density` is the scattering coefficient σ (1/m; 0 =
         // off, no cost); `anisotropy` is the Henyey-Greenstein g.

@@ -108,6 +108,39 @@ namespace threepp {
                 asdep.pMemoryBarriers = &asbar;
                 vkCmdPipelineBarrier2(cb, &asdep);
             }
+            // ── Probe-GI update (opt-in) ─────────────────────────────────────
+            // Refresh a round-robin window of world-space irradiance probes
+            // BEFORE the shade so this frame's gather taps a current grid.
+            // Runs after the AS barrier above (the probe rays traverse the
+            // same TLAS/BLAS). The grid UBO is re-uploaded every frame — its
+            // `enabled` flag is what the shader-side sampling gates on.
+            if (probeGI_) {
+                probeGI_->updateGridUbo(currentFrame, probeGIEnabled_);
+                if (probeGIEnabled_) {
+                    if (probeGridDirty_) {
+                        fitProbeGridToScene();
+                        probeGridDirty_ = false;
+                        // Grid moved → the UBO written above is stale; rewrite.
+                        probeGI_->updateGridUbo(currentFrame, true);
+                    }
+                    probeGI_->recordDispatch(cb, currentFrame,
+                                             emissiveTriCountThisFrame_,
+                                             emissiveTotalPowerThisFrame_,
+                                             /*shadows=*/true, envImage.mipLevels);
+                    // Probe SH writes → deferred shade reads (compute→compute).
+                    VkMemoryBarrier2 pbar{};
+                    pbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    pbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    pbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    pbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    pbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                    VkDependencyInfo pdep{};
+                    pdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    pdep.memoryBarrierCount = 1;
+                    pdep.pMemoryBarriers = &pbar;
+                    vkCmdPipelineBarrier2(cb, &pdep);
+                }
+            }
             gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
             deferredShade_->recordDispatch(cb, currentFrame,
                                            regionRenderExt_.width, regionRenderExt_.height,
@@ -707,6 +740,22 @@ namespace threepp {
 
     bool VulkanRenderer::deferredAO() const {
         return pimpl_->deferredAO_;
+    }
+
+    void VulkanRenderer::setProbeGI(bool enabled) {
+        if (pimpl_->probeGIEnabled_ == enabled) return;
+        pimpl_->probeGIEnabled_ = enabled;
+        // Force a re-fit + SH clear on (re-)enable so a scene swap while the
+        // feature was off can't leave the grid over stale bounds.
+        if (enabled) pimpl_->probeGridDirty_ = true;
+        // The probe term feeds the accumulated GI channel — toggling shifts
+        // its converged mean, so reset accumulation to make the change land
+        // immediately (same pattern as setRestirDIEnabled).
+        if (pimpl_->sceneBuilt_) pimpl_->resetAccumulation();
+    }
+
+    bool VulkanRenderer::probeGI() const {
+        return pimpl_->probeGIEnabled_;
     }
 
     void VulkanRendererCore::setBloomThreshold(float threshold) {

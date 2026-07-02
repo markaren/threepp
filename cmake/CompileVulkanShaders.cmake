@@ -46,6 +46,9 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
     # extra glslangValidator invocations on the unrelated shaders that
     # don't include it).
     set(_shade_primary "${_src_dir}/shade_primary.glsl")
+    # deferred_shade.comp + probe_update.comp #include probe_common.glsl —
+    # same global-dep treatment.
+    set(_probe_common "${_src_dir}/probe_common.glsl")
 
     file(MAKE_DIRECTORY "${_gen_dir}")
 
@@ -80,6 +83,9 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
     endif ()
     if (EXISTS "${_shade_primary}")
         list(APPEND _extra_deps "${_shade_primary}")
+    endif ()
+    if (EXISTS "${_probe_common}")
+        list(APPEND _extra_deps "${_probe_common}")
     endif ()
 
     add_custom_command(

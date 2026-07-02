@@ -45,7 +45,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[36]{};
+        VkDescriptorSetLayoutBinding b[38]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -92,10 +92,12 @@ namespace threepp::vulkan {
         set(33, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // scene fog UBO (shared with the PT path)
         set(34, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // tileable foam detail (R=bubbles, G=lace; mirrors RT binding 45)
         set(35, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // blue-noise tile (GI hemisphere dithering)
+        set(36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // probe SH-L1 store (ProbeGI, read)
+        set(37, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // probe grid UBO (origin/spacing/dims + enable)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 36;
+        dlci.bindingCount = 38;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -153,7 +155,7 @@ namespace threepp::vulkan {
     void DeferredShade::createDescriptorPool() {
         VkDescriptorPoolSize sizes[5]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[0].descriptorCount = framesInFlight_ * 3;// camera + lights + fog
+        sizes[0].descriptorCount = framesInFlight_ * 4;// camera + lights + fog + probe grid
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[1].descriptorCount = framesInFlight_ * (17 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -161,7 +163,7 @@ namespace threepp::vulkan {
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
         sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[4].descriptorCount = framesInFlight_ * 3;// material + geometry + emissive-tri buffers
+        sizes[4].descriptorCount = framesInFlight_ * 4;// material + geometry + emissive-tri + probe SH buffers
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -338,7 +340,17 @@ namespace threepp::vulkan {
             // exact texel-center UVs, so no filtering is wanted. SHADER_READ_ONLY.
             VkDescriptorImageInfo bnInfo = sampled(in.blueNoise, gbufSampler_);
 
-            VkWriteDescriptorSet w[36]{};
+            // Probe GI (bindings 36/37) — SH store + per-frame grid UBO.
+            VkDescriptorBufferInfo probeShInfo{};
+            probeShInfo.buffer = in.probeShBuf;
+            probeShInfo.offset = 0;
+            probeShInfo.range  = VK_WHOLE_SIZE;
+            VkDescriptorBufferInfo probeGridInfo{};
+            probeGridInfo.buffer = in.probeGridUbo[f];
+            probeGridInfo.offset = 0;
+            probeGridInfo.range  = VK_WHOLE_SIZE;
+
+            VkWriteDescriptorSet w[38]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -394,7 +406,9 @@ namespace threepp::vulkan {
             setw(33, 33, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr,          &fogInfo);
             setw(34, 34, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &foamDetailInfo,  nullptr);
             setw(35, 35, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bnInfo,          nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 36, w, 0, nullptr);
+            setw(36, 36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr,          &probeShInfo);
+            setw(37, 37, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr,          &probeGridInfo);
+            vkUpdateDescriptorSets(ctx_.device(), 38, w, 0, nullptr);
         }
     }
 

@@ -649,6 +649,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/AutoExposure.cpp"
             "threepp/renderers/vulkan/BloomPass.cpp"
             "threepp/renderers/vulkan/DeferredShade.cpp"
+            "threepp/renderers/vulkan/ProbeGI.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
             "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
             "threepp/renderers/vulkan/GrassWindPipeline.cpp"
@@ -1003,6 +1004,10 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_denoise.comp"
         kDeferredDenoiseCompSpv
         _deferred_denoise_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/probe_update.comp"
+        kProbeUpdateCompSpv
+        _probe_update_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/skinning.comp"
         kSkinningCompSpv

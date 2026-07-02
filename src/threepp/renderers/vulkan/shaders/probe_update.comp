@@ -1,0 +1,478 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_nonuniform_qualifier : require
+
+#include "vulkan_shared.h"// MaterialDesc, kRayMaskOpaque, kMaxMaterialTextures
+
+// World-space irradiance probe grid — per-frame UPDATE pass (DDGI-lite).
+//
+// One workgroup = one probe; one thread = one radiance ray. Each dispatch
+// updates a round-robin window of K probes: trace a Fibonacci sphere of rays,
+// shade each hit EXACTLY like deferred_shade.comp's giRadiance (direct
+// analytic lights with RT shadows + small-sample emissive NEE, emitter
+// emission suppressed, NO env fill at hits), PLUS one probe-grid feedback tap
+// at the hit — the tap is what turns the 1-bounce estimate into the
+// multi-bounce fixed point (bounce N reads bounce N-1's grid). Ray MISSES
+// read the PMREM top mip, which is SUN-FREE when HDRI sun extraction is on
+// (the sun arrives through the analytic dir-light loop instead), so enclosed
+// interiors only receive the sky their probes actually see through openings.
+// The result is reduced to SH-L1 irradiance and EMA-blended into the store
+// (α = 1/min(count+1, 32): fast bootstrap, stable 1/32 steady state).
+//
+// The feedback tap reads probes the SAME dispatch may be writing — a benign
+// race: a torn read mixes an old and a new estimate of the SAME quantity,
+// off by one EMA step, and the next update washes it out. (DDGI ping-pongs
+// instead; with a round-robin window the extra buffer isn't worth it.)
+//
+// Hit shading is copied from deferred_shade.comp (giRadiance and its helpers)
+// in the house "copied verbatim" style — keep the two in lockstep.
+
+layout(local_size_x = 64) in;// kProbeRays — must match ProbeGI::kRaysPerProbe
+
+const float PI     = 3.14159265358979;
+const float TWO_PI = 6.28318530717959;
+float SHADOW_EPS   = 1e-3;// rescaled per hit from |worldPos| (see deferred_shade)
+
+struct DirLight   { vec3 direction; vec3 color; };
+struct PointLight { vec3 position; float range; vec3 color; float decay; };
+struct SpotLight  { vec3 position; float range; vec3 color; float decay;
+                    vec3 direction; float cosAngleOuter; float cosAngleInner; };
+struct RectLight  { vec3 position; vec3 halfU; vec3 halfV; vec3 normal; vec3 color; };
+layout(set = 0, binding = 1, scalar) uniform LightsUbo {
+    vec3       ambient;
+    uint       dirCount;
+    DirLight   dirLights[8];
+    uint       pointCount;
+    uint       spotCount;
+    uint       rectCount;
+    PointLight pointLights[8];
+    SpotLight  spotLights[8];
+    RectLight  rectLights[4];
+} lights;
+
+layout(set = 0, binding = 2) uniform sampler2D envTex;// prefiltered PMREM mip chain
+layout(set = 0, binding = 3) uniform accelerationStructureEXT topAS;
+layout(set = 0, binding = 4, scalar) readonly buffer MatBuf { MaterialDesc mats[]; };
+
+layout(buffer_reference, scalar) readonly buffer NormalBuf { float n[]; };
+layout(buffer_reference, scalar) readonly buffer IndexBuf  { uint  i[]; };
+layout(buffer_reference, scalar) readonly buffer UvBuf     { float u[]; };
+struct GeometryDesc {
+    uint64_t vertexAddress;
+    uint64_t normalAddress;
+    uint64_t indexAddress;
+    uint64_t uvAddress;
+    uint64_t foamAddress;
+    uint64_t prevVertexAddress;
+    uint64_t colorAddress;
+    uint     indexed;
+    uint     _pad;
+};
+layout(set = 0, binding = 5, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
+layout(set = 0, binding = 6) uniform sampler2D albedoMaps[kMaxMaterialTextures];
+struct EmTri {
+    vec4 v0;       // xyz = pos, w = area
+    vec4 v1;       // xyz = pos, w = cumPower (running power CDF)
+    vec4 v2;       // xyz = pos, w = power (lum × area)
+    vec4 emission; // xyz = emissive × intensity
+};
+layout(set = 0, binding = 7, scalar) readonly buffer EmissiveTriBuf { EmTri emissiveTris[]; };
+
+// SH-L1 probe store (4 vec4/probe — see probe_common.glsl for the layout).
+layout(set = 0, binding = 8, scalar) buffer ProbeShBuf { vec4 probeSh[]; };
+layout(set = 0, binding = 0, scalar) uniform ProbeGridUbo {
+    vec3  origin;  float enabled;// enabled gates SAMPLING (deferred_shade); the
+                                 // update dispatch is simply skipped when off
+    vec3  spacing; float _pad0;
+    ivec3 dims;    int   _pad1;
+} probeGrid;
+
+#include "probe_common.glsl"// probeIrradiance() — the multi-bounce feedback tap
+
+layout(push_constant) uniform Pc {
+    uint  probeOffset;       // round-robin window start (probe index)
+    uint  probeCount;        // probes this dispatch (== workgroup count)
+    uint  frame;             // update counter — rotates the ray sphere
+    uint  flags;             // bit 0 = shadows
+    uint  emissiveCount;     // # emissive triangles (0 = none)
+    float emissiveTotalPower;// power-CDF total (denominator)
+    uint  envMipCount;       // PMREM mip levels (>=1)
+    uint  _pad;
+} pc;
+
+// ── RNG (verbatim from deferred_shade.comp) ─────────────────────────────────
+uint pcgHash(uint v) {
+    v = v * 747796405u + 2891336453u;
+    const uint s = ((v >> ((v >> 28) + 4u)) ^ v) * 277803737u;
+    return (s >> 22) ^ s;
+}
+float rnd(inout uint seed) {
+    seed = seed * 747796405u + 2891336453u;
+    uint r = ((seed >> ((seed >> 28) + 4u)) ^ seed) * 277803737u;
+    r = (r >> 22) ^ r;
+    return float(r) * (1.0 / 4294967296.0);
+}
+
+vec3 sampleEnvLod(vec3 dir, float lod) {
+    const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
+    const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
+    return textureLod(envTex, vec2(u, v), lod).rgb;
+}
+
+// ── Geometry / texture fetch at a hit (verbatim from deferred_shade.comp) ───
+vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
+    const GeometryDesc g = geoms[instIdx];
+    if (g.uvAddress == 0ul) return vec2(0.0);
+    uvec3 idx;
+    if (g.indexed != 0u) {
+        IndexBuf ib = IndexBuf(g.indexAddress);
+        idx = uvec3(ib.i[primId * 3 + 0], ib.i[primId * 3 + 1], ib.i[primId * 3 + 2]);
+    } else {
+        idx = uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
+    }
+    UvBuf ub = UvBuf(g.uvAddress);
+    const vec2 u0 = vec2(ub.u[idx.x * 2 + 0], ub.u[idx.x * 2 + 1]);
+    const vec2 u1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
+    const vec2 u2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
+    return (1.0 - bary.x - bary.y) * u0 + bary.x * u1 + bary.y * u2;
+}
+
+void fetchHit(int instIdx, int primId, vec2 bary, mat4x3 worldToObj,
+              out vec3 Nworld, out vec2 uvOut) {
+    const GeometryDesc g = geoms[instIdx];
+    uvec3 idx;
+    if (g.indexed != 0u) {
+        IndexBuf ib = IndexBuf(g.indexAddress);
+        idx = uvec3(ib.i[primId * 3 + 0], ib.i[primId * 3 + 1], ib.i[primId * 3 + 2]);
+    } else {
+        idx = uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
+    }
+    const float w = 1.0 - bary.x - bary.y;
+    NormalBuf nb = NormalBuf(g.normalAddress);
+    const vec3 n0 = vec3(nb.n[idx.x * 3 + 0], nb.n[idx.x * 3 + 1], nb.n[idx.x * 3 + 2]);
+    const vec3 n1 = vec3(nb.n[idx.y * 3 + 0], nb.n[idx.y * 3 + 1], nb.n[idx.y * 3 + 2]);
+    const vec3 n2 = vec3(nb.n[idx.z * 3 + 0], nb.n[idx.z * 3 + 1], nb.n[idx.z * 3 + 2]);
+    const vec3 nObj = normalize(w * n0 + bary.x * n1 + bary.y * n2);
+    Nworld = normalize(transpose(mat3(worldToObj)) * nObj);
+    uvOut = vec2(0.0);
+    if (g.uvAddress != 0ul) {
+        UvBuf ub = UvBuf(g.uvAddress);
+        const vec2 u0 = vec2(ub.u[idx.x * 2 + 0], ub.u[idx.x * 2 + 1]);
+        const vec2 u1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
+        const vec2 u2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
+        uvOut = w * u0 + bary.x * u1 + bary.y * u2;
+    }
+}
+
+vec3 hitTex(int texIndex, mat3 uvXform, vec2 uv, vec3 fallback) {
+    if (texIndex < 0) return fallback;
+    const int i = clamp(texIndex, 0, int(kMaxMaterialTextures) - 1);
+    return fallback * textureLod(albedoMaps[nonuniformEXT(i)], (uvXform * vec3(uv, 1.0)).xy, 0.0).rgb;
+}
+
+// ── Shadow test (verbatim from deferred_shade.comp) ─────────────────────────
+bool shadowOccludes(int instIdx, int primId, vec2 bary) {
+    const MaterialDesc m = mats[instIdx];
+    const vec3 em = m.emissive * m.emissiveIntensity;
+    if (max(max(em.r, em.g), em.b) >= 1.0) return false;
+    if (m.transmission > 0.0) return false;
+    if (m.alphaCutoff < 0.0) return false;
+    if (m.albedoTexIndex < 0 || m.alphaCutoff == 0.0) return true;// opaque
+    const vec2  uv = fetchUvAt(instIdx, primId, bary);
+    const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+    const float a  = textureLod(albedoMaps[nonuniformEXT(ti)], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a;
+    return a >= m.alphaCutoff;
+}
+
+float shadowVis(vec3 origin, vec3 dir, float tMax) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
+                          kRayMaskOpaque, origin, 0.0, dir, tMax);
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+            shadowOccludes(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                           rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                           rayQueryGetIntersectionBarycentricsEXT(rq, false)))
+            rayQueryConfirmIntersectionEXT(rq);
+    }
+    return (rayQueryGetIntersectionTypeEXT(rq, true) ==
+            gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
+}
+
+// ── Analytic-light pick (verbatim from deferred_shade.comp) ─────────────────
+float lightPickWeight(uint gi, vec3 P) {
+    const vec3 LUM = vec3(0.2126, 0.7152, 0.0722);
+    if (gi < lights.dirCount) {
+        return dot(lights.dirLights[gi].color, LUM);
+    } else if (gi < lights.dirCount + lights.pointCount) {
+        const uint i = gi - lights.dirCount;
+        const vec3 d = lights.pointLights[i].position - P;
+        return dot(lights.pointLights[i].color, LUM) / (1.0 + dot(d, d));
+    }
+    const uint i = gi - lights.dirCount - lights.pointCount;
+    const vec3 d = lights.spotLights[i].position - P;
+    return dot(lights.spotLights[i].color, LUM) / (1.0 + dot(d, d));
+}
+
+uint pickAnalyticLight(vec3 P, inout uint seed, out float wPick) {
+    wPick = 1.0;
+    const uint nL = lights.dirCount + lights.pointCount + lights.spotCount;
+    if (nL == 0u) return 0xFFFFFFFFu;
+    float wSum = 0.0;
+    for (uint i = 0u; i < nL; ++i) wSum += lightPickWeight(i, P);
+    if (wSum <= 1e-8) return 0xFFFFFFFFu;
+    const float xi = rnd(seed) * wSum;
+    float acc = 0.0;
+    for (uint i = 0u; i < nL; ++i) {
+        const float w = lightPickWeight(i, P);
+        acc += w;
+        if (xi <= acc && w > 1e-8) {
+            wPick = wSum / w;
+            return i;
+        }
+    }
+    return 0xFFFFFFFFu;
+}
+
+// ── Emitter diffuse NEE (deferred_shade's emissiveIrradiance; the firefly
+// clamp is the fixed 6.0 the GI channel uses — no pc.fireflyClamp here) ─────
+vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
+    if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
+    const int  emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
+    const vec3 shadowOrig = P + N * SHADOW_EPS;
+    vec3 sum = vec3(0.0);
+    for (int s = 0; s < EM_SAMPLES; ++s) {
+        const float xi = (float(s) + 0.5) / float(EM_SAMPLES) * pc.emissiveTotalPower;
+        uint lo = 0u, hi = pc.emissiveCount - 1u;
+        for (int it = 0; it < emIters; ++it) {
+            if (lo >= hi) break;
+            const uint mid = (lo + hi) >> 1u;
+            if (emissiveTris[mid].v1.w < xi) lo = mid + 1u; else hi = mid;
+        }
+        const EmTri t = emissiveTris[lo];
+        const float su1 = sqrt(fract(0.5 + float(s) * 0.7548776662));
+        const float r2  =      fract(0.5 + float(s) * 0.5698402909);
+        const vec3 lp = (1.0 - su1) * t.v0.xyz + (su1 * (1.0 - r2)) * t.v1.xyz + (su1 * r2) * t.v2.xyz;
+        const vec3 toL = lp - P;
+        const float dist2 = dot(toL, toL);
+        const float dist  = sqrt(max(dist2, 1e-20));
+        if (dist <= 1e-4) continue;
+        const vec3 L = toL / dist;
+        const float ndl = dot(N, L);
+        if (ndl <= 0.01) continue;
+        const vec3 lnRaw = cross(t.v1.xyz - t.v0.xyz, t.v2.xyz - t.v0.xyz);
+        const float lnLen = length(lnRaw);
+        if (lnLen < 1e-20 || t.v0.w <= 1e-20 || t.v2.w <= 0.0) continue;
+        const float cosLight = abs(dot(-L, lnRaw / lnLen));
+        if (cosLight <= 0.05) continue;
+        const float pickPdf = t.v2.w / pc.emissiveTotalPower;
+        const float p_omega = pickPdf * dist2 / (t.v0.w * cosLight);
+        if (p_omega <= 1e-20) continue;
+        if (doShadows) {
+            rayQueryEXT rq;
+            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+                                  kRayMaskOpaque, shadowOrig, 1e-3, L, dist - 1e-2);
+            while (rayQueryProceedEXT(rq)) {}
+            if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
+                continue;
+        }
+        vec3 c = ndl * t.emission.rgb / p_omega;
+        const float lum = max(max(c.r, c.g), c.b);
+        if (lum > 6.0) c *= 6.0 / lum;
+        sum += c;
+    }
+    return sum / float(EM_SAMPLES);
+}
+
+// ── One probe ray (giRadiance's shading + the probe feedback tap) ───────────
+// Returns the radiance arriving at the probe from `dir`. Emitter EMISSION at
+// the hit is suppressed and there is NO env fill at the hit — both are owned
+// by the CONSUMER of the probe (see probe_common.glsl's energy accounting).
+// backface = 1 when the ray landed on geometry's interior side — the caller
+// counts these to decide the probe sits inside a wall (validity).
+vec3 probeRayRadiance(vec3 origin, vec3 dir, bool doShadows, inout uint seed,
+                      out float backface) {
+    backface = 0.0;
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, origin, 1e-4, dir, 1e30);
+    while (rayQueryProceedEXT(rq)) {}
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT)
+        return sampleEnvLod(dir, float(max(pc.envMipCount, 1u) - 1u));// sky (sun-free top mip)
+
+    const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+    const MaterialDesc hm     = mats[hitId];
+    const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+    const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+    const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);
+    const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
+    vec3 hitN; vec2 hitUv;
+    fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
+
+    const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+    if (hm.roughness < 0.0) return hAlbedo;// unlit hit
+
+    if (dot(hitN, -dir) < 0.0) {
+        if (hm.sideMode == 0) {
+            // Interior of FRONT-only geometry: shade it dark (an enclosed
+            // backface sees nothing) and report it so the validity estimate
+            // can exclude probes buried in walls.
+            backface = 1.0;
+            return vec3(0.0);
+        }
+        // Double/back-sided surfaces (curtains, foliage cards) are legitimate
+        // shading sides — flip like giRadiance does, no validity penalty.
+        hitN = -hitN;
+    }
+    const vec3 hitP = origin + dir * tHit;
+    SHADOW_EPS = max(1e-3, max(max(abs(hitP.x), abs(hitP.y)), abs(hitP.z)) * 1e-5);
+    const vec3 shadowOrig = hitP + hitN * SHADOW_EPS;
+    // Metalness must be factor × TEXTURE (blue channel): glTF defaults
+    // metallicFactor to 1.0 and masks dielectrics in the map (Khronos Sponza:
+    // 24/25 materials), so the raw factor alone zeroes the diffuse albedo and
+    // kills the bounce entirely. Mirrors traceRadiance's per-hit sampling.
+    float hMetal = clamp(hm.metalness, 0.0, 1.0);
+    if (hm.metalnessTexIndex >= 0)
+        hMetal *= textureLod(albedoMaps[nonuniformEXT(clamp(hm.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1))],
+                             (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).b;
+    const vec3 diff = hAlbedo * (1.0 - hMetal) * (1.0 / PI);
+
+    // Direct analytic light at the hit — mirrors giRadiance: loop ALL lights
+    // when few (deterministic), 1-pick with exact compensation when many.
+    vec3 lit = vec3(0.0);
+    const uint nLights = lights.dirCount + lights.pointCount + lights.spotCount;
+    const bool pickOne = nLights > 8u;
+    float wL = 1.0;
+    const uint pick = pickOne ? pickAnalyticLight(hitP, seed, wL) : 0xFFFFFFFFu;
+
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        if (pickOne && i != pick) continue;
+        const vec3  L   = normalize(lights.dirLights[i].direction);
+        const float ndl = dot(hitN, L);
+        if (ndl <= 0.0) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0;
+        lit += diff * ndl * lights.dirLights[i].color * (vis * wL);
+    }
+    for (uint i = 0u; i < lights.pointCount; ++i) {
+        if (pickOne && (lights.dirCount + i) != pick) continue;
+        vec3        toL  = lights.pointLights[i].position - hitP;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float ndl = dot(hitN, toL);
+        if (ndl <= 0.0) continue;
+        float atten = 1.0 / max(pow(dist, lights.pointLights[i].decay), 0.01);
+        const float range = lights.pointLights[i].range;
+        if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
+        if (atten <= 1e-6) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        lit += diff * ndl * lights.pointLights[i].color * (atten * vis * wL);
+    }
+    for (uint i = 0u; i < lights.spotCount; ++i) {
+        if (pickOne && (lights.dirCount + lights.pointCount + i) != pick) continue;
+        vec3        toL  = lights.spotLights[i].position - hitP;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float ndl = dot(hitN, toL);
+        if (ndl <= 0.0) continue;
+        const float spotCos   = dot(-toL, lights.spotLights[i].direction);
+        const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
+                                           lights.spotLights[i].cosAngleInner, spotCos);
+        if (spotAtten <= 0.0) continue;
+        float atten = spotAtten / max(pow(dist, lights.spotLights[i].decay), 0.01);
+        const float range = lights.spotLights[i].range;
+        if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
+        if (atten <= 1e-6) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        lit += diff * ndl * lights.spotLights[i].color * (atten * vis * wL);
+    }
+    // Emitter 1-bounce at the hit (same 2-sample NEE giRadiance uses).
+    lit += diff * emissiveIrradiance(hitP, hitN, 2, doShadows);
+    // FEEDBACK: the hit surface's own indirect — last update's probe field.
+    // This single tap is the multi-bounce recursion (bounce N reads N-1).
+    lit += diff * probeIrradiance(hitP, hitN);
+    return lit;
+}
+
+// ── Per-workgroup SH reduction ───────────────────────────────────────────────
+const uint kRays = 64u;// == local_size_x
+shared vec3  s00[kRays];
+shared vec3  sX[kRays];
+shared vec3  sY[kRays];
+shared vec3  sZ[kRays];
+shared float sBack[kRays];
+
+void main() {
+    if (gl_WorkGroupID.x >= pc.probeCount) return;
+    const uint total = uint(probeGrid.dims.x * probeGrid.dims.y * probeGrid.dims.z);
+    const uint pIdx  = (pc.probeOffset + gl_WorkGroupID.x) % max(total, 1u);
+    ivec3 pcoord;
+    pcoord.x = int(pIdx) % probeGrid.dims.x;
+    pcoord.y = (int(pIdx) / probeGrid.dims.x) % probeGrid.dims.y;
+    pcoord.z = int(pIdx) / (probeGrid.dims.x * probeGrid.dims.y);
+    const vec3 probePos = probeGrid.origin + vec3(pcoord) * probeGrid.spacing;
+
+    // Fibonacci sphere, Cranley-Patterson-rotated per (probe, update) so
+    // successive updates integrate fresh directions (the EMA averages them).
+    const uint ri      = gl_LocalInvocationID.x;
+    const uint rotSeed = pcgHash(pIdx * 668265263u ^ pcgHash(pc.frame * 374761393u));
+    const float rot    = float(rotSeed & 0xFFFFu) * (TWO_PI / 65536.0);
+    const float zOff   = float((rotSeed >> 16) & 0xFFFFu) * (1.0 / 65536.0);
+    const float u      = fract((float(ri) + 0.5) / float(kRays) + zOff);
+    const float z      = 1.0 - 2.0 * u;
+    const float r      = sqrt(max(0.0, 1.0 - z * z));
+    const float phi    = float(ri) * 2.39996323 + rot;
+    const vec3  dir    = vec3(r * cos(phi), r * sin(phi), z);
+
+    uint seed = pcgHash(pIdx * 9781u + pc.frame * 26699u + ri * 40009u + 0x9e3779b9u);
+    float back;
+    vec3 L = probeRayRadiance(probePos, dir, (pc.flags & 1u) != 0u, seed, back);
+    // Same 6.0 luminance cap the gather applies to giRadiance — bounds a
+    // sun-through-crack spike so one ray can't swing the whole probe.
+    const float ll = max(max(L.r, L.g), L.b);
+    if (ll > 6.0) L *= 6.0 / ll;
+
+    s00[ri]   = L;
+    sX[ri]    = L * dir.x;
+    sY[ri]    = L * dir.y;
+    sZ[ri]    = L * dir.z;
+    sBack[ri] = back;
+    barrier();
+    if (ri != 0u) return;
+
+    vec3 a00 = vec3(0.0), aX = vec3(0.0), aY = vec3(0.0), aZ = vec3(0.0);
+    float backFrac = 0.0;
+    for (uint i = 0u; i < kRays; ++i) {
+        a00 += s00[i]; aX += sX[i]; aY += sY[i]; aZ += sZ[i];
+        backFrac += sBack[i];
+    }
+    backFrac /= float(kRays);
+    // Monte-Carlo SH projection over the uniform sphere (pdf = 1/4π):
+    // L_lm = (4π/N)·Σ L_i·Y_lm(ω_i);  Y00 = 0.282095, Y1c = 0.488603·comp.
+    const float w00 = (4.0 * PI / float(kRays)) * 0.28209479;
+    const float w1  = (4.0 * PI / float(kRays)) * 0.48860251;
+    vec3 c0 = a00 * w00;
+    vec3 cx = aX * w1, cy = aY * w1, cz = aZ * w1;
+    // DDGI-style probe state: mostly-backface probes sit inside geometry —
+    // exclude them from interpolation (their SH is near-black and would
+    // darken/leak through walls).
+    const float validity = 1.0 - smoothstep(0.25, 0.6, backFrac);
+
+    // EMA blend: 1/(count+1) bootstraps a cleared grid in one update, then
+    // settles at 1/32 — enough hysteresis to hide the 64-ray estimate's noise
+    // while multi-bounce feedback converges in a few grid sweeps.
+    const float hist  = probeSh[pIdx * 4u + 1u].a;
+    const float alpha = 1.0 / min(hist + 1.0, 32.0);
+    const vec4 o0 = probeSh[pIdx * 4u + 0u];
+    const vec4 o1 = probeSh[pIdx * 4u + 1u];
+    const vec4 o2 = probeSh[pIdx * 4u + 2u];
+    const vec4 o3 = probeSh[pIdx * 4u + 3u];
+    probeSh[pIdx * 4u + 0u] = vec4(mix(o0.rgb, c0, alpha), mix(o0.a, validity, alpha));
+    probeSh[pIdx * 4u + 1u] = vec4(mix(o1.rgb, cx, alpha), min(hist + 1.0, 4096.0));
+    probeSh[pIdx * 4u + 2u] = vec4(mix(o2.rgb, cy, alpha), 0.0);
+    probeSh[pIdx * 4u + 3u] = vec4(mix(o3.rgb, cz, alpha), 0.0);
+}
