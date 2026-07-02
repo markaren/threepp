@@ -8150,7 +8150,18 @@ namespace threepp {
             // sunAngularRadiusDeg_), GI bounce, water glints, volumetric
             // shafts — all through the existing dir-light paths. Injected
             // BEFORE the hash below so toggling extraction resets accumulation.
-            if (envSunExtractionWanted() && envSun_.found && ubo.dirCount < kMaxDirLights) {
+            //
+            // ONE-SUN POLICY: at this point ubo.dirCount holds exactly the
+            // scene's own visible DirectionalLights (the traverse above). If
+            // the scene provides one, IT is the sun — scenes authored for
+            // raster renderers carry a stand-in sun light, and injecting the
+            // env's sun on top lit and shadowed everything TWICE (the double
+            // directional shadow report). Auto defers; Always still injects.
+            // Hiding/showing a scene sun re-evaluates here every frame, and
+            // the UBO hash below resets accumulation on the change.
+            const bool sceneHasSun = ubo.dirCount > 0;
+            if (envSunExtractionWanted() && envSun_.found && ubo.dirCount < kMaxDirLights &&
+                !(envSunDefersToSceneSun() && sceneHasSun)) {
                 auto& g = ubo.dirLights[ubo.dirCount++];
                 g.direction[0] = envSun_.dir[0];
                 g.direction[1] = envSun_.dir[1];
@@ -13285,6 +13296,15 @@ namespace threepp {
         // The PT leaf keeps the raw env: its env-CDF NEE + MIS already handle
         // HDRI suns without fireflies.
         virtual bool envSunExtractionWanted() const { return false; }
+
+        // ONE-SUN POLICY (consulted only when extraction is wanted): when true
+        // (VulkanRenderer::EnvSunPolicy::Auto), the extracted env sun is
+        // injected only while the scene has NO visible DirectionalLight of its
+        // own — an explicit scene light claims the sun role (scenes authored
+        // for raster renderers carry a stand-in sun light because raster can't
+        // shadow from an env map; injecting the env sun on top lights and
+        // shadows the scene with TWO suns). false = Always inject.
+        virtual bool envSunDefersToSceneSun() const { return true; }
 
         // Called once after bloom_->createImages() (initial creation and resize).
         // Implementations that hold references to sceneHdr views (e.g. auto-exposure)

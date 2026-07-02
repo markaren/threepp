@@ -24,6 +24,7 @@
 #include "threepp/math/Color.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
+#include <array>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -308,6 +309,42 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r, bool v) { r.native().setEnvSunExtraction(v); },
                               "Extract the HDRI sun into an analytic light (default on). "
                               "Toggling rebuilds the environment on the next frame.")
+                // ONE-SUN POLICY: 'auto' (default) injects the extracted sun only
+                // while the scene has no visible DirectionalLight of its own (an
+                // explicit scene light claims the sun role — otherwise the scene
+                // gets TWO directional shadows); 'always' injects regardless;
+                // 'off' disables extraction entirely (raw env, legacy spec blobs).
+                .def_property("env_sun_policy",
+                              [](PyVulkanRenderer& r) -> std::string {
+                                  switch (r.native().envSunPolicy()) {
+                                      case VulkanRenderer::EnvSunPolicy::Always: return "always";
+                                      case VulkanRenderer::EnvSunPolicy::Off: return "off";
+                                      default: return "auto";
+                                  }
+                              },
+                              [](PyVulkanRenderer& r, const std::string& v) {
+                                  if (v == "auto") r.native().setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Auto);
+                                  else if (v == "always") r.native().setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Always);
+                                  else if (v == "off") r.native().setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Off);
+                                  else throw std::invalid_argument("env_sun_policy: expected 'auto', 'always' or 'off'");
+                              },
+                              "'auto' (a scene DirectionalLight claims the sun role), 'always', or 'off'.")
+                .def_property_readonly("env_sun_found",
+                                       [](PyVulkanRenderer& r) { return r.native().envSunFound(); },
+                                       "True when the current environment has a detected sun disc.")
+                .def_property_readonly("env_sun_direction",
+                                       [](PyVulkanRenderer& r) {
+                                           const auto d = r.native().envSunDirection();
+                                           return std::array<float, 3>{d.x, d.y, d.z};
+                                       },
+                                       "Unit direction TOWARD the detected env sun (valid when env_sun_found). "
+                                       "Use to align an explicit DirectionalLight with the HDRI.")
+                .def_property_readonly("env_sun_color",
+                                       [](PyVulkanRenderer& r) {
+                                           const auto c = r.native().envSunColor();
+                                           return std::array<float, 3>{c.x, c.y, c.z};
+                                       },
+                                       "Integrated sun-disc energy (linear RGB irradiance, valid when env_sun_found).")
                 // Sun angular radius (deg) → soft directional shadows (adaptive
                 // multi-ray penumbra). 0 = hard single-ray shadow. Real sun ~0.27°.
                 .def_property("sun_angular_radius",

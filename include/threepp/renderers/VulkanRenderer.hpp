@@ -15,6 +15,7 @@
 #define THREEPP_VULKANRENDERER_HPP
 
 #include "threepp/canvas/Canvas.hpp"
+#include "threepp/math/Vector3.hpp"
 #include "threepp/renderers/VulkanRendererCore.hpp"
 
 #include <memory>
@@ -81,17 +82,45 @@ namespace threepp {
         // space, pixel-crisp at any resolution/FOV. 0 disables; ~1.0 = night sky.
         void setDeferredStarfield(float intensity);
 
-        // HDRI sun extraction (ON by default). The environment map's dominant
-        // compact bright source (the sun) is removed from the PMREM's glossy /
-        // rough mips at upload — a ~10⁴:1 disc cannot be Monte-Carlo prefiltered
-        // smoothly and shows up as bright blocky "spec blobs" in reflections —
-        // and its exact energy is re-injected as an analytic directional light:
-        // a sharp correct sun highlight (the ONLY sun reflection), soft RT
-        // shadows (setSunAngularRadius), GI bounce and volumetric shafts. The
-        // sky background and true mirror lookups (env mip 0) keep the visible
-        // sun disc. Toggling forces an env re-upload on the next frame.
+        // HDRI sun extraction. The environment map's dominant compact bright
+        // source (the sun) is removed from the PMREM's glossy / rough mips at
+        // upload — a ~10⁴:1 disc cannot be Monte-Carlo prefiltered smoothly and
+        // shows up as bright blocky "spec blobs" in reflections — and its exact
+        // energy can be re-injected as an analytic directional light: a sharp
+        // correct sun highlight (the ONLY sun reflection), soft RT shadows
+        // (setSunAngularRadius), GI bounce and volumetric shafts. The sky
+        // background and true mirror lookups (env mip 0) keep the visible disc.
+        //
+        // ONE-SUN POLICY — a scene must not end up with the sun twice. Scenes
+        // authored for raster renderers add an explicit DirectionalLight as the
+        // sun stand-in (raster can't shadow from an env map); an extractor that
+        // ALSO injects the env's sun would then light and shadow the scene with
+        // two suns (the reported double-shadow). So:
+        //   Auto (default) — extract (clamp the glossy mips) always; INJECT the
+        //     analytic sun only while the scene has NO visible DirectionalLight.
+        //     If the artist provided a sun light, theirs owns direct sun +
+        //     shadow (the raster/three.js convention) and the env supplies
+        //     sky/ambience only. Exactly one sun in every renderer.
+        //   Always — extract AND inject regardless of scene lights (a scene
+        //     that genuinely wants the env sun PLUS extra directional lights).
+        //   Off — no extraction at all: raw env in every mip (legacy; the HDRI
+        //     sun prefilters into blocky spec blobs), nothing injected.
+        // Auto↔Always applies next frame; Off toggles force an env re-upload.
+        enum class EnvSunPolicy { Auto, Always, Off };
+        void setEnvSunPolicy(EnvSunPolicy policy);
+        [[nodiscard]] EnvSunPolicy envSunPolicy() const;
+
+        // Back-compat shim: true → Auto, false → Off.
         void setEnvSunExtraction(bool enabled);
         [[nodiscard]] bool envSunExtraction() const;
+
+        // The measured env sun (valid while envSunFound()): unit direction
+        // TOWARD the sun and the disc's integrated energy Σ L·dΩ (linear RGB
+        // irradiance). Use to ALIGN an explicit DirectionalLight with the HDRI
+        // (e.g. so a raster renderer's shadow direction matches the sky).
+        [[nodiscard]] bool envSunFound() const;
+        [[nodiscard]] Vector3 envSunDirection() const;
+        [[nodiscard]] Vector3 envSunColor() const;
 
         // ── Automatic exposure (eye adaptation) ──────────────────────────────
         // When enabled the renderer samples the log2-luma histogram of the

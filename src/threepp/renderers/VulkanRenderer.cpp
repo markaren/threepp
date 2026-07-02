@@ -68,8 +68,18 @@ namespace threepp {
         bool decalsEnabled() const override { return true; }
 
         // HDRI sun → analytic light (see CoreImpl::envSunExtractionWanted).
-        bool envSunExtraction_ = true;
-        bool envSunExtractionWanted() const override { return envSunExtraction_; }
+        // ONE-SUN POLICY: Auto extracts (mip clamp) but injects the analytic
+        // sun only while the scene carries no visible DirectionalLight — an
+        // explicit scene light claims the sun role (the raster stand-in
+        // convention); injecting anyway lit and shadowed the scene with TWO
+        // suns (the reported double directional shadow).
+        VulkanRenderer::EnvSunPolicy envSunPolicy_ = VulkanRenderer::EnvSunPolicy::Auto;
+        bool envSunExtractionWanted() const override {
+            return envSunPolicy_ != VulkanRenderer::EnvSunPolicy::Off;
+        }
+        bool envSunDefersToSceneSun() const override {
+            return envSunPolicy_ == VulkanRenderer::EnvSunPolicy::Auto;
+        }
 
         void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
                                  VkExtent2D ext, VkExtent2D ptExt,
@@ -827,19 +837,46 @@ namespace threepp {
         pimpl_->deferredStarIntensity_ = std::max(intensity, 0.f);
     }
 
+    void VulkanRenderer::setEnvSunPolicy(EnvSunPolicy policy) {
+        if (pimpl_->envSunPolicy_ == policy) return;
+        const bool wasOff = pimpl_->envSunPolicy_ == EnvSunPolicy::Off;
+        const bool isOff  = policy == EnvSunPolicy::Off;
+        pimpl_->envSunPolicy_ = policy;
+        // Auto↔Always only changes the INJECTION, which updateLightsUbo
+        // re-evaluates every frame (its UBO hash change resets accumulation).
+        // Off transitions change the PMREM content, so force the env re-upload
+        // path (refreshEnvTextureFromScene early-outs on a matching texture id)
+        // so the mips are rebuilt with/without the sun.
+        if (wasOff != isOff) {
+            pimpl_->envTextureIdUploaded = 0xFFFFFFFFu;
+            pimpl_->envSun_ = {};
+        }
+    }
+
+    VulkanRenderer::EnvSunPolicy VulkanRenderer::envSunPolicy() const {
+        return pimpl_->envSunPolicy_;
+    }
+
     void VulkanRenderer::setEnvSunExtraction(bool enabled) {
-        if (pimpl_->envSunExtraction_ == enabled) return;
-        pimpl_->envSunExtraction_ = enabled;
-        // Force the env re-upload path (refreshEnvTextureFromScene early-outs on
-        // a matching texture id) so the PMREM is rebuilt with/without the sun.
-        // The injected light disappears/reappears via updateLightsUbo the same
-        // frame; its UBO hash change resets accumulation.
-        pimpl_->envTextureIdUploaded = 0xFFFFFFFFu;
-        pimpl_->envSun_ = {};
+        setEnvSunPolicy(enabled ? EnvSunPolicy::Auto : EnvSunPolicy::Off);
     }
 
     bool VulkanRenderer::envSunExtraction() const {
-        return pimpl_->envSunExtraction_;
+        return pimpl_->envSunPolicy_ != EnvSunPolicy::Off;
+    }
+
+    bool VulkanRenderer::envSunFound() const {
+        return pimpl_->envSun_.found;
+    }
+
+    Vector3 VulkanRenderer::envSunDirection() const {
+        const auto& s = pimpl_->envSun_;
+        return {s.dir[0], s.dir[1], s.dir[2]};
+    }
+
+    Vector3 VulkanRenderer::envSunColor() const {
+        const auto& s = pimpl_->envSun_;
+        return {s.colorE[0], s.colorE[1], s.colorE[2]};
     }
 
     void VulkanRenderer::setAutoExposure(bool enabled) {
