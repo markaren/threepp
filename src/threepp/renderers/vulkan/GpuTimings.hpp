@@ -33,7 +33,9 @@ namespace threepp::vulkan {
         TP_Denoise      = 4,
         TP_TAA          = 5,
         TP_OverlayDraw  = 6,
-        TP_COUNT        = 7,
+        TP_GbufResolve  = 7,// MSAA dominant-sample resolve (setGbufferMsaa > 1 only)
+        TP_ShadeB       = 8,// MSAA dispatch B: per-sample edge shading (setGbufferMsaa > 1 only)
+        TP_COUNT        = 9,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

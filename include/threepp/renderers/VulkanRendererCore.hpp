@@ -223,6 +223,8 @@ namespace threepp {
             float denoiseMs      = 0.f;// à-trous passes + finalize tonemap
             float taaMs          = 0.f;// hybrid TAA resolve compute
             float rasterGbufMs   = 0.f;// hybrid G-buffer prepass
+            float gbufResolveMs  = 0.f;// MSAA dominant-sample resolve (0 unless setGbufferMsaa > 1)
+            float shadeBMs       = 0.f;// MSAA dispatch B: per-sample edge shading (0 unless setGbufferMsaa > 1)
             float overlayMs      = 0.f;// hybrid overlay depth + draw
             float cpuEnsureSceneMs = 0.f;// ensureSceneBuilt
             float cpuRecordMs      = 0.f;// recordCommandBuffer

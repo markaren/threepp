@@ -33,6 +33,30 @@ namespace threepp {
         float  autoExpMinEV_        = -3.0f;
         float  autoExpMaxEV_        =  3.0f;
 
+        // MSAA dispatch B (per-sample shading at complex/edge pixels) master
+        // switch. OFF by default: measured on rock_flicker (msaa=4), dispatch
+        // B's fallback variant (single largest non-dominant cluster, cheap
+        // env-only diffuse — no RT gather/reflections/ReSTIR, to keep cost
+        // proportional to edge-pixel count) made the static-camera flicker
+        // metric WORSE (mean ~4600-4800 px/frame) than Phase 1 (dominant-
+        // sample resolve) alone (~3700-3900), which was itself already below
+        // the msaa=1 baseline (~4000-4030). Root cause: dispatch B's cheap
+        // shading model disagrees with dispatch A's full model enough that
+        // the disagreement is itself a new, comparably-sized noise source at
+        // every edge pixel — trading one flicker mechanism for another
+        // instead of removing it. The code compiles, is wired end-to-end,
+        // and is architecturally sound (see deferred_shade.comp's shadeMode
+        // branches) for a future attempt with a closer-matching per-sample
+        // shading model; it just isn't a net win yet, so it stays off.
+        // ON by default: under the UNJITTERED msaa raster (see
+        // uploadRasterCameraUbo) dispatch B no longer regresses temporal
+        // stability (static 23 vs 11 px/frame on the rock harness), and with
+        // the corrected coverage accounting (dispatch A blends sky-minority
+        // coverage itself; B fills the geometry-minority weight it reserves)
+        // it supplies the spatial edge AA the dominant-pick resolve alone
+        // lacks. Only consulted when gbufMsaaSamples_ > 1.
+        bool gbufShadeBEnabled_ = true;
+
         // Called once after bloom_->createImages(); wires sceneHdr views.
         void onAfterBloomCreateImages() override {
             if (!autoExposure_) return;
@@ -151,6 +175,13 @@ namespace threepp {
                     vkCmdPipelineBarrier2(cb, &pdep);
                 }
             }
+            // Dispatch A always sees the TRUE sample count: even with
+            // dispatch B off it must blend SKY-minority coverage itself
+            // (every geometry/sky silhouette — the most visible edges).
+            // shadeBActive (flags bit 7) tells it whether to additionally
+            // reserve the geometry-minority weight for dispatch B or fold
+            // it into the dominant surface.
+            const bool shadeBActive = gbufMsaaSamples_ > 1 && gbufShadeBEnabled_;
             gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
             deferredShade_->recordDispatch(cb, currentFrame,
                                            regionRenderExt_.width, regionRenderExt_.height,
@@ -165,8 +196,65 @@ namespace threepp {
                                            deferredStarIntensity_,
                                            deferredCamDeltaLen_, deferredCamRotAngle_,
                                            static_cast<float>(glfwGetTime()),
-                                           std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f));
+                                           std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
+                                           gbufMsaaSamples_, /*shadeMode=*/0u, shadeBActive);
             gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
+
+            // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
+            // Opt-in (gbufShadeBEnabled_, default false) and only when
+            // setGbufferMsaa(2|4) is active. Reads dispatch A's outImage
+            // write (imageLoad accumulate) and the raw MS G-buffer; needs a
+            // compute->compute barrier on outImage between the two
+            // dispatches (RAW: B reads what A just wrote) plus visibility for
+            // the MS attachments (already satisfied — they've been
+            // SHADER_READ_ONLY since the MSAA render pass's own subpass
+            // dependency, unchanged since dispatch A started).
+            if (gbufMsaaSamples_ > 1 && gbufShadeBEnabled_) {
+                VkMemoryBarrier2 shadeBar{};
+                shadeBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                shadeBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                shadeBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                shadeBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                shadeBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                VkDependencyInfo shadeDep{};
+                shadeDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                shadeDep.memoryBarrierCount = 1;
+                shadeDep.pMemoryBarriers    = &shadeBar;
+                vkCmdPipelineBarrier2(cb, &shadeDep);
+
+                gpuTimings_->begin(cb, TP_ShadeB, currentFrame);
+                deferredShade_->recordDispatch(cb, currentFrame,
+                                               regionRenderExt_.width, regionRenderExt_.height,
+                                               envImage.mipLevels, /*shadows=*/true,
+                                               /*ao=*/deferredAO_, sampleIndex,
+                                               emissiveTriCountThisFrame_,
+                                               emissiveTotalPowerThisFrame_,
+                                               fireflyClamp_,
+                                               oceanFineTileSize, oceanFoamTileSize,
+                                               denoiseEnabled_, restirDIEnabled_, deferredVolFog_,
+                                               deferredVolDensity_, deferredVolAniso_,
+                                               deferredStarIntensity_,
+                                               deferredCamDeltaLen_, deferredCamRotAngle_,
+                                               static_cast<float>(glfwGetTime()),
+                                               std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
+                                               gbufMsaaSamples_, /*shadeMode=*/1u, /*shadeBActive=*/true);
+                gpuTimings_->end(cb, TP_ShadeB, currentFrame);
+
+                // Dispatch B's outImage write -> bloom/composite's read.
+                VkMemoryBarrier2 postBar{};
+                postBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                postBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                postBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                postBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                postBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                VkDependencyInfo postDep{};
+                postDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                postDep.memoryBarrierCount = 1;
+                postDep.pMemoryBarriers    = &postBar;
+                vkCmdPipelineBarrier2(cb, &postDep);
+            }
             // Spatial denoise of the demodulated diffuse-indirect + recombine.
             // Barrier: the shade wrote sceneHdr + the indirect image (both
             // GENERAL storage); the denoise reads the indirect 5×5 neighbourhood
@@ -766,6 +854,14 @@ namespace threepp {
 
     bool VulkanRenderer::probeGI() const {
         return pimpl_->probeGIEnabled_;
+    }
+
+    void VulkanRenderer::setGbufferMsaa(uint32_t samples) {
+        pimpl_->setGbufferMsaa(samples);
+    }
+
+    uint32_t VulkanRenderer::gbufferMsaa() const {
+        return pimpl_->gbufferMsaa();
     }
 
     void VulkanRendererCore::setBloomThreshold(float threshold) {

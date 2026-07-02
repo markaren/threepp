@@ -139,6 +139,25 @@ namespace threepp {
         // E.g. setAutoExposureRange(-2, 4) limits to 0.25× .. 16× exposure.
         void setAutoExposureRange(float minEV, float maxEV);
 
+        // ── Raster G-buffer MSAA (edge/silhouette anti-flicker) ─────────────
+        // Rasterizes the material G-buffer at `samples` (1, 2, or 4) per
+        // pixel instead of 1, then resolves each pixel to the majority-
+        // covering surface (dominant-sample pick, not a box/average blend —
+        // averaging normals/ids/depth across a silhouette produces nonsense).
+        // Targets the source of the 1-spp jittered-coverage edge flicker
+        // (leaf canopies, low-poly rock fields shimmering on a STATIC
+        // camera): sample coverage is exact and far more temporally stable
+        // than a single jittered point sample. Default 1 = today's path,
+        // byte-identical output, zero extra cost. Reallocates render-extent
+        // resources (render pass + pipelines + MS images) — same
+        // vkDeviceWaitIdle / deferred-apply-mid-frame contract as
+        // setRenderScale; safe to call from inside the user's animate
+        // lambda. VRAM cost is real (roughly samples× the G-buffer's raster
+        // attachments); 2 is the recommended quality step, 4 for maximum
+        // stability.
+        void setGbufferMsaa(uint32_t samples);
+        [[nodiscard]] uint32_t gbufferMsaa() const;
+
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;

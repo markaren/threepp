@@ -45,7 +45,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[38]{};
+        VkDescriptorSetLayoutBinding b[43]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -94,10 +94,18 @@ namespace threepp::vulkan {
         set(35, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // blue-noise tile (GI hemisphere dithering)
         set(36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // probe SH-L1 store (ProbeGI, read)
         set(37, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // probe grid UBO (origin/spacing/dims + enable)
+        // MSAA raw raster attachments (dispatch B / shadeMode==1 only —
+        // always bound, harmlessly unused at msaa=1 via 1x1 dummy views,
+        // same convention as the ocean/foam dummy textures above).
+        set(38, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf normal MS
+        set(39, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf depth MS
+        set(40, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf ids MS
+        set(41, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf albedo MS
+        set(42, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf uv MS
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 38;
+        dlci.bindingCount = 43;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -105,7 +113,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.offset = 0;
-        pc.size = 68;// 17×u32 (…, camDelta, camRot, timeSec, sunTanHalfAngle)
+        pc.size = 72;// 18×u32 (…, camDelta, camRot, timeSec, sunTanHalfAngle, shadeMode)
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount = 1;
@@ -157,7 +165,7 @@ namespace threepp::vulkan {
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight_ * 4;// camera + lights + fog + probe grid
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (17 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise
+        sizes[1].descriptorCount = framesInFlight_ * (22 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise + 5 gbuf MS
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[2].descriptorCount = framesInFlight_ * 11;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + reflAux + 4 reservoir (pos/W × write/read)
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -350,7 +358,20 @@ namespace threepp::vulkan {
             probeGridInfo.offset = 0;
             probeGridInfo.range  = VK_WHOLE_SIZE;
 
-            VkWriteDescriptorSet w[38]{};
+            // MSAA raw raster attachments (dispatch B). Bound as plain
+            // SHADER_READ_ONLY combined-image-samplers — texelFetch with an
+            // explicit sample index needs no special layout beyond what
+            // every other sampled G-buffer view already uses.
+            VkDescriptorImageInfo normalMsInfo = sampled(in.gbufNormalMS[f], gbufSampler_);
+            VkDescriptorImageInfo idsMsInfo    = sampled(in.gbufIdsMS[f],    gbufSampler_);
+            VkDescriptorImageInfo albMsInfo    = sampled(in.gbufAlbedoMS[f], gbufSampler_);
+            VkDescriptorImageInfo uvMsInfo     = sampled(in.gbufUvMS[f],     gbufSampler_);
+            VkDescriptorImageInfo depthMsInfo{};// depth MS rests DEPTH_STENCIL_READ_ONLY, like the resolved depth
+            depthMsInfo.sampler     = gbufSampler_;
+            depthMsInfo.imageView   = in.gbufDepthMS[f];
+            depthMsInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+            VkWriteDescriptorSet w[43]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -408,7 +429,12 @@ namespace threepp::vulkan {
             setw(35, 35, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bnInfo,          nullptr);
             setw(36, 36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr,          &probeShInfo);
             setw(37, 37, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr,          &probeGridInfo);
-            vkUpdateDescriptorSets(ctx_.device(), 38, w, 0, nullptr);
+            setw(38, 38, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalMsInfo, nullptr);
+            setw(39, 39, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthMsInfo,  nullptr);
+            setw(40, 40, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &idsMsInfo,    nullptr);
+            setw(41, 41, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &albMsInfo,    nullptr);
+            setw(42, 42, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &uvMsInfo,     nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 43, w, 0, nullptr);
         }
     }
 
@@ -437,12 +463,21 @@ namespace threepp::vulkan {
                                        float volDensity, float volAniso,
                                        float starIntensity,
                                        float camDeltaLen, float camRotAngle,
-                                       float timeSec, float sunTanHalfAngle) {
+                                       float timeSec, float sunTanHalfAngle,
+                                       uint32_t gbufMsaaSamples, uint32_t shadeMode,
+                                       bool shadeBActive) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
+        // gbufMsaaSamples packed into flags bits 5-6: 0=1x(default),1=2x,2=4x.
+        // Bit 7 = dispatch B will run this frame: dispatch A reserves the
+        // geometry-minority coverage weight for it; with bit 7 clear that
+        // weight folds back into the dominant surface (no energy loss). Sky
+        // minority coverage is ALWAYS blended by dispatch A itself.
+        const uint32_t msaaCode = gbufMsaaSamples >= 4u ? 2u : (gbufMsaaSamples >= 2u ? 1u : 0u);
         const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u) | (denoise ? 4u : 0u)
-                             | (restirDI ? 8u : 0u) | (volFog ? 16u : 0u);
+                             | (restirDI ? 8u : 0u) | (volFog ? 16u : 0u) | (msaaCode << 5u)
+                             | (shadeBActive ? 128u : 0u);
         uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits, starBits,
                 camDeltaBits, camRotBits, timeBits, sunTanBits;
         std::memcpy(&emPowerBits,   &emissiveTotalPower, sizeof(emPowerBits));
@@ -456,11 +491,11 @@ namespace threepp::vulkan {
         std::memcpy(&camRotBits,    &camRotAngle,        sizeof(camRotBits));
         std::memcpy(&timeBits,      &timeSec,            sizeof(timeBits));
         std::memcpy(&sunTanBits,    &sunTanHalfAngle,    sizeof(sunTanBits));
-        const uint32_t pc[17] = {envMipCount, width, height, flags,
+        const uint32_t pc[18] = {envMipCount, width, height, flags,
                                  frameCounter, emissiveCount, emPowerBits, fireflyBits,
                                  oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits,
                                  starBits, camDeltaBits, camRotBits, timeBits,
-                                 sunTanBits};
+                                 sunTanBits, shadeMode};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
     }

@@ -70,12 +70,14 @@ namespace threepp::vulkan {
         // timings aren't available.
         lastTimings_.cpuEnsureSceneMs = pendingCpuEnsureMs;
         // Zero the GPU fields — only the passes that ran will overwrite.
-        lastTimings_.rasterGbufMs = 0.f;
-        lastTimings_.overlayMs    = 0.f;
-        lastTimings_.photonEmitMs = 0.f;
-        lastTimings_.pathTraceMs  = 0.f;
-        lastTimings_.denoiseMs    = 0.f;
-        lastTimings_.taaMs        = 0.f;
+        lastTimings_.rasterGbufMs  = 0.f;
+        lastTimings_.gbufResolveMs = 0.f;
+        lastTimings_.shadeBMs      = 0.f;
+        lastTimings_.overlayMs     = 0.f;
+        lastTimings_.photonEmitMs  = 0.f;
+        lastTimings_.pathTraceMs   = 0.f;
+        lastTimings_.denoiseMs     = 0.f;
+        lastTimings_.taaMs         = 0.f;
         if (!timingsSupported_) return;
         const uint32_t mask = maskRecorded_[frame];
         if (mask == 0u) return;// first use of this slot
@@ -95,7 +97,9 @@ namespace threepp::vulkan {
             if (pair[1] < pair[0]) return 0.f;
             return static_cast<float>(pair[1] - pair[0]) * toMs;
         };
-        lastTimings_.rasterGbufMs = pairMs(TP_RasterGbuf);
+        lastTimings_.rasterGbufMs  = pairMs(TP_RasterGbuf);
+        lastTimings_.gbufResolveMs = pairMs(TP_GbufResolve);
+        lastTimings_.shadeBMs      = pairMs(TP_ShadeB);
         // Overlay timings collapse the depth prepass + draw pair into a
         // single "overlay" column for the public API.
         lastTimings_.overlayMs    = pairMs(TP_OverlayDepth) + pairMs(TP_OverlayDraw);

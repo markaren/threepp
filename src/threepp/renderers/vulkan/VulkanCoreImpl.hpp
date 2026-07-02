@@ -17,6 +17,7 @@
 #include "VulkanFrameTypes.hpp"
 #include "TaaResolve.hpp"
 #include "AutoExposure.hpp"
+#include "GbufResolve.hpp"
 #include "BloomPass.hpp"
 #include "DeferredShade.hpp"
 #include "ProbeGI.hpp"
@@ -143,6 +144,8 @@ namespace threepp {
     using vulkan::TP_Denoise;
     using vulkan::TP_TAA;
     using vulkan::TP_OverlayDraw;
+    using vulkan::TP_GbufResolve;
+    using vulkan::TP_ShadeB;
 
     namespace {
         // Frames-in-flight depth. Bumped from 2 → 3 to deepen CPU/GPU
@@ -1322,6 +1325,12 @@ namespace threepp {
             return !(e && e[0] == '0');
         }();
 
+        // MSAA G-buffer dominant-sample resolve — see vulkan/GbufResolve.
+        // Lazily constructed the first time gbufMsaaSamples_ > 1 (mirrors
+        // debugResolvePipeline_'s on-demand pattern); stays null at the
+        // msaa=1 default so that path allocates nothing extra.
+        std::unique_ptr<vulkan::GbufResolve> gbufResolve_;
+
         // ── GPU skinning compute pipeline ──────────────────────────────────
         // Replaces the cpuSkin() loop. One dispatch per skinned mesh per
         // frame when bones change, recorded into the main per-frame command
@@ -1364,9 +1373,47 @@ namespace threepp {
             VkFramebuffer framebuffer = VK_NULL_HANDLE;
             uint32_t      width = 0;
             uint32_t      height = 0;
+
+            // ── MSAA raster targets (only allocated when gbufMsaaSamples_ > 1) ──
+            // True multisampled siblings of normal/motion/ids/uv/albedo/depth,
+            // rasterized at VK_SAMPLE_COUNT_{2,4}_BIT. The single-sample images
+            // above stay allocated unchanged and become the RESOLVE TARGETS: every
+            // existing consumer (DeferredShade, TaaResolve, raygen hybrid set,
+            // debug blit) keeps reading them, unaware MSAA is involved. gbuf_resolve
+            // (GbufResolve.{hpp,cpp}) picks the per-pixel dominant sample (majority
+            // instance id, reversed-Z-nearest tie-break) and writes it into the
+            // single-sample images; a tiny depth-only fullscreen pass resolves depth
+            // (compute can't write a depth-aspect image). See setGbufferMsaa.
+            Image2D       normalMS;
+            Image2D       motionMS;
+            Image2D       idsMS;
+            Image2D       uvMS;
+            Image2D       albedoMS;
+            Image2D       depthMS;
+            VkFramebuffer framebufferMS = VK_NULL_HANDLE;// MS render target (rasterGbufRenderPassMS)
         };
         std::array<RasterGbufImages, kFramesInFlight> rasterGbufs{};
         VkRenderPass rasterGbufRenderPass = VK_NULL_HANDLE;
+        // MSAA render pass, keyed by sample count (2 or 4). Only the pass
+        // matching gbufMsaaSamples_ is ever created; the other stays
+        // VK_NULL_HANDLE. Kept separate from rasterGbufRenderPass (the 1×
+        // path) so the default (msaa=1) code path is 100% untouched.
+        VkRenderPass rasterGbufRenderPassMS = VK_NULL_HANDLE;
+        VkPipeline   rasterGbufPipelineMS         = VK_NULL_HANDLE;
+        VkPipeline   rasterGbufIndirectPipelineMS = VK_NULL_HANDLE;
+        VkPipeline   rasterGbufDecalPipelineMS    = VK_NULL_HANDLE;
+        // Sample count backing the MS pipelines/render pass/images above (0
+        // until first created; tracks which count they were built for, so a
+        // 2→4 change knows to tear down and rebuild rather than reuse).
+        VkSampleCountFlagBits gbufMsaaBuiltSamples_ = VK_SAMPLE_COUNT_1_BIT;
+        // 1x1 dummy MS images (5, mirroring normal/depth/ids/uv/albedo) bound
+        // to deferred_shade.comp's dispatch-B sampler2DMS bindings when
+        // gbufMsaaSamples_ == 1 — sampler2DMS is a distinct SPIR-V type from
+        // sampler2D, so (unlike other "1x1 dummy" bindings elsewhere) this
+        // can't reuse a single-sample dummy; a real 2-sample image is the
+        // minimum valid stand-in. Created once, lazily, on first use.
+        std::array<Image2D, 5> gbufDummyMS_{};
+        bool gbufDummyMSCreated_ = false;
 
         VkDescriptorSetLayout rasterDsLayout       = VK_NULL_HANDLE;
         VkPipelineLayout      rasterPipelineLayout = VK_NULL_HANDLE;
@@ -1894,6 +1941,12 @@ namespace threepp {
         // called when Idle apply immediately as before.
         bool pendingRenderScaleRealloc_ = false;
         bool pendingAccumulationReset_  = false;
+        // Raster G-buffer MSAA sample count (1/2/4). 1 = today's single-sample
+        // path, byte-identical output, default. See setGbufferMsaa. Reallocation
+        // (render pass + pipelines + MS images) is render-extent-resource work,
+        // so it reuses the exact same idle-gate as renderScale.
+        uint32_t gbufMsaaSamples_        = 1;
+        bool     pendingGbufMsaaRealloc_ = false;
 
         explicit CoreImpl(Canvas& c) : canvas(c), size(c.size()) {
             ctx = std::make_unique<VulkanContext>(
@@ -7091,8 +7144,13 @@ namespace threepp {
             const uint32_t hi = (haltonFrame_ % phaseCount) + 1u;
             const float jx = halton_(hi, 2) - 0.5f;
             const float jy = halton_(hi, 3) - 0.5f;
-            const float jClipX = 2.f * jx / float(ext.width);
-            const float jClipY = 2.f * jy / float(ext.height);
+            // MSAA G-buffer rasterizes UNJITTERED (see uploadRasterCameraUbo) —
+            // this UBO's jitter must match or every consumer reconstructing
+            // with cam.jitter (deferred_shade worldPos, raygen hybrid V) lands
+            // off the rasterized surface.
+            const bool rasterJitterOn = gbufMsaaSamples_ <= 1;
+            const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
+            const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
             data[32] = jClipX;
             data[33] = jClipY;
             // .zw = previous frame's jitter so raygen's hybrid reproject can
@@ -7319,8 +7377,17 @@ namespace threepp {
             // (tighter history rejection) to suppress it. Static views converge to
             // clean AA over the 16-frame Halton cycle.
             constexpr bool kRasterJitterEnabled = true;
-            const float jClipX = kRasterJitterEnabled ? 2.f * jx / float(ext.width)  : 0.f;
-            const float jClipY = kRasterJitterEnabled ? 2.f * jy / float(ext.height) : 0.f;
+            // MSAA G-buffer (gbufMsaaSamples_ > 1): rasterize UNJITTERED. The
+            // hardware sample coverage replaces jitter as the geometry AA, and
+            // an unjittered raster makes the dominant-sample resolve — and so
+            // every edge pixel's surface classification and reconstruction
+            // position — CONSTANT on a static view. With jitter on, the whole
+            // MSAA sample cloud translates as a unit each frame, so the
+            // majority vote flips nearly as often as a point sample (measured:
+            // dominant-of-4 under jitter cut edge flicker only ~7 %).
+            const bool rasterJitterOn = kRasterJitterEnabled && gbufMsaaSamples_ <= 1;
+            const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
+            const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
 
             // Apply jitter by shifting the projection matrix's m02/m12 (the
             // entries that translate the projected NDC). For a column-major
@@ -7763,7 +7830,15 @@ namespace threepp {
             // raygen launches over it; the viewport must agree.
             const VkExtent2D ext = renderExtent();
             const auto& g = rasterGbufs[frame];
-            if (g.framebuffer == VK_NULL_HANDLE) return;// not initialized
+            // MSAA path: rasterize into the MS framebuffer/render pass/
+            // pipelines (RasterGbufImages::*MS + rasterGbufRenderPassMS);
+            // the single-sample framebuffer/pipelines below stay exactly
+            // what they were pre-MSAA — gbuf_resolve.comp (dispatched right
+            // after this, see recordCommandBuffer) fills the single-sample
+            // images every downstream consumer keeps reading unchanged.
+            const bool useMsaa = gbufMsaaSamples_ > 1 && g.framebufferMS != VK_NULL_HANDLE;
+            const VkFramebuffer fb = useMsaa ? g.framebufferMS : g.framebuffer;
+            if (fb == VK_NULL_HANDLE) return;// not initialized
 
             VkClearValue clears[6]{};
             clears[0].color = {{0.f, 0.f, 0.f, 0.f}};   // normal — sky/miss as zero
@@ -7778,8 +7853,8 @@ namespace threepp {
 
             VkRenderPassBeginInfo rpbi{};
             rpbi.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            rpbi.renderPass      = rasterGbufRenderPass;
-            rpbi.framebuffer     = g.framebuffer;
+            rpbi.renderPass      = useMsaa ? rasterGbufRenderPassMS : rasterGbufRenderPass;
+            rpbi.framebuffer     = fb;
             rpbi.renderArea.offset = {0, 0};
             rpbi.renderArea.extent = {g.width, g.height};
             rpbi.clearValueCount = 6;
@@ -7808,7 +7883,10 @@ namespace threepp {
                 return;
             }
 
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, rasterGbufIndirectPipeline);
+            const VkPipeline indirectPipe = useMsaa ? rasterGbufIndirectPipelineMS : rasterGbufIndirectPipeline;
+            const VkPipeline decalPipe    = useMsaa ? rasterGbufDecalPipelineMS : rasterGbufDecalPipeline;
+
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, indirectPipe);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     rasterPipelineLayout, 0, 1,
                                     &rasterDescSets[frame], 0, nullptr);
@@ -7832,7 +7910,7 @@ namespace threepp {
             // Blend decals last: albedo-blend pipeline lerps over the receivers
             // rasterized above (same layout/descriptors, no set rebind needed).
             if (const auto& g = indirectGroups_[3]; g.count > 0u) {
-                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, rasterGbufDecalPipeline);
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, decalPipe);
                 vkCmdSetCullMode(cb, g.cullMode);
                 vkCmdDrawIndirect(cb,
                                   indirectCmdBuffers[frame].handle,
@@ -8951,7 +9029,8 @@ namespace threepp {
         Image2D createAttachmentImage2D(uint32_t w, uint32_t h, VkFormat format,
                                         VkImageUsageFlags usage,
                                         VkImageAspectFlags aspect,
-                                        const char* debugName = nullptr) {
+                                        const char* debugName = nullptr,
+                                        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT) {
             Image2D out{};
             out.width  = w;
             out.height = h;
@@ -8964,7 +9043,7 @@ namespace threepp {
             ici.extent        = {w, h, 1};
             ici.mipLevels     = 1;
             ici.arrayLayers   = 1;
-            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ici.samples       = samples;
             ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
             ici.usage         = usage;
             ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
@@ -9001,6 +9080,10 @@ namespace threepp {
                     vkDestroyFramebuffer(d, g.framebuffer, nullptr);
                     g.framebuffer = VK_NULL_HANDLE;
                 }
+                if (g.framebufferMS) {
+                    vkDestroyFramebuffer(d, g.framebufferMS, nullptr);
+                    g.framebufferMS = VK_NULL_HANDLE;
+                }
                 destroyImage2D(ctx->allocator(), d, g.normal);
                 destroyImage2D(ctx->allocator(), d, g.motion);
                 destroyImage2D(ctx->allocator(), d, g.ids);
@@ -9014,6 +9097,12 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), d, g.reflAux);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
+                destroyImage2D(ctx->allocator(), d, g.normalMS);
+                destroyImage2D(ctx->allocator(), d, g.motionMS);
+                destroyImage2D(ctx->allocator(), d, g.idsMS);
+                destroyImage2D(ctx->allocator(), d, g.uvMS);
+                destroyImage2D(ctx->allocator(), d, g.albedoMS);
+                destroyImage2D(ctx->allocator(), d, g.depthMS);
                 g.width  = 0;
                 g.height = 0;
             }
@@ -9098,11 +9187,96 @@ namespace threepp {
                   "vkCreateRenderPass(rasterGbuf)");
         }
 
+        // MSAA sibling of createRasterGbufRenderPass — same 6 attachments/
+        // formats/subpass/dependency shape, only `samples` and the depth
+        // finalLayout differ. The depth attachment's finalLayout stays
+        // SHADER_READ_ONLY... no: depth needs its own aspect, so mirror the
+        // 1× pass exactly except attachments[*].samples. Consumed only by
+        // gbuf_resolve.comp (COMPUTE reads all live samples via texelFetch);
+        // nothing else ever touches the MS attachments, so dstStageMask only
+        // needs COMPUTE_SHADER (no RT — the PT leaf never enables MSAA).
+        void createRasterGbufRenderPassMS(VkSampleCountFlagBits samples) {
+            if (rasterGbufRenderPassMS != VK_NULL_HANDLE) {
+                vkDestroyRenderPass(ctx->device(), rasterGbufRenderPassMS, nullptr);
+                rasterGbufRenderPassMS = VK_NULL_HANDLE;
+            }
+            VkAttachmentDescription attachments[6]{};
+            attachments[0].format         = VK_FORMAT_R16G16B16A16_SFLOAT;
+            attachments[0].samples        = samples;
+            attachments[0].loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            attachments[0].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+            attachments[0].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            attachments[0].initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+            attachments[0].finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            attachments[1] = attachments[0];
+            attachments[2] = attachments[0];
+            attachments[2].format = VK_FORMAT_R16G16B16A16_UINT;
+            attachments[3] = attachments[0];
+            attachments[4]        = attachments[0];
+            attachments[4].format = VK_FORMAT_R8G8B8A8_UNORM;
+            attachments[5]              = attachments[0];
+            attachments[5].format       = VK_FORMAT_D32_SFLOAT;
+            attachments[5].finalLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+            VkAttachmentReference colorRefs[5]{};
+            for (uint32_t i = 0; i < 5; ++i) {
+                colorRefs[i].attachment = i;
+                colorRefs[i].layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            }
+            VkAttachmentReference depthRef{};
+            depthRef.attachment = 5;
+            depthRef.layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+            VkSubpassDescription subpass{};
+            subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            subpass.colorAttachmentCount    = 5;
+            subpass.pColorAttachments       = colorRefs;
+            subpass.pDepthStencilAttachment = &depthRef;
+
+            VkSubpassDependency deps[2]{};
+            deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
+            deps[0].dstSubpass    = 0;
+            deps[0].srcStageMask  = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                    VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+            deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+            deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            deps[1].srcSubpass    = 0;
+            deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
+            deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                    VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+            deps[1].dstStageMask  = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+            deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+            VkRenderPassCreateInfo rpci{};
+            rpci.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+            rpci.attachmentCount = 6;
+            rpci.pAttachments    = attachments;
+            rpci.subpassCount    = 1;
+            rpci.pSubpasses      = &subpass;
+            rpci.dependencyCount = 2;
+            rpci.pDependencies   = deps;
+            check(vkCreateRenderPass(ctx->device(), &rpci, nullptr, &rasterGbufRenderPassMS),
+                  "vkCreateRenderPass(rasterGbufMS)");
+        }
+
         void createRasterGbufImages(uint32_t w, uint32_t h) {
             destroyRasterGbufImages();
+            // STORAGE is added to the resolve-target colour images only when
+            // MSAA is active — gbuf_resolve.comp (a compute pass) imageStores
+            // the dominant sample's normal/motion/ids/uv/albedo into them.
+            // Omitted at msaa=1 to keep that path's image usage flags exactly
+            // as they were (byte-identical guarantee — no behavioural surface
+            // added when the feature is off).
             const VkImageUsageFlags colorUsage =
                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                    VK_IMAGE_USAGE_SAMPLED_BIT;
+                    VK_IMAGE_USAGE_SAMPLED_BIT |
+                    (gbufMsaaSamples_ > 1 ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
             const VkImageUsageFlags depthUsage =
                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                     VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -9197,6 +9371,55 @@ namespace threepp {
                       "vkCreateFramebuffer(rasterGbuf)");
                 g.width  = w;
                 g.height = h;
+
+                // MSAA raster targets — only when opted in. These are the
+                // actual render targets the pipeline rasterizes into; normal/
+                // motion/ids/uv/albedo/depth above become the RESOLVE
+                // TARGETS gbuf_resolve.comp writes into (see setGbufferMsaa).
+                if (gbufMsaaSamples_ > 1) {
+                    const auto samples = gbufMsaaSamples_ == 4 ? VK_SAMPLE_COUNT_4_BIT
+                                                                : VK_SAMPLE_COUNT_2_BIT;
+                    // MS attachments need SAMPLED only (not STORAGE — compute
+                    // reads them via sampler2DMS/texelFetch(sample), never
+                    // imageLoad); STORAGE_BIT on a multisampled image needs
+                    // the shaderStorageImageMultisample device feature, which
+                    // isn't enabled/needed here — colorUsage (which adds
+                    // STORAGE for the single-sample RESOLVE targets above) must
+                    // NOT be reused for the MS images themselves.
+                    const VkImageUsageFlags colorUsageMS =
+                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+                    g.normalMS = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                         colorUsageMS, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                         N("normalMS"), samples);
+                    g.motionMS = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                         colorUsageMS, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                         N("motionMS"), samples);
+                    g.idsMS    = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_UINT,
+                                                         colorUsageMS, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                         N("idsMS"), samples);
+                    g.uvMS     = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                         colorUsageMS, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                         N("uvMS"), samples);
+                    g.albedoMS = createAttachmentImage2D(w, h, VK_FORMAT_R8G8B8A8_UNORM,
+                                                         colorUsageMS, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                         N("albedoMS"), samples);
+                    g.depthMS  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
+                                                         depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
+                                                         N("depthMS"), samples);
+
+                    VkImageView viewsMS[6] = {g.normalMS.view, g.motionMS.view, g.idsMS.view,
+                                              g.uvMS.view, g.albedoMS.view, g.depthMS.view};
+                    VkFramebufferCreateInfo fciMS{};
+                    fciMS.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+                    fciMS.renderPass      = rasterGbufRenderPassMS;
+                    fciMS.attachmentCount = 6;
+                    fciMS.pAttachments    = viewsMS;
+                    fciMS.width           = w;
+                    fciMS.height          = h;
+                    fciMS.layers          = 1;
+                    check(vkCreateFramebuffer(ctx->device(), &fciMS, nullptr, &g.framebufferMS),
+                          "vkCreateFramebuffer(rasterGbufMS)");
+                }
             }
 
             // Initialise every slot's attachments to their sampled-read layout.
@@ -9213,7 +9436,7 @@ namespace threepp {
             // first frame regardless. Re-runs on resize (images are recreated).
             VkCommandBuffer initCb = beginOneShot();
             std::vector<VkImageMemoryBarrier> inits;
-            inits.reserve(rasterGbufs.size() * 6);
+            inits.reserve(rasterGbufs.size() * (gbufMsaaSamples_ > 1 ? 18 : 12));
             auto pushInit = [&](VkImage image, VkImageAspectFlags aspect, VkImageLayout layout) {
                 VkImageMemoryBarrier b{};
                 b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -9242,6 +9465,14 @@ namespace threepp {
                 pushInit(g.reflect.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.reflAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+                if (gbufMsaaSamples_ > 1) {
+                    pushInit(g.normalMS.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    pushInit(g.motionMS.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    pushInit(g.idsMS.image,    VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    pushInit(g.uvMS.image,     VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    pushInit(g.albedoMS.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    pushInit(g.depthMS.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+                }
             }
             vkCmdPipelineBarrier(initCb,
                                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
@@ -9583,6 +9814,238 @@ namespace threepp {
             check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciDecal, nullptr,
                                             &rasterGbufDecalPipeline),
                   "vkCreateGraphicsPipelines(rasterGbufDecal)");
+
+            vkDestroyShaderModule(ctx->device(), vertIndirectModule, nullptr);
+            vkDestroyShaderModule(ctx->device(), fragIndModule, nullptr);
+        }
+
+        // MSAA sibling of createRasterGbufPipeline — same shaders/vertex
+        // layout/descriptor layout/push-constant range (reuses
+        // rasterPipelineLayout + rasterDsLayout, already created by the 1×
+        // path in ensureHybridResources), only ms.rasterizationSamples and
+        // the target render pass differ. Kept as a full duplicate rather
+        // than parametrizing createRasterGbufPipeline so the proven 1× path
+        // is never touched (msaa=1 byte-identical guarantee).
+        void createRasterGbufPipelineMS(VkSampleCountFlagBits samples) {
+            if (rasterGbufPipelineMS != VK_NULL_HANDLE) {
+                vkDestroyPipeline(ctx->device(), rasterGbufPipelineMS, nullptr);
+                rasterGbufPipelineMS = VK_NULL_HANDLE;
+            }
+            if (rasterGbufIndirectPipelineMS != VK_NULL_HANDLE) {
+                vkDestroyPipeline(ctx->device(), rasterGbufIndirectPipelineMS, nullptr);
+                rasterGbufIndirectPipelineMS = VK_NULL_HANDLE;
+            }
+            if (rasterGbufDecalPipelineMS != VK_NULL_HANDLE) {
+                vkDestroyPipeline(ctx->device(), rasterGbufDecalPipelineMS, nullptr);
+                rasterGbufDecalPipelineMS = VK_NULL_HANDLE;
+            }
+
+            VkShaderModuleCreateInfo vsmci{};
+            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vsmci.codeSize = sizeof(kGbufferVertSpv);
+            vsmci.pCode    = kGbufferVertSpv;
+            VkShaderModule vertModule = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vertModule),
+                  "vkCreateShaderModule(gbuffer.vert MS)");
+
+            VkShaderModuleCreateInfo fsmci{};
+            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            fsmci.codeSize = sizeof(kGbufferFragSpv);
+            fsmci.pCode    = kGbufferFragSpv;
+            VkShaderModule fragModule = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &fragModule),
+                  "vkCreateShaderModule(gbuffer.frag MS)");
+
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = vertModule;
+            stages[0].pName  = "main";
+            stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = fragModule;
+            stages[1].pName  = "main";
+
+            VkVertexInputBindingDescription vibs[4]{};
+            vibs[0].binding   = 0;
+            vibs[0].stride    = 3 * sizeof(float);
+            vibs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            vibs[1].binding   = 1;
+            vibs[1].stride    = 3 * sizeof(float);
+            vibs[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            vibs[2].binding   = 2;
+            vibs[2].stride    = 2 * sizeof(float);
+            vibs[2].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            vibs[3].binding   = 3;
+            vibs[3].stride    = 3 * sizeof(float);
+            vibs[3].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+            VkVertexInputAttributeDescription vias[4]{};
+            vias[0].location = 0;
+            vias[0].binding  = 0;
+            vias[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
+            vias[0].offset   = 0;
+            vias[1].location = 1;
+            vias[1].binding  = 1;
+            vias[1].format   = VK_FORMAT_R32G32B32_SFLOAT;
+            vias[1].offset   = 0;
+            vias[2].location = 2;
+            vias[2].binding  = 2;
+            vias[2].format   = VK_FORMAT_R32G32_SFLOAT;
+            vias[2].offset   = 0;
+            vias[3].location = 3;
+            vias[3].binding  = 3;
+            vias[3].format   = VK_FORMAT_R32G32B32_SFLOAT;
+            vias[3].offset   = 0;
+
+            VkPipelineVertexInputStateCreateInfo vi{};
+            vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            vi.vertexBindingDescriptionCount   = 4;
+            vi.pVertexBindingDescriptions      = vibs;
+            vi.vertexAttributeDescriptionCount = 4;
+            vi.pVertexAttributeDescriptions    = vias;
+
+            VkPipelineInputAssemblyStateCreateInfo ia{};
+            ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+            VkPipelineViewportStateCreateInfo vp{};
+            vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            vp.viewportCount = 1;
+            vp.scissorCount  = 1;
+
+            VkPipelineRasterizationStateCreateInfo rs{};
+            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode    = VK_CULL_MODE_BACK_BIT;
+            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.lineWidth   = 1.0f;
+
+            VkPipelineMultisampleStateCreateInfo ms{};
+            ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            ms.rasterizationSamples = samples;
+
+            VkPipelineDepthStencilStateCreateInfo ds{};
+            ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            ds.depthTestEnable  = VK_TRUE;
+            ds.depthWriteEnable = VK_TRUE;
+            ds.depthCompareOp   = VK_COMPARE_OP_GREATER;// reverse-Z (near→1, far→0)
+
+            VkPipelineColorBlendAttachmentState cbas[5]{};
+            for (auto& a : cbas) {
+                a.blendEnable    = VK_FALSE;
+                a.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                   VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            }
+            VkPipelineColorBlendStateCreateInfo cb{};
+            cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cb.attachmentCount = 5;
+            cb.pAttachments    = cbas;
+
+            VkDynamicState dynStates[3] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                           VK_DYNAMIC_STATE_SCISSOR,
+                                           VK_DYNAMIC_STATE_CULL_MODE};
+            VkPipelineDynamicStateCreateInfo dyn{};
+            dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dyn.dynamicStateCount = 3;
+            dyn.pDynamicStates    = dynStates;
+
+            // Reuses rasterPipelineLayout (same set layout + push constant
+            // range as the 1× pipelines) — created unconditionally by
+            // createRasterGbufPipeline() before this ever runs.
+            VkGraphicsPipelineCreateInfo gpci{};
+            gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            gpci.stageCount          = 2;
+            gpci.pStages             = stages;
+            gpci.pVertexInputState   = &vi;
+            gpci.pInputAssemblyState = &ia;
+            gpci.pViewportState      = &vp;
+            gpci.pRasterizationState = &rs;
+            gpci.pMultisampleState   = &ms;
+            gpci.pDepthStencilState  = &ds;
+            gpci.pColorBlendState    = &cb;
+            gpci.pDynamicState       = &dyn;
+            gpci.layout              = rasterPipelineLayout;
+            gpci.renderPass          = rasterGbufRenderPassMS;
+            gpci.subpass             = 0;
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpci, nullptr,
+                                            &rasterGbufPipelineMS),
+                  "vkCreateGraphicsPipelines(rasterGbufMS)");
+
+            vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
+            vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
+
+            VkShaderModuleCreateInfo vciInd{};
+            vciInd.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vciInd.codeSize = sizeof(kGbufferIndirectVertSpv);
+            vciInd.pCode    = kGbufferIndirectVertSpv;
+            VkShaderModule vertIndirectModule = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &vciInd, nullptr, &vertIndirectModule),
+                  "vkCreateShaderModule(gbuffer_indirect.vert MS)");
+            VkShaderModuleCreateInfo fciInd{};
+            fciInd.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            fciInd.codeSize = sizeof(kGbufferFragSpv);
+            fciInd.pCode    = kGbufferFragSpv;
+            VkShaderModule fragIndModule = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &fciInd, nullptr, &fragIndModule),
+                  "vkCreateShaderModule(gbuffer.frag for indirect MS)");
+
+            VkPipelineShaderStageCreateInfo stagesInd[2]{};
+            stagesInd[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stagesInd[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            stagesInd[0].module = vertIndirectModule;
+            stagesInd[0].pName  = "main";
+            stagesInd[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stagesInd[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stagesInd[1].module = fragIndModule;
+            stagesInd[1].pName  = "main";
+
+            VkPipelineVertexInputStateCreateInfo viInd{};
+            viInd.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            viInd.vertexBindingDescriptionCount   = 0;
+            viInd.vertexAttributeDescriptionCount = 0;
+
+            VkGraphicsPipelineCreateInfo gpciInd = gpci;
+            gpciInd.stageCount        = 2;
+            gpciInd.pStages           = stagesInd;
+            gpciInd.pVertexInputState = &viInd;
+
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciInd, nullptr,
+                                            &rasterGbufIndirectPipelineMS),
+                  "vkCreateGraphicsPipelines(rasterGbufIndirectMS)");
+
+            VkPipelineDepthStencilStateCreateInfo dsDecal = ds;
+            dsDecal.depthWriteEnable = VK_FALSE;
+            VkPipelineColorBlendAttachmentState cbasDecal[5]{};
+            for (int a = 0; a < 4; ++a) {
+                cbasDecal[a].blendEnable    = VK_FALSE;
+                cbasDecal[a].colorWriteMask = 0;
+            }
+            cbasDecal[4].blendEnable         = VK_TRUE;
+            cbasDecal[4].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            cbasDecal[4].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasDecal[4].colorBlendOp        = VK_BLEND_OP_ADD;
+            cbasDecal[4].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasDecal[4].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            cbasDecal[4].alphaBlendOp        = VK_BLEND_OP_ADD;
+            cbasDecal[4].colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                               VK_COLOR_COMPONENT_B_BIT;
+            VkPipelineColorBlendStateCreateInfo cbDecal = cb;
+            cbDecal.pAttachments = cbasDecal;
+
+            const uint32_t kDecalPassOn = 1u;
+            VkSpecializationMapEntry decalSpecEntry{0, 0, sizeof(uint32_t)};
+            VkSpecializationInfo decalSpecInfo{1, &decalSpecEntry, sizeof(uint32_t), &kDecalPassOn};
+            VkPipelineShaderStageCreateInfo stagesDecal[2] = {stagesInd[0], stagesInd[1]};
+            stagesDecal[1].pSpecializationInfo = &decalSpecInfo;
+
+            VkGraphicsPipelineCreateInfo gpciDecal = gpciInd;
+            gpciDecal.pStages            = stagesDecal;
+            gpciDecal.pDepthStencilState = &dsDecal;
+            gpciDecal.pColorBlendState   = &cbDecal;
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciDecal, nullptr,
+                                            &rasterGbufDecalPipelineMS),
+                  "vkCreateGraphicsPipelines(rasterGbufDecalMS)");
 
             vkDestroyShaderModule(ctx->device(), vertIndirectModule, nullptr);
             vkDestroyShaderModule(ctx->device(), fragIndModule, nullptr);
@@ -10677,6 +11140,15 @@ namespace threepp {
             std::array<VkImageView, kFramesInFlight> reflAuxViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             std::array<VkBuffer, kFramesInFlight> fogBufs{};
+            // MSAA raw raster attachments (dispatch B). Real views when
+            // gbufMsaaSamples_>1 and they exist; the 1x1 dummy MS images
+            // otherwise (msaa=1's default path, or the brief window before
+            // the first MSAA image realloc completes).
+            std::array<VkImageView, kFramesInFlight> normalMSViews{};
+            std::array<VkImageView, kFramesInFlight> depthMSViews{};
+            std::array<VkImageView, kFramesInFlight> idsMSViews{};
+            std::array<VkImageView, kFramesInFlight> albedoMSViews{};
+            std::array<VkImageView, kFramesInFlight> uvMSViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 camBufs[f]       = cameraUbos[f].handle;
                 lightBufs[f]     = lightsUbos[f].handle;
@@ -10696,6 +11168,12 @@ namespace threepp {
                 reflectViews[f]  = rasterGbufs[f].reflect.view;
                 reflAuxViews[f]  = rasterGbufs[f].reflAux.view;
                 sceneHdrViews[f] = bloom_->sceneHdrView(f);
+                const bool haveMS = gbufMsaaSamples_ > 1 && rasterGbufs[f].normalMS.view != VK_NULL_HANDLE;
+                normalMSViews[f] = haveMS ? rasterGbufs[f].normalMS.view : gbufDummyMS_[0].view;
+                depthMSViews[f]  = haveMS ? rasterGbufs[f].depthMS.view  : gbufDummyMS_[1].view;
+                idsMSViews[f]    = haveMS ? rasterGbufs[f].idsMS.view    : gbufDummyMS_[2].view;
+                uvMSViews[f]     = haveMS ? rasterGbufs[f].uvMS.view     : gbufDummyMS_[3].view;
+                albedoMSViews[f] = haveMS ? rasterGbufs[f].albedoMS.view : gbufDummyMS_[4].view;
             }
             // Bindless material-texture array for reflected-hit texturing —
             // same source the RT set's binding 8 uses.
@@ -10756,6 +11234,11 @@ namespace threepp {
             // grid UBO's enable flag gates sampling).
             in.probeShBuf       = probeGI_->shBuffer();
             in.probeGridUbo     = probeGI_->gridUbos();
+            in.gbufNormalMS     = normalMSViews.data();
+            in.gbufDepthMS      = depthMSViews.data();
+            in.gbufIdsMS        = idsMSViews.data();
+            in.gbufAlbedoMS     = albedoMSViews.data();
+            in.gbufUvMS         = uvMSViews.data();
             deferredShade_->rewriteDescriptors(in);
             // The probe UPDATE pass consumes the same scene inputs (TLAS,
             // lights, env, material/geometry/emissive buffers) — keep its set
@@ -10803,7 +11286,59 @@ namespace threepp {
 
         // Lazy bring-up: called at the start of each render() when hybrid is on.
         // Idempotent — handles both initial creation and post-resize reallocation.
+        // 1x1 VK_SAMPLE_COUNT_2_BIT dummy images for deferred_shade.comp's
+        // dispatch-B sampler2DMS/usampler2DMS bindings when MSAA is off —
+        // see gbufDummyMS_'s declaration for why a single-sample dummy can't
+        // stand in here. Formats mirror normal/depth/ids/uv/albedo exactly
+        // (SAMPLED usage only; never rasterized into, never resolved from).
+        void ensureGbufDummyMS() {
+            if (gbufDummyMSCreated_) return;
+            const VkFormat fmts[5] = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT,
+                                      VK_FORMAT_R16G16B16A16_UINT, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                      VK_FORMAT_R8G8B8A8_UNORM};
+            const VkImageAspectFlags aspects[5] = {VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
+                                                   VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                   VK_IMAGE_ASPECT_COLOR_BIT};
+            const char* names[5] = {"gbufDummyMS.normal", "gbufDummyMS.depth", "gbufDummyMS.ids",
+                                    "gbufDummyMS.uv", "gbufDummyMS.albedo"};
+            for (int i = 0; i < 5; ++i) {
+                const VkImageUsageFlags usage = (aspects[i] == VK_IMAGE_ASPECT_DEPTH_BIT)
+                        ? (VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+                        : (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+                gbufDummyMS_[i] = createAttachmentImage2D(1, 1, fmts[i], usage, aspects[i],
+                                                          names[i], VK_SAMPLE_COUNT_2_BIT);
+            }
+            // Layout-init: SHADER_READ_ONLY (color) / DEPTH_STENCIL_READ_ONLY
+            // (depth) — matches what deferred_shade.comp's descriptor binds
+            // expect. Contents are never read meaningfully (dispatch B never
+            // runs at msaa=1 — pc.shadeMode stays 0), only the layout must be
+            // valid to satisfy descriptor/barrier validation.
+            VkCommandBuffer initCb = beginOneShot();
+            for (int i = 0; i < 5; ++i) {
+                VkImageMemoryBarrier b{};
+                b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout = (aspects[i] == VK_IMAGE_ASPECT_DEPTH_BIT)
+                        ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image = gbufDummyMS_[i].image;
+                b.subresourceRange.aspectMask = aspects[i];
+                b.subresourceRange.levelCount = 1;
+                b.subresourceRange.layerCount = 1;
+                b.srcAccessMask = 0;
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                vkCmdPipelineBarrier(initCb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
+                                     0, nullptr, 0, nullptr, 1, &b);
+            }
+            endAndSubmitOneShot(initCb, "gbufDummyMS init layouts");
+            gbufDummyMSCreated_ = true;
+        }
+
         void ensureHybridResources() {
+            ensureGbufDummyMS();
             if (dummyUvBuffer_.handle == VK_NULL_HANDLE) {
                 // 1 MB of zeros = 131,072 vec2 vertices. Bound to vertex input
                 // 2 when a mesh has no UV attribute. Sized generously because
@@ -10844,6 +11379,46 @@ namespace threepp {
                 createRasterDsLayoutAndPool();
                 createRasterGbufPipeline();
             }
+            // MSAA render pass + pipelines — only built when opted in, and
+            // rebuilt when the sample count changes (2↔4) or MSAA is turned
+            // off (torn down; the 1× path above is untouched either way).
+            // gbufMsaaBuiltSamples_ tracks what's currently built so a no-op
+            // setGbufferMsaa(N) (already N) doesn't thrash pipelines every
+            // ensureHybridResources call.
+            const auto wantSamples = gbufMsaaSamples_ == 4 ? VK_SAMPLE_COUNT_4_BIT
+                                    : gbufMsaaSamples_ == 2 ? VK_SAMPLE_COUNT_2_BIT
+                                                             : VK_SAMPLE_COUNT_1_BIT;
+            if (wantSamples != gbufMsaaBuiltSamples_) {
+                if (wantSamples == VK_SAMPLE_COUNT_1_BIT) {
+                    // Turned MSAA off — tear down the MS render pass/pipelines.
+                    // The MS *images* are freed by destroyRasterGbufImages,
+                    // called unconditionally from createRasterGbufImages below.
+                    if (rasterGbufPipelineMS != VK_NULL_HANDLE) {
+                        vkDestroyPipeline(ctx->device(), rasterGbufPipelineMS, nullptr);
+                        rasterGbufPipelineMS = VK_NULL_HANDLE;
+                    }
+                    if (rasterGbufIndirectPipelineMS != VK_NULL_HANDLE) {
+                        vkDestroyPipeline(ctx->device(), rasterGbufIndirectPipelineMS, nullptr);
+                        rasterGbufIndirectPipelineMS = VK_NULL_HANDLE;
+                    }
+                    if (rasterGbufDecalPipelineMS != VK_NULL_HANDLE) {
+                        vkDestroyPipeline(ctx->device(), rasterGbufDecalPipelineMS, nullptr);
+                        rasterGbufDecalPipelineMS = VK_NULL_HANDLE;
+                    }
+                    if (rasterGbufRenderPassMS != VK_NULL_HANDLE) {
+                        vkDestroyRenderPass(ctx->device(), rasterGbufRenderPassMS, nullptr);
+                        rasterGbufRenderPassMS = VK_NULL_HANDLE;
+                    }
+                } else {
+                    createRasterGbufRenderPassMS(wantSamples);
+                    createRasterGbufPipelineMS(wantSamples);
+                }
+                gbufMsaaBuiltSamples_ = wantSamples;
+                // Force the image block below to re-run even if the extent
+                // is unchanged — MS attachments/framebuffer must be (re)created
+                // (or freed, on the ==1 branch) for the new sample count.
+                rasterGbufs[0].width = 0;
+            }
             if (overlayWireframePipeline == VK_NULL_HANDLE) {
                 createOverlayPipeline();
             }
@@ -10854,8 +11429,42 @@ namespace threepp {
             // raygen reads it 1:1 by launch coord, so it must launch at the
             // same resolution the gbuffer rasterized at.
             const VkExtent2D ext = renderExtent();
-            if (rasterGbufs[0].width != ext.width || rasterGbufs[0].height != ext.height) {
+            const bool gbufImagesRebuilt =
+                    rasterGbufs[0].width != ext.width || rasterGbufs[0].height != ext.height;
+            if (gbufImagesRebuilt) {
                 createRasterGbufImages(ext.width, ext.height);
+            }
+            // GbufResolve — lazily constructed the first time MSAA turns on;
+            // descriptors rewritten whenever the MS/resolved image views
+            // changed (any image rebuild above) so they never point at
+            // stale/destroyed views.
+            if (gbufMsaaSamples_ > 1) {
+                if (!gbufResolve_) {
+                    gbufResolve_ = std::make_unique<vulkan::GbufResolve>(*ctx, kFramesInFlight);
+                }
+                if (gbufImagesRebuilt) {
+                    std::array<VkImageView, kFramesInFlight> nMS{}, mMS{}, iMS{}, uMS{}, aMS{}, dMS{};
+                    std::array<VkImageView, kFramesInFlight> nR{}, mR{}, iR{}, uR{}, aR{};
+                    for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                        nMS[f] = rasterGbufs[f].normalMS.view;
+                        mMS[f] = rasterGbufs[f].motionMS.view;
+                        iMS[f] = rasterGbufs[f].idsMS.view;
+                        uMS[f] = rasterGbufs[f].uvMS.view;
+                        aMS[f] = rasterGbufs[f].albedoMS.view;
+                        dMS[f] = rasterGbufs[f].depthMS.view;
+                        nR[f]  = rasterGbufs[f].normal.view;
+                        mR[f]  = rasterGbufs[f].motion.view;
+                        iR[f]  = rasterGbufs[f].ids.view;
+                        uR[f]  = rasterGbufs[f].uv.view;
+                        aR[f]  = rasterGbufs[f].albedo.view;
+                    }
+                    vulkan::GbufResolve::DescriptorWriteInputs gin{};
+                    gin.normalMS = nMS.data(); gin.motionMS = mMS.data(); gin.idsMS = iMS.data();
+                    gin.uvMS = uMS.data(); gin.albedoMS = aMS.data(); gin.depthMS = dMS.data();
+                    gin.normalResolved = nR.data(); gin.motionResolved = mR.data();
+                    gin.idsResolved = iR.data(); gin.uvResolved = uR.data(); gin.albedoResolved = aR.data();
+                    gbufResolve_->rewriteDescriptors(gin);
+                }
             }
         }
 
@@ -13273,6 +13882,29 @@ namespace threepp {
             reallocateRenderExtentResources();
         }
 
+        // Raster G-buffer MSAA sample count. 1 (default) = today's single-
+        // sample path, byte-identical output. 2/4 rasterize the G-buffer at
+        // that sample count and resolve with a dominant-sample pick (see
+        // GbufResolve) instead of a box/average resolve — averaging normals/
+        // ids/depth across a silhouette produces nonsense; picking the
+        // majority-covering surface is what a G-buffer needs. Reallocates
+        // render-extent resources (render pass + pipelines + MS images),
+        // same idle-gate as setRenderScale — safe to call from inside the
+        // user's animate lambda.
+        void setGbufferMsaa(uint32_t samples) {
+            const uint32_t clamped = samples >= 4 ? 4u : (samples >= 2 ? 2u : 1u);
+            if (clamped == gbufMsaaSamples_) return;
+            gbufMsaaSamples_ = clamped;
+            if (frameState_ != FrameState::Idle) {
+                pendingRenderScaleRealloc_ = true;// shares the reallocation gate
+                return;
+            }
+            vkDeviceWaitIdle(ctx->device());
+            reallocateRenderExtentResources();
+        }
+
+        [[nodiscard]] uint32_t gbufferMsaa() const { return gbufMsaaSamples_; }
+
         // Mode-specific scene shade. Called from recordCommandBuffer between the
         // shared G-buffer/AS head and the shared bloom/TAA tail. Each leaf
         // overrides this once: VulkanRenderer::Impl dispatches the analytic
@@ -13661,6 +14293,159 @@ namespace threepp {
                 gpuTimings_->begin(cb, TP_RasterGbuf, currentFrame);
                 recordRasterGbufPass(cb, currentFrame);
                 gpuTimings_->end(cb, TP_RasterGbuf, currentFrame);
+
+                // ── MSAA dominant-sample resolve ────────────────────────────
+                // Only when setGbufferMsaa(2|4) is active. The MSAA render
+                // pass's own subpass dependency (createRasterGbufRenderPassMS
+                // deps[1]) already makes the MS attachments visible to
+                // COMPUTE, so gbuf_resolve.comp can read them with no extra
+                // barrier. Its writes then need: compute->compute (the
+                // depth-resolve fragment shader reads idsResolved) and
+                // compute->{fragment,everyone-else} (the resolved colour
+                // images + resolved depth feed every existing G-buffer
+                // consumer downstream).
+                if (gbufMsaaSamples_ > 1 && gbufResolve_ &&
+                    rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE) {
+                    const VkExtent2D resExt = {rasterGbufs[currentFrame].width, rasterGbufs[currentFrame].height};
+                    gpuTimings_->begin(cb, TP_GbufResolve, currentFrame);
+
+                    // The 5 resolved colour images rest at SHADER_READ_ONLY_
+                    // OPTIMAL (every existing consumer's expected layout,
+                    // same as the msaa=1 render pass's own finalLayout) —
+                    // gbuf_resolve.comp's imageStore needs GENERAL. Flip to
+                    // GENERAL for the duration of the compute write, then
+                    // back below.
+                    {
+                        VkImage resolveImgs[5] = {
+                                rasterGbufs[currentFrame].normal.image, rasterGbufs[currentFrame].motion.image,
+                                rasterGbufs[currentFrame].ids.image, rasterGbufs[currentFrame].uv.image,
+                                rasterGbufs[currentFrame].albedo.image};
+                        VkImageMemoryBarrier2 toGeneral[5]{};
+                        for (int i = 0; i < 5; ++i) {
+                            toGeneral[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                            toGeneral[i].srcStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                            toGeneral[i].srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                            toGeneral[i].dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                            toGeneral[i].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                            toGeneral[i].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                            toGeneral[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                            toGeneral[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                            toGeneral[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                            toGeneral[i].image = resolveImgs[i];
+                            toGeneral[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                            toGeneral[i].subresourceRange.levelCount = 1;
+                            toGeneral[i].subresourceRange.layerCount = 1;
+                        }
+                        VkDependencyInfo genDep{};
+                        genDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                        genDep.imageMemoryBarrierCount = 5;
+                        genDep.pImageMemoryBarriers    = toGeneral;
+                        vkCmdPipelineBarrier2(cb, &genDep);
+                    }
+
+                    gbufResolve_->recordComputeResolve(cb, currentFrame, resExt.width, resExt.height, gbufMsaaSamples_);
+
+                    // Compute write (resolved normal/motion/ids/uv/albedo) ->
+                    // fragment read (depth-resolve pass reads idsResolved for
+                    // the dominant index) + compute/fragment read (every
+                    // other consumer). Also flips the layout back to
+                    // SHADER_READ_ONLY_OPTIMAL — every consumer (DeferredShade,
+                    // TaaResolve, raygen hybrid set, debug blit) binds these
+                    // as COMBINED_IMAGE_SAMPLER at that layout, same contract
+                    // as the msaa=1 render pass's own finalLayout.
+                    {
+                        VkImage resolveImgs[5] = {
+                                rasterGbufs[currentFrame].normal.image, rasterGbufs[currentFrame].motion.image,
+                                rasterGbufs[currentFrame].ids.image, rasterGbufs[currentFrame].uv.image,
+                                rasterGbufs[currentFrame].albedo.image};
+                        VkImageMemoryBarrier2 toRead[5]{};
+                        for (int i = 0; i < 5; ++i) {
+                            toRead[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                            toRead[i].srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                            toRead[i].srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                            toRead[i].dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                                      VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                            toRead[i].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                            toRead[i].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                            toRead[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                            toRead[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                            toRead[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                            toRead[i].image = resolveImgs[i];
+                            toRead[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                            toRead[i].subresourceRange.levelCount = 1;
+                            toRead[i].subresourceRange.layerCount = 1;
+                        }
+                        VkDependencyInfo resDep{};
+                        resDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                        resDep.imageMemoryBarrierCount = 5;
+                        resDep.pImageMemoryBarriers    = toRead;
+                        vkCmdPipelineBarrier2(cb, &resDep);
+                    }
+
+                    // Resolved depth image: UNDEFINED/SHADER_READ_ONLY (from
+                    // last frame) -> DEPTH_ATTACHMENT_OPTIMAL for the
+                    // fullscreen depth-resolve write.
+                    VkImageMemoryBarrier2 toDepthAtt{};
+                    toDepthAtt.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    toDepthAtt.srcStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                    toDepthAtt.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                    toDepthAtt.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                               VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                    toDepthAtt.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                    toDepthAtt.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    toDepthAtt.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                    toDepthAtt.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toDepthAtt.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toDepthAtt.image = rasterGbufs[currentFrame].depth.image;
+                    toDepthAtt.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                    toDepthAtt.subresourceRange.levelCount = 1;
+                    toDepthAtt.subresourceRange.layerCount = 1;
+                    VkDependencyInfo depDep{};
+                    depDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    depDep.imageMemoryBarrierCount = 1;
+                    depDep.pImageMemoryBarriers    = &toDepthAtt;
+                    vkCmdPipelineBarrier2(cb, &depDep);
+
+                    gbufResolve_->recordDepthResolve(cb, currentFrame, resExt.width, resExt.height,
+                                                     rasterGbufs[currentFrame].depthMS.view,
+                                                     rasterGbufs[currentFrame].ids.view,
+                                                     rasterGbufs[currentFrame].depth.view);
+
+                    // DEPTH_ATTACHMENT_OPTIMAL -> DEPTH_STENCIL_READ_ONLY
+                    // (the layout every existing consumer — DeferredShade,
+                    // TaaResolve, raygen hybrid set — expects, matching the
+                    // 1x render pass's own depth finalLayout).
+                    VkImageMemoryBarrier2 toRead{};
+                    toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    toRead.srcStageMask  = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                    toRead.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                    toRead.dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                           VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                           VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+                    toRead.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT |
+                                           VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+                    toRead.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                    toRead.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                    toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toRead.image = rasterGbufs[currentFrame].depth.image;
+                    toRead.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                    toRead.subresourceRange.levelCount = 1;
+                    toRead.subresourceRange.layerCount = 1;
+                    VkDependencyInfo readDep{};
+                    readDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    readDep.imageMemoryBarrierCount = 1;
+                    readDep.pImageMemoryBarriers    = &toRead;
+                    vkCmdPipelineBarrier2(cb, &readDep);
+
+                    gpuTimings_->end(cb, TP_GbufResolve, currentFrame);
+                }
                 // ── Overlay depth prepass ──────────────────────────────────
                 // Fills rasterGbufs[currentFrame].unjitDepth with the
                 // unjittered VP. Consumed by the post-TAA wireframe overlay

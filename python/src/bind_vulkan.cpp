@@ -345,6 +345,17 @@ namespace threepp_py {
                                            return std::array<float, 3>{c.x, c.y, c.z};
                                        },
                                        "Integrated sun-disc energy (linear RGB irradiance, valid when env_sun_found).")
+                // MSAA G-buffer (1/2/4 samples, default 1 = off): kills the 1-spp
+                // jittered-coverage edge flicker at the source — dominant-sample
+                // resolve + coverage-blended edges (per-sample shading of the
+                // geometry minority + sky blending). Rasterizes UNJITTERED when
+                // > 1. VRAM cost ≈ samples× the raster attachments; 2 is the
+                // recommended step for foliage/low-poly-heavy scenes.
+                .def_property("gbuffer_msaa",
+                              [](PyVulkanRenderer& r) { return r.native().gbufferMsaa(); },
+                              [](PyVulkanRenderer& r, uint32_t s) { r.native().setGbufferMsaa(s); },
+                              "G-buffer MSAA sample count (1, 2 or 4; default 1 = off). "
+                              "Stabilizes silhouette/edge flicker in the deferred renderer.")
                 // Sun angular radius (deg) → soft directional shadows (adaptive
                 // multi-ray penumbra). 0 = hard single-ray shadow. Real sun ~0.27°.
                 .def_property("sun_angular_radius",

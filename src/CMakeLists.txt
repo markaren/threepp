@@ -613,6 +613,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/VulkanContext.hpp"
             "threepp/renderers/vulkan/VulkanResources.hpp"
             "threepp/renderers/vulkan/AutoExposure.hpp"
+            "threepp/renderers/vulkan/GbufResolve.hpp"
             "threepp/renderers/vulkan/LidarScanner.hpp"
             "threepp/renderers/vulkan/PhotonCaustics.hpp"
             "threepp/renderers/vulkan/Denoiser.hpp"
@@ -647,6 +648,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/OverlayPass.cpp"
             "threepp/renderers/vulkan/TaaResolve.cpp"
             "threepp/renderers/vulkan/AutoExposure.cpp"
+            "threepp/renderers/vulkan/GbufResolve.cpp"
             "threepp/renderers/vulkan/BloomPass.cpp"
             "threepp/renderers/vulkan/DeferredShade.cpp"
             "threepp/renderers/vulkan/ProbeGI.cpp"
@@ -1078,6 +1080,25 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuffer_indirect.vert"
         kGbufferIndirectVertSpv
         _gbuffer_indirect_vert_spv_h)
+    # MSAA G-buffer dominant-sample resolve (VulkanRenderer::setGbufferMsaa,
+    # opt-in, default off). gbuf_resolve.comp picks the majority-covering
+    # instance per pixel from the K raster samples and writes it into the
+    # single-sample resolve targets every existing consumer already reads;
+    # gbuf_resolve_depth.{vert,frag} is a companion fullscreen pass that
+    # resolves depth (compute can't target a depth-aspect image). See
+    # GbufResolve.{hpp,cpp}.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuf_resolve.comp"
+        kGbufResolveCompSpv
+        _gbuf_resolve_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuf_resolve_depth.vert"
+        kGbufResolveDepthVertSpv
+        _gbuf_resolve_depth_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuf_resolve_depth.frag"
+        kGbufResolveDepthFragSpv
+        _gbuf_resolve_depth_frag_spv_h)
     # Hybrid raster TAA: post-denoise temporal resolve. Reads taaInput +
     # history + gbufMotion → writes swapchain + new history.
     compile_vulkan_shader(threepp

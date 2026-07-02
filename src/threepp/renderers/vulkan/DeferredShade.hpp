@@ -90,6 +90,16 @@ namespace threepp::vulkan {
             // UBO's `enabled` flag gates all sampling when probe GI is off.
             VkBuffer           probeShBuf   = VK_NULL_HANDLE;// SH-L1 store
             const VkBuffer*    probeGridUbo = nullptr;       // [framesInFlight]
+            // MSAA raw raster attachments (bindings 38-42) — only meaningful
+            // when setGbufferMsaa > 1; pass a 1x1 dummy MS view/sampler set
+            // otherwise (same "always bound, harmlessly unused" convention
+            // as the ocean/foam dummies above). Consumed only by dispatch B
+            // (shadeMode==1).
+            const VkImageView* gbufNormalMS = nullptr;// [framesInFlight]
+            const VkImageView* gbufDepthMS  = nullptr;// [framesInFlight]
+            const VkImageView* gbufIdsMS    = nullptr;// [framesInFlight]
+            const VkImageView* gbufAlbedoMS = nullptr;// [framesInFlight]
+            const VkImageView* gbufUvMS     = nullptr;// [framesInFlight]
         };
         void rewriteDescriptors(const DescriptorWriteInputs& in);
 
@@ -112,6 +122,17 @@ namespace threepp::vulkan {
         // foam-noise drift so its speed doesn't scale with fps.
         // sunTanHalfAngle: tan of the directional-light angular RADIUS — jitters
         // the primary sun-shadow ray within that cone (0 = hard 1-ray shadow).
+        // gbufMsaaSamples: setGbufferMsaa's sample count (1/2/4). Packed into
+        // spare pc.flags bits (5-6) so dispatch A can weight complex pixels
+        // by their dominant-cluster fraction and blend sky-minority coverage;
+        // 1 = today's behaviour (no weighting, MS G-buffer bindings unused).
+        // shadeMode: 0 = dispatch A (always). 1 = dispatch B, the MSAA
+        // per-sample edge-shading pass — caller only issues this when
+        // gbufMsaaSamples > 1, AFTER dispatch A and a compute->compute
+        // barrier (dispatch B reads dispatch A's outImage write).
+        // shadeBActive: whether dispatch B WILL run this frame — dispatch A
+        // reserves the geometry-minority coverage weight only then (flags
+        // bit 7); otherwise it folds that weight into the dominant surface.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t width, uint32_t height, uint32_t envMipCount,
                             bool shadows, bool ao, uint32_t frameCounter,
@@ -122,7 +143,9 @@ namespace threepp::vulkan {
                             float volDensity, float volAniso,
                             float starIntensity,
                             float camDeltaLen, float camRotAngle,
-                            float timeSec, float sunTanHalfAngle);
+                            float timeSec, float sunTanHalfAngle,
+                            uint32_t gbufMsaaSamples = 1, uint32_t shadeMode = 0,
+                            bool shadeBActive = false);
 
         // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
         // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor

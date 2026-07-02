@@ -1,0 +1,123 @@
+#version 460
+
+// Dominant-sample resolve for the MSAA raster G-buffer (VulkanRenderer,
+// setGbufferMsaa(2|4)). Runs once per frame, right after the MSAA raster
+// pass (recordRasterGbufPass) and before every existing single-sample
+// consumer (DeferredShade, TaaResolve, raygen hybrid set, debug blit) —
+// none of which change: they keep reading rasterGbufs[f].{normal,motion,
+// ids,uv,albedo} exactly as before; this pass is what fills those images
+// when MSAA is on.
+//
+// Per pixel: read all K raster samples' instance id (ids.x) + reversed-Z
+// depth. The DOMINANT sample is the one whose instance id has the most
+// votes among the K samples; ties break toward the NEAREST sample (largest
+// reversed-Z depth — near=1, far=0). Write that sample's normal/motion/uv/
+// albedo/ids into the resolve targets verbatim (byte-identical to what a
+// 1-sample raster pass would have produced, msaa=1 aside — this is why a
+// majority-of-K pick is far more jitter-stable than the current 1-sample
+// pick: the majority only flips when the TRUE coverage flips, not on every
+// sub-pixel jitter step).
+//
+// ids.w (verified unused by every consumer: gbuffer.frag writes it 0,
+// deferred_shade.comp never reads it) is repurposed to carry per-pixel
+// MSAA metadata for Phase 2 (per-sample shading at complex/edge pixels):
+//   bits 0..3  = "same cluster as dominant" mask, one bit per sample index
+//                (bit set => that sample's id matches the dominant id AND
+//                |depth - domDepth| <= max(1e-6, domDepth*0.15), i.e. same
+//                surface within a reversed-Z relative epsilon)
+//   bits 4..5  = dominant sample index (0..3)
+//   bit 15     = complex flag: 1 if any live sample falls OUTSIDE the
+//                dominant cluster (an edge/silhouette pixel), 0 otherwise
+// Simple (non-edge) pixels: mask = all K bits set, complex = 0.
+//
+// Depth cannot be written here (compute shaders cannot target a depth-
+// aspect image) — see gbuf_resolve_depth.vert/.frag, a tiny fullscreen pass
+// that resolves depth by re-deriving the same dominant-sample pick from the
+// ALREADY-RESOLVED ids.w metadata (dominant sample index in bits 4..5), so
+// the two passes never disagree on which sample won.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2DMS  normalMS;
+layout(set = 0, binding = 1) uniform sampler2DMS  motionMS;
+layout(set = 0, binding = 2) uniform usampler2DMS idsMS;
+layout(set = 0, binding = 3) uniform sampler2DMS  uvMS;
+layout(set = 0, binding = 4) uniform sampler2DMS  albedoMS;
+layout(set = 0, binding = 5) uniform sampler2DMS  depthMS;
+
+layout(set = 0, binding = 6,  rgba16f) uniform writeonly image2D normalOut;
+layout(set = 0, binding = 7,  rgba16f) uniform writeonly image2D motionOut;
+layout(set = 0, binding = 8,  rgba16ui) uniform writeonly uimage2D idsOut;
+layout(set = 0, binding = 9,  rgba16f) uniform writeonly image2D uvOut;
+layout(set = 0, binding = 10, rgba8) uniform writeonly image2D albedoOut;
+
+layout(push_constant) uniform Pc {
+    uint width;
+    uint height;
+    uint sampleCount;// 2 or 4
+} pc;
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
+
+    const int K = int(pc.sampleCount);
+
+    // Pass 1: gather each sample's instance id + reversed-Z depth.
+    uint  ids[4];
+    float depths[4];
+    for (int i = 0; i < K; ++i) {
+        ids[i]    = texelFetch(idsMS, px, i).x;
+        depths[i] = texelFetch(depthMS, px, i).x;
+    }
+
+    // Majority vote over instance id (small K -> O(K^2) tally is cheapest).
+    // Sky (id==0) participates like any other id — a pixel that's mostly
+    // sky resolves to sky, exactly matching what a 1-sample raster pass at
+    // that pixel would most likely have produced.
+    int bestIdx = 0;
+    int bestVotes = 0;
+    for (int i = 0; i < K; ++i) {
+        int votes = 0;
+        for (int j = 0; j < K; ++j) if (ids[j] == ids[i]) ++votes;
+        // Ties broken by nearest depth (largest reversed-Z value). Strict
+        // '>' on votes keeps the FIRST (nearest-so-far, since we also use
+        // '>' below) sample among equally-voted groups; explicit depth
+        // check handles the actual near/far tie-break.
+        if (votes > bestVotes ||
+            (votes == bestVotes && depths[i] > depths[bestIdx])) {
+            bestVotes = votes;
+            bestIdx   = i;
+        }
+    }
+    const uint  domId    = ids[bestIdx];
+    const float domDepth = depths[bestIdx];
+
+    // Cluster mask: samples matching the dominant id AND within a depth
+    // epsilon (handles two nearly-coplanar triangles of the SAME instance
+    // rasterizing at slightly different z — they should count as one
+    // surface, not fracture the cluster). Reversed-Z: epsilon scales with
+    // the dominant depth's own magnitude.
+    const float eps = max(1e-6, domDepth * 0.15);
+    uint clusterMask = 0u;
+    bool complex = false;
+    for (int i = 0; i < K; ++i) {
+        const bool sameCluster = (ids[i] == domId) && (abs(depths[i] - domDepth) <= eps);
+        if (sameCluster) clusterMask |= (1u << uint(i));
+        else complex = true;
+    }
+
+    const uint idsW = (clusterMask & 0xFu) | (uint(bestIdx) << 4u) | (complex ? 0x8000u : 0u);
+
+    const vec4  nTap = texelFetch(normalMS, px, bestIdx);
+    const vec4  mTap = texelFetch(motionMS, px, bestIdx);
+    const vec4  uTap = texelFetch(uvMS, px, bestIdx);
+    const vec4  aTap = texelFetch(albedoMS, px, bestIdx);
+    const uvec4 iTap = texelFetch(idsMS, px, bestIdx);// .x==.y==domId, .z=flags
+
+    imageStore(normalOut, px, nTap);
+    imageStore(motionOut, px, mTap);
+    imageStore(idsOut, px, uvec4(iTap.x, iTap.y, iTap.z, idsW));
+    imageStore(uvOut, px, uTap);
+    imageStore(albedoOut, px, aTap);
+}

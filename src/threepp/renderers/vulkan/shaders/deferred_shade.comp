@@ -72,7 +72,10 @@ layout(set = 0, binding = 3) uniform sampler2D  gbufNormalTex; // .xyz = n*0.5+0
 layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;  // .x = Vulkan NDC z [0,1]
 layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;    // .x = instanceId+1 (0 == sky)
 layout(set = 0, binding = 6) uniform sampler2D  gbufAlbedoTex; // .rgb = albedo, .a = metalness
-layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D outImage;
+// Not writeonly: dispatch B (shadeMode==1, per-sample edge shading) does a
+// read-modify-write accumulate (imageLoad + imageStore) into pixels dispatch
+// A already wrote. Dispatch A's own stores are still plain writes.
+layout(set = 0, binding = 7, rgba16f) uniform image2D outImage;
 layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
 layout(set = 0, binding = 9, scalar) readonly buffer MatBuf  { MaterialDesc mats[]; };
 
@@ -185,6 +188,18 @@ layout(set = 0, binding = 37, scalar) uniform ProbeGridUbo {
     ivec3 dims;    int   _pad1;
 } probeGrid;
 
+// ── MSAA per-sample edge shading (dispatch B, shadeMode==1 only) ───────────
+// Raw MS raster attachments — bound only when setGbufferMsaa(2|4) is active;
+// 1x1 dummy MS views otherwise (same "always bound, harmlessly unused"
+// pattern as the ocean/foam dummy textures elsewhere in this shader).
+// texelFetch(tex, px, sampleIdx) reads ONE live sample directly, bypassing
+// the dominant-sample resolve gbuf_resolve.comp already did for dispatch A.
+layout(set = 0, binding = 38) uniform sampler2DMS  gbufNormalMS;
+layout(set = 0, binding = 39) uniform sampler2DMS  gbufDepthMS;
+layout(set = 0, binding = 40) uniform usampler2DMS gbufIdsMS;
+layout(set = 0, binding = 41) uniform sampler2DMS  gbufAlbedoMS;
+layout(set = 0, binding = 42) uniform sampler2DMS  gbufUvMS;
+
 #include "probe_common.glsl"// probeIrradiance()
 
 layout(push_constant) uniform Pc {
@@ -205,6 +220,11 @@ layout(push_constant) uniform Pc {
     float camRot;            // camera forward-direction change this frame (rad)
     float timeSec;           // wall-clock seconds — foam noise drift (frame-rate independent)
     float sunTanHalfAngle;   // tan(directional-light angular RADIUS) — soft sun-shadow cone; 0 = hard 1-ray shadow
+    uint  shadeMode;         // 0 = dispatch A (today's shading over the resolved G-buffer, always runs).
+                              // 1 = dispatch B (MSAA only): per-sample shading at COMPLEX (edge) pixels —
+                              // early-outs elsewhere; shades the single largest non-dominant sample cluster
+                              // and accumulates its weighted contribution into outImage. See main()'s top
+                              // (tap selection) and bottom (imageStore gating) for the shadeMode==1 branches.
 } pc;
 
 // ReBLUR-style TEMPORAL accumulation for the reflection (+ glass). Adaptive blend
@@ -2678,6 +2698,78 @@ void main() {
     const vec2 size = vec2(float(pc.width), float(pc.height));
     const vec2 uv   = (vec2(px) + 0.5) / size;
 
+    // ── MSAA sample count (setGbufferMsaa; 0=1x/1=2x/2=4x, pc.flags bits 5-6) ──
+    const uint msaaCode = (pc.flags >> 5u) & 0x3u;
+    const int  K = (msaaCode == 2u) ? 4 : (msaaCode == 1u ? 2 : 1);
+
+    // ── Dispatch B (shadeMode==1, MSAA edge shading) gate + tap selection ──
+    // ids.w's bit 15 (packed by gbuf_resolve.comp) marks pixels where at
+    // least one raster sample fell outside the dominant surface cluster — an
+    // edge/silhouette pixel. Non-complex pixels are already fully correct
+    // from dispatch A (the dominant sample IS the only sample), so bail
+    // immediately: this keeps dispatch B's cost proportional to edge pixel
+    // count, not frame resolution.
+    // FALLBACK VARIANT (documented in the MSAA plan): rather than looping
+    // every non-dominant cluster, this shades AT MOST the single largest
+    // non-dominant cluster and folds the rest of the minority weight into
+    // it — 2-cluster pixels (~99% of real edges) are exact; 3+-cluster
+    // pixels get one representative sample standing in for the whole
+    // minority, a documented approximation.
+    const uint idsW0 = texelFetch(gbufIdsTex, px, 0).w;
+    const bool isComplex = (idsW0 & 0x8000u) != 0u;
+    if (pc.shadeMode == 1u && !isComplex) return;
+
+    // Coverage accounting at complex pixels — the three weights sum to
+    // exactly 1.0: dispatch A stores domWeight·lit PLUS skyEdgeW·sky (the
+    // sky needs no per-sample shading, it is a background colour dispatch A
+    // can evaluate itself — an earlier version skipped sky minorities
+    // entirely, which forfeited edge AA on exactly the most visible edges,
+    // every silhouette against the sky), and dispatch B adds geoMinW·lit
+    // for the non-sky minority. When dispatch B is NOT active (flags bit 7
+    // clear) the geometry-minority weight folds back into the dominant
+    // surface so no energy is lost.
+    const uint domMask0 = idsW0 & 0xFu;
+    float domWeight = 1.0;
+    float skyEdgeW  = 0.0;
+    if (pc.shadeMode == 0u && isComplex && K > 1) {
+        const uint domIdx0 = (idsW0 >> 4u) & 0x3u;
+        int skyCount = 0, geoMinCount = 0;
+        for (int i = 0; i < K; ++i) {
+            if (i == int(domIdx0) || (domMask0 & (1u << uint(i))) != 0u) continue;
+            if (texelFetch(gbufIdsMS, px, i).x == 0u) ++skyCount;
+            else ++geoMinCount;
+        }
+        skyEdgeW = float(skyCount) / float(K);
+        const float geoMinW = ((pc.flags & 128u) != 0u) ? float(geoMinCount) / float(K) : 0.0;
+        domWeight = 1.0 - skyEdgeW - geoMinW;
+    }
+
+    int msSampleIdx = -1;// >=0 selects the MS per-sample taps below
+    float msWeight = 1.0;// dispatch-B contribution weight (geo-minority population / K)
+    if (pc.shadeMode == 1u) {
+        const uint domMask = idsW0 & 0xFu;
+        const uint domIdx  = (idsW0 >> 4u) & 0x3u;
+        int bestCluster = -1, bestCount = 0, geoMinCount = 0;
+        for (int i = 0; i < K; ++i) {
+            if (i == int(domIdx) || (domMask & (1u << uint(i))) != 0u) continue;// skip dominant cluster members
+            if (texelFetch(gbufIdsMS, px, i).x == 0u) continue;// skip sky — dispatch A blends it as a background colour
+            ++geoMinCount;
+            int count = 1;
+            for (int j = i + 1; j < K; ++j) {
+                if (j == int(domIdx) || (domMask & (1u << uint(j))) != 0u) continue;
+                if (texelFetch(gbufIdsMS, px, j).x == texelFetch(gbufIdsMS, px, i).x) ++count;
+            }
+            if (count > bestCount) { bestCount = count; bestCluster = i; }
+        }
+        if (bestCluster < 0) return;// pure sky/geometry edge — dispatch A handled the whole pixel
+        msSampleIdx = bestCluster;
+        // Weight = the ENTIRE non-sky minority population (any 3rd cluster
+        // folds onto this representative — the documented fallback
+        // approximation). Must mirror dispatch A's reserved geoMinW exactly
+        // or the pixel gains/loses energy.
+        msWeight = float(geoMinCount) / float(K);
+    }
+
     // Jitter-aware NDC. The G-buffer is rasterized with a sub-pixel jittered
     // projection (TSR), so the depth at this pixel belongs to geometry whose
     // UNJITTERED NDC is offset by the jitter. Add it back before reconstructing
@@ -2690,9 +2782,14 @@ void main() {
     const vec3 camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
     const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
 
-    const uint id = texelFetch(gbufIdsTex, px, 0).x;// 0 == sky
+    const uint id = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx).x
+                                        : texelFetch(gbufIdsTex, px, 0).x;// 0 == sky
 
     if (id == 0u) {
+        // Dispatch B never shades sky (a sky sample can't be the "largest
+        // non-dominant cluster" of a real surface pixel in practice, but
+        // guard anyway — sky has no lit contribution to accumulate).
+        if (pc.shadeMode == 1u) return;
         const vec4 tVS   = cam.projInverse * vec4(ndc, 1.0, 1.0);
         const vec3 dirVS = normalize(tVS.xyz / tVS.w);
         const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
@@ -2707,13 +2804,14 @@ void main() {
         return;
     }
 
-    const vec4  nTap   = texelFetch(gbufNormalTex, px, 0);
-    const vec4  am     = texelFetch(gbufAlbedoTex, px, 0);
+    const vec4  nTap   = (msSampleIdx >= 0) ? texelFetch(gbufNormalMS, px, msSampleIdx) : texelFetch(gbufNormalTex, px, 0);
+    const vec4  am     = (msSampleIdx >= 0) ? texelFetch(gbufAlbedoMS, px, msSampleIdx) : texelFetch(gbufAlbedoTex, px, 0);
     const vec3  albedo = am.rgb;
 
     // Unlit (MeshBasicMaterial, roughness sentinel < 0): emit base colour
     // (fogged by primary distance — three.js fogs basic materials too).
     if (nTap.w < 0.0) {
+        if (pc.shadeMode == 1u) return;// dispatch B: skip (rare — unlit minority sample at an edge)
         const float depthU = texelFetch(gbufDepthTex, px, 0).x;
         const vec4  vhU    = cam.projInverse * vec4(ndc, depthU, 1.0);
         const vec3  wpU    = (cam.viewInverse * vec4(vhU.xyz / vhU.w, 1.0)).xyz;
@@ -2723,7 +2821,7 @@ void main() {
     }
 
     // Reconstruct world position from depth.
-    const float depth    = texelFetch(gbufDepthTex, px, 0).x;
+    const float depth    = (msSampleIdx >= 0) ? texelFetch(gbufDepthMS, px, msSampleIdx).x : texelFetch(gbufDepthTex, px, 0).x;
     const vec4  viewH    = cam.projInverse * vec4(ndc, depth, 1.0);
     const vec3  worldPos = (cam.viewInverse * vec4(viewH.xyz / viewH.w, 1.0)).xyz;
 
@@ -2766,7 +2864,7 @@ void main() {
     // (e.g. the SWAT exoskeleton) glow full white. The primary UV comes from the
     // G-buffer (gbuffer.frag attachment 3). Mirrors the reflection-hit path
     // (hitTex at the hit UV); texIndex < 0 → factor unchanged (no regression).
-    const vec2 primUv     = texelFetch(gbufUvTex, px, 0).rg;
+    const vec2 primUv     = (msSampleIdx >= 0) ? texelFetch(gbufUvMS, px, msSampleIdx).rg : texelFetch(gbufUvTex, px, 0).rg;
     const vec3 emissive   = hitTex(pm.emissiveTexIndex, pm.uvTransformEmissive, primUv,
                                    pm.emissive * pm.emissiveIntensity);
 
@@ -2811,6 +2909,13 @@ void main() {
     // it milky-teal ocean water instead of clear refraction. Thin-walled glass
     // now falls through to the refractive glass branch below like closed glass.
     if (pm.thinWalled != 0 && pm.transmission > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
+        // Dispatch B skips water's minority-sample refinement (rare at an
+        // ocean's silhouette against sky/terrain, and shadeWater's own
+        // internal accumulation state is dispatch-A-only) — dispatch A's
+        // dominant-sample result stands alone for these pixels, same as
+        // pre-Phase-2 behaviour. Not a regression: msaa=1 never reaches here
+        // with shadeMode==1 at all.
+        if (pc.shadeMode == 1u) return;
         vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
                                shadowsOn, maxLod, pc.frame, seed);
         wcol = applySceneFog(wcol, camPos, worldPos);
@@ -2842,7 +2947,11 @@ void main() {
     // the INLINE path uses the DETERMINISTIC GI (1-spp would just be noisy there —
     // that was the transparent-quad wobble).
     const bool denoiseOn = (pc.flags & 4u) != 0u;
-    const bool demodIndirect = denoiseOn && (pm.transmission <= 0.0) &&
+    // Dispatch B forces the INLINE path (demodIndirect=false) — same
+    // precedent as glass/sheen: a self-contained pixel color with no
+    // dependency on the demod GI accumulator's cross-frame state, which
+    // dispatch B never writes (see the GI/SVGF gate near the end of main()).
+    const bool demodIndirect = pc.shadeMode != 1u && denoiseOn && (pm.transmission <= 0.0) &&
                                (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
 
     // ADAPTIVE GI SAMPLE COUNT — probe the reprojected prev history length (binding
@@ -2910,7 +3019,16 @@ void main() {
     const bool aoOn = (pc.flags & 2u) != 0u;
     if (!aoOn) giSkip = false;// checkerboard only pays off on the RT gather
     vec3 diffInd;
-    if (giSkip) {
+    if (pc.shadeMode == 1u) {
+        // Dispatch B: cheap deterministic env sample only — no RT gather, no
+        // ReSTIR (both own dispatch-A-exclusive temporal state: the GI
+        // accumulator and the reservoir ping-pong). A minority sample's
+        // indirect term is a small correction at an edge pixel; the same
+        // cost/accuracy call as the inline reflection fold-in above. This is
+        // the GI-recombine-albedo approximation documented at the SVGF gate
+        // near the end of main().
+        diffInd = sampleEnvLod(N, maxLod) + lights.ambient;
+    } else if (giSkip) {
         diffInd = vec3(0.0);// unused — the accumulation below carries history
         // ReSTIR reservoirs PING-PONG (read prev fif, write curr): a skipped
         // pixel must still pass its reservoir through, or next frame's read
@@ -2930,7 +3048,7 @@ void main() {
     // converges light selection; this denoises the 1-sample radiance). Added before
     // the demod split so it flows through BOTH the denoise accum path AND the inline
     // (denoise-off) path. restirEmissiveDI also persists this pixel's reservoir.
-    if (!giSkip && (pc.flags & 8u) != 0u) {
+    if (pc.shadeMode != 1u && !giSkip && (pc.flags & 8u) != 0u) {
         const float rNdotV = max(dot(N, V), 1e-4);
         diffInd += restirEmissiveDI(worldPos, N, rNdotV, F0, shadowsOn);// F0 already iridescence-modulated
     }
@@ -3117,7 +3235,15 @@ void main() {
         if (rl > reflClamp) r *= reflClamp / rl;
         reflOut = r * (F0 * ab.x + ab.y) * reflBlend;
     }
-    if (demodIndirect) {
+    if (pc.shadeMode == 1u) {
+        // Dispatch B: fold the reflection term in INLINE (no reflSVGFTemporal —
+        // that's a cross-frame temporal accumulator keyed to the dominant-
+        // sample reflectImage channel; dispatch A owns it exclusively). The
+        // minority sample's reflection is a small correction at an edge
+        // pixel, not a full BRDF-lobe integral — inline-and-move-on is the
+        // right cost/accuracy tradeoff here.
+        lit += reflOut;
+    } else if (demodIndirect) {
         // Denoise ON: temporally AA the sharp reflection, then hand it to the
         // roughness-blur denoise pass.
         imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N, length(worldPos - camPos), reflSkip));
@@ -3136,58 +3262,112 @@ void main() {
     // pure glass; 0.8 → 80% glass + 20% the opaque PBR above). shadeGlass does
     // the 2-interface refraction either way (a thin shell just has a short
     // in-glass path → minimal tint → near-clear).
-    if (pm.transmission > 1.0) {
-        // ADDITIVE blend (muzzle flashes, sparks, energy glows). The surface
-        // GLOWS over the scene behind: dst = behind + src*strength. The opaque
-        // G-buffer already overwrote the scene behind this pixel, so re-trace a
-        // straight (-V) ray to recover it. Host encodes strength = transmission-1
-        // (transmission>1 is the additive marker).
-        const float strength = clamp(pm.transmission - 1.0, 0.0, 1.0);
-        const vec3  behind   = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
-                                             /*cheapHits=*/false,// straight into lit, unblurred
-                                             /*probeHitFill=*/false);// content behind a blend surface
-        lit = behind + lit * strength;
-    } else if (pm.transmission > 0.0) {
-        if (pm.ior < 1.05) {
-            // CLEAN ALPHA blend (transparent, opacity<1; host sets ior=1,
-            // transmission=1-opacity). Straight-through to the re-traced scene
-            // behind, blended by opacity — flat alpha, NO glass Fresnel/refraction
-            // darkening. (One transparent layer over opaque: the behind ray sees
-            // opaque geometry shaded as PBR; overlapping transparent isn't sorted.)
-            const float opacity = 1.0 - clamp(pm.transmission, 0.0, 1.0);
-            const vec3  behind  = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
-                                                /*cheapHits=*/false,// straight into lit, unblurred
-                                                /*probeHitFill=*/false);// content behind a blend surface
-            lit = mix(behind, lit, opacity);
-        } else {
-            // REAL refractive glass (ior>1). ONE sharp Fresnel reflect+refract
-            // sample (no ghost copies); the reflection denoise blurs it by the glass
-            // roughness (the frost) + recombines — same channel as opaque reflections.
-            const float gt       = clamp(pm.transmission, 0.0, 1.0);
-            const vec3  glassCol = shadeGlass(worldPos, N, V, pm, albedo, shadowsOn, maxLod, seed);
-            if (denoiseOn) {
-                // Demodulate the mix(): hand glassCol·t to the reflection denoise
-                // (which ADDS blur(reflect)) and scale the opaque base by (1-t), so
-                // the recombine reconstructs mix(lit, blur(glass), t) — frosted.
-                // Same clamped roughness as shadeGlass (PT-parity cap) so the
-                // denoise blur matches the lobe that produced the sample.
-                const float gr = glassRough(pm.roughness);
-                // .a NEGATIVE = glass marker: the denoise gives it a minimum AA blur
-                // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
-                // curved surface — refraction is far more normal-sensitive than
-                // reflection, so 1 ray aliases into blocky speckles without it.
-                imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N, length(worldPos - camPos), /*hold=*/false));// glass: full rate (refraction aliases at half)
-                lit = lit * (1.0 - gt);
+    // Dispatch B skips the additive/alpha-blend/glass refinement entirely —
+    // all three re-trace a full radiance path (traceRadiance/shadeGlass) and
+    // the glass branch also owns a reflectImage temporal slot exclusively
+    // via reflSVGFTemporal (dispatch-A state). A minority sample landing on
+    // transmissive geometry at an edge keeps dispatch A's dominant-sample
+    // result — same as the pre-Phase-2 (msaa=1) behaviour for that pixel,
+    // not a regression, just an untreated edge on (rare) glass/blend props.
+    if (pc.shadeMode != 1u) {
+        if (pm.transmission > 1.0) {
+            // ADDITIVE blend (muzzle flashes, sparks, energy glows). The surface
+            // GLOWS over the scene behind: dst = behind + src*strength. The opaque
+            // G-buffer already overwrote the scene behind this pixel, so re-trace a
+            // straight (-V) ray to recover it. Host encodes strength = transmission-1
+            // (transmission>1 is the additive marker).
+            const float strength = clamp(pm.transmission - 1.0, 0.0, 1.0);
+            const vec3  behind   = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
+                                                 /*cheapHits=*/false,// straight into lit, unblurred
+                                                 /*probeHitFill=*/false);// content behind a blend surface
+            lit = behind + lit * strength;
+        } else if (pm.transmission > 0.0) {
+            if (pm.ior < 1.05) {
+                // CLEAN ALPHA blend (transparent, opacity<1; host sets ior=1,
+                // transmission=1-opacity). Straight-through to the re-traced scene
+                // behind, blended by opacity — flat alpha, NO glass Fresnel/refraction
+                // darkening. (One transparent layer over opaque: the behind ray sees
+                // opaque geometry shaded as PBR; overlapping transparent isn't sorted.)
+                const float opacity = 1.0 - clamp(pm.transmission, 0.0, 1.0);
+                const vec3  behind  = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
+                                                    /*cheapHits=*/false,// straight into lit, unblurred
+                                                    /*probeHitFill=*/false);// content behind a blend surface
+                lit = mix(behind, lit, opacity);
             } else {
-                lit = mix(lit, glassCol, gt);// denoise off → inline (sharp, no frost)
+                // REAL refractive glass (ior>1). ONE sharp Fresnel reflect+refract
+                // sample (no ghost copies); the reflection denoise blurs it by the glass
+                // roughness (the frost) + recombines — same channel as opaque reflections.
+                const float gt       = clamp(pm.transmission, 0.0, 1.0);
+                const vec3  glassCol = shadeGlass(worldPos, N, V, pm, albedo, shadowsOn, maxLod, seed);
+                if (denoiseOn) {
+                    // Demodulate the mix(): hand glassCol·t to the reflection denoise
+                    // (which ADDS blur(reflect)) and scale the opaque base by (1-t), so
+                    // the recombine reconstructs mix(lit, blur(glass), t) — frosted.
+                    // Same clamped roughness as shadeGlass (PT-parity cap) so the
+                    // denoise blur matches the lobe that produced the sample.
+                    const float gr = glassRough(pm.roughness);
+                    // .a NEGATIVE = glass marker: the denoise gives it a minimum AA blur
+                    // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
+                    // curved surface — refraction is far more normal-sensitive than
+                    // reflection, so 1 ray aliases into blocky speckles without it.
+                    imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N, length(worldPos - camPos), /*hold=*/false));// glass: full rate (refraction aliases at half)
+                    lit = lit * (1.0 - gt);
+                } else {
+                    lit = mix(lit, glassCol, gt);// denoise off → inline (sharp, no frost)
+                }
             }
         }
     }
 
+    // Volumetric spot/directional scatter is a per-PIXEL view-ray integral
+    // (independent of which G-buffer sample "won" that pixel) — dispatch A
+    // already added it once; dispatch B must NOT add it again (would double-
+    // count the beam/aerial contribution at every complex pixel). Fog
+    // extinction, in contrast, multiplies the surface radiance itself
+    // (different per sample's worldPos/albedo), so both dispatches apply it
+    // to their own `lit`.
     lit = applySceneFog(lit, camPos, worldPos);// extinction first; the beam march carries its own
-    lit += volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
-    lit += volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);// sun shafts / aerial glow
-    imageStore(outImage, px, vec4(lit, 1.0));
+    if (pc.shadeMode == 0u) {
+        lit += volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
+        lit += volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);// sun shafts / aerial glow
+    }
+    if (pc.shadeMode == 1u) {
+        // Dispatch B: weighted accumulate into dispatch A's already-written
+        // pixel (which stored domWeight*lit for the SAME complex pixel — see
+        // domWeight above; domWeight + msWeight sums the K samples' cluster
+        // populations back to exactly K/K = 1.0 for the 2-cluster case).
+        // Safe read-modify-write — dispatch B is the ONLY writer at this
+        // point for complex pixels (dispatch A finished and barriered before
+        // dispatch B starts), and each pixel is touched by exactly one
+        // invocation, so there's no cross-invocation race.
+        const vec3 base = imageLoad(outImage, px).rgb;
+        imageStore(outImage, px, vec4(base + lit * msWeight, 1.0));
+    } else {
+        // Dispatch A: at a complex pixel, scale down by the dominant
+        // cluster's population fraction and blend the SKY minority's
+        // coverage right here (sky is a background colour — no per-sample
+        // shading needed; this is what anti-aliases every silhouette
+        // against the sky). Simple pixels and msaa=1 keep domWeight==1,
+        // skyEdgeW==0 — byte-identical to the pre-MSAA output.
+        vec3 outC = lit * domWeight;
+        if (skyEdgeW > 0.0) {
+            const vec4 tVS   = cam.projInverse * vec4(ndc, 1.0, 1.0);
+            const vec3 dirVS = normalize(tVS.xyz / tVS.w);
+            const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
+            outC += skyEdgeW * applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
+        }
+        imageStore(outImage, px, vec4(outC, 1.0));
+    }
+    // Dispatch B never touches the GI/SVGF accumulator channels (indirect/
+    // momentsImage) — those are dispatch-A-exclusive temporal state keyed to
+    // the DOMINANT sample; a minority sample writing a second, DIFFERENT
+    // "current" value into the same pixel's accumulator would corrupt next
+    // frame's history for every consumer (denoise, GI reproject). This is
+    // the GI-recombine-albedo approximation noted in the MSAA plan: complex
+    // pixels' indirect lighting is entirely the dominant sample's — a static
+    // bias at edges, not fixed in this pass.
+    if (pc.shadeMode == 1u) return;
+
     // SVGF TEMPORAL stage for the demod GI — now with REPROJECTION (kills motion
     // ghosting). Read the 1-frame GI history (the OTHER fif index, giPrevTex) at
     // the MOTION-REPROJECTED pixel, exp-moving-average the current stochastic GI
@@ -3225,7 +3405,9 @@ void main() {
             // surface for irradiance-history purposes, so compare
             // orientation-agnostically. Single-sided geometry keeps the
             // signed test (a wall's two faces ARE different surfaces).
-            const bool dsided = (texelFetch(gbufIdsTex, px, 0).z & 16u) != 0u;
+            const uint flagsZ = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx).z
+                                                    : texelFetch(gbufIdsTex, px, 0).z;
+            const bool dsided = (flagsZ & 16u) != 0u;
             bool found = false;
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
