@@ -311,6 +311,11 @@ void main() {
     const vec3  Pc     = worldFromDepth(px, texelFetch(gbufDepthTex, px, 0).x);
     const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
     const float planeScale = 1.0 / max(0.035 * length(Pc - camPos), 1e-3);
+    // Double-sided surface (ids flags bit 4): the raster flips N viewer-ward,
+    // so neighbouring texels of one cutout card can carry OPPOSITE normals —
+    // a signed pow-48 stop then refuses the card's own neighbours and the
+    // 1-spp GI noise survives unfiltered. ±N is the same surface there.
+    const bool dsided = (texelFetch(gbufIdsTex, px, 0).z & 16u) != 0u;
 
     vec4  cC   = readSrc(px);
     float lumC = dot(cC.rgb, LUMA);
@@ -392,7 +397,9 @@ void main() {
         const vec4 nq = texelFetch(gbufNormalTex, q, 0);
         if (nq.w < 0.0) continue;
         const vec3  Nq = normalize(nq.xyz * 2.0 - 1.0);
-        const float wn = pow(max(dot(Nc, Nq), 0.0), 48.0);// normal edge stop (crisp at creases)
+        float ndq = dot(Nc, Nq);
+        if (dsided) ndq = abs(ndq);// ±N = same surface on double-sided cards
+        const float wn = pow(max(ndq, 0.0), 48.0);// normal edge stop (crisp at creases)
         if (wn <= 0.0) continue;
         const vec3  Pq = worldFromDepth(q, texelFetch(gbufDepthTex, q, 0).x);
         const float wz = exp(-abs(dot(Pq - Pc, Nc)) * planeScale);// tangent-plane edge stop

@@ -7643,10 +7643,20 @@ namespace threepp {
                 }
                 di.instanceCustomIndex = static_cast<uint32_t>(i);
                 // Flag bits match the old gbuffer.vert push-constant layout:
-                //   bit 0 = is_water (DisplacedMesh), bit 3 = is_skinned.
+                //   bit 0 = is_water (DisplacedMesh), bit 3 = is_skinned,
+                //   bit 4 = double-sided material (Side::Double).
                 uint32_t flags = 0u;
                 if (en.isDisplaced) flags |= 1u;
                 if (en.isSkinned)   flags |= 8u;
+                // DOUBLE_SIDED: gbuffer.frag flips N toward the viewer, so on
+                // cutout foliage the jittered coverage flips a pixel's normal
+                // SIGN frame to frame. The GI temporal reproject + SVGF normal
+                // edge-stop must treat ±N as the SAME surface there (flag
+                // consumed in deferred_shade.comp / deferred_denoise.comp) or
+                // the GI history cold-starts every frame — measured as 8× the
+                // frame-to-frame flicker on a procedural tree canopy.
+                if (auto sm = en.mesh->material(); sm && sm->side == Side::Double)
+                    flags |= 16u;
                 di.flags   = flags;
                 di.indexed = indexed ? 1u : 0u;
                 // polygonOffset → per-mesh clip-z depth bias (decals). Reverse-Z:

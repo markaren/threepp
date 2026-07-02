@@ -3180,14 +3180,26 @@ void main() {
         if (valid) {
             const ivec2 ip = ivec2(prevUv * vec2(float(pc.width), float(pc.height)));
             const ivec2 mx = ivec2(int(pc.width), int(pc.height)) - 1;
+            // DOUBLE-SIDED surfaces (ids flags bit 4): the raster flips N to
+            // face the viewer, so on cutout foliage the jittered coverage
+            // flips a pixel's normal SIGN frame to frame — a signed test then
+            // cold-starts the GI history EVERY frame (1-spp boil across a
+            // tree canopy, read as "flickering shadows"; single-siding the
+            // leaves measured 8× less frame-to-frame diff). ±N is the same
+            // surface for irradiance-history purposes, so compare
+            // orientation-agnostically. Single-sided geometry keeps the
+            // signed test (a wall's two faces ARE different surfaces).
+            const bool dsided = (texelFetch(gbufIdsTex, px, 0).z & 16u) != 0u;
             bool found = false;
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
                     const vec3 pn = texelFetch(gbufNormalPrevTex, clamp(ip + ivec2(dx, dy), ivec2(0), mx), 0).xyz * 2.0 - 1.0;
-                    if (dot(N, normalize(pn)) > 0.7) found = true;// ~45° — loose: the surface-aware DEPTH
-                                                                  // check is the primary disocclusion now, so this
-                                                                  // just rejects gross flips without false-resetting
-                                                                  // a deforming skinned surface (bending joints)
+                    float nd = dot(N, normalize(pn));
+                    if (dsided) nd = abs(nd);
+                    if (nd > 0.7) found = true;// ~45° — loose: the surface-aware DEPTH
+                                               // check is the primary disocclusion now, so this
+                                               // just rejects gross flips without false-resetting
+                                               // a deforming skinned surface (bending joints)
                 }
             }
             valid = found;
