@@ -58,7 +58,11 @@ def mirror_joints(q, c):
 
 
 def mirror_obs(obs):
-    """Mirror the OBS_DIM observation left<->right. obs [..., OBS_DIM]."""
+    """Mirror the observation left<->right — LEGACY pre-clock layout ([proprio(48)|base_above(1)|
+    scan(45)], _SCAN0=49). For the current 96-d clock layout ([proprio|clock|base_above|scan])
+    use spot_steps_symmetry.mirror_obs, which shifts the clock a half period and mirrors the
+    scan at its real offset (51). The joint-level constants below (MIRROR_PERM/MIRROR_SIGN/
+    mirror_joints/mirror_act) are layout-independent and shared by every mirror."""
     c = _consts(obs.device)
     o = obs.clone()
     o[..., 0:3] = obs[..., 0:3] * c["lin"]      # lin_b
@@ -102,23 +106,26 @@ if __name__ == "__main__":
     print(f"involution: obs err {err_obs:.2e}  act err {err_act:.2e}  (expect ~0)")
     assert err_obs < 1e-5 and err_act < 1e-5, "mirror is not an involution"
 
-    # 2) teacher equivariance on REAL obs: the symmetric Isaac walker should be ~equivariant under a
-    #    CORRECT mirror -> teacher(mirror(obs)) ~= mirror(teacher(obs)). A large error = a mirror bug.
+    # 2) anchor equivariance on REAL obs: the base gait (scratch_flat_best.pt, 50-d norm-aware,
+    #    reads obs[:, :50] = proprio+clock) should be ~equivariant under a CORRECT mirror ->
+    #    anchor(mirror(obs)) ~= mirror(anchor(obs)). A large error = a mirror bug. Uses the
+    #    clock-aware 96-d mirror from spot_steps_symmetry — mirror_obs HERE is the legacy
+    #    pre-clock layout and would scramble the clock dims the anchor reads.
     if torch.cuda.is_available():
         import threepp as tp
-        from spot_deploy import fetch_assets
-        from spot_heightfield_env import SpotHeightfieldEnv
         if tp.HAS_PHYSX:
+            from spot_heightfield_env import SpotHeightfieldEnv
+            from spot_steps_symmetry import mirror_obs as mirror_obs_clock
             env = SpotHeightfieldEnv(num_envs=64, device="cuda")
+            anchor = lambda o: env.anchor_ac.act_mean(env.anchor_norm.norm(o[:, :50]))
             obs = env.reset()
-            for _ in range(40):                                  # let it move so obs isn't a trivial stand
-                obs, _, _, _, _ = env.step(env.imit_policy(env._last_obs[:, :48]))
-            teacher = env.imit_policy
             with torch.no_grad():
-                a0 = teacher(obs[:, :48])                        # teacher action on obs
-                a1 = teacher(mirror_obs(obs)[:, :48])            # teacher action on the mirrored obs
+                for _ in range(40):                              # let it move so obs isn't a trivial stand
+                    obs, _, _, _, _ = env.step(anchor(obs))
+                a0 = anchor(obs)                                 # anchor action on obs
+                a1 = anchor(mirror_obs_clock(obs))               # anchor action on the mirrored obs
                 equiv_err = (a1 - mirror_act(a0)).abs().mean().item()
                 base = a0.abs().mean().item()
-            print(f"teacher equivariance: mean|t(mirror(o)) - mirror(t(o))| = {equiv_err:.4f}  "
-                  f"(action scale {base:.3f}; small relative to scale = mirror correct + teacher ~symmetric)")
+            print(f"anchor equivariance: mean|t(mirror(o)) - mirror(t(o))| = {equiv_err:.4f}  "
+                  f"(action scale {base:.3f}; small relative to scale = mirror correct + anchor ~symmetric)")
     print("SPOT-SYMMETRY SELFTEST: PASS")
