@@ -6,6 +6,7 @@
 #include "threepp/renderers/vulkan/shaders/probe_update.comp.spv.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace threepp::vulkan {
@@ -227,14 +228,42 @@ namespace threepp::vulkan {
 
     void ProbeGI::setGridBounds(const float aabbMin[3], const float aabbMax[3]) {
         const uint32_t dims[3] = {kDimX, kDimY, kDimZ};
+        float newSpacing[3], newOrigin[3];
         for (int a = 0; a < 3; ++a) {
             // Cell-centered probes: spacing = extent/dims, first probe half a
             // cell inside the AABB. The 0.05 m floor keeps a flat scene (zero
             // Y extent) from collapsing the trilinear cell to a divide-by-0.
-            const float extent  = std::max(aabbMax[a] - aabbMin[a], 0.f);
-            gridSpacing_[a] = std::max(extent / static_cast<float>(dims[a]), 0.05f);
-            gridOrigin_[a]  = aabbMin[a] + 0.5f * gridSpacing_[a];
+            const float extent = std::max(aabbMax[a] - aabbMin[a], 0.f);
+            newSpacing[a] = std::max(extent / static_cast<float>(dims[a]), 0.05f);
+            newOrigin[a]  = aabbMin[a] + 0.5f * newSpacing[a];
         }
+        // HYSTERESIS — adopting a new grid WIPES the SH cache (needsClear_),
+        // and the wipe collapses the measured ambient scene-wide for the ~8+
+        // frames the round-robin needs to refill. Every STRUCTURAL scene
+        // change re-fits (VulkanCoreImpl probeGridDirty_), and gameplay churns
+        // structure constantly (tracers, casings, decals, muzzle flashes) —
+        // an unconditional wipe made every sun-occluded mesh visibly strobe
+        // (measured: a 1 cm cube toggled every 5 frames pulsed a Sponza
+        // corridor's shadowed ambient 0.4→5.2 mean luminance). Keep the
+        // current grid while it still represents the scene: origin within
+        // half a cell and spacing within −20 %/+25 % per axis. Out-of-grid
+        // points clamp in probeIrradiance, so a slightly-outgrown AABB
+        // degrades gracefully; a real scene swap trips the thresholds and
+        // takes the honest wipe.
+        if (gridFitted_) {
+            bool keep = true;
+            for (int a = 0; a < 3; ++a) {
+                if (newSpacing[a] > gridSpacing_[a] * 1.25f ||
+                    newSpacing[a] < gridSpacing_[a] * 0.80f ||
+                    std::abs(newOrigin[a] - gridOrigin_[a]) > 0.5f * gridSpacing_[a]) {
+                    keep = false;
+                    break;
+                }
+            }
+            if (keep) return;
+        }
+        std::memcpy(gridSpacing_, newSpacing, sizeof(newSpacing));
+        std::memcpy(gridOrigin_,  newOrigin,  sizeof(newOrigin));
         gridFitted_   = true;
         needsClear_   = true;
         probeOffset_  = 0;
