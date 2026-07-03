@@ -644,8 +644,12 @@ void BufferGeometry::computeVertexNormals() {
         } else {
 
             // non-indexed elements (unconnected triangle soup)
+            // il is rounded down to a multiple of 3 — a trailing partial
+            // triangle (e.g. a non-triangle-mode glTF primitive misread as
+            // a triangle list) would otherwise read 1-2 vertices past the
+            // end of positionAttribute.
 
-            for (unsigned i = 0, il = positionAttribute->count(); i < il; i += 3) {
+            for (unsigned i = 0, il = positionAttribute->count() - positionAttribute->count() % 3; i < il; i += 3) {
 
                 positionAttribute->setFromBufferAttribute(pA, i + 0);
                 positionAttribute->setFromBufferAttribute(pB, i + 1);

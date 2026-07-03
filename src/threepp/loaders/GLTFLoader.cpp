@@ -852,6 +852,25 @@ namespace threepp {
 
                 int primIdx = 0;
                 for (const auto& prim : primitives) {
+                    // glTF "mode" (default 4/TRIANGLES if absent): POINTS(0),
+                    // LINES(1), LINE_LOOP(2), LINE_STRIP(3), TRIANGLES(4),
+                    // TRIANGLE_STRIP(5), TRIANGLE_FAN(6). The renderers here
+                    // only understand flat triangle lists (raster draw calls
+                    // and the Vulkan RT BLAS both assume indexCount/vertexCount
+                    // is a triangle count) — feeding them a point cloud or line
+                    // strip mis-decodes as garbage triangles and, for vertex
+                    // counts not a multiple of 3, previously overran the
+                    // position buffer in computeVertexNormals(). Skip
+                    // unsupported topologies rather than misrender them.
+                    const int primMode = prim.value("mode", 4);
+                    if (primMode != 4) {
+                        std::cerr << "GLTFLoader: skipping primitive " << primIdx
+                                  << " of mesh " << meshIdx << " — unsupported mode "
+                                  << primMode << " (only TRIANGLES is supported)" << std::endl;
+                        ++primIdx;
+                        continue;
+                    }
+
                     auto geometry = BufferGeometry::create();
 
                     // --- Attributes ---
