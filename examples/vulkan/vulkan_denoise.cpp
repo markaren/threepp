@@ -103,11 +103,7 @@ int main() {
 
     VulkanRenderer renderer(canvas);
     renderer.outputColorSpace    = ColorSpace::sRGB;
-    renderer.toneMapping         = ToneMapping::ACESFilmic;
-    renderer.toneMappingExposure = 1.0f;
 
-    renderer.setDenoise(true);
-    renderer.setRestirDIEnabled(true);
     // AAA post stack: punchy HDR bloom + post-TAA RCAS sharpen (live-tunable
     // below). Bloom is additive over a soft-knee bright pass, so darks stay
     // crisp; sharpen restores detail the temporal resolve softens.
@@ -164,7 +160,6 @@ int main() {
     bool restirOn     = renderer.restirDIEnabled();
     bool rotating     = true;
     float rotSpeed    = 0.5f;
-    float exposure    = renderer.toneMappingExposure;
     float bloomInt    = renderer.bloomIntensity();
     float bloomThresh = renderer.bloomThreshold();
     float bloomClamp  = renderer.bloomClamp();
@@ -188,13 +183,13 @@ int main() {
         }
         ImGui::Separator();
 
-        if (ImGui::Checkbox("Denoiser", &denoiserOn))
+        if (ImGui::Checkbox("Denoiser", &denoiserOn)) {
             renderer.setDenoise(denoiserOn);
-        if (ImGui::Checkbox("ReSTIR DI", &restirOn))
+        }
+        if (ImGui::Checkbox("ReSTIR DI", &restirOn)) {
             renderer.setRestirDIEnabled(restirOn);
+        }
 
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
-            renderer.toneMappingExposure = exposure;
 
         ImGui::Separator();
         ImGui::TextDisabled("AAA post");
