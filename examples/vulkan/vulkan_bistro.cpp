@@ -60,10 +60,10 @@ int main(int argc, char** argv) {
     // the official Falcor scene multiplies every emissive factor by 1000 to get a
     // well-exposed image, so do the same here for interior lighting to read.
     loader.emissiveScale = 100.0f;
-    // auto interior = loadAsync(loader, modelFolder / "BistroInterior_Wine.fbx");
+    auto interior = loadAsync(loader, modelFolder / "BistroInterior_Wine.fbx");
     auto exterior = loadAsync(loader, modelFolder / "BistroExterior.fbx");
 
-    // scene.add(interior);
+    scene.add(interior);
     scene.add(exterior);
 
     auto toggleBistroLights = [&] {
