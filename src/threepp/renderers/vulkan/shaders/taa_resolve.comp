@@ -443,7 +443,27 @@ void main() {
     // Depth disocclusion also drives the blend toward current: the clipped
     // history above is at best the neighbourhood mean, but a freshly revealed
     // surface should read its own current sample, not a clip of stale colour.
-    const float a = max(clamp((pc.blendAlpha + velocityBump) * antiFlicker, 0.01, 1.0), depthDisocc);
+    float a = max(clamp((pc.blendAlpha + velocityBump) * antiFlicker, 0.01, 1.0), depthDisocc);
+    // PER-FRAME-CHANGING CONTENT — α floor for two flag classes:
+    //   bit 5 (32u): persistent GEOMETRY deformer (tet-skinned soft bodies).
+    //     Reprojection aligns the geometry, but the shading itself (normals
+    //     swinging, stretch, contact shadowing) changes every frame — an EMA
+    //     at α≈0.1-0.25 displays a 3-8-frame-lagged average of it, read as
+    //     "frames of history dragging behind the fish" (GL, no TAA, is
+    //     crisp). The velocity bump cannot catch this: a body wobbling in
+    //     place has near-zero screen motion yet full shading change — screen
+    //     velocity and shading-change rate are decoupled exactly here (the
+    //     reason the old is_skinned force-high-alpha hack was wrong is the
+    //     reason this flag-scoped floor is right).
+    //   bit 6 (64u): per-frame TEXTURE animation (Material::textureAnimatedHint
+    //     — scrolling conveyor-belt UVs, video textures). The pattern moves
+    //     with ZERO motion vectors, so history blending smears/lags it at any
+    //     reprojection quality.
+    // 0.75 leaves a ~1/3-frame mean shading lag (0.5 still read as a visible
+    // one-frame echo on high-contrast fish texture); the variance clip (and
+    // setGbufferMsaa for edges) covers the reduced temporal AA.
+    const bool perFrameContent = (currIds.z & 96u) != 0u;
+    if (perFrameContent) a = max(a, 0.75);
     const vec3 result = reprojValid ? mix(history, curr, a) : curr;
 
     // When a downstream RCAS pass owns the swapchain write, skip it here but

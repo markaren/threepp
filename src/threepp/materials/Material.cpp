@@ -45,6 +45,7 @@ void Material::copyInto(Material& m) const {
     m.blending = blending;
     m.side = side;
     m.vertexColors = vertexColors;
+    m.textureAnimatedHint = textureAnimatedHint;
 
     m.opacity = opacity;
     m.transparent = transparent;

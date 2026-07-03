@@ -40,6 +40,13 @@ namespace threepp {
         std::shared_ptr<Texture> tetTexture;
         int tetTextureSize = 0;
 
+        // Hint for temporal passes (Vulkan deferred TAA): this material's texture
+        // content animates every frame (scrolling UV offset, video texture, live
+        // DataTexture) WITHOUT geometric motion, so motion vectors cannot reproject
+        // it. Temporal accumulation holds a short history on these surfaces instead
+        // of smearing the moving pattern. No effect on GL/WGPU.
+        bool textureAnimatedHint = false;
+
         float opacity = 1;
         bool transparent = false;
 

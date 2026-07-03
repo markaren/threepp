@@ -7716,19 +7716,36 @@ namespace threepp {
                 di.instanceCustomIndex = static_cast<uint32_t>(i);
                 // Flag bits match the old gbuffer.vert push-constant layout:
                 //   bit 0 = is_water (DisplacedMesh), bit 3 = is_skinned,
-                //   bit 4 = double-sided material (Side::Double).
+                //   bit 4 = double-sided material (Side::Double),
+                //   bit 5 = persistent per-frame deformer (tet-skinned soft body),
+                //   bit 6 = per-frame texture animation (Material::textureAnimatedHint).
                 uint32_t flags = 0u;
                 if (en.isDisplaced) flags |= 1u;
                 if (en.isSkinned)   flags |= 8u;
-                // DOUBLE_SIDED: gbuffer.frag flips N toward the viewer, so on
-                // cutout foliage the jittered coverage flips a pixel's normal
-                // SIGN frame to frame. The GI temporal reproject + SVGF normal
-                // edge-stop must treat ±N as the SAME surface there (flag
-                // consumed in deferred_shade.comp / deferred_denoise.comp) or
-                // the GI history cold-starts every frame — measured as 8× the
-                // frame-to-frame flicker on a procedural tree canopy.
-                if (auto sm = en.mesh->material(); sm && sm->side == Side::Double)
-                    flags |= 16u;
+                {
+                    const auto sm = en.mesh->material();
+                    // DOUBLE_SIDED: gbuffer.frag flips N toward the viewer, so on
+                    // cutout foliage the jittered coverage flips a pixel's normal
+                    // SIGN frame to frame. The GI temporal reproject + SVGF normal
+                    // edge-stop must treat ±N as the SAME surface there (flag
+                    // consumed in deferred_shade.comp / deferred_denoise.comp) or
+                    // the GI history cold-starts every frame — measured as 8× the
+                    // frame-to-frame flicker on a procedural tree canopy.
+                    if (sm && sm->side == Side::Double) flags |= 16u;
+                    // TEXTURE-ANIMATED (scrolling UVs, video/live textures): the
+                    // pattern moves with NO geometric motion vectors, so the TAA
+                    // resolve must hold a short history (α floor) instead of
+                    // smearing it. TAA-only — the GI history accumulates
+                    // DEMODULATED irradiance, which a texture animation doesn't
+                    // change, so bit 6 deliberately does NOT shorten the GI cap.
+                    if (sm && sm->textureAnimatedHint) flags |= 64u;
+                }
+                // PERSISTENT DEFORMER: a PhysX soft body deforms EVERY frame, so
+                // the GI temporal cap in deferred_shade.comp must not chase its
+                // oscillating per-pixel motion magnitude (visible pumping on the
+                // wobble). The shader pins a constant history cap on this bit;
+                // the TAA resolve floors its blend α (shading changes per frame).
+                if (en.isTet) flags |= 32u;
                 di.flags   = flags;
                 di.indexed = indexed ? 1u : 0u;
                 // polygonOffset → per-mesh clip-z depth bias (decals). Reverse-Z:

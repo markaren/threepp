@@ -3384,6 +3384,11 @@ void main() {
         const vec2 prevUv   = vec2(prevNDC.x * 0.5 + 0.5, 0.5 - prevNDC.y * 0.5);
         bool valid = all(greaterThanEqual(prevUv, vec2(0.0))) &&
                      all(lessThanEqual(prevUv, vec2(1.0)));
+        // Per-instance flag bits (drawInfo.flags via the ids attachment .z).
+        // Used by the double-sided normal test below and the persistent-
+        // deformer history cap at the bottom of this block.
+        const uint giFlagsZ = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx).z
+                                                 : texelFetch(gbufIdsTex, px, 0).z;
         // GEOMETRIC (normal-based) JITTER-ROBUST DISOCCLUSION: the current surface's
         // world normal must match SOMEWHERE in the 3×3 prev-normal neighbourhood at
         // the reprojected pixel. Normals are draw-order-INDEPENDENT (so firing —
@@ -3405,9 +3410,7 @@ void main() {
             // surface for irradiance-history purposes, so compare
             // orientation-agnostically. Single-sided geometry keeps the
             // signed test (a wall's two faces ARE different surfaces).
-            const uint flagsZ = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx).z
-                                                    : texelFetch(gbufIdsTex, px, 0).z;
-            const bool dsided = (flagsZ & 16u) != 0u;
+            const bool dsided = (giFlagsZ & 16u) != 0u;
             bool found = false;
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
@@ -3460,7 +3463,22 @@ void main() {
         // camera world flow so it tracks. Collapses to length(motionGL) when the
         // camera is still.
         const float giCamNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(length(worldPos - camPos), 0.25);
-        const float capF = mix(48.0, 6.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc)));
+        // PERSISTENT DEFORMER (flags bit 5 — tet-skinned soft bodies): the
+        // surface deforms EVERY frame, so |motionGL| swings across the
+        // smoothstep window with the wobble and the motion-scaled cap
+        // oscillates with it — dragging the blend alpha, the despeckle gate
+        // (histLen<8) and the variance fallback (histLen<4) along. That reads
+        // as per-frame pumping on soft bodies even at a steady frame rate.
+        // Pin a CONSTANT cap instead — the pumping came from the OSCILLATION,
+        // not from which gates are active. 6 sits INSIDE the despeckle range
+        // (histLen<8) so the outlier clamp runs steadily — a persistently-
+        // deforming 1-spp surface sheds isolated GI sparks every frame and
+        // NEEDS it (pinning at 10 disabled it: visible white speckle on soft
+        // bodies) — while staying above the spatial variance fallback (4).
+        const bool  giDeformer = (giFlagsZ & 32u) != 0u;
+        const float capF = giDeformer
+                ? 6.0
+                : mix(48.0, 6.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc)));
         // Skip frames carry the history UNCHANGED (no new sample → no histLen
         // increment, no blend); trace frames accumulate as before.
         const float histLen = giSkip ? max(prevT.a, 1.0)
