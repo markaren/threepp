@@ -273,7 +273,8 @@ namespace threepp {
                 denoiseDep.pMemoryBarriers = &denoiseBar;
                 vkCmdPipelineBarrier2(cb, &denoiseDep);
                 gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
-                deferredShade_->recordDenoiseDispatch(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height);
+                deferredShade_->recordDenoiseDispatch(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
+                                                      gbufMsaaSamples_, shadeBActive);
                 gpuTimings_->end(cb, TP_Denoise, currentFrame);
             }
             // Auto-exposure: histogram over the final sceneHdr. sceneHdr writes

@@ -26,6 +26,10 @@
 //                |depth - domDepth| <= max(1e-6, domDepth*0.15), i.e. same
 //                surface within a reversed-Z relative epsilon)
 //   bits 4..5  = dominant sample index (0..3)
+//   bits 6..8  = SKY minority count: samples with id==0 outside the dominant
+//                cluster (0 when the dominant itself is sky). The denoise
+//                recombine uses this to weight the GI/reflection adds by the
+//                pixel's geometry coverage — the sky fraction carries neither.
 //   bit 15     = complex flag: 1 if any live sample falls OUTSIDE the
 //                dominant cluster (an edge/silhouette pixel), 0 otherwise
 // Simple (non-edge) pixels: mask = all K bits set, complex = 0.
@@ -100,14 +104,19 @@ void main() {
     // the dominant depth's own magnitude.
     const float eps = max(1e-6, domDepth * 0.15);
     uint clusterMask = 0u;
+    uint skyMin = 0u;
     bool complex = false;
     for (int i = 0; i < K; ++i) {
         const bool sameCluster = (ids[i] == domId) && (abs(depths[i] - domDepth) <= eps);
         if (sameCluster) clusterMask |= (1u << uint(i));
-        else complex = true;
+        else {
+            complex = true;
+            if (ids[i] == 0u) ++skyMin;
+        }
     }
 
-    const uint idsW = (clusterMask & 0xFu) | (uint(bestIdx) << 4u) | (complex ? 0x8000u : 0u);
+    const uint idsW = (clusterMask & 0xFu) | (uint(bestIdx) << 4u) | (skyMin << 6u)
+                    | (complex ? 0x8000u : 0u);
 
     const vec4  nTap = texelFetch(normalMS, px, bestIdx);
     const vec4  mTap = texelFetch(motionMS, px, bestIdx);

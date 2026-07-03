@@ -58,7 +58,8 @@ layout(push_constant) uniform Pc {
     uint dstMode;// 0 = atrousA, 1 = atrousB, 2 = recombine → sceneHdr
     uint feedback;// 1 = also write src (the 1st-pass filtered) back as temporal history
     uint channel;// 0 = GI (à-trous), 1 = reflection (roughness-guided blur + recombine)
-    uint _p8; uint _p9;
+    uint msaaInfo;// bits 0..2 = G-buffer MSAA sample count (≤1 = off), bit 4 = shade dispatch B active
+    uint _p9;
 } pc;
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
@@ -85,6 +86,31 @@ vec3 fogTransmittance(vec3 a, vec3 b) {
         }
     }
     return exp(-fog.sigmaT * d);
+}
+
+// Coverage weight for the GI/reflection RECOMBINES at MSAA complex (edge) pixels.
+// indirectImage/reflectImage carry the DOMINANT sample's UNWEIGHTED values (they
+// are temporal accumulators — weighting must happen here, at consumption), but at
+// a complex pixel the shade pass stored only domWeight of the dominant surface:
+// dispatch B added the geometry minority INLINE (with its own GI + reflection
+// folded in) and the sky fraction is a background colour with neither. Adding the
+// dominant GI/reflection at weight 1 therefore over-added (1-domWeight)·(GI+refl)
+// at every edge pixel — a one-pixel bright rim hugging every silhouette (the
+// "glowing outline", loudest in fog where the recombined GI rides on bright haze).
+//   dispatch B active  → weight = dominant-cluster coverage (ids.w bits 0..3).
+//   dispatch B off     → the geometry minority folded INTO the dominant surface,
+//                        so only the sky fraction (ids.w bits 6..8) is excluded.
+// (Known approximation: when B bails on an unlit/water minority rep the shade
+// pass folds that weight back, while this uses the dominant coverage — the rare
+// affected edge under-adds GI by the minority fraction instead of glowing.)
+float recombineCoverage(ivec2 q) {
+    const uint K = pc.msaaInfo & 0x7u;
+    if (K <= 1u) return 1.0;
+    const uint w = texelFetch(gbufIdsTex, q, 0).w;
+    if ((w & 0x8000u) == 0u) return 1.0;// not a complex pixel
+    if ((pc.msaaInfo & 0x10u) != 0u)
+        return float(bitCount(w & 0xFu)) / float(K);
+    return 1.0 - float((w >> 6u) & 0x7u) / float(K);
 }
 
 // Source color (.rgb) + variance (.a). Pass 0 reads the raw GI (variance computed
@@ -155,7 +181,7 @@ void main() {
         if (isGlass && rough < 0.12) {
             if (!vert) { imageStore(atrousB, px, cR); return; }
             const vec3 cur = imageLoad(outImage, px).rgb;
-            imageStore(outImage, px, vec4(cur + cR.rgb * fogTransmittance(camPos, Pc), 1.0));
+            imageStore(outImage, px, vec4(cur + cR.rgb * fogTransmittance(camPos, Pc) * recombineCoverage(px), 1.0));
             return;
         }
         const float metalness = texelFetch(gbufAlbedoTex, px, 0).a;
@@ -293,7 +319,7 @@ void main() {
             if (bl > cap) blurred *= cap / bl;       // collapse the isolated spike
         }
         const vec3 cur     = imageLoad(outImage, px).rgb;
-        imageStore(outImage, px, vec4(cur + blurred * fogTransmittance(camPos, Pc), 1.0));// pre-weighted → add, fog-extinguished
+        imageStore(outImage, px, vec4(cur + blurred * fogTransmittance(camPos, Pc) * recombineCoverage(px), 1.0));// pre-weighted → add, fog-extinguished
         return;
     }
 
@@ -438,7 +464,7 @@ void main() {
         const vec4 am           = texelFetch(gbufAlbedoTex, px, 0);
         const vec3 diffuseColor = am.rgb * (1.0 - am.a);
         const vec3 cur          = imageLoad(outImage, px).rgb;
-        imageStore(outImage, px, vec4(cur + fC * diffuseColor * fogTransmittance(camPos, Pc), 1.0));
+        imageStore(outImage, px, vec4(cur + fC * diffuseColor * fogTransmittance(camPos, Pc) * recombineCoverage(px), 1.0));
     } else if (pc.dstMode == 0u) {
         imageStore(atrousA, px, vec4(fC, fV));
     } else {

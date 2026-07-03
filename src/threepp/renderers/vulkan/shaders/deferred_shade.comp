@@ -2692,6 +2692,17 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     return sum * medAlbedo * (sigma * dt);
 }
 
+// Fogged sky/background colour along this pixel's view ray — the term dispatch A
+// blends at MSAA complex pixels for the SKY-minority coverage (and the full sky
+// path uses the same expression). Volumetric in-scatter is NOT included: that is
+// a per-pixel view-ray integral added once, at full weight, by the caller.
+vec3 skyBackground(vec2 ndc) {
+    const vec4 tVS   = cam.projInverse * vec4(ndc, 1.0, 1.0);
+    const vec3 dirVS = normalize(tVS.xyz / tVS.w);
+    const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
+    return applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
+}
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
@@ -2734,13 +2745,34 @@ void main() {
     if (pc.shadeMode == 0u && isComplex && K > 1) {
         const uint domIdx0 = (idsW0 >> 4u) & 0x3u;
         int skyCount = 0, geoMinCount = 0;
+        int repIdx = -1, repCount = 0;// dispatch B's minority representative (mirror its selection exactly)
         for (int i = 0; i < K; ++i) {
             if (i == int(domIdx0) || (domMask0 & (1u << uint(i))) != 0u) continue;
-            if (texelFetch(gbufIdsMS, px, i).x == 0u) ++skyCount;
-            else ++geoMinCount;
+            if (texelFetch(gbufIdsMS, px, i).x == 0u) { ++skyCount; continue; }
+            ++geoMinCount;
+            int count = 1;
+            for (int j = i + 1; j < K; ++j) {
+                if (j == int(domIdx0) || (domMask0 & (1u << uint(j))) != 0u) continue;
+                if (texelFetch(gbufIdsMS, px, j).x == texelFetch(gbufIdsMS, px, i).x) ++count;
+            }
+            if (count > repCount) { repCount = count; repIdx = i; }
         }
         skyEdgeW = float(skyCount) / float(K);
-        const float geoMinW = ((pc.flags & 128u) != 0u) ? float(geoMinCount) / float(K) : 0.0;
+        // Reserve the geometry-minority weight ONLY if dispatch B will actually
+        // pay it back. B bails without accumulating on UNLIT and OCEAN-WATER
+        // minority representatives (their shade paths own dispatch-A-only
+        // temporal state) — reserving weight B never pays is a dark rim on
+        // exactly those edges, so mirror B's rep selection + early-outs and
+        // fold the weight back into the dominant surface in those cases.
+        float geoMinW = 0.0;
+        if ((pc.flags & 128u) != 0u && repIdx >= 0) {
+            const uint repId    = texelFetch(gbufIdsMS, px, repIdx).x;
+            const bool repUnlit = texelFetch(gbufNormalMS, px, repIdx).w < 0.0;
+            const bool repWater = mats[repId - 1u].thinWalled != 0
+                                && mats[repId - 1u].transmission > 0.0
+                                && geoms[repId - 1u].foamAddress != 0ul;
+            if (!repUnlit && !repWater) geoMinW = float(geoMinCount) / float(K);
+        }
         domWeight = 1.0 - skyEdgeW - geoMinW;
     }
 
@@ -2795,8 +2827,14 @@ void main() {
         const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
         // Sky pixels march the beams too — a lighthouse beam against the night
         // sky is exactly where the volumetric is most visible.
-        vec3 sky = applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
+        // COVERAGE-WEIGHTED at MSAA complex pixels: a sky-DOMINANT edge pixel
+        // reserves geoMinW for dispatch B exactly like the geometry path does.
+        // Storing the sky at full weight here let B add the geometry minority
+        // ON TOP (energy = 1 + geoMinW) — a bright rim hugging the sky side of
+        // every silhouette, glowing hardest where the sky/haze is bright.
+        vec3 sky = applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS) * domWeight;
         // Volumetric sun glow / god rays added on top → blooms THROUGH the haze.
+        // Per-pixel view-ray integral: full weight, independent of coverage.
         sky += volumetricSpotScatter(camPos, dirWS, 2000.0, px)
              + volumetricDirScatter(camPos, dirWS, 2000.0, px);
         imageStore(outImage, px, vec4(sky, 1.0));
@@ -2815,7 +2853,11 @@ void main() {
         const float depthU = texelFetch(gbufDepthTex, px, 0).x;
         const vec4  vhU    = cam.projInverse * vec4(ndc, depthU, 1.0);
         const vec3  wpU    = (cam.viewInverse * vec4(vhU.xyz / vhU.w, 1.0)).xyz;
-        imageStore(outImage, px, vec4(applySceneFog(albedo, camPos, wpU), 1.0));
+        // Same coverage weighting as the main path: dominant fraction + the
+        // sky minority blended here (dispatch B pays the geometry minority).
+        vec3 outU = applySceneFog(albedo, camPos, wpU) * domWeight;
+        if (skyEdgeW > 0.0) outU += skyEdgeW * skyBackground(ndc);
+        imageStore(outImage, px, vec4(outU, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         return;
     }
@@ -2918,7 +2960,11 @@ void main() {
         if (pc.shadeMode == 1u) return;
         vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
                                shadowsOn, maxLod, pc.frame, seed);
-        wcol = applySceneFog(wcol, camPos, worldPos);
+        // Coverage weighting as in the main path — water-dominant edge pixels
+        // reserve geoMinW for dispatch B and blend their own sky minority;
+        // the volumetric in-scatter is per-pixel and stays at full weight.
+        wcol = applySceneFog(wcol, camPos, worldPos) * domWeight;
+        if (skyEdgeW > 0.0) wcol += skyEdgeW * skyBackground(ndc);
         wcol += volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
         imageStore(outImage, px, vec4(wcol, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
@@ -3327,10 +3373,6 @@ void main() {
     // (different per sample's worldPos/albedo), so both dispatches apply it
     // to their own `lit`.
     lit = applySceneFog(lit, camPos, worldPos);// extinction first; the beam march carries its own
-    if (pc.shadeMode == 0u) {
-        lit += volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
-        lit += volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);// sun shafts / aerial glow
-    }
     if (pc.shadeMode == 1u) {
         // Dispatch B: weighted accumulate into dispatch A's already-written
         // pixel (which stored domWeight*lit for the SAME complex pixel — see
@@ -3350,12 +3392,14 @@ void main() {
         // against the sky). Simple pixels and msaa=1 keep domWeight==1,
         // skyEdgeW==0 — byte-identical to the pre-MSAA output.
         vec3 outC = lit * domWeight;
-        if (skyEdgeW > 0.0) {
-            const vec4 tVS   = cam.projInverse * vec4(ndc, 1.0, 1.0);
-            const vec3 dirVS = normalize(tVS.xyz / tVS.w);
-            const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
-            outC += skyEdgeW * applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
-        }
+        if (skyEdgeW > 0.0) outC += skyEdgeW * skyBackground(ndc);
+        // Volumetric in-scatter is a per-PIXEL view-ray integral, independent
+        // of which G-buffer sample won — add it ONCE at FULL weight AFTER the
+        // coverage weighting. (It used to be folded into `lit` before the
+        // domWeight scale, which silently dimmed the beams/aerial glow by the
+        // minority coverage at every edge pixel — a dark fringe in fog.)
+        outC += volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
+        outC += volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);// sun shafts / aerial glow
         imageStore(outImage, px, vec4(outC, 1.0));
     }
     // Dispatch B never touches the GI/SVGF accumulator channels (indirect/

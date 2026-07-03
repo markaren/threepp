@@ -150,8 +150,13 @@ namespace threepp::vulkan {
         // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
         // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor
         // set); the caller inserts a compute→compute barrier between them.
+        // gbufMsaaSamples/shadeBActive mirror recordDispatch: the recombine
+        // weights its GI/reflection adds by the geometry coverage at MSAA
+        // complex pixels (must match how the shade pass split the weights).
         void recordDenoiseDispatch(VkCommandBuffer cb, uint32_t frame,
-                                   uint32_t width, uint32_t height);
+                                   uint32_t width, uint32_t height,
+                                   uint32_t gbufMsaaSamples = 1,
+                                   bool shadeBActive = false);
 
     private:
         VulkanContext& ctx_;
