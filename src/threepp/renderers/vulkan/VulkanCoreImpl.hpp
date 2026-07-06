@@ -9295,13 +9295,20 @@ namespace threepp {
             // Omitted at msaa=1 to keep that path's image usage flags exactly
             // as they were (byte-identical guarantee — no behavioural surface
             // added when the feature is off).
+            // TRANSFER_SRC is added so the AOV readback path
+            // (VulkanRendererCore::readGBufferAOV) can vkCmdCopyImageToBuffer the
+            // resolved single-sample attachments to a host staging buffer. It is
+            // a pure capability flag (no render-pass / layout / perf effect); the
+            // STORAGE bit below stays MSAA-gated for its byte-identical guarantee.
             const VkImageUsageFlags colorUsage =
                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                     VK_IMAGE_USAGE_SAMPLED_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                     (gbufMsaaSamples_ > 1 ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
             const VkImageUsageFlags depthUsage =
                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                    VK_IMAGE_USAGE_SAMPLED_BIT;
+                    VK_IMAGE_USAGE_SAMPLED_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
             for (size_t fi = 0; fi < rasterGbufs.size(); ++fi) {
                 auto& g = rasterGbufs[fi];
                 char nameBuf[64];

@@ -1,9 +1,14 @@
 """Deferred G-buffer AOVs from the Vulkan renderer, as numpy — labels for free.
 
-The deferred (RasterFirst) renderer writes a full G-buffer every frame. This
-reads several attachments back as (H, W, 3) uint8 images: the shaded RGB, world
-normals, per-instance segmentation, and albedo — the raw material for synthetic
-training data (no path tracer, no manual labelling).
+The deferred (RasterFirst) renderer writes a full G-buffer every frame. Two ways
+to read it back:
+
+  * Visualisation (uint8): render_aovs() → (H, W, 3) uint8 montage tiles.
+  * Lossless (float / int): read_depth() → metric (H,W) f32 · read_normals_float()
+    → world normals (H,W,3) f32 · read_instance_ids() → RECOVERABLE (H,W) uint32
+    labels (0 = sky, else instanceCustomIndex+1; no hashing) · read_motion() →
+    (H,W,2) f32 pixel flow. read_aovs_typed() reads several at once from a single
+    render. This is the raw material an ML / sensor pipeline actually trains on.
 
     python vulkan_aovs.py
 
@@ -74,6 +79,16 @@ depth = renderer.read_depth(scene, camera)
 fg = depth[depth < 99.0]  # exclude the far-plane background
 print(f"{'depth':14s} {depth.shape} {depth.dtype}  "
       f"foreground {fg.min():.2f}..{fg.max():.2f} units")
+
+# Lossless labels: recoverable integer instance ids (uint32), not hashed colours.
+# 0 = sky; every other id is instanceCustomIndex+1, directly usable as a mask.
+ids = renderer.read_instance_ids(scene, camera)
+print(f"{'instance_ids':14s} {ids.shape} {ids.dtype}  distinct ids {np.unique(ids).tolist()}")
+
+# Full-precision world normals (float32, unit vectors) — no 8-bit quantization.
+normals_f = renderer.read_normals_float(scene, camera)
+print(f"{'normals_f':14s} {normals_f.shape} {normals_f.dtype}  "
+      f"range {normals_f.min():.2f}..{normals_f.max():.2f}")
 
 # Normalize the metric depth to a grayscale tile for the montage (near = bright).
 lo, hi = (float(fg.min()), float(fg.max())) if fg.size else (0.0, 1.0)
