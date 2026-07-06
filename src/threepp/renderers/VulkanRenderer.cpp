@@ -787,6 +787,14 @@ namespace threepp {
         return true;
     }
 
+    void VulkanRendererCore::setObjectInstanceId(const Object3D& obj, uint32_t instanceId) {
+        core()->instanceIdOverride_[obj.id] = static_cast<uint16_t>(instanceId & 0xFFFFu);
+    }
+
+    void VulkanRendererCore::setObjectClassId(const Object3D& obj, uint32_t classId) {
+        core()->classIds_[obj.id] = static_cast<uint16_t>(classId > 255u ? 255u : classId);
+    }
+
     void VulkanRendererCore::setEventCameraEnabled(bool enabled) {
         auto& impl = *core();
         if (enabled == impl.eventCamEnabled_) return;

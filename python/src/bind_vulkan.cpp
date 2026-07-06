@@ -173,8 +173,9 @@ namespace {
             return arr;
         }
 
-        // Recoverable integer instance ids (H, W) uint32. 0 = sky / no hit;
-        // otherwise instanceCustomIndex + 1. No hashing, no collisions.
+        // Stable, recoverable integer instance ids (H, W) uint32. 0 = sky / no
+        // hit; otherwise a per-object id that persists across frames (outIds.y).
+        // No hashing, no collisions. Assign specific ids with set_instance_id.
         py::array_t<uint32_t> ids_last() {
             std::vector<uint8_t> raw;
             int w = 0, h = 0, bpp = 0;
@@ -184,9 +185,27 @@ namespace {
             }
             py::array_t<uint32_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
             auto* dst     = arr.mutable_data();
-            const auto* s = reinterpret_cast<const uint16_t*>(raw.data());// RGBA16_UINT, .x = id
+            const auto* s = reinterpret_cast<const uint16_t*>(raw.data());// RGBA16_UINT, .y = stable id
             const size_t px = static_cast<size_t>(w) * h;
-            for (size_t i = 0; i < px; ++i) dst[i] = static_cast<uint32_t>(s[i * 4 + 0]);
+            for (size_t i = 0; i < px; ++i) dst[i] = static_cast<uint32_t>(s[i * 4 + 1]);
+            return arr;
+        }
+
+        // Semantic class ids (H, W) uint32 from outIds.z bits 8..15. 0 = unset;
+        // tag objects with set_class_id. Gives semantic segmentation alongside
+        // the instance ids above, from the same G-buffer read.
+        py::array_t<uint32_t> class_last() {
+            std::vector<uint8_t> raw;
+            int w = 0, h = 0, bpp = 0;
+            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp) ||
+                w <= 0 || h <= 0) {
+                return py::array_t<uint32_t>({py::ssize_t(0), py::ssize_t(0)});
+            }
+            py::array_t<uint32_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
+            auto* dst     = arr.mutable_data();
+            const auto* s = reinterpret_cast<const uint16_t*>(raw.data());// RGBA16_UINT, .z = flags|class
+            const size_t px = static_cast<size_t>(w) * h;
+            for (size_t i = 0; i < px; ++i) dst[i] = static_cast<uint32_t>((s[i * 4 + 2] >> 8) & 0xFFu);
             return arr;
         }
 
@@ -239,10 +258,20 @@ namespace {
             drive_frames(scene, camera);
             return ids_last();
         }
+        py::array_t<uint32_t> read_class_ids(Object3D& scene, Camera& camera) {
+            drive_frames(scene, camera);
+            return class_last();
+        }
         py::array_t<float> read_motion(Object3D& scene, Camera& camera) {
             drive_frames(scene, camera);
             return motion_last();
         }
+
+        // Label assignment for the segmentation AOVs. instance id overrides the
+        // auto-assigned stable id (outIds.y); class id (0..255) tags the object
+        // for semantic segmentation (outIds.z). Take effect on the next render.
+        void set_instance_id(Object3D& obj, uint32_t id) { renderer_.setObjectInstanceId(obj, id); }
+        void set_class_id(Object3D& obj, uint32_t cls) { renderer_.setObjectClassId(obj, cls); }
 
         // Render ONCE, then read every requested AOV from that same frame, each
         // as its natural numpy dtype: depth (H,W) f32 · normals (H,W,3) f32 ·
@@ -259,6 +288,8 @@ namespace {
                     out[py::str(name)] = normals_last();
                 } else if (name == "instance_ids" || name == "ids" || name == "segmentation") {
                     out[py::str(name)] = ids_last();
+                } else if (name == "class_ids" || name == "class" || name == "semantic") {
+                    out[py::str(name)] = class_last();
                 } else if (name == "motion" || name == "flow") {
                     out[py::str(name)] = motion_last();
                 } else if (name == "rgb" || name == "shaded" || name == "color") {
@@ -267,7 +298,7 @@ namespace {
                     out[py::str(name)] = albedo_last();
                 } else {
                     throw std::invalid_argument("unknown typed AOV '" + name +
-                            "' — use: depth, normals, instance_ids, motion, rgb, albedo");
+                            "' — use: depth, normals, instance_ids, class_ids, motion, rgb, albedo");
                 }
             }
             return out;
@@ -390,11 +421,21 @@ namespace threepp_py {
                 // ── Lossless float / int AOV readback (native G-buffer copy) ──
                 .def("read_instance_ids", &PyVulkanRenderer::read_instance_ids,
                      py::arg("scene"), py::arg("camera"),
-                     "Recoverable per-pixel instance ids as (H, W) uint32. 0 = sky / no hit; "
-                     "otherwise instanceCustomIndex + 1. No hashing, no collisions — the "
-                     "labels an ML segmentation pipeline can index directly. NOTE: ids are "
-                     "per-frame visible-set indices (stable for a static scene; may change "
-                     "across frames on add/remove/hide/LOD).")
+                     "Stable per-pixel instance ids as (H, W) uint32. 0 = sky / no hit; otherwise "
+                     "a per-object id that persists across frames and visible-set changes (no "
+                     "hashing, no collisions). Auto-assigned; override with set_instance_id().")
+                .def("read_class_ids", &PyVulkanRenderer::read_class_ids,
+                     py::arg("scene"), py::arg("camera"),
+                     "Semantic class ids as (H, W) uint32 (0..255; 0 = unset). Tag objects with "
+                     "set_class_id() to get semantic segmentation alongside the instance ids.")
+                .def("set_instance_id", &PyVulkanRenderer::set_instance_id,
+                     py::arg("object"), py::arg("instance_id"),
+                     "Assign a specific stable instance id (0..65535) to an object for the ids "
+                     "AOV. Overrides the auto-assigned id. Takes effect on the next render.")
+                .def("set_class_id", &PyVulkanRenderer::set_class_id,
+                     py::arg("object"), py::arg("class_id"),
+                     "Tag an object with a semantic class id (0..255) for read_class_ids(). "
+                     "Objects sharing a class id share a semantic label.")
                 .def("read_normals_float", &PyVulkanRenderer::read_normals_float,
                      py::arg("scene"), py::arg("camera"),
                      "World-space unit normals as (H, W, 3) float32, components in [-1, 1] "

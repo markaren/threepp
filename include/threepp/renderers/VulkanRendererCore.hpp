@@ -108,6 +108,19 @@ namespace threepp {
         [[nodiscard]] bool readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
                                           int& width, int& height, int& bytesPerPixel);
 
+        // ── Segmentation labels for the Ids AOV ──────────────────────────
+        // The Ids attachment's .y channel is a STABLE per-object instance id,
+        // auto-assigned on first draw (unlike .x, the per-frame visible index,
+        // it survives add/remove/hide/LOD). setObjectInstanceId overrides it for
+        // a specific object; setObjectClassId tags an object with an 8-bit
+        // semantic class written to .z bits 8..15 — so a single readback yields
+        // both instance- and semantic-segmentation ground truth. Both take
+        // effect on the next render. instanceId is truncated to 16 bits, classId
+        // clamped to [0, 255]. Keyed by Object3D::id, so calling before the
+        // object is added to the scene is fine.
+        void setObjectInstanceId(const Object3D& obj, uint32_t instanceId);
+        void setObjectClassId(const Object3D& obj, uint32_t classId);
+
         // ── GPU event camera (DVS) detector ───────────────────────────────
         struct EventCameraParams {
             float    threshold        = 0.15f;

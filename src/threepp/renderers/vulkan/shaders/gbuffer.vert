@@ -60,6 +60,10 @@ layout(location = 6) out vec3 vWorldPos;// for fragment-shader TBN via dFdx/dFdy
 layout(location = 7) out vec3 vColor;// per-vertex color; this fixed-input path has no
                                      // color binding, so always white (the indirect
                                      // path — gbuffer_indirect.vert — does real vertex colors)
+layout(location = 8) flat out uint vStableId;// stable per-object id — matches the shared
+                                             // gbuffer.frag interface. This fixed path is not
+                                             // used for the ids pass (indirect draws are), so
+                                             // it just mirrors the visible index as before.
 
 void main() {
     vec4 worldPos     = pc.model * vec4(inPos, 1.0);
@@ -84,6 +88,7 @@ void main() {
     vUv            = inUv;
     vWorldPos      = worldPos.xyz;
     vColor         = vec3(1.0);// no color binding on this path
+    vStableId      = pc.instanceCustomIndex + 1u;// fixed path: mirror .x (unused for ids)
 
     // threepp's projection matrix follows the GL convention (Y up in NDC).
     // Vulkan NDC has Y pointing down, so we negate Y at the gl_Position
