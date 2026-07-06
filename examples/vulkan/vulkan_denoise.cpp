@@ -21,6 +21,11 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/threepp.hpp"
 
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
+#include <string>
+
 using namespace threepp;
 
 namespace {
@@ -97,7 +102,21 @@ namespace {
 
 }// namespace
 
-int main() {
+int main(int argc, char** argv) {
+
+    // Dev capture: --shot <name.png> [--frames N] settles N frames then writes
+    // aaa_caps/<name> and exits (object rotation off for a clean settle).
+    // --lightrad r sets a physical source radius on the key/fill/rim lights —
+    // soft local-shadow triage for the deferred denoised-shadow channel.
+    std::string shotPath;
+    int   shotFrames = 150, shotFrame = 0;
+    float optLightRad = -1.f;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (a == "--lightrad" && i + 1 < argc) optLightRad = static_cast<float>(std::atof(argv[++i]));
+    }
 
     Canvas canvas("Vulkan PT - Denoiser Showcase", {{"vsync", false}});
 
@@ -147,6 +166,12 @@ int main() {
     auto rimLight = PointLight::create(Color(1.0f, 0.5f, 0.2f), 5.2f);
     rimLight->position.set(1.f, 5.f, -4.f);
     scene.add(rimLight);
+
+    if (optLightRad >= 0.f) {// --lightrad: soft local shadows (source radius)
+        keyLight->radius  = optLightRad;
+        fillLight->radius = optLightRad;
+        rimLight->radius  = optLightRad;
+    }
 
     // ---- Camera ----
     PerspectiveCamera camera(45.f, canvas.aspect(), 0.1f, 100.f);
@@ -227,7 +252,7 @@ int main() {
     canvas.animate([&] {
         const float dt = clock.getDelta();
 
-        if (rotating) {
+        if (rotating && shotPath.empty()) {
             hero->rotation.y += rotSpeed * dt;
         }
 
@@ -242,7 +267,14 @@ int main() {
 
         controls.update();
         renderer.render(scene, camera);
-        ui.render();
+        if (shotPath.empty()) {
+            ui.render();
+        } else if (++shotFrame >= shotFrames) {
+            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
+            renderer.writeFramebuffer(path);
+            std::cout << "wrote " << path.string() << std::endl;
+            std::exit(0);
+        }
     });
 
     return 0;

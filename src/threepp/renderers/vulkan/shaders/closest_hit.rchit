@@ -76,6 +76,7 @@ struct PointLight {
     float range;  // 0 = infinite
     vec3  color;
     float decay;
+    float radius; // physical source radius (soft shadows; layout parity with GpuPointLight)
 };
 struct SpotLight {
     vec3  position;
@@ -85,6 +86,7 @@ struct SpotLight {
     vec3  direction;      // toward target (emission direction)
     float cosAngleOuter;  // cos(angle)          — hard cutoff
     float cosAngleInner;  // cos(angle*(1-pen))  — full-brightness edge
+    float radius;         // physical source radius (soft shadows; layout parity with GpuSpotLight)
 };
 struct RectLight {
     vec3 position;

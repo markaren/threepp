@@ -83,6 +83,7 @@ int main(int argc, char** argv) {
     bool camSet = false;   // --cam px py pz tx ty tz: fixed camera (interior shots)
     float camV[6] = {};
     int optSun = -1;       // --sun 0|1: hide/show the example's stand-in DirectionalLight
+    float optLightRad = -1.f;// --lightrad r: physical source radius on loaded point/spot lights (soft-shadow triage)
     int churnN = 0;        // --churn N: add/remove a tiny cube every N frames (structural-rebuild stressor)
     std::string envPath;   // --env <hdr>: environment override (default citrus orchard)
     std::string sunPolicy; // --sunpolicy auto|always|off
@@ -104,6 +105,7 @@ int main(int argc, char** argv) {
             camSet = true;
         }
         else if (a == "--sun" && i + 1 < argc) optSun = std::atoi(argv[++i]);
+        else if (a == "--lightrad" && i + 1 < argc) optLightRad = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--churn" && i + 1 < argc) churnN = std::atoi(argv[++i]);
         else if (a == "--env" && i + 1 < argc) envPath = argv[++i];
         else if (a == "--sunpolicy" && i + 1 < argc) sunPolicy = argv[++i];
@@ -199,7 +201,7 @@ int main(int argc, char** argv) {
         auto name = models[idx].name;
         std::cout << "Loading: " << name << " (" << path << ")" << std::endl;
 
-        loadedModel = loadAsync([&loader, path, name]() -> std::shared_ptr<Group> {
+        loadedModel = loadAsync([&loader, path, name, optLightRad]() -> std::shared_ptr<Group> {
             try {
                 auto result = loader.load(path);
                 if (!result || !result->scene) {
@@ -212,6 +214,12 @@ int main(int argc, char** argv) {
                 root->traverseType<Light>([&](Light& l) {
                     l.visible = true;
                     l.intensity = std::max(l.intensity, 1.0f);
+                    // --lightrad: physical source radius on the model's punctual
+                    // lights (RT soft-shadow triage; 0/absent = exact hard).
+                    if (optLightRad >= 0.f) {
+                        if (auto* pl = dynamic_cast<PointLight*>(&l)) pl->radius = optLightRad;
+                        else if (auto* sl = dynamic_cast<SpotLight*>(&l)) sl->radius = optLightRad;
+                    }
                 });
                 if (!hasMesh) {
                     std::cerr << "Skipping '" << name << "': no mesh geometry" << std::endl;

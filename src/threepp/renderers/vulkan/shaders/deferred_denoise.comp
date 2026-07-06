@@ -39,6 +39,18 @@ layout(set = 0, binding = 22, rgba16f) uniform image2D atrousA;            // pi
 layout(set = 0, binding = 23, rgba16f) uniform image2D atrousB;
 layout(set = 0, binding = 25, rgba16f) uniform readonly image2D reflectImage;// sharp mirror reflection (.rgb pre-weighted, .a=roughness)
 layout(set = 0, binding = 31, rgba16f) uniform readonly image2D reflAuxImage;// ReBLUR aux: .x=history length, .y=E[L²] (temporal convergence → blur width)
+// ── Denoised direct-shadow channel ──────────────────────────────────────────
+// shadowVisImage: temporally-accumulated visibility RATIO from the shade pass
+// (.x=R, .y=E[R²], .z=histLen). The ratio plane rides the SAME à-trous passes
+// as the GI (shared normal/plane/wavelet weights — only the range stop is its
+// own, scaled by the ratio's temporal variance), ping-ponging through the two
+// rg16f scratches. The recombine adds directUImage × R̃: the exact unshadowed
+// analytic direct times the filtered [0,1] ratio — grain-free penumbras with
+// the color/BRDF untouched (Heitz et al. 2018 split).
+layout(set = 0, binding = 43, rgba16f) uniform image2D shadowVisImage;      // feedback rewrites .x
+layout(set = 0, binding = 45, rgba16f) uniform readonly image2D directUImage;
+layout(set = 0, binding = 46, rg16f)   uniform image2D shadowAtrousA;       // x=R, y=variance
+layout(set = 0, binding = 47, rg16f)   uniform image2D shadowAtrousB;
 // Scene fog — same UBO the shade pass consumes (binding 33 of the shared set).
 // The GI + reflection RECOMBINES below add radiance into sceneHdr AFTER the
 // shade pass fogged the base — these additions must carry the same primary-
@@ -119,6 +131,13 @@ vec4 readSrc(ivec2 q) {
     if (pc.srcMode == 1u) return imageLoad(atrousA, q);
     if (pc.srcMode == 2u) return imageLoad(atrousB, q);
     return vec4(imageLoad(indirectImage, q).rgb, 0.0);
+}
+
+// Shadow-ratio source (x=R, y=variance) — mirrors readSrc's ping-pong exactly.
+vec2 readSrcShadow(ivec2 q) {
+    if (pc.srcMode == 1u) return imageLoad(shadowAtrousA, q).xy;
+    if (pc.srcMode == 2u) return imageLoad(shadowAtrousB, q).xy;
+    return vec2(imageLoad(shadowVisImage, q).x, 0.0);
 }
 
 // B3-spline à-trous kernel weights {3/8, 1/4, 1/16}.
@@ -328,8 +347,8 @@ void main() {
     const bool sky = texelFetch(gbufIdsTex, px, 0).x == 0u;
     const vec4 nC  = texelFetch(gbufNormalTex, px, 0);
     if (sky || nC.w < 0.0) {
-        if      (pc.dstMode == 0u) imageStore(atrousA, px, vec4(0.0));
-        else if (pc.dstMode == 1u) imageStore(atrousB, px, vec4(0.0));
+        if      (pc.dstMode == 0u) { imageStore(atrousA, px, vec4(0.0)); imageStore(shadowAtrousA, px, vec4(0.0)); }
+        else if (pc.dstMode == 1u) { imageStore(atrousB, px, vec4(0.0)); imageStore(shadowAtrousB, px, vec4(0.0)); }
         return;
     }
 
@@ -411,10 +430,41 @@ void main() {
     }
     const float lumPhi = 4.0 * sqrt(max(variance, 0.0)) + 1e-3;// luminance edge-stop scale
 
+    // Shadow-ratio center + variance — same estimate structure as the GI's:
+    // temporal moment (E[R²]−R², accumulated by the shade pass) once the
+    // history is long enough, a 5×5 spatial fallback while fresh. The variance
+    // sizes the ratio's OWN range stop: a converged penumbra gradient has
+    // near-zero temporal variance → tight stop → the gradient is PRESERVED
+    // (contact shadows stay crisp); fresh/disoccluded or occluder-swept pixels
+    // have high variance → loose stop → the 1-2 ray noise blurs away.
+    vec2  cS = readSrcShadow(px);
+    float varS;
+    if (pc.srcMode == 0u) {
+        const vec4 sv = imageLoad(shadowVisImage, px);
+        if (sv.z < 4.0) {
+            float s = 0.0, s2 = 0.0, n = 0.0;
+            for (int dy = -2; dy <= 2; ++dy)
+            for (int dx = -2; dx <= 2; ++dx) {
+                const ivec2 q = clamp(px + ivec2(dx, dy), ivec2(0), mx);
+                if (texelFetch(gbufIdsTex, q, 0).x == 0u) continue;
+                const float v = imageLoad(shadowVisImage, q).x;
+                s += v; s2 += v * v; n += 1.0;
+            }
+            const float m = s / max(n, 1.0);
+            varS = max(s2 / max(n, 1.0) - m * m, 0.0);
+        } else {
+            varS = max(sv.y - sv.x * sv.x, 0.0);
+        }
+    } else {
+        varS = cS.y;
+    }
+    const float visPhi = 4.0 * sqrt(max(varS, 0.0)) + 1e-3;// ratio range-stop scale
+
     const int st = int(max(pc.step, 1u));
     vec3  sumC = vec3(0.0);
     float sumW = 0.0;
     float sumV = 0.0;
+    float sumS = 0.0, sumWS = 0.0, sumVS = 0.0;// shadow-ratio accumulators
     for (int dy = -2; dy <= 2; ++dy)
     for (int dx = -2; dx <= 2; ++dx) {
         const ivec2 q = px + ivec2(dx, dy) * st;
@@ -439,12 +489,24 @@ void main() {
         sumC += sq.rgb * w;
         sumW += w;
         sumV += w * w * vq;
+        // Shadow-ratio plane: shared geometric weights (wn/wz/hk), its own
+        // variance-guided range stop on R.
+        const vec2  sqS = (dx == 0 && dy == 0) ? cS : readSrcShadow(q);
+        const float wlS = exp(-abs(cS.x - sqS.x) / visPhi);
+        const float wS  = wn * wz * hk * wlS;
+        const float vqS = (pc.srcMode == 0u) ? varS : sqS.y;
+        sumS  += sqS.x * wS;
+        sumWS += wS;
+        sumVS += wS * wS * vqS;
     }
     const vec3  fC = sumW > 0.0 ? sumC / sumW : cC.rgb;
     // Variance propagation: pass 0 stores the center estimate (no neighbour
     // variance available); later passes carry the à-trous-filtered variance.
     const float fV = (pc.srcMode == 0u) ? variance
                    : (sumW > 0.0 ? sumV / (sumW * sumW) : variance);
+    const float fS  = sumWS > 0.0 ? sumS / sumWS : cS.x;
+    const float fVS = (pc.srcMode == 0u) ? varS
+                    : (sumWS > 0.0 ? sumVS / (sumWS * sumWS) : varS);
 
     // SVGF HISTORY FEEDBACK: on the designated pass, write THIS pass's SOURCE (the
     // first à-trous pass's already-filtered GI) back into the indirect image as the
@@ -455,19 +517,30 @@ void main() {
     if (pc.feedback == 1u) {
         const float hl = imageLoad(indirectImage, px).a;
         imageStore(indirectImage, px, vec4(cC.rgb, hl));
+        // Same feedback for the shadow ratio: next frame's accumulation blends
+        // against the FILTERED (clean) R, so disocclusions converge in ~2
+        // frames instead of fading in — keeps .y/.z/.w (moment/history/trend).
+        const vec4 sv = imageLoad(shadowVisImage, px);
+        imageStore(shadowVisImage, px, vec4(cS.x, sv.yzw));
     }
 
     if (pc.dstMode == 2u) {
         // Recombine: sceneHdr += blur(indirect) · diffuseColor (matches
-        // shadeDiffuseDirect's albedo·(1-metalness)). Only the demodulated
-        // irradiance was filtered, so albedo/direct/reflections stay crisp.
+        // shadeDiffuseDirect's albedo·(1-metalness)) + directU × R̃ (the
+        // denoised-shadow split: exact unshadowed analytic direct × the
+        // filtered visibility ratio). Only the demodulated irradiance and the
+        // bounded ratio were filtered, so albedo/texture detail stays crisp.
         const vec4 am           = texelFetch(gbufAlbedoTex, px, 0);
         const vec3 diffuseColor = am.rgb * (1.0 - am.a);
+        const vec3 dU           = imageLoad(directUImage, px).rgb;
         const vec3 cur          = imageLoad(outImage, px).rgb;
-        imageStore(outImage, px, vec4(cur + fC * diffuseColor * fogTransmittance(camPos, Pc) * recombineCoverage(px), 1.0));
+        imageStore(outImage, px, vec4(cur + (fC * diffuseColor + dU * clamp(fS, 0.0, 1.0))
+                                            * fogTransmittance(camPos, Pc) * recombineCoverage(px), 1.0));
     } else if (pc.dstMode == 0u) {
         imageStore(atrousA, px, vec4(fC, fV));
+        imageStore(shadowAtrousA, px, vec4(fS, fVS, 0.0, 0.0));
     } else {
         imageStore(atrousB, px, vec4(fC, fV));
+        imageStore(shadowAtrousB, px, vec4(fS, fVS, 0.0, 0.0));
     }
 }

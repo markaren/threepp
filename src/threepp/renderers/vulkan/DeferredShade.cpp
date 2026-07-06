@@ -45,7 +45,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[43]{};
+        VkDescriptorSetLayoutBinding b[48]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -102,10 +102,16 @@ namespace threepp::vulkan {
         set(40, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf ids MS
         set(41, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf albedo MS
         set(42, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf uv MS
+        // Denoised direct-shadow channel (ratio estimator).
+        set(43, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // shadow-ratio accumulator CUR (shade writes, denoise reads + feedback)
+        set(44, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV shadow-ratio (other fif index) = 1-frame reproject history
+        set(45, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // unshadowed analytic direct U (recombine multiplies by the filtered ratio)
+        set(46, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // shadow-ratio à-trous ping-pong A (rg16f)
+        set(47, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // shadow-ratio à-trous ping-pong B
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 43;
+        dlci.bindingCount = 48;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -165,9 +171,9 @@ namespace threepp::vulkan {
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight_ * 4;// camera + lights + fog + probe grid
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (22 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise + 5 gbuf MS
+        sizes[1].descriptorCount = framesInFlight_ * (23 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise + 5 gbuf MS + shadowVisPrev
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[2].descriptorCount = framesInFlight_ * 11;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + reflAux + 4 reservoir (pos/W × write/read)
+        sizes[2].descriptorCount = framesInFlight_ * 15;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + reflAux + 4 reservoir (pos/W × write/read) + shadowVis + directU + shadowAtrousA/B
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
         sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -366,12 +372,32 @@ namespace threepp::vulkan {
             VkDescriptorImageInfo idsMsInfo    = sampled(in.gbufIdsMS[f],    gbufSampler_);
             VkDescriptorImageInfo albMsInfo    = sampled(in.gbufAlbedoMS[f], gbufSampler_);
             VkDescriptorImageInfo uvMsInfo     = sampled(in.gbufUvMS[f],     gbufSampler_);
+
+            // Denoised direct-shadow channel. shadowVis ping-pongs across the
+            // frames-in-flight exactly like indirect: CUR = storage write,
+            // PREV = the other index sampled in GENERAL (reproject history).
+            VkDescriptorImageInfo shadowVisInfo{};
+            shadowVisInfo.imageView   = in.shadowVis[f];
+            shadowVisInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo prevShadowVisInfo{};
+            prevShadowVisInfo.sampler     = gbufSampler_;
+            prevShadowVisInfo.imageView   = in.shadowVis[pf];
+            prevShadowVisInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo directUInfo{};
+            directUInfo.imageView   = in.directU[f];
+            directUInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo shadowAtrAInfo{};
+            shadowAtrAInfo.imageView   = in.shadowAtrousA[f];
+            shadowAtrAInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo shadowAtrBInfo{};
+            shadowAtrBInfo.imageView   = in.shadowAtrousB[f];
+            shadowAtrBInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             VkDescriptorImageInfo depthMsInfo{};// depth MS rests DEPTH_STENCIL_READ_ONLY, like the resolved depth
             depthMsInfo.sampler     = gbufSampler_;
             depthMsInfo.imageView   = in.gbufDepthMS[f];
             depthMsInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-            VkWriteDescriptorSet w[43]{};
+            VkWriteDescriptorSet w[48]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -434,7 +460,12 @@ namespace threepp::vulkan {
             setw(40, 40, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &idsMsInfo,    nullptr);
             setw(41, 41, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &albMsInfo,    nullptr);
             setw(42, 42, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &uvMsInfo,     nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 43, w, 0, nullptr);
+            setw(43, 43, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &shadowVisInfo,     nullptr);
+            setw(44, 44, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevShadowVisInfo, nullptr);
+            setw(45, 45, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &directUInfo,       nullptr);
+            setw(46, 46, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &shadowAtrAInfo,    nullptr);
+            setw(47, 47, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &shadowAtrBInfo,    nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 48, w, 0, nullptr);
         }
     }
 

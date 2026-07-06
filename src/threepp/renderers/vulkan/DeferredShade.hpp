@@ -53,6 +53,14 @@ namespace threepp::vulkan {
             const VkImageView* atrousB    = nullptr;// [framesInFlight] SVGF à-trous ping-pong B (storage)
             const VkImageView* reflect    = nullptr;// [framesInFlight] sharp mirror-ray reflection radiance (storage)
             const VkImageView* reflAux    = nullptr;// [framesInFlight] reflection-denoiser auxiliary (storage+sampled, ping-pong like reflect)
+            // Denoised direct-shadow channel (bindings 43-47): shadow-ratio
+            // accumulator (ping-ponged like indirect), the unshadowed analytic
+            // direct sum the recombine multiplies by the filtered ratio, and
+            // the ratio's own rg16f à-trous ping-pong pair.
+            const VkImageView* shadowVis     = nullptr;// [framesInFlight] storage+sampled (prev fif read)
+            const VkImageView* directU       = nullptr;// [framesInFlight] storage
+            const VkImageView* shadowAtrousA = nullptr;// [framesInFlight] storage (rg16f)
+            const VkImageView* shadowAtrousB = nullptr;// [framesInFlight] storage (rg16f)
             const VkImageView* sceneHdr   = nullptr;// [framesInFlight] output (storage)
             // Scene fog (homogeneous medium) — the SAME per-frame UBO the PT path
             // consumes (GpuFogUbo: sigmaT/enabled/color/anisotropy/waterSurfaceY).

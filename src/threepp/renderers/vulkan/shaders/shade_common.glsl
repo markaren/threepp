@@ -805,13 +805,31 @@ vec3 analyticNeeOpaque(
             atten *= w * w;
         }
 
+        // Physical source radius → soft shadow: jitter the SHADOW target on a
+        // disc ⊥ toL. The BRDF keeps the exact toL — only the occlusion test
+        // softens (same policy as the deferred renderer's shadow channel); the
+        // PT's per-sample seed integrates the penumbra across accumulation.
+        vec3  sToL  = toL;
+        float sDist = dist;
+        const float srcRp = lights.pointLights[i].radius;
+        if (srcRp > 0.0) {
+            const vec3 up = abs(toL.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+            const vec3 tD = normalize(cross(up, toL));
+            const vec3 bD = cross(toL, tD);
+            const float aD = TWO_PI * urand(seed);
+            const vec3  lp = lights.pointLights[i].position
+                           + (tD * cos(aD) + bD * sin(aD)) * (sqrt(urand(seed)) * srcRp);
+            sToL  = lp - hitPos;
+            sDist = max(length(sToL), 1e-4);
+            sToL /= sDist;
+        }
         shadowVisibility = 1.0;
         traceRayEXT(topAS,
                     gl_RayFlagsTerminateOnFirstHitEXT |
                     gl_RayFlagsSkipClosestHitShaderEXT |
                     gl_RayFlagsNoOpaqueEXT,
                     0xff, 1, 0, 1,
-                    hitPos + N * 1e-3, 0.0, toL, dist - 1e-2, 1);
+                    hitPos + N * 1e-3, 0.0, sToL, sDist - 1e-2, 1);
         if (shadowVisibility <= 0.0) continue;
 
         const vec3  H_p   = normalize(V + toL);
@@ -866,13 +884,28 @@ vec3 analyticNeeOpaque(
         }
         atten *= spotAtten;
 
+        // Physical source radius → soft shadow (see the point-light note).
+        vec3  sToL  = toL;
+        float sDist = dist;
+        const float srcRs = lights.spotLights[i].radius;
+        if (srcRs > 0.0) {
+            const vec3 up = abs(toL.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+            const vec3 tD = normalize(cross(up, toL));
+            const vec3 bD = cross(toL, tD);
+            const float aD = TWO_PI * urand(seed);
+            const vec3  lp = lights.spotLights[i].position
+                           + (tD * cos(aD) + bD * sin(aD)) * (sqrt(urand(seed)) * srcRs);
+            sToL  = lp - hitPos;
+            sDist = max(length(sToL), 1e-4);
+            sToL /= sDist;
+        }
         shadowVisibility = 1.0;
         traceRayEXT(topAS,
                     gl_RayFlagsTerminateOnFirstHitEXT |
                     gl_RayFlagsSkipClosestHitShaderEXT |
                     gl_RayFlagsNoOpaqueEXT,
                     0xff, 1, 0, 1,
-                    hitPos + N * 1e-3, 0.0, toL, dist - 1e-2, 1);
+                    hitPos + N * 1e-3, 0.0, sToL, sDist - 1e-2, 1);
         if (shadowVisibility <= 0.0) continue;
 
         const vec3  H_s   = normalize(V + toL);

@@ -606,6 +606,7 @@ namespace threepp {
         struct GpuPointLight {
             float position[3]; float range;
             float color[3];    float decay;
+            float radius;      // physical source radius (world units) → RT soft shadows; 0 = hard
         };
         struct GpuSpotLight {
             float position[3];   float range;
@@ -613,6 +614,7 @@ namespace threepp {
             float direction[3];  // toward target (emission direction)
             float cosAngleOuter; // cos(angle)
             float cosAngleInner; // cos(angle * (1-penumbra))
+            float radius;        // physical source radius (world units) → RT soft shadows; 0 = hard
         };
         struct GpuRectLight {
             float position[3];
@@ -633,8 +635,8 @@ namespace threepp {
             GpuRectLight  rectLights[kMaxRectLights];
         };
         static_assert(sizeof(GpuDirLight)   == 24);
-        static_assert(sizeof(GpuPointLight) == 32);
-        static_assert(sizeof(GpuSpotLight)  == 52);
+        static_assert(sizeof(GpuPointLight) == 36);
+        static_assert(sizeof(GpuSpotLight)  == 56);
         static_assert(sizeof(GpuRectLight)  == 60);
         std::array<Buffer, kFramesInFlight> lightsUbos{};
 
@@ -1374,6 +1376,10 @@ namespace threepp {
             Image2D       atrousB;      // rgba16f — SVGF multi-pass à-trous ping-pong (the other half)
             Image2D       reflect;      // rgba16f — sharp 1-mirror-ray reflection radiance (.rgb), demodulated; roughness-blurred by the reflection denoise. STORAGE
             Image2D       reflAux;      // rgba16f — reflection-denoiser auxiliary (ping-pong, mirrors `reflect`: STORAGE write + SAMPLED prev-frame read)
+            Image2D       shadowVis;    // rgba16f — denoised-shadow channel accumulator (.x=visibility ratio, .y=E[R²], .z=histLen, .w=trend); STORAGE + SAMPLED, ping-ponged like indirect
+            Image2D       directU;      // rgba16f — unshadowed analytic direct (dir/point/spot) for the denoise recombine (U × R̃); STORAGE, current frame only
+            Image2D       shadowAtrousA;// rg16f — shadow-ratio à-trous ping-pong (x=R, y=variance); STORAGE scratch
+            Image2D       shadowAtrousB;// rg16f — shadow-ratio à-trous ping-pong (the other half)
             Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
             // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
             // an extra depth-only prepass (overlay_depth.vert) right after
@@ -8281,6 +8287,7 @@ namespace threepp {
                     g.color[1] = pl->color.g * pl->intensity;
                     g.color[2] = pl->color.b * pl->intensity;
                     g.decay = pl->decay;
+                    g.radius = pl->radius;
                 } else if (auto* sl = dynamic_cast<SpotLight*>(&o)) {
                     if (ubo.spotCount >= kMaxSpotLights) return;
                     Vector3 lp, tp;
@@ -8299,6 +8306,7 @@ namespace threepp {
                     g.direction[0] = emDir.x; g.direction[1] = emDir.y; g.direction[2] = emDir.z;
                     g.cosAngleOuter = std::cos(sl->angle);
                     g.cosAngleInner = std::cos(sl->angle * (1.0f - sl->penumbra));
+                    g.radius = sl->radius;
                 } else if (auto* rl = dynamic_cast<RectAreaLight*>(&o)) {
                     if (ubo.rectCount >= kMaxRectLights) return;
                     Vector3 wp; rl->getWorldPosition(wp);
@@ -9195,6 +9203,10 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), d, g.atrousB);
                 destroyImage2D(ctx->allocator(), d, g.reflect);
                 destroyImage2D(ctx->allocator(), d, g.reflAux);
+                destroyImage2D(ctx->allocator(), d, g.shadowVis);
+                destroyImage2D(ctx->allocator(), d, g.directU);
+                destroyImage2D(ctx->allocator(), d, g.shadowAtrousA);
+                destroyImage2D(ctx->allocator(), d, g.shadowAtrousB);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
                 destroyImage2D(ctx->allocator(), d, g.normalMS);
@@ -9447,6 +9459,23 @@ namespace threepp {
                 g.reflAux = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("reflAux"));
+                // Denoised direct-shadow channel: the shadow-ratio accumulator
+                // (STORAGE write + SAMPLED prev-fif read, same ping-pong as
+                // indirect), the unshadowed analytic direct the recombine
+                // multiplies by the filtered ratio, and the ratio's own rg16f
+                // à-trous scratch pair.
+                g.shadowVis = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                      VK_IMAGE_ASPECT_COLOR_BIT, N("shadowVis"));
+                g.directU = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT, N("directU"));
+                g.shadowAtrousA = createAttachmentImage2D(w, h, VK_FORMAT_R16G16_SFLOAT,
+                                                          VK_IMAGE_USAGE_STORAGE_BIT,
+                                                          VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousA"));
+                g.shadowAtrousB = createAttachmentImage2D(w, h, VK_FORMAT_R16G16_SFLOAT,
+                                                          VK_IMAGE_USAGE_STORAGE_BIT,
+                                                          VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousB"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                    N("depth"));
@@ -9571,6 +9600,10 @@ namespace threepp {
                 pushInit(g.atrousB.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.reflect.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.reflAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.shadowVis.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.directU.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.shadowAtrousA.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.shadowAtrousB.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
                 if (gbufMsaaSamples_ > 1) {
                     pushInit(g.normalMS.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -11245,6 +11278,10 @@ namespace threepp {
             std::array<VkImageView, kFramesInFlight> atrousBViews{};
             std::array<VkImageView, kFramesInFlight> reflectViews{};
             std::array<VkImageView, kFramesInFlight> reflAuxViews{};
+            std::array<VkImageView, kFramesInFlight> shadowVisViews{};
+            std::array<VkImageView, kFramesInFlight> directUViews{};
+            std::array<VkImageView, kFramesInFlight> shadowAtrousAViews{};
+            std::array<VkImageView, kFramesInFlight> shadowAtrousBViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             std::array<VkBuffer, kFramesInFlight> fogBufs{};
             // MSAA raw raster attachments (dispatch B). Real views when
@@ -11274,6 +11311,10 @@ namespace threepp {
                 atrousBViews[f]  = rasterGbufs[f].atrousB.view;
                 reflectViews[f]  = rasterGbufs[f].reflect.view;
                 reflAuxViews[f]  = rasterGbufs[f].reflAux.view;
+                shadowVisViews[f]     = rasterGbufs[f].shadowVis.view;
+                directUViews[f]       = rasterGbufs[f].directU.view;
+                shadowAtrousAViews[f] = rasterGbufs[f].shadowAtrousA.view;
+                shadowAtrousBViews[f] = rasterGbufs[f].shadowAtrousB.view;
                 sceneHdrViews[f] = bloom_->sceneHdrView(f);
                 const bool haveMS = gbufMsaaSamples_ > 1 && rasterGbufs[f].normalMS.view != VK_NULL_HANDLE;
                 normalMSViews[f] = haveMS ? rasterGbufs[f].normalMS.view : gbufDummyMS_[0].view;
@@ -11304,6 +11345,10 @@ namespace threepp {
             in.atrousB          = atrousBViews.data();
             in.reflect          = reflectViews.data();
             in.reflAux          = reflAuxViews.data();
+            in.shadowVis        = shadowVisViews.data();
+            in.directU          = directUViews.data();
+            in.shadowAtrousA    = shadowAtrousAViews.data();
+            in.shadowAtrousB    = shadowAtrousBViews.data();
             in.sceneHdr         = sceneHdrViews.data();
             in.fogBuf           = fogBufs.data();
             in.fogRange         = sizeof(GpuFogUbo);

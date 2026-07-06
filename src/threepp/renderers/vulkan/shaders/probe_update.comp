@@ -38,9 +38,9 @@ const float TWO_PI = 6.28318530717959;
 float SHADOW_EPS   = 1e-3;// rescaled per hit from |worldPos| (see deferred_shade)
 
 struct DirLight   { vec3 direction; vec3 color; };
-struct PointLight { vec3 position; float range; vec3 color; float decay; };
+struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
 struct SpotLight  { vec3 position; float range; vec3 color; float decay;
-                    vec3 direction; float cosAngleOuter; float cosAngleInner; };
+                    vec3 direction; float cosAngleOuter; float cosAngleInner; float radius; };
 struct RectLight  { vec3 position; vec3 halfU; vec3 halfV; vec3 normal; vec3 color; };
 layout(set = 0, binding = 1, scalar) uniform LightsUbo {
     vec3       ambient;

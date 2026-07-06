@@ -51,9 +51,9 @@ layout(set = 0, binding = 0) uniform CameraUbo {
 } cam;
 
 struct DirLight   { vec3 direction; vec3 color; };
-struct PointLight { vec3 position; float range; vec3 color; float decay; };
+struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
 struct SpotLight  { vec3 position; float range; vec3 color; float decay;
-                    vec3 direction; float cosAngleOuter; float cosAngleInner; };
+                    vec3 direction; float cosAngleOuter; float cosAngleInner; float radius; };
 struct RectLight  { vec3 position; vec3 halfU; vec3 halfV; vec3 normal; vec3 color; };
 layout(set = 0, binding = 1, scalar) uniform LightsUbo {
     vec3       ambient;
@@ -199,6 +199,23 @@ layout(set = 0, binding = 39) uniform sampler2DMS  gbufDepthMS;
 layout(set = 0, binding = 40) uniform usampler2DMS gbufIdsMS;
 layout(set = 0, binding = 41) uniform sampler2DMS  gbufAlbedoMS;
 layout(set = 0, binding = 42) uniform sampler2DMS  gbufUvMS;
+
+// ── Denoised direct-shadow channel (ratio estimator, Heitz et al. 2018) ─────
+// The analytic dir/point/spot direct lighting is SPLIT: the UNSHADOWED sum U is
+// computed exactly (noise-free, → directUImage) while the shadowing is a 1-2 ray
+// stochastic estimate of the luminance-weighted visibility ratio
+//   R = Σ lum(c_i)·V_i / Σ lum(c_i)   ∈ [0,1]
+// accumulated temporally here (shadowVisImage, reprojected like the GI) and
+// à-trous-filtered by deferred_denoise, whose recombine adds U × R̃. R is
+// bounded and firefly-free — ideal denoiser food — so the penumbra converges
+// smooth instead of the static-dither grain the old always-inline path had,
+// and point/spot lights gain radius-driven soft shadows at the same flat cost.
+// .x = accumulated R, .y = E[R²] (temporal variance), .z = histLen, .w = trend
+// (content-change antilag — a sweeping shadow edge must cut history, because
+// the receiver's motion vectors can't see the OCCLUDER moving).
+layout(set = 0, binding = 43, rgba16f) uniform image2D shadowVisImage;
+layout(set = 0, binding = 44) uniform sampler2D shadowVisPrevTex;// prev fif (reproject history)
+layout(set = 0, binding = 45, rgba16f) uniform writeonly image2D directUImage;
 
 #include "probe_common.glsl"// probeIrradiance()
 
@@ -1240,6 +1257,155 @@ float sunShadowVis(vec3 orig, vec3 L, float tanR, bool cheapHit) {
     return sum * (1.0 / 16.0);
 }
 
+// ── Denoised direct-shadow channel (primary surfaces, denoise ON) ───────────
+// One soft shadow ray toward the light picked by global index `gi` (same
+// dir→point→spot index convention as pickAnalyticLight). Directional lights
+// jitter within the sun cone (pc.sunTanHalfAngle); point/spot lights sample a
+// disc of the light's PHYSICAL source radius perpendicular to the shading
+// direction — that is what turns their hard 1-ray shadows into real penumbras
+// that widen with distance (radius 0 keeps them exact-hard). xi is
+// frame-ANIMATED blue noise: unlike the old always-inline path this estimate
+// feeds a temporal accumulator, so fresh directions every frame integrate
+// instead of flickering.
+float shadowRayVisTo(vec3 orig, vec3 P, uint gi, vec2 xi) {
+    if (gi < lights.dirCount) {
+        const vec3  L    = normalize(lights.dirLights[gi].direction);
+        const float tanR = pc.sunTanHalfAngle;
+        if (tanR <= 0.0) return shadowVis(orig, L, 1e30);
+        const vec3 up = abs(L.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+        const vec3 t  = normalize(cross(up, L));
+        const vec3 b  = cross(L, t);
+        const float a = TWO_PI * xi.x;
+        return shadowVis(orig, normalize(L + (t * cos(a) + b * sin(a)) * (sqrt(xi.y) * tanR)), 1e30);
+    }
+    vec3 lp; float srcR;
+    if (gi < lights.dirCount + lights.pointCount) {
+        const uint i = gi - lights.dirCount;
+        lp = lights.pointLights[i].position; srcR = lights.pointLights[i].radius;
+    } else {
+        const uint i = gi - lights.dirCount - lights.pointCount;
+        lp = lights.spotLights[i].position; srcR = lights.spotLights[i].radius;
+    }
+    vec3  toL  = lp - P;
+    float dist = length(toL);
+    if (dist < 1e-4) return 1.0;
+    toL /= dist;
+    if (srcR > 0.0) {
+        const vec3 up = abs(toL.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+        const vec3 t  = normalize(cross(up, toL));
+        const vec3 b  = cross(toL, t);
+        const float a = TWO_PI * xi.x;
+        const vec3 lp2 = lp + (t * cos(a) + b * sin(a)) * (sqrt(xi.y) * srcR);
+        toL  = lp2 - P;
+        dist = length(toL);
+        if (dist < 1e-4) return 1.0;
+        toL /= dist;
+    }
+    return shadowVis(orig, toL, dist - 1e-2);
+}
+
+// Analytic/stochastic direct-light split (Heitz et al. 2018 ratio estimator).
+// Returns the exact UNSHADOWED dir/point/spot sum U (per-light BRDF × color ×
+// attenuation — KEEP THE LOOPS IN SYNC with shadeDiffuseDirect's) and writes a
+// 1-2 ray estimate of the luminance visibility ratio R to visEst: each ray
+// picks one light ∝ lum(c_i) and returns its soft visibility, so
+// E[visEst] = Σ lum(c_i)·V_i / Σ lum(c_i). The recombine multiplies U × R̃
+// (denoised) — color/BRDF stay exact, only the bounded scalar is stochastic.
+// (Known Heitz-2018 approximation: differently-colored lights with different
+// shadowing share one scalar ratio — a slight tint in mixed penumbras.)
+vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
+                         float metalness, vec3 F0, vec3 sheenColor, float sheenRoughness,
+                         ivec2 px, int nRays, out float visEst) {
+    const vec3  LUM   = vec3(0.2126, 0.7152, 0.0722);
+    const float NdotV = max(dot(N, V), 1e-4);
+    const float k     = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    float lw[24];// per-light pick weights (lum of the unshadowed contribution)
+    uint  nL = 0u;
+    vec3  U    = vec3(0.0);
+    float wSum = 0.0;
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        const vec3 L = normalize(lights.dirLights[i].direction);
+        vec3 c = vec3(0.0);
+        if (dot(N, L) > 0.0)
+            c = evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
+              * lights.dirLights[i].color;
+        U += c;
+        lw[nL] = dot(c, LUM); wSum += lw[nL]; ++nL;
+    }
+    for (uint i = 0u; i < lights.pointCount; ++i) {
+        vec3 c = vec3(0.0);
+        vec3        toL  = lights.pointLights[i].position - P;
+        const float dist = length(toL);
+        if (dist >= 1e-4) {
+            toL /= dist;
+            if (dot(N, toL) > 0.0) {
+                const float decay = lights.pointLights[i].decay;
+                float atten = 1.0 / max(pow(dist, decay), 0.01);
+                const float range = lights.pointLights[i].range;
+                if (range > 0.0) {
+                    const float t  = dist / range;
+                    const float t4 = t * t * t * t;
+                    const float wnd = max(1.0 - t4, 0.0);
+                    atten *= wnd * wnd;
+                }
+                c = evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
+                  * lights.pointLights[i].color * atten;
+            }
+        }
+        U += c;
+        lw[nL] = dot(c, LUM); wSum += lw[nL]; ++nL;
+    }
+    for (uint i = 0u; i < lights.spotCount; ++i) {
+        vec3 c = vec3(0.0);
+        vec3        toL  = lights.spotLights[i].position - P;
+        const float dist = length(toL);
+        if (dist >= 1e-4) {
+            toL /= dist;
+            if (dot(N, toL) > 0.0) {
+                const float spotCos   = dot(-toL, lights.spotLights[i].direction);
+                const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
+                                                   lights.spotLights[i].cosAngleInner, spotCos);
+                if (spotAtten > 0.0) {
+                    const float decay = lights.spotLights[i].decay;
+                    float atten = 1.0 / max(pow(dist, decay), 0.01);
+                    const float range = lights.spotLights[i].range;
+                    if (range > 0.0) {
+                        const float t  = dist / range;
+                        const float t4 = t * t * t * t;
+                        const float wnd = max(1.0 - t4, 0.0);
+                        atten *= wnd * wnd;
+                    }
+                    c = evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
+                      * lights.spotLights[i].color * atten * spotAtten;
+                }
+            }
+        }
+        U += c;
+        lw[nL] = dot(c, LUM); wSum += lw[nL]; ++nL;
+    }
+    visEst = 1.0;
+    if (wSum <= 1e-8) return U;// nothing lit → ratio irrelevant (U×R = 0)
+    const vec3 orig = P + N * SHADOW_EPS;
+    float vAcc = 0.0;
+    for (int s = 0; s < nRays; ++s) {
+        // Distinct blue-noise salts per ray + dimension (GI uses 0/1, the
+        // inline sun path 0/1 static — these are frame-animated and distinct).
+        const float xiPick = blueNoiseDef(uvec2(px), pc.frame, uint(2 + s * 3));
+        const vec2  xiDisc = vec2(blueNoiseDef(uvec2(px), pc.frame, uint(3 + s * 3)),
+                                  blueNoiseDef(uvec2(px), pc.frame, uint(4 + s * 3)));
+        const float xi = xiPick * wSum;
+        float acc = 0.0;
+        uint  pick = 0xFFFFFFFFu;
+        for (uint i = 0u; i < nL; ++i) {
+            acc += lw[i];
+            if (xi <= acc && lw[i] > 1e-8) { pick = i; break; }
+        }
+        vAcc += (pick == 0xFFFFFFFFu) ? 1.0 : shadowRayVisTo(orig, P, pick, xiDisc);
+    }
+    visEst = vAcc / float(nRays);
+    return U;
+}
+
 vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stochastic, int nGI, out float openness) {
     const float maxLod  = float(max(pc.envMipCount, 1u) - 1u);
     const vec3 up = abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
@@ -1395,6 +1561,12 @@ uint pickAnalyticLight(vec3 P, inout uint seed, out float wPick) {
     return 0xFFFFFFFFu;// numeric edge: treat as no pick
 }
 
+// Set by the PRIMARY demod path only (never at reflection/GI hits): the
+// dir/point/spot loops below are skipped because the denoised-shadow channel
+// owns them — analyticDirectSplit computes the exact unshadowed sum and the
+// denoise recombine adds U × R̃. Rect lights + emissive NEE stay inline.
+bool gSkipAnalyticDirect = false;
+
 vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
                         float metalness, vec3 emissive, bool doShadows, vec3 diffuseIndirect,
                         vec3 sheenColor, float sheenRoughness,
@@ -1438,7 +1610,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     const bool pickOne = cheapHit && (nLights > 8u);
     if (pickOne) pickIdx = pickAnalyticLight(P, seed, wPick);
 
-    for (uint i = 0u; i < lights.dirCount; ++i) {
+    for (uint i = 0u; !gSkipAnalyticDirect && i < lights.dirCount; ++i) {
         if (pickOne && i != pickIdx) continue;
         const vec3 L = normalize(lights.dirLights[i].direction);
         if (dot(N, L) <= 0.0) continue;
@@ -1452,7 +1624,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         lit += evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
                * lights.dirLights[i].color * vis;
     }
-    for (uint i = 0u; i < lights.pointCount; ++i) {
+    for (uint i = 0u; !gSkipAnalyticDirect && i < lights.pointCount; ++i) {
         if (pickOne && (lights.dirCount + i) != pickIdx) continue;
         vec3        toL  = lights.pointLights[i].position - P;
         const float dist = length(toL);
@@ -1473,7 +1645,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
                * lights.pointLights[i].color * atten * vis;
     }
-    for (uint i = 0u; i < lights.spotCount; ++i) {
+    for (uint i = 0u; !gSkipAnalyticDirect && i < lights.spotCount; ++i) {
         if (pickOne && (lights.dirCount + lights.pointCount + i) != pickIdx) continue;
         vec3        toL  = lights.spotLights[i].position - P;
         const float dist = length(toL);
@@ -2839,6 +3011,8 @@ void main() {
              + volumetricDirScatter(camPos, dirWS, 2000.0, px);
         imageStore(outImage, px, vec4(sky, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
+        imageStore(shadowVisImage, px, vec4(0.0));// cold-start marker for the ping-pong
+        imageStore(directUImage, px, vec4(0.0));
         return;
     }
 
@@ -2859,6 +3033,8 @@ void main() {
         if (skyEdgeW > 0.0) outU += skyEdgeW * skyBackground(ndc);
         imageStore(outImage, px, vec4(outU, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
+        imageStore(shadowVisImage, px, vec4(0.0));
+        imageStore(directUImage, px, vec4(0.0));
         return;
     }
 
@@ -2969,6 +3145,8 @@ void main() {
         imageStore(outImage, px, vec4(wcol, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(reflectImage, px, vec4(0.0));// water shades its own reflection inline
+        imageStore(shadowVisImage, px, vec4(0.0));// water shadows its own lighting inline
+        imageStore(directUImage, px, vec4(0.0));
         return;
     }
 
@@ -3008,6 +3186,7 @@ void main() {
     // regions during motion — exactly where it's needed and tolerable.
     int giSpp = 3;
     bool giSkip = false;// checkerboard carry (set in the adaptive block below)
+    int nSRays = 2;// shadow-ratio rays: 2 while fresh / in-penumbra, 1 converged
     if (demodIndirect) {
         const vec2 mv   = texture(gbufMotionTex, uv).rg;
         const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
@@ -3024,8 +3203,16 @@ void main() {
             // buffer (depth is primary; loose normal avoids treating a deforming
             // skinned surface as fresh → keeps its history → no dust).
             if (dot(N, normalize(pn)) > 0.7 &&
-                abs(svz - bvh.z / bvh.w) <= 0.1 * max(abs(svz), 1e-3))
+                abs(svz - bvh.z / bvh.w) <= 0.1 * max(abs(svz), 1e-3)) {
                 ph = texture(giPrevTex, pUv).a;
+                // Shadow-channel adaptive rays: a CONVERGED pixel outside any
+                // penumbra (long history, near-zero temporal variance of the
+                // visibility ratio) coasts on 1 ray/frame; fresh/disoccluded
+                // and penumbra pixels (where E[R²]−R² stays > 0) keep 2 so
+                // they converge with samples instead of blur.
+                const vec4 sPrev = texture(shadowVisPrevTex, pUv);
+                if (sPrev.z >= 8.0 && (sPrev.y - sPrev.x * sPrev.x) < 0.005) nSRays = 1;
+            }
         }
         // EFFECTIVE history = min(prev history, the motion-scaled cap this pixel will
         // get in the accumulation). So a fast camera PAN (no disocclusion, but a
@@ -3100,6 +3287,20 @@ void main() {
     }
     const vec3 diffIndShade = demodIndirect ? vec3(0.0) : diffInd;
 
+    // ── Denoised direct-shadow channel (demod path only) ─────────────────────
+    // Split the analytic direct into the exact unshadowed sum U (directUImage)
+    // and a 1-2 ray visibility-ratio estimate (accumulated below, filtered +
+    // recombined as U × R̃ by deferred_denoise). The inline path (denoise off,
+    // glass/sheen, dispatch B) keeps the old fully-inline shadowed loops.
+    const bool shadowChannel = demodIndirect && shadowsOn;
+    vec3  directU = vec3(0.0);
+    float visEst  = 1.0;
+    if (shadowChannel) {
+        directU = analyticDirectSplit(worldPos, N, V, albedo, roughness, metalness, F0,
+                                      pm.sheenColor, pm.sheenRoughness, px, nSRays, visEst);
+        gSkipAnalyticDirect = true;// shadeDiffuseDirect: skip dir/point/spot loops
+    }
+
     // Diffuse + direct (shadowed) + emissive-NEE + diffuse indirect + emissive.
     vec3 lit = shadeDiffuseDirect(worldPos, N, V, albedo, roughness, metalness,
                                   emissive, shadowsOn, diffIndShade,
@@ -3108,6 +3309,7 @@ void main() {
                                   pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm, seed,
                                   /*addEmissive=*/((pc.flags & 8u) == 0u),// ReSTIR on → emissive via main()/diffInd; off → coherent emissiveNEE here
                                   /*cheapHit=*/false);// primary: exhaustive lights + full NEE
+    gSkipAnalyticDirect = false;// reflection/GI/glass hits below keep inline lights
 
     // Sharp surfaces trace the exact mirror ray; glossy surfaces GGX-importance-
     // sample the reflection lobe so the reflection BLURS with roughness and
@@ -3542,8 +3744,44 @@ void main() {
                                    : (giSkip ? texture(momentsPrevTex, uv).r : (curLum * curLum));
         const float accSq  = giSkip ? prevSq : mix(prevSq, curLum * curLum, 1.0 / histLen);
         imageStore(momentsImage, px, vec4(accSq, 0.0, 0.0, 0.0));
+
+        // ── Shadow-ratio temporal accumulation ───────────────────────────────
+        // Same reproject + disocclusion gates as the GI above (prevUv/valid are
+        // exactly the surface-identity tests the ratio needs). Two extra
+        // history cuts the GI doesn't have:
+        //   • TREND antilag (.w): the receiver's motion vectors can't see a
+        //     MOVING OCCLUDER, so a shadow sweeping across a static floor
+        //     reprojects "valid" and a long EMA would trail it as a smear.
+        //     Consistent same-sign deviations (visEst vs the running mean)
+        //     accumulate in a ~3-frame EMA; zero-mean sample noise cancels.
+        //     A firing trend collapses the cap → the mean tracks the edge.
+        //   • The motion-scaled cap (same term as the GI) for camera/receiver
+        //     motion. Static, settled penumbras keep the long clean history.
+        if (shadowChannel) {
+            const vec4 sPrev  = valid ? texture(shadowVisPrevTex, prevUv) : vec4(0.0);
+            // .z==0 = cold-start marker (sky/glass/off); the magnitude guards
+            // reject first-frame / garbage fp16 history (NaN compares false).
+            const bool sValid = valid && sPrev.z > 0.5 && sPrev.z < 4096.0 &&
+                                abs(sPrev.x) <= 1.5 && abs(sPrev.w) <= 1.5;
+            const float dev      = visEst - sPrev.x;
+            const float trend    = sValid ? mix(sPrev.w, dev, 0.34) : 0.0;
+            const float trendCut = smoothstep(0.10, 0.30, abs(trend));
+            const float sCapMot  = mix(32.0, 8.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc)));
+            const float sCap     = mix(sCapMot, 4.0, trendCut);
+            const float sHist    = sValid ? min(sPrev.z + 1.0, sCap) : 1.0;
+            const float sAcc     = sValid ? mix(sPrev.x, visEst, 1.0 / sHist) : visEst;
+            const float sSq      = sValid ? mix(sPrev.y, visEst * visEst, 1.0 / sHist) : visEst * visEst;
+            imageStore(shadowVisImage, px, vec4(sAcc, sSq, sHist, trend));
+        } else {
+            imageStore(shadowVisImage, px, vec4(0.0));// shadows off: recombine adds 0 (directU=0)
+        }
     } else {
         imageStore(indirectImage, px, vec4(0.0));// histLen=0 → next frame cold-starts
         imageStore(momentsImage, px, vec4(0.0));
+        imageStore(shadowVisImage, px, vec4(0.0));// glass/sheen/inline: no shadow channel
     }
+    // Unshadowed analytic direct for the recombine (U × R̃). UNWEIGHTED like
+    // indirect/reflect — the denoise applies recombineCoverage at consumption.
+    // vec3(0) whenever the channel is off, so the recombine adds nothing.
+    imageStore(directUImage, px, vec4(directU, 1.0));
 }
