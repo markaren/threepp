@@ -52,6 +52,7 @@ layout(location = 4) flat in uint vFlags;
 layout(location = 5) in vec2 vUv;
 layout(location = 6) in vec3 vWorldPos;
 layout(location = 7) in vec3 vColor;// per-vertex color (material.vertexColors); white when unused
+layout(location = 8) flat in uint vStableId;// stable per-object id (host-assigned; NOT the visible-set index)
 
 // Attachment 0: world-space normal (rgba16f). .xyz = n*0.5+0.5 encoded world
 // normal, .w = linear roughness (raster-first deferred pass reads it; raygen
@@ -67,11 +68,17 @@ layout(location = 1) out vec4 outMotion;
 // Attachment 2: per-pixel IDs + flags (rgba16ui).
 //   .x = instanceCustomIndex + 1 (matches raygen Payload.hitInstanceId
 //        convention; 0 reserved for sky/miss because the render pass
-//        clears IDs to 0 before any draw)
-//   .y = mesh-ID for the reproject same-mesh guard (currently == .x but
-//        kept separate so future stages can decouple)
-//   .z = flags (bit 0 is_water, bit 1 transmissive, bit 2 thinWalled, ...)
-//   .w = reserved
+//        clears IDs to 0 before any draw). This is the PER-FRAME visible-set
+//        index — used internally (reproject/motionMat), NOT stable across frames.
+//   .y = STABLE per-object instance id (host-assigned, persists across frames
+//        and visible-set changes; 0 = sky). The recoverable label for
+//        instance segmentation — see VulkanRendererCore::setObjectInstanceId.
+//   .z = flags in bits 0..7 (bit 0 is_water, bit 1 transmissive, bit 2
+//        thinWalled, bit 3 skinned, bit 4 double, bit 5 deformer, bit 6
+//        tex-anim) | semantic CLASS id in bits 8..15 (0 = unset). Consumers
+//        bit-test the low byte, so the class byte is inert to them; the MSAA
+//        resolve carries the dominant sample's .z through unchanged.
+//   .w = reserved (repacked with MSAA coverage metadata by gbuf_resolve.comp)
 layout(location = 2) out uvec4 outIds;
 
 // Attachment 3: material UV + LOD bias (rgba16f). .rg = UV (chit normally
@@ -283,9 +290,11 @@ void main() {
     // wrongly reset any surface that moves in depth → dust on animated meshes.
     outMotion = vec4(motion, vPrevClip.z / vPrevClip.w, 0.0);
 
-    // +1 so the renderpass's clear-to-0 means "sky/no draw", matching
-    // raygen's Payload.hitInstanceId convention exactly.
-    outIds = uvec4(vInstanceIdx + 1u, vInstanceIdx + 1u, vFlags, 0u);
+    // .x = per-frame visible index +1 (clear-to-0 = sky, matches raygen's
+    // Payload.hitInstanceId). .y = stable per-object id (host-assigned; 0 when
+    // unassigned/sky). .z = flags | class byte (already packed into vFlags host-
+    // side, bits 8..15). Truncates to uint16 per channel — class fits in 8..15.
+    outIds = uvec4(vInstanceIdx + 1u, vStableId, vFlags, 0u);
 
     // log2 of the per-pixel UV-footprint diameter (texture-size-independent).
     // raygen turns this into a per-texture LOD via `bias + log2(textureSize.x)`.

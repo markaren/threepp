@@ -1767,8 +1767,46 @@ class VulkanRenderer:
         """
     def read_albedo(self, scene: Object3D, camera: Camera) -> numpy.ndarray[numpy.uint8]:
         ...
+    def read_aovs_typed(self, scene: Object3D, camera: Camera, aovs: list[str] = ['rgb', 'depth', 'normals', 'instance_ids']) -> dict:
+        """
+        Render ONCE and read every requested AOV from that same frame, each as its natural dtype:
+        depth (H,W) f32 · normals (H,W,3) f32 · instance_ids (H,W) u32 · class_ids (H,W) u32 ·
+        motion (H,W,2) f32 · rgb (H,W,3) u8 · albedo (H,W,4) u8. The efficient multi-AOV entry point.
+        """
+    def read_class_ids(self, scene: Object3D, camera: Camera) -> numpy.ndarray[numpy.uint32]:
+        """
+        Semantic class ids as (H, W) uint32 (0..255; 0 = unset). Tag objects with set_class_id().
+        """
+    def read_depth(self, scene: Object3D, camera: Camera) -> numpy.ndarray[numpy.float32]:
+        """
+        Metric depth as (H, W) float32 — distance from the camera in scene units.
+        Background reads as the camera far plane. Full 32-bit precision (native D32 read).
+        """
+    def read_instance_ids(self, scene: Object3D, camera: Camera) -> numpy.ndarray[numpy.uint32]:
+        """
+        Stable per-pixel instance ids as (H, W) uint32. 0 = sky / no hit; otherwise a per-object
+        id that persists across frames (no hashing, no collisions). Override with set_instance_id().
+        """
+    def read_motion(self, scene: Object3D, camera: Camera) -> numpy.ndarray[numpy.float32]:
+        """
+        Screen-space motion vectors as (H, W, 2) float32, in pixels (previous - current surface position).
+        """
     def read_normals(self, scene: Object3D, camera: Camera) -> numpy.ndarray[numpy.uint8]:
         ...
+    def read_normals_float(self, scene: Object3D, camera: Camera) -> numpy.ndarray[numpy.float32]:
+        """
+        World-space unit normals as (H, W, 3) float32, components in [-1, 1] (full precision).
+        """
+    def set_instance_id(self, object: Object3D, instance_id: int) -> None:
+        """
+        Assign a stable instance id (0..65535) to an object for the ids AOV. Overrides the
+        auto-assigned id. Takes effect on the next render.
+        """
+    def set_class_id(self, object: Object3D, class_id: int) -> None:
+        """
+        Tag an object with a semantic class id (0..255) for read_class_ids(). Objects sharing a
+        class id share a semantic label.
+        """
     def read_pixels(self) -> numpy.ndarray[numpy.uint8]:
         """
         Final shaded RGB of the last render as (H, W, 3) uint8.

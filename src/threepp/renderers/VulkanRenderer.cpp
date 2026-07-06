@@ -635,6 +635,166 @@ namespace threepp {
         return rgb;
     }
 
+    bool VulkanRendererCore::readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
+                                            int& width, int& height, int& bytesPerPixel) {
+        auto& impl = *core();
+        auto* ctx  = impl.ctx.get();
+        if (!ctx) return false;
+
+        // The just-rendered G-buffer sits in the slot BEFORE the current one:
+        // endFrame advances currentFrame after recording (VulkanCoreImpl.hpp),
+        // so the freshest attachment contents are (currentFrame - 1) mod N —
+        // the same slot arithmetic the fog history uses.
+        const uint32_t n    = static_cast<uint32_t>(impl.rasterGbufs.size());
+        const uint32_t slot = (impl.currentFrame + n - 1u) % n;
+        const auto& g       = impl.rasterGbufs[slot];
+
+        // Select the attachment, its aspect, and the layout it rests in after a
+        // frame (the raster render pass' finalLayout; the MSAA resolve leaves the
+        // resolved single-sample images in the same layouts). Depth carries the
+        // depth aspect + DEPTH_STENCIL_READ_ONLY; every colour AOV is SHADER_READ_ONLY.
+        const vulkan::Image2D* img = nullptr;
+        VkImageAspectFlags aspect  = VK_IMAGE_ASPECT_COLOR_BIT;
+        VkImageLayout restLayout   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        switch (aov) {
+            case GBufferAOV::Depth:
+                img = &g.depth; aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+                restLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL; break;
+            case GBufferAOV::Normal: img = &g.normal; break;
+            case GBufferAOV::Motion: img = &g.motion; break;
+            case GBufferAOV::Ids:    img = &g.ids;    break;
+            case GBufferAOV::Albedo: img = &g.albedo; break;
+        }
+        if (!img || img->image == VK_NULL_HANDLE || img->width == 0 || img->height == 0) {
+            return false;// no frame rendered yet
+        }
+
+        const uint32_t w = img->width;
+        const uint32_t h = img->height;
+        // Element size of the attachment format: RGBA16 (normal/motion/ids) = 8,
+        // D32_SFLOAT (depth) and RGBA8_UNORM (albedo) = 4.
+        uint32_t bpp = 4;
+        if (img->format == VK_FORMAT_R16G16B16A16_SFLOAT ||
+            img->format == VK_FORMAT_R16G16B16A16_UINT) {
+            bpp = 8;
+        }
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * bpp;
+
+        // Wait so the last frame's writes to this attachment are complete and no
+        // in-flight frame is still sampling it — same trade-off as readRGBPixels.
+        vkDeviceWaitIdle(ctx->device());
+
+        vulkan::Buffer staging = vulkan::createBuffer(
+                ctx->allocator(), ctx->device(), bytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                        VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+        VkCommandPoolCreateInfo cpci{};
+        cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        cpci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        cpci.queueFamilyIndex = ctx->queueFamilies().graphics;
+        VkCommandPool cpool = VK_NULL_HANDLE;
+        vulkan::check(vkCreateCommandPool(ctx->device(), &cpci, nullptr, &cpool),
+                      "vkCreateCommandPool(readGBufferAOV)");
+
+        VkCommandBufferAllocateInfo cbai{};
+        cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cbai.commandPool        = cpool;
+        cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cbai.commandBufferCount = 1;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        vulkan::check(vkAllocateCommandBuffers(ctx->device(), &cbai, &cb),
+                      "vkAllocateCommandBuffers(readGBufferAOV)");
+
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vulkan::check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer(readGBufferAOV)");
+
+        // restLayout → TRANSFER_SRC for the copy. srcAccess 0 is safe: the prior
+        // vkDeviceWaitIdle already retired every access, so this barrier only
+        // performs the layout transition.
+        VkImageMemoryBarrier toSrc{};
+        toSrc.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toSrc.oldLayout                   = restLayout;
+        toSrc.newLayout                   = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toSrc.srcAccessMask               = 0;
+        toSrc.dstAccessMask               = VK_ACCESS_TRANSFER_READ_BIT;
+        toSrc.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+        toSrc.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+        toSrc.image                       = img->image;
+        toSrc.subresourceRange.aspectMask = aspect;
+        toSrc.subresourceRange.levelCount = 1;
+        toSrc.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(cb,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+        VkBufferImageCopy region{};
+        region.imageSubresource.aspectMask = aspect;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent                 = {w, h, 1};
+        vkCmdCopyImageToBuffer(cb, img->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               staging.handle, 1, &region);
+
+        // Restore the resting layout so the next frame's consumers (deferred
+        // shade / TAA / raygen) find the attachment where they expect it.
+        VkImageMemoryBarrier toRest = toSrc;
+        toRest.oldLayout            = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toRest.newLayout            = restLayout;
+        toRest.srcAccessMask        = VK_ACCESS_TRANSFER_READ_BIT;
+        toRest.dstAccessMask        = 0;
+        vkCmdPipelineBarrier(cb,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &toRest);
+
+        vulkan::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(readGBufferAOV)");
+
+        VkFenceCreateInfo fci{};
+        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VkFence fence = VK_NULL_HANDLE;
+        vulkan::check(vkCreateFence(ctx->device(), &fci, nullptr, &fence),
+                      "vkCreateFence(readGBufferAOV)");
+
+        VkSubmitInfo si{};
+        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers    = &cb;
+        vulkan::check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, fence),
+                      "vkQueueSubmit(readGBufferAOV)");
+        vulkan::check(vkWaitForFences(ctx->device(), 1, &fence, VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(readGBufferAOV)");
+
+        out.resize(static_cast<size_t>(bytes));
+        void* mapped = nullptr;
+        vmaInvalidateAllocation(ctx->allocator(), staging.alloc, 0, bytes);
+        vulkan::check(vmaMapMemory(ctx->allocator(), staging.alloc, &mapped),
+                      "vmaMapMemory(readGBufferAOV)");
+        std::memcpy(out.data(), mapped, static_cast<size_t>(bytes));
+        vmaUnmapMemory(ctx->allocator(), staging.alloc);
+
+        vkDestroyFence(ctx->device(), fence, nullptr);
+        vkDestroyCommandPool(ctx->device(), cpool, nullptr);
+        vulkan::destroyBuffer(ctx->allocator(), staging);
+
+        width         = static_cast<int>(w);
+        height        = static_cast<int>(h);
+        bytesPerPixel = static_cast<int>(bpp);
+        return true;
+    }
+
+    void VulkanRendererCore::setObjectInstanceId(const Object3D& obj, uint32_t instanceId) {
+        core()->instanceIdOverride_[obj.id] = static_cast<uint16_t>(instanceId & 0xFFFFu);
+    }
+
+    void VulkanRendererCore::setObjectClassId(const Object3D& obj, uint32_t classId) {
+        core()->classIds_[obj.id] = static_cast<uint16_t>(classId > 255u ? 255u : classId);
+    }
+
     void VulkanRendererCore::setEventCameraEnabled(bool enabled) {
         auto& impl = *core();
         if (enabled == impl.eventCamEnabled_) return;

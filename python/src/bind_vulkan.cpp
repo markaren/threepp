@@ -5,12 +5,19 @@
 // when THREEPP_WITH_VULKAN is ON). Otherwise init_vulkan only sets HAS_VULKAN.
 //
 // The deferred renderer writes a full G-buffer every frame (world normals,
-// optical flow, instance-segmentation ids, albedo, depth). The renderer's
-// debug-resolve compute pass (setHybridDebugView) encodes a chosen attachment
-// into the swapchain, where readRGBPixels() can read it back — so the AOVs come
-// out as (H, W, 3) uint8 images: normals as n*0.5+0.5, segmentation as per-id
-// hashed colours, albedo passthrough. (Raw float depth has no readback path in
-// the renderer yet; it is the natural next step.)
+// optical flow, instance-segmentation ids, albedo, depth). Two readback paths:
+//
+//   * Visualisation (8-bit): render_aov / render_aovs go through the debug-
+//     resolve compute pass (setHybridDebugView) → swapchain → readRGBPixels,
+//     returning (H, W, 3) uint8 (normals as n*0.5+0.5, segmentation as per-id
+//     hashed colour, albedo passthrough). Good for montages / eyeballing.
+//
+//   * Lossless (float / int): read_depth, read_normals_float, read_instance_ids,
+//     read_motion and read_aovs_typed copy the native G-buffer attachment
+//     straight to host memory via VulkanRendererCore::readGBufferAOV — full-
+//     precision depth (f32), world normals (f32), RECOVERABLE integer instance
+//     ids (u32, no hashing) and metric motion (f32). This is the material an ML
+//     / sensor pipeline actually trains on.
 #include "bindings.hpp"
 
 #ifdef THREEPP_PY_HAS_VULKAN
@@ -26,6 +33,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -34,6 +42,36 @@ namespace py = pybind11;// the threepp_py::py alias isn't visible in the anon na
 using namespace threepp;
 
 namespace {
+
+    // IEEE-754 half (binary16) -> float32. The G-buffer normal/motion attachments
+    // are R16G16B16A16_SFLOAT; the native AOV readback returns their raw bytes, so
+    // we decode the halves host-side (numpy has no lossless half decode we can rely
+    // on across versions). Handles subnormals, inf and NaN.
+    inline float half_to_float(uint16_t hbits) {
+        const uint32_t sign = static_cast<uint32_t>(hbits & 0x8000u) << 16;
+        const uint32_t exp  = (hbits & 0x7C00u) >> 10;
+        const uint32_t mant = (hbits & 0x03FFu);
+        uint32_t bits;
+        if (exp == 0u) {
+            if (mant == 0u) {
+                bits = sign;// signed zero
+            } else {
+                // Subnormal: normalize into a float32 normal.
+                int e    = 0;
+                uint32_t m = mant;
+                while ((m & 0x0400u) == 0u) { m <<= 1; ++e; }
+                m &= 0x03FFu;
+                bits = sign | (static_cast<uint32_t>(127 - 15 - e) << 23) | (m << 13);
+            }
+        } else if (exp == 0x1Fu) {
+            bits = sign | 0x7F800000u | (mant << 13);// inf / NaN
+        } else {
+            bits = sign | ((exp + (127u - 15u)) << 23) | (mant << 13);
+        }
+        float f;
+        std::memcpy(&f, &bits, sizeof(f));
+        return f;
+    }
 
     // AOV name -> setHybridDebugView code. 0 = the shaded RGB output (Off).
     int aov_code(const std::string& aov) {
@@ -88,33 +126,182 @@ namespace {
         void set_scissor(int x, int y, int w, int h) { renderer_.setScissor(x, y, w, h); }
         void set_scissor_test(bool enabled) { renderer_.setScissorTest(enabled); }
 
-        // Metric depth as (H, W) float32 in scene units (distance from the
-        // camera). The depth debug-view packs the reverse-Z depth into 24-bit
-        // RGB; here we decode it and linearize with the camera near/far. Sky /
-        // background pixels (cleared to far) read as `far`.
-        py::array_t<float> read_depth(Object3D& scene, Camera& camera) {
-            renderer_.setHybridDebugView(5);// Depth → 24-bit packed reverse-Z
-            drive_frames(scene, camera);
-            const std::vector<unsigned char> px = renderer_.readRGBPixels();
-            renderer_.setHybridDebugView(0);
+        // ── Native G-buffer AOV readback (lossless float / int) ──────────
+        // These decode the *last rendered frame's* G-buffer attachment straight
+        // from its native GPU format via VulkanRendererCore::readGBufferAOV — no
+        // 8-bit swapchain round-trip, no id hashing. The *_last() helpers assume a
+        // frame is already on screen (call render()/drive first); the public
+        // read_* wrappers below drive a frame themselves for one-shot use.
 
-            const auto s = renderer_.framebufferSize();
-            const int w = s.width(), h = s.height();
+        // Metric depth (H, W) float32 — distance from the camera in scene units.
+        // Background (cleared to the far plane) reads as `far`. Full 32-bit
+        // precision from the D32 depth buffer (the old path quantized to 24 bits).
+        py::array_t<float> depth_last(Camera& camera) {
+            std::vector<uint8_t> raw;
+            int w = 0, h = 0, bpp = 0;
+            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Depth, raw, w, h, bpp) ||
+                w <= 0 || h <= 0) {
+                return py::array_t<float>({py::ssize_t(0), py::ssize_t(0)});
+            }
             py::array_t<float> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
-            const size_t pxCount = static_cast<size_t>(w) * h;
-            const size_t ch = pxCount ? px.size() / pxCount : 3;
-            auto* dst = arr.mutable_data();
-            const float nearP = camera.nearPlane;
-            const float farP = camera.farPlane;
-            if (px.size() >= pxCount * ch && (ch == 3 || ch == 4)) {
-                for (size_t i = 0; i < pxCount; ++i) {
-                    const uint32_t r = px[i * ch + 0], gg = px[i * ch + 1], b = px[i * ch + 2];
-                    const float d = static_cast<float>((r << 16) | (gg << 8) | b) / 16777215.0f;
-                    // reverse-Z [0,1] (1=near, 0=far) → distance from camera.
-                    dst[i] = (d <= 0.f) ? farP : (nearP * farP) / (nearP + d * (farP - nearP));
-                }
+            auto* dst        = arr.mutable_data();
+            const auto* d    = reinterpret_cast<const float*>(raw.data());// D32_SFLOAT
+            const float nearP = camera.nearPlane, farP = camera.farPlane;
+            const size_t px   = static_cast<size_t>(w) * h;
+            for (size_t i = 0; i < px; ++i) {
+                const float z = d[i];// reverse-Z NDC depth [0,1] (1=near, 0=far)
+                dst[i] = (z <= 0.f) ? farP : (nearP * farP) / (nearP + z * (farP - nearP));
             }
             return arr;
+        }
+
+        // World-space unit normals (H, W, 3) float32, components in [-1, 1].
+        py::array_t<float> normals_last() {
+            std::vector<uint8_t> raw;
+            int w = 0, h = 0, bpp = 0;
+            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Normal, raw, w, h, bpp) ||
+                w <= 0 || h <= 0) {
+                return py::array_t<float>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(3)});
+            }
+            py::array_t<float> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w), py::ssize_t(3)});
+            auto* dst     = arr.mutable_data();
+            const auto* s = reinterpret_cast<const uint16_t*>(raw.data());// RGBA16F, xyz = n*0.5+0.5
+            const size_t px = static_cast<size_t>(w) * h;
+            for (size_t i = 0; i < px; ++i)
+                for (int c = 0; c < 3; ++c)
+                    dst[i * 3 + c] = half_to_float(s[i * 4 + c]) * 2.f - 1.f;
+            return arr;
+        }
+
+        // Stable, recoverable integer instance ids (H, W) uint32. 0 = sky / no
+        // hit; otherwise a per-object id that persists across frames (outIds.y).
+        // No hashing, no collisions. Assign specific ids with set_instance_id.
+        py::array_t<uint32_t> ids_last() {
+            std::vector<uint8_t> raw;
+            int w = 0, h = 0, bpp = 0;
+            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp) ||
+                w <= 0 || h <= 0) {
+                return py::array_t<uint32_t>({py::ssize_t(0), py::ssize_t(0)});
+            }
+            py::array_t<uint32_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
+            auto* dst     = arr.mutable_data();
+            const auto* s = reinterpret_cast<const uint16_t*>(raw.data());// RGBA16_UINT, .y = stable id
+            const size_t px = static_cast<size_t>(w) * h;
+            for (size_t i = 0; i < px; ++i) dst[i] = static_cast<uint32_t>(s[i * 4 + 1]);
+            return arr;
+        }
+
+        // Semantic class ids (H, W) uint32 from outIds.z bits 8..15. 0 = unset;
+        // tag objects with set_class_id. Gives semantic segmentation alongside
+        // the instance ids above, from the same G-buffer read.
+        py::array_t<uint32_t> class_last() {
+            std::vector<uint8_t> raw;
+            int w = 0, h = 0, bpp = 0;
+            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids, raw, w, h, bpp) ||
+                w <= 0 || h <= 0) {
+                return py::array_t<uint32_t>({py::ssize_t(0), py::ssize_t(0)});
+            }
+            py::array_t<uint32_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w)});
+            auto* dst     = arr.mutable_data();
+            const auto* s = reinterpret_cast<const uint16_t*>(raw.data());// RGBA16_UINT, .z = flags|class
+            const size_t px = static_cast<size_t>(w) * h;
+            for (size_t i = 0; i < px; ++i) dst[i] = static_cast<uint32_t>((s[i * 4 + 2] >> 8) & 0xFFu);
+            return arr;
+        }
+
+        // Screen-space motion vectors (H, W, 2) float32, in PIXELS: where each
+        // surface was last frame minus where it is now (prev - curr). +x is
+        // rightward; the y sign follows the Vulkan NDC (down-positive) convention.
+        py::array_t<float> motion_last() {
+            std::vector<uint8_t> raw;
+            int w = 0, h = 0, bpp = 0;
+            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Motion, raw, w, h, bpp) ||
+                w <= 0 || h <= 0) {
+                return py::array_t<float>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(2)});
+            }
+            py::array_t<float> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w), py::ssize_t(2)});
+            auto* dst     = arr.mutable_data();
+            const auto* s = reinterpret_cast<const uint16_t*>(raw.data());// RGBA16F, .xy = NDC delta
+            const float sx = 0.5f * static_cast<float>(w);
+            const float sy = 0.5f * static_cast<float>(h);
+            const size_t px = static_cast<size_t>(w) * h;
+            for (size_t i = 0; i < px; ++i) {
+                dst[i * 2 + 0] = half_to_float(s[i * 4 + 0]) * sx;// NDC delta → pixels
+                dst[i * 2 + 1] = half_to_float(s[i * 4 + 1]) * sy;
+            }
+            return arr;
+        }
+
+        // Linear base colour + metalness (H, W, 4) uint8: rgb = linear albedo,
+        // a = metalness. Native G-buffer read (no debug-blit re-render).
+        py::array_t<uint8_t> albedo_last() {
+            std::vector<uint8_t> raw;
+            int w = 0, h = 0, bpp = 0;
+            if (!renderer_.readGBufferAOV(VulkanRenderer::GBufferAOV::Albedo, raw, w, h, bpp) ||
+                w <= 0 || h <= 0) {
+                return py::array_t<uint8_t>({py::ssize_t(0), py::ssize_t(0), py::ssize_t(4)});
+            }
+            py::array_t<uint8_t> arr({static_cast<py::ssize_t>(h), static_cast<py::ssize_t>(w), py::ssize_t(4)});
+            std::memcpy(arr.mutable_data(), raw.data(), raw.size());// RGBA8, tightly packed
+            return arr;
+        }
+
+        py::array_t<float> read_depth(Object3D& scene, Camera& camera) {
+            drive_frames(scene, camera);
+            return depth_last(camera);
+        }
+        py::array_t<float> read_normals_float(Object3D& scene, Camera& camera) {
+            drive_frames(scene, camera);
+            return normals_last();
+        }
+        py::array_t<uint32_t> read_instance_ids(Object3D& scene, Camera& camera) {
+            drive_frames(scene, camera);
+            return ids_last();
+        }
+        py::array_t<uint32_t> read_class_ids(Object3D& scene, Camera& camera) {
+            drive_frames(scene, camera);
+            return class_last();
+        }
+        py::array_t<float> read_motion(Object3D& scene, Camera& camera) {
+            drive_frames(scene, camera);
+            return motion_last();
+        }
+
+        // Label assignment for the segmentation AOVs. instance id overrides the
+        // auto-assigned stable id (outIds.y); class id (0..255) tags the object
+        // for semantic segmentation (outIds.z). Take effect on the next render.
+        void set_instance_id(Object3D& obj, uint32_t id) { renderer_.setObjectInstanceId(obj, id); }
+        void set_class_id(Object3D& obj, uint32_t cls) { renderer_.setObjectClassId(obj, cls); }
+
+        // Render ONCE, then read every requested AOV from that same frame, each
+        // as its natural numpy dtype: depth (H,W) f32 · normals (H,W,3) f32 ·
+        // instance_ids (H,W) u32 · motion (H,W,2) f32 · rgb/segmentation/albedo
+        // (H,W,3) u8. The efficient multi-AOV entry point for dataset generation.
+        py::dict read_aovs_typed(Object3D& scene, Camera& camera,
+                                 const std::vector<std::string>& aovs) {
+            drive_frames(scene, camera);
+            py::dict out;
+            for (const auto& name : aovs) {
+                if (name == "depth") {
+                    out[py::str(name)] = depth_last(camera);
+                } else if (name == "normals" || name == "normal") {
+                    out[py::str(name)] = normals_last();
+                } else if (name == "instance_ids" || name == "ids" || name == "segmentation") {
+                    out[py::str(name)] = ids_last();
+                } else if (name == "class_ids" || name == "class" || name == "semantic") {
+                    out[py::str(name)] = class_last();
+                } else if (name == "motion" || name == "flow") {
+                    out[py::str(name)] = motion_last();
+                } else if (name == "rgb" || name == "shaded" || name == "color") {
+                    out[py::str(name)] = to_numpy(renderer_.readRGBPixels());
+                } else if (name == "albedo") {
+                    out[py::str(name)] = albedo_last();
+                } else {
+                    throw std::invalid_argument("unknown typed AOV '" + name +
+                            "' — use: depth, normals, instance_ids, class_ids, motion, rgb, albedo");
+                }
+            }
+            return out;
         }
 
         py::array_t<uint8_t> render_aov(Object3D& scene, Camera& camera, const std::string& aov) {
@@ -229,7 +416,41 @@ namespace threepp_py {
                      py::arg("scene"), py::arg("camera"))
                 .def("read_depth", &PyVulkanRenderer::read_depth, py::arg("scene"), py::arg("camera"),
                      "Metric depth as (H, W) float32 — distance from the camera in scene units. "
-                     "Background reads as the camera far plane.")
+                     "Background reads as the camera far plane. Full 32-bit precision "
+                     "(native D32 read; supersedes the old 24-bit-packed path).")
+                // ── Lossless float / int AOV readback (native G-buffer copy) ──
+                .def("read_instance_ids", &PyVulkanRenderer::read_instance_ids,
+                     py::arg("scene"), py::arg("camera"),
+                     "Stable per-pixel instance ids as (H, W) uint32. 0 = sky / no hit; otherwise "
+                     "a per-object id that persists across frames and visible-set changes (no "
+                     "hashing, no collisions). Auto-assigned; override with set_instance_id().")
+                .def("read_class_ids", &PyVulkanRenderer::read_class_ids,
+                     py::arg("scene"), py::arg("camera"),
+                     "Semantic class ids as (H, W) uint32 (0..255; 0 = unset). Tag objects with "
+                     "set_class_id() to get semantic segmentation alongside the instance ids.")
+                .def("set_instance_id", &PyVulkanRenderer::set_instance_id,
+                     py::arg("object"), py::arg("instance_id"),
+                     "Assign a specific stable instance id (0..65535) to an object for the ids "
+                     "AOV. Overrides the auto-assigned id. Takes effect on the next render.")
+                .def("set_class_id", &PyVulkanRenderer::set_class_id,
+                     py::arg("object"), py::arg("class_id"),
+                     "Tag an object with a semantic class id (0..255) for read_class_ids(). "
+                     "Objects sharing a class id share a semantic label.")
+                .def("read_normals_float", &PyVulkanRenderer::read_normals_float,
+                     py::arg("scene"), py::arg("camera"),
+                     "World-space unit normals as (H, W, 3) float32, components in [-1, 1] "
+                     "(full precision; read_normals() stays the 8-bit visualisation).")
+                .def("read_motion", &PyVulkanRenderer::read_motion,
+                     py::arg("scene"), py::arg("camera"),
+                     "Screen-space motion vectors as (H, W, 2) float32, in pixels "
+                     "(previous - current surface position; +x rightward, y down-positive).")
+                .def("read_aovs_typed", &PyVulkanRenderer::read_aovs_typed,
+                     py::arg("scene"), py::arg("camera"),
+                     py::arg("aovs") = std::vector<std::string>{"rgb", "depth", "normals", "instance_ids"},
+                     "Render ONCE and read every requested AOV from that same frame, each as "
+                     "its natural dtype: depth (H,W) f32 · normals (H,W,3) f32 · instance_ids "
+                     "(H,W) u32 · motion (H,W,2) f32 · rgb (H,W,3) u8 · albedo (H,W,4) u8 "
+                     "(linear rgb + metalness). The efficient multi-AOV entry point.")
                 .def("set_clear_color", &PyVulkanRenderer::set_clear_color, py::arg("color"), py::arg("alpha") = 1.f)
                 // No-op shadow toggle for GLRenderer API parity: Vulkan analytic
                 // lights always cast ray-traced shadows, so this is stored but

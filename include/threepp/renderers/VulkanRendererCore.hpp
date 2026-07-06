@@ -84,6 +84,43 @@ namespace threepp {
         [[nodiscard]] bool sceneCaptureEnabled() const;
         [[nodiscard]] std::vector<unsigned char> readSceneRGBPixels();
 
+        // ── G-buffer AOV readback (deferred / hybrid raster prepass) ──────
+        // The raster G-buffer already computes high-precision per-pixel geometry
+        // and material data every frame. readGBufferAOV copies one attachment
+        // from the most recently rendered frame into `out` as its NATIVE GPU
+        // format — no 8-bit swapchain round-trip, no id hashing — so ML / sensor
+        // pipelines get lossless depth, normals, recoverable integer instance
+        // ids and motion vectors. Call after render().
+        //
+        // On success `out` is resized to width*height*bytesPerPixel (tightly
+        // packed, row-major, top-left origin) and true is returned. Returns
+        // false before the first frame or when the backend has no G-buffer.
+        // width/height come back as the render-scaled G-buffer extent (see
+        // setRenderScale), which may be smaller than framebufferSize().
+        //
+        // Per-AOV element layout (bytesPerPixel):
+        //   Depth  (4)  1x float32 : reversed-Z NDC depth in [0,1] (1=near, 0=far)
+        //   Normal (8)  4x float16 : world normal encoded n*0.5+0.5 in xyz, roughness in w
+        //   Motion (8)  4x float16 : screen-space motion (prevNDC - currNDC) in xy, prevDepth in z
+        //   Ids    (8)  4x uint16  : x = instanceCustomIndex+1 (0 = sky/no-hit), y = meshId, z = flag bits
+        //   Albedo (4)  4x unorm8  : linear base colour in rgb, metalness in a
+        enum class GBufferAOV { Depth, Normal, Motion, Ids, Albedo };
+        [[nodiscard]] bool readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
+                                          int& width, int& height, int& bytesPerPixel);
+
+        // ── Segmentation labels for the Ids AOV ──────────────────────────
+        // The Ids attachment's .y channel is a STABLE per-object instance id,
+        // auto-assigned on first draw (unlike .x, the per-frame visible index,
+        // it survives add/remove/hide/LOD). setObjectInstanceId overrides it for
+        // a specific object; setObjectClassId tags an object with an 8-bit
+        // semantic class written to .z bits 8..15 — so a single readback yields
+        // both instance- and semantic-segmentation ground truth. Both take
+        // effect on the next render. instanceId is truncated to 16 bits, classId
+        // clamped to [0, 255]. Keyed by Object3D::id, so calling before the
+        // object is added to the scene is fine.
+        void setObjectInstanceId(const Object3D& obj, uint32_t instanceId);
+        void setObjectClassId(const Object3D& obj, uint32_t classId);
+
         // ── GPU event camera (DVS) detector ───────────────────────────────
         struct EventCameraParams {
             float    threshold        = 0.15f;

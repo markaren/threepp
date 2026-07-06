@@ -7574,12 +7574,43 @@ namespace threepp {
             uint64_t indexAddr;        // 8 (0 → non-indexed)
             uint64_t colorAddr;        // 8 (0 → no per-vertex color / vertexColors off)
             uint32_t instanceCustomIndex;
-            uint32_t flags;
+            uint32_t flags;            // bits 0..7 render flags | bits 8..15 semantic class id
             uint32_t indexed;
             float    polygonOffset;    // clip-z depth bias (reverse-Z: + = toward near = on top)
+            uint32_t stableId;         // stable per-object instance id (-> outIds.y)
+            uint32_t _pad;             // keep 8-byte array stride (matches scalar buffer_reference)
         };
-        static_assert(sizeof(DrawInfoGpu) == 128,
+        static_assert(sizeof(DrawInfoGpu) == 136,
                       "DrawInfoGpu layout drifted from gbuffer_indirect.vert");
+
+        // ── Stable / semantic object IDs for the segmentation AOVs ───────
+        // outIds.x is the per-frame visible-set index; outIds.y must be STABLE
+        // across frames. We assign a dense 16-bit id per Object3D (keyed by the
+        // process-stable Object3D::id) the first time it is drawn, so the label
+        // survives add/remove/hide/LOD. Callers may override the instance id and
+        // set an 8-bit semantic class (folded into outIds.z bits 8..15 by
+        // buildIndirectDrawData). Maps are keyed by Object3D::id (never a raw
+        // pointer) so a deleted object leaves an inert entry, never a dangling read.
+        std::unordered_map<unsigned int, uint16_t> autoStableIds_;      // Object3D::id -> dense id
+        std::unordered_map<unsigned int, uint16_t> instanceIdOverride_; // user-set instance id
+        std::unordered_map<unsigned int, uint16_t> classIds_;           // user-set semantic class
+        uint32_t nextAutoStableId_ = 1;// 0 reserved for sky / unassigned
+
+        uint16_t stableIdForObject(const Object3D& o) {
+            if (const auto it = instanceIdOverride_.find(o.id); it != instanceIdOverride_.end()) {
+                return it->second;
+            }
+            const auto [it, inserted] = autoStableIds_.try_emplace(o.id, uint16_t(0));
+            if (inserted) {
+                it->second = static_cast<uint16_t>(nextAutoStableId_);
+                if (nextAutoStableId_ < 0xFFFFu) ++nextAutoStableId_;// saturate at 65535
+            }
+            return it->second;
+        }
+        uint16_t classIdForObject(const Object3D& o) const {
+            const auto it = classIds_.find(o.id);
+            return it == classIds_.end() ? uint16_t(0) : it->second;
+        }
 
         // Per-cull-mode dispatch span into indirectCmdBuffers[frame].
         struct DrawGroup {
@@ -7746,8 +7777,16 @@ namespace threepp {
                 // wobble). The shader pins a constant history cap on this bit;
                 // the TAA resolve floors its blend α (shading changes per frame).
                 if (en.isTet) flags |= 32u;
+                // Semantic CLASS id (0..255) packed into bits 8..15 — inert to
+                // every flag bit-test (they mask the low byte) and carried
+                // through the MSAA resolve. Read back via outIds.z >> 8.
+                flags |= (static_cast<uint32_t>(classIdForObject(*en.mesh)) & 0xFFu) << 8;
                 di.flags   = flags;
                 di.indexed = indexed ? 1u : 0u;
+                // STABLE per-object instance id -> outIds.y (survives visible-set
+                // reordering, unlike instanceCustomIndex/.x).
+                di.stableId = stableIdForObject(*en.mesh);
+                di._pad     = 0u;
                 // polygonOffset → per-mesh clip-z depth bias (decals). Reverse-Z:
                 // a +clip-z bias pushes the surface toward NEAR so it renders on
                 // top of coplanar geometry (no z-fight). threepp/GL uses NEGATIVE
@@ -9295,13 +9334,20 @@ namespace threepp {
             // Omitted at msaa=1 to keep that path's image usage flags exactly
             // as they were (byte-identical guarantee — no behavioural surface
             // added when the feature is off).
+            // TRANSFER_SRC is added so the AOV readback path
+            // (VulkanRendererCore::readGBufferAOV) can vkCmdCopyImageToBuffer the
+            // resolved single-sample attachments to a host staging buffer. It is
+            // a pure capability flag (no render-pass / layout / perf effect); the
+            // STORAGE bit below stays MSAA-gated for its byte-identical guarantee.
             const VkImageUsageFlags colorUsage =
                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                     VK_IMAGE_USAGE_SAMPLED_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                     (gbufMsaaSamples_ > 1 ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
             const VkImageUsageFlags depthUsage =
                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                    VK_IMAGE_USAGE_SAMPLED_BIT;
+                    VK_IMAGE_USAGE_SAMPLED_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
             for (size_t fi = 0; fi < rasterGbufs.size(); ++fi) {
                 auto& g = rasterGbufs[fi];
                 char nameBuf[64];
