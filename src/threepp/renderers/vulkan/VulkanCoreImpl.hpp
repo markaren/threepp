@@ -518,6 +518,17 @@ namespace threepp {
         // pattern as pendingSkinnedRebuilds_. Cleared at end of recordCommandBuffer.
         std::vector<std::pair<GrassMesh*, GrassMeshState*>> pendingGrassDeforms_;
 
+        // DisplacedMesh (FFT water) deforms queued in ensureSceneBuilt and
+        // recorded into the frame command buffer by recordCommandBuffer — the
+        // same no-mid-frame-submit pattern as pendingGrassDeforms_. The float
+        // is the elapsed-seconds timestamp captured at stage time (drives the
+        // dynamic spectrum). The old path recorded the FFT→displace→BLAS chain
+        // into a one-shot and BLOCKED on its completion every frame — a full
+        // CPU⇄GPU sync whose stall scaled with everything already in flight
+        // (tens of ms on large scenes). CPU height-field mirrors now read the
+        // readback buffers at stage time instead (one frame late).
+        std::vector<std::tuple<DisplacedMesh*, DisplacedMeshState*, float>> pendingDisplacedDeforms_;
+
         // Single TLAS over all mesh instances in the scene.
         VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
         Buffer tlasBuffer;
@@ -3999,8 +4010,13 @@ namespace threepp {
 
         // Per-frame: run the FFT chain → water_displace → BLAS rebuild for
         // one DisplacedMesh. Mirrors refreshSkinnedBlas's structure.
-        void refreshDisplacedBlas(DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds) {
-            VkCommandBuffer cb = beginOneShot();
+        // Record the full per-frame water update — FFT chain → water_displace →
+        // world foam → in-place BLAS rebuild — into `cb`. NO submit and NO CPU
+        // wait: the caller either batches this into the frame command buffer
+        // (recordCommandBuffer draining pendingDisplacedDeforms_, the per-frame
+        // path) or wraps it in a one-shot for the rare structural first build
+        // (refreshDisplacedBlas below).
+        void recordDisplacedDeform(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds) {
 
             // (1)..(3) Run each enabled cascade's FFT chain in turn. Phillips
             // is one-shot per cascade. DynamicSpectrum re-runs each frame.
@@ -4331,45 +4347,63 @@ namespace threepp {
                     ctx->device(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &build, &primCount, &sizes);
 
-            const VkDeviceSize scratchSize =
-                    fullRebuild ? sizes.buildScratchSize : sizes.updateScratchSize;
-            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), scratchSize);
-            build.scratchData.deviceAddress = scratch.address;
+            // Persistent scratch (lazy, sized to buildScratchSize which always
+            // covers updateScratchSize) — same pattern as refreshGrassBlas. A
+            // per-call transient scratch would be freed while the batched frame
+            // command buffer still references it.
+            if (st.blas->blasScratch.handle == VK_NULL_HANDLE ||
+                st.blas->blasScratchSize < sizes.buildScratchSize) {
+                if (st.blas->blasScratch.handle != VK_NULL_HANDLE)
+                    destroyBuffer(ctx->allocator(), st.blas->blasScratch);
+                st.blas->blasScratch = createAsScratchBuffer(
+                        ctx->allocator(), ctx->device(), sizes.buildScratchSize);
+                st.blas->blasScratchSize = sizes.buildScratchSize;
+            }
+            build.scratchData.deviceAddress = st.blas->blasScratch.address;
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
             range.primitiveCount = primCount;
             const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &build, &pRange);
+        }
 
-            endAndSubmitOneShot(cb);
-            destroyBuffer(ctx->allocator(), scratch);
-
-            // Mirror cascade height fields into DisplacedMesh for CPU sampling.
-            // endAndSubmit waits for completion, so the staging buffers are
-            // fully written by the time we get here.
-            {
-                struct { Buffer* buf; float tileSize; } cascades[] = {
-                    {&st.heightReadback,  dm.params.tileSize0},
-                    {&st.heightReadback1, dm.params.tileSize1},
-                    {&st.heightReadback2, dm.params.tileSize2},
-                };
-                for (int ci = 0; ci < 3; ++ci) {
-                    auto& cf = dm.heightFields[ci];
-                    const uint32_t dim = st.heightReadbackDim[ci];
-                    if (cascades[ci].buf->handle != VK_NULL_HANDLE && dim > 0) {
-                        const size_t cells = size_t(dim) * size_t(dim);
-                        const size_t bytes = cells * 2 * sizeof(float);
-                        if (cf.data.size() != cells * 2)
-                            cf.data.assign(cells * 2, 0.f);
-                        void* mapped = nullptr;
-                        vmaMapMemory(ctx->allocator(), cascades[ci].buf->alloc, &mapped);
-                        std::memcpy(cf.data.data(), mapped, bytes);
-                        vmaUnmapMemory(ctx->allocator(), cascades[ci].buf->alloc);
-                        cf.dim      = dim;
-                        cf.tileSize = cascades[ci].tileSize;
-                    }
+        // Mirror cascade height fields into DisplacedMesh for CPU sampling
+        // (boat hydrodynamics etc.). On the batched per-frame path this reads
+        // what the last COMPLETED frame's copy wrote — one/two frames of
+        // latency, which wave sampling tolerates (same class as the skinned
+        // path's single-buffered bone uploads).
+        void mirrorDisplacedHeightfields(DisplacedMesh& dm, DisplacedMeshState& st) {
+            struct { Buffer* buf; float tileSize; } cascades[] = {
+                {&st.heightReadback,  dm.params.tileSize0},
+                {&st.heightReadback1, dm.params.tileSize1},
+                {&st.heightReadback2, dm.params.tileSize2},
+            };
+            for (int ci = 0; ci < 3; ++ci) {
+                auto& cf = dm.heightFields[ci];
+                const uint32_t dim = st.heightReadbackDim[ci];
+                if (cascades[ci].buf->handle != VK_NULL_HANDLE && dim > 0) {
+                    const size_t cells = size_t(dim) * size_t(dim);
+                    const size_t bytes = cells * 2 * sizeof(float);
+                    if (cf.data.size() != cells * 2)
+                        cf.data.assign(cells * 2, 0.f);
+                    void* mapped = nullptr;
+                    vmaMapMemory(ctx->allocator(), cascades[ci].buf->alloc, &mapped);
+                    std::memcpy(cf.data.data(), mapped, bytes);
+                    vmaUnmapMemory(ctx->allocator(), cascades[ci].buf->alloc);
+                    cf.dim      = dim;
+                    cf.tileSize = cascades[ci].tileSize;
                 }
             }
+        }
+
+        // Synchronous variant for the structural (re)build path: the TLAS /
+        // geometry descriptors built right after need the displaced result in
+        // place. Rare (scene restructure), so the one-shot block is fine here.
+        void refreshDisplacedBlas(DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds) {
+            VkCommandBuffer cb = beginOneShot();
+            recordDisplacedDeform(cb, dm, st, elapsedSeconds);
+            endAndSubmitOneShot(cb);
+            mirrorDisplacedHeightfields(dm, st);
         }
 
         // ── GrassMesh helpers ────────────────────────────────────────────
@@ -5674,17 +5708,22 @@ namespace threepp {
                         }
                     }
                     if (displacedDirtyAny) {
-                        // Re-displace every DisplacedMesh: run FFT chain →
-                        // water_displace.comp → BLAS rebuild in place. Same
-                        // TLAS-AABB caveat as SkinnedMesh: refit happens just
-                        // below.
+                        // Queue each DisplacedMesh water update (FFT chain →
+                        // water_displace.comp → BLAS rebuild in place); the
+                        // chain is recorded into the frame command buffer in
+                        // recordCommandBuffer — NO blocking one-shot submit
+                        // (the old drain stalled the CPU on all in-flight GPU
+                        // work, tens of ms on large scenes). The CPU height-
+                        // field mirror reads the last completed frame's
+                        // readback here instead — one frame of latency.
                         const float now = static_cast<float>(glfwGetTime());
                         for (size_t i = 0; i < entries.size(); ++i) {
                             if (!entryDisplacedDirty[i]) continue;
                             auto* dm = static_cast<DisplacedMesh*>(entries[i].mesh);
                             auto stIt = displacedStates.find(dm);
                             if (stIt == displacedStates.end()) continue;
-                            refreshDisplacedBlas(*dm, *stIt->second, now);
+                            mirrorDisplacedHeightfields(*dm, *stIt->second);
+                            pendingDisplacedDeforms_.emplace_back(dm, stIt->second.get(), now);
                             ++dm->frameTick;
                         }
                     }
@@ -14301,6 +14340,39 @@ namespace threepp {
                 }
 
                 pendingTetRebuilds_.clear();
+            }
+
+            // ── DisplacedMesh (FFT water) update + BLAS rebuild ─────────────
+            // Recorded into the frame cb (no blocking submit), like the skinned
+            // and tet paths above. recordDisplacedDeform issues the cascade FFT
+            // chain, water_displace + world-foam dispatches, the height-field
+            // readback copies (mirrored to the CPU one frame later at stage
+            // time) and the in-place BLAS rebuild, with its internal barriers.
+            // The publish barrier below covers AS-build→TLAS/RT reads AND the
+            // displace-compute writes → raster G-buffer vertex-attribute reads
+            // (the one-shot's submit+wait used to serialize those implicitly).
+            if (!pendingDisplacedDeforms_.empty() && waterDisplace_) {
+                for (auto& [dmPtr, stPtr, tsec] : pendingDisplacedDeforms_) {
+                    recordDisplacedDeform(cb, *dmPtr, *stPtr, tsec);
+                }
+                VkMemoryBarrier2 mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
+                                   VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                   VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT;
+                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                   VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                   VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+                VkDependencyInfo dep{};
+                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers    = &mb;
+                vkCmdPipelineBarrier2(cb, &dep);
+                pendingDisplacedDeforms_.clear();
             }
 
             // ── GrassMesh wind deform (GPU) + BLAS refit ────────────────────
