@@ -188,7 +188,9 @@ void main() {
     const bool bypass = (pc.bgIsSolidColor != 0u) && (skyW < 0.5);
     vec3 outRgb;
     if (bypass) {
-        outRgb = linearToSRGB(color / preExp);
+        // Bypass pixels are stored at DISPLAY scale (the shade/resolve skips
+        // the pre-exposure for solid-bg sky) — restore verbatim, no divide.
+        outRgb = linearToSRGB(color);
     } else {
         // White balance in linear scene-referred space, before the tone curve.
         if ((pc.postFlags & 1u) != 0u)

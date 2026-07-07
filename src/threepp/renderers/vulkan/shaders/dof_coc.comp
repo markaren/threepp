@@ -1,0 +1,62 @@
+#version 460
+
+// DoF pass 1/4 — CoC + half-res prefilter (see vulkan/DofPass.{hpp,cpp}).
+//
+// For each HALF-res pixel: read the 2×2 full-res quad, linearize the
+// reversed-Z depths, evaluate the signed thin-lens circle of confusion
+//   cocPx(d) = cocScale · (d − S) / d      (radius, FULL-res pixels;
+//                                           negative = near field)
+// with cocScale = f²/(N·(S−f)) · (renderH / sensorH) · 0.5 precomputed on
+// the CPU, and write the averaged colour + the CoC of the CLOSEST sample
+// (closest-wins keeps thin foreground silhouettes in the near field
+// instead of averaging them away). CoC is stored in HALF-res pixel units
+// (×0.5) — the gather pass works entirely at half res.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+    vec4 jitter;
+} cam;
+layout(set = 0, binding = 1) uniform sampler2D depthTex;   // full res, reversed-Z
+layout(set = 0, binding = 2) uniform sampler2D sceneTex;   // full res, linear HDR
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D halfImg;// rgb + coc (half-res px)
+
+layout(push_constant) uniform Pc {
+    uint  fullW, fullH, halfW, halfH;
+    float cocScale;  // f²/(N·(S−f)) · pxPerSensorHeight · 0.5 (radius px)
+    float focusDist; // S (m)
+    float maxCoc;    // clamp, FULL-res px radius
+    float _pad;
+} pc;
+
+// View-space distance from reversed-Z NDC depth — only the projection
+// inverse's z/w rows (same construction as the deferred SSR's ssrViewDepth).
+float viewDepth(float zNdc) {
+    const float vz = cam.projInverse[2][2] * zNdc + cam.projInverse[3][2];
+    const float vw = cam.projInverse[2][3] * zNdc + cam.projInverse[3][3];
+    return -(vz / vw);
+}
+
+float cocFullPx(float d) {
+    return clamp(pc.cocScale * (d - pc.focusDist) / max(d, 1e-4), -pc.maxCoc, pc.maxCoc);
+}
+
+void main() {
+    const ivec2 hp = ivec2(gl_GlobalInvocationID.xy);
+    if (hp.x >= int(pc.halfW) || hp.y >= int(pc.halfH)) return;
+
+    const ivec2 fp = hp * 2;
+    const ivec2 mx = ivec2(int(pc.fullW) - 1, int(pc.fullH) - 1);
+
+    vec3  colorSum = vec3(0.0);
+    float dMin     = 1e30;
+    for (int i = 0; i < 4; ++i) {
+        const ivec2 q = min(fp + ivec2(i & 1, i >> 1), mx);
+        colorSum += texelFetch(sceneTex, q, 0).rgb;
+        dMin = min(dMin, viewDepth(texelFetch(depthTex, q, 0).x));
+    }
+    const float coc = cocFullPx(dMin) * 0.5;// half-res pixel units
+    imageStore(halfImg, hp, vec4(colorSum * 0.25, coc));
+}

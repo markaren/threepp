@@ -169,6 +169,11 @@ namespace threepp::vulkan {
         // into every sceneHdr store (physical-camera mode; keeps 100k-lux
         // radiance inside fp16) and the PREV frame's factor the SSR
         // prev-scene fetch divides back out. 0x3F800000 = 1.0f = legacy.
+        // bgIsSolidColor: the background is a DISPLAY-referred solid colour
+        // (the composite bypass restores it verbatim) — the sky store skips
+        // the pre-exposure so sky and geometry share one value domain
+        // (flags bit 10; without it any DoF/bloom mixing into sky pixels is
+        // amplified 1/preExposure at the bypass → white silhouette rims).
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t width, uint32_t height, uint32_t envMipCount,
                             bool shadows, bool ao, uint32_t frameCounter,
@@ -186,7 +191,8 @@ namespace threepp::vulkan {
                             bool froxelsActive = false,
                             bool ssrActive = false,
                             uint32_t preExpBits = 0x3F800000u,
-                            uint32_t prevPreExpBits = 0x3F800000u);
+                            uint32_t prevPreExpBits = 0x3F800000u,
+                            bool bgIsSolidColor = false);
 
         // Clustered light culling: one thread per cluster cell tests every
         // light's cull sphere against the cell's view-space AABB and writes

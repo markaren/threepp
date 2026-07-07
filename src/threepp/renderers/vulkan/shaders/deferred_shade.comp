@@ -3217,14 +3217,24 @@ void main() {
         // ON TOP (energy = 1 + geoMinW) — a bright rim hugging the sky side of
         // every silhouette, glowing hardest where the sky/haze is bright.
         vec3 sky = applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS) * domWeight;
-        // Volumetric sun glow / god rays added on top → blooms THROUGH the haze.
-        // Per-pixel view-ray integral: full weight, independent of coverage.
-        // Sky = the full froxel range (the far marches were σ-extinct anyway)
-        // + the per-pixel spot beams (a lighthouse against the night sky).
-        sky += froxelInscatter(uv, kFroxelZMax)
-             + volumetricSpotScatter(camPos, dirWS, 2000.0, px)
-             + volumetricDirScatter(camPos, dirWS, 2000.0, px);
-        imageStore(outImage, px, vec4(sky * uintBitsToFloat(pc.preExpBits), 1.0));
+        // SOLID-COLOUR background (flags bit 10): the bg is DISPLAY-referred
+        // (the exact clear colour, restored verbatim by the composite's sky
+        // bypass), not physical radiance — store it UNexposed so it lives in
+        // the same value domain as the pre-exposed geometry. Without this,
+        // any cross-pixel mixing into sky (DoF, bloom) gets amplified by
+        // 1/preExposure at the bypass → white silhouette rims. Legacy mode:
+        // preExp is 1.0 and both branches are identical.
+        const float skyPe = ((pc.flags & 1024u) != 0u) ? 1.0 : uintBitsToFloat(pc.preExpBits);
+        sky *= skyPe;
+        // Volumetric sun glow / god rays added on top → blooms THROUGH the
+        // haze. Per-pixel view-ray integral: full weight, independent of
+        // coverage. Sky = the full froxel range (the far marches were
+        // σ-extinct anyway) + the per-pixel spot beams (a lighthouse against
+        // the night sky). Physical radiance → always pre-exposed.
+        sky += (froxelInscatter(uv, kFroxelZMax)
+              + volumetricSpotScatter(camPos, dirWS, 2000.0, px)
+              + volumetricDirScatter(camPos, dirWS, 2000.0, px)) * uintBitsToFloat(pc.preExpBits);
+        imageStore(outImage, px, vec4(sky, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(shadowVisImage, px, vec4(0.0));// cold-start marker for the ping-pong
         imageStore(directUImage, px, vec4(0.0));

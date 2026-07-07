@@ -651,6 +651,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/GbufResolve.cpp"
             "threepp/renderers/vulkan/BloomPass.cpp"
             "threepp/renderers/vulkan/PostComposite.cpp"
+            "threepp/renderers/vulkan/DofPass.cpp"
             "threepp/renderers/vulkan/DeferredShade.cpp"
             "threepp/renderers/vulkan/ProbeGI.cpp"
             "threepp/renderers/vulkan/HiZPyramid.cpp"
@@ -996,6 +997,24 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/post_composite.comp"
         kPostCompositeCompSpv
         _post_composite_spv_h)
+    # Thin-lens depth of field (CoC prefilter → tile max/dilate → near/far
+    # scatter-as-gather → full-res combine). See vulkan/DofPass.{hpp,cpp}.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dof_coc.comp"
+        kDofCocCompSpv
+        _dof_coc_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dof_tile.comp"
+        kDofTileCompSpv
+        _dof_tile_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dof_gather.comp"
+        kDofGatherCompSpv
+        _dof_gather_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dof_combine.comp"
+        kDofCombineCompSpv
+        _dof_combine_spv_h)
     # Auto-exposure: log2-luma histogram over sceneHdr. See AutoExposure.{hpp,cpp}.
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lum_histogram.comp"

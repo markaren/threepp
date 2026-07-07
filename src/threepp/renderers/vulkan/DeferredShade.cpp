@@ -620,7 +620,8 @@ namespace threepp::vulkan {
                                        uint32_t gbufMsaaSamples, uint32_t shadeMode,
                                        bool shadeBActive, uint32_t clusterLightCount,
                                        bool froxelsActive, bool ssrActive,
-                                       uint32_t preExpBits, uint32_t prevPreExpBits) {
+                                       uint32_t preExpBits, uint32_t prevPreExpBits,
+                                       bool bgIsSolidColor) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
@@ -633,8 +634,9 @@ namespace threepp::vulkan {
         const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u) | (denoise ? 4u : 0u)
                              | (restirDI ? 8u : 0u) | (volFog ? 16u : 0u) | (msaaCode << 5u)
                              | (shadeBActive ? 128u : 0u)
-                             | (froxelsActive ? 256u : 0u)// froxel LUT valid this frame
-                             | (ssrActive ? 512u : 0u);   // HiZ built → hybrid SSR fast path
+                             | (froxelsActive ? 256u : 0u)  // froxel LUT valid this frame
+                             | (ssrActive ? 512u : 0u)      // HiZ built → hybrid SSR fast path
+                             | (bgIsSolidColor ? 1024u : 0u);// solid bg: sky store NOT pre-exposed
         uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits, starBits,
                 camDeltaBits, camRotBits, timeBits, sunTanBits;
         std::memcpy(&emPowerBits,   &emissiveTotalPower, sizeof(emPowerBits));

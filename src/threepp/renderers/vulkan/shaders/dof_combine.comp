@@ -1,0 +1,62 @@
+#version 460
+
+// DoF pass 4/4 — full-res combine (see vulkan/DofPass.{hpp,cpp}).
+//
+// Re-evaluates the exact per-pixel CoC from full-res depth (the half-res
+// chain can't provide a crisp focus edge), then layers:
+//   1. sharp → far field, blended in as the pixel's own FAR CoC exceeds a
+//      pixel (smoothstep 0.5..2.0 px — in-focus geometry stays untouched),
+//   2. near field over the result by the gather's coverage alpha (the
+//      foreground's blur skirt spills over whatever is behind it).
+// Reads AND writes sceneHdr in place — each invocation only touches its own
+// pixel (the same RMW pattern as the deferred denoise recombine), so bloom
+// and the PostComposite downstream see the defocused HDR scene (bright
+// bokeh blooms, as it should).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+    vec4 jitter;
+} cam;
+layout(set = 0, binding = 1) uniform sampler2D depthTex;// full res, reversed-Z
+layout(set = 0, binding = 2) uniform sampler2D farTex;  // half res, bilinear
+layout(set = 0, binding = 3) uniform sampler2D nearTex; // half res, bilinear (rgb + coverage)
+layout(set = 0, binding = 4, rgba16f) uniform image2D sceneImg;// RMW
+
+layout(push_constant) uniform Pc {
+    uint  fullW, fullH, halfW, halfH;
+    float cocScale;
+    float focusDist;
+    float maxCoc;// FULL-res px radius
+    float _pad;
+} pc;
+
+float viewDepth(float zNdc) {
+    const float vz = cam.projInverse[2][2] * zNdc + cam.projInverse[3][2];
+    const float vw = cam.projInverse[2][3] * zNdc + cam.projInverse[3][3];
+    return -(vz / vw);
+}
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.fullW) || px.y >= int(pc.fullH)) return;
+
+    const float d   = viewDepth(texelFetch(depthTex, px, 0).x);
+    const float coc = clamp(pc.cocScale * (d - pc.focusDist) / max(d, 1e-4),
+                            -pc.maxCoc, pc.maxCoc);
+
+    const vec2 uv    = (vec2(px) + 0.5) / vec2(float(pc.fullW), float(pc.fullH));
+    const vec4 nearC = texture(nearTex, uv);
+
+    vec3 outC = imageLoad(sceneImg, px).rgb;
+    // Far field: only where this pixel itself is behind the focus plane.
+    const float fb = smoothstep(0.5, 2.0, max(coc, 0.0));
+    if (fb > 0.0) outC = mix(outC, texture(farTex, uv).rgb, fb);
+    // Near field on top — coverage is nonzero wherever a defocused
+    // foreground's skirt reaches, including over in-focus background.
+    outC = mix(outC, nearC.rgb, nearC.a);
+
+    imageStore(sceneImg, px, vec4(outC, 1.0));
+}

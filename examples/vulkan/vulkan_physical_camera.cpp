@@ -97,6 +97,7 @@ int main() {
     renderer.setPhysicalCamera(true);
     float aperture = 16.f, shutterInv = 125.f, iso = 100.f;// sunny-16 daylight
     renderer.setCameraExposure(aperture, 1.f / shutterInv, iso);
+    renderer.setFocusDistance(8.f);// matches the UI default below
 
     PerspectiveCamera camera(45.f, canvas.aspect(), 0.1f, 200.f);
     camera.position.set(0.f, 2.6f, 8.5f);
@@ -106,6 +107,9 @@ int main() {
 
     // ── UI state ─────────────────────────────────────────────────────────────
     bool physCam = true, autoExp = false;
+    bool dofOn = false;
+    float focusDist = 8.f;
+    float lensMm = 29.f;// ≈ 45° vertical FOV on the 24 mm full-frame sensor
     float evComp = 0.f;
     float wbTemp = 6500.f, wbTint = 0.f;
     float gradeSat = 1.f, gradeContrast = 1.f;
@@ -177,6 +181,33 @@ int main() {
             renderer.setExposureCompensation(evComp);
         if (ImGui::Checkbox("Auto exposure (EV comp around base)", &autoExp))
             renderer.setAutoExposure(autoExp);
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Depth of field");
+        if (ImGui::Checkbox("Enable##dof", &dofOn))
+            renderer.setDepthOfField(dofOn);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Thin-lens bokeh from the SAME camera:\n"
+                              "shallow depth of field needs a LONG lens\n"
+                              "AND a wide aperture, exactly like real\n"
+                              "photography — at 24 mm nothing blurs, at\n"
+                              "85 mm f/2 the background melts. Opening\n"
+                              "the aperture also brightens the exposure\n"
+                              "(re-expose with EV comp / shutter / ISO,\n"
+                              "or enable auto exposure).");
+        // Focal length drives BOTH the framing (fov) and the CoC — the
+        // photographic control that makes depth of field readable. 12 mm =
+        // half the 24 mm full-frame sensor height.
+        if (ImGui::SliderFloat("Lens (mm)", &lensMm, 24.f, 135.f, "%.0f mm",
+                               ImGuiSliderFlags_Logarithmic)) {
+            camera.fov = 2.f * std::atan(12.f / lensMm) * 180.f / math::PI;
+            camera.updateProjectionMatrix();
+        }
+        if (ImGui::SliderFloat("Focus (m)", &focusDist, 0.5f, 40.f, "%.1f m",
+                               ImGuiSliderFlags_Logarithmic))
+            renderer.setFocusDistance(focusDist);
 
         ImGui::Separator();
         ImGui::TextDisabled("Display pipeline");

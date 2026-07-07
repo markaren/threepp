@@ -95,6 +95,7 @@ int main(int argc, char** argv) {
     int churnN = 0;        // --churn N: add/remove a tiny cube every N frames (structural-rebuild stressor)
     std::string envPath;   // --env <hdr>: environment override (default citrus orchard)
     std::string sunPolicy; // --sunpolicy auto|always|off
+    float dofFocus = 0.f;  // --dof S: thin-lens DoF focused at S meters (f/2 aperture)
     bool usePT = false;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -122,6 +123,7 @@ int main(int argc, char** argv) {
         else if (a == "--churn" && i + 1 < argc) churnN = std::atoi(argv[++i]);
         else if (a == "--env" && i + 1 < argc) envPath = argv[++i];
         else if (a == "--sunpolicy" && i + 1 < argc) sunPolicy = argv[++i];
+        else if (a == "--dof" && i + 1 < argc) dofFocus = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--pt") usePT = true;
     }
     if (!fs::exists(modelFolder) || !fs::is_directory(modelFolder)) {
@@ -157,6 +159,11 @@ int main(int argc, char** argv) {
         else if (sunPolicy == "auto") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Auto);
     }
     if (optSunRad >= 0.f) renderer.setSunAngularRadius(optSunRad);
+    if (dofFocus > 0.f) {// thin-lens DoF: wide-open aperture, focus at S meters
+        renderer.setCameraExposure(2.0f, 1.f / 125.f, 100.f);
+        renderer.setFocusDistance(dofFocus);
+        renderer.setDepthOfField(true);
+    }
     renderer.setHybridDebugView(cliDebugView);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;

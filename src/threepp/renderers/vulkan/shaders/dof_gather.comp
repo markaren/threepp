@@ -1,0 +1,95 @@
+#version 460
+
+// DoF pass 3/4 — near/far scatter-as-gather (see vulkan/DofPass.{hpp,cpp}).
+//
+// One half-res dispatch produces BOTH fields from a 49-tap disc (center +
+// 8/16/24-tap rings, per-pixel static IGN rotation — TAA integrates the
+// residual ring noise; no per-frame term, so a held camera stays stable):
+//
+//   FAR  (background bokeh): a tap scatters onto the center if its own far
+//        CoC reaches it — w = saturate(tapCocFar − dist + 1). Near-field
+//        taps have tapCocFar = 0, so the foreground never contaminates the
+//        background blur. Normalized average → far colour.
+//   NEAR (foreground bokeh): same test against the tap's near CoC, plus a
+//        COVERAGE alpha (saturate(2·mean(w))) that deliberately saturates
+//        at half occupancy — the foreground's blur skirt spills over the
+//        in-focus background behind it, which is what real defocused
+//        foregrounds do (and hard cuts don't).
+//
+// The gather radius comes from the DILATED tile max, so a big bokeh a tile
+// away is still found; tiles with no CoC early-out to a passthrough.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D halfTex;// rgb + signed coc (half-res px)
+layout(set = 0, binding = 1) uniform sampler2D tileTex;// dilated (maxNear, maxFar) per 8×8 tile
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D farImg; // rgb + unused
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D nearImg;// rgb + coverage
+
+layout(push_constant) uniform Pc {
+    uint halfW, halfH, tilesW, tilesH;
+} pc;
+
+const int kRingTaps[3]  = int[3](8, 16, 24);
+const float kRingR[3]   = float[3](1.0 / 3.0, 2.0 / 3.0, 1.0);
+const float kTapCount   = 49.0;
+
+void main() {
+    const ivec2 hp = ivec2(gl_GlobalInvocationID.xy);
+    if (hp.x >= int(pc.halfW) || hp.y >= int(pc.halfH)) return;
+
+    const ivec2 mx     = ivec2(int(pc.halfW) - 1, int(pc.halfH) - 1);
+    const vec4  center = texelFetch(halfTex, hp, 0);
+
+    const ivec2 tile = min(hp / 8, ivec2(int(pc.tilesW) - 1, int(pc.tilesH) - 1));
+    const vec2  tm   = texelFetch(tileTex, tile, 0).rg;// (maxNear, maxFar)
+    const float R    = max(tm.r, tm.g);
+
+    if (R < 0.4) {// whole neighbourhood sharp — passthrough (0.8 full-res px:
+        // low enough that the blur ONSET ramps in smoothly instead of whole
+        // tiles popping from sharp to blurred as the CoC crosses a threshold)
+        imageStore(farImg, hp, vec4(center.rgb, 0.0));
+        imageStore(nearImg, hp, vec4(0.0));
+        return;
+    }
+
+    // Interleaved gradient noise → static per-pixel disc rotation.
+    const float ign = fract(52.9829189 * fract(0.06711056 * float(hp.x) + 0.00583715 * float(hp.y)));
+    const float rot = ign * 6.2831853;
+    const float cr = cos(rot), sr = sin(rot);
+
+    // Center tap (dist 0).
+    float wF = clamp(max(center.a, 0.0) + 1.0, 0.0, 1.0);
+    float wN = clamp(max(-center.a, 0.0) + 1.0, 0.0, 1.0) * step(0.0, -center.a);
+    vec3  farAcc  = center.rgb * wF;
+    float farW    = wF;
+    vec3  nearAcc = center.rgb * wN;
+    float nearW   = wN;
+
+    for (int ring = 0; ring < 3; ++ring) {
+        const int   n  = kRingTaps[ring];
+        const float rr = kRingR[ring] * R;
+        for (int i = 0; i < n; ++i) {
+            const float a = 6.2831853 * (float(i) + 0.5) / float(n);
+            vec2 o = vec2(cos(a), sin(a));
+            o = vec2(o.x * cr - o.y * sr, o.x * sr + o.y * cr) * rr;
+            const ivec2 q   = clamp(hp + ivec2(round(o)), ivec2(0), mx);
+            const vec4  tap = texelFetch(halfTex, q, 0);
+            const float dist = rr;
+
+            const float tF = clamp(max(tap.a, 0.0) - dist + 1.0, 0.0, 1.0);
+            farAcc += tap.rgb * tF;
+            farW   += tF;
+
+            const float tN = clamp(max(-tap.a, 0.0) - dist + 1.0, 0.0, 1.0);
+            nearAcc += tap.rgb * tN;
+            nearW   += tN;
+        }
+    }
+
+    const vec3  farC     = farAcc / max(farW, 1e-4);
+    const vec3  nearC    = nearAcc / max(nearW, 1e-4);
+    const float coverage = clamp(nearW * (2.0 / kTapCount), 0.0, 1.0);
+    imageStore(farImg, hp, vec4(farC, 0.0));
+    imageStore(nearImg, hp, vec4(nearC, coverage));
+}

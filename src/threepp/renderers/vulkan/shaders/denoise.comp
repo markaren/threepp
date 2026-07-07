@@ -35,7 +35,7 @@ layout(push_constant) uniform Pc {
                           // (physical-camera mode keeps 100k-lux radiance inside
                           // fp16; 1.0 legacy = exact no-op multiply)
     uint denoiseEnabled;
-    uint bgIsSolidColor;  // unused here — post_composite.comp owns the bg bypass.
+    uint bgIsSolidColor;  // solid bg → sky pixels store UNexposed (see below)
 } pc;
 
 void main() {
@@ -64,5 +64,12 @@ void main() {
 
     // Linear HDR out (pre-exposed in physical-camera mode) —
     // post_composite.comp applies tone map + sRGB (+ bloom).
-    imageStore(outImage, px, vec4(color * uintBitsToFloat(pc.preExpBits), 1.0));
+    // SOLID-COLOUR background sky pixels stay UNexposed: the bg is
+    // display-referred (the composite bypass restores it verbatim), and
+    // keeping it in the same value domain as geometry stops cross-pixel
+    // mixing (DoF, bloom) being amplified 1/preExposure at the bypass.
+    const float pe = (pc.bgIsSolidColor != 0u && g.w < 0.5)
+            ? 1.0
+            : uintBitsToFloat(pc.preExpBits);
+    imageStore(outImage, px, vec4(color * pe, 1.0));
 }

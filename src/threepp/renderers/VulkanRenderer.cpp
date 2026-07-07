@@ -260,7 +260,8 @@ namespace threepp {
                                            std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
                                            gbufMsaaSamples_, /*shadeMode=*/0u, shadeBActive,
                                            clusterLightCountThisFrame_, froxelsActive,
-                                           ssrActive, preExpBits_, prevPreExpBits_);
+                                           ssrActive, preExpBits_, prevPreExpBits_,
+                                           envIsBgColor);
             gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
 
             // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
@@ -303,7 +304,8 @@ namespace threepp {
                                                std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
                                                gbufMsaaSamples_, /*shadeMode=*/1u, /*shadeBActive=*/true,
                                                clusterLightCountThisFrame_, froxelsActive,
-                                               ssrActive, preExpBits_, prevPreExpBits_);
+                                               ssrActive, preExpBits_, prevPreExpBits_,
+                                               envIsBgColor);
                 gpuTimings_->end(cb, TP_ShadeB, currentFrame);
 
                 // Dispatch B's outImage write -> bloom/composite's read.
@@ -1159,6 +1161,22 @@ namespace threepp {
 
     bool VulkanRendererCore::physicalLightUnits() const {
         return core()->physicalLightUnits_;
+    }
+
+    void VulkanRendererCore::setDepthOfField(bool enabled) {
+        core()->dofEnabled_ = enabled;
+    }
+
+    bool VulkanRendererCore::depthOfField() const {
+        return core()->dofEnabled_;
+    }
+
+    void VulkanRendererCore::setFocusDistance(float meters) {
+        core()->focusDistance_ = std::max(meters, 0.01f);
+    }
+
+    float VulkanRendererCore::focusDistance() const {
+        return core()->focusDistance_;
     }
 
     void VulkanRendererCore::setWhiteBalance(float temperatureK, float tint) {

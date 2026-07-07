@@ -20,6 +20,7 @@
 #include "GbufResolve.hpp"
 #include "BloomPass.hpp"
 #include "PostComposite.hpp"
+#include "DofPass.hpp"
 #include "DeferredShade.hpp"
 #include "HiZPyramid.hpp"
 #include "ProbeGI.hpp"
@@ -149,6 +150,7 @@ namespace threepp {
     using vulkan::TP_OverlayDraw;
     using vulkan::TP_GbufResolve;
     using vulkan::TP_ShadeB;
+    using vulkan::TP_Dof;
 
     namespace {
         // Frames-in-flight depth. Bumped from 2 → 3 to deepen CPU/GPU
@@ -1755,6 +1757,16 @@ namespace threepp {
         // TAA input (post_composite.comp). Owns the white-balance matrix and
         // the 33³ grade LUT (setWhiteBalance / setColorGrade forward here).
         std::unique_ptr<vulkan::PostComposite> post_;
+        // Thin-lens depth of field on sceneHdr, recorded between the scene
+        // dispatch and the bloom pyramid so bokeh still blooms + tone-maps
+        // as HDR (see vulkan/DofPass.hpp). CoC is camera-derived: aperture
+        // from camAperture_, focal length from tanHalfFovY_ on a 24 mm
+        // sensor, focus plane at focusDistance_. OFF by default (the whole
+        // pass is skipped; zero cost).
+        std::unique_ptr<vulkan::DofPass> dof_;
+        bool  dofEnabled_    = false;
+        float focusDistance_ = 10.f;
+        float tanHalfFovY_   = 0.4142f;// stashed in updateCameraUbo (45° default)
         float bloomIntensity_ = 0.0f;
         // Deferred GI path: ON activates stochastic 1-bounce GI (colour bleed) +
         // temporal accumulation + à-trous. OFF falls back to the deterministic
@@ -2118,6 +2130,8 @@ namespace threepp {
             onAfterBloomCreateImages();
             // Exposure/WB/tone-map/grade/sRGB composite → TAA input.
             post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
+            // Thin-lens DoF (images/descriptors fitted in rewriteBloomDescriptors).
+            dof_ = std::make_unique<vulkan::DofPass>(*ctx, cmdPool, kFramesInFlight);
             // Raster-first deferred lighting pass. Writes bloom_->sceneHdr, so
             // it must exist after bloom_; its descriptors reference the camera /
             // lights UBOs, the env image, the raster gbuffer and sceneHdr — all
@@ -7261,6 +7275,12 @@ namespace threepp {
         void updateCameraUbo(uint32_t frame, Camera& camera) {
             camera.updateMatrixWorld(true);
 
+            // Stash tan(fovY/2) for the DoF focal-length derivation —
+            // extracted from the projection matrix (proj[1][1] = 1/tan) so
+            // it works for any camera type without a PerspectiveCamera cast.
+            if (std::abs(camera.projectionMatrix.elements[5]) > 1e-6f)
+                tanHalfFovY_ = 1.f / std::abs(camera.projectionMatrix.elements[5]);
+
             float data[36];
             std::memcpy(data + 0,  camera.matrixWorld->elements.data(), 64);
             // Reverse-Z projInverse (matches the reverse-Z VP the raster uses) so
@@ -11527,6 +11547,22 @@ namespace threepp {
             in.rasterIdsPerFrame = idsViews.data();
             in.taaInputPerFrame  = taaInViews.data();
             post_->rewriteDescriptors(in);
+
+            // DoF scratch + descriptors track the same lifetimes (sceneHdr /
+            // raster depth / render extent), so (re)fit it here too.
+            if (dof_) {
+                std::array<VkBuffer, kFramesInFlight>    camBufs{};
+                std::array<VkImageView, kFramesInFlight> depthViews{};
+                for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                    camBufs[f]    = cameraUbos[f].handle;
+                    depthViews[f] = rasterGbufs[f].depth.view;
+                }
+                vulkan::DofPass::ResizeInputs din{};
+                din.cameraUbos       = camBufs.data();
+                din.depthPerFrame    = depthViews.data();
+                din.sceneHdrPerFrame = sceneViews.data();
+                dof_->resize(renderExtent().width, renderExtent().height, din);
+            }
         }
 
         // Raster-first deferred shade reads the camera + lights UBOs, the env
@@ -15329,6 +15365,27 @@ namespace threepp {
             // Dispatch to the leaf renderer (VulkanPathTracer: PT raygen + denoiser;
             // VulkanRenderer: deferred shade compute); bloom + TAA below are shared.
             recordSceneDispatch(cb, setIdx, ext, ptExt, exposureBits);
+
+            // ── Thin-lens depth of field (opt-in) ──────────────────────────────
+            // Defocus the linear-HDR scene BEFORE bloom/composite/TAA so
+            // bright bokeh still blooms and tone-maps as HDR. CoC from the
+            // camera: aperture = camAperture_ (setCameraExposure — exposure
+            // and DoF consume the triplet independently, so this works with
+            // physicalCamera off too), focal length from the camera's FOV on
+            // a 24 mm full-frame sensor, focus plane at focusDistance_.
+            if (dofEnabled_ && dof_ && dof_->valid()) {
+                constexpr float kSensorH  = 0.024f;// full-frame sensor height (m)
+                constexpr float kMaxCocPx = 32.f;  // full-res radius clamp
+                const float f = (kSensorH * 0.5f) / std::max(tanHalfFovY_, 1e-3f);
+                const float S = std::max(focusDistance_, f * 2.f);
+                const float cocScale = f * f / (std::max(camAperture_, 0.1f) * (S - f)) *
+                                       (static_cast<float>(regionRenderExt_.height) / kSensorH) * 0.5f;
+                gpuTimings_->begin(cb, TP_Dof, currentFrame);
+                dof_->record(cb, currentFrame,
+                             regionRenderExt_.width, regionRenderExt_.height,
+                             cocScale, S, kMaxCocPx);
+                gpuTimings_->end(cb, TP_Dof, currentFrame);
+            }
 
             // ── Bloom pyramid + post composite (HDR post stack) ────────────────
             // The shade/resolve wrote linear HDR into bloom_->sceneHdr (the

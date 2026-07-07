@@ -504,6 +504,7 @@ namespace threepp_py {
                                            d["gbuf_resolve_ms"] = t.gbufResolveMs;
                                            d["shade_b_ms"] = t.shadeBMs;
                                            d["overlay_ms"] = t.overlayMs;
+                                           d["dof_ms"] = t.dofMs;
                                            d["cpu_ensure_scene_ms"] = t.cpuEnsureSceneMs;
                                            d["cpu_record_ms"] = t.cpuRecordMs;
                                            d["cpu_frame_ms"] = t.cpuFrameMs;
@@ -534,6 +535,18 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r, bool v) { r.native().setPhysicalLightUnits(v); },
                               "Interpret light intensities photometrically: directional = lux "
                               "(sun ~100000), point/spot = lumens, rect/emissive = nits. Default off.")
+                // ── Depth of field (thin lens, post) ──────────────────────────
+                .def_property("depth_of_field",
+                              [](PyVulkanRenderer& r) { return r.native().depthOfField(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setDepthOfField(v); },
+                              "Thin-lens bokeh on the HDR scene (before bloom/TAA). CoC comes "
+                              "from the camera: set_camera_exposure's f-number (independent of "
+                              "physical_camera), FOV-derived focal length, focus_distance. "
+                              "Default off (zero cost).")
+                .def_property("focus_distance",
+                              [](PyVulkanRenderer& r) { return r.native().focusDistance(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setFocusDistance(v); },
+                              "Focus plane distance in scene units/meters (default 10).")
                 // ── White balance + colour grade (post composite) ─────────────
                 .def("set_white_balance",
                      [](PyVulkanRenderer& r, float temperatureK, float tint) {

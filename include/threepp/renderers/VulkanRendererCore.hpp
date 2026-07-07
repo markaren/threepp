@@ -291,6 +291,24 @@ namespace threepp {
         };
         void setColorGrade(const ColorGrade& grade);
 
+        // ── Depth of field (thin lens, post) ─────────────────────────────
+        // Half-res near/far scatter-as-gather bokeh on the HDR scene before
+        // bloom/TAA (defocused highlights still bloom). The circle of
+        // confusion is CAMERA-derived, not a strength slider: aperture is
+        // setCameraExposure's f-number (the aperture drives bokeh size even
+        // while physicalCamera is off — exposure and DoF are independent
+        // consumers of the same triplet), focal length comes from the
+        // camera's vertical FOV on a 24 mm full-frame sensor, and the focus
+        // plane sits at setFocusDistance. Wider aperture (smaller f-number)
+        // or a longer lens (narrower FOV) → shallower depth of field, as on
+        // a real camera. OFF by default (zero cost).
+        void setDepthOfField(bool enabled);
+        [[nodiscard]] bool depthOfField() const;
+
+        // Focus plane distance in scene units/meters (default 10).
+        void setFocusDistance(float meters);
+        [[nodiscard]] float focusDistance() const;
+
         // ── PhysX soft-body zero-copy interop (CUDA → Vulkan) ────────────────
         struct SoftBodyInteropHandle {
             void*  osHandle  = nullptr;
@@ -328,6 +346,7 @@ namespace threepp {
             float gbufResolveMs  = 0.f;// MSAA dominant-sample resolve (0 unless setGbufferMsaa > 1)
             float shadeBMs       = 0.f;// MSAA dispatch B: per-sample edge shading (0 unless setGbufferMsaa > 1)
             float overlayMs      = 0.f;// hybrid overlay depth + draw
+            float dofMs          = 0.f;// thin-lens depth of field (0 unless setDepthOfField)
             float cpuEnsureSceneMs = 0.f;// ensureSceneBuilt
             float cpuRecordMs      = 0.f;// recordCommandBuffer
             float cpuFrameMs       = 0.f;// total render() wall time
