@@ -4,6 +4,8 @@
 
 #include "threepp/renderers/vulkan/shaders/taa_resolve.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/rcas.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/motion_tilemax.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/motion_blur.comp.spv.h"
 
 #include <array>
 #include <cstring>
@@ -17,6 +19,8 @@ namespace threepp::vulkan {
         : ctx_(ctx), cmdPool_(cmdPool),
           imageCount_(imageCount), framesInFlight_(framesInFlight) {
         inputImagesPP_.resize(framesInFlight_);
+        tileMax_.resize(framesInFlight_);
+        mblurOut_.resize(framesInFlight_);
         createPipeline();
         createDescriptorPool();
     }
@@ -29,6 +33,11 @@ namespace threepp::vulkan {
         if (rcasPipe_)       vkDestroyPipeline(d, rcasPipe_, nullptr);
         if (rcasPipeLayout_) vkDestroyPipelineLayout(d, rcasPipeLayout_, nullptr);
         if (rcasDsLayout_)   vkDestroyDescriptorSetLayout(d, rcasDsLayout_, nullptr);
+        if (tilemaxPipe_)       vkDestroyPipeline(d, tilemaxPipe_, nullptr);
+        if (tilemaxPipeLayout_) vkDestroyPipelineLayout(d, tilemaxPipeLayout_, nullptr);
+        if (mblurPipe_)         vkDestroyPipeline(d, mblurPipe_, nullptr);
+        if (mblurPipeLayout_)   vkDestroyPipelineLayout(d, mblurPipeLayout_, nullptr);
+        if (mblurDsLayout_)     vkDestroyDescriptorSetLayout(d, mblurDsLayout_, nullptr);
         if (descPool_)       vkDestroyDescriptorPool(d, descPool_, nullptr);
         if (sampler_)        vkDestroySampler(d, sampler_, nullptr);
         destroyImages();
@@ -38,6 +47,8 @@ namespace threepp::vulkan {
         VkDevice d = ctx_.device();
         for (auto& img : inputImagesPP_)   destroyImage2D(ctx_.allocator(), d, img);
         for (auto& img : historyImagesPP_) destroyImage2D(ctx_.allocator(), d, img);
+        for (auto& img : tileMax_)         destroyImage2D(ctx_.allocator(), d, img);
+        for (auto& img : mblurOut_)        destroyImage2D(ctx_.allocator(), d, img);
         historyValid_ = false;
     }
 
@@ -145,6 +156,19 @@ namespace threepp::vulkan {
             img = createStorageSampledImage(outWidth, outHeight,
                                             VK_FORMAT_R16G16B16A16_SFLOAT,
                                             "vmaCreateImage(taa.history)");
+        // Motion blur: per-32px-tile dominant velocity + (when RCAS is also
+        // active) the pre-sharpen blurred frame. Both at the OUTPUT extent —
+        // the blur runs on the resolved full-res image.
+        tilesX_ = (outWidth  + 31u) / 32u;
+        tilesY_ = (outHeight + 31u) / 32u;
+        for (auto& img : tileMax_)
+            img = createStorageSampledImage(tilesX_, tilesY_,
+                                            VK_FORMAT_R16G16_SFLOAT,
+                                            "vmaCreateImage(taa.mblurTileMax)");
+        for (auto& img : mblurOut_)
+            img = createStorageSampledImage(outWidth, outHeight,
+                                            VK_FORMAT_B8G8R8A8_UNORM,
+                                            "vmaCreateImage(taa.mblurOut)");
     }
 
     void TaaResolve::createPipeline() {
@@ -296,45 +320,137 @@ namespace threepp::vulkan {
                   "vkCreateComputePipelines(rcas)");
             vkDestroyShaderModule(ctx_.device(), rmod, nullptr);
         }
+
+        // ── Motion blur pipelines (McGuire 2012). TileMax shares the RCAS
+        //    descriptor shape (sampler @0 + storage @1) but needs a 96-byte
+        //    PC (scalars + skyReproj mat4); reconstruction gets its own
+        //    4-binding layout + 112-byte PC (adds depthLin). ───────────────
+        {
+            VkPushConstantRange tpc{};
+            tpc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            tpc.offset     = 0;
+            tpc.size       = 96;// 8 scalars + mat4 skyReproj @32
+            VkPipelineLayoutCreateInfo tplci{};
+            tplci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            tplci.setLayoutCount         = 1;
+            tplci.pSetLayouts            = &rcasDsLayout_;
+            tplci.pushConstantRangeCount = 1;
+            tplci.pPushConstantRanges    = &tpc;
+            check(vkCreatePipelineLayout(ctx_.device(), &tplci, nullptr, &tilemaxPipeLayout_),
+                  "vkCreatePipelineLayout(mblur.tilemax)");
+
+            VkShaderModuleCreateInfo tsmci{};
+            tsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            tsmci.codeSize = sizeof(kMotionTilemaxCompSpv);
+            tsmci.pCode    = kMotionTilemaxCompSpv;
+            VkShaderModule tmod = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx_.device(), &tsmci, nullptr, &tmod),
+                  "vkCreateShaderModule(mblur.tilemax)");
+            VkPipelineShaderStageCreateInfo tstage{};
+            tstage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            tstage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            tstage.module = tmod;
+            tstage.pName  = "main";
+            VkComputePipelineCreateInfo tcpci{};
+            tcpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            tcpci.stage  = tstage;
+            tcpci.layout = tilemaxPipeLayout_;
+            check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(), 1, &tcpci,
+                                           nullptr, &tilemaxPipe_),
+                  "vkCreateComputePipelines(mblur.tilemax)");
+            vkDestroyShaderModule(ctx_.device(), tmod, nullptr);
+
+            VkDescriptorSetLayoutBinding mb[4]{};
+            for (int i = 0; i < 3; ++i) {
+                mb[i].binding         = static_cast<uint32_t>(i);
+                mb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                mb[i].descriptorCount = 1;
+                mb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            mb[3].binding         = 3;
+            mb[3].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            mb[3].descriptorCount = 1;
+            mb[3].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            VkDescriptorSetLayoutCreateInfo mdlci{};
+            mdlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            mdlci.bindingCount = 4;
+            mdlci.pBindings    = mb;
+            check(vkCreateDescriptorSetLayout(ctx_.device(), &mdlci, nullptr, &mblurDsLayout_),
+                  "vkCreateDescriptorSetLayout(mblur)");
+
+            VkPushConstantRange mpc{};
+            mpc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            mpc.offset     = 0;
+            mpc.size       = 112;// 8 scalars + mat4 skyReproj @32 + vec4 depthLin @96
+            VkPipelineLayoutCreateInfo mplci{};
+            mplci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            mplci.setLayoutCount         = 1;
+            mplci.pSetLayouts            = &mblurDsLayout_;
+            mplci.pushConstantRangeCount = 1;
+            mplci.pPushConstantRanges    = &mpc;
+            check(vkCreatePipelineLayout(ctx_.device(), &mplci, nullptr, &mblurPipeLayout_),
+                  "vkCreatePipelineLayout(mblur)");
+
+            VkShaderModuleCreateInfo msmci{};
+            msmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            msmci.codeSize = sizeof(kMotionBlurCompSpv);
+            msmci.pCode    = kMotionBlurCompSpv;
+            VkShaderModule mmod = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx_.device(), &msmci, nullptr, &mmod),
+                  "vkCreateShaderModule(mblur)");
+            VkPipelineShaderStageCreateInfo mstage{};
+            mstage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            mstage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            mstage.module = mmod;
+            mstage.pName  = "main";
+            VkComputePipelineCreateInfo mcpci{};
+            mcpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            mcpci.stage  = mstage;
+            mcpci.layout = mblurPipeLayout_;
+            check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(), 1, &mcpci,
+                                           nullptr, &mblurPipe_),
+                  "vkCreateComputePipelines(mblur)");
+            vkDestroyShaderModule(ctx_.device(), mmod, nullptr);
+        }
     }
 
     void TaaResolve::createDescriptorPool() {
         const uint32_t totalSets = imageCount_ * framesInFlight_;
         VkDescriptorPoolSize sizes[2]{};
         // Main resolve set: 6 sampled + 2 storage. RCAS set: 1 sampled + 1
-        // storage. Both families × totalSets, sharing this pool.
+        // storage. Motion blur: tilemax (1+1) + mblur→out (3+1) per frame,
+        // mblur→swap (3+1) + rcas-from-mblur (1+1) per frame×image. All
+        // families share this pool.
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = totalSets * (6 + 1);
+        sizes[0].descriptorCount = totalSets * (6 + 1 + 3 + 1) + framesInFlight_ * (1 + 3);
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[1].descriptorCount = totalSets * (2 + 1);
+        sizes[1].descriptorCount = totalSets * (2 + 1 + 1 + 1) + framesInFlight_ * (1 + 1);
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = totalSets * 2;// main + rcas
+        dpci.maxSets       = totalSets * 4 + framesInFlight_ * 2;// main + rcas + mblurSwap + rcasMb + tilemax + mblurOut
         dpci.poolSizeCount = 2;
         dpci.pPoolSizes    = sizes;
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
               "vkCreateDescriptorPool(taa)");
 
-        std::vector<VkDescriptorSetLayout> layouts(totalSets, dsLayout_);
-        VkDescriptorSetAllocateInfo ai{};
-        ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        ai.descriptorPool     = descPool_;
-        ai.descriptorSetCount = totalSets;
-        ai.pSetLayouts        = layouts.data();
-        descSets_.resize(totalSets);
-        check(vkAllocateDescriptorSets(ctx_.device(), &ai, descSets_.data()),
-              "vkAllocateDescriptorSets(taa)");
-
-        std::vector<VkDescriptorSetLayout> rlayouts(totalSets, rcasDsLayout_);
-        VkDescriptorSetAllocateInfo rai{};
-        rai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        rai.descriptorPool     = descPool_;
-        rai.descriptorSetCount = totalSets;
-        rai.pSetLayouts        = rlayouts.data();
-        rcasSets_.resize(totalSets);
-        check(vkAllocateDescriptorSets(ctx_.device(), &rai, rcasSets_.data()),
-              "vkAllocateDescriptorSets(rcas)");
+        auto allocSets = [&](VkDescriptorSetLayout layout, uint32_t count,
+                             std::vector<VkDescriptorSet>& out, const char* what) {
+            std::vector<VkDescriptorSetLayout> layouts(count, layout);
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool     = descPool_;
+            ai.descriptorSetCount = count;
+            ai.pSetLayouts        = layouts.data();
+            out.resize(count);
+            check(vkAllocateDescriptorSets(ctx_.device(), &ai, out.data()), what);
+        };
+        allocSets(dsLayout_,      totalSets,       descSets_,      "vkAllocateDescriptorSets(taa)");
+        allocSets(rcasDsLayout_,  totalSets,       rcasSets_,      "vkAllocateDescriptorSets(rcas)");
+        allocSets(rcasDsLayout_,  framesInFlight_, tilemaxSets_,   "vkAllocateDescriptorSets(mblur.tilemax)");
+        allocSets(mblurDsLayout_, totalSets,       mblurSwapSets_, "vkAllocateDescriptorSets(mblur.swap)");
+        allocSets(mblurDsLayout_, framesInFlight_, mblurOutSets_,  "vkAllocateDescriptorSets(mblur.out)");
+        allocSets(rcasDsLayout_,  totalSets,       rcasMbSets_,    "vkAllocateDescriptorSets(rcas.mblur)");
     }
 
     void TaaResolve::rewriteDescriptors(const DescriptorWriteInputs& inputs) {
@@ -441,6 +557,102 @@ namespace threepp::vulkan {
                 rw[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 rw[1].pImageInfo      = &rcasOut;
                 vkUpdateDescriptorSets(ctx_.device(), 2, rw, 0, nullptr);
+
+                // Motion-blur reconstruction → swapchain (the sharpen-off
+                // chain): resolved history + motion + tileMax in, swapchain
+                // out. And the RCAS variant that reads the blurred frame
+                // (mblurOut) instead of the history slot (sharpen-on chain).
+                VkDescriptorImageInfo mbColorI{};
+                mbColorI.sampler     = sampler_;
+                mbColorI.imageView   = historyImagesPP_[writeSlot].view;
+                mbColorI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkDescriptorImageInfo mbTileI{};
+                mbTileI.sampler     = sampler_;
+                mbTileI.imageView   = tileMax_[f].view;
+                mbTileI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkWriteDescriptorSet mw[4]{};
+                for (int b = 0; b < 4; ++b) {
+                    mw[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    mw[b].dstSet          = mblurSwapSets_[idx];
+                    mw[b].dstBinding      = static_cast<uint32_t>(b);
+                    mw[b].descriptorCount = 1;
+                    mw[b].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                }
+                mw[0].pImageInfo     = &mbColorI;
+                mw[1].pImageInfo     = &motionI;
+                mw[2].pImageInfo     = &mbTileI;
+                mw[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                mw[3].pImageInfo     = &swapI;
+                vkUpdateDescriptorSets(ctx_.device(), 4, mw, 0, nullptr);
+
+                VkDescriptorImageInfo mbOutReadI{};
+                mbOutReadI.sampler     = sampler_;
+                mbOutReadI.imageView   = mblurOut_[f].view;
+                mbOutReadI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkWriteDescriptorSet rmw[2]{};
+                for (int b = 0; b < 2; ++b) {
+                    rmw[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    rmw[b].dstSet          = rcasMbSets_[idx];
+                    rmw[b].dstBinding      = static_cast<uint32_t>(b);
+                    rmw[b].descriptorCount = 1;
+                }
+                rmw[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                rmw[0].pImageInfo     = &mbOutReadI;
+                rmw[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                rmw[1].pImageInfo     = &rcasOut;
+                vkUpdateDescriptorSets(ctx_.device(), 2, rmw, 0, nullptr);
+            }
+
+            // Per-frame (swapchain-image-independent) motion-blur sets:
+            // TileMax (motion in, tile velocities out) and the reconstruction
+            // variant that writes mblurOut for a downstream RCAS.
+            {
+                const uint32_t writeSlot = (f & 1u);
+                VkDescriptorImageInfo motionI{};
+                motionI.sampler     = inputs.gbufSampler;
+                motionI.imageView   = inputs.gbufMotionPerFrame[f];
+                motionI.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                VkDescriptorImageInfo tileWriteI{};
+                tileWriteI.imageView   = tileMax_[f].view;
+                tileWriteI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkWriteDescriptorSet tw[2]{};
+                for (int b = 0; b < 2; ++b) {
+                    tw[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    tw[b].dstSet          = tilemaxSets_[f];
+                    tw[b].dstBinding      = static_cast<uint32_t>(b);
+                    tw[b].descriptorCount = 1;
+                }
+                tw[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                tw[0].pImageInfo     = &motionI;
+                tw[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                tw[1].pImageInfo     = &tileWriteI;
+                vkUpdateDescriptorSets(ctx_.device(), 2, tw, 0, nullptr);
+
+                VkDescriptorImageInfo mbColorI{};
+                mbColorI.sampler     = sampler_;
+                mbColorI.imageView   = historyImagesPP_[writeSlot].view;
+                mbColorI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkDescriptorImageInfo mbTileI{};
+                mbTileI.sampler     = sampler_;
+                mbTileI.imageView   = tileMax_[f].view;
+                mbTileI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkDescriptorImageInfo mbOutWriteI{};
+                mbOutWriteI.imageView   = mblurOut_[f].view;
+                mbOutWriteI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkWriteDescriptorSet mw[4]{};
+                for (int b = 0; b < 4; ++b) {
+                    mw[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    mw[b].dstSet          = mblurOutSets_[f];
+                    mw[b].dstBinding      = static_cast<uint32_t>(b);
+                    mw[b].descriptorCount = 1;
+                    mw[b].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                }
+                mw[0].pImageInfo     = &mbColorI;
+                mw[1].pImageInfo     = &motionI;
+                mw[2].pImageInfo     = &mbTileI;
+                mw[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                mw[3].pImageInfo     = &mbOutWriteI;
+                vkUpdateDescriptorSets(ctx_.device(), 4, mw, 0, nullptr);
             }
         }
     }
@@ -463,12 +675,19 @@ namespace threepp::vulkan {
                                    uint32_t physInH,
                                    uint32_t physOutW,
                                    uint32_t physOutH,
-                                   const float* depthLin) {
+                                   const float* depthLin,
+                                   float mblurShutter) {
         // Physical (full texture) sizes default to the region sizes → scale 1.
         if (physInW == 0)  physInW  = inWidth;
         if (physInH == 0)  physInH  = inHeight;
         if (physOutW == 0) physOutW = outWidth;
         if (physOutH == 0) physOutH = outHeight;
+        // Motion blur is full-frame only: split-screen panes (offset stores /
+        // region-sized content in full-size textures) skip it silently.
+        const bool mblur = mblurShutter > 0.f &&
+                           dstX == 0 && dstY == 0 &&
+                           physOutW == outWidth && physOutH == outHeight &&
+                           tileMax_[frame].view != VK_NULL_HANDLE;
         // Barrier: taaInput write → read; both history slots covered (RAW
         // hazard on the read slot, WAW on the write slot we're about to
         // overwrite this frame).
@@ -518,7 +737,7 @@ namespace threepp::vulkan {
         std::memcpy(&pc[0], &alphaBits, 4);
         const uint32_t dims[4] = {outWidth, outHeight, inWidth, inHeight};
         std::memcpy(&pc[1], dims, 16);
-        const uint32_t ws = sharpen ? 0u : 1u;
+        const uint32_t ws = (sharpen || mblur) ? 0u : 1u;
         std::memcpy(&pc[5], &ws, 4);
         pc[6] = dtFrames;
         const uint32_t packedDst = (dstX & 0xFFFFu) | (dstY << 16);
@@ -537,10 +756,9 @@ namespace threepp::vulkan {
         const uint32_t gy = (outHeight + 7u) / 8u;
         vkCmdDispatch(cb, gx, gy, 1);
 
-        if (sharpen) {
-            // The resolve wrote the resolved frame into the history slot and
-            // skipped the swapchain. Make it visible, then RCAS-sharpen it
-            // into the swapchain.
+        // Reused by every downstream stage: all producers/consumers here are
+        // compute storage accesses on GENERAL-layout images.
+        auto computeBarrier = [&] {
             VkMemoryBarrier2 mb{};
             mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
             mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -553,10 +771,60 @@ namespace threepp::vulkan {
             di.memoryBarrierCount = 1;
             di.pMemoryBarriers    = &mb;
             vkCmdPipelineBarrier2(cb, &di);
+        };
+
+        if (mblur) {
+            // TileMax: dominant velocity per 32px tile. Independent of the
+            // resolve's output (reads only the G-buffer motion), so no
+            // barrier before it — the GPU may overlap the two dispatches.
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, tilemaxPipe_);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    tilemaxPipeLayout_, 0, 1,
+                                    &tilemaxSets_[frame], 0, nullptr);
+            float tpc[24] = {};
+            const uint32_t tdims[4] = {outWidth, outHeight, tilesX_, tilesY_};
+            std::memcpy(&tpc[0], tdims, 16);
+            tpc[4] = mblurShutter;
+            std::memcpy(&tpc[8], skyReproj, 64);// mat4 @32
+            vkCmdPushConstants(cb, tilemaxPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(tpc), tpc);
+            vkCmdDispatch(cb, tilesX_, tilesY_, 1);// one workgroup per tile
+
+            // Resolve's history write + tilemax's velocity write → the
+            // reconstruction's reads.
+            computeBarrier();
+
+            // Reconstruction: gathers the resolved frame along the tile
+            // neighborhood's dominant velocity. Writes the swapchain, or the
+            // pre-sharpen intermediate when RCAS runs after us.
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, mblurPipe_);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    mblurPipeLayout_, 0, 1,
+                                    sharpen ? &mblurOutSets_[frame]
+                                            : &mblurSwapSets_[descIdx],
+                                    0, nullptr);
+            float mpc[28] = {};
+            std::memcpy(&mpc[0], tdims, 16);
+            mpc[4] = mblurShutter;
+            std::memcpy(&mpc[8], skyReproj, 64);// mat4 @32
+            if (depthLin) std::memcpy(&mpc[24], depthLin, 16);// vec4 @96
+            vkCmdPushConstants(cb, mblurPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(mpc), mpc);
+            vkCmdDispatch(cb, gx, gy, 1);
+        }
+
+        if (sharpen) {
+            // Make the upstream write (resolve's history slot, or the motion
+            // blur's intermediate) visible, then RCAS-sharpen it into the
+            // swapchain.
+            computeBarrier();
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, rcasPipe_);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                    rcasPipeLayout_, 0, 1, &rcasSets_[descIdx], 0, nullptr);
+                                    rcasPipeLayout_, 0, 1,
+                                    mblur ? &rcasMbSets_[descIdx]
+                                          : &rcasSets_[descIdx],
+                                    0, nullptr);
             uint32_t amountBits;
             std::memcpy(&amountBits, &sharpenAmount, sizeof(amountBits));
             const uint32_t rpc[4] = {outWidth, outHeight, amountBits, packedDst};

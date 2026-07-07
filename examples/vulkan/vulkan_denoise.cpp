@@ -113,6 +113,9 @@ int main(int argc, char** argv) {
     float optLightRad = -1.f;
     float fogDensity  = 0.f;// --fog d: FogExp2 medium (froxel-volumetrics triage: beams + point-light glow)
     int   ringLights  = 0;// --lights N: ring of N extra colored point lights (clustered-lighting triage)
+    float mblur       = 0.f;// --mblur s: post-TAA motion blur, shutter fraction (0.5 = 180°).
+                            // Keeps the hero rotating in shot mode so the streaks show.
+    float optSharpen  = -1.f;// --sharpen s: RCAS override (0 exercises the blur→swapchain chain)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -120,6 +123,8 @@ int main(int argc, char** argv) {
         else if (a == "--lightrad" && i + 1 < argc) optLightRad = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--lights" && i + 1 < argc) ringLights = std::atoi(argv[++i]);
         else if (a == "--fog" && i + 1 < argc) fogDensity = static_cast<float>(std::atof(argv[++i]));
+        else if (a == "--mblur" && i + 1 < argc) mblur = static_cast<float>(std::atof(argv[++i]));
+        else if (a == "--sharpen" && i + 1 < argc) optSharpen = static_cast<float>(std::atof(argv[++i]));
     }
 
     Canvas canvas("Vulkan PT - Denoiser Showcase", {{"vsync", false}});
@@ -136,7 +141,8 @@ int main(int argc, char** argv) {
     // sphere are sub-pixel HDR spikes whose intensity swings per frame with
     // the TAA jitter — unclamped, the halo radius visibly pulses.
     renderer.setBloomClamp(16.0f);
-    renderer.setSharpenStrength(0.5f);
+    renderer.setSharpenStrength(optSharpen >= 0.f ? optSharpen : 0.5f);
+    if (mblur > 0.f) renderer.setMotionBlur(mblur);
 
     // ---- Scene ----
     Scene scene;
@@ -253,6 +259,8 @@ int main(int argc, char** argv) {
             renderer.setBloomClamp(bloomClamp);
         if (ImGui::SliderFloat("Sharpen (RCAS)", &sharpen, 0.0f, 0.8f))
             renderer.setSharpenStrength(sharpen);
+        if (ImGui::SliderFloat("Motion blur (shutter)", &mblur, 0.0f, 1.0f))
+            renderer.setMotionBlur(mblur);
 
         ImGui::Separator();
         const auto t = renderer.lastFrameTimings();
@@ -279,7 +287,9 @@ int main(int argc, char** argv) {
     canvas.animate([&] {
         const float dt = clock.getDelta();
 
-        if (rotating && shotPath.empty()) {
+        // Shots settle with the object still — EXCEPT the motion-blur triage,
+        // which needs per-object motion vectors in the capture frame.
+        if (rotating && (shotPath.empty() || mblur > 0.f)) {
             hero->rotation.y += rotSpeed * dt;
         }
 

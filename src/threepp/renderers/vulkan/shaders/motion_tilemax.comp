@@ -1,0 +1,91 @@
+#version 460
+
+// Motion blur — TILE MAX (McGuire et al. 2012, "A Reconstruction Filter for
+// Plausible Motion Blur"). One workgroup per kTilePx×kTilePx tile of the
+// OUTPUT (post-TAA) frame: finds the dominant (longest) blur velocity in the
+// tile so the reconstruction pass can gather along it. Velocities are the
+// G-buffer motion vectors (curr − prev, converted to output pixels), scaled
+// by the camera shutter fraction and clamped to the tile radius — the tile
+// size IS the maximum blur reach, which is what makes the 3×3 neighbor-max
+// in the reconstruction pass sufficient.
+//
+// Sky rasterizes no geometry (motion stays at the 0 clear), so its rotation-
+// induced motion is rebuilt from the far-plane reprojection matrix exactly
+// like taa_resolve.comp — without this the sky stays sharp while everything
+// pans, which reads instantly wrong.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D gbufMotionTex;// RENDER extent, rg = NDC delta
+layout(set = 0, binding = 1, rg16f) uniform writeonly image2D tileMaxImage;
+
+layout(push_constant) uniform Pc {
+    uint  width;     // output (post-TAA) extent — velocity pixel space
+    uint  height;
+    uint  tilesX;
+    uint  tilesY;
+    float shutter;   // exposure as a fraction of the frame interval (0.5 = 180° shutter)
+    uint  pad0;
+    uint  pad1;
+    uint  pad2;
+    mat4  skyReproj; // prevVPunjit · currVPunjit⁻¹ at the far plane (see taa_resolve)
+} pc;
+
+// KEEP IN SYNC with motion_blur.comp (tile size = max blur radius in px).
+const float kTilePx = 32.0;
+
+// Blur velocity (curr − prev) at `uv`, in OUTPUT pixels, shutter-scaled and
+// clamped to the tile radius. Motion is stored as prevNDC − currNDC (GL NDC,
+// Y-up); the pixel-space conversion folds in the negation and the Y flip.
+vec2 blurVelocityPx(vec2 uv) {
+    vec2 motionGL = texture(gbufMotionTex, uv).rg;
+    const vec2 currNDC = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    if (all(equal(motionGL, vec2(0.0)))) {
+        const vec4 pclip = pc.skyReproj * vec4(currNDC, 0.0, 1.0);// reversed-Z far
+        if (abs(pclip.w) > 1e-6) motionGL = pclip.xy / pclip.w - currNDC;
+    }
+    vec2 vPx = vec2(-motionGL.x, motionGL.y) * 0.5
+             * vec2(float(pc.width), float(pc.height)) * pc.shutter;
+    const float len = length(vPx);
+    if (len > kTilePx) vPx *= kTilePx / len;
+    return vPx;
+}
+
+shared vec2  sVel[64];
+shared float sLen[64];
+
+void main() {
+    const ivec2 tile = ivec2(gl_WorkGroupID.xy);
+    const uint  t    = gl_LocalInvocationIndex;
+
+    // 64 threads × a 4×4 sub-block each cover the 32×32 tile.
+    const ivec2 sub  = ivec2(gl_LocalInvocationID.xy) * 4;
+    const ivec2 base = tile * int(kTilePx) + sub;
+    const vec2  sz   = vec2(float(pc.width), float(pc.height));
+
+    vec2  vMax = vec2(0.0);
+    float lMax = 0.0;
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            const ivec2 px = base + ivec2(x, y);
+            if (px.x >= int(pc.width) || px.y >= int(pc.height)) continue;
+            const vec2  v = blurVelocityPx((vec2(px) + 0.5) / sz);
+            const float l = dot(v, v);
+            if (l > lMax) { lMax = l; vMax = v; }
+        }
+    }
+    sVel[t] = vMax;
+    sLen[t] = lMax;
+    barrier();
+
+    for (uint s = 32u; s > 0u; s >>= 1u) {
+        if (t < s && sLen[t + s] > sLen[t]) {
+            sLen[t] = sLen[t + s];
+            sVel[t] = sVel[t + s];
+        }
+        barrier();
+    }
+
+    if (t == 0u && tile.x < int(pc.tilesX) && tile.y < int(pc.tilesY))
+        imageStore(tileMaxImage, tile, vec4(sVel[0], 0.0, 0.0));
+}

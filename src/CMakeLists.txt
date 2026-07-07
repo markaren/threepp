@@ -1127,6 +1127,16 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/rcas.comp"
         kRcasCompSpv
         _rcas_spv_h)
+    # Post-TAA motion blur (McGuire 2012 tile-max + reconstruction), also
+    # folded into vulkan/TaaResolve.cpp. Opt-in via setMotionBlur.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/motion_tilemax.comp"
+        kMotionTilemaxCompSpv
+        _motion_tilemax_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/motion_blur.comp"
+        kMotionBlurCompSpv
+        _motion_blur_spv_h)
     # Hybrid raster overlay: wireframe + Line/LineSegments draw on top of
     # the post-TAA swapchain image. Depth-tested against the G-buffer's
     # depth attachment so overlays are correctly occluded by path-traced

@@ -1096,6 +1096,14 @@ namespace threepp {
         return core()->sharpenStrength_;
     }
 
+    void VulkanRendererCore::setMotionBlur(float shutterFraction) {
+        core()->motionBlurAmount_ = std::clamp(shutterFraction, 0.f, 1.f);
+    }
+
+    float VulkanRendererCore::motionBlur() const {
+        return core()->motionBlurAmount_;
+    }
+
     void VulkanRendererCore::setFireflyClamp(float cap) {
         core()->fireflyClamp_ = (cap <= 0.0f) ? 1e30f : cap;
     }

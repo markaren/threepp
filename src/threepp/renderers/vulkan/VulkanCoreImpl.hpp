@@ -1746,6 +1746,8 @@ namespace threepp {
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
         float bloomClamp_ = 0.0f;    // per-tap HDR cap before the bright pass; <= 0 = off
         float sharpenStrength_ = 0.5f;// post-TAA RCAS amount; 0 = off
+        float motionBlurAmount_ = 0.f;// post-TAA motion blur: shutter open fraction
+                                      // of the frame interval (0.5 = 180°); 0 = off
         float taaBlendAlpha_ = 0.16f;// 10% current, 90% history at the reference rate;
                                     // frame-rate-corrected per frame (see taaPrevTimeSec_)
         // Wall-clock anchor for the frame-rate-aware TAA blend. taaBlendAlpha_ is a
@@ -15269,7 +15271,7 @@ namespace threepp {
                                 taaSkyReproj_.data(),
                                 static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
                                 ptExt.width, ptExt.height, ext.width, ext.height,
-                                taaDepthLin_.data());
+                                taaDepthLin_.data(), motionBlurAmount_);
             gpuTimings_->end(cb, TP_TAA, currentFrame);
             // ── End raster TAA ─────────────────────────────────────────────────
 

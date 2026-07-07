@@ -86,6 +86,7 @@ int main(int argc, char** argv) {
     float optLightRad = -1.f;// --lightrad r: physical source radius on loaded point/spot lights (soft-shadow triage)
     bool  fogOnCli = false; float fogDensityCli = 0.05f;// --fog d: FogExp2 at density d (volumetric-fog triage)
     bool  volFogCli = false;// --volfog: enable the volumetric dir-light fog (sun shafts)
+    float mblurCli = 0.f;  // --mblur s: post-TAA motion blur, shutter fraction (pair with --orbit)
     int churnN = 0;        // --churn N: add/remove a tiny cube every N frames (structural-rebuild stressor)
     std::string envPath;   // --env <hdr>: environment override (default citrus orchard)
     std::string sunPolicy; // --sunpolicy auto|always|off
@@ -110,6 +111,7 @@ int main(int argc, char** argv) {
         else if (a == "--lightrad" && i + 1 < argc) optLightRad = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--fog" && i + 1 < argc) { fogOnCli = true; fogDensityCli = static_cast<float>(std::atof(argv[++i])); }
         else if (a == "--volfog") volFogCli = true;
+        else if (a == "--mblur" && i + 1 < argc) mblurCli = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--churn" && i + 1 < argc) churnN = std::atoi(argv[++i]);
         else if (a == "--env" && i + 1 < argc) envPath = argv[++i];
         else if (a == "--sunpolicy" && i + 1 < argc) sunPolicy = argv[++i];
@@ -141,6 +143,7 @@ int main(int argc, char** argv) {
         if (optProbe >= 0) vr->setProbeGI(optProbe != 0);
         if (optSunExt >= 0) vr->setEnvSunExtraction(optSunExt != 0);
         if (volFogCli) vr->setVolumetricFog(true);
+        if (mblurCli > 0.f) vr->setMotionBlur(mblurCli);
         if (sunPolicy == "always") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Always);
         else if (sunPolicy == "off") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Off);
         else if (sunPolicy == "auto") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Auto);

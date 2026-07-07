@@ -74,6 +74,14 @@ namespace threepp::vulkan {
         // write and a post-resolve RCAS pass (sharpenAmount ~0.2–0.6) reads
         // the resolved frame back from the history slot and writes the
         // sharpened result to the swapchain instead.
+        // `mblurShutter` > 0 inserts a motion-blur stage between the resolve
+        // and the swapchain (McGuire 2012 tile-max + reconstruction), reading
+        // the resolved history slot + the G-buffer motion vectors. The value
+        // is the shutter open fraction of the frame interval (0.5 = a 180°
+        // shutter). Chain: resolve → motion blur → optional RCAS. Full-frame
+        // only — silently skipped for split-screen panes (dstX/dstY or
+        // phys != region). History stays UNBLURRED (the blur never feeds
+        // back into next frame's temporal accumulation).
         // `dtFrames` = this frame's duration in reference frames (dt · 90 fps,
         // clamped [1, 6] by the caller; 1 at high fps). The shader scales its
         // per-frame temporal constants (deviation-streak ramp, soft-clip rate)
@@ -102,7 +110,8 @@ namespace threepp::vulkan {
                            uint32_t physInH = 0,
                            uint32_t physOutW = 0,
                            uint32_t physOutH = 0,
-                           const float* depthLin = nullptr);// 4 floats: reverse-Z viewZ linearization (A,B,C,D)
+                           const float* depthLin = nullptr,// 4 floats: reverse-Z viewZ linearization (A,B,C,D)
+                           float mblurShutter = 0.f);
 
         // Denoise writes its output here when TAA is active (replaces the
         // direct-to-swapchain write of non-TAA mode).
@@ -155,6 +164,24 @@ namespace threepp::vulkan {
         VkPipelineLayout      rcasPipeLayout_ = VK_NULL_HANDLE;
         VkPipeline            rcasPipe_       = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> rcasSets_;
+
+        // Post-resolve motion blur (folded into this pass, like RCAS).
+        // TileMax finds each 32px tile's dominant velocity; reconstruction
+        // gathers the resolved frame along it. When RCAS is also active the
+        // blur writes mblurOut_ and RCAS reads that instead of the history
+        // slot; otherwise the blur writes the swapchain directly.
+        std::vector<Image2D> tileMax_; // [framesInFlight] tilesX×tilesY rg16f
+        std::vector<Image2D> mblurOut_;// [framesInFlight] output extent bgra8
+        uint32_t tilesX_ = 0, tilesY_ = 0;
+        VkPipelineLayout tilemaxPipeLayout_ = VK_NULL_HANDLE;// reuses rcasDsLayout_ (sampler@0 + storage@1)
+        VkPipeline       tilemaxPipe_       = VK_NULL_HANDLE;
+        VkDescriptorSetLayout mblurDsLayout_   = VK_NULL_HANDLE;// samplers@0-2 + storage@3
+        VkPipelineLayout      mblurPipeLayout_ = VK_NULL_HANDLE;
+        VkPipeline            mblurPipe_       = VK_NULL_HANDLE;
+        std::vector<VkDescriptorSet> tilemaxSets_;  // [frame]: motion → tileMax
+        std::vector<VkDescriptorSet> mblurSwapSets_;// [frame×image]: history+motion+tileMax → swapchain
+        std::vector<VkDescriptorSet> mblurOutSets_; // [frame]: history+motion+tileMax → mblurOut
+        std::vector<VkDescriptorSet> rcasMbSets_;   // [frame×image]: mblurOut → swapchain
 
         bool historyValid_ = false;
 

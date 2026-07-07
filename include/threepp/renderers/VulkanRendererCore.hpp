@@ -226,6 +226,13 @@ namespace threepp {
         void setSharpenStrength(float amount);
         [[nodiscard]] float sharpenStrength() const;
 
+        // Camera motion blur (post-TAA, per-pixel motion vectors incl.
+        // skinning/deformation). The value is the shutter open fraction of
+        // the frame interval — 0.5 is the filmic 180° shutter, 1.0 a full
+        // frame of smear. 0 (default) disables the passes entirely.
+        void setMotionBlur(float shutterFraction);
+        [[nodiscard]] float motionBlur() const;
+
         // ── PhysX soft-body zero-copy interop (CUDA → Vulkan) ────────────────
         struct SoftBodyInteropHandle {
             void*  osHandle  = nullptr;
