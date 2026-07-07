@@ -2807,10 +2807,71 @@ vec3 proceduralStars(vec3 dir) {
     return sum * (pc.starIntensity * smoothstep(0.0, 0.05, dir.y));
 }
 
-// (The per-pixel volumetricSpotScatter / volumetricDirScatter marches moved
-// into froxel_inject/integrate.comp — the shade samples their integrated LUT
-// through froxelInscatter above: same terms, ~2 orders of magnitude fewer
-// shadow rays, and every CLUSTERED light scatters, not just 8 spots.)
+// (The per-pixel DIRECTIONAL march moved into froxel_inject/integrate.comp —
+// the shade samples its integrated LUT through froxelInscatter above: same
+// terms, ~2 orders of magnitude fewer shadow rays — and clustered POINT
+// lights gained a froxel fog glow the old spot-only march never gave them.
+// SPOT beams stay per-pixel below: a tight bright cone is a high-frequency
+// feature the froxel grid cannot resolve — the lighthouse turned to mush.)
+
+vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
+    // Scene fog drives the march when active (σ, HG g, and the medium albedo
+    // tint all come from the fog UBO → spotlight god rays appear automatically
+    // in any fogged deferred scene); pc.volDensity remains the explicit knob
+    // for clear-air beams (the lighthouse).
+    const bool  fogDriven = fog.enabled > 0.5;
+    const float sigma = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
+                                  : pc.volDensity;
+    const float hgG   = fogDriven ? fog.anisotropy : pc.volAniso;
+    const vec3  medAlbedo = fogDriven ? fog.color : vec3(1.0);
+    if (sigma <= 0.0 || lights.spotCount == 0u) return vec3(0.0);
+    const int   STEPS = 40;
+    uint seed = pcgHash(uint(px.x) * 7919u + pcgHash(uint(px.y) * 104729u + pc.frame * 6271u));
+    const float jitter = rnd(seed);
+    vec3 sum = vec3(0.0);
+    for (uint i = 0u; i < lights.spotCount; ++i) {
+        const SpotLight sl = lights.spotLights[i];
+        const float range = (sl.range > 0.0) ? sl.range : 200.0;
+        const vec3  oc   = ro - sl.position;
+        const float b    = dot(oc, rd);
+        const float c    = dot(oc, oc) - range * range;
+        const float disc = b * b - c;
+        if (disc <= 0.0) continue;
+        const float sq = sqrt(disc);
+        const float t0 = max(-b - sq, 0.0);
+        const float t1 = min(-b + sq, tMax);
+        if (t1 <= t0) continue;
+        const float dt = (t1 - t0) / float(STEPS);
+        vec3 acc = vec3(0.0);
+        for (int s = 0; s < STEPS; ++s) {
+            const float t = t0 + (float(s) + jitter) * dt;
+            const vec3  x = ro + rd * t;
+            vec3  toL = sl.position - x;
+            const float dist = length(toL);
+            if (dist < 1e-3) continue;
+            toL /= dist;
+            const float spotCos = dot(-toL, sl.direction);
+            const float cone    = smoothstep(sl.cosAngleOuter, sl.cosAngleInner, spotCos);
+            if (cone <= 0.0) continue;
+            // Inverse-square with a 1 m clamp (no firefly core at the lamp) +
+            // the same range window the surface path applies.
+            float atten = 1.0 / max(dist * dist, 1.0);
+            const float tr  = dist / range;
+            const float t4  = tr * tr * tr * tr;
+            const float wnd = max(1.0 - t4, 0.0);
+            atten *= wnd * wnd;
+            // HG phase: incoming (light→x) vs outgoing (x→camera = -rd).
+            const float mu    = dot(-toL, -rd);
+            const float phase = hgPhase(mu, hgG);
+            // Transmittance camera→x and light→x (uniform thin haze).
+            const float trans = exp(-sigma * (t + dist));
+            acc += sl.color * (cone * atten * phase * trans);
+        }
+        // σ_s = σ_t · albedo: the medium's tint scales what gets IN-scattered.
+        sum += acc * medAlbedo * (sigma * dt);
+    }
+    return sum;
+}
 
 // Fogged sky/background colour along this pixel's view ray — the term dispatch A
 // blends at MSAA complex pixels for the SKY-minority coverage (and the full sky
@@ -2955,8 +3016,10 @@ void main() {
         vec3 sky = applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS) * domWeight;
         // Volumetric sun glow / god rays added on top → blooms THROUGH the haze.
         // Per-pixel view-ray integral: full weight, independent of coverage.
-        // Sky = the full froxel range (the far marches were σ-extinct anyway).
-        sky += froxelInscatter(uv, kFroxelZMax);
+        // Sky = the full froxel range (the far marches were σ-extinct anyway)
+        // + the per-pixel spot beams (a lighthouse against the night sky).
+        sky += froxelInscatter(uv, kFroxelZMax)
+             + volumetricSpotScatter(camPos, dirWS, 2000.0, px);
         imageStore(outImage, px, vec4(sky, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(shadowVisImage, px, vec4(0.0));// cold-start marker for the ping-pong
@@ -3089,9 +3152,10 @@ void main() {
         // the volumetric in-scatter is per-pixel and stays at full weight.
         wcol = applySceneFog(wcol, camPos, worldPos) * domWeight;
         if (skyEdgeW > 0.0) wcol += skyEdgeW * skyBackground(ndc);
-        // Froxel in-scatter (was spot-beams-only here — water now gets the
-        // sun shafts and point-light glow too).
-        wcol += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0));
+        // Froxel in-scatter (sun shafts + point glow — new on water) + the
+        // per-pixel spot beams (crisp lighthouse over the swell).
+        wcol += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))
+              + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
         imageStore(outImage, px, vec4(wcol, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(reflectImage, px, vec4(0.0));// water shades its own reflection inline
@@ -3553,7 +3617,8 @@ void main() {
         // coverage weighting. (It used to be folded into `lit` before the
         // domWeight scale, which silently dimmed the beams/aerial glow by the
         // minority coverage at every edge pixel — a dark fringe in fog.)
-        outC += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0));// shafts + beams + point glow
+        outC += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))// sun shafts + point glow
+              + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);// crisp spot beams
         imageStore(outImage, px, vec4(outC, 1.0));
     }
     // Dispatch B never touches the GI/SVGF accumulator channels (indirect/

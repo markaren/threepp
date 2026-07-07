@@ -176,18 +176,10 @@ void main() {
     const vec3  camPos  = cam.viewInverse[3].xyz;
     const vec3  rd      = normalize(x - camPos);// camera → froxel (the view ray)
 
-    // Water-capped medium (fog ends at the wave surface). Above the surface
-    // only the explicit clear-air beam density survives — the ocean's
-    // lighthouse beam lives above the water while the fog lives below it.
-    if (fog.waterSurfaceY < 1e29 && x.y > fog.waterSurfaceY) {
-        if (pc.volDensity <= 0.0) {
-            imageStore(froxelScatterImage, fi, vec4(0.0));
-            return;
-        }
-        sigma = pc.volDensity;
-        hgG = pc.volAniso;
-        medAlbedo = vec3(1.0);
-    }
+    // NO waterSurfaceY cap here: the surface-extinction leg (applySceneFog /
+    // fogPathLength) is what the wave surface clips — the volumetric marches
+    // this replaces always scattered above the water too (the fjord's aerial
+    // sun glow, the mist over the swell). Capping it killed them.
 
     vec3 sum = vec3(0.0);
 
@@ -203,22 +195,23 @@ void main() {
         }
     }
 
-    // Clustered point/spot lights — the volumetricSpotScatter per-step terms
-    // (1 m-clamped inverse square, range window, cone, HG phase, light-leg
-    // extinction), now for EVERY light in this froxel's cluster cell.
+    // Clustered POINT lights — the volumetricSpotScatter per-step terms
+    // (1 m-clamped inverse square, range window, HG phase, light-leg
+    // extinction) for every point light in this froxel's cluster cell: the
+    // soft omnidirectional fog glow the old spot-only march never gave them.
+    // SPOT lights are SKIPPED: a tight bright cone (the lighthouse) is a
+    // high-frequency feature this grid fundamentally cannot resolve — spots
+    // keep the per-pixel analytic beam march in deferred_shade.comp.
     if (pc.clusterLightCount > 0u) {
         const uint base = clusterCellBase(uv, dist);
         const uint cCnt = min(clusterGrid[base], kClusterMaxPerCell);
         for (uint c = 0u; c < cCnt; ++c) {
             const uint li = min(clusterGrid[base + 1u + c], pc.clusterLightCount - 1u);
+            if (clusterLights[li].type > 0.5) continue;// spots: per-pixel beam march
             vec3        toL = clusterLights[li].position - x;
             const float d   = length(toL);
             if (d < 1e-3) continue;
             toL /= d;
-            const float cone = smoothstep(clusterLights[li].cosAngleOuter,
-                                          clusterLights[li].cosAngleInner,
-                                          dot(-toL, clusterLights[li].direction));
-            if (cone <= 0.0) continue;
             float atten = 1.0 / max(d * d, 1.0);
             const float range = (clusterLights[li].range > 0.0) ? clusterLights[li].range : 200.0;
             const float tr  = d / range;
@@ -226,7 +219,7 @@ void main() {
             const float wnd = max(1.0 - t4, 0.0);
             atten *= wnd * wnd;
             const float phase = hgPhase(dot(toL, rd), hgG);
-            sum += clusterLights[li].color * (cone * atten * phase * exp(-sigma * d));
+            sum += clusterLights[li].color * (atten * phase * exp(-sigma * d));
         }
     }
 
