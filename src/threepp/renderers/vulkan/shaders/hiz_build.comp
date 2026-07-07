@@ -1,0 +1,56 @@
+#version 460
+
+// HiZ depth pyramid — one dispatch per mip (HiZPyramid::record).
+//
+// Mip 0 copies the resolved reverse-Z G-buffer depth into R32F; every
+// further mip is a CONSERVATIVE 2×2 reduce. Reverse-Z puts the NEAR plane at
+// 1 and the far plane at 0, so the per-cell CLOSEST surface — the value the
+// SSR walk needs ("can the ray provably stay in front of everything in this
+// cell?") — is the MAX. Conservatism must never lean the other way: a cell
+// value ABOVE the true closest only costs extra refinement steps, one BELOW
+// lets rays tunnel through geometry. That is why the odd-dimension leftovers
+// (NPOT mips: floor-halving orphans the last row/column) are folded into the
+// edge cells rather than dropped, and why the reads clamp instead of wrap.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcDepth;              // resolved reverse-Z depth (fromDepth pass)
+layout(set = 0, binding = 1, r32f) uniform readonly  image2D srcMip;  // HiZ mip i-1 (reduce pass)
+layout(set = 0, binding = 2, r32f) uniform writeonly image2D dstMip;  // HiZ mip i
+
+layout(push_constant) uniform Pc {
+    ivec2 dstSize;
+    ivec2 srcSize;
+    uint  fromDepth;// 1 = mip-0 copy from the depth buffer, 0 = 2×2 max-reduce
+} pc;
+
+void main() {
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= pc.dstSize.x || p.y >= pc.dstSize.y) return;
+
+    if (pc.fromDepth == 1u) {
+        imageStore(dstMip, p, vec4(texelFetch(srcDepth, min(p, pc.srcSize - 1), 0).x));
+        return;
+    }
+
+    const ivec2 b  = p * 2;
+    const ivec2 mx = pc.srcSize - 1;
+    float m = imageLoad(srcMip, min(b, mx)).x;
+    m = max(m, imageLoad(srcMip, min(b + ivec2(1, 0), mx)).x);
+    m = max(m, imageLoad(srcMip, min(b + ivec2(0, 1), mx)).x);
+    m = max(m, imageLoad(srcMip, min(b + ivec2(1, 1), mx)).x);
+    // Odd source dims: fold the orphaned last column/row into every cell that
+    // could touch it (clamped loads make the extra taps duplicates elsewhere —
+    // pure over-conservatism, never tunneling).
+    if ((pc.srcSize.x & 1) != 0) {
+        m = max(m, imageLoad(srcMip, min(b + ivec2(2, 0), mx)).x);
+        m = max(m, imageLoad(srcMip, min(b + ivec2(2, 1), mx)).x);
+    }
+    if ((pc.srcSize.y & 1) != 0) {
+        m = max(m, imageLoad(srcMip, min(b + ivec2(0, 2), mx)).x);
+        m = max(m, imageLoad(srcMip, min(b + ivec2(1, 2), mx)).x);
+        if ((pc.srcSize.x & 1) != 0)
+            m = max(m, imageLoad(srcMip, min(b + ivec2(2, 2), mx)).x);
+    }
+    imageStore(dstMip, p, vec4(m));
+}

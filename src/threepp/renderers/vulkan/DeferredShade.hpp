@@ -99,6 +99,14 @@ namespace threepp::vulkan {
             VkBuffer           probeShBuf    = VK_NULL_HANDLE;// SH-L1 store
             const VkBuffer*    probeGridUbo  = nullptr;       // [framesInFlight]
             VkBuffer           probeDepthBuf = VK_NULL_HANDLE;// Chebyshev depth store
+            // Hybrid SSR (bindings 55-57): the HiZ closest-depth pyramid +
+            // its NEAREST/unclamped-LOD sampler (HiZPyramid), and the raster
+            // camera UBOs (forward jittered VP for the screen-space march).
+            // The prev-frame colour source is sceneHdr[other fif] — already
+            // provided above. All always valid; sampling gates on flags bit 9.
+            VkImageView        hizView      = VK_NULL_HANDLE;
+            VkSampler          hizSampler   = VK_NULL_HANDLE;
+            const VkBuffer*    rasterCamUbo = nullptr;        // [framesInFlight]
             // MSAA raw raster attachments (bindings 38-42) — only meaningful
             // when setGbufferMsaa > 1; pass a 1x1 dummy MS view/sampler set
             // otherwise (same "always bound, harmlessly unused" convention
@@ -155,6 +163,8 @@ namespace threepp::vulkan {
         // clusterLightCount: # lights in the cluster buffer this frame — the
         // shade's analytic split reads its cell's list when > 0 (the caller
         // must have recorded recordClusterBuild + a compute barrier first).
+        // ssrActive: HiZ pyramid built this frame + setSsrReflections on —
+        // gates the shade's hybrid SSR fast path (flags bit 9).
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t width, uint32_t height, uint32_t envMipCount,
                             bool shadows, bool ao, uint32_t frameCounter,
@@ -169,7 +179,8 @@ namespace threepp::vulkan {
                             uint32_t gbufMsaaSamples = 1, uint32_t shadeMode = 0,
                             bool shadeBActive = false,
                             uint32_t clusterLightCount = 0,
-                            bool froxelsActive = false);
+                            bool froxelsActive = false,
+                            bool ssrActive = false);
 
         // Clustered light culling: one thread per cluster cell tests every
         // light's cull sphere against the cell's view-space AABB and writes

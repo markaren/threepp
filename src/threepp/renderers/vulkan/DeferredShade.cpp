@@ -59,7 +59,7 @@ namespace threepp::vulkan {
         lci.minFilter  = VK_FILTER_LINEAR;
         check(vkCreateSampler(d, &lci, nullptr, &lutSampler_), "vkCreateSampler(froxel LUT)");
 
-        VkDescriptorSetLayoutBinding b[55]{};// KEEP the bound == dlci.bindingCount (a lagging bound = stack smash)
+        VkDescriptorSetLayoutBinding b[58]{};// KEEP the bound == dlci.bindingCount (a lagging bound = stack smash)
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -131,10 +131,13 @@ namespace threepp::vulkan {
         set(52, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // froxel LUT (3D, integrate writes)
         set(53, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // froxel LUT (LINEAR — shade's trilinear sample)
         set(54, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // probe Chebyshev depth store
+        set(55, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // HiZ closest-depth pyramid (hybrid SSR)
+        set(56, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV sceneHdr (other fif — SSR colour source)
+        set(57, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // raster camera UBO (jittered VP for the SSR march)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 55;
+        dlci.bindingCount = 58;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -229,9 +232,9 @@ namespace threepp::vulkan {
     void DeferredShade::createDescriptorPool() {
         VkDescriptorPoolSize sizes[5]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[0].descriptorCount = framesInFlight_ * 4;// camera + lights + fog + probe grid
+        sizes[0].descriptorCount = framesInFlight_ * 5;// camera + lights + fog + probe grid + raster camera (SSR)
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (25 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise + 5 gbuf MS + shadowVisPrev + froxelScatterPrev + froxelLut
+        sizes[1].descriptorCount = framesInFlight_ * (27 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise + 5 gbuf MS + shadowVisPrev + froxelScatterPrev + froxelLut + HiZ + prevSceneHdr
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[2].descriptorCount = framesInFlight_ * 17;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + reflAux + 4 reservoir (pos/W × write/read) + shadowVis + directU + shadowAtrousA/B + froxelScatter + froxelLut
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -429,6 +432,23 @@ namespace threepp::vulkan {
             probeDepthInfo.offset = 0;
             probeDepthInfo.range  = VK_WHOLE_SIZE;
 
+            // Hybrid SSR (bindings 55-57): HiZ pyramid (GENERAL — rebuilt by
+            // compute each frame), PREV sceneHdr (other fif, GENERAL storage
+            // image sampled through the LINEAR lutSampler_ — SSR hit UVs land
+            // between texels), and the raster camera UBO.
+            VkDescriptorImageInfo hizInfo{};
+            hizInfo.sampler     = in.hizSampler;
+            hizInfo.imageView   = in.hizView;
+            hizInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo prevSceneInfo{};
+            prevSceneInfo.sampler     = lutSampler_;
+            prevSceneInfo.imageView   = in.sceneHdr[pf];
+            prevSceneInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorBufferInfo rcamInfo{};
+            rcamInfo.buffer = in.rasterCamUbo[f];
+            rcamInfo.offset = 0;
+            rcamInfo.range  = VK_WHOLE_SIZE;
+
             // MSAA raw raster attachments (dispatch B). Bound as plain
             // SHADER_READ_ONLY combined-image-samplers — texelFetch with an
             // explicit sample index needs no special layout beyond what
@@ -489,7 +509,7 @@ namespace threepp::vulkan {
             froxelLutTexInfo.imageView   = in.froxelLut[f];
             froxelLutTexInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            VkWriteDescriptorSet w[55]{};
+            VkWriteDescriptorSet w[58]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -564,7 +584,10 @@ namespace threepp::vulkan {
             setw(52, 52, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &froxelLutInfo,         nullptr);
             setw(53, 53, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &froxelLutTexInfo,      nullptr);
             setw(54, 54, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &probeDepthInfo);
-            vkUpdateDescriptorSets(ctx_.device(), 55, w, 0, nullptr);
+            setw(55, 55, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &hizInfo,       nullptr);
+            setw(56, 56, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevSceneInfo, nullptr);
+            setw(57, 57, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &rcamInfo);
+            vkUpdateDescriptorSets(ctx_.device(), 58, w, 0, nullptr);
         }
     }
 
@@ -596,7 +619,7 @@ namespace threepp::vulkan {
                                        float timeSec, float sunTanHalfAngle,
                                        uint32_t gbufMsaaSamples, uint32_t shadeMode,
                                        bool shadeBActive, uint32_t clusterLightCount,
-                                       bool froxelsActive) {
+                                       bool froxelsActive, bool ssrActive) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
@@ -609,7 +632,8 @@ namespace threepp::vulkan {
         const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u) | (denoise ? 4u : 0u)
                              | (restirDI ? 8u : 0u) | (volFog ? 16u : 0u) | (msaaCode << 5u)
                              | (shadeBActive ? 128u : 0u)
-                             | (froxelsActive ? 256u : 0u);// froxel LUT valid this frame
+                             | (froxelsActive ? 256u : 0u)// froxel LUT valid this frame
+                             | (ssrActive ? 512u : 0u);   // HiZ built → hybrid SSR fast path
         uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits, starBits,
                 camDeltaBits, camRotBits, timeBits, sunTanBits;
         std::memcpy(&emPowerBits,   &emissiveTotalPower, sizeof(emPowerBits));

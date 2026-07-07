@@ -41,6 +41,22 @@ namespace threepp {
         void setDeferredAO(bool enabled);
         [[nodiscard]] bool deferredAO() const;
 
+        // Hybrid SSR→RT reflections. The reflection channel first walks a HiZ
+        // depth pyramid in screen space and, where the screen can answer
+        // (visible, front-facing, non-emissive, non-specular geometry), takes
+        // last frame's shaded colour — reflected content then carries its
+        // full lighting (including its own reflections) without the RT ray +
+        // hit-shade. Everywhere the screen CANNOT answer (off-screen,
+        // occluded, backfacing, emitters, view-dependent surfaces, rays
+        // toward the camera) the RT ray fires exactly as before — SSR is a
+        // fast path, never a quality authority.
+        // OFF by default: on the scenes measured so far the march + pyramid
+        // cost roughly equals the saved ray queries (quality is unchanged —
+        // the goldens pass byte-near either way). Worth enabling on huge
+        // monolithic BVHs where RT reflection rays dominate the frame.
+        void setSsrReflections(bool enabled);
+        [[nodiscard]] bool ssrReflections() const;
+
         // World-space irradiance probe grid (DDGI-lite) — multi-bounce diffuse
         // GI for the deferred gather. A 32×16×32 grid of SH-L1 probes is fitted
         // to the scene AABB and refreshed round-robin (2048 probes × 64 rays

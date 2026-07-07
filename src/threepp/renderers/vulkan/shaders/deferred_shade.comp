@@ -190,6 +190,23 @@ layout(set = 0, binding = 37, scalar) uniform ProbeGridUbo {
 // Octahedral depth store (Chebyshev visibility — see probe_common.glsl).
 layout(set = 0, binding = 54, scalar) readonly buffer ProbeDepthBuf { uint probeDepth[]; };
 
+// ── Hybrid SSR inputs (flags bit 9 — see ssrTraceHiZ) ──────────────────────
+// 55 = reverse-Z "closest depth" mip pyramid (HiZPyramid, rebuilt per frame),
+// 56 = LAST frame's pre-TAA linear-HDR sceneHdr (the other frame-in-flight,
+//      motion-reprojected at the hit — same cross-frame pattern as binding 17),
+// 57 = the raster camera UBO: the forward JITTERED view-proj the G-buffer was
+//      rasterized with, so a projected world point lands on the exact depth
+//      texel the raster wrote (layout matches gbuffer.vert's CameraUbo).
+layout(set = 0, binding = 55) uniform sampler2D hizTex;
+layout(set = 0, binding = 56) uniform sampler2D prevSceneTex;
+layout(set = 0, binding = 57) uniform RasterCamUbo {
+    mat4 currVPjittered;
+    mat4 currVPunjittered;
+    mat4 prevVP;
+    vec4 jitter;
+    vec4 prevJitter;
+} rcam;
+
 // ── MSAA per-sample edge shading (dispatch B, shadeMode==1 only) ───────────
 // Raw MS raster attachments — bound only when setGbufferMsaa(2|4) is active;
 // 1x1 dummy MS views otherwise (same "always bound, harmlessly unused"
@@ -443,6 +460,140 @@ vec3 sampleEnvLod(vec3 dir, float lod) {
     const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
     const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
     return textureLod(envTex, vec2(u, v), lod).rgb;
+}
+
+// ── Hybrid SSR: HiZ screen-space reflection with RT fallback (flags bit 9) ──
+// The reflection ray first walks the HiZ closest-depth pyramid (binding 55)
+// in screen space; a CONFIDENT hit samples last frame's pre-TAA linear HDR
+// (binding 56, motion-reprojected) — the reflected content is then exactly
+// what the viewer sees, including its own specular chain, at a fraction of
+// an RT ray + hit-shade's cost. ANY doubt (segment leaves the screen or
+// approaches the camera, the ray tunnels past the thickness window, the hit
+// is a backface / emissive / sky, the reprojection lands off-screen) returns
+// false and the caller shoots the RT ray it would have shot anyway — SSR is
+// a pure fast path, never a quality authority. Emissive hits in particular
+// MUST fall back: emissiveSpecNEE already owns emitter specular
+// (gReflEmitterScale), so screen colour would double-count it.
+//
+// Space bookkeeping: march coords are (u, v, reverse-Z ndc.z). A world line
+// projects to a straight line in NDC (projective transform), so P(t) =
+// mix(P0, P1, t) IS the ray's screen path. The projection uses the raster's
+// JITTERED VP — the same matrix that placed the geometry in the depth buffer
+// — so ray z compares against HiZ texels with no jitter bias. Skip test
+// (reverse-Z, z decreasing away from camera): if z at the cell EXIT is still
+// ABOVE the cell's closest surface, the whole in-cell segment is in front →
+// step over it and coarsen; otherwise refine downward. Level-0 candidates
+// take a view-space thickness test so silhouette overshoots (marching onto
+// a CLOSER object's cell while far behind it) bail to RT instead of
+// smearing the closer object's colour across the disocclusion.
+
+const float kSsrMaxDist = 1.0e4;// world-space march cap (projective — generous)
+const int   kSsrMaxIter = 96;   // HiZ walk budget; typical hits resolve in 20-40
+
+float ssrViewDepth(float zNdc) {// reverse-Z NDC z → positive view-space distance
+    // Only the z/w rows matter (xy jitter never feeds them) — evaluate the
+    // projInverse columns directly instead of a full mat4 transform.
+    const float vz = cam.projInverse[2][2] * zNdc + cam.projInverse[3][2];
+    const float vw = cam.projInverse[2][3] * zNdc + cam.projInverse[3][3];
+    return abs(vz / vw);
+}
+
+bool ssrTraceHiZ(vec3 O, vec3 Rd, out vec3 color) {
+    color = vec3(0.0);
+    // Project the segment endpoints; keep the far end in front of the near
+    // plane (clip coords are affine along a world segment, so solving
+    // w(t) = ε is exact).
+    const vec4 c0 = rcam.currVPjittered * vec4(O, 1.0);
+    if (c0.w <= 1e-3) return false;
+    vec4 c1 = rcam.currVPjittered * vec4(O + Rd * kSsrMaxDist, 1.0);
+    if (c1.w <= 1e-3) c1 = mix(c0, c1, (c0.w - 1e-3) / (c0.w - c1.w));
+    const vec3 ndc0 = c0.xyz / c0.w;
+    const vec3 ndc1 = c1.xyz / c1.w;
+    const vec3 s0 = vec3(ndc0.x * 0.5 + 0.5, 0.5 - ndc0.y * 0.5, ndc0.z);
+    const vec3 s1 = vec3(ndc1.x * 0.5 + 0.5, 0.5 - ndc1.y * 0.5, ndc1.z);
+    const vec3 d  = s1 - s0;
+    // Rays that gain depth approach the camera — they mostly see backfaces
+    // and offscreen content, and the walk below assumes monotone z. RT owns
+    // them (and the truly screen-parallel ones).
+    if (d.z >= -1e-8) return false;
+
+    const int   maxLevel = textureQueryLevels(hizTex) - 1;
+    const ivec2 baseSize = textureSize(hizTex, 0);
+    const vec2  dSign = vec2(d.x >= 0.0 ? 1.0 : -1.0, d.y >= 0.0 ? 1.0 : -1.0);
+    const vec2  dInv  = vec2(abs(d.x) > 1e-8 ? 1.0 / d.x : dSign.x * 1e16,
+                             abs(d.y) > 1e-8 ? 1.0 / d.y : dSign.y * 1e16);
+    const vec2  cellOff = max(dSign, vec2(0.0));// exit boundary per axis
+
+    // Step out of the origin's own level-0 texel first — the reflector
+    // itself sits in it and would self-hit immediately.
+    float t;
+    {
+        const vec2 bound = (floor(s0.xy * vec2(baseSize)) + cellOff) / vec2(baseSize);
+        const vec2 tB    = (bound - s0.xy) * dInv;
+        t = min(tB.x, tB.y) + 1e-5;
+    }
+
+    int   level = min(1, maxLevel);
+    float hitT  = -1.0;
+    for (int i = 0; i < kSsrMaxIter; ++i) {
+        if (t > 1.0) return false;// marched the whole segment: nothing on screen
+        const vec3 pos = s0 + d * t;
+        if (min(pos.x, pos.y) < 0.0 || max(pos.x, pos.y) > 1.0) return false;
+        const ivec2 sizeL = ivec2(max(baseSize.x >> level, 1), max(baseSize.y >> level, 1));
+        const vec2  cell  = floor(pos.xy * vec2(sizeL));
+        const float hz    = texelFetch(hizTex, ivec2(cell), level).x;
+        const vec2  bound = (cell + cellOff) / vec2(sizeL);
+        const vec2  tB    = (bound - s0.xy) * dInv;
+        const float tExit = min(tB.x, tB.y) + 1e-5;
+        if (s0.z + d.z * tExit > hz) {
+            t     = tExit;                    // whole cell provably in front → skip
+            level = min(level + 1, maxLevel); // and try a coarser stride
+        } else if (level > 0) {
+            --level;                          // possible crossing → refine in place
+        } else {
+            // Level-0 candidate. Where does the ray meet the surface depth:
+            // at the crossing if it enters in front, at the entry point if a
+            // previous skip already landed it behind (silhouette overshoot).
+            const float zEntry = s0.z + d.z * t;
+            const float tHit   = zEntry <= hz ? t : clamp((hz - s0.z) / d.z, t, tExit);
+            const float rayVz  = ssrViewDepth(s0.z + d.z * tHit);
+            const float srfVz  = ssrViewDepth(hz);
+            if (rayVz - srfVz <= max(0.15, 0.04 * srfVz)) { hitT = tHit; break; }
+            return false;// tunneled far behind: the screen cannot answer here
+        }
+    }
+    if (hitT < 0.0) return false;// walk budget exhausted
+
+    // The screen can only answer for front-facing, non-emissive geometry.
+    const vec2  hitUv = s0.xy + d.xy * hitT;
+    const ivec2 hitPx = ivec2(clamp(hitUv * vec2(baseSize), vec2(0.0), vec2(baseSize) - 1.0));
+    const uint  idH   = texelFetch(gbufIdsTex, hitPx, 0).x;
+    if (idH == 0u) return false;// sky — the RT miss path owns env sampling
+    const vec4 nTapH = texelFetch(gbufNormalTex, hitPx, 0);
+    if (nTapH.w >= 0.0 && dot(normalize(nTapH.xyz * 2.0 - 1.0), Rd) > 0.0)
+        return false;// back side of the hit surface (unlit sentinel w<0 exempt)
+    const vec3 emH = mats[idH - 1u].emissive * mats[idH - 1u].emissiveIntensity;
+    if (max(max(emH.r, emH.g), emH.b) > 0.05) return false;// emitters → RT (NEE owns them)
+    // VIEW-DEPENDENT hit surfaces lie on screen: a smooth metal pixel shows
+    // what IT reflects toward the CAMERA, not toward our ray (the metal
+    // golden's sphere-on-sphere reflection came back as a smeared camera-view
+    // paste), and transmissive pixels show refracted content the same way.
+    // The RT chain renders those correctly — mirror-on-mirror stays RT.
+    // Rough (≥0.35) hits are fine: their wide lobe reads ~direction-free,
+    // and smooth DIELECTRICS too (F0 0.04 — the screen colour is mostly
+    // their diffuse).
+    if (nTapH.w >= 0.0 && nTapH.w < 0.35 && texelFetch(gbufAlbedoTex, hitPx, 0).a > 0.1)
+        return false;
+    if (mats[idH - 1u].transmission > 0.0) return false;
+
+    // Fetch from the PREVIOUS frame's scene colour via the hit pixel's motion
+    // vector — the same reprojection every temporal channel here uses.
+    const vec2 mvH  = texelFetch(gbufMotionTex, hitPx, 0).rg;
+    const vec2 pNdc = vec2(hitUv.x * 2.0 - 1.0, -(hitUv.y * 2.0 - 1.0)) + mvH;
+    const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
+    if (any(lessThan(pUv, vec2(0.0))) || any(greaterThan(pUv, vec2(1.0)))) return false;
+    color = texture(prevSceneTex, pUv).rgb;
+    return true;
 }
 
 // ── Sheen (KHR_materials_sheen) — verbatim from shade_common.glsl so the
@@ -3524,9 +3675,18 @@ void main() {
         // no amount of denoising should have to absorb. Mirror fallback matches
         // the bounce-continuation guard inside traceRadiance.
         if (dot(Rd, N) <= 0.0) Rd = R;
-        vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
-                               /*cheapHits=*/true,// reflection channel: blur+temporal absorb
-                               /*probeHitFill=*/true);
+        // Hybrid SSR fast path (flags bit 9): resolve the reflection from the
+        // HiZ pyramid + last frame's screen when the screen can answer,
+        // otherwise shoot the RT ray as before. Dispatch A only — B's edge-
+        // minority samples sit exactly where SSR is least trustworthy.
+        vec3 r;
+        bool ssrHit = false;
+        if ((pc.flags & 512u) != 0u && pc.shadeMode == 0u)
+            ssrHit = ssrTraceHiZ(shadowOrig, Rd, r);
+        if (!ssrHit)
+            r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
+                              /*cheapHits=*/true,// reflection channel: blur+temporal absorb
+                              /*probeHitFill=*/true);
         gReflEmitterScale = 1.0;
         // Roughness-aware reflection clamp (moving/deterministic path only). A glossy
         // surface integrates a bright point source — the sun, a sky-gap between trees —

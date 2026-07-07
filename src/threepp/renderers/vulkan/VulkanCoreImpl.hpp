@@ -20,6 +20,7 @@
 #include "GbufResolve.hpp"
 #include "BloomPass.hpp"
 #include "DeferredShade.hpp"
+#include "HiZPyramid.hpp"
 #include "ProbeGI.hpp"
 #include "WaterDisplacePipeline.hpp"
 #include "FoamWorldPipeline.hpp"
@@ -1717,6 +1718,16 @@ namespace threepp {
         // PT-like grounding (contact darkening + 1-bounce GI). Uses the deterministic
         // Fibonacci 64-sample gather (clean + settles), no per-frame flicker.
         bool  deferredAO_ = true;
+        // Hybrid SSR→RT reflections (VulkanRenderer::setSsrReflections). ON:
+        // the reflection channel resolves from the HiZ pyramid + last frame's
+        // screen wherever the screen can answer, RT rays fill the rest. OFF:
+        // every reflection ray is RT (the pyramid isn't even built).
+        // Default OFF — measured 2026-07-07 (box field / 600-instance field /
+        // Intel Sponza, RTX 4070): quality matches RT (goldens byte-near) but
+        // the march + pyramid cost ≈ the ray-query savings (Δ −0.1..−0.3 ms).
+        // Opt in per scene; candidates are huge monolithic BVHs with heavy
+        // per-hit shading where RT reflection rays dominate.
+        bool  deferredSsr_ = false;
         // Deferred volumetric spot-light beams (ray-marched single scattering in
         // deferred_shade.comp). σ = 0 disables (the march is skipped entirely).
         float deferredVolDensity_ = 0.f;
@@ -1743,6 +1754,11 @@ namespace threepp {
         std::unique_ptr<vulkan::ProbeGI> probeGI_;
         bool probeGIEnabled_  = true;
         bool probeGridDirty_  = true;
+        // HiZ closest-depth pyramid for the deferred hybrid SSR (bindings
+        // 55-57). Created alongside deferredShade_; (re)fitted to the render
+        // extent inside rewriteDeferredDescriptors; rebuilt every frame in
+        // recordSceneDispatch when SSR is on (deferredSsr_ above).
+        std::unique_ptr<vulkan::HiZPyramid> hiz_;
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
         float bloomClamp_ = 0.0f;    // per-tap HDR cap before the bright pass; <= 0 = off
         float sharpenStrength_ = 0.5f;// post-TAA RCAS amount; 0 = off
@@ -2064,6 +2080,7 @@ namespace threepp {
             // deferredShade_ stays null if ray query is unavailable.
             if (ctx->rayQuerySupported()) {
                 deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
+                hiz_ = std::make_unique<vulkan::HiZPyramid>(*ctx, kFramesInFlight);
                 // Probe grid backs the deferred set's bindings 36/37 (dummy-
                 // free: real buffers from construction, sampling gated by the
                 // grid UBO's enable flag until setProbeGI(true)).
@@ -11593,6 +11610,18 @@ namespace threepp {
             in.probeShBuf       = probeGI_->shBuffer();
             in.probeGridUbo     = probeGI_->gridUbos();
             in.probeDepthBuf    = probeGI_->depthBuffer();
+            // Hybrid SSR (bindings 55-57): (re)fit the HiZ pyramid to the
+            // current render extent + depth views (idempotent — this rewrite
+            // runs on exactly the resize/realloc events the pyramid must
+            // track), then hand its view/sampler + the raster camera UBOs
+            // (forward jittered VP) to the shade set.
+            std::array<VkBuffer, kFramesInFlight> rasterCamBufs{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f)
+                rasterCamBufs[f] = rasterCameraUbos[f].handle;
+            hiz_->resize(renderExtent(), depthViews.data());
+            in.hizView          = hiz_->view();
+            in.hizSampler       = hiz_->sampler();
+            in.rasterCamUbo     = rasterCamBufs.data();
             in.gbufNormalMS     = normalMSViews.data();
             in.gbufDepthMS      = depthMSViews.data();
             in.gbufIdsMS        = idsMSViews.data();

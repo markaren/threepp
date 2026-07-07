@@ -142,6 +142,13 @@ namespace threepp {
                 asdep.pMemoryBarriers = &asbar;
                 vkCmdPipelineBarrier2(cb, &asdep);
             }
+            // ── HiZ pyramid (hybrid SSR) ─────────────────────────────────────
+            // Rebuild the closest-depth mip chain from this frame's resolved
+            // G-buffer depth (visible to COMPUTE via the raster render pass'
+            // dependency). record() carries its own leading/trailing barriers,
+            // so the shade dispatch below can sample it with nothing added.
+            const bool ssrActive = deferredSsr_ && hiz_ && hiz_->valid();
+            if (ssrActive) hiz_->record(cb, currentFrame);
             // ── Probe-GI update (opt-in) ─────────────────────────────────────
             // Refresh a round-robin window of world-space irradiance probes
             // BEFORE the shade so this frame's gather taps a current grid.
@@ -243,7 +250,8 @@ namespace threepp {
                                            static_cast<float>(glfwGetTime()),
                                            std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
                                            gbufMsaaSamples_, /*shadeMode=*/0u, shadeBActive,
-                                           clusterLightCountThisFrame_, froxelsActive);
+                                           clusterLightCountThisFrame_, froxelsActive,
+                                           ssrActive);
             gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
 
             // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
@@ -285,7 +293,8 @@ namespace threepp {
                                                static_cast<float>(glfwGetTime()),
                                                std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
                                                gbufMsaaSamples_, /*shadeMode=*/1u, /*shadeBActive=*/true,
-                                               clusterLightCountThisFrame_, froxelsActive);
+                                               clusterLightCountThisFrame_, froxelsActive,
+                                               ssrActive);
                 gpuTimings_->end(cb, TP_ShadeB, currentFrame);
 
                 // Dispatch B's outImage write -> bloom/composite's read.
@@ -1046,6 +1055,14 @@ namespace threepp {
 
     bool VulkanRenderer::deferredAO() const {
         return pimpl_->deferredAO_;
+    }
+
+    void VulkanRenderer::setSsrReflections(bool enabled) {
+        pimpl_->deferredSsr_ = enabled;
+    }
+
+    bool VulkanRenderer::ssrReflections() const {
+        return pimpl_->deferredSsr_;
     }
 
     void VulkanRenderer::setProbeGI(bool enabled) {
