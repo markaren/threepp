@@ -1,26 +1,32 @@
 #version 460
 
-// Bloom downsample: full-res linear-HDR scene → half-res, using the 13-tap
-// Karis-averaged filter from Jimenez "Next Generation Post Processing in
-// Call of Duty: Advanced Warfare". The Karis average (weight each 2×2 group
-// by 1/(1+luma)) suppresses fireflies, so a single bright sub-pixel sample
-// can't explode into a blocky bloom square. Bilinear sampling fuses 4 source
-// texels per fetch, so this 13-tap pattern actually reads a 6×6 footprint.
+// Bloom downsample — one level of the progressive pyramid (Jimenez "Next
+// Generation Post Processing in Call of Duty: Advanced Warfare"): 13-tap
+// filter, run repeatedly by the host (full → 1/2 → 1/4 → … → ~1/64). On the
+// FIRST level (firstLevel = 1) the taps are Karis-averaged (weight each 2×2
+// group by 1/(1+luma)) so a single bright sub-pixel sample can't explode into
+// a blocky bloom square, and the soft-knee bright pass + per-tap HDR clamp
+// run; deeper levels are plain 13-tap averages of already-filtered content.
+// Bilinear sampling fuses 4 source texels per fetch, so the 13-tap pattern
+// actually reads a 6×6 footprint.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0) uniform sampler2D srcTex;                  // linear HDR
-layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D dstImg;// half res
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D dstImg;// half res of src
 
 layout(push_constant) uniform Pc {
     uint  srcW; uint srcH;  // source extent (for texel size)
     uint  dstW; uint dstH;  // dest extent  (dispatch bounds)
     float threshold;        // soft-knee bright-pass cutoff (linear HDR luma)
     float clampMax;         // per-tap HDR cap (<= 0 disables) — temporal stability
+    uint  firstLevel;       // 1 = scene → level 0 (Karis + bright pass); 0 = deeper levels
 } pc;
 
 float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
-float karis(vec3 c) { return 1.0 / (1.0 + luma(c)); }
+// Karis weight on the first level only — deeper levels are already averaged,
+// and re-weighting them toward darker groups just leaks energy per level.
+float karis(vec3 c) { return pc.firstLevel != 0u ? 1.0 / (1.0 + luma(c)) : 1.0; }
 
 // Per-tap HDR clamp (hue-preserving), BEFORE the Karis combine. A tiny
 // near-mirror specular highlight (an analytic light reflected in a smooth
@@ -77,16 +83,19 @@ void main() {
     vec3 res = (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4)
              / max(w0 + w1 + w2 + w3 + w4, 1e-5);
 
-    // Soft-knee bright pass: only highlights above `threshold` bloom, with a
-    // smooth ramp through the knee so there is no hard popping edge. Darks
-    // drop to ~0 so the additive composite leaves them crisp (the "punchy
-    // highlight glow" look, vs. a thresholdless veiling glare).
-    const float br   = max(res.r, max(res.g, res.b));
-    const float knee = pc.threshold * 0.5 + 1e-5;
-    float soft = clamp(br - pc.threshold + knee, 0.0, 2.0 * knee);
-    soft = soft * soft / (4.0 * knee);
-    const float contrib = max(soft, br - pc.threshold) / max(br, 1e-5);
-    res *= max(contrib, 0.0);
+    // Soft-knee bright pass (FIRST level only): only highlights above
+    // `threshold` bloom, with a smooth ramp through the knee so there is no
+    // hard popping edge. Darks drop to ~0 so the additive composite leaves
+    // them crisp (the "punchy highlight glow" look, vs. a thresholdless
+    // veiling glare). Deeper levels carry already-thresholded content.
+    if (pc.firstLevel != 0u) {
+        const float br   = max(res.r, max(res.g, res.b));
+        const float knee = pc.threshold * 0.5 + 1e-5;
+        float soft = clamp(br - pc.threshold + knee, 0.0, 2.0 * knee);
+        soft = soft * soft / (4.0 * knee);
+        const float contrib = max(soft, br - pc.threshold) / max(br, 1e-5);
+        res *= max(contrib, 0.0);
+    }
 
     imageStore(dstImg, p, vec4(res, 1.0));
 }

@@ -1,0 +1,45 @@
+#version 460
+
+// Bloom upsample — one level of the progressive pyramid walk-back (Jimenez
+// 2014). Reads the NEXT-COARSER level through a 3×3 tent filter (one source
+// texel wide; bilinear taps make it a smooth low-pass) and ADDS it into this
+// level in place. Walking the chain bottom-up accumulates every pyramid
+// level into level 0, so a highlight's glow is the sum of progressively
+// wider Gaussians-alike — the wide, stable, energy-conserving halo that a
+// single half-res blur can't reach (its radius is fixed in half-res texels
+// and shrinks relative to the image as resolution grows). The host divides
+// the composite's bloom intensity by the level count, so the summed chain
+// lands at the same overall energy as the old single-blur bloom.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcTex;          // coarser level
+layout(set = 0, binding = 1, rgba16f) uniform image2D dstImg;   // this level (read+write accumulate)
+
+layout(push_constant) uniform Pc {
+    uint srcW; uint srcH;// coarser-level extent (for tent texel size)
+    uint dstW; uint dstH;// this level's extent (dispatch bounds)
+} pc;
+
+void main() {
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.dstW) || p.y >= int(pc.dstH)) return;
+
+    const vec2 uv = (vec2(p) + 0.5) / vec2(float(pc.dstW), float(pc.dstH));
+    const vec2 t  = 1.0 / vec2(float(pc.srcW), float(pc.srcH));
+
+    // 3×3 tent, weights 1-2-1 / 2-4-2 / 1-2-1 (sum 16).
+    vec3 acc  = texture(srcTex, uv + t * vec2(-1, -1)).rgb;
+    acc += 2.0 * texture(srcTex, uv + t * vec2( 0, -1)).rgb;
+    acc +=       texture(srcTex, uv + t * vec2( 1, -1)).rgb;
+    acc += 2.0 * texture(srcTex, uv + t * vec2(-1,  0)).rgb;
+    acc += 4.0 * texture(srcTex, uv                   ).rgb;
+    acc += 2.0 * texture(srcTex, uv + t * vec2( 1,  0)).rgb;
+    acc +=       texture(srcTex, uv + t * vec2(-1,  1)).rgb;
+    acc += 2.0 * texture(srcTex, uv + t * vec2( 0,  1)).rgb;
+    acc +=       texture(srcTex, uv + t * vec2( 1,  1)).rgb;
+    acc *= (1.0 / 16.0);
+
+    const vec3 cur = imageLoad(dstImg, p).rgb;
+    imageStore(dstImg, p, vec4(cur + acc, 1.0));
+}

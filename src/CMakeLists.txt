@@ -978,17 +978,17 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/denoise_atrous.comp"
         kDenoiseAtrousCompSpv
         _denoise_atrous_spv_h)
-    # PT post stack: bloom (Karis downsample + separable Gaussian blur) +
-    # the tone-map/sRGB/bloom composite that closes the HDR path. See
-    # vulkan/BloomPass.{hpp,cpp} and denoise.comp (resolve) for the producer.
+    # Post stack: progressive bloom pyramid (Jimenez 2014 — Karis 13-tap down
+    # chain + 3x3 tent additive upsample) + the tone-map/sRGB/bloom composite
+    # that closes the HDR path. See vulkan/BloomPass.{hpp,cpp}.
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/bloom_down.comp"
         kBloomDownCompSpv
         _bloom_down_spv_h)
     compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/bloom_blur.comp"
-        kBloomBlurCompSpv
-        _bloom_blur_spv_h)
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/bloom_up.comp"
+        kBloomUpCompSpv
+        _bloom_up_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/composite.comp"
         kCompositeCompSpv

@@ -3,9 +3,10 @@
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
 #include "threepp/renderers/vulkan/shaders/bloom_down.comp.spv.h"
-#include "threepp/renderers/vulkan/shaders/bloom_blur.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/bloom_up.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/composite.comp.spv.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 
@@ -14,8 +15,7 @@ namespace threepp::vulkan {
     BloomPass::BloomPass(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight)
         : ctx_(ctx), cmdPool_(cmdPool), framesInFlight_(framesInFlight) {
         sceneHdr_.resize(framesInFlight_);
-        bloomA_.resize(framesInFlight_);
-        bloomB_.resize(framesInFlight_);
+        pyr_.resize(framesInFlight_ * kMaxLevels);
         createPipelines();
         createDescriptorPool();
     }
@@ -23,7 +23,7 @@ namespace threepp::vulkan {
     BloomPass::~BloomPass() {
         VkDevice d = ctx_.device();
         if (downPipe_)       vkDestroyPipeline(d, downPipe_, nullptr);
-        if (blurPipe_)       vkDestroyPipeline(d, blurPipe_, nullptr);
+        if (upPipe_)         vkDestroyPipeline(d, upPipe_, nullptr);
         if (compPipe_)       vkDestroyPipeline(d, compPipe_, nullptr);
         if (bloomPipeLayout_) vkDestroyPipelineLayout(d, bloomPipeLayout_, nullptr);
         if (compPipeLayout_)  vkDestroyPipelineLayout(d, compPipeLayout_, nullptr);
@@ -37,8 +37,7 @@ namespace threepp::vulkan {
     void BloomPass::destroyImages() {
         VkDevice d = ctx_.device();
         for (auto& img : sceneHdr_) destroyImage2D(ctx_.allocator(), d, img);
-        for (auto& img : bloomA_)   destroyImage2D(ctx_.allocator(), d, img);
-        for (auto& img : bloomB_)   destroyImage2D(ctx_.allocator(), d, img);
+        for (auto& img : pyr_)      destroyImage2D(ctx_.allocator(), d, img);
     }
 
     Image2D BloomPass::createStorageSampledImage(uint32_t w, uint32_t h, const char* label) {
@@ -127,14 +126,21 @@ namespace threepp::vulkan {
         destroyImages();
         width_  = width;
         height_ = height;
-        halfW_  = (width  + 1u) / 2u;
-        halfH_  = (height + 1u) / 2u;
+        // Pyramid levels halve from half res down to ~1/64 of the frame; stop
+        // before a level's short side drops under 8 texels (a 3×3 tent on a
+        // smaller level is all edge-clamp, contributing only blocky smear).
+        levels_ = 0;
+        while (levels_ < kMaxLevels &&
+               std::min(width >> (levels_ + 1u), height >> (levels_ + 1u)) >= 8u)
+            ++levels_;
+        if (levels_ == 0) levels_ = 1;// degenerate tiny extent: keep the half-res level
         for (auto& img : sceneHdr_)
             img = createStorageSampledImage(width_, height_, "vmaCreateImage(bloom.sceneHdr)");
-        for (auto& img : bloomA_)
-            img = createStorageSampledImage(halfW_, halfH_, "vmaCreateImage(bloom.A)");
-        for (auto& img : bloomB_)
-            img = createStorageSampledImage(halfW_, halfH_, "vmaCreateImage(bloom.B)");
+        for (uint32_t f = 0; f < framesInFlight_; ++f)
+            for (uint32_t l = 0; l < levels_; ++l)
+                pyr_[f * kMaxLevels + l] = createStorageSampledImage(
+                        std::max(width_ >> (l + 1u), 1u), std::max(height_ >> (l + 1u), 1u),
+                        "vmaCreateImage(bloom.pyr)");
     }
 
     static VkPipeline makeComputePipe(VkDevice d, VkPipelineCache cache, VkPipelineLayout layout,
@@ -179,7 +185,7 @@ namespace threepp::vulkan {
             check(vkCreateSampler(d, &sci, nullptr, &sampler_), "vkCreateSampler(bloom)");
         }
 
-        // Bloom (down + blur) layout: combined sampler @0, storage image @1.
+        // Bloom (down + up) layout: combined sampler @0, storage image @1.
         {
             VkDescriptorSetLayoutBinding bnd[2]{};
             bnd[0].binding = 0;
@@ -200,7 +206,7 @@ namespace threepp::vulkan {
             VkPushConstantRange pc{};
             pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
             pc.offset = 0;
-            pc.size = 24;// down: 4×u32 + 2×float ; blur: 2×u32 + 2×float
+            pc.size = 28;// down: 4×u32 + 2×float + u32 firstLevel ; up: 4×u32
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
             plci.setLayoutCount = 1;
@@ -246,42 +252,46 @@ namespace threepp::vulkan {
 
         downPipe_ = makeComputePipe(d, ctx_.pipelineCache(), bloomPipeLayout_, kBloomDownCompSpv,
                                     sizeof(kBloomDownCompSpv), "vkCreateComputePipelines(bloom_down)");
-        blurPipe_ = makeComputePipe(d, ctx_.pipelineCache(), bloomPipeLayout_, kBloomBlurCompSpv,
-                                    sizeof(kBloomBlurCompSpv), "vkCreateComputePipelines(bloom_blur)");
+        upPipe_   = makeComputePipe(d, ctx_.pipelineCache(), bloomPipeLayout_, kBloomUpCompSpv,
+                                    sizeof(kBloomUpCompSpv), "vkCreateComputePipelines(bloom_up)");
         compPipe_ = makeComputePipe(d, ctx_.pipelineCache(), compPipeLayout_, kCompositeCompSpv,
                                     sizeof(kCompositeCompSpv), "vkCreateComputePipelines(composite)");
     }
 
     void BloomPass::createDescriptorPool() {
+        // Sized for kMaxLevels regardless of the runtime level count (the pool
+        // is created before the surface size is known).
+        const uint32_t downSets = framesInFlight_ * kMaxLevels;
+        const uint32_t upSets   = framesInFlight_ * kMaxLevels;// only levels-1 used
         VkDescriptorPoolSize sizes[2]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = framesInFlight_ * 5;// down1 + blurH1 + blurV1 + comp2
+        sizes[0].descriptorCount = downSets + upSets + framesInFlight_ * 2;// +comp2
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[1].descriptorCount = framesInFlight_ * 5;// down1 + blurH1 + blurV1 + comp2
+        sizes[1].descriptorCount = downSets + upSets + framesInFlight_ * 2;// +comp2
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = framesInFlight_ * 4;
+        dpci.maxSets       = downSets + upSets + framesInFlight_;
         dpci.poolSizeCount = 2;
         dpci.pPoolSizes    = sizes;
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
               "vkCreateDescriptorPool(bloom)");
 
-        auto alloc = [&](std::vector<VkDescriptorSet>& sets, VkDescriptorSetLayout layout) {
-            std::vector<VkDescriptorSetLayout> layouts(framesInFlight_, layout);
+        auto alloc = [&](std::vector<VkDescriptorSet>& sets, VkDescriptorSetLayout layout,
+                         uint32_t count) {
+            std::vector<VkDescriptorSetLayout> layouts(count, layout);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             ai.descriptorPool     = descPool_;
-            ai.descriptorSetCount = framesInFlight_;
+            ai.descriptorSetCount = count;
             ai.pSetLayouts        = layouts.data();
-            sets.resize(framesInFlight_);
+            sets.resize(count);
             check(vkAllocateDescriptorSets(ctx_.device(), &ai, sets.data()),
                   "vkAllocateDescriptorSets(bloom)");
         };
-        alloc(downSets_,  bloomDsLayout_);
-        alloc(blurHSets_, bloomDsLayout_);
-        alloc(blurVSets_, bloomDsLayout_);
-        alloc(compSets_,  compDsLayout_);
+        alloc(downSets_, bloomDsLayout_, downSets);
+        alloc(upSets_,   bloomDsLayout_, upSets);
+        alloc(compSets_, compDsLayout_,  framesInFlight_);
     }
 
     void BloomPass::rewriteDescriptors(const DescriptorWriteInputs& in) {
@@ -300,22 +310,43 @@ namespace threepp::vulkan {
                 return i;
             };
 
-            // down: sceneHdr (sampled) -> bloomA (storage)
-            VkDescriptorImageInfo dIn  = sampled(sceneHdr_[f].view);
-            VkDescriptorImageInfo dOut = storage(bloomA_[f].view);
-            // blurH: bloomA (sampled) -> bloomB (storage)
-            VkDescriptorImageInfo hIn  = sampled(bloomA_[f].view);
-            VkDescriptorImageInfo hOut = storage(bloomB_[f].view);
-            // blurV: bloomB (sampled) -> bloomA (storage)
-            VkDescriptorImageInfo vIn  = sampled(bloomB_[f].view);
-            VkDescriptorImageInfo vOut = storage(bloomA_[f].view);
-            // composite: sceneHdr (sampled), bloomA (sampled), gbuf (storage) -> taaInput (storage)
+            auto writePair = [&](VkDescriptorSet ds, const VkDescriptorImageInfo* src,
+                                 const VkDescriptorImageInfo* dst) {
+                VkWriteDescriptorSet w[2]{};
+                for (int n = 0; n < 2; ++n) {
+                    w[n].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    w[n].dstSet          = ds;
+                    w[n].dstBinding      = static_cast<uint32_t>(n);
+                    w[n].descriptorCount = 1;
+                }
+                w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w[0].pImageInfo     = src;
+                w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                w[1].pImageInfo     = dst;
+                vkUpdateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
+            };
+
+            // Down chain: sceneHdr → pyr[0], then pyr[l-1] → pyr[l].
+            // Up chain: pyr[l+1] (tent-sampled) accumulates into pyr[l].
+            for (uint32_t l = 0; l < levels_; ++l) {
+                VkDescriptorImageInfo dIn  = sampled(l == 0 ? sceneHdr_[f].view
+                                                            : pyr_[f * kMaxLevels + l - 1].view);
+                VkDescriptorImageInfo dOut = storage(pyr_[f * kMaxLevels + l].view);
+                writePair(downSets_[f * kMaxLevels + l], &dIn, &dOut);
+                if (l + 1 < levels_) {
+                    VkDescriptorImageInfo uIn  = sampled(pyr_[f * kMaxLevels + l + 1].view);
+                    VkDescriptorImageInfo uOut = storage(pyr_[f * kMaxLevels + l].view);
+                    writePair(upSets_[f * kMaxLevels + l], &uIn, &uOut);
+                }
+            }
+
+            // composite: sceneHdr (sampled), pyr[0] (sampled), gbuf (storage) -> taaInput (storage)
             VkDescriptorImageInfo cScene = sampled(sceneHdr_[f].view);
-            VkDescriptorImageInfo cBloom = sampled(bloomA_[f].view);
+            VkDescriptorImageInfo cBloom = sampled(pyr_[f * kMaxLevels].view);
             VkDescriptorImageInfo cGbuf  = storage(in.gbufPerFrame[f]);
             VkDescriptorImageInfo cOut   = storage(in.taaInputPerFrame[f]);
 
-            VkWriteDescriptorSet w[10]{};
+            VkWriteDescriptorSet w[4]{};
             auto setw = [&](int n, VkDescriptorSet ds, uint32_t bind,
                             VkDescriptorType t, const VkDescriptorImageInfo* info) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -325,17 +356,11 @@ namespace threepp::vulkan {
                 w[n].descriptorType = t;
                 w[n].pImageInfo = info;
             };
-            setw(0, downSets_[f],  0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &dIn);
-            setw(1, downSets_[f],  1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &dOut);
-            setw(2, blurHSets_[f], 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &hIn);
-            setw(3, blurHSets_[f], 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &hOut);
-            setw(4, blurVSets_[f], 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &vIn);
-            setw(5, blurVSets_[f], 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &vOut);
-            setw(6, compSets_[f],  0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cScene);
-            setw(7, compSets_[f],  1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cBloom);
-            setw(8, compSets_[f],  2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cGbuf);
-            setw(9, compSets_[f],  3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cOut);
-            vkUpdateDescriptorSets(ctx_.device(), 10, w, 0, nullptr);
+            setw(0, compSets_[f], 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cScene);
+            setw(1, compSets_[f], 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cBloom);
+            setw(2, compSets_[f], 2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cGbuf);
+            setw(3, compSets_[f], 3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cOut);
+            vkUpdateDescriptorSets(ctx_.device(), 4, w, 0, nullptr);
         }
     }
 
@@ -363,45 +388,50 @@ namespace threepp::vulkan {
         barrier();
 
         if (bloomIntensity > 0.0f) {
-            const uint32_t ghx = (halfW_ + 7u) / 8u;
-            const uint32_t ghy = (halfH_ + 7u) / 8u;
+            struct BloomPc { uint32_t srcW, srcH, dstW, dstH; float threshold, clampMax; uint32_t firstLevel; };
+            auto levelW = [&](uint32_t l) { return std::max(width_  >> (l + 1u), 1u); };
+            auto levelH = [&](uint32_t l) { return std::max(height_ >> (l + 1u), 1u); };
 
-            struct DownPc { uint32_t srcW, srcH, dstW, dstH; float threshold, clampMax; };
-            struct BlurPc { uint32_t w, h; float dx, dy; };
-
-            // Downsample sceneHdr -> bloomA (half res, Karis + soft-knee bright pass).
+            // Progressive downsample: sceneHdr → pyr[0] (Karis + soft-knee
+            // bright pass + per-tap clamp) → pyr[1] → … (plain 13-tap).
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, downPipe_);
-            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                    bloomPipeLayout_, 0, 1, &downSets_[frame], 0, nullptr);
-            DownPc dpc{width, height, halfW_, halfH_, bloomThreshold, bloomClamp};
-            vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(dpc), &dpc);
-            vkCmdDispatch(cb, ghx, ghy, 1);
-            barrier();
-
-            // Two separable-Gaussian iterations (H, V) for a wide soft glow.
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, blurPipe_);
-            BlurPc hpc{halfW_, halfH_, 1.0f, 0.0f};
-            BlurPc vpc{halfW_, halfH_, 0.0f, 1.0f};
-            for (int iter = 0; iter < 2; ++iter) {
-                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                        bloomPipeLayout_, 0, 1, &blurHSets_[frame], 0, nullptr);
-                vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(hpc), &hpc);
-                vkCmdDispatch(cb, ghx, ghy, 1);
+            for (uint32_t l = 0; l < levels_; ++l) {
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bloomPipeLayout_,
+                                        0, 1, &downSets_[frame * kMaxLevels + l], 0, nullptr);
+                BloomPc pc{l == 0 ? width : levelW(l - 1), l == 0 ? height : levelH(l - 1),
+                           levelW(l), levelH(l),
+                           bloomThreshold, l == 0 ? bloomClamp : 0.f, l == 0 ? 1u : 0u};
+                vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+                vkCmdDispatch(cb, (levelW(l) + 7u) / 8u, (levelH(l) + 7u) / 8u, 1);
                 barrier();
-                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                        bloomPipeLayout_, 0, 1, &blurVSets_[frame], 0, nullptr);
-                vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(vpc), &vpc);
-                vkCmdDispatch(cb, ghx, ghy, 1);
+            }
+
+            // Progressive upsample walk-back: tent-filter each coarser level
+            // and ADD it into the next-finer one, accumulating the whole
+            // chain into pyr[0]. The composite divides bloomIntensity by the
+            // level count, so total energy matches a single-level bloom.
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, upPipe_);
+            for (uint32_t l = levels_ - 1; l > 0; --l) {
+                const uint32_t dst = l - 1;
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bloomPipeLayout_,
+                                        0, 1, &upSets_[frame * kMaxLevels + dst], 0, nullptr);
+                BloomPc pc{levelW(l), levelH(l), levelW(dst), levelH(dst), 0.f, 0.f, 0u};
+                vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+                vkCmdDispatch(cb, (levelW(dst) + 7u) / 8u, (levelH(dst) + 7u) / 8u, 1);
                 barrier();
             }
         }
 
-        // Composite: sceneHdr (+ bloomA) -> tone map -> sRGB -> TAA input.
+        // Composite: sceneHdr (+ pyr[0]) -> tone map -> sRGB -> TAA input.
+        // Intensity is normalized by the accumulated level count so the summed
+        // pyramid lands at the same overall energy the old single-blur bloom
+        // put out for the same slider value — halos just reach further.
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, compPipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 compPipeLayout_, 0, 1, &compSets_[frame], 0, nullptr);
+        const float effIntensity = bloomIntensity / static_cast<float>(std::max(levels_, 1u));
         uint32_t intensityBits;
-        std::memcpy(&intensityBits, &bloomIntensity, sizeof(intensityBits));
+        std::memcpy(&intensityBits, &effIntensity, sizeof(intensityBits));
         const uint32_t cpc[6] = {toneMapping, exposureBits,
                                  bgIsSolidColor ? 1u : 0u, intensityBits,
                                  width, height};
