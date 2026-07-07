@@ -29,6 +29,10 @@ int main() {
     Canvas canvas("PhysX Vehicle", {{"aa", 4}, {"vsync", true}});
     auto renderer = createRenderer(canvas);
 
+    if (auto pt = dynamic_cast<VulkanRenderer*>(renderer.get())) {
+        pt->setMotionBlur(0.4f);
+    }
+
     auto scene = Scene::create();
     auto sensorScene = Scene::create();
 

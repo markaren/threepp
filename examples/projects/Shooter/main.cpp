@@ -117,8 +117,7 @@ int main(int argc, char** argv) {
     renderer->toneMappingExposure = 1.0f;
 
     if (auto pt = dynamic_cast<VulkanRenderer*>(renderer.get())) {
-
-
+        pt->setMotionBlur(0.4f);
     }
 
     // Pointer-lock mouse-look: cursor hidden + grabbed while playing (raw,
