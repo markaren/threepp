@@ -187,6 +187,8 @@ layout(set = 0, binding = 37, scalar) uniform ProbeGridUbo {
     vec3  spacing; float _pad0;
     ivec3 dims;    int   _pad1;
 } probeGrid;
+// Octahedral depth store (Chebyshev visibility — see probe_common.glsl).
+layout(set = 0, binding = 54, scalar) readonly buffer ProbeDepthBuf { uint probeDepth[]; };
 
 // ── MSAA per-sample edge shading (dispatch B, shadeMode==1 only) ───────────
 // Raw MS raster attachments — bound only when setGbufferMsaa(2|4) is active;

@@ -33,6 +33,14 @@ namespace threepp::vulkan {
                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                               VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+        // Chebyshev depth store: kDepthTexels × packHalf2x16(mean, mean²) per
+        // probe = 4 MB. Cleared alongside the SH on every grid (re)fit — 0u is
+        // the "no data yet" sentinel the sampler treats as fully visible.
+        depthBuf_ = createBuffer(ctx_.allocator(), ctx_.device(),
+                                 static_cast<VkDeviceSize>(kProbeCount) * kDepthTexels * 4,
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
         gridUbos_.resize(framesInFlight_);
         gridUboHandles_.resize(framesInFlight_);
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
@@ -56,12 +64,13 @@ namespace threepp::vulkan {
         if (descPool_)   vkDestroyDescriptorPool(d, descPool_, nullptr);
         for (auto& b : gridUbos_) destroyBuffer(ctx_.allocator(), b);
         destroyBuffer(ctx_.allocator(), shBuf_);
+        destroyBuffer(ctx_.allocator(), depthBuf_);
     }
 
     void ProbeGI::createPipeline() {
         VkDevice d = ctx_.device();
 
-        VkDescriptorSetLayoutBinding b[9]{};
+        VkDescriptorSetLayoutBinding b[10]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -78,10 +87,11 @@ namespace threepp::vulkan {
         b[6].descriptorCount = kMaxMaterialTextures;          // ...fixed-size array
         set(7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);            // EmTri[]
         set(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);            // SH probe store (r/w)
+        set(9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);            // Chebyshev depth store (r/w)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 9;
+        dlci.bindingCount = 10;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(probeGI)");
@@ -128,7 +138,7 @@ namespace threepp::vulkan {
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[1].descriptorCount = framesInFlight_ * (1 + kMaxMaterialTextures);// env + bindless
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[2].descriptorCount = framesInFlight_ * 4;// materials + geometry + emissive + SH
+        sizes[2].descriptorCount = framesInFlight_ * 5;// materials + geometry + emissive + SH + depth
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;
 
@@ -175,6 +185,9 @@ namespace threepp::vulkan {
             VkDescriptorBufferInfo shInfo{};
             shInfo.buffer = shBuf_.handle;
             shInfo.range  = VK_WHOLE_SIZE;
+            VkDescriptorBufferInfo depthInfo{};
+            depthInfo.buffer = depthBuf_.handle;
+            depthInfo.range  = VK_WHOLE_SIZE;
 
             VkAccelerationStructureKHR tlasLocal = in.tlas;
             VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
@@ -182,7 +195,7 @@ namespace threepp::vulkan {
             asInfo.accelerationStructureCount = 1;
             asInfo.pAccelerationStructures = &tlasLocal;
 
-            VkWriteDescriptorSet w[9]{};
+            VkWriteDescriptorSet w[10]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -208,7 +221,8 @@ namespace threepp::vulkan {
             w[6].pImageInfo      = in.materialTex;
             setw(7, 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr,  &emInfo);
             setw(8, 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr,  &shInfo);
-            vkUpdateDescriptorSets(ctx_.device(), 9, w, 0, nullptr);
+            setw(9, 9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr,  &depthInfo);
+            vkUpdateDescriptorSets(ctx_.device(), 10, w, 0, nullptr);
         }
     }
 
@@ -290,8 +304,11 @@ namespace threepp::vulkan {
                                  bool shadows, uint32_t envMipCount) {
         if (needsClear_) {
             // Fresh fit: zero SH + validity + history so probes bootstrap with
-            // α = 1 instead of blending into a stale grid.
+            // α = 1 instead of blending into a stale grid. The depth store is
+            // zeroed too — 0u is its "no data" sentinel (sampled as fully
+            // visible, so bootstrap can't Chebyshev-reject every probe).
             vkCmdFillBuffer(cb, shBuf_.handle, 0, VK_WHOLE_SIZE, 0u);
+            vkCmdFillBuffer(cb, depthBuf_.handle, 0, VK_WHOLE_SIZE, 0u);
             VkMemoryBarrier2 bar{};
             bar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
             bar.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;

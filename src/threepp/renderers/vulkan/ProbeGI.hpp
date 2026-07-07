@@ -10,7 +10,10 @@
 // deferred_shade.comp samples the same SH buffer at its GI-ray hit points
 // (bindings 36/37), which is what lets enclosed interiors (the Sponza
 // ground-floor corridors) receive courtyard light instead of rendering
-// near-black off the 1-bounce gather.
+// near-black off the 1-bounce gather. Each probe also carries an 8×8
+// octahedral map of ray-hit distance moments (mean/mean²) that the sampler
+// Chebyshev-tests per tap (DDGI visibility, Majercik et al. 2019) so probes
+// on the far side of a wall can't leak irradiance through it.
 //
 // Follows the SkinningPipeline / EnvPrefilter house pattern: one class, own
 // pipeline + descriptor pool, recordDispatch(cb, ...). Buffers exist from
@@ -40,6 +43,12 @@ namespace threepp::vulkan {
         static constexpr uint32_t kProbeCount = kDimX * kDimY * kDimZ;
         // Rays per probe — must match probe_update.comp's local_size_x.
         static constexpr uint32_t kRaysPerProbe = 64;
+        // Chebyshev depth map: kDepthRes² octahedral texels per probe, each
+        // packHalf2x16(mean, mean²) ray-hit distance. Must match
+        // probe_common.glsl's kProbeDepthRes; texel count must equal
+        // kRaysPerProbe (one thread per texel in the update's blend).
+        static constexpr uint32_t kDepthRes    = 8;
+        static constexpr uint32_t kDepthTexels = kDepthRes * kDepthRes;
         // Round-robin budget: the full grid refreshes every
         // kProbeCount / kProbesPerFrame = 8 frames. 2048 × 64 = 131 k rays
         // per frame — well inside the ~1 ms probe budget on an RTX 4070.
@@ -91,15 +100,17 @@ namespace threepp::vulkan {
                             uint32_t emissiveCount, float emissiveTotalPower,
                             bool shadows, uint32_t envMipCount);
 
-        // For DeferredShade's descriptor write (bindings 36/37).
+        // For DeferredShade's descriptor write (bindings 36/37/54).
         [[nodiscard]] VkBuffer shBuffer() const { return shBuf_.handle; }
         [[nodiscard]] const VkBuffer* gridUbos() const { return gridUboHandles_.data(); }
+        [[nodiscard]] VkBuffer depthBuffer() const { return depthBuf_.handle; }
 
     private:
         VulkanContext& ctx_;
         uint32_t       framesInFlight_;
 
-        Buffer                shBuf_{};// kProbeCount × 4 × vec4 SH-L1 store
+        Buffer                shBuf_{};   // kProbeCount × 4 × vec4 SH-L1 store
+        Buffer                depthBuf_{};// kProbeCount × kDepthTexels × uint Chebyshev depth
         std::vector<Buffer>   gridUbos_;        // [framesInFlight]
         std::vector<VkBuffer> gridUboHandles_;  // handles view for DeferredShade
 

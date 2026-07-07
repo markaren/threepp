@@ -21,7 +21,10 @@
 // (the sun arrives through the analytic dir-light loop instead), so enclosed
 // interiors only receive the sky their probes actually see through openings.
 // The result is reduced to SH-L1 irradiance and EMA-blended into the store
-// (α = 1/min(count+1, 32): fast bootstrap, stable 1/32 steady state).
+// (α = 1/min(count+1, 32): fast bootstrap, stable 1/32 steady state). The
+// ray-hit DISTANCES additionally feed the probe's 8×8 octahedral depth map
+// (mean/mean², same α) — the Chebyshev visibility test probeIrradiance runs
+// per tap to stop irradiance leaking through walls (see probe_common.glsl).
 //
 // The feedback tap reads probes the SAME dispatch may be writing — a benign
 // race: a torn read mixes an old and a new estimate of the SAME quantity,
@@ -84,6 +87,9 @@ layout(set = 0, binding = 7, scalar) readonly buffer EmissiveTriBuf { EmTri emis
 
 // SH-L1 probe store (4 vec4/probe — see probe_common.glsl for the layout).
 layout(set = 0, binding = 8, scalar) buffer ProbeShBuf { vec4 probeSh[]; };
+// Octahedral depth store (kProbeDepthTexels × packHalf2x16(mean, mean²) per
+// probe, normalized by probeMaxDist() — see probe_common.glsl).
+layout(set = 0, binding = 9, scalar) buffer ProbeDepthBuf { uint probeDepth[]; };
 layout(set = 0, binding = 0, scalar) uniform ProbeGridUbo {
     vec3  origin;  float enabled;// enabled gates SAMPLING (deferred_shade); the
                                  // update dispatch is simply skipped when off
@@ -294,9 +300,14 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
 // by the CONSUMER of the probe (see probe_common.glsl's energy accounting).
 // backface = 1 when the ray landed on geometry's interior side — the caller
 // counts these to decide the probe sits inside a wall (validity).
+// hitDist = ray-hit distance for the Chebyshev depth map (1e30 on miss — the
+// depth blend saturates it at probeMaxDist()); backface hits report 0.2× the
+// true distance (DDGI convention: an in-wall probe's depth then shadows
+// everything, belt-and-braces with validity).
 vec3 probeRayRadiance(vec3 origin, vec3 dir, bool doShadows, inout uint seed,
-                      out float backface) {
+                      out float backface, out float hitDist) {
     backface = 0.0;
+    hitDist  = 1e30;
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, origin, 1e-4, dir, 1e30);
     while (rayQueryProceedEXT(rq)) {}
@@ -309,6 +320,7 @@ vec3 probeRayRadiance(vec3 origin, vec3 dir, bool doShadows, inout uint seed,
     const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
     const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);
     const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
+    hitDist = tHit;
     vec3 hitN; vec2 hitUv;
     fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
 
@@ -321,6 +333,7 @@ vec3 probeRayRadiance(vec3 origin, vec3 dir, bool doShadows, inout uint seed,
             // backface sees nothing) and report it so the validity estimate
             // can exclude probes buried in walls.
             backface = 1.0;
+            hitDist  = tHit * 0.2;
             return vec3(0.0);
         }
         // Double/back-sided surfaces (curtains, foliage cards) are legitimate
@@ -405,6 +418,11 @@ shared vec3  sX[kRays];
 shared vec3  sY[kRays];
 shared vec3  sZ[kRays];
 shared float sBack[kRays];
+shared vec3  sDir[kRays]; // ray directions — the depth texels gather over these
+shared float sDist[kRays];// ray-hit distances (Chebyshev depth)
+shared float sHist;       // EMA history snapshot — read once BEFORE thread 0
+                          // bumps it, so every depth texel blends with the
+                          // same α as the SH
 
 void main() {
     if (gl_WorkGroupID.x >= pc.probeCount) return;
@@ -429,8 +447,8 @@ void main() {
     const vec3  dir    = vec3(r * cos(phi), r * sin(phi), z);
 
     uint seed = pcgHash(pIdx * 9781u + pc.frame * 26699u + ri * 40009u + 0x9e3779b9u);
-    float back;
-    vec3 L = probeRayRadiance(probePos, dir, (pc.flags & 1u) != 0u, seed, back);
+    float back, hitDist;
+    vec3 L = probeRayRadiance(probePos, dir, (pc.flags & 1u) != 0u, seed, back, hitDist);
     // Same 6.0 luminance cap the gather applies to giRadiance — bounds a
     // sun-through-crack spike so one ray can't swing the whole probe.
     const float ll = max(max(L.r, L.g), L.b);
@@ -441,7 +459,43 @@ void main() {
     sY[ri]    = L * dir.y;
     sZ[ri]    = L * dir.z;
     sBack[ri] = back;
+    sDir[ri]  = dir;
+    sDist[ri] = hitDist;
+    if (ri == 0u) sHist = probeSh[pIdx * 4u + 1u].a;
     barrier();
+
+    const float alpha = 1.0 / min(sHist + 1.0, 32.0);
+
+    // ── Chebyshev depth blend — one thread = one octahedral texel (8×8=64) ──
+    // Power-cosine gather over this update's ray fan (the paper's per-texel
+    // filter, done in shared memory instead of an atlas pass), EMA-blended
+    // like the SH. Texels the fan barely grazed keep their old value — with
+    // Cranley-Patterson rotation the next updates cover them.
+    {
+        const float maxDist = probeMaxDist();
+        const ivec2 tc      = ivec2(int(ri) % kProbeDepthRes, int(ri) / kProbeDepthRes);
+        const vec3  tDir    = octDecode((vec2(tc) + 0.5) * (2.0 / float(kProbeDepthRes)) - 1.0);
+        float wSum = 0.0, dSum = 0.0, d2Sum = 0.0;
+        for (uint i = 0u; i < kRays; ++i) {
+            const float w = pow(max(dot(tDir, sDir[i]), 0.0), kProbeDepthSharpness);
+            if (w < 1e-5) continue;
+            const float dN = min(sDist[i], maxDist) / maxDist;
+            wSum  += w;
+            dSum  += w * dN;
+            d2Sum += w * dN * dN;
+        }
+        if (wSum > 1e-4) {
+            const uint di   = pIdx * uint(kProbeDepthTexels) + ri;
+            const uint bits = probeDepth[di];
+            const vec2 dNew = vec2(dSum, d2Sum) / wSum;
+            // 0u = never written (fresh grid) → adopt outright, mirroring the
+            // SH's α=1 bootstrap; blending against the sentinel would smear
+            // "all clear" into real walls for a whole EMA tail.
+            const vec2 dOld = (bits == 0u) ? dNew : unpackHalf2x16(bits);
+            probeDepth[di] = packHalf2x16(mix(dOld, dNew, alpha));
+        }
+    }
+
     if (ri != 0u) return;
 
     vec3 a00 = vec3(0.0), aX = vec3(0.0), aY = vec3(0.0), aZ = vec3(0.0);
@@ -464,9 +518,9 @@ void main() {
 
     // EMA blend: 1/(count+1) bootstraps a cleared grid in one update, then
     // settles at 1/32 — enough hysteresis to hide the 64-ray estimate's noise
-    // while multi-bounce feedback converges in a few grid sweeps.
-    const float hist  = probeSh[pIdx * 4u + 1u].a;
-    const float alpha = 1.0 / min(hist + 1.0, 32.0);
+    // while multi-bounce feedback converges in a few grid sweeps. (alpha was
+    // computed above from the sHist snapshot — the depth texels share it.)
+    const float hist = sHist;
     const vec4 o0 = probeSh[pIdx * 4u + 0u];
     const vec4 o1 = probeSh[pIdx * 4u + 1u];
     const vec4 o2 = probeSh[pIdx * 4u + 2u];

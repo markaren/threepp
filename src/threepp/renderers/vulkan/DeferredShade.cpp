@@ -59,7 +59,7 @@ namespace threepp::vulkan {
         lci.minFilter  = VK_FILTER_LINEAR;
         check(vkCreateSampler(d, &lci, nullptr, &lutSampler_), "vkCreateSampler(froxel LUT)");
 
-        VkDescriptorSetLayoutBinding b[54]{};// KEEP the bound == dlci.bindingCount (a lagging bound = stack smash)
+        VkDescriptorSetLayoutBinding b[55]{};// KEEP the bound == dlci.bindingCount (a lagging bound = stack smash)
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -130,10 +130,11 @@ namespace threepp::vulkan {
         set(51, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV froxel scatter (other fif) — temporal EMA
         set(52, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // froxel LUT (3D, integrate writes)
         set(53, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // froxel LUT (LINEAR — shade's trilinear sample)
+        set(54, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // probe Chebyshev depth store
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 54;
+        dlci.bindingCount = 55;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -236,7 +237,7 @@ namespace threepp::vulkan {
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
         sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[4].descriptorCount = framesInFlight_ * 6;// material + geometry + emissive-tri + probe SH + cluster grid/lights
+        sizes[4].descriptorCount = framesInFlight_ * 7;// material + geometry + emissive-tri + probe SH + probe depth + cluster grid/lights
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -413,7 +414,8 @@ namespace threepp::vulkan {
             // exact texel-center UVs, so no filtering is wanted. SHADER_READ_ONLY.
             VkDescriptorImageInfo bnInfo = sampled(in.blueNoise, gbufSampler_);
 
-            // Probe GI (bindings 36/37) — SH store + per-frame grid UBO.
+            // Probe GI (bindings 36/37/54) — SH store + per-frame grid UBO +
+            // Chebyshev depth store.
             VkDescriptorBufferInfo probeShInfo{};
             probeShInfo.buffer = in.probeShBuf;
             probeShInfo.offset = 0;
@@ -422,6 +424,10 @@ namespace threepp::vulkan {
             probeGridInfo.buffer = in.probeGridUbo[f];
             probeGridInfo.offset = 0;
             probeGridInfo.range  = VK_WHOLE_SIZE;
+            VkDescriptorBufferInfo probeDepthInfo{};
+            probeDepthInfo.buffer = in.probeDepthBuf;
+            probeDepthInfo.offset = 0;
+            probeDepthInfo.range  = VK_WHOLE_SIZE;
 
             // MSAA raw raster attachments (dispatch B). Bound as plain
             // SHADER_READ_ONLY combined-image-samplers — texelFetch with an
@@ -483,7 +489,7 @@ namespace threepp::vulkan {
             froxelLutTexInfo.imageView   = in.froxelLut[f];
             froxelLutTexInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            VkWriteDescriptorSet w[54]{};
+            VkWriteDescriptorSet w[55]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -557,7 +563,8 @@ namespace threepp::vulkan {
             setw(51, 51, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &froxelScatterPrevInfo, nullptr);
             setw(52, 52, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &froxelLutInfo,         nullptr);
             setw(53, 53, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &froxelLutTexInfo,      nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 54, w, 0, nullptr);
+            setw(54, 54, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &probeDepthInfo);
+            vkUpdateDescriptorSets(ctx_.device(), 55, w, 0, nullptr);
         }
     }
 

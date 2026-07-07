@@ -11587,11 +11587,12 @@ namespace threepp {
             const VkImageView resWViews[2]   = {reservoirWImagesPP[0].view,   reservoirWImagesPP[1].view};
             in.reservoirPos     = resPosViews;
             in.reservoirW       = resWViews;
-            // Probe GI (bindings 36/37) — the SH store + per-frame grid UBO
-            // ProbeGI owns. Real buffers even when the feature is off (the
-            // grid UBO's enable flag gates sampling).
+            // Probe GI (bindings 36/37/54) — the SH store + per-frame grid UBO
+            // + Chebyshev depth store ProbeGI owns. Real buffers even when the
+            // feature is off (the grid UBO's enable flag gates sampling).
             in.probeShBuf       = probeGI_->shBuffer();
             in.probeGridUbo     = probeGI_->gridUbos();
+            in.probeDepthBuf    = probeGI_->depthBuffer();
             in.gbufNormalMS     = normalMSViews.data();
             in.gbufDepthMS      = depthMSViews.data();
             in.gbufIdsMS        = idsMSViews.data();
