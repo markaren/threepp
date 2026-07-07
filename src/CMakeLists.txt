@@ -650,6 +650,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/AutoExposure.cpp"
             "threepp/renderers/vulkan/GbufResolve.cpp"
             "threepp/renderers/vulkan/BloomPass.cpp"
+            "threepp/renderers/vulkan/PostComposite.cpp"
             "threepp/renderers/vulkan/DeferredShade.cpp"
             "threepp/renderers/vulkan/ProbeGI.cpp"
             "threepp/renderers/vulkan/HiZPyramid.cpp"
@@ -980,8 +981,9 @@ if (THREEPP_WITH_VULKAN)
         kDenoiseAtrousCompSpv
         _denoise_atrous_spv_h)
     # Post stack: progressive bloom pyramid (Jimenez 2014 — Karis 13-tap down
-    # chain + 3x3 tent additive upsample) + the tone-map/sRGB/bloom composite
-    # that closes the HDR path. See vulkan/BloomPass.{hpp,cpp}.
+    # chain + 3x3 tent additive upsample, vulkan/BloomPass.{hpp,cpp}) + the
+    # exposure/white-balance/tone-map/grade/sRGB composite that closes the
+    # HDR path (vulkan/PostComposite.{hpp,cpp}).
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/bloom_down.comp"
         kBloomDownCompSpv
@@ -991,9 +993,9 @@ if (THREEPP_WITH_VULKAN)
         kBloomUpCompSpv
         _bloom_up_spv_h)
     compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/composite.comp"
-        kCompositeCompSpv
-        _composite_spv_h)
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/post_composite.comp"
+        kPostCompositeCompSpv
+        _post_composite_spv_h)
     # Auto-exposure: log2-luma histogram over sceneHdr. See AutoExposure.{hpp,cpp}.
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lum_histogram.comp"

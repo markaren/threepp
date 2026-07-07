@@ -165,6 +165,10 @@ namespace threepp::vulkan {
         // must have recorded recordClusterBuild + a compute barrier first).
         // ssrActive: HiZ pyramid built this frame + setSsrReflections on —
         // gates the shade's hybrid SSR fast path (flags bit 9).
+        // preExpBits/prevPreExpBits: float-bits of the pre-exposure to bake
+        // into every sceneHdr store (physical-camera mode; keeps 100k-lux
+        // radiance inside fp16) and the PREV frame's factor the SSR
+        // prev-scene fetch divides back out. 0x3F800000 = 1.0f = legacy.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t width, uint32_t height, uint32_t envMipCount,
                             bool shadows, bool ao, uint32_t frameCounter,
@@ -180,7 +184,9 @@ namespace threepp::vulkan {
                             bool shadeBActive = false,
                             uint32_t clusterLightCount = 0,
                             bool froxelsActive = false,
-                            bool ssrActive = false);
+                            bool ssrActive = false,
+                            uint32_t preExpBits = 0x3F800000u,
+                            uint32_t prevPreExpBits = 0x3F800000u);
 
         // Clustered light culling: one thread per cluster cell tests every
         // light's cull sphere against the cell's view-space AABB and writes
@@ -211,10 +217,13 @@ namespace threepp::vulkan {
         // gbufMsaaSamples/shadeBActive mirror recordDispatch: the recombine
         // weights its GI/reflection adds by the geometry coverage at MSAA
         // complex pixels (must match how the shade pass split the weights).
+        // preExpBits: the recombine's sceneHdr adds bake the same
+        // pre-exposure the shade stored with (0x3F800000 = 1.0f = legacy).
         void recordDenoiseDispatch(VkCommandBuffer cb, uint32_t frame,
                                    uint32_t width, uint32_t height,
                                    uint32_t gbufMsaaSamples = 1,
-                                   bool shadeBActive = false);
+                                   bool shadeBActive = false,
+                                   uint32_t preExpBits = 0x3F800000u);
 
     private:
         VulkanContext& ctx_;

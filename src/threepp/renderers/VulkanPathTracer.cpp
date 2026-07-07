@@ -161,7 +161,7 @@ namespace threepp {
             denoiser_->recordDispatch(cb, descriptorSets[setIdx], regionRenderExt_,
                                       denoiseEnabled_,
                                       static_cast<uint32_t>(toneMapping_),
-                                      exposureBits,
+                                      preExpBits_,// pre-exposure into sceneHdr (1.0 legacy)
                                       envIsBgColor);
             gpuTimings_->end(cb, TP_Denoise, currentFrame);
             // ── End denoise ─────────────────────────────────────────────────────

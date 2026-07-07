@@ -77,7 +77,10 @@ namespace threepp_py {
                 .value("Reinhard", ToneMapping::Reinhard)
                 .value("Cineon", ToneMapping::Cineon)
                 .value("ACESFilmic", ToneMapping::ACESFilmic)
-                .value("Neutral", ToneMapping::Neutral);
+                .value("Neutral", ToneMapping::Neutral)
+                // AgX (Sobotka / three.js AgXToneMapping): the gentlest
+                // highlight roll-off of the set. Vulkan renderers only.
+                .value("AgX", ToneMapping::AgX);
 
         // ---- LIDAR value types (helpers/LidarTypes.hpp + LidarModel.hpp) -----
         // Pure data structs shared by the GL LidarSensor and the Vulkan

@@ -19,6 +19,7 @@
 #include "AutoExposure.hpp"
 #include "GbufResolve.hpp"
 #include "BloomPass.hpp"
+#include "PostComposite.hpp"
 #include "DeferredShade.hpp"
 #include "HiZPyramid.hpp"
 #include "ProbeGI.hpp"
@@ -46,6 +47,7 @@
 #include "threepp/objects/Points.hpp"
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/Frustum.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Bone.hpp"
@@ -206,6 +208,45 @@ namespace threepp {
         // resets the accumulator (tone mapping is display-only).
         ToneMapping toneMapping_ = ToneMapping::None;
         float       toneMappingExposure_ = 1.f;
+
+        // ── Physical camera exposure (setPhysicalCamera) ────────────────────
+        // While enabled, exposure is derived from real camera parameters
+        // instead of toneMappingExposure_:
+        //   EV100 = log2(N²/t · 100/S) − evComp, exposure = 1/(1.2·2^EV100)
+        // and the shade/resolve PRE-EXPOSES sceneHdr (multiplies the store by
+        // the full exposure) so rgba16f survives 100k-lux daylight radiance.
+        // Defaults are the sunny-16 daylight setting (f/16, 1/125 s, ISO 100):
+        // a 100k-lux sun-lit scene lands at mid-gray. Legacy mode (default
+        // off) leaves every multiply at 1.0 — numerically byte-identical.
+        bool  physicalCamera_ = false;
+        float camAperture_    = 16.f;       // f-number N
+        float camShutter_     = 1.f / 125.f;// seconds
+        float camIso_         = 100.f;
+        float camEvComp_      = 0.f;// EV compensation (+1 doubles brightness)
+        [[nodiscard]] float physicalExposure() const {
+            const float ev100 = std::log2(camAperture_ * camAperture_ / camShutter_ *
+                                          100.f / camIso_) -
+                                camEvComp_;
+            return 1.f / (1.2f * std::exp2(ev100));
+        }
+        // The factor already baked into this frame's sceneHdr stores (1.0 in
+        // legacy mode). Hoisted into preExpBits_/prevPreExpBits_ once per
+        // frame in recordCommandBuffer; preExpHist_ remembers each frame-in-
+        // flight's value so cross-frame sceneHdr consumers (deferred SSR's
+        // prev-frame fetch) can un-bake the OTHER slot's exposure.
+        [[nodiscard]] float preExposure() const {
+            return physicalCamera_ ? currentExposure() : 1.f;
+        }
+        float    preExpHist_[kFramesInFlight] = {1.f, 1.f};
+        uint32_t preExpBits_     = 0x3F800000u;// float bits of this frame's preExposure
+        uint32_t prevPreExpBits_ = 0x3F800000u;// float bits of the prev frame's preExposure
+
+        // Analytic light intensities are photometric while enabled: dir = lux
+        // (as-is), point = lumens (→ candela Φ/4π at upload), spot = lumens
+        // (→ Φ/π, Frostbite's cone-angle-invariant convention), rect/emissive
+        // = nits (as-is). Pair with setPhysicalCamera — 100k lux needs a
+        // physical exposure to land on screen.
+        bool physicalLightUnits_ = false;
 
         // Wall-clock time of the last beginFrameForPT() call, used to compute
         // dt for the onBeginFrameForPT() hook (auto-exposure, etc.).
@@ -1704,12 +1745,16 @@ namespace threepp {
         // External deps (raster gbuffer views, swapchain views) are passed
         // in at descriptor-write time.
         std::unique_ptr<vulkan::TaaResolve> taa_;
-        // HDR bloom + tone-map/sRGB composite — tail of the PT post stack.
-        // denoise.comp (resolve) writes linear HDR into bloom_->sceneHdr
-        // (the shared set's binding 1); bloom_ down/blurs it and composites
-        // bloom + tone map + sRGB into the TAA input. bloomIntensity_ == 0
-        // skips the bloom passes (composite still owns the tone map).
+        // HDR bloom pyramid — the shade/resolve writes linear HDR into
+        // bloom_->sceneHdr (the shared set's binding 1); bloom_ builds the
+        // Jimenez progressive pyramid from it. bloomIntensity_ == 0 skips
+        // the pyramid entirely.
         std::unique_ptr<vulkan::BloomPass> bloom_;
+        // Exposure / white balance / tone map (incl. AgX) / grade LUT / sRGB
+        // — the camera/display end of the post stack, one dispatch into the
+        // TAA input (post_composite.comp). Owns the white-balance matrix and
+        // the 33³ grade LUT (setWhiteBalance / setColorGrade forward here).
+        std::unique_ptr<vulkan::PostComposite> post_;
         float bloomIntensity_ = 0.0f;
         // Deferred GI path: ON activates stochastic 1-bounce GI (colour bleed) +
         // temporal accumulation + à-trous. OFF falls back to the deterministic
@@ -2065,12 +2110,14 @@ namespace threepp {
                 taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
-            // HDR bloom + tone-map/sRGB composite. sceneHdr lives at the
-            // path-trace render extent (it is the shared set's binding 1
-            // target); the bloom ping-pong buffers are half that.
+            // HDR bloom pyramid. sceneHdr lives at the path-trace render
+            // extent (it is the shared set's binding 1 target); the bloom
+            // pyramid levels are half that and below.
             bloom_ = std::make_unique<vulkan::BloomPass>(*ctx, cmdPool, kFramesInFlight);
             bloom_->createImages(renderExtent().width, renderExtent().height);
             onAfterBloomCreateImages();
+            // Exposure/WB/tone-map/grade/sRGB composite → TAA input.
+            post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
             // Raster-first deferred lighting pass. Writes bloom_->sceneHdr, so
             // it must exist after bloom_; its descriptors reference the camera /
             // lights UBOs, the env image, the raster gbuffer and sceneHdr — all
@@ -8343,6 +8390,16 @@ namespace threepp {
                 return std::min(std::pow(L / 0.005f, 1.f / d), 500.f);
             };
 
+            // Physical light units (setPhysicalLightUnits): point/spot
+            // intensities are luminous FLUX (lumens) and convert to the
+            // intensity the falloff math expects — candela Φ/4π for points,
+            // Φ/π for spots (Frostbite's convention: brightness is invariant
+            // under cone-angle edits). Dir lights are lux and rect lights
+            // nits — both already the unit the shading math consumes, so
+            // they pass through. Legacy mode: all scales 1.0, byte-identical.
+            const float pointUnitScale = physicalLightUnits_ ? 1.f / (4.f * math::PI) : 1.f;
+            const float spotUnitScale  = physicalLightUnits_ ? 1.f / math::PI : 1.f;
+
             // traverseVisible so a hidden parent prunes its child lights too.
             scene.traverseVisible([&](Object3D& o) {
                 if (auto* a = dynamic_cast<AmbientLight*>(&o)) {
@@ -8370,9 +8427,9 @@ namespace threepp {
                     Vector3 wp; pl->getWorldPosition(wp);
                     rec.position[0] = wp.x; rec.position[1] = wp.y; rec.position[2] = wp.z;
                     rec.range = pl->distance;
-                    rec.color[0] = pl->color.r * pl->intensity;
-                    rec.color[1] = pl->color.g * pl->intensity;
-                    rec.color[2] = pl->color.b * pl->intensity;
+                    rec.color[0] = pl->color.r * pl->intensity * pointUnitScale;
+                    rec.color[1] = pl->color.g * pl->intensity * pointUnitScale;
+                    rec.color[2] = pl->color.b * pl->intensity * pointUnitScale;
                     rec.decay = pl->decay;
                     rec.direction[2] = -1.f;
                     rec.cosAngleOuter = -1.1f;// cone sentinel: smoothstep(-1.1,-1.05,cos≥-1) = 1
@@ -8391,9 +8448,9 @@ namespace threepp {
                     GpuClusterLight rec{};
                     rec.position[0] = lp.x; rec.position[1] = lp.y; rec.position[2] = lp.z;
                     rec.range = sl->distance;
-                    rec.color[0] = sl->color.r * sl->intensity;
-                    rec.color[1] = sl->color.g * sl->intensity;
-                    rec.color[2] = sl->color.b * sl->intensity;
+                    rec.color[0] = sl->color.r * sl->intensity * spotUnitScale;
+                    rec.color[1] = sl->color.g * sl->intensity * spotUnitScale;
+                    rec.color[2] = sl->color.b * sl->intensity * spotUnitScale;
                     rec.decay = sl->decay;
                     rec.direction[0] = emDir.x; rec.direction[1] = emDir.y; rec.direction[2] = emDir.z;
                     rec.cosAngleOuter = std::cos(sl->angle);
@@ -11445,20 +11502,31 @@ namespace threepp {
             taa_->rewriteDescriptors(in);
         }
 
-        // Bloom composite reads the per-frame G-buffer (for the solid-bg sky
-        // bypass) and writes the per-frame TAA input. Call after bloom_->
+        // The bloom pyramid's internal sets + the PostComposite (reads
+        // sceneHdr + bloom level 0 + the per-frame G-buffer for the solid-bg
+        // sky bypass, writes the per-frame TAA input). Call after bloom_->
         // createImages OR after the gbuffer / TAA images are reallocated.
         void rewriteBloomDescriptors() {
+            bloom_->rewriteDescriptors();
+            std::array<VkImageView, kFramesInFlight> sceneViews{};
+            std::array<VkImageView, kFramesInFlight> bloomViews{};
             std::array<VkImageView, kFramesInFlight> gbufViews{};
+            std::array<VkImageView, kFramesInFlight> idsViews{};
             std::array<VkImageView, kFramesInFlight> taaInViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                sceneViews[f] = bloom_->sceneHdrView(f);
+                bloomViews[f] = bloom_->bloomView(f);
                 gbufViews[f]  = gbufImagesPP[f].view;
+                idsViews[f]   = rasterGbufs[f].ids.view;
                 taaInViews[f] = taa_->inputView(f);
             }
-            vulkan::BloomPass::DescriptorWriteInputs in{};
-            in.gbufPerFrame     = gbufViews.data();
-            in.taaInputPerFrame = taaInViews.data();
-            bloom_->rewriteDescriptors(in);
+            vulkan::PostComposite::DescriptorWriteInputs in{};
+            in.sceneHdrPerFrame  = sceneViews.data();
+            in.bloomPerFrame     = bloomViews.data();
+            in.gbufPerFrame      = gbufViews.data();
+            in.rasterIdsPerFrame = idsViews.data();
+            in.taaInputPerFrame  = taaInViews.data();
+            post_->rewriteDescriptors(in);
         }
 
         // Raster-first deferred shade reads the camera + lights UBOs, the env
@@ -14339,8 +14407,19 @@ namespace threepp {
         virtual void onBeginFrameForPT(uint32_t /*frame*/, float /*dt*/) {}
 
         // Exposure value used for this frame's composite push constant.
-        // Overridden by VulkanRenderer::Impl when auto-exposure is active.
-        [[nodiscard]] virtual float currentExposure() const { return toneMappingExposure_; }
+        // Physical camera mode derives it from aperture/shutter/ISO;
+        // overridden by VulkanRenderer::Impl when auto-exposure is active
+        // (which composes the physical exposure as its base there).
+        [[nodiscard]] virtual float currentExposure() const {
+            return physicalCamera_ ? physicalExposure() : toneMappingExposure_;
+        }
+
+        // The post composite's solid-bg sky test: the PT leaf writes the
+        // PT-style gbuf ping-pong (.w = id+1); the DEFERRED leaf never does
+        // (it stays zero — keying on it there bypassed tone mapping on EVERY
+        // pixel of a solid-bg scene), so it overrides this to read the
+        // raster G-buffer ids attachment instead.
+        [[nodiscard]] virtual bool skyIdsFromRasterGbuf() const { return false; }
 
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
 
@@ -15237,23 +15316,41 @@ namespace threepp {
             const float exposure   = currentExposure();
             uint32_t exposureBits;
             std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
+            // Pre-exposure (physical camera mode; 1.0 otherwise — every
+            // consumer's multiply/divide is then an exact no-op). The OTHER
+            // frame-in-flight's stashed value is what last frame baked into
+            // ITS sceneHdr — the deferred SSR prev-frame fetch divides by it.
+            const float preExp     = preExposure();
+            const float prevPreExp = preExpHist_[(currentFrame + 1u) % kFramesInFlight];
+            preExpHist_[currentFrame] = preExp;
+            std::memcpy(&preExpBits_, &preExp, sizeof(preExpBits_));
+            std::memcpy(&prevPreExpBits_, &prevPreExp, sizeof(prevPreExpBits_));
 
             // Dispatch to the leaf renderer (VulkanPathTracer: PT raygen + denoiser;
             // VulkanRenderer: deferred shade compute); bloom + TAA below are shared.
             recordSceneDispatch(cb, setIdx, ext, ptExt, exposureBits);
 
-            // ── Bloom + tone-map/sRGB composite (HDR post stack) ───────────────
-            // denoise.comp (resolve) wrote linear HDR into bloom_->sceneHdr
-            // (the shared set's binding 1). This pass glows the bright
-            // highlights and composites bloom + tone map + sRGB into the TAA
-            // input image. With bloomIntensity_ == 0 the bloom passes are
-            // skipped and the composite reproduces the old finalize output
-            // (tone map + sRGB + solid-bg bypass) exactly.
-            bloom_->recordDispatch(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
-                                   static_cast<uint32_t>(toneMapping_),
-                                   exposureBits, envIsBgColor,
-                                   bloomIntensity_, bloomThreshold_, bloomClamp_);
-            // ── End bloom ──────────────────────────────────────────────────────
+            // ── Bloom pyramid + post composite (HDR post stack) ────────────────
+            // The shade/resolve wrote linear HDR into bloom_->sceneHdr (the
+            // shared set's binding 1). The pyramid glows the bright
+            // highlights (skipped when bloomIntensity_ == 0); the post
+            // composite then closes the HDR path — exposure, white balance,
+            // tone map, grade LUT, sRGB — into the TAA input image.
+            bloom_->recordPyramid(cb, currentFrame,
+                                  regionRenderExt_.width, regionRenderExt_.height,
+                                  bloomIntensity_, bloomThreshold_, bloomClamp_);
+            // Intensity normalized by the accumulated level count so the
+            // summed pyramid lands at the same overall energy a single-level
+            // bloom put out for the same slider value.
+            const float effBloomIntensity =
+                    bloomIntensity_ / static_cast<float>(std::max(bloom_->levels(), 1u));
+            post_->recordDispatch(cb, currentFrame,
+                                  regionRenderExt_.width, regionRenderExt_.height,
+                                  static_cast<uint32_t>(toneMapping_),
+                                  exposureBits, preExpBits_, envIsBgColor,
+                                  effBloomIntensity,
+                                  skyIdsFromRasterGbuf());
+            // ── End post stack ─────────────────────────────────────────────────
 
             // ── Raster TAA / temporal upsampler ─────────────────────────────────
             // Reads denoise output from the TAA input image (render extent),

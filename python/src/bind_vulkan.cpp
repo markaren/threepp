@@ -490,6 +490,74 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().bloomClamp(); },
                               [](PyVulkanRenderer& r, float v) { r.native().setBloomClamp(v); },
                               "Bloom input clamp to stabilise flickery ultra-bright highlights. <=0 disables (default); typical 8-32.")
+                // Per-frame CPU/GPU pass timings (milliseconds) — see
+                // VulkanRendererCore::FrameTimings. For perf triage from python.
+                .def_property_readonly("frame_timings",
+                                       [](PyVulkanRenderer& r) {
+                                           const auto t = r.native().lastFrameTimings();
+                                           py::dict d;
+                                           d["photon_emit_ms"] = t.photonEmitMs;
+                                           d["shade_ms"] = t.pathTraceMs;
+                                           d["denoise_ms"] = t.denoiseMs;
+                                           d["taa_ms"] = t.taaMs;
+                                           d["raster_gbuf_ms"] = t.rasterGbufMs;
+                                           d["gbuf_resolve_ms"] = t.gbufResolveMs;
+                                           d["shade_b_ms"] = t.shadeBMs;
+                                           d["overlay_ms"] = t.overlayMs;
+                                           d["cpu_ensure_scene_ms"] = t.cpuEnsureSceneMs;
+                                           d["cpu_record_ms"] = t.cpuRecordMs;
+                                           d["cpu_frame_ms"] = t.cpuFrameMs;
+                                           return d;
+                                       })
+                // ── Physical camera + photometric light units ─────────────────
+                .def_property("physical_camera",
+                              [](PyVulkanRenderer& r) { return r.native().physicalCamera(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setPhysicalCamera(v); },
+                              "Derive exposure from aperture/shutter/ISO (EV100) instead of "
+                              "tone_mapping_exposure; the HDR target is pre-exposed so 100k-lux "
+                              "daylight survives fp16. Defaults = sunny-16 (f/16, 1/125 s, ISO "
+                              "100). Pair with physical_light_units. Default off.")
+                .def("set_camera_exposure",
+                     [](PyVulkanRenderer& r, float aperture, float shutter, float iso) {
+                         r.native().setCameraExposure(aperture, shutter, iso);
+                     },
+                     py::arg("aperture") = 16.f, py::arg("shutter") = 1.f / 125.f,
+                     py::arg("iso") = 100.f,
+                     "Camera exposure triplet (used while physical_camera is on): "
+                     "f-number, shutter seconds, ISO.")
+                .def_property("exposure_compensation",
+                              [](PyVulkanRenderer& r) { return r.native().exposureCompensation(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setExposureCompensation(v); },
+                              "EV compensation while physical_camera is on (+1 doubles brightness).")
+                .def_property("physical_light_units",
+                              [](PyVulkanRenderer& r) { return r.native().physicalLightUnits(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setPhysicalLightUnits(v); },
+                              "Interpret light intensities photometrically: directional = lux "
+                              "(sun ~100000), point/spot = lumens, rect/emissive = nits. Default off.")
+                // ── White balance + colour grade (post composite) ─────────────
+                .def("set_white_balance",
+                     [](PyVulkanRenderer& r, float temperatureK, float tint) {
+                         r.native().setWhiteBalance(temperatureK, tint);
+                     },
+                     py::arg("temperature") = 6500.f, py::arg("tint") = 0.f,
+                     "Scene-illuminant white balance: Kelvin on the Planckian locus "
+                     "(6500 = neutral = off), tint green(-)/magenta(+).")
+                .def("set_color_grade",
+                     [](PyVulkanRenderer& r, const Vector3& lift, const Vector3& gamma,
+                        const Vector3& gain, float saturation, float contrast) {
+                         VulkanRendererCore::ColorGrade g;
+                         g.lift = lift;
+                         g.gamma = gamma;
+                         g.gain = gain;
+                         g.saturation = saturation;
+                         g.contrast = contrast;
+                         r.native().setColorGrade(g);
+                     },
+                     py::arg("lift") = Vector3(0, 0, 0), py::arg("gamma") = Vector3(1, 1, 1),
+                     py::arg("gain") = Vector3(1, 1, 1), py::arg("saturation") = 1.f,
+                     py::arg("contrast") = 1.f,
+                     "Lift/gamma/gain wheels + saturation + contrast, baked into a 33^3 "
+                     "LUT applied after the tone map. Defaults = identity = off.")
                 // Denoiser toggle (SVGF à-trous + temporal accumulation). ON by
                 // default. With it ON the deferred GI/AO is a stochastic ~1-spp gather
                 // cleaned by the denoiser; OFF switches to the deterministic 64-ray AO

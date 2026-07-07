@@ -145,7 +145,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.offset = 0;
-        pc.size = 76;// 19×u32 (…, timeSec, sunTanHalfAngle, clusterLightCount, shadeMode)
+        pc.size = 84;// 21×u32 (…, clusterLightCount, shadeMode, preExpBits, prevPreExpBits)
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount = 1;
@@ -619,7 +619,8 @@ namespace threepp::vulkan {
                                        float timeSec, float sunTanHalfAngle,
                                        uint32_t gbufMsaaSamples, uint32_t shadeMode,
                                        bool shadeBActive, uint32_t clusterLightCount,
-                                       bool froxelsActive, bool ssrActive) {
+                                       bool froxelsActive, bool ssrActive,
+                                       uint32_t preExpBits, uint32_t prevPreExpBits) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
@@ -647,11 +648,12 @@ namespace threepp::vulkan {
         std::memcpy(&camRotBits,    &camRotAngle,        sizeof(camRotBits));
         std::memcpy(&timeBits,      &timeSec,            sizeof(timeBits));
         std::memcpy(&sunTanBits,    &sunTanHalfAngle,    sizeof(sunTanBits));
-        const uint32_t pc[19] = {envMipCount, width, height, flags,
+        const uint32_t pc[21] = {envMipCount, width, height, flags,
                                  frameCounter, emissiveCount, emPowerBits, fireflyBits,
                                  oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits,
                                  starBits, camDeltaBits, camRotBits, timeBits,
-                                 sunTanBits, clusterLightCount, shadeMode};
+                                 sunTanBits, clusterLightCount, shadeMode,
+                                 preExpBits, prevPreExpBits};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
     }
@@ -717,7 +719,8 @@ namespace threepp::vulkan {
 
     void DeferredShade::recordDenoiseDispatch(VkCommandBuffer cb, uint32_t frame,
                                               uint32_t width, uint32_t height,
-                                              uint32_t gbufMsaaSamples, bool shadeBActive) {
+                                              uint32_t gbufMsaaSamples, bool shadeBActive,
+                                              uint32_t preExpBits) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, denoisePipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
@@ -748,7 +751,9 @@ namespace threepp::vulkan {
         mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;// RAW (scratch) + WAR (history feedback writes indirect that pass 0 read)
         mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         for (int p = 0; p < 4; ++p) {
-            const uint32_t pc[10] = {0u, width, height, passes[p].step,
+            // Slot [0] = preExpBits: the recombine's sceneHdr adds bake the
+            // same pre-exposure the shade pass stored with (1.0 legacy).
+            const uint32_t pc[10] = {preExpBits, width, height, passes[p].step,
                                      passes[p].srcMode, passes[p].dstMode, passes[p].feedback, 0u, msaaInfo, 0u};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
             vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
@@ -774,7 +779,7 @@ namespace threepp::vulkan {
             vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
                                  1, &mb, 0, nullptr, 0, nullptr);
-            const uint32_t rpc[10] = {0u, width, height, s/*0=H,1=V*/, 0u, 0u, 0u, 1u/*channel=reflection*/, msaaInfo, 0u};
+            const uint32_t rpc[10] = {preExpBits, width, height, s/*0=H,1=V*/, 0u, 0u, 0u, 1u/*channel=reflection*/, msaaInfo, 0u};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(rpc), rpc);
             vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
         }

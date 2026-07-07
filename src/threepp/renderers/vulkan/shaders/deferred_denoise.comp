@@ -65,7 +65,9 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
 } fog;
 
 layout(push_constant) uniform Pc {
-    uint _p0; uint width; uint height; uint step;
+    uint preExpBits;// float-bits: pre-exposure the shade stored sceneHdr with —
+                    // the recombine adds bake the same factor (1.0 = legacy no-op)
+    uint width; uint height; uint step;
     uint srcMode;// 0 = indirect (raw, pass 0), 1 = atrousA, 2 = atrousB
     uint dstMode;// 0 = atrousA, 1 = atrousB, 2 = recombine → sceneHdr
     uint feedback;// 1 = also write src (the 1st-pass filtered) back as temporal history
@@ -199,8 +201,9 @@ void main() {
         // Separable: H passes it through untouched, V adds it sharp.
         if (isGlass && rough < 0.12) {
             if (!vert) { imageStore(atrousB, px, cR); return; }
-            const vec3 cur = imageLoad(outImage, px).rgb;
-            imageStore(outImage, px, vec4(cur + cR.rgb * fogTransmittance(camPos, Pc) * recombineCoverage(px), 1.0));
+            const vec3 cur = imageLoad(outImage, px).rgb;// pre-exposed by the shade
+            imageStore(outImage, px, vec4(cur + cR.rgb * fogTransmittance(camPos, Pc) * recombineCoverage(px)
+                                                * uintBitsToFloat(pc.preExpBits), 1.0));
             return;
         }
         const float metalness = texelFetch(gbufAlbedoTex, px, 0).a;
@@ -338,7 +341,8 @@ void main() {
             if (bl > cap) blurred *= cap / bl;       // collapse the isolated spike
         }
         const vec3 cur     = imageLoad(outImage, px).rgb;
-        imageStore(outImage, px, vec4(cur + blurred * fogTransmittance(camPos, Pc) * recombineCoverage(px), 1.0));// pre-weighted → add, fog-extinguished
+        imageStore(outImage, px, vec4(cur + blurred * fogTransmittance(camPos, Pc) * recombineCoverage(px)
+                                            * uintBitsToFloat(pc.preExpBits), 1.0));// pre-weighted → add, fog-extinguished
         return;
     }
 
@@ -535,7 +539,8 @@ void main() {
         const vec3 dU           = imageLoad(directUImage, px).rgb;
         const vec3 cur          = imageLoad(outImage, px).rgb;
         imageStore(outImage, px, vec4(cur + (fC * diffuseColor + dU * clamp(fS, 0.0, 1.0))
-                                            * fogTransmittance(camPos, Pc) * recombineCoverage(px), 1.0));
+                                            * fogTransmittance(camPos, Pc) * recombineCoverage(px)
+                                            * uintBitsToFloat(pc.preExpBits), 1.0));
     } else if (pc.dstMode == 0u) {
         imageStore(atrousA, px, vec4(fC, fV));
         imageStore(shadowAtrousA, px, vec4(fS, fVS, 0.0, 0.0));

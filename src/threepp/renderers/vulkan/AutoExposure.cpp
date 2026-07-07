@@ -172,7 +172,11 @@ namespace threepp::vulkan {
     }
 
     void AutoExposure::recordDispatch(VkCommandBuffer cb, uint32_t frame,
-                                      uint32_t width, uint32_t height) {
+                                      uint32_t width, uint32_t height,
+                                      float preExposure) {
+        // Remember what this frame's sceneHdr stores were scaled by so
+        // tick() can meter the TRUE scene luminance (un-bake below).
+        histBufs_[frame].preExposure = preExposure;
         // Clear this frame's bins on the GPU (avoids a CPU→GPU sync point).
         vkCmdFillBuffer(cb, histBufs_[frame].buf.handle, 0,
                         kBins * sizeof(uint32_t), 0u);
@@ -239,11 +243,18 @@ namespace threepp::vulkan {
         }
         if (count == 0) return;
 
-        const float meanEV = static_cast<float>(sumEV / static_cast<double>(count));
+        // The histogram metered PRE-EXPOSED values (physical-camera mode
+        // bakes the exposure into sceneHdr); un-bake to true scene EV. Both
+        // corrections are exact subtractions of 0.0 in legacy mode.
+        const float meanEV = static_cast<float>(sumEV / static_cast<double>(count)) -
+                             std::log2(std::max(histBufs_[prev].preExposure, 1e-30f));
 
-        // Target exposure: map scene mean to 18% gray (EV ≈ -2.47 = log2(0.18)).
+        // Target EV compensation: map scene mean to 18% gray (EV ≈ -2.47 =
+        // log2(0.18)) RELATIVE to baseExposure (1.0 legacy → absolute).
         const float keyEV      = std::log2f(0.18f);
-        float       targetEV   = std::clamp(keyEV - meanEV, minEV, maxEV);
+        float       targetEV   = std::clamp(keyEV - meanEV -
+                                                    std::log2(std::max(baseExposure, 1e-30f)),
+                                            minEV, maxEV);
 
         // Asymmetric EMA: eye constricts faster toward bright than it dilates toward dark.
         const float speed  = (targetEV < currentEV_) ? adaptSpeed * 0.5f : adaptSpeed;

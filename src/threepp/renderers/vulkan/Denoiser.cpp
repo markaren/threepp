@@ -236,7 +236,7 @@ namespace threepp::vulkan {
                                   VkExtent2D      extent,
                                   bool            denoiseEnabled,
                                   uint32_t        toneMapping,
-                                  uint32_t        exposureBits,
+                                  uint32_t        preExpBits,
                                   bool            bgIsSolidColor) {
         const uint32_t gx = (extent.width  + 7u) / 8u;
         const uint32_t gy = (extent.height + 7u) / 8u;
@@ -304,13 +304,15 @@ namespace threepp::vulkan {
             barrierMem(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
         }
 
-        // Finalize: tonemap + sRGB → outImage. When `denoiseEnabled` is
+        // Finalize (resolve): linear-HDR sceneHdr write (pre-exposed by
+        // preExpBits in physical-camera mode; 1.0 legacy). Tone map + sRGB
+        // happen downstream in PostComposite. When `denoiseEnabled` is
         // false, this is the only compute dispatch in the block; the
         // initial RT → COMPUTE barrier above covers it.
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, finalizePipeline_);
         const uint32_t finalizePc[4] = {
                 toneMapping,
-                exposureBits,
+                preExpBits,
                 denoiseEnabled ? 1u : 0u,
                 bgIsSolidColor ? 1u : 0u,
         };

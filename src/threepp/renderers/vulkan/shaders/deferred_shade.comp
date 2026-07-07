@@ -299,6 +299,11 @@ layout(push_constant) uniform Pc {
                               // early-outs elsewhere; shades the single largest non-dominant sample cluster
                               // and accumulates its weighted contribution into outImage. See main()'s top
                               // (tap selection) and bottom (imageStore gating) for the shadeMode==1 branches.
+    uint  preExpBits;        // float-bits: pre-exposure baked into every outImage (sceneHdr) store —
+                              // physical-camera mode keeps 100k-lux radiance inside fp16.
+                              // 1.0 in legacy mode: an exact no-op multiply.
+    uint  prevPreExpBits;    // float-bits: the PREV frame's pre-exposure — the SSR prev-scene
+                              // fetch divides by it to recover UNexposed radiance.
 } pc;
 
 // Integrated volumetric in-scatter for the camera→(uv, viewDist) leg — ONE
@@ -592,7 +597,9 @@ bool ssrTraceHiZ(vec3 O, vec3 Rd, out vec3 color) {
     const vec2 pNdc = vec2(hitUv.x * 2.0 - 1.0, -(hitUv.y * 2.0 - 1.0)) + mvH;
     const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
     if (any(lessThan(pUv, vec2(0.0))) || any(greaterThan(pUv, vec2(1.0)))) return false;
-    color = texture(prevSceneTex, pUv).rgb;
+    // Un-bake the PREV frame's pre-exposure — this value re-enters the
+    // shading sum, which the final store re-exposes with THIS frame's.
+    color = texture(prevSceneTex, pUv).rgb / uintBitsToFloat(pc.prevPreExpBits);
     return true;
 }
 
@@ -3217,7 +3224,7 @@ void main() {
         sky += froxelInscatter(uv, kFroxelZMax)
              + volumetricSpotScatter(camPos, dirWS, 2000.0, px)
              + volumetricDirScatter(camPos, dirWS, 2000.0, px);
-        imageStore(outImage, px, vec4(sky, 1.0));
+        imageStore(outImage, px, vec4(sky * uintBitsToFloat(pc.preExpBits), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(shadowVisImage, px, vec4(0.0));// cold-start marker for the ping-pong
         imageStore(directUImage, px, vec4(0.0));
@@ -3239,7 +3246,7 @@ void main() {
         // sky minority blended here (dispatch B pays the geometry minority).
         vec3 outU = applySceneFog(albedo, camPos, wpU) * domWeight;
         if (skyEdgeW > 0.0) outU += skyEdgeW * skyBackground(ndc);
-        imageStore(outImage, px, vec4(outU, 1.0));
+        imageStore(outImage, px, vec4(outU * uintBitsToFloat(pc.preExpBits), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(shadowVisImage, px, vec4(0.0));
         imageStore(directUImage, px, vec4(0.0));
@@ -3353,7 +3360,7 @@ void main() {
         // per-pixel spot beams (crisp lighthouse over the swell).
         wcol += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))
               + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
-        imageStore(outImage, px, vec4(wcol, 1.0));
+        imageStore(outImage, px, vec4(wcol * uintBitsToFloat(pc.preExpBits), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(reflectImage, px, vec4(0.0));// water shades its own reflection inline
         imageStore(shadowVisImage, px, vec4(0.0));// water shadows its own lighting inline
@@ -3807,8 +3814,8 @@ void main() {
         // point for complex pixels (dispatch A finished and barriered before
         // dispatch B starts), and each pixel is touched by exactly one
         // invocation, so there's no cross-invocation race.
-        const vec3 base = imageLoad(outImage, px).rgb;
-        imageStore(outImage, px, vec4(base + lit * msWeight, 1.0));
+        const vec3 base = imageLoad(outImage, px).rgb;// already pre-exposed by dispatch A
+        imageStore(outImage, px, vec4(base + lit * (msWeight * uintBitsToFloat(pc.preExpBits)), 1.0));
     } else {
         // Dispatch A: at a complex pixel, scale down by the dominant
         // cluster's population fraction and blend the SKY minority's
@@ -3826,7 +3833,7 @@ void main() {
         outC += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))// clustered point-light glow
               + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px)// crisp spot beams
               + volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);// sun shafts / aerial glow
-        imageStore(outImage, px, vec4(outC, 1.0));
+        imageStore(outImage, px, vec4(outC * uintBitsToFloat(pc.preExpBits), 1.0));
     }
     // Dispatch B never touches the GI/SVGF accumulator channels (indirect/
     // momentsImage) — those are dispatch-A-exclusive temporal state keyed to

@@ -1,7 +1,6 @@
-// BloomPass — HDR bloom + tone-map/sRGB composite, the tail of the PT post
-// stack.
+// BloomPass — the HDR bloom pyramid of the shared post stack.
 //
-// denoise.comp (resolve) writes the linear-HDR scene into sceneHdr (bound to
+// The shade/resolve stage writes the linear-HDR scene into sceneHdr (bound to
 // the shared RT descriptor set's binding 1). This pass then runs the Jimenez
 // 2014 ("Next Generation Post Processing in Call of Duty: Advanced Warfare")
 // progressive bloom pyramid:
@@ -12,17 +11,15 @@
 //      into the next-finer level, accumulating every level into level 0 —
 //      wide, stable, energy-conserving halos whose reach is resolution-
 //      independent (a single half-res blur's radius shrinks relative to the
-//      image as resolution grows),
-//   3. composite: bloom (level 0, intensity normalized by level count) +
-//      sceneHdr in linear HDR, tone-map, sRGB-encode → the TAA input image.
+//      image as resolution grows).
 //
-// Adding bloom before the tone-map curve is what makes a bright highlight
-// glow far more than a mid-tone (the correct, AAA look). With bloomIntensity
-// <= 0 the bloom passes are skipped and the composite reproduces the previous
-// finalize output exactly.
+// The tone-map / sRGB composite that consumes level 0 lives in PostComposite
+// (split out so camera/display response isn't a bloom concern). Adding bloom
+// before the tone-map curve there is what makes a bright highlight glow far
+// more than a mid-tone (the correct, AAA look). With bloomIntensity <= 0 the
+// pyramid is skipped entirely.
 //
-// All images are per-frame-in-flight (no swapchain-image dimension — the
-// composite writes the per-frame TAA input, not the swapchain directly).
+// All images are per-frame-in-flight (no swapchain-image dimension).
 
 #ifndef THREEPP_VULKAN_BLOOM_PASS_HPP
 #define THREEPP_VULKAN_BLOOM_PASS_HPP
@@ -53,7 +50,7 @@ namespace threepp::vulkan {
         void destroyImages();
 
         // sceneHdr view per frame — bound to the shared RT set's binding 1 so
-        // denoise.comp (resolve) writes the linear-HDR scene here.
+        // the shade/resolve writes the linear-HDR scene here.
         [[nodiscard]] VkImageView sceneHdrView(uint32_t frame) const {
             return sceneHdr_[frame].view;
         }
@@ -61,24 +58,29 @@ namespace threepp::vulkan {
             return sceneHdr_[frame].image;
         }
 
-        // Rewrite per-frame descriptor sets. External inputs (one view per
-        // frame-in-flight): the G-buffer storage view (for the solid-bg sky
-        // bypass) and the TAA input view (composite output target).
-        struct DescriptorWriteInputs {
-            const VkImageView* gbufPerFrame     = nullptr;// [framesInFlight]
-            const VkImageView* taaInputPerFrame = nullptr;// [framesInFlight]
-        };
-        void rewriteDescriptors(const DescriptorWriteInputs& in);
+        // Pyramid level 0 (half res, all levels accumulated) — what the
+        // PostComposite samples as the bloom buffer.
+        [[nodiscard]] VkImageView bloomView(uint32_t frame) const {
+            return pyr_[frame * kMaxLevels].view;
+        }
+        // Runtime level count for the current extent — PostComposite divides
+        // bloomIntensity by it so the summed pyramid lands at the same
+        // overall energy a single-level bloom put out for the same slider.
+        [[nodiscard]] uint32_t levels() const { return levels_; }
 
-        // Records the bloom chain (skipped when bloomIntensity <= 0) and the
-        // composite (always). width/height = path-trace render extent.
-        // bloomClamp caps the per-tap HDR input to the bright pass (<= 0 = off)
-        // so sub-pixel specular flicker can't pulse the halo radius.
-        void recordDispatch(VkCommandBuffer cb, uint32_t frame,
-                            uint32_t width, uint32_t height,
-                            uint32_t toneMapping, uint32_t exposureBits,
-                            bool bgIsSolidColor, float bloomIntensity,
-                            float bloomThreshold, float bloomClamp);
+        // Rewrite the per-frame down/up descriptor sets (internal images
+        // only). Call after createImages.
+        void rewriteDescriptors();
+
+        // Records the bloom pyramid; no-op when bloomIntensity <= 0.
+        // width/height = render extent. bloomClamp caps the per-tap HDR input
+        // to the bright pass (<= 0 = off) so sub-pixel specular flicker can't
+        // pulse the halo radius. Ends with the pyramid writes barriered
+        // visible to the next compute consumer.
+        void recordPyramid(VkCommandBuffer cb, uint32_t frame,
+                           uint32_t width, uint32_t height,
+                           float bloomIntensity, float bloomThreshold,
+                           float bloomClamp);
 
     private:
         VulkanContext& ctx_;
@@ -101,15 +103,10 @@ namespace threepp::vulkan {
         VkPipelineLayout      bloomPipeLayout_ = VK_NULL_HANDLE;
         VkPipeline            downPipe_        = VK_NULL_HANDLE;
         VkPipeline            upPipe_          = VK_NULL_HANDLE;
-        // Composite layout (sampler @0,1; storage @2,3; 24B PC).
-        VkDescriptorSetLayout compDsLayout_    = VK_NULL_HANDLE;
-        VkPipelineLayout      compPipeLayout_  = VK_NULL_HANDLE;
-        VkPipeline            compPipe_        = VK_NULL_HANDLE;
 
         VkDescriptorPool descPool_ = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> downSets_;// [f×kMaxLevels]: (sceneHdr|pyr[l-1]) -> pyr[l]
         std::vector<VkDescriptorSet> upSets_;  // [f×kMaxLevels]: pyr[l+1] -> pyr[l] (accumulate)
-        std::vector<VkDescriptorSet> compSets_;// sceneHdr+pyr[0]+gbuf -> taaInput
 
         Image2D createStorageSampledImage(uint32_t w, uint32_t h, const char* label);
         void    transitionFreshImage(VkImage img);

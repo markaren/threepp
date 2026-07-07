@@ -103,7 +103,12 @@ namespace threepp {
         // luminance while preserving a bright colour's hue, instead of ACES's
         // path-to-white. Good for keeping coloured emitters/albedos from
         // desaturating toward white at high intensity.
-        Neutral = 6
+        Neutral = 6,
+        // AgX (three.js AgXToneMapping): Sobotka's filmic sigmoid — the
+        // gentlest highlight rolloff of the set; holds saturated emitters
+        // without hue skew. NOTE: numeric value diverges from three.js
+        // (threepp assigned 6 to Neutral first). Vulkan renderers only.
+        AgX = 7
     };
 
     enum class Mapping {

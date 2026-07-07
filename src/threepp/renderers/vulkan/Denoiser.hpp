@@ -53,15 +53,16 @@ namespace threepp::vulkan {
         // 33 / 34 already wired via the view accessors below). Inserts
         // the RT_SHADER → COMPUTE_SHADER memory barrier internally,
         // then runs the two à-trous passes (stride 1, 2) gated on
-        // `denoiseEnabled`, and finally the finalize pass (tone-map +
-        // sRGB → outImage) which always runs. `extent` is the dispatch
-        // size (swapchain extent).
+        // `denoiseEnabled`, and finally the finalize/resolve pass
+        // (linear-HDR sceneHdr write, scaled by preExpBits — the
+        // physical-camera pre-exposure; 0x3F800000 = 1.0f = legacy)
+        // which always runs. `extent` is the dispatch size.
         void recordDispatch(VkCommandBuffer cb,
                             VkDescriptorSet frameDescriptorSet,
                             VkExtent2D      extent,
                             bool            denoiseEnabled,
                             uint32_t        toneMapping,
-                            uint32_t        exposureBits,
+                            uint32_t        preExpBits,
                             bool            bgIsSolidColor);
 
         // View / image accessors for descriptor wiring and pre-RT

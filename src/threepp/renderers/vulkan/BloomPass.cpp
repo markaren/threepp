@@ -4,7 +4,6 @@
 
 #include "threepp/renderers/vulkan/shaders/bloom_down.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/bloom_up.comp.spv.h"
-#include "threepp/renderers/vulkan/shaders/composite.comp.spv.h"
 
 #include <algorithm>
 #include <array>
@@ -24,11 +23,8 @@ namespace threepp::vulkan {
         VkDevice d = ctx_.device();
         if (downPipe_)       vkDestroyPipeline(d, downPipe_, nullptr);
         if (upPipe_)         vkDestroyPipeline(d, upPipe_, nullptr);
-        if (compPipe_)       vkDestroyPipeline(d, compPipe_, nullptr);
         if (bloomPipeLayout_) vkDestroyPipelineLayout(d, bloomPipeLayout_, nullptr);
-        if (compPipeLayout_)  vkDestroyPipelineLayout(d, compPipeLayout_, nullptr);
         if (bloomDsLayout_)  vkDestroyDescriptorSetLayout(d, bloomDsLayout_, nullptr);
-        if (compDsLayout_)   vkDestroyDescriptorSetLayout(d, compDsLayout_, nullptr);
         if (descPool_)       vkDestroyDescriptorPool(d, descPool_, nullptr);
         if (sampler_)        vkDestroySampler(d, sampler_, nullptr);
         destroyImages();
@@ -217,45 +213,10 @@ namespace threepp::vulkan {
                   "vkCreatePipelineLayout(bloom)");
         }
 
-        // Composite layout: combined samplers @0,1 ; storage images @2,3.
-        {
-            VkDescriptorSetLayoutBinding bnd[4]{};
-            bnd[0].binding = 0;
-            bnd[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bnd[1].binding = 1;
-            bnd[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bnd[2].binding = 2;
-            bnd[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bnd[3].binding = 3;
-            bnd[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            for (auto& b : bnd) { b.descriptorCount = 1; b.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT; }
-            VkDescriptorSetLayoutCreateInfo dlci{};
-            dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            dlci.bindingCount = 4;
-            dlci.pBindings = bnd;
-            check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &compDsLayout_),
-                  "vkCreateDescriptorSetLayout(composite)");
-
-            VkPushConstantRange pc{};
-            pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            pc.offset = 0;
-            pc.size = 24;// 6×u32
-            VkPipelineLayoutCreateInfo plci{};
-            plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            plci.setLayoutCount = 1;
-            plci.pSetLayouts = &compDsLayout_;
-            plci.pushConstantRangeCount = 1;
-            plci.pPushConstantRanges = &pc;
-            check(vkCreatePipelineLayout(d, &plci, nullptr, &compPipeLayout_),
-                  "vkCreatePipelineLayout(composite)");
-        }
-
         downPipe_ = makeComputePipe(d, ctx_.pipelineCache(), bloomPipeLayout_, kBloomDownCompSpv,
                                     sizeof(kBloomDownCompSpv), "vkCreateComputePipelines(bloom_down)");
         upPipe_   = makeComputePipe(d, ctx_.pipelineCache(), bloomPipeLayout_, kBloomUpCompSpv,
                                     sizeof(kBloomUpCompSpv), "vkCreateComputePipelines(bloom_up)");
-        compPipe_ = makeComputePipe(d, ctx_.pipelineCache(), compPipeLayout_, kCompositeCompSpv,
-                                    sizeof(kCompositeCompSpv), "vkCreateComputePipelines(composite)");
     }
 
     void BloomPass::createDescriptorPool() {
@@ -265,13 +226,13 @@ namespace threepp::vulkan {
         const uint32_t upSets   = framesInFlight_ * kMaxLevels;// only levels-1 used
         VkDescriptorPoolSize sizes[2]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = downSets + upSets + framesInFlight_ * 2;// +comp2
+        sizes[0].descriptorCount = downSets + upSets;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[1].descriptorCount = downSets + upSets + framesInFlight_ * 2;// +comp2
+        sizes[1].descriptorCount = downSets + upSets;
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = downSets + upSets + framesInFlight_;
+        dpci.maxSets       = downSets + upSets;
         dpci.poolSizeCount = 2;
         dpci.pPoolSizes    = sizes;
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
@@ -291,10 +252,9 @@ namespace threepp::vulkan {
         };
         alloc(downSets_, bloomDsLayout_, downSets);
         alloc(upSets_,   bloomDsLayout_, upSets);
-        alloc(compSets_, compDsLayout_,  framesInFlight_);
     }
 
-    void BloomPass::rewriteDescriptors(const DescriptorWriteInputs& in) {
+    void BloomPass::rewriteDescriptors() {
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
             auto sampled = [&](VkImageView v) {
                 VkDescriptorImageInfo i{};
@@ -339,36 +299,15 @@ namespace threepp::vulkan {
                     writePair(upSets_[f * kMaxLevels + l], &uIn, &uOut);
                 }
             }
-
-            // composite: sceneHdr (sampled), pyr[0] (sampled), gbuf (storage) -> taaInput (storage)
-            VkDescriptorImageInfo cScene = sampled(sceneHdr_[f].view);
-            VkDescriptorImageInfo cBloom = sampled(pyr_[f * kMaxLevels].view);
-            VkDescriptorImageInfo cGbuf  = storage(in.gbufPerFrame[f]);
-            VkDescriptorImageInfo cOut   = storage(in.taaInputPerFrame[f]);
-
-            VkWriteDescriptorSet w[4]{};
-            auto setw = [&](int n, VkDescriptorSet ds, uint32_t bind,
-                            VkDescriptorType t, const VkDescriptorImageInfo* info) {
-                w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                w[n].dstSet = ds;
-                w[n].dstBinding = bind;
-                w[n].descriptorCount = 1;
-                w[n].descriptorType = t;
-                w[n].pImageInfo = info;
-            };
-            setw(0, compSets_[f], 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cScene);
-            setw(1, compSets_[f], 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cBloom);
-            setw(2, compSets_[f], 2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cGbuf);
-            setw(3, compSets_[f], 3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cOut);
-            vkUpdateDescriptorSets(ctx_.device(), 4, w, 0, nullptr);
         }
     }
 
-    void BloomPass::recordDispatch(VkCommandBuffer cb, uint32_t frame,
-                                   uint32_t width, uint32_t height,
-                                   uint32_t toneMapping, uint32_t exposureBits,
-                                   bool bgIsSolidColor, float bloomIntensity,
-                                   float bloomThreshold, float bloomClamp) {
+    void BloomPass::recordPyramid(VkCommandBuffer cb, uint32_t frame,
+                                  uint32_t width, uint32_t height,
+                                  float bloomIntensity, float bloomThreshold,
+                                  float bloomClamp) {
+        if (bloomIntensity <= 0.0f) return;
+
         auto barrier = [&]() {
             VkMemoryBarrier2 mb{};
             mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -384,61 +323,42 @@ namespace threepp::vulkan {
             vkCmdPipelineBarrier2(cb, &di);
         };
 
-        // denoise.comp (resolve) wrote sceneHdr (compute); make it visible.
+        // The shade/resolve wrote sceneHdr (compute); make it visible.
         barrier();
 
-        if (bloomIntensity > 0.0f) {
-            struct BloomPc { uint32_t srcW, srcH, dstW, dstH; float threshold, clampMax; uint32_t firstLevel; };
-            auto levelW = [&](uint32_t l) { return std::max(width_  >> (l + 1u), 1u); };
-            auto levelH = [&](uint32_t l) { return std::max(height_ >> (l + 1u), 1u); };
+        struct BloomPc { uint32_t srcW, srcH, dstW, dstH; float threshold, clampMax; uint32_t firstLevel; };
+        auto levelW = [&](uint32_t l) { return std::max(width_  >> (l + 1u), 1u); };
+        auto levelH = [&](uint32_t l) { return std::max(height_ >> (l + 1u), 1u); };
 
-            // Progressive downsample: sceneHdr → pyr[0] (Karis + soft-knee
-            // bright pass + per-tap clamp) → pyr[1] → … (plain 13-tap).
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, downPipe_);
-            for (uint32_t l = 0; l < levels_; ++l) {
-                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bloomPipeLayout_,
-                                        0, 1, &downSets_[frame * kMaxLevels + l], 0, nullptr);
-                BloomPc pc{l == 0 ? width : levelW(l - 1), l == 0 ? height : levelH(l - 1),
-                           levelW(l), levelH(l),
-                           bloomThreshold, l == 0 ? bloomClamp : 0.f, l == 0 ? 1u : 0u};
-                vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                vkCmdDispatch(cb, (levelW(l) + 7u) / 8u, (levelH(l) + 7u) / 8u, 1);
-                barrier();
-            }
-
-            // Progressive upsample walk-back: tent-filter each coarser level
-            // and ADD it into the next-finer one, accumulating the whole
-            // chain into pyr[0]. The composite divides bloomIntensity by the
-            // level count, so total energy matches a single-level bloom.
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, upPipe_);
-            for (uint32_t l = levels_ - 1; l > 0; --l) {
-                const uint32_t dst = l - 1;
-                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bloomPipeLayout_,
-                                        0, 1, &upSets_[frame * kMaxLevels + dst], 0, nullptr);
-                BloomPc pc{levelW(l), levelH(l), levelW(dst), levelH(dst), 0.f, 0.f, 0u};
-                vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                vkCmdDispatch(cb, (levelW(dst) + 7u) / 8u, (levelH(dst) + 7u) / 8u, 1);
-                barrier();
-            }
+        // Progressive downsample: sceneHdr → pyr[0] (Karis + soft-knee
+        // bright pass + per-tap clamp) → pyr[1] → … (plain 13-tap).
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, downPipe_);
+        for (uint32_t l = 0; l < levels_; ++l) {
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bloomPipeLayout_,
+                                    0, 1, &downSets_[frame * kMaxLevels + l], 0, nullptr);
+            BloomPc pc{l == 0 ? width : levelW(l - 1), l == 0 ? height : levelH(l - 1),
+                       levelW(l), levelH(l),
+                       bloomThreshold, l == 0 ? bloomClamp : 0.f, l == 0 ? 1u : 0u};
+            vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+            vkCmdDispatch(cb, (levelW(l) + 7u) / 8u, (levelH(l) + 7u) / 8u, 1);
+            barrier();
         }
 
-        // Composite: sceneHdr (+ pyr[0]) -> tone map -> sRGB -> TAA input.
-        // Intensity is normalized by the accumulated level count so the summed
-        // pyramid lands at the same overall energy the old single-blur bloom
-        // put out for the same slider value — halos just reach further.
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, compPipe_);
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                compPipeLayout_, 0, 1, &compSets_[frame], 0, nullptr);
-        const float effIntensity = bloomIntensity / static_cast<float>(std::max(levels_, 1u));
-        uint32_t intensityBits;
-        std::memcpy(&intensityBits, &effIntensity, sizeof(intensityBits));
-        const uint32_t cpc[6] = {toneMapping, exposureBits,
-                                 bgIsSolidColor ? 1u : 0u, intensityBits,
-                                 width, height};
-        vkCmdPushConstants(cb, compPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cpc), cpc);
-        vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
-        // Composite wrote the TAA input; TaaResolve::recordResolve's pre-barrier
-        // makes it visible to the temporal resolve.
+        // Progressive upsample walk-back: tent-filter each coarser level
+        // and ADD it into the next-finer one, accumulating the whole
+        // chain into pyr[0]. PostComposite divides bloomIntensity by the
+        // level count, so total energy matches a single-level bloom.
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, upPipe_);
+        for (uint32_t l = levels_ - 1; l > 0; --l) {
+            const uint32_t dst = l - 1;
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bloomPipeLayout_,
+                                    0, 1, &upSets_[frame * kMaxLevels + dst], 0, nullptr);
+            BloomPc pc{levelW(l), levelH(l), levelW(dst), levelH(dst), 0.f, 0.f, 0u};
+            vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+            vkCmdDispatch(cb, (levelW(dst) + 7u) / 8u, (levelH(dst) + 7u) / 8u, 1);
+            barrier();
+        }
+        // Last barrier above already covers pyramid write → PostComposite read.
     }
 
 }// namespace threepp::vulkan

@@ -21,6 +21,7 @@
 #define THREEPP_VULKANRENDERERCORE_HPP
 
 #include "threepp/helpers/LidarTypes.hpp"
+#include "threepp/math/Vector3.hpp"
 #include "threepp/renderers/Renderer.hpp"
 
 #include <cstdint>
@@ -232,6 +233,63 @@ namespace threepp {
         // frame of smear. 0 (default) disables the passes entirely.
         void setMotionBlur(float shutterFraction);
         [[nodiscard]] float motionBlur() const;
+
+        // ── Physical camera exposure ─────────────────────────────────────
+        // Derive exposure from real camera parameters instead of
+        // toneMappingExposure:
+        //   EV100 = log2(aperture²/shutter · 100/iso) − evCompensation
+        //   exposure = 1 / (1.2 · 2^EV100)
+        // Defaults (f/16, 1/125 s, ISO 100) are the sunny-16 daylight
+        // setting: a 100,000 lux sun-lit scene lands at mid-gray. Pair with
+        // setPhysicalLightUnits so intensities are real photometric units.
+        // While enabled the renderer PRE-EXPOSES the HDR scene target
+        // (stores are scaled by the exposure) so fp16 never overflows at
+        // daylight magnitudes; bloomThreshold then operates on exposed
+        // values (~1.0 = a few stops above mid-gray). toneMappingExposure
+        // is ignored; the deferred renderer's auto-exposure composes on top
+        // as EV compensation around the physical exposure. OFF by default.
+        void setPhysicalCamera(bool enabled);
+        [[nodiscard]] bool physicalCamera() const;
+
+        // Camera exposure triplet (effective while physicalCamera is on):
+        // aperture = f-number N, shutter in seconds, iso = sensitivity.
+        void setCameraExposure(float aperture, float shutterSeconds, float iso);
+
+        // Exposure compensation in EV (+1 doubles screen brightness);
+        // effective while physicalCamera is on. Default 0.
+        void setExposureCompensation(float ev);
+        [[nodiscard]] float exposureCompensation() const;
+
+        // ── Physical light units ─────────────────────────────────────────
+        // When enabled, analytic light intensities are photometric:
+        //   DirectionalLight.intensity = lux (sunlight ≈ 100,000)
+        //   PointLight.intensity = lumens (candela = Φ/4π at upload)
+        //   SpotLight.intensity  = lumens (Φ/π — Frostbite's convention:
+        //                          brightness invariant under cone edits)
+        //   RectAreaLight.intensity / emissive = nits (used as-is)
+        // Default off: intensities keep the legacy arbitrary units.
+        void setPhysicalLightUnits(bool enabled);
+        [[nodiscard]] bool physicalLightUnits() const;
+
+        // ── White balance + colour grade (post composite) ────────────────
+        // Scene-illuminant white balance: temperatureK on the Planckian
+        // locus (1667–25000 K; 6500 = neutral/D65 = off), tint shifts
+        // green (−) / magenta (+), ±1 ≈ ±0.05 in CIE y. Bradford-adapted
+        // to D65 in linear space before the tone curve.
+        void setWhiteBalance(float temperatureK, float tint = 0.0f);
+
+        // Lift/gamma/gain colour wheels + saturation + contrast, applied to
+        // the tone-mapped sRGB-encoded result via a 33³ LUT baked on the
+        // CPU at set time (call at UI rate, not per frame). Defaults are
+        // identity = off.
+        struct ColorGrade {
+            Vector3 lift{0.f, 0.f, 0.f};  // adds toward shadows
+            Vector3 gamma{1.f, 1.f, 1.f}; // mid-tone power (per channel)
+            Vector3 gain{1.f, 1.f, 1.f};  // scales toward highlights
+            float saturation = 1.f;
+            float contrast   = 1.f;// pivot 0.5 (display-referred)
+        };
+        void setColorGrade(const ColorGrade& grade);
 
         // ── PhysX soft-body zero-copy interop (CUDA → Vulkan) ────────────────
         struct SoftBodyInteropHandle {

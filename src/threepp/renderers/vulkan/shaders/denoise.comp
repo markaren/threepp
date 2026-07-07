@@ -30,10 +30,12 @@ layout(set = 0, binding = 12, rgba32f) uniform readonly image2D gbufImage;
 layout(set = 0, binding = 20, rgba32f) uniform readonly image2D filteredArray[2];
 
 layout(push_constant) uniform Pc {
-    uint toneMapping;     // unused here — composite.comp owns tone mapping
-    uint exposureBits;    // unused here — kept for ABI parity with the
-    uint denoiseEnabled;  // Denoiser::recordDispatch finalize push (4×u32).
-    uint bgIsSolidColor;  // unused here — composite.comp owns the bg bypass.
+    uint toneMapping;     // unused here — post_composite.comp owns tone mapping
+    uint preExpBits;      // float-bits: pre-exposure baked into the sceneHdr store
+                          // (physical-camera mode keeps 100k-lux radiance inside
+                          // fp16; 1.0 legacy = exact no-op multiply)
+    uint denoiseEnabled;
+    uint bgIsSolidColor;  // unused here — post_composite.comp owns the bg bypass.
 } pc;
 
 void main() {
@@ -60,6 +62,7 @@ void main() {
         }
     }
 
-    // Linear HDR out — composite.comp applies tone map + sRGB (+ bloom).
-    imageStore(outImage, px, vec4(color, 1.0));
+    // Linear HDR out (pre-exposed in physical-camera mode) —
+    // post_composite.comp applies tone map + sRGB (+ bloom).
+    imageStore(outImage, px, vec4(color * uintBitsToFloat(pc.preExpBits), 1.0));
 }

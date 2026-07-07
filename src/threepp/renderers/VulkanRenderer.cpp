@@ -79,17 +79,26 @@ namespace threepp {
                     views[f] = bloom_->sceneHdrView(f);
                 autoExposure_->rewriteDescriptors(views);
             }
+            // Physical camera: the EMA adapts an EV COMPENSATION around the
+            // EV100-derived exposure instead of an absolute multiplier
+            // around 1.0 (the histogram/EMA machinery is reused unchanged).
+            autoExposure_->baseExposure = physicalCamera_ ? physicalExposure() : 1.f;
             autoExposure_->tick(frame, dt);
         }
 
-        // Return adapted exposure when auto-exposure is active.
+        // Return adapted exposure when auto-exposure is active (composes the
+        // physical-camera base inside AutoExposure::exposure()).
         [[nodiscard]] float currentExposure() const override {
             if (autoExposureEnabled_ && autoExposure_)
                 return autoExposure_->exposure();
-            return toneMappingExposure_;
+            return CoreImpl::currentExposure();
         }
 
         bool decalsEnabled() const override { return true; }
+
+        // Deferred: the PT-style gbuf ping-pong is never written — the post
+        // composite's solid-bg sky test must read the raster ids attachment.
+        bool skyIdsFromRasterGbuf() const override { return true; }
 
         // HDRI sun → analytic light (see CoreImpl::envSunExtractionWanted).
         // ONE-SUN POLICY: Auto extracts (mip clamp) but injects the analytic
@@ -251,7 +260,7 @@ namespace threepp {
                                            std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
                                            gbufMsaaSamples_, /*shadeMode=*/0u, shadeBActive,
                                            clusterLightCountThisFrame_, froxelsActive,
-                                           ssrActive);
+                                           ssrActive, preExpBits_, prevPreExpBits_);
             gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
 
             // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
@@ -294,7 +303,7 @@ namespace threepp {
                                                std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
                                                gbufMsaaSamples_, /*shadeMode=*/1u, /*shadeBActive=*/true,
                                                clusterLightCountThisFrame_, froxelsActive,
-                                               ssrActive);
+                                               ssrActive, preExpBits_, prevPreExpBits_);
                 gpuTimings_->end(cb, TP_ShadeB, currentFrame);
 
                 // Dispatch B's outImage write -> bloom/composite's read.
@@ -330,7 +339,7 @@ namespace threepp {
                 vkCmdPipelineBarrier2(cb, &denoiseDep);
                 gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
                 deferredShade_->recordDenoiseDispatch(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
-                                                      gbufMsaaSamples_, shadeBActive);
+                                                      gbufMsaaSamples_, shadeBActive, preExpBits_);
                 gpuTimings_->end(cb, TP_Denoise, currentFrame);
             }
             // Auto-exposure: histogram over the final sceneHdr. sceneHdr writes
@@ -351,7 +360,8 @@ namespace threepp {
                 lumDep.pMemoryBarriers    = &lumBar;
                 vkCmdPipelineBarrier2(cb, &lumDep);
                 autoExposure_->recordDispatch(cb, currentFrame,
-                                             regionRenderExt_.width, regionRenderExt_.height);
+                                             regionRenderExt_.width, regionRenderExt_.height,
+                                             preExpHist_[currentFrame]);// meter un-bakes this
             }
         }
     };
@@ -1119,6 +1129,51 @@ namespace threepp {
 
     float VulkanRendererCore::motionBlur() const {
         return core()->motionBlurAmount_;
+    }
+
+    void VulkanRendererCore::setPhysicalCamera(bool enabled) {
+        core()->physicalCamera_ = enabled;
+    }
+
+    bool VulkanRendererCore::physicalCamera() const {
+        return core()->physicalCamera_;
+    }
+
+    void VulkanRendererCore::setCameraExposure(float aperture, float shutterSeconds, float iso) {
+        core()->camAperture_ = std::max(aperture, 0.1f);
+        core()->camShutter_  = std::max(shutterSeconds, 1e-6f);
+        core()->camIso_      = std::max(iso, 1.f);
+    }
+
+    void VulkanRendererCore::setExposureCompensation(float ev) {
+        core()->camEvComp_ = std::clamp(ev, -20.f, 20.f);
+    }
+
+    float VulkanRendererCore::exposureCompensation() const {
+        return core()->camEvComp_;
+    }
+
+    void VulkanRendererCore::setPhysicalLightUnits(bool enabled) {
+        core()->physicalLightUnits_ = enabled;
+    }
+
+    bool VulkanRendererCore::physicalLightUnits() const {
+        return core()->physicalLightUnits_;
+    }
+
+    void VulkanRendererCore::setWhiteBalance(float temperatureK, float tint) {
+        if (core()->post_) core()->post_->setWhiteBalance(temperatureK, tint);
+    }
+
+    void VulkanRendererCore::setColorGrade(const ColorGrade& grade) {
+        if (!core()->post_) return;
+        vulkan::PostComposite::ColorGrade g;
+        g.lift[0]  = grade.lift.x;  g.lift[1]  = grade.lift.y;  g.lift[2]  = grade.lift.z;
+        g.gamma[0] = grade.gamma.x; g.gamma[1] = grade.gamma.y; g.gamma[2] = grade.gamma.z;
+        g.gain[0]  = grade.gain.x;  g.gain[1]  = grade.gain.y;  g.gain[2]  = grade.gain.z;
+        g.saturation = grade.saturation;
+        g.contrast   = grade.contrast;
+        core()->post_->setColorGrade(g);
     }
 
     void VulkanRendererCore::setFireflyClamp(float cap) {
