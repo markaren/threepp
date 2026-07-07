@@ -2873,6 +2873,49 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     return sum;
 }
 
+// ── Directional-light volumetric single scattering (god rays / aerial glow) ───
+// Ray-marches the camera→surface (or →sky-cap) segment; at each step an RT shadow
+// ray toward each sun carves real light shafts through trees/terrain, and the
+// Henyey-Greenstein phase brightens the haze TOWARD the sun (the "volume" a flat
+// extinction haze lacks). Sun shafts are HIGH-frequency (thin occluders, thin
+// fog integrated over kilometres) — the froxel grid blurred them to nothing,
+// so they stay per-pixel. Gated on fog.enabled AND the volumetric-fog flag
+// (bit 4) so the per-step shadow-ray cost is opt-in; the per-pixel jittered
+// step offset relies on TAA to average into smooth shafts.
+vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
+    if (fog.enabled < 0.5 || (pc.flags & 16u) == 0u || lights.dirCount == 0u) return vec3(0.0);
+    const float sigma = max(dot(fog.sigmaT, vec3(1.0 / 3.0)), 0.0);
+    if (sigma <= 0.0) return vec3(0.0);
+    const float hgG       = fog.anisotropy;
+    const vec3  medAlbedo = fog.color;
+    // Cap the march where transmittance is essentially extinct (σ·t ≈ 4) so a sky
+    // pixel's huge tMax doesn't spend steps on fully-attenuated distance.
+    const float march = min(tMax, 4.0 / sigma);
+    if (march <= 0.0) return vec3(0.0);
+
+    const int   STEPS  = 16;
+    uint        seed   = pcgHash(uint(px.x) * 7919u + pcgHash(uint(px.y) * 104729u + pc.frame * 6271u));
+    const float jitter = rnd(seed);
+    const float dt     = march / float(STEPS);
+
+    vec3 sum = vec3(0.0);
+    for (int s = 0; s < STEPS; ++s) {
+        const float t     = (float(s) + jitter) * dt;
+        const float trCam = exp(-sigma * t);          // camera→x transmittance
+        if (trCam < 0.003) break;                     // remaining contribution negligible
+        const vec3 x = ro + rd * t;
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+            const vec3  L     = normalize(lights.dirLights[i].direction);
+            const float vis   = shadowVis(x, L, 1e30); // tree/terrain shaft occlusion
+            if (vis <= 0.0) continue;
+            const float phase = hgPhase(dot(L, rd), hgG);// forward glow toward the sun
+            sum += lights.dirLights[i].color * (phase * vis * trCam);
+        }
+    }
+    // σ_s = σ_t · albedo: the medium tint scales the in-scattered radiance.
+    return sum * medAlbedo * (sigma * dt);
+}
+
 // Fogged sky/background colour along this pixel's view ray — the term dispatch A
 // blends at MSAA complex pixels for the SKY-minority coverage (and the full sky
 // path uses the same expression). Volumetric in-scatter is NOT included: that is
@@ -3019,7 +3062,8 @@ void main() {
         // Sky = the full froxel range (the far marches were σ-extinct anyway)
         // + the per-pixel spot beams (a lighthouse against the night sky).
         sky += froxelInscatter(uv, kFroxelZMax)
-             + volumetricSpotScatter(camPos, dirWS, 2000.0, px);
+             + volumetricSpotScatter(camPos, dirWS, 2000.0, px)
+             + volumetricDirScatter(camPos, dirWS, 2000.0, px);
         imageStore(outImage, px, vec4(sky, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(shadowVisImage, px, vec4(0.0));// cold-start marker for the ping-pong
@@ -3617,8 +3661,9 @@ void main() {
         // coverage weighting. (It used to be folded into `lit` before the
         // domWeight scale, which silently dimmed the beams/aerial glow by the
         // minority coverage at every edge pixel — a dark fringe in fog.)
-        outC += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))// sun shafts + point glow
-              + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);// crisp spot beams
+        outC += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))// clustered point-light glow
+              + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px)// crisp spot beams
+              + volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);// sun shafts / aerial glow
         imageStore(outImage, px, vec4(outC, 1.0));
     }
     // Dispatch B never touches the GI/SVGF accumulator channels (indirect/

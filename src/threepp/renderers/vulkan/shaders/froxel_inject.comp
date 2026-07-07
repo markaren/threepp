@@ -183,17 +183,12 @@ void main() {
 
     vec3 sum = vec3(0.0);
 
-    // Directional lights: one RT shadow ray per froxel carves the shafts
-    // (the old march paid 16 rays per PIXEL; the froxel grid + temporal EMA
-    // gets smoother shafts for ~2 orders of magnitude fewer rays). Gated
-    // exactly like volumetricDirScatter: fog on + the volumetric-fog flag.
-    if (fogDriven && (pc.flags & 16u) != 0u) {
-        for (uint i = 0u; i < lights.dirCount; ++i) {
-            const vec3 L = normalize(lights.dirLights[i].direction);
-            if (shadowVis(x, L, 1e30) <= 0.0) continue;
-            sum += lights.dirLights[i].color * hgPhase(dot(L, rd), hgG);
-        }
-    }
+    // NO directional lights here: sun shafts are carved by thin occluders
+    // (window mullions, tree trunks, robot legs) — high-frequency content
+    // this grid blurs into nothing (FJORD's aerial glow and spot_slam's god
+    // rays both vanished). They stay on the per-pixel RT march
+    // (volumetricDirScatter in deferred_shade.comp). Froxels own only the
+    // LOW-frequency term the marches never had: clustered point-light glow.
 
     // Clustered POINT lights — the volumetricSpotScatter per-step terms
     // (1 m-clamped inverse square, range window, HG phase, light-leg
