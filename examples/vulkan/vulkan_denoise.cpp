@@ -111,11 +111,13 @@ int main(int argc, char** argv) {
     std::string shotPath;
     int   shotFrames = 150, shotFrame = 0;
     float optLightRad = -1.f;
+    int   ringLights  = 0;// --lights N: ring of N extra colored point lights (clustered-lighting triage)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (a == "--lightrad" && i + 1 < argc) optLightRad = static_cast<float>(std::atof(argv[++i]));
+        else if (a == "--lights" && i + 1 < argc) ringLights = std::atoi(argv[++i]);
     }
 
     Canvas canvas("Vulkan PT - Denoiser Showcase", {{"vsync", false}});
@@ -171,6 +173,24 @@ int main(int argc, char** argv) {
         keyLight->radius  = optLightRad;
         fillLight->radius = optLightRad;
         rimLight->radius  = optLightRad;
+    }
+
+    // --lights N: ring of N colored point lights around the set with unlit
+    // marker spheres — clustered-lighting triage. The pre-cluster renderer
+    // capped point lights at 8 (the rest were silently dropped); with the
+    // cluster path every one of them lights its own pool of floor.
+    for (int i = 0; i < ringLights; ++i) {
+        const float a = static_cast<float>(i) / static_cast<float>(ringLights) * 6.2831853f;
+        Color c;
+        c.setHSL(static_cast<float>(i) / static_cast<float>(ringLights), 0.9f, 0.5f);
+        auto l = PointLight::create(c, 4.f, 7.f, 2.f);
+        l->position.set(std::cos(a) * 6.5f, 0.9f, std::sin(a) * 6.5f);
+        if (optLightRad >= 0.f) l->radius = optLightRad;
+        scene.add(l);
+        auto marker = Mesh::create(SphereGeometry::create(0.09f),
+                                   MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(c)));
+        marker->position.copy(l->position);
+        scene.add(marker);
     }
 
     // ---- Camera ----

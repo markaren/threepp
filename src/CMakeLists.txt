@@ -1006,6 +1006,12 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_denoise.comp"
         kDeferredDenoiseCompSpv
         _deferred_denoise_spv_h)
+    # Clustered light culling (deferred): per-cell light index lists consumed
+    # by deferred_shade's analytic direct split. See DeferredShade::recordClusterBuild.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/cluster_build.comp"
+        kClusterBuildCompSpv
+        _cluster_build_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/probe_update.comp"
         kProbeUpdateCompSpv

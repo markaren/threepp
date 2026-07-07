@@ -640,6 +640,32 @@ namespace threepp {
         static_assert(sizeof(GpuRectLight)  == 60);
         std::array<Buffer, kFramesInFlight> lightsUbos{};
 
+        // ── Clustered lights (deferred) ─────────────────────────────────────
+        // ALL scene point/spot lights, power-sorted, in one unified record —
+        // the UBO's 8-per-type arrays above keep the STRONGEST 8 (same sort)
+        // for the paths screen-space clusters can't serve (PT, reflection/GI
+        // hits, volumetric beams, probes). cluster_build.comp culls the list
+        // into per-cell index rows of a 16×8×24 screen-tile × exponential-Z
+        // grid; deferred_shade's analytic split loops only its own cell.
+        // KEEP IN SYNC with the ClusterLight structs in cluster_build.comp +
+        // deferred_shade.comp (scalar layout, 64 bytes).
+        static constexpr uint32_t kMaxClusterLights   = 256;
+        static constexpr uint32_t kClusterCells       = 16 * 8 * 24;
+        static constexpr uint32_t kClusterMaxPerCell  = 24;
+        struct GpuClusterLight {
+            float position[3];   float range;         // range 0 = infinite (three.js)
+            float color[3];      float decay;         // color premultiplied by intensity
+            float direction[3];  float cosAngleOuter; // spot cone; points carry -1.1/-1.05 (cone test → 1)
+            float cosAngleInner;
+            float radius;        // physical source radius (soft shadows)
+            float cullRadius;    // conservative influence radius (range, or the atten<eps solve)
+            float type;          // 0 = point, 1 = spot
+        };
+        static_assert(sizeof(GpuClusterLight) == 64);
+        std::array<Buffer, kFramesInFlight> clusterLightsBuffers{};// host-visible mapped (CPU fills per frame)
+        std::array<Buffer, kFramesInFlight> clusterGridBuffers{};  // device-local (cluster_build writes)
+        uint32_t clusterLightCountThisFrame_ = 0;
+
         // Homogeneous fog (participating media). FogExp2.density maps directly
         // to sigma_t; linear Fog (near/far) is converted to an equivalent
         // density. Enabled flag = 0 short-circuits all fog work in the shaders.
@@ -2232,6 +2258,8 @@ namespace threepp {
             for (auto& b : cameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : prevCameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : clusterLightsBuffers) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : clusterGridBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : fogUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : motionMatBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : meshMovedBitsBuffers) destroyBuffer(ctx->allocator(), b);
@@ -8243,6 +8271,25 @@ namespace threepp {
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                                 VMA_ALLOCATION_CREATE_MAPPED_BIT);
             }
+            // Clustered-light buffers: the full point/spot list (CPU-filled)
+            // + the per-cell index grid (cluster_build.comp writes it).
+            for (auto& b : clusterLightsBuffers) {
+                b = createBuffer(
+                        ctx->allocator(), ctx->device(),
+                        sizeof(GpuClusterLight) * kMaxClusterLights,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            }
+            for (auto& b : clusterGridBuffers) {
+                b = createBuffer(
+                        ctx->allocator(), ctx->device(),
+                        sizeof(uint32_t) * kClusterCells * (kClusterMaxPerCell + 1),
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        0);// device-local: GPU write (cull) → GPU read (shade)
+            }
         }
 
         // Walk the scene each frame for AmbientLight + DirectionalLight; pack
@@ -8257,6 +8304,22 @@ namespace threepp {
             scene.updateMatrixWorld();
 
             GpuLightsUbo ubo{};
+
+            // Uncapped point/spot collection for the clustered path. The cull
+            // radius bounds each light's influence for the cluster test: the
+            // authored range when set, else the distance where the 1/d^decay
+            // falloff drops below ~0.5% of the peak (range 0 = infinite in
+            // three.js — a literal infinity would put every light in every
+            // cell). Zero-power lights get cullRadius 0 → in no cell.
+            std::vector<GpuClusterLight> clusterCollect;
+            clusterCollect.reserve(16);
+            const auto clusterCullRadius = [](const GpuClusterLight& r) {
+                if (r.range > 0.f) return r.range;
+                const float L = std::max({r.color[0], r.color[1], r.color[2]});
+                if (L <= 0.f) return 0.f;
+                const float d = std::max(r.decay, 0.25f);
+                return std::min(std::pow(L / 0.005f, 1.f / d), 500.f);
+            };
 
             // traverseVisible so a hidden parent prunes its child lights too.
             scene.traverseVisible([&](Object3D& o) {
@@ -8278,35 +8341,45 @@ namespace threepp {
                     g.color[1] = dl->color.g * dl->intensity;
                     g.color[2] = dl->color.b * dl->intensity;
                 } else if (auto* pl = dynamic_cast<PointLight*>(&o)) {
-                    if (ubo.pointCount >= kMaxPointLights) return;
+                    // Point/spot lights are COLLECTED (uncapped) for the
+                    // clustered path; the UBO's 8-per-type slots are filled
+                    // from the power-sorted list after the traverse.
+                    GpuClusterLight rec{};
                     Vector3 wp; pl->getWorldPosition(wp);
-                    auto& g = ubo.pointLights[ubo.pointCount++];
-                    g.position[0] = wp.x; g.position[1] = wp.y; g.position[2] = wp.z;
-                    g.range = pl->distance;
-                    g.color[0] = pl->color.r * pl->intensity;
-                    g.color[1] = pl->color.g * pl->intensity;
-                    g.color[2] = pl->color.b * pl->intensity;
-                    g.decay = pl->decay;
-                    g.radius = pl->radius;
+                    rec.position[0] = wp.x; rec.position[1] = wp.y; rec.position[2] = wp.z;
+                    rec.range = pl->distance;
+                    rec.color[0] = pl->color.r * pl->intensity;
+                    rec.color[1] = pl->color.g * pl->intensity;
+                    rec.color[2] = pl->color.b * pl->intensity;
+                    rec.decay = pl->decay;
+                    rec.direction[2] = -1.f;
+                    rec.cosAngleOuter = -1.1f;// cone sentinel: smoothstep(-1.1,-1.05,cos≥-1) = 1
+                    rec.cosAngleInner = -1.05f;
+                    rec.radius = pl->radius;
+                    rec.cullRadius = clusterCullRadius(rec);
+                    rec.type = 0.f;
+                    clusterCollect.push_back(rec);
                 } else if (auto* sl = dynamic_cast<SpotLight*>(&o)) {
-                    if (ubo.spotCount >= kMaxSpotLights) return;
                     Vector3 lp, tp;
                     sl->getWorldPosition(lp);
                     const_cast<Object3D&>(sl->target()).getWorldPosition(tp);
                     Vector3 emDir = tp - lp;
                     if (emDir.lengthSq() < 1e-12f) emDir.set(0.f, -1.f, 0.f);
                     emDir.normalize();
-                    auto& g = ubo.spotLights[ubo.spotCount++];
-                    g.position[0] = lp.x; g.position[1] = lp.y; g.position[2] = lp.z;
-                    g.range = sl->distance;
-                    g.color[0] = sl->color.r * sl->intensity;
-                    g.color[1] = sl->color.g * sl->intensity;
-                    g.color[2] = sl->color.b * sl->intensity;
-                    g.decay = sl->decay;
-                    g.direction[0] = emDir.x; g.direction[1] = emDir.y; g.direction[2] = emDir.z;
-                    g.cosAngleOuter = std::cos(sl->angle);
-                    g.cosAngleInner = std::cos(sl->angle * (1.0f - sl->penumbra));
-                    g.radius = sl->radius;
+                    GpuClusterLight rec{};
+                    rec.position[0] = lp.x; rec.position[1] = lp.y; rec.position[2] = lp.z;
+                    rec.range = sl->distance;
+                    rec.color[0] = sl->color.r * sl->intensity;
+                    rec.color[1] = sl->color.g * sl->intensity;
+                    rec.color[2] = sl->color.b * sl->intensity;
+                    rec.decay = sl->decay;
+                    rec.direction[0] = emDir.x; rec.direction[1] = emDir.y; rec.direction[2] = emDir.z;
+                    rec.cosAngleOuter = std::cos(sl->angle);
+                    rec.cosAngleInner = std::cos(sl->angle * (1.0f - sl->penumbra));
+                    rec.radius = sl->radius;
+                    rec.cullRadius = clusterCullRadius(rec);
+                    rec.type = 1.f;
+                    clusterCollect.push_back(rec);
                 } else if (auto* rl = dynamic_cast<RectAreaLight*>(&o)) {
                     if (ubo.rectCount >= kMaxRectLights) return;
                     Vector3 wp; rl->getWorldPosition(wp);
@@ -8328,6 +8401,51 @@ namespace threepp {
                     g.color[2] = rl->color.b * rl->intensity;
                 }
             });
+
+            // Power-sort the point/spot list (strongest first) so BOTH the
+            // UBO's 8-per-type slots (legacy paths: PT, reflection/GI hits,
+            // volumetric beams, probes) and an overflowing cluster cell keep
+            // the most important lights. Then mirror the top 8 of each type
+            // into the UBO exactly as the pre-cluster path did.
+            const auto lightLum = [](const GpuClusterLight& r) {
+                return 0.2126f * r.color[0] + 0.7152f * r.color[1] + 0.0722f * r.color[2];
+            };
+            std::stable_sort(clusterCollect.begin(), clusterCollect.end(),
+                             [&](const GpuClusterLight& a, const GpuClusterLight& b) {
+                                 return lightLum(a) > lightLum(b);
+                             });
+            if (clusterCollect.size() > kMaxClusterLights)
+                clusterCollect.resize(kMaxClusterLights);
+            for (const auto& rec : clusterCollect) {
+                if (rec.type < 0.5f) {
+                    if (ubo.pointCount >= kMaxPointLights) continue;
+                    auto& g = ubo.pointLights[ubo.pointCount++];
+                    std::memcpy(g.position, rec.position, sizeof(g.position));
+                    g.range = rec.range;
+                    std::memcpy(g.color, rec.color, sizeof(g.color));
+                    g.decay  = rec.decay;
+                    g.radius = rec.radius;
+                } else {
+                    if (ubo.spotCount >= kMaxSpotLights) continue;
+                    auto& g = ubo.spotLights[ubo.spotCount++];
+                    std::memcpy(g.position, rec.position, sizeof(g.position));
+                    g.range = rec.range;
+                    std::memcpy(g.color, rec.color, sizeof(g.color));
+                    g.decay = rec.decay;
+                    std::memcpy(g.direction, rec.direction, sizeof(g.direction));
+                    g.cosAngleOuter = rec.cosAngleOuter;
+                    g.cosAngleInner = rec.cosAngleInner;
+                    g.radius = rec.radius;
+                }
+            }
+            clusterLightCountThisFrame_ = static_cast<uint32_t>(clusterCollect.size());
+            if (!clusterCollect.empty()) {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), clusterLightsBuffers[frame].alloc, &mapped);
+                std::memcpy(mapped, clusterCollect.data(),
+                            sizeof(GpuClusterLight) * clusterCollect.size());
+                vmaUnmapMemory(ctx->allocator(), clusterLightsBuffers[frame].alloc);
+            }
 
             // Extracted HDRI sun → analytic directional light (deferred leaf
             // only). The PMREM's mips 1+ were built sun-free, so this light
@@ -8368,6 +8486,14 @@ namespace threepp {
             const auto* bytes = reinterpret_cast<const uint8_t*>(&ubo);
             for (size_t i = 0; i < sizeof(ubo); ++i) {
                 h ^= bytes[i];
+                h *= 0x100000001b3ull;
+            }
+            // Cluster list too — a light BEYOND the UBO's 8-per-type slots
+            // moving/changing must also flag the frame (it lights pixels via
+            // the clustered path even though the UBO bytes are unchanged).
+            const auto* cbytes = reinterpret_cast<const uint8_t*>(clusterCollect.data());
+            for (size_t i = 0; i < sizeof(GpuClusterLight) * clusterCollect.size(); ++i) {
+                h ^= cbytes[i];
                 h *= 0x100000001b3ull;
             }
             if (h != prevLightsHash_) {
@@ -11284,6 +11410,8 @@ namespace threepp {
             std::array<VkImageView, kFramesInFlight> shadowAtrousBViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             std::array<VkBuffer, kFramesInFlight> fogBufs{};
+            std::array<VkBuffer, kFramesInFlight> clusterGridBufs{};
+            std::array<VkBuffer, kFramesInFlight> clusterLightBufs{};
             // MSAA raw raster attachments (dispatch B). Real views when
             // gbufMsaaSamples_>1 and they exist; the 1x1 dummy MS images
             // otherwise (msaa=1's default path, or the brief window before
@@ -11297,6 +11425,8 @@ namespace threepp {
                 camBufs[f]       = cameraUbos[f].handle;
                 lightBufs[f]     = lightsUbos[f].handle;
                 fogBufs[f]       = fogUbos[f].handle;
+                clusterGridBufs[f]  = clusterGridBuffers[f].handle;
+                clusterLightBufs[f] = clusterLightsBuffers[f].handle;
                 matBufs[f]       = materialDescsBuffers[f].handle;
                 emBufs[f]        = emissiveTriBuffers[f].handle;
                 normalViews[f]   = rasterGbufs[f].normal.view;
@@ -11349,6 +11479,8 @@ namespace threepp {
             in.directU          = directUViews.data();
             in.shadowAtrousA    = shadowAtrousAViews.data();
             in.shadowAtrousB    = shadowAtrousBViews.data();
+            in.clusterGrid      = clusterGridBufs.data();
+            in.clusterLights    = clusterLightBufs.data();
             in.sceneHdr         = sceneHdrViews.data();
             in.fogBuf           = fogBufs.data();
             in.fogRange         = sizeof(GpuFogUbo);

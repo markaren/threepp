@@ -6,6 +6,7 @@
 
 #include "threepp/renderers/vulkan/shaders/deferred_shade.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/deferred_denoise.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/cluster_build.comp.spv.h"
 
 #include <array>
 #include <cstring>
@@ -22,6 +23,7 @@ namespace threepp::vulkan {
         VkDevice d = ctx_.device();
         if (pipe_)        vkDestroyPipeline(d, pipe_, nullptr);
         if (denoisePipe_) vkDestroyPipeline(d, denoisePipe_, nullptr);
+        if (clusterPipe_) vkDestroyPipeline(d, clusterPipe_, nullptr);
         if (pipeLayout_) vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
         if (dsLayout_)   vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
         if (descPool_)   vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -45,7 +47,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[48]{};
+        VkDescriptorSetLayoutBinding b[50]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -108,10 +110,13 @@ namespace threepp::vulkan {
         set(45, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // unshadowed analytic direct U (recombine multiplies by the filtered ratio)
         set(46, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // shadow-ratio à-trous ping-pong A (rg16f)
         set(47, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // shadow-ratio à-trous ping-pong B
+        // Clustered lights (cluster_build.comp writes 48, the shade reads both).
+        set(48, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // per-cell light index grid
+        set(49, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // GpuClusterLight[] (power-sorted, uncapped)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 48;
+        dlci.bindingCount = 50;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -119,7 +124,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.offset = 0;
-        pc.size = 72;// 18×u32 (…, camDelta, camRot, timeSec, sunTanHalfAngle, shadeMode)
+        pc.size = 76;// 19×u32 (…, timeSec, sunTanHalfAngle, clusterLightCount, shadeMode)
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount = 1;
@@ -162,8 +167,21 @@ namespace threepp::vulkan {
         check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciD, nullptr, &denoisePipe_),
               "vkCreateComputePipelines(deferred_denoise)");
 
+        // Third pipeline — clustered light culling — same layout again.
+        VkShaderModuleCreateInfo smciC{};
+        smciC.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smciC.codeSize = sizeof(kClusterBuildCompSpv);
+        smciC.pCode    = kClusterBuildCompSpv;
+        VkShaderModule modC = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(d, &smciC, nullptr, &modC), "vkCreateShaderModule(cluster_build)");
+        VkComputePipelineCreateInfo cpciC = cpci;
+        cpciC.stage.module = modC;
+        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciC, nullptr, &clusterPipe_),
+              "vkCreateComputePipelines(cluster_build)");
+
         vkDestroyShaderModule(d, mod, nullptr);
         vkDestroyShaderModule(d, modD, nullptr);
+        vkDestroyShaderModule(d, modC, nullptr);
     }
 
     void DeferredShade::createDescriptorPool() {
@@ -177,7 +195,7 @@ namespace threepp::vulkan {
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
         sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[4].descriptorCount = framesInFlight_ * 4;// material + geometry + emissive-tri + probe SH buffers
+        sizes[4].descriptorCount = framesInFlight_ * 6;// material + geometry + emissive-tri + probe SH + cluster grid/lights
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -397,7 +415,17 @@ namespace threepp::vulkan {
             depthMsInfo.imageView   = in.gbufDepthMS[f];
             depthMsInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-            VkWriteDescriptorSet w[48]{};
+            // Clustered lights: per-cell index grid + the uncapped light list.
+            VkDescriptorBufferInfo clusterGridInfo{};
+            clusterGridInfo.buffer = in.clusterGrid[f];
+            clusterGridInfo.offset = 0;
+            clusterGridInfo.range  = VK_WHOLE_SIZE;
+            VkDescriptorBufferInfo clusterLightsInfo{};
+            clusterLightsInfo.buffer = in.clusterLights[f];
+            clusterLightsInfo.offset = 0;
+            clusterLightsInfo.range  = VK_WHOLE_SIZE;
+
+            VkWriteDescriptorSet w[50]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -465,7 +493,9 @@ namespace threepp::vulkan {
             setw(45, 45, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &directUInfo,       nullptr);
             setw(46, 46, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &shadowAtrAInfo,    nullptr);
             setw(47, 47, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &shadowAtrBInfo,    nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 48, w, 0, nullptr);
+            setw(48, 48, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &clusterGridInfo);
+            setw(49, 49, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &clusterLightsInfo);
+            vkUpdateDescriptorSets(ctx_.device(), 50, w, 0, nullptr);
         }
     }
 
@@ -496,7 +526,7 @@ namespace threepp::vulkan {
                                        float camDeltaLen, float camRotAngle,
                                        float timeSec, float sunTanHalfAngle,
                                        uint32_t gbufMsaaSamples, uint32_t shadeMode,
-                                       bool shadeBActive) {
+                                       bool shadeBActive, uint32_t clusterLightCount) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
@@ -522,13 +552,30 @@ namespace threepp::vulkan {
         std::memcpy(&camRotBits,    &camRotAngle,        sizeof(camRotBits));
         std::memcpy(&timeBits,      &timeSec,            sizeof(timeBits));
         std::memcpy(&sunTanBits,    &sunTanHalfAngle,    sizeof(sunTanBits));
-        const uint32_t pc[18] = {envMipCount, width, height, flags,
+        const uint32_t pc[19] = {envMipCount, width, height, flags,
                                  frameCounter, emissiveCount, emPowerBits, fireflyBits,
                                  oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits,
                                  starBits, camDeltaBits, camRotBits, timeBits,
-                                 sunTanBits, shadeMode};
+                                 sunTanBits, clusterLightCount, shadeMode};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
+    }
+
+    void DeferredShade::recordClusterBuild(VkCommandBuffer cb, uint32_t frame,
+                                           uint32_t lightCount,
+                                           uint32_t width, uint32_t height) {
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, clusterPipe_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
+        // Shared 19-uint push-constant block — the cull consumes width/height
+        // (tile footprint) + clusterLightCount only; the rest ride as zeros.
+        uint32_t pc[19] = {};
+        pc[1]  = width;
+        pc[2]  = height;
+        pc[17] = lightCount;
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+        // One thread per cluster cell (16×8×24 = 3072, local_size_x = 64).
+        vkCmdDispatch(cb, (16u * 8u * 24u + 63u) / 64u, 1, 1);
     }
 
     void DeferredShade::recordDenoiseDispatch(VkCommandBuffer cb, uint32_t frame,

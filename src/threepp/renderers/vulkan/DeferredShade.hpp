@@ -108,6 +108,11 @@ namespace threepp::vulkan {
             const VkImageView* gbufIdsMS    = nullptr;// [framesInFlight]
             const VkImageView* gbufAlbedoMS = nullptr;// [framesInFlight]
             const VkImageView* gbufUvMS     = nullptr;// [framesInFlight]
+            // Clustered lights (bindings 48/49): per-cell index grid written
+            // by recordClusterBuild + the full power-sorted point/spot light
+            // list (GpuClusterLight[], no 8-per-type cap).
+            const VkBuffer*    clusterGrid   = nullptr;// [framesInFlight] storage (device-local)
+            const VkBuffer*    clusterLights = nullptr;// [framesInFlight] storage (host-visible)
         };
         void rewriteDescriptors(const DescriptorWriteInputs& in);
 
@@ -141,6 +146,9 @@ namespace threepp::vulkan {
         // shadeBActive: whether dispatch B WILL run this frame — dispatch A
         // reserves the geometry-minority coverage weight only then (flags
         // bit 7); otherwise it folds that weight into the dominant surface.
+        // clusterLightCount: # lights in the cluster buffer this frame — the
+        // shade's analytic split reads its cell's list when > 0 (the caller
+        // must have recorded recordClusterBuild + a compute barrier first).
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t width, uint32_t height, uint32_t envMipCount,
                             bool shadows, bool ao, uint32_t frameCounter,
@@ -153,7 +161,17 @@ namespace threepp::vulkan {
                             float camDeltaLen, float camRotAngle,
                             float timeSec, float sunTanHalfAngle,
                             uint32_t gbufMsaaSamples = 1, uint32_t shadeMode = 0,
-                            bool shadeBActive = false);
+                            bool shadeBActive = false,
+                            uint32_t clusterLightCount = 0);
+
+        // Clustered light culling: one thread per cluster cell tests every
+        // light's cull sphere against the cell's view-space AABB and writes
+        // the per-cell index list (cluster_build.comp). Record BEFORE the
+        // shade dispatch with a compute→compute barrier between them; skip
+        // when lightCount == 0 (the shade's cluster loop is count-gated).
+        void recordClusterBuild(VkCommandBuffer cb, uint32_t frame,
+                                uint32_t lightCount,
+                                uint32_t width, uint32_t height);
 
         // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
         // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor
@@ -175,6 +193,7 @@ namespace threepp::vulkan {
         VkPipelineLayout      pipeLayout_   = VK_NULL_HANDLE;
         VkPipeline            pipe_         = VK_NULL_HANDLE;
         VkPipeline            denoisePipe_  = VK_NULL_HANDLE;// spatial denoise + recombine
+        VkPipeline            clusterPipe_  = VK_NULL_HANDLE;// clustered light culling (cluster_build.comp)
         VkDescriptorPool      descPool_     = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [framesInFlight]
 

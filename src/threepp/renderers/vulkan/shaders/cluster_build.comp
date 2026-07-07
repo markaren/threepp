@@ -1,0 +1,126 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+
+// Clustered light culling for the deferred renderer. The scene's point/spot
+// lights (ALL of them — the 8-per-type UBO caps only bound the legacy paths)
+// are uploaded power-sorted into the cluster-light buffer; this pass runs ONE
+// THREAD PER CLUSTER CELL over a kClusterX×kClusterY×kClusterZ grid (screen
+// tiles × exponential view-Z slices), tests every light's cull sphere against
+// the cell's view-space AABB, and writes a bounded per-cell index list. The
+// deferred shade's analytic split then loops only its own cell's lights, so
+// per-pixel direct-lighting cost stays flat no matter the scene light count
+// (the denoised-shadow ratio estimator already pays a constant 1-2 shadow
+// rays regardless of how many lights the cell holds).
+//
+// Shares the DeferredShade descriptor-set layout (bindings 0/48/49) and push
+// constants — only width/height/clusterLightCount are consumed here.
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+    vec4 jitter;
+} cam;
+
+// KEEP IN SYNC with deferred_shade.comp's ClusterLight + the CPU
+// GpuClusterLight (VulkanCoreImpl.hpp) — scalar layout, 64 bytes.
+struct ClusterLight {
+    vec3  position;   float range;         // range 0 = infinite (three.js)
+    vec3  color;      float decay;         // color premultiplied by intensity
+    vec3  direction;  float cosAngleOuter; // spot cone; points carry the -1.1/-1.05 sentinel (cone test → 1)
+    float cosAngleInner;
+    float radius;                          // physical source radius (soft shadows)
+    float cullRadius;                      // conservative influence radius (range, or the atten<eps solve)
+    float type;                            // 0 = point, 1 = spot
+};
+layout(set = 0, binding = 48, scalar) buffer ClusterGridBuf { uint clusterGrid[]; };
+layout(set = 0, binding = 49, scalar) readonly buffer ClusterLightsBuf { ClusterLight clusterLights[]; };
+
+layout(push_constant) uniform Pc {
+    uint  envMipCount;
+    uint  width;
+    uint  height;
+    uint  flags;
+    uint  frame;
+    uint  emissiveCount;
+    float emissiveTotalPower;
+    float fireflyClamp;
+    float oceanFineTileSize;
+    float oceanFoamTileSize;
+    float volDensity;
+    float volAniso;
+    float starIntensity;
+    float camDelta;
+    float camRot;
+    float timeSec;
+    float sunTanHalfAngle;
+    uint  clusterLightCount;
+    uint  shadeMode;
+} pc;
+
+// Grid + Z mapping — KEEP IN SYNC with deferred_shade.comp. The Z slices are
+// a FIXED exponential ladder over view-space distance [kClusterZMin,
+// kClusterZMax] (camera-independent — no near/far plumbing): slice 0 extends
+// to the camera, the last slice absorbs everything beyond kClusterZMax.
+const uint  kClusterX = 16u, kClusterY = 8u, kClusterZ = 24u;
+const uint  kClusterMaxPerCell = 24u;
+const float kClusterZMin = 0.1, kClusterZMax = 1024.0;
+
+float sliceZ(uint k) {// lower view-distance bound of slice k
+    return kClusterZMin * pow(kClusterZMax / kClusterZMin, float(k) / float(kClusterZ));
+}
+
+// A view-space point along the ray through `ndc`, scaled so its view DISTANCE
+// (-z, GL-style forward) equals d. The unproject depth is arbitrary — only
+// the ray direction matters.
+vec3 cornerAtDist(vec2 ndc, float d) {
+    const vec4 v = cam.projInverse * vec4(ndc, 0.5, 1.0);
+    const vec3 p = v.xyz / v.w;
+    return p * (d / max(-p.z, 1e-6));
+}
+
+void main() {
+    const uint nCells = kClusterX * kClusterY * kClusterZ;
+    const uint cell   = gl_GlobalInvocationID.x;
+    if (cell >= nCells) return;
+    const uint cx = cell % kClusterX;
+    const uint cy = (cell / kClusterX) % kClusterY;
+    const uint cz = cell / (kClusterX * kClusterY);
+
+    // Cell footprint in GL-style NDC (y up — same convention as the shade's
+    // `ndc` reconstruction: pixel row 0 = +1). Corner ORDER doesn't matter —
+    // the AABB min/max below absorbs it.
+    const vec2 uv0 = vec2(float(cx)      / float(kClusterX), float(cy)      / float(kClusterY));
+    const vec2 uv1 = vec2(float(cx + 1u) / float(kClusterX), float(cy + 1u) / float(kClusterY));
+    const float nx0 = uv0.x * 2.0 - 1.0, nx1 = uv1.x * 2.0 - 1.0;
+    const float ny0 = -(uv0.y * 2.0 - 1.0), ny1 = -(uv1.y * 2.0 - 1.0);
+    const float z0 = (cz == 0u) ? 1e-3 : sliceZ(cz);// slice 0 reaches the camera
+    const float z1 = sliceZ(cz + 1u);
+
+    vec3 bbMin = vec3(1e30), bbMax = vec3(-1e30);
+    for (int i = 0; i < 4; ++i) {
+        const vec2 ndc = vec2((i & 1) == 0 ? nx0 : nx1, (i & 2) == 0 ? ny0 : ny1);
+        const vec3 pNear = cornerAtDist(ndc, z0);
+        const vec3 pFar  = cornerAtDist(ndc, z1);
+        bbMin = min(bbMin, min(pNear, pFar));
+        bbMax = max(bbMax, max(pNear, pFar));
+    }
+
+    // world→view: rigid inverse of viewInverse (the camera world matrix).
+    const mat3 R      = transpose(mat3(cam.viewInverse));
+    const vec3 camPos = cam.viewInverse[3].xyz;
+
+    // Sphere-vs-AABB per light. The list is power-sorted on the CPU, so a
+    // cell that overflows kClusterMaxPerCell keeps the STRONGEST lights.
+    const uint base  = cell * (kClusterMaxPerCell + 1u);
+    uint       count = 0u;
+    for (uint i = 0u; i < pc.clusterLightCount && count < kClusterMaxPerCell; ++i) {
+        const float r = clusterLights[i].cullRadius;
+        if (r <= 0.0) continue;// zero-power light (uploaded regardless — see the UBO pick-weight note)
+        const vec3 pv = R * (clusterLights[i].position - camPos);
+        const vec3 d  = clamp(pv, bbMin, bbMax) - pv;
+        if (dot(d, d) <= r * r) clusterGrid[base + 1u + count++] = i;
+    }
+    clusterGrid[base] = count;
+}

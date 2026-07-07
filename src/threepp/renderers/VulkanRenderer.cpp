@@ -182,6 +182,25 @@ namespace threepp {
             // reserve the geometry-minority weight for dispatch B or fold
             // it into the dominant surface.
             const bool shadeBActive = gbufMsaaSamples_ > 1 && gbufShadeBEnabled_;
+            // Clustered light culling: per-cell light lists for the shade's
+            // analytic split (all point/spot lights, no 8-per-type cap).
+            // Barrier: cull's grid writes → shade's reads (compute→compute).
+            if (clusterLightCountThisFrame_ > 0) {
+                deferredShade_->recordClusterBuild(cb, currentFrame,
+                                                   clusterLightCountThisFrame_,
+                                                   regionRenderExt_.width, regionRenderExt_.height);
+                VkMemoryBarrier2 cbar{};
+                cbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                cbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                cbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                cbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                cbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                VkDependencyInfo cdep{};
+                cdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                cdep.memoryBarrierCount = 1;
+                cdep.pMemoryBarriers = &cbar;
+                vkCmdPipelineBarrier2(cb, &cdep);
+            }
             gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
             deferredShade_->recordDispatch(cb, currentFrame,
                                            regionRenderExt_.width, regionRenderExt_.height,
@@ -197,7 +216,8 @@ namespace threepp {
                                            deferredCamDeltaLen_, deferredCamRotAngle_,
                                            static_cast<float>(glfwGetTime()),
                                            std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
-                                           gbufMsaaSamples_, /*shadeMode=*/0u, shadeBActive);
+                                           gbufMsaaSamples_, /*shadeMode=*/0u, shadeBActive,
+                                           clusterLightCountThisFrame_);
             gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
 
             // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
@@ -238,7 +258,8 @@ namespace threepp {
                                                deferredCamDeltaLen_, deferredCamRotAngle_,
                                                static_cast<float>(glfwGetTime()),
                                                std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
-                                               gbufMsaaSamples_, /*shadeMode=*/1u, /*shadeBActive=*/true);
+                                               gbufMsaaSamples_, /*shadeMode=*/1u, /*shadeBActive=*/true,
+                                               clusterLightCountThisFrame_);
                 gpuTimings_->end(cb, TP_ShadeB, currentFrame);
 
                 // Dispatch B's outImage write -> bloom/composite's read.
