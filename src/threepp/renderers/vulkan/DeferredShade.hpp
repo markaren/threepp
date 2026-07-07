@@ -113,6 +113,11 @@ namespace threepp::vulkan {
             // list (GpuClusterLight[], no 8-per-type cap).
             const VkBuffer*    clusterGrid   = nullptr;// [framesInFlight] storage (device-local)
             const VkBuffer*    clusterLights = nullptr;// [framesInFlight] storage (host-visible)
+            // Froxel volumetrics (bindings 50-53): the per-froxel in-scatter
+            // accumulator (3D, ping-ponged across fif for the temporal EMA)
+            // and the front-to-back-integrated LUT the shade samples.
+            const VkImageView* froxelScatter = nullptr;// [framesInFlight] storage+sampled 3D
+            const VkImageView* froxelLut     = nullptr;// [framesInFlight] storage+sampled 3D
         };
         void rewriteDescriptors(const DescriptorWriteInputs& in);
 
@@ -162,7 +167,8 @@ namespace threepp::vulkan {
                             float timeSec, float sunTanHalfAngle,
                             uint32_t gbufMsaaSamples = 1, uint32_t shadeMode = 0,
                             bool shadeBActive = false,
-                            uint32_t clusterLightCount = 0);
+                            uint32_t clusterLightCount = 0,
+                            bool froxelsActive = false);
 
         // Clustered light culling: one thread per cluster cell tests every
         // light's cull sphere against the cell's view-space AABB and writes
@@ -172,6 +178,20 @@ namespace threepp::vulkan {
         void recordClusterBuild(VkCommandBuffer cb, uint32_t frame,
                                 uint32_t lightCount,
                                 uint32_t width, uint32_t height);
+
+        // Froxel volumetric lighting: inject (per-froxel in-scatter — RT sun
+        // shafts + clustered lights, temporal EMA) + integrate (front-to-back
+        // LUT), with the inject→integrate barrier inside. Record AFTER
+        // recordClusterBuild's barrier (inject reads the cluster grid) and
+        // BEFORE the shade dispatch, with a compute→compute barrier after
+        // (the shade samples the LUT). Only when the medium is active; pass
+        // froxelsActive=true to recordDispatch the same frame.
+        void recordFroxels(VkCommandBuffer cb, uint32_t frame,
+                           uint32_t width, uint32_t height,
+                           bool volFog, float volDensity, float volAniso,
+                           uint32_t frameCounter,
+                           float camDeltaLen, float camRotAngle,
+                           uint32_t clusterLightCount);
 
         // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
         // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor
@@ -189,11 +209,14 @@ namespace threepp::vulkan {
         uint32_t       framesInFlight_;
 
         VkSampler             gbufSampler_  = VK_NULL_HANDLE;// nearest (texelFetch ignores it)
+        VkSampler             lutSampler_   = VK_NULL_HANDLE;// LINEAR clamp — froxel LUT trilinear sampling
         VkDescriptorSetLayout dsLayout_     = VK_NULL_HANDLE;
         VkPipelineLayout      pipeLayout_   = VK_NULL_HANDLE;
         VkPipeline            pipe_         = VK_NULL_HANDLE;
         VkPipeline            denoisePipe_  = VK_NULL_HANDLE;// spatial denoise + recombine
         VkPipeline            clusterPipe_  = VK_NULL_HANDLE;// clustered light culling (cluster_build.comp)
+        VkPipeline            froxelInjectPipe_    = VK_NULL_HANDLE;// froxel in-scatter (froxel_inject.comp)
+        VkPipeline            froxelIntegratePipe_ = VK_NULL_HANDLE;// froxel LUT integrate (froxel_integrate.comp)
         VkDescriptorPool      descPool_     = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [framesInFlight]
 

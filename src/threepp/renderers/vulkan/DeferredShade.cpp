@@ -7,6 +7,8 @@
 #include "threepp/renderers/vulkan/shaders/deferred_shade.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/deferred_denoise.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/cluster_build.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/froxel_inject.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/froxel_integrate.comp.spv.h"
 
 #include <array>
 #include <cstring>
@@ -24,6 +26,9 @@ namespace threepp::vulkan {
         if (pipe_)        vkDestroyPipeline(d, pipe_, nullptr);
         if (denoisePipe_) vkDestroyPipeline(d, denoisePipe_, nullptr);
         if (clusterPipe_) vkDestroyPipeline(d, clusterPipe_, nullptr);
+        if (froxelInjectPipe_)    vkDestroyPipeline(d, froxelInjectPipe_, nullptr);
+        if (froxelIntegratePipe_) vkDestroyPipeline(d, froxelIntegratePipe_, nullptr);
+        if (lutSampler_) vkDestroySampler(d, lutSampler_, nullptr);
         if (pipeLayout_) vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
         if (dsLayout_)   vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
         if (descPool_)   vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -47,7 +52,14 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[50]{};
+        // LINEAR clamp sampler for the froxel LUT — the trilinear filtering
+        // ACROSS froxels is what turns the coarse grid into smooth beams.
+        VkSamplerCreateInfo lci = sci;
+        lci.magFilter  = VK_FILTER_LINEAR;
+        lci.minFilter  = VK_FILTER_LINEAR;
+        check(vkCreateSampler(d, &lci, nullptr, &lutSampler_), "vkCreateSampler(froxel LUT)");
+
+        VkDescriptorSetLayoutBinding b[54]{};// KEEP the bound == dlci.bindingCount (a lagging bound = stack smash)
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -113,10 +125,15 @@ namespace threepp::vulkan {
         // Clustered lights (cluster_build.comp writes 48, the shade reads both).
         set(48, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // per-cell light index grid
         set(49, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // GpuClusterLight[] (power-sorted, uncapped)
+        // Froxel volumetrics (inject writes 50 / reads 51; integrate 50→52; shade samples 53).
+        set(50, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // froxel scatter CUR (3D)
+        set(51, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV froxel scatter (other fif) — temporal EMA
+        set(52, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // froxel LUT (3D, integrate writes)
+        set(53, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // froxel LUT (LINEAR — shade's trilinear sample)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 50;
+        dlci.bindingCount = 54;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -179,9 +196,33 @@ namespace threepp::vulkan {
         check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciC, nullptr, &clusterPipe_),
               "vkCreateComputePipelines(cluster_build)");
 
+        // Froxel volumetrics — inject + integrate, same layout.
+        VkShaderModuleCreateInfo smciF{};
+        smciF.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smciF.codeSize = sizeof(kFroxelInjectCompSpv);
+        smciF.pCode    = kFroxelInjectCompSpv;
+        VkShaderModule modF = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(d, &smciF, nullptr, &modF), "vkCreateShaderModule(froxel_inject)");
+        VkComputePipelineCreateInfo cpciF = cpci;
+        cpciF.stage.module = modF;
+        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciF, nullptr, &froxelInjectPipe_),
+              "vkCreateComputePipelines(froxel_inject)");
+        VkShaderModuleCreateInfo smciI{};
+        smciI.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smciI.codeSize = sizeof(kFroxelIntegrateCompSpv);
+        smciI.pCode    = kFroxelIntegrateCompSpv;
+        VkShaderModule modI = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(d, &smciI, nullptr, &modI), "vkCreateShaderModule(froxel_integrate)");
+        VkComputePipelineCreateInfo cpciI = cpci;
+        cpciI.stage.module = modI;
+        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciI, nullptr, &froxelIntegratePipe_),
+              "vkCreateComputePipelines(froxel_integrate)");
+
         vkDestroyShaderModule(d, mod, nullptr);
         vkDestroyShaderModule(d, modD, nullptr);
         vkDestroyShaderModule(d, modC, nullptr);
+        vkDestroyShaderModule(d, modF, nullptr);
+        vkDestroyShaderModule(d, modI, nullptr);
     }
 
     void DeferredShade::createDescriptorPool() {
@@ -189,9 +230,9 @@ namespace threepp::vulkan {
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight_ * 4;// camera + lights + fog + probe grid
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (23 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise + 5 gbuf MS + shadowVisPrev
+        sizes[1].descriptorCount = framesInFlight_ * (25 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise + 5 gbuf MS + shadowVisPrev + froxelScatterPrev + froxelLut
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[2].descriptorCount = framesInFlight_ * 15;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + reflAux + 4 reservoir (pos/W × write/read) + shadowVis + directU + shadowAtrousA/B
+        sizes[2].descriptorCount = framesInFlight_ * 17;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + reflAux + 4 reservoir (pos/W × write/read) + shadowVis + directU + shadowAtrousA/B + froxelScatter + froxelLut
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
         sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -425,7 +466,24 @@ namespace threepp::vulkan {
             clusterLightsInfo.offset = 0;
             clusterLightsInfo.range  = VK_WHOLE_SIZE;
 
-            VkWriteDescriptorSet w[50]{};
+            // Froxel volumetrics: scatter CUR (storage) + PREV (sampled, other
+            // fif — temporal EMA) + LUT (storage write / LINEAR sampled read).
+            VkDescriptorImageInfo froxelScatterInfo{};
+            froxelScatterInfo.imageView   = in.froxelScatter[f];
+            froxelScatterInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo froxelScatterPrevInfo{};
+            froxelScatterPrevInfo.sampler     = gbufSampler_;
+            froxelScatterPrevInfo.imageView   = in.froxelScatter[pf];
+            froxelScatterPrevInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo froxelLutInfo{};
+            froxelLutInfo.imageView   = in.froxelLut[f];
+            froxelLutInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo froxelLutTexInfo{};
+            froxelLutTexInfo.sampler     = lutSampler_;
+            froxelLutTexInfo.imageView   = in.froxelLut[f];
+            froxelLutTexInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+            VkWriteDescriptorSet w[54]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -495,7 +553,11 @@ namespace threepp::vulkan {
             setw(47, 47, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &shadowAtrBInfo,    nullptr);
             setw(48, 48, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &clusterGridInfo);
             setw(49, 49, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &clusterLightsInfo);
-            vkUpdateDescriptorSets(ctx_.device(), 50, w, 0, nullptr);
+            setw(50, 50, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &froxelScatterInfo,     nullptr);
+            setw(51, 51, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &froxelScatterPrevInfo, nullptr);
+            setw(52, 52, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &froxelLutInfo,         nullptr);
+            setw(53, 53, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &froxelLutTexInfo,      nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 54, w, 0, nullptr);
         }
     }
 
@@ -526,7 +588,8 @@ namespace threepp::vulkan {
                                        float camDeltaLen, float camRotAngle,
                                        float timeSec, float sunTanHalfAngle,
                                        uint32_t gbufMsaaSamples, uint32_t shadeMode,
-                                       bool shadeBActive, uint32_t clusterLightCount) {
+                                       bool shadeBActive, uint32_t clusterLightCount,
+                                       bool froxelsActive) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
@@ -538,7 +601,8 @@ namespace threepp::vulkan {
         const uint32_t msaaCode = gbufMsaaSamples >= 4u ? 2u : (gbufMsaaSamples >= 2u ? 1u : 0u);
         const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u) | (denoise ? 4u : 0u)
                              | (restirDI ? 8u : 0u) | (volFog ? 16u : 0u) | (msaaCode << 5u)
-                             | (shadeBActive ? 128u : 0u);
+                             | (shadeBActive ? 128u : 0u)
+                             | (froxelsActive ? 256u : 0u);// froxel LUT valid this frame
         uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits, starBits,
                 camDeltaBits, camRotBits, timeBits, sunTanBits;
         std::memcpy(&emPowerBits,   &emissiveTotalPower, sizeof(emPowerBits));
@@ -576,6 +640,48 @@ namespace threepp::vulkan {
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         // One thread per cluster cell (16×8×24 = 3072, local_size_x = 64).
         vkCmdDispatch(cb, (16u * 8u * 24u + 63u) / 64u, 1, 1);
+    }
+
+    void DeferredShade::recordFroxels(VkCommandBuffer cb, uint32_t frame,
+                                      uint32_t width, uint32_t height,
+                                      bool volFog, float volDensity, float volAniso,
+                                      uint32_t frameCounter,
+                                      float camDeltaLen, float camRotAngle,
+                                      uint32_t clusterLightCount) {
+        // Shared 19-uint push block — the froxel passes consume width/height
+        // (cluster-cell mapping), the volFog flag, frame, the beam density/
+        // anisotropy, the camera-motion history gates and the cluster count.
+        uint32_t pc[19] = {};
+        pc[1] = width;
+        pc[2] = height;
+        pc[3] = volFog ? 16u : 0u;
+        pc[4] = frameCounter;
+        std::memcpy(&pc[10], &volDensity,  sizeof(uint32_t));
+        std::memcpy(&pc[11], &volAniso,    sizeof(uint32_t));
+        std::memcpy(&pc[13], &camDeltaLen, sizeof(uint32_t));
+        std::memcpy(&pc[14], &camRotAngle, sizeof(uint32_t));
+        pc[17] = clusterLightCount;
+
+        // Inject: one thread per froxel (128×72×64, local 4×4×4).
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, froxelInjectPipe_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+        vkCmdDispatch(cb, 128u / 4u, 72u / 4u, 64u / 4u);
+
+        // Inject's scatter writes → integrate's reads.
+        VkMemoryBarrier mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                             1, &mb, 0, nullptr, 0, nullptr);
+
+        // Integrate: one thread per froxel column (128×72, local 8×8).
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, froxelIntegratePipe_);
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+        vkCmdDispatch(cb, 128u / 8u, 72u / 8u, 1);
     }
 
     void DeferredShade::recordDenoiseDispatch(VkCommandBuffer cb, uint32_t frame,

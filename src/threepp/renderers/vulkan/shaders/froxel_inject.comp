@@ -1,0 +1,248 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_ray_query : require
+
+// Froxel volumetric lighting — INJECT (Wronski 2014 / Frostbite). One thread
+// per froxel of a kFroxelX×kFroxelY×kFroxelZ view-frustum grid (screen tiles ×
+// exponential view-Z slices): computes the in-scattered radiance PER UNIT
+// LENGTH at a jittered position inside the froxel —
+//   • directional lights with ONE RT shadow ray each (real light shafts
+//     through trees/columns), gated on fog + the volumetric-fog flag exactly
+//     like the per-pixel march this system replaces,
+//   • ALL clustered point/spot lights (the cluster list, not the 8-cap UBO —
+//     point lights glow in fog for the first time; spots keep their beams),
+//   • Henyey-Greenstein phase and camera/light-leg extinction matching the
+//     old volumetricSpot/DirScatter marchers term for term —
+// and EMA-accumulates it against the previous frame's froxel (the sub-froxel
+// jitter is what turns 1 sample/froxel into a converged integral; camera
+// motion shortens the history so beams track instead of smearing). The
+// INTEGRATE pass then folds the slices front-to-back into the 3D LUT the
+// shade pass samples with one trilinear fetch per pixel.
+//
+// Shares the DeferredShade set (bindings 0/1/8/33/48/49/50/51) + push block.
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(set = 0, binding = 0) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+    vec4 jitter;
+} cam;
+
+struct DirLight   { vec3 direction; vec3 color; };
+struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
+struct SpotLight  { vec3 position; float range; vec3 color; float decay;
+                    vec3 direction; float cosAngleOuter; float cosAngleInner; float radius; };
+struct RectLight  { vec3 position; vec3 halfU; vec3 halfV; vec3 normal; vec3 color; };
+layout(set = 0, binding = 1, scalar) uniform LightsUbo {
+    vec3       ambient;
+    uint       dirCount;
+    DirLight   dirLights[8];
+    uint       pointCount;
+    uint       spotCount;
+    uint       rectCount;
+    PointLight pointLights[8];
+    SpotLight  spotLights[8];
+    RectLight  rectLights[4];
+} lights;
+
+layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
+
+layout(set = 0, binding = 33, scalar) uniform FogUbo {
+    vec3  sigmaT;
+    float enabled;
+    vec3  color;
+    float anisotropy;
+    float waterSurfaceY;
+    vec3  worldUp;
+} fog;
+
+// KEEP IN SYNC with cluster_build.comp / deferred_shade.comp.
+struct ClusterLight {
+    vec3  position;   float range;
+    vec3  color;      float decay;
+    vec3  direction;  float cosAngleOuter;
+    float cosAngleInner;
+    float radius;
+    float cullRadius;
+    float type;
+};
+layout(set = 0, binding = 48, scalar) readonly buffer ClusterGridBuf { uint clusterGrid[]; };
+layout(set = 0, binding = 49, scalar) readonly buffer ClusterLightsBuf { ClusterLight clusterLights[]; };
+
+// Froxel scatter accumulator: .rgb = in-scatter per unit length, .a = histLen.
+layout(set = 0, binding = 50, rgba16f) uniform writeonly image3D froxelScatterImage;
+layout(set = 0, binding = 51) uniform sampler3D froxelScatterPrevTex;// prev fif (EMA history)
+
+layout(push_constant) uniform Pc {
+    uint  envMipCount;
+    uint  width;
+    uint  height;
+    uint  flags;             // bit 4 (16u) = volumetric dir-light fog enabled
+    uint  frame;
+    uint  emissiveCount;
+    float emissiveTotalPower;
+    float fireflyClamp;
+    float oceanFineTileSize;
+    float oceanFoamTileSize;
+    float volDensity;
+    float volAniso;
+    float starIntensity;
+    float camDelta;
+    float camRot;
+    float timeSec;
+    float sunTanHalfAngle;
+    uint  clusterLightCount;
+    uint  shadeMode;
+} pc;
+
+const float PI = 3.14159265358979;
+
+// Grid + ladders — KEEP IN SYNC with froxel_integrate.comp + deferred_shade.comp.
+const uint  kFroxelX = 128u, kFroxelY = 72u, kFroxelZ = 64u;
+const float kFroxelZMin = 0.25, kFroxelZMax = 512.0;
+// Cluster grid constants — KEEP IN SYNC with cluster_build.comp.
+const uint  kClusterX = 16u, kClusterY = 8u, kClusterZ = 24u;
+const uint  kClusterMaxPerCell = 24u;
+const float kClusterZMin = 0.1, kClusterZMax = 1024.0;
+
+float froxelDist(float s) {// continuous slice coord [0,kFroxelZ] → view distance
+    return kFroxelZMin * pow(kFroxelZMax / kFroxelZMin, s / float(kFroxelZ));
+}
+
+uint clusterCellBase(vec2 uv, float viewDist) {
+    const uint cx = min(uint(uv.x * float(kClusterX)), kClusterX - 1u);
+    const uint cy = min(uint(uv.y * float(kClusterY)), kClusterY - 1u);
+    const float t = log(max(viewDist, kClusterZMin) / kClusterZMin)
+                  / log(kClusterZMax / kClusterZMin);
+    const uint cz = min(uint(max(t, 0.0) * float(kClusterZ)), kClusterZ - 1u);
+    return (cx + cy * kClusterX + cz * kClusterX * kClusterY) * (kClusterMaxPerCell + 1u);
+}
+
+float hgPhase(float mu, float g) {
+    const float g2 = g * g;
+    return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
+}
+
+uint pcgHash(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word  = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+float rnd(inout uint seed) {
+    seed = pcgHash(seed);
+    return float(seed) * (1.0 / 4294967296.0);
+}
+
+// Binary occlusion toward a light (opaque-only mask matches the surface
+// shadow rays: blend/glass never blocks a shaft).
+float shadowVis(vec3 origin, vec3 dir, float tMax) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+                          0x01u /*kRayMaskOpaque*/, origin, 1e-3, dir, tMax);
+    while (rayQueryProceedEXT(rq)) {}
+    return (rayQueryGetIntersectionTypeEXT(rq, true) ==
+            gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
+}
+
+void main() {
+    const uvec3 f = gl_GlobalInvocationID;
+    if (f.x >= kFroxelX || f.y >= kFroxelY || f.z >= kFroxelZ) return;
+    const ivec3 fi = ivec3(f);
+
+    // Medium parameters — the volumetricSpotScatter rules verbatim: scene fog
+    // drives σ/g/albedo when active (max'd with the explicit beam density);
+    // pc.volDensity alone gives clear-air beams (the lighthouse).
+    const bool  fogDriven = fog.enabled > 0.5;
+    float sigma     = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
+                                : pc.volDensity;
+    float hgG       = fogDriven ? fog.anisotropy : pc.volAniso;
+    vec3  medAlbedo = fogDriven ? fog.color : vec3(1.0);
+    if (sigma <= 0.0) {
+        imageStore(froxelScatterImage, fi, vec4(0.0));
+        return;
+    }
+
+    // Jittered sample position inside the froxel (sub-froxel stratification —
+    // the EMA below integrates it; per-frame decorrelated per froxel).
+    uint seed = pcgHash(f.x * 7919u + pcgHash(f.y * 104729u + pcgHash(f.z * 6271u + pc.frame * 26699u)));
+    const vec2  uv   = (vec2(f.xy) + vec2(rnd(seed), rnd(seed))) / vec2(float(kFroxelX), float(kFroxelY));
+    const float dist = froxelDist(float(f.z) + rnd(seed));
+    const vec2  ndc  = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    const vec4  vh   = cam.projInverse * vec4(ndc, 0.5, 1.0);
+    const vec3  pv   = vh.xyz / vh.w;
+    const vec3  viewPos = pv * (dist / max(-pv.z, 1e-6));
+    const vec3  x       = (cam.viewInverse * vec4(viewPos, 1.0)).xyz;
+    const vec3  camPos  = cam.viewInverse[3].xyz;
+    const vec3  rd      = normalize(x - camPos);// camera → froxel (the view ray)
+
+    // Water-capped medium (fog ends at the wave surface). Above the surface
+    // only the explicit clear-air beam density survives — the ocean's
+    // lighthouse beam lives above the water while the fog lives below it.
+    if (fog.waterSurfaceY < 1e29 && x.y > fog.waterSurfaceY) {
+        if (pc.volDensity <= 0.0) {
+            imageStore(froxelScatterImage, fi, vec4(0.0));
+            return;
+        }
+        sigma = pc.volDensity;
+        hgG = pc.volAniso;
+        medAlbedo = vec3(1.0);
+    }
+
+    vec3 sum = vec3(0.0);
+
+    // Directional lights: one RT shadow ray per froxel carves the shafts
+    // (the old march paid 16 rays per PIXEL; the froxel grid + temporal EMA
+    // gets smoother shafts for ~2 orders of magnitude fewer rays). Gated
+    // exactly like volumetricDirScatter: fog on + the volumetric-fog flag.
+    if (fogDriven && (pc.flags & 16u) != 0u) {
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+            const vec3 L = normalize(lights.dirLights[i].direction);
+            if (shadowVis(x, L, 1e30) <= 0.0) continue;
+            sum += lights.dirLights[i].color * hgPhase(dot(L, rd), hgG);
+        }
+    }
+
+    // Clustered point/spot lights — the volumetricSpotScatter per-step terms
+    // (1 m-clamped inverse square, range window, cone, HG phase, light-leg
+    // extinction), now for EVERY light in this froxel's cluster cell.
+    if (pc.clusterLightCount > 0u) {
+        const uint base = clusterCellBase(uv, dist);
+        const uint cCnt = min(clusterGrid[base], kClusterMaxPerCell);
+        for (uint c = 0u; c < cCnt; ++c) {
+            const uint li = min(clusterGrid[base + 1u + c], pc.clusterLightCount - 1u);
+            vec3        toL = clusterLights[li].position - x;
+            const float d   = length(toL);
+            if (d < 1e-3) continue;
+            toL /= d;
+            const float cone = smoothstep(clusterLights[li].cosAngleOuter,
+                                          clusterLights[li].cosAngleInner,
+                                          dot(-toL, clusterLights[li].direction));
+            if (cone <= 0.0) continue;
+            float atten = 1.0 / max(d * d, 1.0);
+            const float range = (clusterLights[li].range > 0.0) ? clusterLights[li].range : 200.0;
+            const float tr  = d / range;
+            const float t4  = tr * tr * tr * tr;
+            const float wnd = max(1.0 - t4, 0.0);
+            atten *= wnd * wnd;
+            const float phase = hgPhase(dot(toL, rd), hgG);
+            sum += clusterLights[li].color * (cone * atten * phase * exp(-sigma * d));
+        }
+    }
+
+    // σ_s = σ_t · albedo — in-scattered radiance per unit length. The camera-
+    // leg transmittance is applied by the integrate pass (front-to-back T).
+    const vec3 S = sum * medAlbedo * sigma;
+
+    // Temporal EMA against the SAME froxel of the previous frame (no
+    // reprojection — froxels are view-anchored). Camera motion shortens the
+    // history so beams track the view instead of smearing; a held camera
+    // converges the jittered samples into smooth shafts.
+    const vec4  prev   = texelFetch(froxelScatterPrevTex, fi, 0);
+    const float motion = pc.camRot * 3.0 + pc.camDelta * 0.5;
+    const float cap    = mix(16.0, 2.0, smoothstep(0.001, 0.02, motion));
+    const bool  valid  = prev.a > 0.5 && prev.a < 4096.0 && all(lessThan(abs(prev.rgb), vec3(1e6)));
+    const float hist   = valid ? min(prev.a + 1.0, cap) : 1.0;
+    const vec3  acc    = valid ? mix(prev.rgb, S, 1.0 / hist) : S;
+    imageStore(froxelScatterImage, fi, vec4(acc, hist));
+}

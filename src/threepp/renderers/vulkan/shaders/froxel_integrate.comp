@@ -1,0 +1,86 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+
+// Froxel volumetric lighting — INTEGRATE. One thread per froxel COLUMN walks
+// the depth slices front-to-back, folding each slice's in-scatter (from the
+// inject pass) behind the accumulated camera-leg transmittance with the
+// analytic homogeneous-segment integral, and writes the running total into
+// the 3D LUT. The shade pass then gets its whole volumetric term — sun
+// shafts, spot beams, point-light glow — from ONE trilinear sample at
+// (uv, sliceOf(viewDist)) instead of the per-pixel marches this replaces.
+// Transmittance uses the same GLOBAL homogeneous σ the old marchers used
+// (surface extinction stays applySceneFog's analytic Beer-Lambert — the LUT
+// carries in-scatter only).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 33, scalar) uniform FogUbo {
+    vec3  sigmaT;
+    float enabled;
+    vec3  color;
+    float anisotropy;
+    float waterSurfaceY;
+    vec3  worldUp;
+} fog;
+
+layout(set = 0, binding = 50, rgba16f) uniform readonly image3D froxelScatterImage;
+layout(set = 0, binding = 52, rgba16f) uniform writeonly image3D froxelLutImage;
+
+layout(push_constant) uniform Pc {
+    uint  envMipCount;
+    uint  width;
+    uint  height;
+    uint  flags;
+    uint  frame;
+    uint  emissiveCount;
+    float emissiveTotalPower;
+    float fireflyClamp;
+    float oceanFineTileSize;
+    float oceanFoamTileSize;
+    float volDensity;
+    float volAniso;
+    float starIntensity;
+    float camDelta;
+    float camRot;
+    float timeSec;
+    float sunTanHalfAngle;
+    uint  clusterLightCount;
+    uint  shadeMode;
+} pc;
+
+// KEEP IN SYNC with froxel_inject.comp + deferred_shade.comp.
+const uint  kFroxelX = 128u, kFroxelY = 72u, kFroxelZ = 64u;
+const float kFroxelZMin = 0.25, kFroxelZMax = 512.0;
+
+float froxelDist(float s) {
+    return kFroxelZMin * pow(kFroxelZMax / kFroxelZMin, s / float(kFroxelZ));
+}
+
+void main() {
+    const uvec2 col = gl_GlobalInvocationID.xy;
+    if (col.x >= kFroxelX || col.y >= kFroxelY) return;
+
+    // Same medium σ rule as the inject/marchers (fog-driven, max'd with the
+    // explicit beam density).
+    const bool  fogDriven = fog.enabled > 0.5;
+    const float sigma = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
+                                  : pc.volDensity;
+
+    vec3  L = vec3(0.0);
+    float T = 1.0;
+    float z0 = 0.0;// slice 0 reaches the camera
+    for (uint k = 0u; k < kFroxelZ; ++k) {
+        const float z1  = froxelDist(float(k + 1u));
+        const float seg = z1 - z0;
+        const vec3  S   = imageLoad(froxelScatterImage, ivec3(col, k)).rgb;
+        if (sigma > 1e-6) {
+            // Analytic homogeneous segment: ∫ S·e^(-σt) dt over the slice.
+            L += T * S * ((1.0 - exp(-sigma * seg)) / sigma);
+            T *= exp(-sigma * seg);
+        } else {
+            L += T * S * seg;
+        }
+        imageStore(froxelLutImage, ivec3(col, k), vec4(L, T));
+        z0 = z1;
+    }
+}

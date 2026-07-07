@@ -84,6 +84,8 @@ int main(int argc, char** argv) {
     float camV[6] = {};
     int optSun = -1;       // --sun 0|1: hide/show the example's stand-in DirectionalLight
     float optLightRad = -1.f;// --lightrad r: physical source radius on loaded point/spot lights (soft-shadow triage)
+    bool  fogOnCli = false; float fogDensityCli = 0.05f;// --fog d: FogExp2 at density d (volumetric-fog triage)
+    bool  volFogCli = false;// --volfog: enable the volumetric dir-light fog (sun shafts)
     int churnN = 0;        // --churn N: add/remove a tiny cube every N frames (structural-rebuild stressor)
     std::string envPath;   // --env <hdr>: environment override (default citrus orchard)
     std::string sunPolicy; // --sunpolicy auto|always|off
@@ -106,6 +108,8 @@ int main(int argc, char** argv) {
         }
         else if (a == "--sun" && i + 1 < argc) optSun = std::atoi(argv[++i]);
         else if (a == "--lightrad" && i + 1 < argc) optLightRad = static_cast<float>(std::atof(argv[++i]));
+        else if (a == "--fog" && i + 1 < argc) { fogOnCli = true; fogDensityCli = static_cast<float>(std::atof(argv[++i])); }
+        else if (a == "--volfog") volFogCli = true;
         else if (a == "--churn" && i + 1 < argc) churnN = std::atoi(argv[++i]);
         else if (a == "--env" && i + 1 < argc) envPath = argv[++i];
         else if (a == "--sunpolicy" && i + 1 < argc) sunPolicy = argv[++i];
@@ -136,6 +140,7 @@ int main(int argc, char** argv) {
     if (auto* vr = dynamic_cast<VulkanRenderer*>(&renderer)) {
         if (optProbe >= 0) vr->setProbeGI(optProbe != 0);
         if (optSunExt >= 0) vr->setEnvSunExtraction(optSunExt != 0);
+        if (volFogCli) vr->setVolumetricFog(true);
         if (sunPolicy == "always") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Always);
         else if (sunPolicy == "off") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Off);
         else if (sunPolicy == "auto") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Auto);
@@ -264,8 +269,8 @@ int main(int argc, char** argv) {
     int toneMode = static_cast<int>(renderer.toneMapping);
     bool dirLight = sun->visible;
     int spp = pt ? pt->samplesPerPixel() : 1;
-    bool fogOn = false;
-    float fogDensity = 0.05f;
+    bool fogOn = fogOnCli;
+    float fogDensity = fogOnCli ? fogDensityCli : 0.05f;
     float fogColor[3] = {0.55f, 0.6f, 0.7f};
     float fogG = 0.5f;// HG anisotropy: moderately forward-scattering by default
     float fps = 0.f, fpsAccum = 0.f;

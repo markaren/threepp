@@ -1012,6 +1012,16 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/cluster_build.comp"
         kClusterBuildCompSpv
         _cluster_build_spv_h)
+    # Froxel volumetric lighting (deferred): inject (per-froxel in-scatter,
+    # RT sun shafts + clustered lights) + integrate (front-to-back LUT).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/froxel_inject.comp"
+        kFroxelInjectCompSpv
+        _froxel_inject_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/froxel_integrate.comp"
+        kFroxelIntegrateCompSpv
+        _froxel_integrate_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/probe_update.comp"
         kProbeUpdateCompSpv

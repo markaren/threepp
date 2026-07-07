@@ -111,6 +111,7 @@ int main(int argc, char** argv) {
     std::string shotPath;
     int   shotFrames = 150, shotFrame = 0;
     float optLightRad = -1.f;
+    float fogDensity  = 0.f;// --fog d: FogExp2 medium (froxel-volumetrics triage: beams + point-light glow)
     int   ringLights  = 0;// --lights N: ring of N extra colored point lights (clustered-lighting triage)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -118,6 +119,7 @@ int main(int argc, char** argv) {
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (a == "--lightrad" && i + 1 < argc) optLightRad = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--lights" && i + 1 < argc) ringLights = std::atoi(argv[++i]);
+        else if (a == "--fog" && i + 1 < argc) fogDensity = static_cast<float>(std::atof(argv[++i]));
     }
 
     Canvas canvas("Vulkan PT - Denoiser Showcase", {{"vsync", false}});
@@ -139,6 +141,11 @@ int main(int argc, char** argv) {
     // ---- Scene ----
     Scene scene;
     scene.background = Color(0.02f, 0.02f, 0.05f);
+    if (fogDensity > 0.f) {// --fog: key-spot beam + ring-light glow through the medium
+        scene.fog = FogExp2(Color(0.35f, 0.38f, 0.45f), fogDensity);
+        renderer.setFogAnisotropy(0.4f);
+        renderer.setVolumetricFog(true);
+    }
 
     scene.add(makeGround());
     scene.add(makePedestal());

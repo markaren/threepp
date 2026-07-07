@@ -201,6 +201,32 @@ namespace threepp {
                 cdep.pMemoryBarriers = &cbar;
                 vkCmdPipelineBarrier2(cb, &cdep);
             }
+            // Froxel volumetrics: inject (RT sun shafts + clustered-light
+            // beams, temporal EMA) + integrate (front-to-back LUT), whenever
+            // a medium exists this frame. Runs AFTER the cluster barrier
+            // (inject reads the cluster grid); the barrier below makes the
+            // LUT visible to the shade's trilinear sample.
+            const bool froxelsActive = fogEnabledThisFrame_ || deferredVolDensity_ > 0.f;
+            if (froxelsActive) {
+                deferredShade_->recordFroxels(cb, currentFrame,
+                                              regionRenderExt_.width, regionRenderExt_.height,
+                                              deferredVolFog_, deferredVolDensity_, deferredVolAniso_,
+                                              sampleIndex,
+                                              deferredCamDeltaLen_, deferredCamRotAngle_,
+                                              clusterLightCountThisFrame_);
+                VkMemoryBarrier2 fbar{};
+                fbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                fbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                fbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                fbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                fbar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+                                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                VkDependencyInfo fdep{};
+                fdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                fdep.memoryBarrierCount = 1;
+                fdep.pMemoryBarriers = &fbar;
+                vkCmdPipelineBarrier2(cb, &fdep);
+            }
             gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
             deferredShade_->recordDispatch(cb, currentFrame,
                                            regionRenderExt_.width, regionRenderExt_.height,
@@ -217,7 +243,7 @@ namespace threepp {
                                            static_cast<float>(glfwGetTime()),
                                            std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
                                            gbufMsaaSamples_, /*shadeMode=*/0u, shadeBActive,
-                                           clusterLightCountThisFrame_);
+                                           clusterLightCountThisFrame_, froxelsActive);
             gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
 
             // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
@@ -259,7 +285,7 @@ namespace threepp {
                                                static_cast<float>(glfwGetTime()),
                                                std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
                                                gbufMsaaSamples_, /*shadeMode=*/1u, /*shadeBActive=*/true,
-                                               clusterLightCountThisFrame_);
+                                               clusterLightCountThisFrame_, froxelsActive);
                 gpuTimings_->end(cb, TP_ShadeB, currentFrame);
 
                 // Dispatch B's outImage write -> bloom/composite's read.

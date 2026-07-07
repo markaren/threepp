@@ -665,6 +665,7 @@ namespace threepp {
         std::array<Buffer, kFramesInFlight> clusterLightsBuffers{};// host-visible mapped (CPU fills per frame)
         std::array<Buffer, kFramesInFlight> clusterGridBuffers{};  // device-local (cluster_build writes)
         uint32_t clusterLightCountThisFrame_ = 0;
+        bool     fogEnabledThisFrame_ = false;// scene.fog present (froxel-volumetrics gate)
 
         // Homogeneous fog (participating media). FogExp2.density maps directly
         // to sigma_t; linear Fog (near/far) is converted to an equivalent
@@ -1406,6 +1407,8 @@ namespace threepp {
             Image2D       directU;      // rgba16f — unshadowed analytic direct (dir/point/spot) for the denoise recombine (U × R̃); STORAGE, current frame only
             Image2D       shadowAtrousA;// rg16f — shadow-ratio à-trous ping-pong (x=R, y=variance); STORAGE scratch
             Image2D       shadowAtrousB;// rg16f — shadow-ratio à-trous ping-pong (the other half)
+            Image2D       froxelScatter;// rgba16f 3D (128×72×64, FIXED size) — froxel in-scatter accumulator (.a=histLen); STORAGE + SAMPLED, ping-ponged like indirect
+            Image2D       froxelLut;    // rgba16f 3D — front-to-back-integrated volumetric LUT; STORAGE (integrate) + SAMPLED (shade, trilinear)
             Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
             // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
             // an extra depth-only prepass (overlay_depth.vert) right after
@@ -8570,6 +8573,10 @@ namespace threepp {
                 cameraMovedThisFrame_ = true;
                 prevFogHash_          = h;
             }
+            // Froxel-volumetrics gate: the deferred leaf records the froxel
+            // passes only when a medium exists this frame (fog, or the
+            // explicit clear-air beam density).
+            fogEnabledThisFrame_ = ubo.enabled > 0.5f;
 
             void* mapped = nullptr;
             vmaMapMemory(ctx->allocator(), fogUbos[frame].alloc, &mapped);
@@ -9306,6 +9313,51 @@ namespace threepp {
             return out;
         }
 
+        // 3D storage image (froxel volumetrics) — the volume sibling of
+        // createAttachmentImage2D (OPTIMAL tiling, single mip, 3D view).
+        Image2D createImage3D(uint32_t w, uint32_t h, uint32_t depth, VkFormat format,
+                              VkImageUsageFlags usage, const char* debugName = nullptr) {
+            Image2D out{};
+            out.width  = w;
+            out.height = h;
+            out.format = format;
+
+            VkImageCreateInfo ici{};
+            ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType     = VK_IMAGE_TYPE_3D;
+            ici.format        = format;
+            ici.extent        = {w, h, depth};
+            ici.mipLevels     = 1;
+            ici.arrayLayers   = 1;
+            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage         = usage;
+            ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            VmaAllocationCreateInfo aci{};
+            aci.usage = VMA_MEMORY_USAGE_AUTO;
+            check(vmaCreateImage(ctx->allocator(), &ici, &aci,
+                                 &out.image, &out.alloc, nullptr),
+                  "vmaCreateImage(3D)");
+
+            VkImageViewCreateInfo vci{};
+            vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vci.image    = out.image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_3D;
+            vci.format   = format;
+            vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vci.subresourceRange.levelCount = 1;
+            vci.subresourceRange.layerCount = 1;
+            check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
+                  "vkCreateImageView(3D)");
+            if (debugName) {
+                ctx->setObjectName(out.image, debugName);
+                ctx->setObjectName(out.view,  debugName);
+            }
+            return out;
+        }
+
         void destroyRasterGbufImages() {
             if (!ctx) return;
             VkDevice d = ctx->device();
@@ -9333,6 +9385,8 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), d, g.directU);
                 destroyImage2D(ctx->allocator(), d, g.shadowAtrousA);
                 destroyImage2D(ctx->allocator(), d, g.shadowAtrousB);
+                destroyImage2D(ctx->allocator(), d, g.froxelScatter);
+                destroyImage2D(ctx->allocator(), d, g.froxelLut);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
                 destroyImage2D(ctx->allocator(), d, g.normalMS);
@@ -9602,6 +9656,16 @@ namespace threepp {
                 g.shadowAtrousB = createAttachmentImage2D(w, h, VK_FORMAT_R16G16_SFLOAT,
                                                           VK_IMAGE_USAGE_STORAGE_BIT,
                                                           VK_IMAGE_ASPECT_COLOR_BIT, N("shadowAtrousB"));
+                // Froxel volumetrics — FIXED-size 3D volumes (independent of
+                // the render extent; recreated here anyway on resize, which
+                // also correctly resets the temporal history). KEEP the dims
+                // in sync with froxel_inject/integrate.comp.
+                g.froxelScatter = createImage3D(128, 72, 64, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                N("froxelScatter"));
+                g.froxelLut = createImage3D(128, 72, 64, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                            N("froxelLut"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                    N("depth"));
@@ -9730,6 +9794,8 @@ namespace threepp {
                 pushInit(g.directU.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.shadowAtrousA.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.shadowAtrousB.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.froxelScatter.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.froxelLut.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
                 if (gbufMsaaSamples_ > 1) {
                     pushInit(g.normalMS.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -11408,6 +11474,8 @@ namespace threepp {
             std::array<VkImageView, kFramesInFlight> directUViews{};
             std::array<VkImageView, kFramesInFlight> shadowAtrousAViews{};
             std::array<VkImageView, kFramesInFlight> shadowAtrousBViews{};
+            std::array<VkImageView, kFramesInFlight> froxelScatterViews{};
+            std::array<VkImageView, kFramesInFlight> froxelLutViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             std::array<VkBuffer, kFramesInFlight> fogBufs{};
             std::array<VkBuffer, kFramesInFlight> clusterGridBufs{};
@@ -11445,6 +11513,8 @@ namespace threepp {
                 directUViews[f]       = rasterGbufs[f].directU.view;
                 shadowAtrousAViews[f] = rasterGbufs[f].shadowAtrousA.view;
                 shadowAtrousBViews[f] = rasterGbufs[f].shadowAtrousB.view;
+                froxelScatterViews[f] = rasterGbufs[f].froxelScatter.view;
+                froxelLutViews[f]     = rasterGbufs[f].froxelLut.view;
                 sceneHdrViews[f] = bloom_->sceneHdrView(f);
                 const bool haveMS = gbufMsaaSamples_ > 1 && rasterGbufs[f].normalMS.view != VK_NULL_HANDLE;
                 normalMSViews[f] = haveMS ? rasterGbufs[f].normalMS.view : gbufDummyMS_[0].view;
@@ -11481,6 +11551,8 @@ namespace threepp {
             in.shadowAtrousB    = shadowAtrousBViews.data();
             in.clusterGrid      = clusterGridBufs.data();
             in.clusterLights    = clusterLightBufs.data();
+            in.froxelScatter    = froxelScatterViews.data();
+            in.froxelLut        = froxelLutViews.data();
             in.sceneHdr         = sceneHdrViews.data();
             in.fogBuf           = fogBufs.data();
             in.fogRange         = sizeof(GpuFogUbo);
