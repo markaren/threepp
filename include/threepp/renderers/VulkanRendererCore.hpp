@@ -309,6 +309,23 @@ namespace threepp {
         void setFocusDistance(float meters);
         [[nodiscard]] float focusDistance() const;
 
+        // ── Two-phase GPU occlusion culling ──────────────────────────────
+        // Splits the raster G-buffer into: draw last frame's visible set →
+        // build a farthest-depth pyramid from it → test every object's
+        // world AABB on the GPU → draw only the newly visible. Hidden
+        // objects stop paying vertex/fragment cost entirely, with no
+        // popping: a wrongly-skipped object is caught by the test and drawn
+        // in phase 2 of the SAME frame (camera cuts cost one slow frame,
+        // never a wrong one). Deformers (skinned/displaced/soft-body) always
+        // draw — their CPU-side bounds are stale. Works with setGbufferMsaa
+        // (the depth pyramid reduces the raw MS attachment's samples). Wins
+        // scale with how much geometry is actually hidden (interiors, city
+        // blocks, walls); scenes with little occlusion pay two small compute
+        // dispatches + a depth-pyramid build. OFF by default. Ignored while
+        // split-screen scissor is active.
+        void setOcclusionCulling(bool enabled);
+        [[nodiscard]] bool occlusionCulling() const;
+
         // ── PhysX soft-body zero-copy interop (CUDA → Vulkan) ────────────────
         struct SoftBodyInteropHandle {
             void*  osHandle  = nullptr;

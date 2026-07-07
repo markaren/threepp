@@ -1,0 +1,140 @@
+#version 460
+
+// Two-phase GPU occlusion culling — both compute stages (OcclusionCull).
+//
+// One thread per indirect draw record; pc.mode selects the stage:
+//
+//   mode 0 (PHASE-1 FILTER, before the raster): copy the CPU-built indirect
+//     record into the phase-1 buffer with instanceCount zeroed unless the
+//     object was visible LAST frame (persistent visBits, keyed by the
+//     renderer's stable per-object id) or is always-draw (deformers: their
+//     CPU AABB is stale — same rule as the frustum cull). Records are
+//     copied, never compacted, so firstInstance (the DrawInfo index the
+//     vertex shader reads) stays untouched and empty draws cost nothing.
+//
+//   mode 1 (OCCLUSION TEST, after phase-1 depth → farthest-HiZ): project
+//     the object's world AABB with the SAME jittered view-proj the raster
+//     used, pick the mip where the screen rect spans ≤ 2×2 texels, and
+//     compare the box's CLOSEST depth against the region's FARTHEST
+//     surface — hidden iff every covered texel's farthest surface is
+//     strictly closer than the box's nearest point (reverse-Z: larger =
+//     closer). Sampling a SUPERSET region and the min-reduce's edge
+//     folding both err toward "visible" — extra draws, never holes.
+//     Newly-visible objects go to the phase-2 buffer; visBits is rewritten
+//     for next frame. A corner behind the near plane makes the projection
+//     unsafe → visible. An object's own phase-1 depth can never
+//     self-occlude it: its surfaces lie inside its AABB, so the region's
+//     farthest can't be closer than the box's closest.
+
+layout(local_size_x = 64) in;
+
+struct DrawCmd { uint vertexCount; uint instanceCount; uint firstVertex; uint firstInstance; };
+struct CullMeta {
+    vec4 aabbMin;// xyz = world AABB min, w = uintBitsToFloat(stableId)
+    vec4 aabbMax;// xyz = world AABB max, w = uintBitsToFloat(flags: bit0 alwaysDraw)
+};
+
+layout(set = 0, binding = 0, std430) readonly  buffer SrcCmds { DrawCmd srcCmds[]; };
+layout(set = 0, binding = 1, std430) writeonly buffer DstCmds { DrawCmd dstCmds[]; };
+layout(set = 0, binding = 2, std430) readonly  buffer Meta    { CullMeta meta[]; };
+layout(set = 0, binding = 3, std430) buffer VisBits           { uint visBits[]; };// 1 bit per stableId
+layout(set = 0, binding = 4) uniform sampler2D hizTex;// FARTHEST (min-reduce) pyramid
+// The raster camera UBO — layout matches gbuffer.vert's CameraUbo. Only
+// the JITTERED current VP is read: the phase-1 depth was rasterized with
+// it, so the AABB projection compares apples to apples.
+layout(set = 0, binding = 5) uniform RasterCamUbo {
+    mat4 currVPjittered;
+    mat4 currVPunjittered;
+    mat4 prevVP;
+    vec4 jitter;
+    vec4 prevJitter;
+} rcam;
+
+layout(push_constant) uniform Pc {
+    uint  drawCount;
+    uint  mode;    // 0 = phase-1 filter, 1 = occlusion test
+    uint  hizMips;
+    uint  _pad;
+    ivec2 hizSize; // mip-0 texel dims (= render extent)
+} pc;
+
+bool bitGet(uint id) { return (visBits[id >> 5u] & (1u << (id & 31u))) != 0u; }
+void bitSet(uint id, bool v) {
+    // One thread per stableId (unique per object) — plain RMW would race on
+    // the shared word, so use atomics.
+    const uint w = id >> 5u, m = 1u << (id & 31u);
+    if (v) atomicOr(visBits[w], m);
+    else   atomicAnd(visBits[w], ~m);
+}
+
+// Conservative HiZ visibility: true = potentially visible.
+bool hizVisible(vec3 bmin, vec3 bmax) {
+    vec2 ndcMin = vec2(1e30), ndcMax = vec2(-1e30);
+    float zMax = -1e30;// box CLOSEST depth (reverse-Z: larger = closer)
+    for (int i = 0; i < 8; ++i) {
+        const vec3 c = vec3((i & 1) != 0 ? bmax.x : bmin.x,
+                            (i & 2) != 0 ? bmax.y : bmin.y,
+                            (i & 4) != 0 ? bmax.z : bmin.z);
+        const vec4 h = rcam.currVPjittered * vec4(c, 1.0);
+        if (h.w <= 1e-6) return true;// corner at/behind the eye plane — unsafe
+        const vec3 ndc = h.xyz / h.w;
+        ndcMin = min(ndcMin, ndc.xy);
+        ndcMax = max(ndcMax, ndc.xy);
+        zMax   = max(zMax, ndc.z);
+    }
+    if (ndcMin.x > 1.0 || ndcMax.x < -1.0 || ndcMin.y > 1.0 || ndcMax.y < -1.0)
+        return false;// fully off-screen (the CPU frustum cull already caught most)
+    if (zMax >= 1.0) return true;// pokes through the near plane
+
+    // NDC → pixel rect (GL-style y-up NDC ↔ y-down UV, same convention as
+    // the SSR walk), clamped to the screen.
+    const vec2 uvMin = clamp(vec2(ndcMin.x * 0.5 + 0.5, 0.5 - ndcMax.y * 0.5), 0.0, 1.0);
+    const vec2 uvMax = clamp(vec2(ndcMax.x * 0.5 + 0.5, 0.5 - ndcMin.y * 0.5), 0.0, 1.0);
+    const vec2 pxMin = uvMin * vec2(pc.hizSize);
+    const vec2 pxMax = uvMax * vec2(pc.hizSize);
+
+    // Mip where the rect spans at most ONE texel size, so floor(pxMin) and
+    // floor(pxMax) land in adjacent texels at worst — the 2×2 corner taps
+    // below always cover the rect regardless of alignment (a span-≤-2-texel
+    // choice can straddle THREE texels and the middle column would be
+    // missed). Coarser-than-needed is merely conservative.
+    const float span = max(pxMax.x - pxMin.x, pxMax.y - pxMin.y);
+    const int mip = clamp(int(ceil(log2(max(span, 1.0)))), 0, int(pc.hizMips) - 1);
+
+    const ivec2 mipSize = max(pc.hizSize >> mip, ivec2(1));
+    const ivec2 t0 = clamp(ivec2(pxMin) >> mip, ivec2(0), mipSize - 1);
+    const ivec2 t1 = clamp(ivec2(pxMax) >> mip, ivec2(0), mipSize - 1);
+    float farthest = 1e30;
+    farthest = min(farthest, texelFetch(hizTex, ivec2(t0.x, t0.y), mip).x);
+    farthest = min(farthest, texelFetch(hizTex, ivec2(t1.x, t0.y), mip).x);
+    farthest = min(farthest, texelFetch(hizTex, ivec2(t0.x, t1.y), mip).x);
+    farthest = min(farthest, texelFetch(hizTex, ivec2(t1.x, t1.y), mip).x);
+
+    // Visible unless every covered texel's farthest surface is strictly
+    // closer than the box's closest point.
+    return zMax >= farthest;
+}
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.drawCount) return;
+
+    DrawCmd cmd = srcCmds[i];
+    const uint stableId  = floatBitsToUint(meta[i].aabbMin.w);
+    const bool alwaysOn  = (floatBitsToUint(meta[i].aabbMax.w) & 1u) != 0u;
+
+    if (pc.mode == 0u) {
+        // Phase 1: draw what was visible last frame (+ always-draw).
+        if (!alwaysOn && !bitGet(stableId)) cmd.instanceCount = 0u;
+        dstCmds[i] = cmd;
+        return;
+    }
+
+    // Phase 2: test everything against the phase-1 farthest-HiZ; draw only
+    // what phase 1 SKIPPED but is actually visible; refresh visBits.
+    const bool wasVisible = alwaysOn || bitGet(stableId);
+    const bool visible    = alwaysOn || hizVisible(meta[i].aabbMin.xyz, meta[i].aabbMax.xyz);
+    if (wasVisible || !visible) cmd.instanceCount = 0u;// already drawn, or hidden
+    dstCmds[i] = cmd;
+    bitSet(stableId, visible);
+}

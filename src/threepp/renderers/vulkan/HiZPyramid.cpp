@@ -16,8 +16,10 @@ namespace threepp::vulkan {
             int32_t dstW, dstH;
             int32_t srcW, srcH;
             uint32_t fromDepth;
+            uint32_t reduceMin;// 0 = max (closest, SSR), 1 = min (farthest, occlusion)
+            uint32_t msSamples;// >1 = mip 0 reduces the raw MS depth attachment
         };
-        static_assert(sizeof(HiZPc) == 20, "hiz_build push-constant drift");
+        static_assert(sizeof(HiZPc) == 28, "hiz_build push-constant drift");
 
         uint32_t mipDim(uint32_t base, uint32_t level) {
             return std::max(base >> level, 1u);
@@ -65,20 +67,21 @@ namespace threepp::vulkan {
     void HiZPyramid::createPipeline() {
         VkDevice d = ctx_.device();
 
-        VkDescriptorSetLayoutBinding b[3]{};
+        VkDescriptorSetLayoutBinding b[4]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
             b[i].descriptorCount = 1;
             b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         };
-        set(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);// resolved depth (mip-0 pass)
+        set(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);// 1× depth (mip-0 pass)
         set(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);         // src mip (reduce pass)
         set(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);         // dst mip
+        set(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);// MS depth (or 1×1 dummy)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 3;
+        dlci.bindingCount = 4;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(hiz)");
@@ -117,10 +120,12 @@ namespace threepp::vulkan {
         vkDestroyShaderModule(d, mod, nullptr);
     }
 
-    void HiZPyramid::resize(VkExtent2D extent, const VkImageView* depthViews) {
-        bool sameDepth = true;
+    void HiZPyramid::resize(VkExtent2D extent, const VkImageView* depthViews,
+                            const VkImageView* msDepthViews, uint32_t msSamples) {
+        bool sameDepth = msSamples == msSamples_;
         for (uint32_t f = 0; f < framesInFlight_; ++f)
-            sameDepth = sameDepth && cachedDepthViews_[f] == depthViews[f];
+            sameDepth = sameDepth && cachedDepthViews_[f] == depthViews[f] &&
+                        cachedMsDepthViews_[f] == msDepthViews[f];
         if (image_ && extent.width == extent_.width && extent.height == extent_.height && sameDepth)
             return;
 
@@ -134,7 +139,11 @@ namespace threepp::vulkan {
         mipCount_ = 1;
         while (mipDim(extent.width, mipCount_) > 1 || mipDim(extent.height, mipCount_) > 1)
             ++mipCount_;
-        for (uint32_t f = 0; f < framesInFlight_; ++f) cachedDepthViews_[f] = depthViews[f];
+        for (uint32_t f = 0; f < framesInFlight_; ++f) {
+            cachedDepthViews_[f]   = depthViews[f];
+            cachedMsDepthViews_[f] = msDepthViews[f];
+        }
+        msSamples_ = msSamples;
 
         VkImageCreateInfo ici{};
         ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -176,7 +185,7 @@ namespace threepp::vulkan {
         // the unused src — never loaded on the fromDepth path).
         VkDescriptorPoolSize sizes[2]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = framesInFlight_ * mipCount_;
+        sizes[0].descriptorCount = framesInFlight_ * mipCount_ * 2;// 1× + MS depth
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[1].descriptorCount = framesInFlight_ * mipCount_ * 2;
         VkDescriptorPoolCreateInfo dpci{};
@@ -207,8 +216,12 @@ namespace threepp::vulkan {
                 VkDescriptorImageInfo dstInfo{};
                 dstInfo.imageView   = mipViews_[m];
                 dstInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkDescriptorImageInfo msInfo{};
+                msInfo.sampler     = sampler_;
+                msInfo.imageView   = msDepthViews[f];
+                msInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-                VkWriteDescriptorSet w[3]{};
+                VkWriteDescriptorSet w[4]{};
                 auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                                 const VkDescriptorImageInfo* img) {
                     w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -221,12 +234,13 @@ namespace threepp::vulkan {
                 setw(0, 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthInfo);
                 setw(1, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &srcInfo);
                 setw(2, 2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &dstInfo);
-                vkUpdateDescriptorSets(d, 3, w, 0, nullptr);
+                setw(3, 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &msInfo);
+                vkUpdateDescriptorSets(d, 4, w, 0, nullptr);
             }
         }
     }
 
-    void HiZPyramid::record(VkCommandBuffer cb, uint32_t frame) {
+    void HiZPyramid::record(VkCommandBuffer cb, uint32_t frame, bool reduceMin) {
         if (!image_) return;
 
         // Leading barrier: fresh image → GENERAL; otherwise fence last
@@ -279,6 +293,8 @@ namespace threepp::vulkan {
             pc.srcW = static_cast<int32_t>(m == 0 ? extent_.width  : mipDim(extent_.width, m - 1));
             pc.srcH = static_cast<int32_t>(m == 0 ? extent_.height : mipDim(extent_.height, m - 1));
             pc.fromDepth = m == 0 ? 1u : 0u;
+            pc.reduceMin = reduceMin ? 1u : 0u;
+            pc.msSamples = msSamples_;
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
             vkCmdDispatch(cb, (static_cast<uint32_t>(pc.dstW) + 7u) / 8u,
                           (static_cast<uint32_t>(pc.dstH) + 7u) / 8u, 1);

@@ -1179,6 +1179,20 @@ namespace threepp {
         return core()->focusDistance_;
     }
 
+    void VulkanRendererCore::setOcclusionCulling(bool enabled) {
+        auto* c = core();
+        if (c->occlusionCullingEnabled_ == enabled) return;
+        c->occlusionCullingEnabled_ = enabled;
+        c->occlActiveThisFrame_ = false;// next buildIndirectDrawData re-evaluates
+        // The farthest pyramid's image is allocated lazily by the next
+        // frame's ensureHybridResources (which inherits the resize/MSAA
+        // idle-wait guarantees), so enabling mid-run engages one frame later.
+    }
+
+    bool VulkanRendererCore::occlusionCulling() const {
+        return core()->occlusionCullingEnabled_;
+    }
+
     void VulkanRendererCore::setWhiteBalance(float temperatureK, float tint) {
         if (core()->post_) core()->post_->setWhiteBalance(temperatureK, tint);
     }

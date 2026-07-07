@@ -23,6 +23,7 @@
 #include "DofPass.hpp"
 #include "DeferredShade.hpp"
 #include "HiZPyramid.hpp"
+#include "OcclusionCull.hpp"
 #include "ProbeGI.hpp"
 #include "WaterDisplacePipeline.hpp"
 #include "FoamWorldPipeline.hpp"
@@ -1816,6 +1817,28 @@ namespace threepp {
         // extent inside rewriteDeferredDescriptors; rebuilt every frame in
         // recordSceneDispatch when SSR is on (deferredSsr_ above).
         std::unique_ptr<vulkan::HiZPyramid> hiz_;
+        // ── Two-phase GPU occlusion culling (setOcclusionCulling) ───────────
+        // Phase 1 draws last frame's visible set; a FARTHEST-depth pyramid
+        // (occlHiz_, min-reduce — the SSR pyramid above is closest/max) is
+        // built mid-frame from that depth; the cull compute tests every
+        // record's world AABB against it and phase 2 draws only the newly
+        // visible (render passes A/B below — same framebuffer + pipelines,
+        // load/store-op variants are render-pass compatible; MSAA gets its
+        // own variant pair and the pyramid reduces the raw MS attachment's
+        // samples at mip 0). Deformers always draw (their CPU AABB is stale
+        // — the frustum-cull rule). Default OFF: the single-pass path
+        // records byte-identically and occlHiz_'s image isn't even
+        // allocated. Gate: no split-screen scissor.
+        std::unique_ptr<vulkan::OcclusionCull> occl_;
+        std::unique_ptr<vulkan::HiZPyramid>    occlHiz_;
+        bool occlusionCullingEnabled_ = false;
+        VkRenderPass occlRenderPassA_   = VK_NULL_HANDLE;// CLEAR + STORE, depth → sampleable
+        VkRenderPass occlRenderPassB_   = VK_NULL_HANDLE;// LOAD, final layouts as the single pass
+        VkRenderPass occlRenderPassAMS_ = VK_NULL_HANDLE;// MSAA siblings (created with the MS
+        VkRenderPass occlRenderPassBMS_ = VK_NULL_HANDLE;// pass on the msaa toggle)
+        // True while THIS frame's raster actually ran two-phase (consumers
+        // in the same recordCommandBuffer body branch on it).
+        bool occlActiveThisFrame_ = false;
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
         float bloomClamp_ = 0.0f;    // per-tap HDR cap before the bright pass; <= 0 = off
         float sharpenStrength_ = 0.5f;// post-TAA RCAS amount; 0 = off
@@ -2397,6 +2420,10 @@ namespace threepp {
             if (rasterDsLayout)         vkDestroyDescriptorSetLayout(d, rasterDsLayout, nullptr);
             if (rasterDescPool)         vkDestroyDescriptorPool(d, rasterDescPool, nullptr);
             if (rasterGbufRenderPass)   vkDestroyRenderPass(d, rasterGbufRenderPass, nullptr);
+            if (occlRenderPassA_)       vkDestroyRenderPass(d, occlRenderPassA_, nullptr);
+            if (occlRenderPassB_)       vkDestroyRenderPass(d, occlRenderPassB_, nullptr);
+            if (occlRenderPassAMS_)     vkDestroyRenderPass(d, occlRenderPassAMS_, nullptr);
+            if (occlRenderPassBMS_)     vkDestroyRenderPass(d, occlRenderPassBMS_, nullptr);
             if (overlayWireframePipeline)         vkDestroyPipeline(d, overlayWireframePipeline, nullptr);
             if (overlayBasicPipeline)             vkDestroyPipeline(d, overlayBasicPipeline, nullptr);
             if (overlayBasicTransparentPipeline)  vkDestroyPipeline(d, overlayBasicTransparentPipeline, nullptr);
@@ -7812,7 +7839,10 @@ namespace threepp {
             indirectCmdBuffers[frame] = createBuffer(
                     ctx->allocator(), ctx->device(),
                     newCap,
-                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                    // STORAGE: the occlusion-cull filter compute reads these
+                    // CPU-built records as an SSBO (occl_cull.comp binding 0).
+                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
@@ -7844,6 +7874,11 @@ namespace threepp {
             // Four buckets: [BACK_cull, FRONT_cull, NONE_cull, decal] order.
             std::array<std::vector<DrawInfoGpu>, 4>            draws;
             std::array<std::vector<VkDrawIndirectCommand>, 4>  cmds;
+            // Occlusion-cull metadata rides the same bucketing so its final
+            // concatenated order matches the command records 1:1.
+            const bool wantOcclMeta = occlusionCullingEnabled_ && occl_ &&
+                                      occlHiz_ && occlHiz_->valid() && !scissorTest;
+            std::array<std::vector<vulkan::OcclusionCull::CullMeta>, 4> occlMeta;
             auto bucketOf = [](VkCullModeFlags cm) -> int {
                 if (cm == VK_CULL_MODE_BACK_BIT)  return 0;
                 if (cm == VK_CULL_MODE_FRONT_BIT) return 1;
@@ -7973,10 +8008,42 @@ namespace threepp {
                 cmd.firstVertex   = 0u;
                 cmd.firstInstance = 0u;// patched below to the final-position index
                 cmds[b].push_back(cmd);
+
+                if (wantOcclMeta) {
+                    // Same rules as cullEntriesAgainstFrustum: deformers'
+                    // cached local AABB is stale per frame → always draw;
+                    // missing bounds → always draw.
+                    vulkan::OcclusionCull::CullMeta cm{};
+                    cm.stableId = di.stableId;
+                    bool always = en.isSkinned || en.isDisplaced || en.isGrass ||
+                                  en.isMorphed || en.isTet;
+                    Box3 worldAabb;
+                    if (!always) {
+                        auto geom = en.mesh->geometry();
+                        if (geom && !geom->boundingBox) geom->computeBoundingBox();
+                        if (geom && geom->boundingBox) {
+                            worldAabb = *geom->boundingBox;
+                            Matrix4 w;
+                            std::memcpy(w.elements.data(), en.worldMatrix.data(), 64);
+                            worldAabb.applyMatrix4(w);
+                        } else {
+                            always = true;
+                        }
+                    }
+                    cm.flags = always ? 1u : 0u;
+                    cm.aabbMin[0] = worldAabb.min().x;
+                    cm.aabbMin[1] = worldAabb.min().y;
+                    cm.aabbMin[2] = worldAabb.min().z;
+                    cm.aabbMax[0] = worldAabb.max().x;
+                    cm.aabbMax[1] = worldAabb.max().y;
+                    cm.aabbMax[2] = worldAabb.max().z;
+                    occlMeta[b].push_back(cm);
+                }
                 ++globalIdx;
             }
 
             indirectTotalDraws_ = globalIdx;
+            occlActiveThisFrame_ = wantOcclMeta && globalIdx > 0u;
             if (globalIdx == 0u) return;
 
             // Concatenate buckets into the per-frame device buffers.
@@ -7984,6 +8051,20 @@ namespace threepp {
             const VkDeviceSize cmdBytes  = sizeof(VkDrawIndirectCommand) * globalIdx;
             const bool drawGrown = ensureDrawInfoCapacity(frame, drawBytes);
             ensureIndirectCmdCapacity(frame, cmdBytes);
+
+            // Occlusion culling: size the phase buffers + rewrite this fif's
+            // sets if any input changed (AFTER the capacity calls above so
+            // the src handle is final), then get the mapped meta destination.
+            vulkan::OcclusionCull::CullMeta* occlMetaDst = nullptr;
+            if (occlActiveThisFrame_) {
+                vulkan::OcclusionCull::FrameInputs oin{};
+                oin.srcCmds    = indirectCmdBuffers[frame].handle;
+                oin.rasterCam  = rasterCameraUbos[frame].handle;
+                oin.hizView    = occlHiz_->view();
+                oin.hizSampler = occlHiz_->sampler();
+                occl_->prepareFrame(frame, globalIdx, oin);
+                occlMetaDst = occl_->metaPtr(frame);
+            }
 
             void* mappedDraws = nullptr;
             vmaMapMemory(ctx->allocator(), drawInfoBuffers[frame].alloc, &mappedDraws);
@@ -8016,6 +8097,9 @@ namespace threepp {
                                 draws[b].data(), n * sizeof(DrawInfoGpu));
                     std::memcpy(cDst + offset * sizeof(VkDrawIndirectCommand),
                                 cmds[b].data(), n * sizeof(VkDrawIndirectCommand));
+                    if (occlMetaDst)
+                        std::memcpy(occlMetaDst + offset, occlMeta[b].data(),
+                                    n * sizeof(vulkan::OcclusionCull::CullMeta));
                 }
                 offset += n;
             }
@@ -8049,9 +8133,6 @@ namespace threepp {
         // see buildIndirectDrawData above for how the GPU buffers are
         // populated.
         void recordRasterGbufPass(VkCommandBuffer cb, uint32_t frame) {
-            // Render extent — the gbuffer attachments are sized to it and
-            // raygen launches over it; the viewport must agree.
-            const VkExtent2D ext = renderExtent();
             const auto& g = rasterGbufs[frame];
             // MSAA path: rasterize into the MS framebuffer/render pass/
             // pipelines (RasterGbufImages::*MS + rasterGbufRenderPassMS);
@@ -8060,7 +8141,24 @@ namespace threepp {
             // after this, see recordCommandBuffer) fills the single-sample
             // images every downstream consumer keeps reading unchanged.
             const bool useMsaa = gbufMsaaSamples_ > 1 && g.framebufferMS != VK_NULL_HANDLE;
-            const VkFramebuffer fb = useMsaa ? g.framebufferMS : g.framebuffer;
+            recordRasterGbufPassInternal(cb, frame,
+                                         useMsaa ? rasterGbufRenderPassMS : rasterGbufRenderPass,
+                                         useMsaa ? g.framebufferMS : g.framebuffer,
+                                         useMsaa,
+                                         indirectCmdBuffers[frame].handle,
+                                         /*clear=*/true);
+        }
+
+        // Shared body: `renderPass` must be COMPATIBLE with the pipelines'
+        // creation pass (the occlusion-culling load/store variants are), and
+        // `indirectBuffer` supplies the VkDrawIndirectCommand records the
+        // bucket groups index into (the two-phase path swaps in the compute-
+        // written phase buffers; offsets/counts are identical by design).
+        void recordRasterGbufPassInternal(VkCommandBuffer cb, uint32_t frame,
+                                          VkRenderPass renderPass, VkFramebuffer fb,
+                                          bool useMsaa, VkBuffer indirectBuffer,
+                                          bool clear) {
+            const auto& g = rasterGbufs[frame];
             if (fb == VK_NULL_HANDLE) return;// not initialized
 
             VkClearValue clears[6]{};
@@ -8076,12 +8174,14 @@ namespace threepp {
 
             VkRenderPassBeginInfo rpbi{};
             rpbi.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            rpbi.renderPass      = useMsaa ? rasterGbufRenderPassMS : rasterGbufRenderPass;
+            rpbi.renderPass      = renderPass;
             rpbi.framebuffer     = fb;
             rpbi.renderArea.offset = {0, 0};
             rpbi.renderArea.extent = {g.width, g.height};
-            rpbi.clearValueCount = 6;
-            rpbi.pClearValues    = clears;
+            // LOAD-variant passes ignore the clear values but the count must
+            // still cover every CLEAR attachment — harmless to always pass.
+            rpbi.clearValueCount = clear ? 6u : 0u;
+            rpbi.pClearValues    = clear ? clears : nullptr;
             vkCmdBeginRenderPass(cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 
             // Split-screen: draw the pane region-sized at the origin (the render
@@ -8125,7 +8225,7 @@ namespace threepp {
                 if (g.count == 0u) continue;
                 vkCmdSetCullMode(cb, g.cullMode);
                 vkCmdDrawIndirect(cb,
-                                  indirectCmdBuffers[frame].handle,
+                                  indirectBuffer,
                                   static_cast<VkDeviceSize>(g.offset) * cmdStride,
                                   g.count,
                                   static_cast<uint32_t>(cmdStride));
@@ -8136,7 +8236,7 @@ namespace threepp {
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, decalPipe);
                 vkCmdSetCullMode(cb, g.cullMode);
                 vkCmdDrawIndirect(cb,
-                                  indirectCmdBuffers[frame].handle,
+                                  indirectBuffer,
                                   static_cast<VkDeviceSize>(g.offset) * cmdStride,
                                   g.count,
                                   static_cast<uint32_t>(cmdStride));
@@ -9573,6 +9673,101 @@ namespace threepp {
             rpci.pDependencies   = deps;
             check(vkCreateRenderPass(ctx->device(), &rpci, nullptr, &rasterGbufRenderPass),
                   "vkCreateRenderPass(rasterGbuf)");
+        }
+
+        // Two-phase occlusion-culling variants of the G-buffer pass (1× and
+        // MSAA flavours). Same attachments/formats/samples as the source
+        // pass → render-pass COMPATIBLE, so the framebuffer and graphics
+        // pipelines are shared; only load/store ops and layouts differ:
+        //   A: CLEAR + STORE everything; colors end COLOR_ATTACHMENT (pass B
+        //      loads them), depth ends DEPTH_STENCIL_READ_ONLY (the farthest
+        //      HiZ + cull compute sample it between the passes — under MSAA
+        //      the pyramid reduces the raw MS attachment's samples directly).
+        //   B: LOAD everything; final layouts identical to the single pass,
+        //      so every downstream consumer (incl. gbuf_resolve at MSAA) is
+        //      untouched.
+        void createOcclRenderPasses(VkSampleCountFlagBits samples,
+                                    VkRenderPass& outA, VkRenderPass& outB) {
+            auto build = [&](bool phaseA, VkRenderPass& out) {
+                VkAttachmentDescription attachments[6]{};
+                attachments[0].format         = VK_FORMAT_R16G16B16A16_SFLOAT;
+                attachments[0].samples        = samples;
+                attachments[0].loadOp         = phaseA ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                                                       : VK_ATTACHMENT_LOAD_OP_LOAD;
+                attachments[0].storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+                attachments[0].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+                attachments[0].initialLayout  = phaseA ? VK_IMAGE_LAYOUT_UNDEFINED
+                                                       : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                attachments[0].finalLayout    = phaseA ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                                                       : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                attachments[1] = attachments[0];
+                attachments[2] = attachments[0];
+                attachments[2].format = VK_FORMAT_R16G16B16A16_UINT;
+                attachments[3] = attachments[0];
+                attachments[4]        = attachments[0];
+                attachments[4].format = VK_FORMAT_R8G8B8A8_UNORM;
+                attachments[5]        = attachments[0];
+                attachments[5].format = VK_FORMAT_D32_SFLOAT;
+                attachments[5].initialLayout = phaseA ? VK_IMAGE_LAYOUT_UNDEFINED
+                                                      : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                attachments[5].finalLayout   = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+                VkAttachmentReference colorRefs[5]{};
+                for (uint32_t i = 0; i < 5; ++i) {
+                    colorRefs[i].attachment = i;
+                    colorRefs[i].layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                }
+                VkAttachmentReference depthRef{};
+                depthRef.attachment = 5;
+                depthRef.layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+                VkSubpassDescription subpass{};
+                subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+                subpass.colorAttachmentCount    = 5;
+                subpass.pColorAttachments       = colorRefs;
+                subpass.pDepthStencilAttachment = &depthRef;
+
+                // A entry: prior RT/compute reads of last frame's attachments.
+                // A exit / B entry: the between-pass compute (HiZ + cull) and
+                // the indirect-buffer read. B exit: same consumers as the
+                // single pass (raygen + deferred shade compute).
+                VkSubpassDependency deps[2]{};
+                deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
+                deps[0].dstSubpass    = 0;
+                deps[0].srcStageMask  = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
+                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+                deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+                deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+                deps[1].srcSubpass    = 0;
+                deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
+                deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+                deps[1].dstStageMask  = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
+                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+                deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+                VkRenderPassCreateInfo rpci{};
+                rpci.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+                rpci.attachmentCount = 6;
+                rpci.pAttachments    = attachments;
+                rpci.subpassCount    = 1;
+                rpci.pSubpasses      = &subpass;
+                rpci.dependencyCount = 2;
+                rpci.pDependencies   = deps;
+                check(vkCreateRenderPass(ctx->device(), &rpci, nullptr, &out),
+                      "vkCreateRenderPass(occl phase)");
+            };
+            build(true, outA);
+            build(false, outB);
         }
 
         // MSAA sibling of createRasterGbufRenderPass — same 6 attachments/
@@ -11563,6 +11758,7 @@ namespace threepp {
                 din.sceneHdrPerFrame = sceneViews.data();
                 dof_->resize(renderExtent().width, renderExtent().height, din);
             }
+
         }
 
         // Raster-first deferred shade reads the camera + lights UBOs, the env
@@ -11722,7 +11918,10 @@ namespace threepp {
             std::array<VkBuffer, kFramesInFlight> rasterCamBufs{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f)
                 rasterCamBufs[f] = rasterCameraUbos[f].handle;
-            hiz_->resize(renderExtent(), depthViews.data());
+            // msSamples stays 1: the SSR walk reads the RESOLVED depth even
+            // under MSAA (binding 3 gets the MS/dummy view purely to keep the
+            // descriptor valid).
+            hiz_->resize(renderExtent(), depthViews.data(), depthMSViews.data(), 1);
             in.hizView          = hiz_->view();
             in.hizSampler       = hiz_->sampler();
             in.rasterCamUbo     = rasterCamBufs.data();
@@ -11867,9 +12066,18 @@ namespace threepp {
             }
             if (rasterGbufRenderPass == VK_NULL_HANDLE) {
                 createRasterGbufRenderPass();
+                // Two-phase occlusion load/store variants (compatible).
+                createOcclRenderPasses(VK_SAMPLE_COUNT_1_BIT, occlRenderPassA_, occlRenderPassB_);
                 createRasterCameraUbos();
                 createRasterDsLayoutAndPool();
                 createRasterGbufPipeline();
+            }
+            // Occlusion-cull compute (pipeline + visBits + phase buffers are
+            // cheap; the farthest pyramid's IMAGE is only allocated when the
+            // feature is enabled — see rewriteBloomDescriptors).
+            if (!occl_) {
+                occl_    = std::make_unique<vulkan::OcclusionCull>(*ctx, cmdPool, kFramesInFlight);
+                occlHiz_ = std::make_unique<vulkan::HiZPyramid>(*ctx, kFramesInFlight);
             }
             // MSAA render pass + pipelines — only built when opted in, and
             // rebuilt when the sample count changes (2↔4) or MSAA is turned
@@ -11901,9 +12109,22 @@ namespace threepp {
                         vkDestroyRenderPass(ctx->device(), rasterGbufRenderPassMS, nullptr);
                         rasterGbufRenderPassMS = VK_NULL_HANDLE;
                     }
+                    if (occlRenderPassAMS_ != VK_NULL_HANDLE) {
+                        vkDestroyRenderPass(ctx->device(), occlRenderPassAMS_, nullptr);
+                        occlRenderPassAMS_ = VK_NULL_HANDLE;
+                    }
+                    if (occlRenderPassBMS_ != VK_NULL_HANDLE) {
+                        vkDestroyRenderPass(ctx->device(), occlRenderPassBMS_, nullptr);
+                        occlRenderPassBMS_ = VK_NULL_HANDLE;
+                    }
                 } else {
                     createRasterGbufRenderPassMS(wantSamples);
                     createRasterGbufPipelineMS(wantSamples);
+                    if (occlRenderPassAMS_ != VK_NULL_HANDLE)
+                        vkDestroyRenderPass(ctx->device(), occlRenderPassAMS_, nullptr);
+                    if (occlRenderPassBMS_ != VK_NULL_HANDLE)
+                        vkDestroyRenderPass(ctx->device(), occlRenderPassBMS_, nullptr);
+                    createOcclRenderPasses(wantSamples, occlRenderPassAMS_, occlRenderPassBMS_);
                 }
                 gbufMsaaBuiltSamples_ = wantSamples;
                 // Force the image block below to re-run even if the extent
@@ -11957,6 +12178,28 @@ namespace threepp {
                     gin.idsResolved = iR.data(); gin.uvResolved = uR.data(); gin.albedoResolved = aR.data();
                     gbufResolve_->rewriteDescriptors(gin);
                 }
+            }
+
+            // Occlusion culling's farthest pyramid: only allocated while the
+            // feature is on (its image is the feature's whole VRAM cost).
+            // This runs before every frame's raster and inherits the resize/
+            // MSAA-toggle idle waits, so extent + sample-count changes and a
+            // mid-run setOcclusionCulling(true) all land here. Under MSAA
+            // the mip-0 source is the RAW MS depth attachment (the resolved
+            // depth doesn't exist until gbuf_resolve, which runs AFTER the
+            // two-phase raster).
+            if (occlHiz_ && occlusionCullingEnabled_ &&
+                rasterGbufs[0].depth.view != VK_NULL_HANDLE) {
+                const bool haveMS = gbufMsaaSamples_ > 1 &&
+                                    rasterGbufs[0].depthMS.view != VK_NULL_HANDLE;
+                std::array<VkImageView, kFramesInFlight> dv{};
+                std::array<VkImageView, kFramesInFlight> dvMS{};
+                for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                    dv[f]   = rasterGbufs[f].depth.view;
+                    dvMS[f] = haveMS ? rasterGbufs[f].depthMS.view : gbufDummyMS_[1].view;
+                }
+                occlHiz_->resize(renderExtent(), dv.data(), dvMS.data(),
+                                 haveMS ? gbufMsaaSamples_ : 1u);
             }
         }
 
@@ -14827,7 +15070,34 @@ namespace threepp {
             // present — bypassing the entire RT pipeline.
             if (rasterGbufPipeline != VK_NULL_HANDLE) {
                 gpuTimings_->begin(cb, TP_RasterGbuf, currentFrame);
-                recordRasterGbufPass(cb, currentFrame);
+                const bool occlMsaa = gbufMsaaSamples_ > 1 &&
+                                      rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE;
+                const VkRenderPass  occlA  = occlMsaa ? occlRenderPassAMS_ : occlRenderPassA_;
+                const VkRenderPass  occlB  = occlMsaa ? occlRenderPassBMS_ : occlRenderPassB_;
+                const VkFramebuffer occlFb = occlMsaa ? rasterGbufs[currentFrame].framebufferMS
+                                                      : rasterGbufs[currentFrame].framebuffer;
+                if (occlActiveThisFrame_ && occlA != VK_NULL_HANDLE &&
+                    occlFb != VK_NULL_HANDLE) {
+                    // ── Two-phase occlusion culling ────────────────────────
+                    // Filter to last frame's visible set → pass A → farthest
+                    // HiZ from its depth (the raw MS attachment under MSAA —
+                    // its samples reduce at mip 0) → AABB test → pass B draws
+                    // only the newly visible. rasterGbufMs (this timing
+                    // scope) covers the WHOLE sequence, so the on/off
+                    // comparison is honest.
+                    occl_->recordFilter(cb, currentFrame, indirectTotalDraws_);
+                    recordRasterGbufPassInternal(cb, currentFrame, occlA, occlFb,
+                                                 occlMsaa,
+                                                 occl_->phase1Buffer(), /*clear=*/true);
+                    occlHiz_->record(cb, currentFrame, /*reduceMin=*/true);
+                    occl_->recordCullTest(cb, currentFrame, indirectTotalDraws_,
+                                          occlHiz_->mips(), renderExtent());
+                    recordRasterGbufPassInternal(cb, currentFrame, occlB, occlFb,
+                                                 occlMsaa,
+                                                 occl_->phase2Buffer(), /*clear=*/false);
+                } else {
+                    recordRasterGbufPass(cb, currentFrame);
+                }
                 gpuTimings_->end(cb, TP_RasterGbuf, currentFrame);
 
                 // ── MSAA dominant-sample resolve ────────────────────────────

@@ -655,6 +655,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/DeferredShade.cpp"
             "threepp/renderers/vulkan/ProbeGI.cpp"
             "threepp/renderers/vulkan/HiZPyramid.cpp"
+            "threepp/renderers/vulkan/OcclusionCull.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
             "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
             "threepp/renderers/vulkan/GrassWindPipeline.cpp"
@@ -1048,11 +1049,18 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/probe_update.comp"
         kProbeUpdateCompSpv
         _probe_update_spv_h)
-    # HiZ depth pyramid (deferred hybrid SSR) — see HiZPyramid.{hpp,cpp}.
+    # HiZ depth pyramid (hybrid SSR closest-reduce + occlusion-culling
+    # farthest-reduce) — see HiZPyramid.{hpp,cpp}.
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/hiz_build.comp"
         kHizBuildCompSpv
         _hiz_build_spv_h)
+    # Two-phase GPU occlusion culling (phase-1 filter + AABB-vs-HiZ test) —
+    # see OcclusionCull.{hpp,cpp}.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/occl_cull.comp"
+        kOcclCullCompSpv
+        _occl_cull_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/skinning.comp"
         kSkinningCompSpv

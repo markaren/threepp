@@ -36,6 +36,7 @@ int main(int argc, char** argv) {
     renderer.setFireflyClamp(8.f);
     renderer.setRenderScale(0.75);
     renderer.setGbufferMsaa(2);
+    renderer.setOcclusionCulling(true);
 
 
     // ---- Scene ----

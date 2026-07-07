@@ -535,6 +535,14 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r, bool v) { r.native().setPhysicalLightUnits(v); },
                               "Interpret light intensities photometrically: directional = lux "
                               "(sun ~100000), point/spot = lumens, rect/emissive = nits. Default off.")
+                // ── Two-phase GPU occlusion culling ───────────────────────────
+                .def_property("occlusion_culling",
+                              [](PyVulkanRenderer& r) { return r.native().occlusionCulling(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setOcclusionCulling(v); },
+                              "Two-phase GPU occlusion culling: hidden objects stop paying "
+                              "raster cost (phase-2 same-frame recovery, no popping). Works "
+                              "with gbuffer_msaa. Wins scale with occlusion (interiors, city "
+                              "blocks). Default off.")
                 // ── Depth of field (thin lens, post) ──────────────────────────
                 .def_property("depth_of_field",
                               [](PyVulkanRenderer& r) { return r.native().depthOfField(); },
