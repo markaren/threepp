@@ -116,6 +116,10 @@ int main(int argc, char** argv) {
     float mblur       = 0.f;// --mblur s: post-TAA motion blur, shutter fraction (0.5 = 180°).
                             // Keeps the hero rotating in shot mode so the streaks show.
     float optSharpen  = -1.f;// --sharpen s: RCAS override (0 exercises the blur→swapchain chain)
+    float stepRad     = -1.f;// --radstep R N: set light radius to R at shot frame N —
+    int   stepFrame   = -1;  // the interactive slider-drag case, for settle-speed measurement
+    int   seqN        = 0;   // --seqn K: write K CONSECUTIVE frames (stem_000.png …) from
+                             // --frames on — frame-to-frame diffs measure settle churn
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -125,6 +129,11 @@ int main(int argc, char** argv) {
         else if (a == "--fog" && i + 1 < argc) fogDensity = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--mblur" && i + 1 < argc) mblur = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--sharpen" && i + 1 < argc) optSharpen = static_cast<float>(std::atof(argv[++i]));
+        else if (a == "--radstep" && i + 2 < argc) {
+            stepRad   = static_cast<float>(std::atof(argv[++i]));
+            stepFrame = std::atoi(argv[++i]);
+        }
+        else if (a == "--seqn" && i + 1 < argc) seqN = std::atoi(argv[++i]);
     }
 
     Canvas canvas("Vulkan PT - Denoiser Showcase", {{"vsync", false}});
@@ -302,15 +311,30 @@ int main(int argc, char** argv) {
             fpsFrames = 0;
         }
 
+        if (!shotPath.empty() && stepFrame >= 0 && shotFrame == stepFrame) {
+            keyLight->radius  = stepRad;// --radstep: mid-run light edit (settle harness)
+            fillLight->radius = stepRad;
+            rimLight->radius  = stepRad;
+        }
         controls.update();
         renderer.render(scene, camera);
         if (shotPath.empty()) {
             ui.render();
         } else if (++shotFrame >= shotFrames) {
-            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
-            renderer.writeFramebuffer(path);
-            std::cout << "wrote " << path.string() << std::endl;
-            std::exit(0);
+            auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
+            if (seqN > 0) {// --seqn: consecutive frames stem_000.png … (settle-churn metric)
+                const int k = shotFrame - shotFrames;
+                char suffix[16];
+                std::snprintf(suffix, sizeof(suffix), "_%03d", k);
+                path = path.parent_path() / (path.stem().string() + suffix + path.extension().string());
+                renderer.writeFramebuffer(path);
+                std::cout << "wrote " << path.string() << std::endl;
+                if (k + 1 >= seqN) std::exit(0);
+            } else {
+                renderer.writeFramebuffer(path);
+                std::cout << "wrote " << path.string() << std::endl;
+                std::exit(0);
+            }
         }
     });
 

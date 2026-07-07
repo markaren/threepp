@@ -75,6 +75,11 @@ int main(int argc, char** argv) {
     // after the settle period — frame-to-frame diffs measure temporal shake.
     // --probe/--sunext/--sunrad toggle the deferred features under test.
     int seqN = 0, seqI = 0;
+    // --browse K M: auto-advance to the next model K times, M frames apart
+    // (the interactive Left/Right browsing flow, scripted) — the capture then
+    // settles + runs on the FINAL model. Repro harness for state that only
+    // goes bad after several load/remove cycles.
+    int browseK = 0, browseEvery = 40, browseFrame = 0;
     int optProbe = -1, optSunExt = -1;
     float optSunRad = -1.f;
     float orbitDeg = 0.f;// --orbit d: rotate the camera d° per frame during capture (motion-shake harness)
@@ -97,6 +102,7 @@ int main(int argc, char** argv) {
         else if (a == "--debug" && i + 1 < argc) cliDebugView = std::atoi(argv[++i]);
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (a == "--seq" && i + 1 < argc) seqN = std::atoi(argv[++i]);
+        else if (a == "--browse" && i + 2 < argc) { browseK = std::atoi(argv[++i]); browseEvery = std::atoi(argv[++i]); }
         else if (a == "--probe" && i + 1 < argc) optProbe = std::atoi(argv[++i]);
         else if (a == "--sunext" && i + 1 < argc) optSunExt = std::atoi(argv[++i]);
         else if (a == "--sunrad" && i + 1 < argc) optSunRad = static_cast<float>(std::atof(argv[++i]));
@@ -400,6 +406,19 @@ int main(int argc, char** argv) {
         }
 
         if (mixer) mixer->update(dt);
+
+        // --browse: scripted Left/Right browsing. Advances on a pure frame
+        // timer — a fast browser clicks Right BEFORE the previous async load
+        // lands, so overlapping loads are part of what this reproduces. Each
+        // advance re-arms the capture settle (modelReady/shotFrame) so
+        // --frames applies to the final model only.
+        if (browseK > 0 && ++browseFrame >= browseEvery) {
+            browseFrame = 0;
+            --browseK;
+            modelReady = false;
+            shotFrame  = 0;
+            loadModel((currentModel + 1) % static_cast<int>(models.size()));
+        }
 
         if (fogOn) {
             scene.fog = FogExp2(Color(fogColor[0], fogColor[1], fogColor[2]), fogDensity);
