@@ -175,6 +175,21 @@ int main() {
     float neonIntensity = neonMat->emissiveIntensity;
     float ambIntensity = 0.0f;
 
+    // ── Shadow softness ─────────────────────────────────────────────────────
+    // Two knobs, different units:
+    //   • Sun angular radius (degrees): the directional light's disc size. The
+    //     deferred shadow ray is jittered within this cone, so thin occluders
+    //     cast a stable penumbra (the denoised shadow channel keeps it
+    //     grain-free). Real sun ≈ 0.27°; renderer default 0.5°.
+    //   • Point/Spot source radius (world units): a non-zero radius disc-samples
+    //     the shadow ray toward the light, giving sharp contact shadows that
+    //     widen into a penumbra with occluder distance. 0 = hard 1-ray shadow.
+    // (RectArea + emissive are already area-sampled, hence inherently soft.)
+    float sunAngleDeg = renderer.sunAngularRadius();
+    float localRadius = 0.12f;
+    pointLight->radius = localRadius;
+    spotLight->radius = localRadius;
+
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -231,6 +246,23 @@ int main() {
             ambient->intensity = ambIntensity;
 
         ImGui::Separator();
+        ImGui::TextDisabled("Shadow softness");
+        // Directional (section 1): sun disc angular radius. 0 = hard shadow.
+        if (ImGui::SliderFloat("Sun angle (deg)", &sunAngleDeg, 0.0f, 5.0f, "%.2f"))
+            renderer.setSunAngularRadius(sunAngleDeg);
+        // Point (section 2) + Spot (section 3): source radius in world units.
+        // 0 = hard, larger = wider penumbra. RectArea/emissive are already soft.
+        if (ImGui::SliderFloat("Point/Spot radius", &localRadius, 0.0f, 1.0f, "%.2f")) {
+            pointLight->radius = localRadius;
+            spotLight->radius = localRadius;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Physical source size of the point/spot light.\n"
+                              "The shadow ray is disc-sampled toward it, so\n"
+                              "shadows keep a sharp contact and soften with\n"
+                              "distance. 0 = single hard shadow ray.");
 
         ImGui::Separator();
         bool restirDI = renderer.restirDIEnabled();
