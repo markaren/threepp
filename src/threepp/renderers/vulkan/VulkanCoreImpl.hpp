@@ -3788,6 +3788,21 @@ namespace threepp {
             const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
 
             VkCommandBuffer cb = beginOneShot();
+            // Motion-vector prev-pose: buildBlasFor seeded prevVertex with the
+            // REST (unmorphed) positions, but we just overwrote vertex with the
+            // BLENDED positions. Left as-is, the gbuffer VS / chit read
+            // prevPos = rest while pos = blended → a permanent rest→blend motion
+            // vector on an otherwise static morph, so TAA reprojects history
+            // from the wrong pixel every frame and the surface shakes. Sync
+            // prevVertex := vertex here so the morph reports zero per-vertex
+            // motion (transform/camera motion still flows through motionMat),
+            // exactly like the static-mesh prevPosAddr == posAddr fallback.
+            if (st.blas->prevVertex.handle != VK_NULL_HANDLE) {
+                VkBufferCopy region{};
+                region.size = st.blendedPositions.size() * sizeof(float);
+                vkCmdCopyBuffer(cb, st.blas->vertex.handle,
+                                st.blas->prevVertex.handle, 1, &region);
+            }
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
             endAndSubmitOneShot(cb);
             destroyBuffer(ctx->allocator(), scratch);

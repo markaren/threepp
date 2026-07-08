@@ -55,7 +55,23 @@ namespace threepp {
         ResolvedProperty resolvedProperty;
 
         Object3D* targetObject = nullptr;
+        // Sibling primitives that share the same morph weights. A glTF mesh
+        // with several primitives becomes a Group of Meshes, and mesh-level
+        // weights apply to ALL of them — but bind() picks one as targetObject,
+        // so the rest are driven through here. Empty for everything else.
+        std::vector<Object3D*> extraTargets;
         std::string propertyName;
+
+        // Write a single morph influence onto obj (if it carries any),
+        // growing the array as needed. Shared by every direct setter so the
+        // multi-primitive fan-out lives in one place.
+        static void applyMorphInfluence(Object3D* obj, int idx, float value) {
+            if (auto* m = dynamic_cast<ObjectWithMorphTargetInfluences*>(obj)) {
+                auto& inf = m->morphTargetInfluences();
+                if (idx >= static_cast<int>(inf.size())) inf.resize(idx + 1, 0.f);
+                inf[idx] = value;
+            }
+        }
 
         PropertyBinding(Object3D* rootNode, const std::string& path, const std::optional<TrackResults>& parsedPath)
             : rootNode(rootNode), path(path), parsedPath(parsedPath.value_or(parseTrackName(path))) {
@@ -114,11 +130,8 @@ namespace threepp {
             } else if (that->propertyName == "scale") {
                 that->targetObject->scale.fromArray(buffer, offset);
             } else if (int idx = parseMorphIndex(that->propertyName); idx >= 0) {
-                if (auto* m = dynamic_cast<ObjectWithMorphTargetInfluences*>(that->targetObject)) {
-                    auto& inf = m->morphTargetInfluences();
-                    if (idx >= static_cast<int>(inf.size())) inf.resize(idx + 1, 0.f);
-                    inf[idx] = buffer[offset];
-                }
+                applyMorphInfluence(that->targetObject, idx, buffer[offset]);
+                for (auto* t : that->extraTargets) applyMorphInfluence(t, idx, buffer[offset]);
             } else {
                 std::cerr << that->propertyName << " is not writable." << std::endl;
             }
@@ -133,11 +146,8 @@ namespace threepp {
             } else if (that->propertyName == "scale") {
                 that->targetObject->scale.fromArray(buffer, offset);
             } else if (int idx = parseMorphIndex(that->propertyName); idx >= 0) {
-                if (auto* m = dynamic_cast<ObjectWithMorphTargetInfluences*>(that->targetObject)) {
-                    auto& inf = m->morphTargetInfluences();
-                    if (idx >= static_cast<int>(inf.size())) inf.resize(idx + 1, 0.f);
-                    inf[idx] = buffer[offset];
-                }
+                applyMorphInfluence(that->targetObject, idx, buffer[offset]);
+                for (auto* t : that->extraTargets) applyMorphInfluence(t, idx, buffer[offset]);
             } else {
                 std::cerr << "_setValue_direct_setMatrixWorldNeedsUpdate: " << that->propertyName << " is not writable." << std::endl;
             }

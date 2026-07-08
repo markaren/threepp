@@ -325,18 +325,28 @@ void PropertyBinding::bind() {
 
     // glTF nodes are pre-created as Group; the actual Mesh with morph
     // influences is a child. When the property is a morph index and the
-    // found node doesn't implement the interface, search its subtree.
+    // found node doesn't implement the interface, search its subtree. A
+    // multi-primitive glTF mesh becomes a Group of several Meshes, and the
+    // mesh-level weights apply to EVERY primitive — so collect them all: the
+    // first becomes targetObject and the rest go to extraTargets, which the
+    // setters fan the influence write out to. Binding only the first (the
+    // old behaviour) left every other primitive frozen at its rest pose.
+    this->extraTargets.clear();
     if (parseMorphIndex(propertyName) >= 0 &&
         !dynamic_cast<ObjectWithMorphTargetInfluences*>(targetObject)) {
-        std::function<Object3D*(Object3D*)> findMorphChild = [&](Object3D* n) -> Object3D* {
+        std::vector<Object3D*> morphChildren;
+        std::function<void(Object3D*)> collectMorphChildren = [&](Object3D* n) {
             for (auto* c : n->children) {
-                if (dynamic_cast<ObjectWithMorphTargetInfluences*>(c)) return c;
-                if (auto* found = findMorphChild(c)) return found;
+                if (dynamic_cast<ObjectWithMorphTargetInfluences*>(c)) morphChildren.push_back(c);
+                else collectMorphChildren(c);
             }
-            return nullptr;
         };
-        if (auto* m = findMorphChild(targetObject))
-            targetObject = m;
+        collectMorphChildren(targetObject);
+        if (!morphChildren.empty()) {
+            targetObject = morphChildren.front();
+            for (size_t i = 1; i < morphChildren.size(); ++i)
+                this->extraTargets.push_back(morphChildren[i]);
+        }
     }
 
     this->targetObject = targetObject;
