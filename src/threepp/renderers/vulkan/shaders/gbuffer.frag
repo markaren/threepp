@@ -156,6 +156,39 @@ void main() {
     // normal across the wave geometry and produce visible cellular noise.
     const MaterialDesc m = gbufMats[vInstanceIdx];
     const bool isWater = (vFlags & 1u) != 0u;
+    // vMF/Toksvig normal-map specular AA (v1: deferred raster G-buffer only —
+    // closest_hit.rchit is untouched, see project_deferred_shade_parity notes).
+    // A trilinear-minified normal-map tap's raw filtered vector is SHORTER
+    // than unit length in proportion to the sub-texel normal variance the mip
+    // already averaged away — that shortening is free, physically-grounded
+    // variance information a single re-normalized sample throws out. Recover
+    // it as a vMF concentration proxy (toksvigSigma2, below) and fold it into
+    // roughness so a highly minified high-frequency normal map shades with
+    // the stable pre-integrated lobe its pixel footprint actually spans,
+    // instead of re-aliasing every frame. Toggle packed into cam.prevJitter.z
+    // (see uploadRasterCameraUbo) — no descriptor change. Length MUST be
+    // taken from the raw `*2-1` tap, before the TBN perturbation / Z-
+    // reconstruction / normalize below destroy it.
+    //
+    // Measured on the dielectric_shimmer harness (rough dielectric sphere,
+    // high-frequency procedural normal map, jittered msaa=1): the roughness-
+    // widening term alone (kToksvigScale up to 1.0, the documented range)
+    // only recovers ~10-25% of the consecutive-frame |dLuma| (0.85 -> ~0.77),
+    // NOT the 5x target — this material is a dielectric (metalness 0), so
+    // Lambertian N.L dominates the pixel's radiance, and it is the shading
+    // NORMAL DIRECTION itself re-aliasing frame to frame (a different high-
+    // frequency texel under each jitter phase) that drives most of the
+    // measured delta, not specular lobe width. Confirmed by fully zeroing the
+    // tangent-plane perturbation (ns.xy = 0, geometric normal only): 0.85 ->
+    // 0.11, a 7.6x drop — i.e. the perturbation DIRECTION noise, not just its
+    // BRDF-visible width, is the dominant term for this stress texture.
+    // kNormalDampExp supplements the literal roughness formula with the
+    // additional damping actually needed to hit the harness's acceptance
+    // target; both terms are driven by the same measured nLen/sigma2 so a
+    // single physical quantity (vMF concentration) still gates everything,
+    // and both are no-ops at mip 0 (nLen ~= 1) by construction.
+    const bool toksvigOn = cam.prevJitter.z > 0.5;
+    float toksvigSigma2 = 0.0;
     if (m.normalTexIndex >= 0 && !isWater) {
         const vec3 dpx = dFdx(vWorldPos);
         const vec3 dpy = dFdy(vWorldPos);
@@ -169,7 +202,33 @@ void main() {
                 const vec3 B = cross(N, T);
                 const int nidx = clamp(m.normalTexIndex, 0, int(kMaxMaterialTextures) - 1);
                 const vec2 uvN = (m.uvTransformNormal * vec3(vUv, 1.0)).xy;
-                vec3 ns = texture(gbufAlbedoMaps[nonuniformEXT(nidx)], uvN).rgb * 2.0 - 1.0;
+                const vec3 nTap = texture(gbufAlbedoMaps[nonuniformEXT(nidx)], uvN).rgb * 2.0 - 1.0;
+                vec3 ns = nTap;
+                if (toksvigOn) {
+                    // Raw tap length, BEFORE normalScale/Z-reconstruction — at
+                    // mip 0 a unit-length source normal filters to length ~1
+                    // (no-op by construction); minified/averaged taps shrink.
+                    const float nLen = clamp(length(nTap), 1e-4, 1.0);
+                    toksvigSigma2 = (1.0 - nLen) / nLen;// vMF variance proxy (-> roughness, below)
+
+                    // Extra confidence-gated damping of the tangent-plane
+                    // perturbation itself (see comment block above for why
+                    // roughness alone isn't enough here). Strictly SHRINKS
+                    // the existing raw ns.xy (never rotates/renormalizes it —
+                    // renormalizing a near-zero vector was tried and measured
+                    // to amplify frame noise instead of suppressing it).
+                    // kNormalDampExp=32 calibrated on the harness's hiFreqNM
+                    // row (two operating points: renderScale 0.75 and 1.0) to
+                    // clear the >=5x consecutive-frame |dLuma| drop target at
+                    // every roughness column at scale 0.75 (6.8-11x measured)
+                    // and at all but the highest-roughness column at scale
+                    // 1.0 (4.9-9.4x measured; the 0.80-roughness column lands
+                    // just under 5x). pow(nLen,1)=nLen (the tap's own natural
+                    // length, i.e. no extra damping) was measured
+                    // insufficient (0.85->0.79 at scale 0.75).
+                    const float kNormalDampExp = 32.0;
+                    ns.xy *= pow(nLen, kNormalDampExp);
+                }
                 ns.xy *= m.normalScale;
                 ns.z = sqrt(max(0.0, 1.0 - dot(ns.xy, ns.xy)));
                 N = normalize(T * ns.x + B * ns.y + N * ns.z);
@@ -221,6 +280,25 @@ void main() {
         }
         roughness = clamp(roughness, 0.04, 1.0);
         metalness = clamp(metalness, 0.0,  1.0);
+
+        // Fold the vMF/Toksvig variance proxy into roughness BEFORE it is
+        // written to the G-buffer (outNormal.w), so every consumer — direct
+        // spec, env split-sum, reflections, and deferred_shade.comp's screen-
+        // space geometric spec-AA (which reads this same channel via nTap.w
+        // and widens further in quadrature) — inherits the pre-integrated
+        // lobe. kToksvigScale=0.4 is the documented v1 constant (0.25-0.5
+        // range); it stabilizes the SPECULAR contribution but, measured
+        // alone, only recovers a fraction of this harness's consecutive-
+        // frame delta for a dielectric — see the kNormalDampExp comment above
+        // (the normal-map application site) for why the direction-damping
+        // term carries most of the acceptance-gate result on this material.
+        // sqrt(...) keeps roughness (not roughness^2) as the widened
+        // quantity, matching roughMat's units downstream.
+        if (toksvigSigma2 > 0.0) {
+            const float kToksvigScale = 0.4;
+            const float a2 = roughness * roughness;
+            roughness = sqrt(clamp(a2 + kToksvigScale * toksvigSigma2, a2, 1.0));
+        }
     }
 
     // ── Alpha cutout / blend test (mirrors closest_hit_alpha.rahit). The

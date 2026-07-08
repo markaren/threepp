@@ -1199,6 +1199,12 @@ namespace threepp {
         // (the real sun subtends ~0.27°): thin occluders cast a stable narrow
         // penumbra instead of a per-frame lit/shadow coin flip under TAA jitter.
         float    sunAngularRadiusDeg_ = 0.0f;
+        // Normal-map vMF/Toksvig specular-AA toggle (deferred G-buffer raster
+        // path only — see setNormalMapToksvig). Threaded to gbuffer.frag via
+        // the raster CameraUbo's prevJitter.z, which is otherwise dead (only
+        // prevJitter.xy is read, by nothing in gbuffer.frag/.vert — see
+        // uploadRasterCameraUbo) so no descriptor/PC layout change is needed.
+        bool     normalMapToksvig_ = false;
         // Cached CDF blob (16 floats per tri) reused across frames when no
         // emissive mesh moved + entries-list size unchanged. The CPU walk in
         // buildAndUploadEmissiveTris is the dominant per-frame cost on
@@ -7621,7 +7627,10 @@ namespace threepp {
             // static surfaces is exactly zero (no spurious offset on cold start).
             ubo.prevJitter[0] = rasterPrevJitterValid_ ? rasterPrevJitter_[0] : jClipX;
             ubo.prevJitter[1] = rasterPrevJitterValid_ ? rasterPrevJitter_[1] : jClipY;
-            ubo.prevJitter[2] = 0.f;
+            // .z: normal-map Toksvig spec-AA toggle (gbuffer.frag), packed here
+            // because prevJitter.zw is otherwise unread by any gbuffer shader —
+            // see normalMapToksvig_. .w stays reserved/unused.
+            ubo.prevJitter[2] = normalMapToksvig_ ? 1.f : 0.f;
             ubo.prevJitter[3] = 0.f;
 
             void* mapped = nullptr;

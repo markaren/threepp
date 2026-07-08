@@ -1337,6 +1337,14 @@ namespace threepp {
         return core()->restirDIEnabled_;
     }
 
+    void VulkanRendererCore::setNormalMapToksvig(bool enabled) {
+        core()->normalMapToksvig_ = enabled;
+    }
+
+    bool VulkanRendererCore::normalMapToksvig() const {
+        return core()->normalMapToksvig_;
+    }
+
     VulkanRendererCore::FrameTimings VulkanRendererCore::lastFrameTimings() const {
         return core()->gpuTimings_->timings();
     }

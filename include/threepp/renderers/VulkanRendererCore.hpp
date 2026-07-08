@@ -211,6 +211,18 @@ namespace threepp {
         void setRestirDIEnabled(bool enabled);
         [[nodiscard]] bool restirDIEnabled() const;
 
+        // Normal-map vMF/Toksvig specular AA (deferred G-buffer raster path
+        // only; the path tracer's closest_hit.rchit is unaffected). Recovers
+        // the normal-map minification variance already baked into a filtered
+        // (mip/trilinear) tap's shortened vector length and folds it into the
+        // G-buffer roughness BEFORE the geometric spec-AA pass reads it, so
+        // a high-frequency normal map shading a rough dielectric doesn't
+        // moire/shimmer under TAA jitter at a distance. No-op at mip 0
+        // (nLen ~= 1) and inert on materials without a normal map. Off by
+        // default.
+        void setNormalMapToksvig(bool enabled);
+        [[nodiscard]] bool normalMapToksvig() const;
+
         // HDR bloom, added in linear HDR before the tone-map curve. 0 disables.
         void setBloomIntensity(float intensity);
         [[nodiscard]] float bloomIntensity() const;
