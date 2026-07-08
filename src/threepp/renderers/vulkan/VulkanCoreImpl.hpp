@@ -1204,7 +1204,10 @@ namespace threepp {
         // the raster CameraUbo's prevJitter.z, which is otherwise dead (only
         // prevJitter.xy is read, by nothing in gbuffer.frag/.vert — see
         // uploadRasterCameraUbo) so no descriptor/PC layout change is needed.
-        bool     normalMapToksvig_ = false;
+        // ON by default: it is a no-op on materials without a normal map and at
+        // mip 0 (nLen ~= 1), and strictly reduces normal-map minification
+        // shimmer otherwise — a "just right" default, not an opt-in.
+        bool     normalMapToksvig_ = true;
         // Cached CDF blob (16 floats per tri) reused across frames when no
         // emissive mesh moved + entries-list size unchanged. The CPU walk in
         // buildAndUploadEmissiveTris is the dominant per-frame cost on

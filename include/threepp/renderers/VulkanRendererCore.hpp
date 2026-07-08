@@ -218,8 +218,9 @@ namespace threepp {
         // G-buffer roughness BEFORE the geometric spec-AA pass reads it, so
         // a high-frequency normal map shading a rough dielectric doesn't
         // moire/shimmer under TAA jitter at a distance. No-op at mip 0
-        // (nLen ~= 1) and inert on materials without a normal map. Off by
-        // default.
+        // (nLen ~= 1) and inert on materials without a normal map. ON by
+        // default (strictly-better, no-op-when-unused); setter is a manual
+        // override / debug escape.
         void setNormalMapToksvig(bool enabled);
         [[nodiscard]] bool normalMapToksvig() const;
 
