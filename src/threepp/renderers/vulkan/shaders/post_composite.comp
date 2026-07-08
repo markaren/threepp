@@ -16,6 +16,18 @@
 // levels. preExposureBits carries that factor; the tone-map curve then runs
 // at exposure/preExposure (== 1.0 when pre-exposed, == exposure when not —
 // legacy mode passes preExposure = 1.0 and is numerically unchanged).
+//
+// HDR MODE (setTaaHdrInput, postFlags bit 3): the TAA resolve now runs
+// BEFORE this pass, so `color` comes from hdrSceneTex (binding 6 — the
+// resolve's already-bloomed, already-exposure-rescaled HDR history slot)
+// instead of sceneHdrTex+bloomTex, this dispatch runs at DISPLAY resolution,
+// and the result is written to hdrOutImg (binding 7) instead of outImage —
+// see PostComposite.hpp/.cpp for why (this class's descriptor sets are
+// frame-in-flight-, not swapchain-image-, indexed, so it can't write the
+// swapchain directly; the caller finalizes hdrOutImg into the swapchain via
+// TaaResolve's existing swapchain-indexed RCAS/copy machinery). The sky-mask
+// sources (gbufImg/rasterIdsTex) still live at RENDER resolution, so a pixel
+// at display-res `px` maps to mask texel `px * srcWH / dispatchWH`.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -41,6 +53,12 @@ layout(set = 0, binding = 4) uniform sampler3D gradeLutTex;// 33³ rgba16f
 // zero), so keying the bypass on it there bypassed EVERY pixel — a solid-bg
 // deferred scene never tone-mapped at all. postFlags bit 2 selects this.
 layout(set = 0, binding = 5) uniform usampler2D rasterIdsTex;
+// HDR-mode-only (harmlessly bound + unused otherwise): the TAA resolve's
+// output (binding 6, sampled — already bloomed + exposure-rescaled linear
+// HDR at DISPLAY extent) and this pass's HDR-mode output target (binding 7,
+// storage, bgra8 display extent — TaaResolve::mblurHdrView / hdrOut_).
+layout(set = 0, binding = 6) uniform sampler2D hdrSceneTex;
+layout(set = 0, binding = 7) uniform writeonly image2D hdrOutImg;
 
 layout(push_constant) uniform Pc {
     uint toneMapping;        // matches ToneMapping enum
@@ -50,12 +68,20 @@ layout(push_constant) uniform Pc {
     uint width;
     uint height;
     uint postFlags;          // bit 0 = white balance active, bit 1 = grade LUT active,
-                             // bit 2 = sky test reads rasterIdsTex (deferred renderer)
+                             // bit 2 = sky test reads rasterIdsTex (deferred renderer),
+                             // bit 3 = HDR mode (setTaaHdrInput)
     uint preExposureBits;    // float-bits: exposure already baked into sceneHdr (1.0 = none)
     vec4 wbRow0;             // white-balance mat3 rows (linear sRGB → linear sRGB),
     vec4 wbRow1;             // Bradford CAT scene-illuminant → D65. .w unused.
     vec4 wbRow2;
+    // HDR-mode-only: the sky-mask sources' RENDER extent, for scaling the
+    // display-res dispatch's texel index down to their native texel grid.
+    // Equals width/height (no scaling) in LDR mode or at renderScale == 1.
+    uint srcWidth;
+    uint srcHeight;
 } pc;
+
+bool isHdrMode() { return (pc.postFlags & 8u) != 0u; }
 
 vec3 linearToSRGB(vec3 x) {
     const vec3 cutoff = vec3(lessThan(x, vec3(0.0031308)));
@@ -161,11 +187,17 @@ void main() {
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
 
     const vec2 uv = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
+    const bool hdr = isHdrMode();
 
-    vec3 color = texelFetch(sceneHdrTex, px, 0).rgb;// 1:1 with output — exact texel
+    // HDR mode: the resolve already bloomed + exposure-rescaled this at
+    // DISPLAY resolution — sample it directly, no second bloom add (the
+    // caller also passes bloomIntensityBits <= 0 in this mode, so the add
+    // below is skipped either way; the branch just avoids the extra fetch).
+    vec3 color = hdr ? texture(hdrSceneTex, uv).rgb
+                      : texelFetch(sceneHdrTex, px, 0).rgb;// 1:1 with output — exact texel
 
     const float intensity = uintBitsToFloat(pc.bloomIntensityBits);
-    if (intensity > 0.0) {
+    if (!hdr && intensity > 0.0) {
         // Additive bloom: the bloom buffer is a soft-knee bright-pass (only
         // highlights survive the threshold in bloom_down), so adding it leaves
         // darks/mid-tones crisp and makes bright areas glow. Intensity can be
@@ -181,10 +213,15 @@ void main() {
     // isn't ACES-desaturated) but are still sRGB-encoded — matches the old
     // finalize behaviour exactly. They skip white balance + grading too:
     // the contract is an EXACT background colour. The sky id source depends
-    // on the renderer (see the binding-5 note).
+    // on the renderer (see the binding-5 note). HDR mode: the sky-mask
+    // sources are still RENDER-extent while `px` is DISPLAY-extent — scale
+    // down to the mask's native texel grid (identity at renderScale == 1).
+    const ivec2 maskPx = hdr ? ivec2(vec2(px) * vec2(float(pc.srcWidth), float(pc.srcHeight))
+                                     / vec2(float(pc.width), float(pc.height)))
+                             : px;
     const float skyW = ((pc.postFlags & 4u) != 0u)
-            ? float(texelFetch(rasterIdsTex, px, 0).x)
-            : imageLoad(gbufImg, px).w;
+            ? float(texelFetch(rasterIdsTex, maskPx, 0).x)
+            : imageLoad(gbufImg, maskPx).w;
     const bool bypass = (pc.bgIsSolidColor != 0u) && (skyW < 0.5);
     vec3 outRgb;
     if (bypass) {
@@ -209,5 +246,6 @@ void main() {
             outRgb = texture(gradeLutTex, lc).rgb;
         }
     }
-    imageStore(outImage, px, vec4(outRgb, 1.0));
+    if (hdr) imageStore(hdrOutImg, px, vec4(outRgb, 1.0));
+    else     imageStore(outImage,  px, vec4(outRgb, 1.0));
 }

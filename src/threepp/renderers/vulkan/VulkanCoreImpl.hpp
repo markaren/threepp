@@ -1863,6 +1863,30 @@ namespace threepp {
         // so only this base weight needs the correction.
         double taaPrevTimeSec_ = -1.0;
 
+        // TAA/TSR resolve input domain (VulkanRendererCore::setTaaHdrInput).
+        // false (default): resolve consumes PostComposite's post-tonemap 8-bit
+        // output, byte-identical to the pre-Phase-1 pipeline. true: resolve
+        // consumes the linear-HDR scene (+ bloom) directly, before tone
+        // mapping; PostComposite moves after the resolve and runs at display
+        // resolution; RCAS moves to run after PostComposite. See the pass-
+        // order block in recordCommandBuffer (taaHdrInput_ branch) and
+        // TaaResolve.cpp's companded-YCoCg path.
+        bool taaHdrInput_ = false;
+        // Set by setTaaHdrInput/setMotionBlur when the HDR-mode-only image
+        // lifetimes (TaaResolve::mblurOutHdr_ / PostComposite::hdrOut_) or
+        // their descriptor bindings may be stale — never allocated/rewritten
+        // synchronously inside those setters (that's the pre-first-render
+        // setter-side GPU-touch crash class; see
+        // feedback_vulkan_pre_first_render_setters.md). ensureHybridResources
+        // consumes this flag every frame: lazily (re)allocates the HDR-mode
+        // scratch images ONLY while taaHdrInput_ is on (mirrors the
+        // occlusion-culling farthest-HiZ pyramid precedent — allocated only
+        // while its feature is enabled), then rewrites the affected
+        // descriptors, in that order, so no descriptor ever references a
+        // null image. A toggle therefore engages one frame later, same as
+        // enabling occlusion culling mid-run.
+        bool taaHdrPlumbingDirty_ = true;
+
         bool perSppJitterHybrid_ = true;
         // Tracks what each per-frame slot's binding 1 (RT denoise output)
         // currently points at, so the per-frame rewrite block only fires on
@@ -2183,6 +2207,7 @@ namespace threepp {
             createFoamDetailImage_();// must run before descriptor writes (binding 45 + deferred 34)
             rewriteTaaDescriptors();// after ensureHybridResources gave us raster gbuf views
             rewriteBloomDescriptors();// bloom composite reads gbuf + writes the TAA input
+            taaHdrPlumbingDirty_ = false;// handled by the call just above (taaHdrInput_ defaults off)
             rewriteDeferredDescriptors();// raster-first deferred shade inputs
             gpuTimings_ = std::make_unique<vulkan::GpuTimings>(*ctx, kFramesInFlight);
             overlayPass_ = std::make_unique<vulkan::OverlayPass>(
@@ -11711,10 +11736,18 @@ namespace threepp {
             std::array<VkImageView, kFramesInFlight> motionViews{};
             std::array<VkImageView, kFramesInFlight> idsViews{};
             std::array<VkImageView, kFramesInFlight> depthViews{};
+            std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
+            std::array<VkImageView, kFramesInFlight> bloomViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                motionViews[f] = rasterGbufs[f].motion.view;
-                idsViews[f]    = rasterGbufs[f].ids.view;
-                depthViews[f]  = rasterGbufs[f].depth.view;
+                motionViews[f]   = rasterGbufs[f].motion.view;
+                idsViews[f]      = rasterGbufs[f].ids.view;
+                depthViews[f]    = rasterGbufs[f].depth.view;
+                // HDR-mode-only sources (setTaaHdrInput) — harmlessly bound +
+                // unused when the toggle is off. bloom_ exists by the time
+                // this runs (constructed before the first rewriteTaaDescriptors
+                // call in both the ctor and resize paths).
+                sceneHdrViews[f] = bloom_->sceneHdrView(f);
+                bloomViews[f]    = bloom_->bloomView(f);
             }
             const auto& swapViews = ctx->swapchainImageViews();
             vulkan::TaaResolve::DescriptorWriteInputs in{};
@@ -11723,6 +11756,8 @@ namespace threepp {
             in.gbufIdsPerFrame    = idsViews.data();
             in.gbufDepthPerFrame  = depthViews.data();
             in.swapchainViews     = swapViews.data();
+            in.sceneHdrPerFrame   = sceneHdrViews.data();
+            in.bloomPerFrame      = bloomViews.data();
             taa_->rewriteDescriptors(in);
         }
 
@@ -11732,17 +11767,47 @@ namespace threepp {
         // createImages OR after the gbuffer / TAA images are reallocated.
         void rewriteBloomDescriptors() {
             bloom_->rewriteDescriptors();
+            // HDR-mode-only scratch images (TaaResolve::mblurOutHdr_ /
+            // PostComposite::hdrOut_) are VRAM-costing and only needed when
+            // setTaaHdrInput(true) is active — allocate them lazily, here,
+            // BEFORE the view-capture loop below reads their views, so a
+            // default-off run never allocates them (mirrors the occlusion-
+            // culling farthest-HiZ pyramid: allocated only while its feature
+            // is enabled). Once allocated they are left allocated if the
+            // toggle turns off (no churn) — see ensureHdrMblurImages /
+            // resizeHdrOutput's own idempotency for why repeat calls here
+            // are cheap.
+            if (taaHdrInput_) {
+                const VkExtent2D outExt = ctx->swapchainExtent();
+                taa_->ensureHdrMblurImages(outExt.width, outExt.height);
+                post_->resizeHdrOutput(outExt.width, outExt.height);
+            }
             std::array<VkImageView, kFramesInFlight> sceneViews{};
             std::array<VkImageView, kFramesInFlight> bloomViews{};
             std::array<VkImageView, kFramesInFlight> gbufViews{};
             std::array<VkImageView, kFramesInFlight> idsViews{};
             std::array<VkImageView, kFramesInFlight> taaInViews{};
+            std::array<VkImageView, kFramesInFlight> hdrSceneViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 sceneViews[f] = bloom_->sceneHdrView(f);
                 bloomViews[f] = bloom_->bloomView(f);
                 gbufViews[f]  = gbufImagesPP[f].view;
                 idsViews[f]   = rasterGbufs[f].ids.view;
                 taaInViews[f] = taa_->inputView(f);
+                // HDR-mode-only (setTaaHdrInput): PostComposite's binding 6
+                // reads whichever history slot THIS frame-in-flight's
+                // TaaResolve::recordResolve call just wrote — or, when
+                // motion blur is active, the HDR motion-blur intermediate.
+                // motionBlurAmount_ is checked here (not per-frame) because
+                // this rewrite only runs on resize/toggle, same cadence as
+                // every other view capture in this function. Guarded on
+                // hdrMblurImagesValid() so this never reads mblurHdrView()
+                // before ensureHdrMblurImages has actually run for it (e.g.
+                // taaHdrInput_ is still false — the view is unused by the
+                // shader in that case anyway, but must stay non-null).
+                hdrSceneViews[f] = (motionBlurAmount_ > 0.f && taa_->hdrMblurImagesValid())
+                        ? taa_->mblurHdrView(f)
+                        : taa_->historyView(vulkan::TaaResolve::writeSlotFor(f));
             }
             vulkan::PostComposite::DescriptorWriteInputs in{};
             in.sceneHdrPerFrame  = sceneViews.data();
@@ -11750,7 +11815,23 @@ namespace threepp {
             in.gbufPerFrame      = gbufViews.data();
             in.rasterIdsPerFrame = idsViews.data();
             in.taaInputPerFrame  = taaInViews.data();
+            in.hdrScenePerFrame  = hdrSceneViews.data();
             post_->rewriteDescriptors(in);
+
+            // Finalize (HDR-mode PostComposite output → swapchain, via
+            // TaaResolve's RCAS/copy — see TaaResolve::recordPostFinalize).
+            {
+                std::array<VkImageView, kFramesInFlight> hdrOutViews{};
+                std::array<VkImage,     kFramesInFlight> hdrOutImages{};
+                for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                    hdrOutViews[f]  = post_->hdrOutView(f);
+                    hdrOutImages[f] = post_->hdrOutImage(f);
+                }
+                const auto& swapViews  = ctx->swapchainImageViews();
+                const auto& swapImages = ctx->swapchainImages();
+                taa_->rewritePostFinalizeDescriptors(hdrOutViews.data(), hdrOutImages.data(),
+                                                     swapViews.data(), swapImages.data());
+            }
 
             // DoF scratch + descriptors track the same lifetimes (sceneHdr /
             // raster depth / render extent), so (re)fit it here too.
@@ -12209,6 +12290,22 @@ namespace threepp {
                 }
                 occlHiz_->resize(renderExtent(), dv.data(), dvMS.data(),
                                  haveMS ? gbufMsaaSamples_ : 1u);
+            }
+
+            // HDR-mode-only scratch images (setTaaHdrInput): same "only
+            // allocated while the feature is on" shape as the occlusion
+            // pyramid above. taa_/bloom_/post_ don't exist yet on the very
+            // first (ctor-time) call to ensureHybridResources — guard on
+            // them. taaHdrPlumbingDirty_ starts true so the first real call
+            // (after ctor finishes constructing them) always runs this once;
+            // afterwards it only re-runs when setTaaHdrInput/setMotionBlur
+            // actually changed something relevant (avoids per-frame
+            // vkUpdateDescriptorSets churn in the steady state).
+            if (taaHdrPlumbingDirty_ && taa_ && bloom_ && post_) {
+                rewriteBloomDescriptors();// allocates lazily (gated on
+                                          // taaHdrInput_), then rewrites —
+                                          // see that function's ordering.
+                taaHdrPlumbingDirty_ = false;
             }
         }
 
@@ -14592,7 +14689,10 @@ namespace threepp {
             // TAA descriptor sets are persistent (pool lives inside TaaResolve);
             // just rewrite them to the new image / view handles.
             rewriteTaaDescriptors();
-            rewriteBloomDescriptors();// gbuf + TAA-input views changed
+            rewriteBloomDescriptors();// gbuf + TAA-input views changed (also
+                                      // covers the HDR-mode lazy alloc — see
+                                      // its own taaHdrInput_ gate)
+            taaHdrPlumbingDirty_ = false;// handled by the call just above
             rewriteDeferredDescriptors();// raster gbuf + sceneHdr views changed
             // The descriptor pool was rebuilt — force the per-frame binding-1
             // target rewrite to re-run regardless of its prior cached mode.
@@ -15666,37 +15766,6 @@ namespace threepp {
                 gpuTimings_->end(cb, TP_Dof, currentFrame);
             }
 
-            // ── Bloom pyramid + post composite (HDR post stack) ────────────────
-            // The shade/resolve wrote linear HDR into bloom_->sceneHdr (the
-            // shared set's binding 1). The pyramid glows the bright
-            // highlights (skipped when bloomIntensity_ == 0); the post
-            // composite then closes the HDR path — exposure, white balance,
-            // tone map, grade LUT, sRGB — into the TAA input image.
-            bloom_->recordPyramid(cb, currentFrame,
-                                  regionRenderExt_.width, regionRenderExt_.height,
-                                  bloomIntensity_, bloomThreshold_, bloomClamp_);
-            // Intensity normalized by the accumulated level count so the
-            // summed pyramid lands at the same overall energy a single-level
-            // bloom put out for the same slider value.
-            const float effBloomIntensity =
-                    bloomIntensity_ / static_cast<float>(std::max(bloom_->levels(), 1u));
-            post_->recordDispatch(cb, currentFrame,
-                                  regionRenderExt_.width, regionRenderExt_.height,
-                                  static_cast<uint32_t>(toneMapping_),
-                                  exposureBits, preExpBits_, envIsBgColor,
-                                  effBloomIntensity,
-                                  skyIdsFromRasterGbuf());
-            // ── End post stack ─────────────────────────────────────────────────
-
-            // ── Raster TAA / temporal upsampler ─────────────────────────────────
-            // Reads denoise output from the TAA input image (render extent),
-            // blends with reprojected history (rgba16f, swapchain extent),
-            // writes the result straight to the swapchain. When renderScale
-            // < 1 the input is lower-res than the output, so this pass IS the
-            // upscaler — jittered low-res samples accumulate into the full-
-            // res history, reconstructing detail (no separate blit needed).
-            // The spatial neighborhood clamp + motion-vec reproject smooths
-            // per-frame Halton jitter shake on moving objects.
             // Frame-rate-aware history blend: keep the ghost-decay time constant in
             // wall-clock seconds, not frames (see taaPrevTimeSec_). taaBlendAlpha_ is
             // authored to look good at kTaaRefFps; at or above that rate this is a
@@ -15726,17 +15795,107 @@ namespace threepp {
                 }
                 taaPrevTimeSec_ = now;
             }
-            gpuTimings_->begin(cb, TP_TAA, currentFrame);
-            taa_->recordResolve(cb, currentFrame, imageIndex,
-                                regionRenderExt_.width, regionRenderExt_.height,
-                                regionSwapExt_.width, regionSwapExt_.height, effAlpha, taaDtFrames,
-                                sharpenStrength_ > 0.0f, sharpenStrength_,
-                                taaSkyReproj_.data(),
-                                static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
-                                ptExt.width, ptExt.height, ext.width, ext.height,
-                                taaDepthLin_.data(), motionBlurAmount_);
-            gpuTimings_->end(cb, TP_TAA, currentFrame);
-            // ── End raster TAA ─────────────────────────────────────────────────
+
+            // Intensity normalized by the accumulated level count so the
+            // summed pyramid lands at the same overall energy a single-level
+            // bloom put out for the same slider value. Computed unconditionally
+            // (both orders need it; HDR mode's bloom-add moves into TaaResolve).
+            const float effBloomIntensity =
+                    bloomIntensity_ / static_cast<float>(std::max(bloom_->levels(), 1u));
+
+            if (!taaHdrInput_) {
+                // ── LEGACY (default) ORDER ──────────────────────────────────────
+                // Bloom pyramid + post composite (HDR post stack). The shade/
+                // resolve wrote linear HDR into bloom_->sceneHdr (the shared
+                // set's binding 1). The pyramid glows the bright highlights
+                // (skipped when bloomIntensity_ == 0); the post composite then
+                // closes the HDR path — exposure, white balance, tone map,
+                // grade LUT, sRGB — into the TAA input image (render extent).
+                bloom_->recordPyramid(cb, currentFrame,
+                                      regionRenderExt_.width, regionRenderExt_.height,
+                                      bloomIntensity_, bloomThreshold_, bloomClamp_);
+                post_->recordDispatch(cb, currentFrame,
+                                      regionRenderExt_.width, regionRenderExt_.height,
+                                      static_cast<uint32_t>(toneMapping_),
+                                      exposureBits, preExpBits_, envIsBgColor,
+                                      effBloomIntensity,
+                                      skyIdsFromRasterGbuf());
+
+                // Raster TAA / temporal upsampler. Reads denoise output from
+                // the TAA input image (render extent), blends with reprojected
+                // history (rgba16f, swapchain extent), writes the result
+                // straight to the swapchain. When renderScale < 1 the input is
+                // lower-res than the output, so this pass IS the upscaler —
+                // jittered low-res samples accumulate into the full-res
+                // history, reconstructing detail (no separate blit needed).
+                gpuTimings_->begin(cb, TP_TAA, currentFrame);
+                taa_->recordResolve(cb, currentFrame, imageIndex,
+                                    regionRenderExt_.width, regionRenderExt_.height,
+                                    regionSwapExt_.width, regionSwapExt_.height, effAlpha, taaDtFrames,
+                                    sharpenStrength_ > 0.0f, sharpenStrength_,
+                                    taaSkyReproj_.data(),
+                                    static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
+                                    ptExt.width, ptExt.height, ext.width, ext.height,
+                                    taaDepthLin_.data(), motionBlurAmount_);
+                gpuTimings_->end(cb, TP_TAA, currentFrame);
+            } else {
+                // ── HDR-INPUT ORDER (setTaaHdrInput) ────────────────────────────
+                // scene dispatch → DoF (above) → bloom pyramid (unchanged,
+                // still pre-resolve/render-res — see TaaResolve.cpp's header
+                // comment for why) → TaaResolve on LINEAR HDR (bloom added
+                // inside the resolve, companded stats/clip/blend, history
+                // exposure-rescaled) → PostComposite (tone map ONLY, at
+                // DISPLAY resolution, reading the resolve's HDR output) →
+                // RCAS (display-referred, now downstream of PostComposite) →
+                // overlay (unchanged — both orders end at the swapchain).
+                bloom_->recordPyramid(cb, currentFrame,
+                                      regionRenderExt_.width, regionRenderExt_.height,
+                                      bloomIntensity_, bloomThreshold_, bloomClamp_);
+
+                // History exposure compensation: rescale the RAW (true-linear)
+                // history sample by prevPreExp/currPreExp before the resolve's
+                // companding/clip math runs, so a physical-camera exposure
+                // step doesn't read as a whole-scene brightness change (which
+                // would hard-reject history via the deviation/variance-clip
+                // gates — see feedback_temporal_accum_motion_gates.md's FC
+                // floor/cap lesson, same failure shape). 1.0 in legacy mode
+                // (preExp/prevPreExp both 1.0) — exact no-op.
+                const float exposureRatio = prevPreExp / std::max(preExp, 1e-8f);
+
+                gpuTimings_->begin(cb, TP_TAA, currentFrame);
+                taa_->recordResolve(cb, currentFrame, imageIndex,
+                                    regionRenderExt_.width, regionRenderExt_.height,
+                                    regionSwapExt_.width, regionSwapExt_.height, effAlpha, taaDtFrames,
+                                    sharpenStrength_ > 0.0f, sharpenStrength_,
+                                    taaSkyReproj_.data(),
+                                    static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
+                                    ptExt.width, ptExt.height, ext.width, ext.height,
+                                    taaDepthLin_.data(), motionBlurAmount_,
+                                    /*hdrMode=*/true, effBloomIntensity, exposureRatio);
+                gpuTimings_->end(cb, TP_TAA, currentFrame);
+
+                // PostComposite now runs at DISPLAY resolution, reading the
+                // resolve's HDR output (no second bloom add — pass <= 0).
+                // skyFromRasterIds's mask still lives at render resolution
+                // (regionRenderExt_), so pass it as the src extent.
+                post_->recordDispatch(cb, currentFrame,
+                                      regionSwapExt_.width, regionSwapExt_.height,
+                                      static_cast<uint32_t>(toneMapping_),
+                                      exposureBits, preExpBits_, envIsBgColor,
+                                      /*effBloomIntensity=*/0.f,
+                                      skyIdsFromRasterGbuf(),
+                                      regionRenderExt_.width, regionRenderExt_.height,
+                                      /*hdrMode=*/true);
+
+                // Finalize PostComposite's hdrOut_ into the swapchain — RCAS
+                // (moved out of TaaResolve; display-referred by design) or a
+                // plain copy. Full-frame only in this mode (split-screen +
+                // HDR-input together isn't a supported combination yet).
+                taa_->recordPostFinalize(cb, currentFrame, imageIndex,
+                                         regionSwapExt_.width, regionSwapExt_.height,
+                                         sharpenStrength_ > 0.0f, sharpenStrength_);
+            }
+            // ── End post stack / TAA ────────────────────────────────────────────
 
             // ── Hybrid raster overlay pass ─────────────────────────────────────
             // Wireframe-flagged meshes (any material with wireframe == true)

@@ -97,6 +97,7 @@ int main(int argc, char** argv) {
     std::string sunPolicy; // --sunpolicy auto|always|off
     float dofFocus = 0.f;  // --dof S: thin-lens DoF focused at S meters (f/2 aperture)
     int optOccl = -1;      // --occl 0|1: two-phase GPU occlusion culling
+    int optTaaHdr = -1;    // --taa-hdr 0|1: setTaaHdrInput (deferred renderer only)
     bool usePT = false;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -126,6 +127,7 @@ int main(int argc, char** argv) {
         else if (a == "--sunpolicy" && i + 1 < argc) sunPolicy = argv[++i];
         else if (a == "--dof" && i + 1 < argc) dofFocus = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--occl" && i + 1 < argc) optOccl = std::atoi(argv[++i]);
+        else if (a == "--taa-hdr" && i + 1 < argc) optTaaHdr = std::atoi(argv[++i]);
         else if (a == "--pt") usePT = true;
     }
     if (!fs::exists(modelFolder) || !fs::is_directory(modelFolder)) {
@@ -162,6 +164,7 @@ int main(int argc, char** argv) {
     }
     if (optSunRad >= 0.f) renderer.setSunAngularRadius(optSunRad);
     if (optOccl >= 0) renderer.setOcclusionCulling(optOccl != 0);
+    if (optTaaHdr >= 0) renderer.setTaaHdrInput(optTaaHdr != 0);
     if (dofFocus > 0.f) {// thin-lens DoF: wide-open aperture, focus at S meters
         renderer.setCameraExposure(2.0f, 1.f / 125.f, 100.f);
         renderer.setFocusDistance(dofFocus);

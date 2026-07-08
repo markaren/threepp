@@ -6,6 +6,8 @@
 //   binding 2: gbufMotionTex      — gbuffer motion vector         (RENDER extent)
 //   binding 3: taaSwapImage       — swapchain output (write)      (OUTPUT extent)
 //   binding 4: taaHistoryWriteImg — next-frame history (write)    (OUTPUT extent)
+//   binding 8: sceneHdrTex        — HDR-MODE ONLY: linear-HDR scene (RENDER extent)
+//   binding 9: bloomTex           — HDR-MODE ONLY: bloom pyramid level 0 (half RENDER extent)
 //
 // When the path tracer renders below the swapchain resolution
 // (renderScale < 1) the input + gbuffer are at the render extent while
@@ -23,6 +25,21 @@
 //   3) blend mix(history, current, alpha) with alpha small (~0.1 → 90% history weight)
 // The neighborhood clamp suppresses ghosting at disocclusions and on
 // fast-moving geometry without an explicit motion-rejection branch.
+//
+// HDR MODE (setTaaHdrInput, pc.flags bit 1): `curr` is read from the linear-
+// HDR scene (+ bloom add) instead of PostComposite's post-tonemap 8-bit
+// output, and the neighbourhood stats / variance clip / blend all operate on
+// REINHARD-COMPANDED values (FSR2 / Karis: T(c) = c/(1+luma(c)), inverted
+// after blending with T⁻¹(y) = y/(1-luma(y))) instead of raw linear or YCoCg-
+// of-linear. Rationale: an uncompanded clip box is dominated by whichever
+// neighbour is brightest — a single sun-spec or emissive texel can inflate σ
+// by orders of magnitude, so the clip box no longer constrains anything and
+// ghosts/rings around bright detail. Companding maps unbounded HDR into
+// [0,1) the same way the OLD post-tonemap-LDR path was implicitly bounded,
+// so the existing YCoCg/variance-clip machinery below is reused UNCHANGED —
+// it just operates on companded values when hdrMode is set. The history
+// write is still the true linear (decompanded) result — companding is only
+// the stats/clip/blend WORKING SPACE, never the storage format.
 
 #extension GL_GOOGLE_include_directive : enable
 
@@ -41,7 +58,9 @@ layout(set = 0, binding = 3) uniform writeonly image2D taaSwapImage;
 // re-quantized every frame and locked into uint8 codes, producing visible
 // iso-luminance bands on smooth specular surfaces. Input/swap stay rgba8
 // because denoise.comp writes binding 1 with rgba8 and that target can be
-// either the TAA input image or the BGRA8 swapchain.
+// either the TAA input image or the BGRA8 swapchain. In HDR mode this same
+// storage holds true LINEAR HDR (pre-exposed) instead of display-referred
+// colour — the format doesn't change, only what's stored in it.
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D taaHistoryWriteImg;
 // Mesh-ID rejection: bind both the current frame's IDs and the previous
 // frame's. When the reprojected prev pixel sits on a different mesh than
@@ -54,6 +73,12 @@ layout(set = 0, binding = 6) uniform usampler2D gbufIdsPrevTex;
 // depth-based disocclusion (see linZ + depthDisocc in main). Same image the
 // deferred GI/reflection disocclusion uses (gbufDepthPrevTex there).
 layout(set = 0, binding = 7) uniform sampler2D gbufDepthPrevTex;
+// HDR-mode-only sources (harmlessly bound + unused otherwise). sceneHdrTex is
+// the shade/resolve's pre-exposed linear-HDR output (same image BloomPass /
+// PostComposite read); bloomTex is the bloom pyramid's level 0 (half render
+// extent, bilinear-upsampled the same way PostComposite already adds it).
+layout(set = 0, binding = 8) uniform sampler2D sceneHdrTex;
+layout(set = 0, binding = 9) uniform sampler2D bloomTex;
 
 layout(push_constant) uniform Pc {
     float blendAlpha;// base new-sample weight (0.1 = strong AA, slow ghost decay)
@@ -61,9 +86,12 @@ layout(push_constant) uniform Pc {
     uint  height;
     uint  inWidth;   // PANE (scissor region) input size (path-trace render extent)
     uint  inHeight;
-    uint  writeSwap; // 1 = write the swapchain here; 0 = a downstream RCAS
-                     //     sharpen pass owns the swapchain write (history is
-                     //     still written so it reads the resolved frame).
+    // bit 0 = writeSwap (1 = write the swapchain here; 0 = a downstream RCAS
+    //         sharpen pass, or in HDR mode PostComposite, owns the next read
+    //         of the history-write slot instead).
+    // bit 1 = hdrMode (setTaaHdrInput): curr reads sceneHdrTex+bloomTex and
+    //         all stats/clip/blend math runs on Reinhard-companded values.
+    uint  flags;
     float dtFrames;  // this frame's duration in REFERENCE frames (dt · 90 fps,
                      // host-clamped to [1, 6]; 1 at ≥90 fps). Converts the
                      // per-frame temporal constants below (deviation-streak
@@ -82,20 +110,48 @@ layout(push_constant) uniform Pc {
     // (reversed-Z: z = 0) to previous clip. Supplies SKY pixels their true
     // rotation-induced motion. std430: mat4 aligns to offset 32.
     mat4  skyReproj;
-    // Split-screen: full (physical) texture sizes for UV normalisation. The pane
-    // content lives in [0..inWidth]/[0..width] of these full-size textures, so a
-    // region-UV in [0,1] must be scaled by region/phys before sampling. Default
-    // (phys == region) → scale 1 → identical to the full-frame path.
-    uint  physInW;
-    uint  physInH;
-    uint  physOutW;
-    uint  physOutH;
+    // Split-screen: full (physical) texture sizes for UV normalisation, each
+    // packed as (w | h<<16) — same convention as dstOffset — to fit the two
+    // new HDR-mode floats below into the 128-byte push-constant budget (the
+    // guaranteed cross-vendor minimum; this codebase never exceeds it). The
+    // pane content lives in [0..inWidth]/[0..width] of these full-size
+    // textures, so a region-UV in [0,1] must be scaled by region/phys before
+    // sampling. Default (phys == region) → scale 1 → identical to full-frame.
+    uint  physIn;    // physInW | physInH << 16
+    uint  physOut;   // physOutW | physOutH << 16
+    // HDR-mode-only (zero/ignored otherwise): additive bloom amount (<= 0
+    // disables the add, matching PostComposite's own convention) and the
+    // history exposure-compensation ratio prevPreExp/currPreExp (1.0 = no
+    // change) applied to the raw history sample BEFORE companding, so a
+    // physical-camera exposure step rescales history into the CURRENT
+    // frame's exposure instead of reading as a scene-brightness change and
+    // hard-rejecting the whole screen via the deviation/variance-clip gates.
+    float bloomIntensity;
+    float exposureRatio;
     // Reverse-Z view-depth linearization terms (A,B,C,D): viewZ = (A·d+B)/(C·d+D),
     // taken from the inverse reverse-Z projection's z/w rows. Lets the depth
     // disocclusion gate compare surfaces in linear view-Z (matches deferred_shade).
     // All-zero ⇒ disocclusion disabled (caller supplied no camera depth params).
     vec4  depthLin;
 } pc;
+
+const uint kFlagWriteSwap = 1u;
+const uint kFlagHdrMode   = 2u;
+bool isHdrMode() { return (pc.flags & kFlagHdrMode) != 0u; }
+
+// Reinhard companding (FSR2 / Karis) — maps unbounded linear HDR into [0,1)
+// so the neighbourhood variance clip below can't be blown out by a single
+// bright pixel (sun spec, emissive). Inverted exactly after blending.
+vec3 compand(vec3 c) {
+    return c / (1.0 + dot(c, vec3(0.2126, 0.7152, 0.0722)));
+}
+vec3 decompand(vec3 c) {
+    const float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    return c / max(1.0 - l, 1e-4);
+}
+
+// physIn/physOut are packed (w | h<<16) — see the Pc block comment.
+uvec2 unpackDims(uint packed) { return uvec2(packed & 0xFFFFu, packed >> 16u); }
 
 // Catmull-Rom history reconstruction (5-tap, bilinear-fused).
 // Single-bilinear sampling of history smears under camera translation
@@ -112,7 +168,7 @@ layout(push_constant) uniform Pc {
 // region/phys). texSize is the full texture size so the 5 fused-bilinear taps
 // land on the correct texels.
 vec3 sampleHistoryCR(vec2 uv) {
-    const vec2 texSize = vec2(float(pc.physOutW), float(pc.physOutH));
+    const vec2 texSize = vec2(unpackDims(pc.physOut));
     const vec2 samplePos = uv * texSize;
     const vec2 texPos1 = floor(samplePos - 0.5) + 0.5;
     const vec2 f = samplePos - texPos1;
@@ -209,13 +265,29 @@ void main() {
     // Split-screen: the pane content occupies [0..inWidth]/[0..width] of the
     // full-size textures, so map the region-UV into that sub-rect for sampling.
     // (At full-frame, region == phys → scale 1 → unchanged.)
-    const vec2 inScale  = vec2(float(pc.inWidth), float(pc.inHeight)) / vec2(float(pc.physInW), float(pc.physInH));
-    const vec2 outScale = vec2(float(pc.width),   float(pc.height))   / vec2(float(pc.physOutW), float(pc.physOutH));
+    const vec2 physInSz  = vec2(unpackDims(pc.physIn));
+    const vec2 physOutSz = vec2(unpackDims(pc.physOut));
+    const vec2 inScale  = vec2(float(pc.inWidth), float(pc.inHeight)) / physInSz;
+    const vec2 outScale = vec2(float(pc.width),   float(pc.height))   / physOutSz;
     const vec2 uvIn = uv * inScale;// render-extent textures (input, motion, ids)
 
-    // Current sample — raw (jittered) input. Temporal accumulation over the
-    // Halton jitter sequence is the anti-aliasing now (TSR), not FXAA.
-    const vec3 curr = texture(taaInputTex, uvIn).rgb;
+    const bool hdr = isHdrMode();
+
+    // Current sample. LDR mode: raw (jittered) post-tonemap input. HDR mode
+    // (setTaaHdrInput): the linear-HDR scene + additive bloom — the same
+    // add PostComposite used to do BEFORE tone mapping, done here instead
+    // since the resolve now runs before PostComposite. Temporal accumulation
+    // over the Halton jitter sequence is the anti-aliasing (TSR) either way.
+    vec3 currLinear = texture(taaInputTex, uvIn).rgb;
+    if (hdr) {
+        currLinear = texture(sceneHdrTex, uvIn).rgb;
+        if (pc.bloomIntensity > 0.0) currLinear += texture(bloomTex, uv).rgb * pc.bloomIntensity;
+    }
+    // `curr` is the WORKING-space sample every gate/blend below operates on:
+    // companded (bounded, LDR-like) in HDR mode, the raw LDR sample
+    // otherwise — matches the m1/m2 neighbourhood stats, which are companded
+    // the same way. Decompanded back to true linear only at the final store.
+    const vec3 curr = hdr ? compand(currLinear) : currLinear;
 
     // Reproject prev frame via gbuffer motion vec. Motion is in GL-NDC delta
     // (Y-up); convert UV → GL-NDC → add motion → back to screen UV.
@@ -269,8 +341,11 @@ void main() {
     // edges oscillate hard (frame N vs N+1 differed by ~229/255 at every
     // silhouette). The full neighbourhood spans surface+background, so the box is
     // stable and the edge converges to the jitter-averaged coverage = clean AA.
-    // The halo the gate guarded against is bounded now anyway: the TAA input is
-    // post-tonemap LDR, so a bright neighbour can't blow up σ.
+    // The halo the gate guarded against is bounded now anyway: LDR mode's TAA
+    // input is post-tonemap and already in [0,1]; HDR mode instead COMPANDS
+    // each neighbour (see compand() above) before the YCoCg transform, which
+    // gives the same bounded-neighbourhood guarantee for unbounded linear
+    // input (a sun-spec/emissive texel maps to <1 instead of blowing up σ).
     const ivec2 inSz = ivec2(int(pc.inWidth), int(pc.inHeight));
     const ivec2 ipx  = clamp(ivec2(uv * vec2(inSz)), ivec2(0), inSz - 1);
     vec3 m1 = vec3(0.0), m2 = vec3(0.0);
@@ -278,7 +353,18 @@ void main() {
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
             const ivec2 q = clamp(ipx + ivec2(dx, dy), ivec2(0), inSz - 1);
-            const vec3 c = RGB_to_YCoCg(texelFetch(taaInputTex, q, 0).rgb);
+            vec3 s = texelFetch(taaInputTex, q, 0).rgb;
+            if (hdr) {
+                s = texelFetch(sceneHdrTex, q, 0).rgb;
+                // Bloom UV: the neighbour's fractional position within the
+                // render-extent pane — same quantity `uv` is for the centre
+                // pixel (bloom isn't phys/split-screen aware; matches how
+                // PostComposite already samples it with a plain region uv).
+                if (pc.bloomIntensity > 0.0)
+                    s += texture(bloomTex, (vec2(q) + 0.5) / vec2(inSz)).rgb * pc.bloomIntensity;
+                s = compand(s);
+            }
+            const vec3 c = RGB_to_YCoCg(s);
             m1 += c; m2 += c * c; cnt += 1.0;
         }
     }
@@ -327,12 +413,26 @@ void main() {
         depthDisocc = mismatch ? clamp(dilatedMotionPx * 0.6, 0.0, 1.0) : 0.0;
     }
 
+    // `history` lives in the same WORKING space as `curr` (companded in HDR
+    // mode, matching the m1/m2 neighbourhood stats above). Falls back to
+    // `curr` when there's no valid reprojection, same as before. Decompanded
+    // back to true linear only at the final store.
     vec3 history = curr;
     float devStreak = 0.0;// consecutive strongly-deviating frames (carried in history .a)
     if (reprojValid && cnt > 0.5) {
         // Catmull-Rom 5-tap (sharper than single bilinear — kills the
         // "everything smears on camera translation" compounding blur).
-        const vec3 histRGB = sampleHistoryCR(prevUv * outScale);
+        vec3 histRGB = sampleHistoryCR(prevUv * outScale);
+        // HDR-mode-only: rescale the raw (true-linear) history sample by
+        // prevPreExp/currPreExp BEFORE companding, so a physical-camera
+        // exposure step is absorbed here instead of reading as a scene-
+        // brightness change that the deviation/variance-clip gates below
+        // would hard-reject (a whole-screen flash/reset on every exposure
+        // change). exposureRatio == 1.0 in LDR mode / no exposure change.
+        if (hdr) {
+            histRGB = max(histRGB * pc.exposureRatio, vec3(0.0));
+            histRGB = compand(histRGB);
+        }
         // Variance clip in YCoCg. γ widens/tightens the allowed history box:
         // ~1 is a good flicker/ghost balance.
         const vec3  mu    = m1 / cnt;
@@ -464,15 +564,21 @@ void main() {
     // setGbufferMsaa for edges) covers the reduced temporal AA.
     const bool perFrameContent = (currIds.z & 96u) != 0u;
     if (perFrameContent) a = max(a, 0.75);
-    const vec3 result = reprojValid ? mix(history, curr, a) : curr;
+    // `result` is still WORKING space here (companded in HDR mode) — decompand
+    // back to true linear right before it leaves the shader. LDR mode: no-op
+    // (decompand is only ever called under `hdr`), byte-identical to before.
+    vec3 result = reprojValid ? mix(history, curr, a) : curr;
+    if (hdr) result = max(decompand(result), vec3(0.0));
 
     // When a downstream RCAS pass owns the swapchain write, skip it here but
     // still write history (RCAS reads the resolved frame from the history slot).
-    // When a downstream RCAS pass owns the swapchain write, skip it here but
-    // still write history (RCAS reads the resolved frame from the history slot).
+    // HDR mode never writes the swapchain here regardless of pc.flags bit 0
+    // (the host always clears it in HDR mode) — PostComposite becomes the
+    // next reader of the history-write slot instead, same pattern as a
+    // downstream RCAS in LDR mode.
     // Swapchain write is offset to the pane's screen position; history stays at
     // the texture origin (region-local), so next frame reprojects consistently.
     const ivec2 dstPx = px + ivec2(int(pc.dstOffset & 0xFFFFu), int(pc.dstOffset >> 16u));
-    if (pc.writeSwap != 0u) imageStore(taaSwapImage, dstPx, vec4(result, 1.0));
+    if ((pc.flags & kFlagWriteSwap) != 0u) imageStore(taaSwapImage, dstPx, vec4(result, 1.0));
     imageStore(taaHistoryWriteImg,  px, vec4(result, devStreak));// .a = deviation streak
 }
