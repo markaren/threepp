@@ -3999,10 +3999,106 @@ void main() {
         //   • The motion-scaled cap (same term as the GI) for camera/receiver
         //     motion. Static, settled penumbras keep the long clean history.
         if (shadowChannel) {
-            const vec4 sPrev  = valid ? texture(shadowVisPrevTex, prevUv) : vec4(0.0);
+            // EDGE-AWARE 4-TAP (2×2) HISTORY FETCH — replaces the old history
+            // fetch's single-texel snap. NOTE: shadowVisPrevTex (like giPrevTex/
+            // gbufNormalPrevTex/gbufDepthPrevTex) is bound through gbufSampler_,
+            // which this pass creates NEAREST (DeferredShade.cpp ~line 46: "the
+            // shader uses texelFetch, sampler ignored, still required") — so the
+            // OLD `texture(shadowVisPrevTex, prevUv)` was already a nearest snap,
+            // not hardware bilinear. Under motion prevUv drifts continuously, and
+            // at a shadow boundary the nearest-neighbour rounding OCCASIONALLY
+            // snaps a shadowed pixel onto a LIT neighbour's full history value
+            // (R̃≈1) instead of its own — a 100%-weight contamination event that
+            // frame (vs. a small blended sliver), which then compounds through
+            // the EMA frame after frame (measured up to 7.5× at deep-shadow
+            // pixels). Manually gather the 4 integer-texel neighbours with their
+            // bilinear proximity weights so a genuine sub-pixel reproject blends
+            // a SMALL, bounded fraction of a neighbour instead of an all-or-
+            // nothing snap, then edge-stop each tap two ways before accepting it:
+            //   1) GEOMETRIC consistency — same predicates/thresholds as the GI
+            //      reproject above (depth-plane test via cam.projInverse, normal
+            //      dot with the same double-sided abs(dot) handling) — this is
+            //      what the GI reuses to reject a tap that landed on a DIFFERENT
+            //      surface (disocclusion / silhouette crossing).
+            //   2) VALUE-range consistency — geometry alone can't separate "same
+            //      floor, different shadow state" (a penumbra boundary on a flat
+            //      surface has NO depth/normal discontinuity to key off). The
+            //      spatial à-trous denoise below (deferred_denoise.comp ~line
+            //      499: `wlS = exp(-abs(cS.x - sqS.x) / visPhi)`) already range-
+            //      stops this exact ratio signal by its own temporal variance —
+            //      reused here verbatim (same exp/variance-scale form). The
+            //      reference for "what value should this pixel's history be" is
+            //      the NEAREST tap's own stored ratio (nearV.x below) — the exact
+            //      value the OLD nearest-snap fetch would have used alone — NOT
+            //      this frame's visEst (1-2 ray Monte Carlo estimate, too noisy
+            //      per-frame to anchor a gate on). Anchoring on the nearest tap
+            //      means: agreeing neighbours blend in for a genuinely smoother
+            //      sub-pixel reproject; a neighbour on the OTHER side of a
+            //      shadow boundary disagrees with the nearest tap and is cut,
+            //      so the result degrades to (at worst) the same single-tap
+            //      value the old code already used — never worse, only smoother
+            //      when the 2×2 neighbourhood agrees.
+            // Renormalize by the surviving weight; if every tap is out (or
+            // off-screen), fall through to sValid=false below, matching how the
+            // GI path cold-starts on total invalidity.
+            vec4 sPrev = vec4(0.0);
+            bool sAnyTap = false;
+            if (valid) {
+                const vec2  texel   = prevUv * vec2(float(pc.width), float(pc.height)) - 0.5;
+                const ivec2 base    = ivec2(floor(texel));
+                const vec2  frac    = texel - vec2(base);
+                const ivec2 mx      = ivec2(int(pc.width), int(pc.height)) - 1;
+                // Re-derive dsided locally — the GI 3×3 pass above scopes its own
+                // copy inside its `if (valid)` block; giFlagsZ (the source flag) is
+                // still in scope here so this is the same bit test, not a new heuristic.
+                const bool  dsided  = (giFlagsZ & 16u) != 0u;
+                const float surfD   = texture(gbufMotionTex, uv).b;// this surface's prev NDC depth (shared by all 4 taps)
+                const vec4  svh     = cam.projInverse * vec4(prevNDC, surfD, 1.0);
+                const float svz     = svh.z / svh.w;
+                // Nearest tap = what the old `texture()` NEAREST fetch would have
+                // picked (GL/Vulkan NEAREST samples texel floor(uv*size), no
+                // half-texel offset) — the value anchor below.
+                const ivec2 nearTp  = clamp(ivec2(floor(prevUv * vec2(float(pc.width), float(pc.height)))), ivec2(0), mx);
+                const vec4  nearV   = texelFetch(shadowVisPrevTex, nearTp, 0);
+                const float nearVar = max(nearV.y - nearV.x * nearV.x, 0.0);
+                // Tight floor (measured: a looser 4x-of-variance floor matching
+                // deferred_denoise.comp's own visPhi scale left a residual bleed —
+                // this is a TEMPORAL accumulator, where a small per-frame leak
+                // compounds every frame instead of being re-filtered from a clean
+                // source each time like the spatial à-trous is, so it needs a much
+                // tighter stop than the one-shot spatial blur to stay put-together
+                // over hundreds of frames of camera motion).
+                const float nearPhi = 0.25 * sqrt(nearVar) + 1e-4;
+                float wSum = 0.0;
+                vec4  accTap = vec4(0.0);
+                for (int ty = 0; ty <= 1; ++ty) {
+                    for (int tx = 0; tx <= 1; ++tx) {
+                        const ivec2 tp = clamp(base + ivec2(tx, ty), ivec2(0), mx);
+                        const float bw = (tx == 0 ? (1.0 - frac.x) : frac.x) *
+                                         (ty == 0 ? (1.0 - frac.y) : frac.y);
+                        if (bw <= 0.0) continue;
+                        const vec3 pn = texelFetch(gbufNormalPrevTex, tp, 0).xyz * 2.0 - 1.0;
+                        float nd = dot(N, normalize(pn));
+                        if (dsided) nd = abs(nd);
+                        if (nd <= 0.7) continue;// same 45° gate as the GI 3×3 normal test
+                        const float bufD = texelFetch(gbufDepthPrevTex, tp, 0).x;
+                        const vec4  bvh  = cam.projInverse * vec4(prevNDC, bufD, 1.0);
+                        if (abs(svz - bvh.z / bvh.w) > 0.1 * max(abs(svz), 1e-3)) continue;// same depth-plane gate as the GI
+                        const vec4  tapV = texelFetch(shadowVisPrevTex, tp, 0);
+                        // Value-range stop vs the nearest tap (see comment above);
+                        // same exp/variance form as deferred_denoise.comp's wlS.
+                        const float wl = exp(-abs(nearV.x - tapV.x) / nearPhi);
+                        const float w  = bw * wl;
+                        if (w <= 1e-5) continue;
+                        accTap += w * tapV;
+                        wSum   += w;
+                    }
+                }
+                if (wSum > 1e-4) { sPrev = accTap / wSum; sAnyTap = true; }
+            }
             // .z==0 = cold-start marker (sky/glass/off); the magnitude guards
             // reject first-frame / garbage fp16 history (NaN compares false).
-            const bool sValid = valid && sPrev.z > 0.5 && sPrev.z < 4096.0 &&
+            const bool sValid = sAnyTap && sPrev.z > 0.5 && sPrev.z < 4096.0 &&
                                 abs(sPrev.x) <= 1.5 && abs(sPrev.w) <= 1.5;
             const float dev      = visEst - sPrev.x;
             const float trend    = sValid ? mix(sPrev.w, dev, 0.34) : 0.0;
