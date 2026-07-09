@@ -496,7 +496,6 @@ namespace threepp_py {
                                        [](PyVulkanRenderer& r) {
                                            const auto t = r.native().lastFrameTimings();
                                            py::dict d;
-                                           d["photon_emit_ms"] = t.photonEmitMs;
                                            d["shade_ms"] = t.pathTraceMs;
                                            d["denoise_ms"] = t.denoiseMs;
                                            d["taa_ms"] = t.taaMs;

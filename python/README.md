@@ -48,7 +48,7 @@ pip install "git+https://github.com/markaren/threepp"
 ```
 
 The wheel is **GL-only** by design — it needs no Vulkan SDK, PhysX, or CUDA and
-runs on any machine. The Vulkan path-tracer / deferred AOVs and the PhysX physics
+runs on any machine. The Vulkan deferred renderer / G-buffer AOVs and the PhysX physics
 + GPU-RL backends are opt-in **source** builds (see the backend sections below).
 
 ## Build
@@ -213,7 +213,7 @@ cmake --build build --target threepp_stubs
 The deferred (RasterFirst) Vulkan renderer writes a full G-buffer every frame —
 world normals, optical flow, per-instance segmentation ids, albedo, depth. The
 binding exposes those attachments as numpy, so a scene authored in Python yields
-ground-truth labels with no path tracer and no manual annotation:
+ground-truth labels directly from the render, with no manual annotation:
 
 ```python
 import threepp as tp

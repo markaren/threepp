@@ -5,13 +5,11 @@
 // content under camera and object motion.
 //
 // Differences vs the WGPU example:
-//   • VulkanRenderer is always a path tracer (no `usePathTracer` toggle and
-//     no separate `pathTracer()` object — settings live on the renderer).
-//   • Max bounce count is not yet plumbed to a setter on Vulkan
-//     (compile-time `kMaxBounces = 4` in raygen.rgen), so the slider is
-//     omitted.
-//   • Vulkan exposes hybrid raster + samples-per-pixel knobs that the WGPU
-//     example doesn't — added below for completeness.
+//   • This is the deferred VulkanRenderer, which runs its own SVGF-style
+//     denoiser over the ray-traced lighting channels (`setDenoise`); settings
+//     live directly on the renderer.
+//   • It adds an AAA post stack (HDR bloom, RCAS sharpen, motion blur) the
+//     WGPU example doesn't have — surfaced below for completeness.
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"

@@ -1,5 +1,5 @@
-// Classical white-furnace test for the Vulkan path tracer (env-only).
-// Port of the (removed) examples/wgpu/wgpu_furnace_env_test.cpp.
+// White-furnace IBL energy-conservation check for the deferred VulkanRenderer
+// (env-only). Port of the (removed) examples/wgpu/wgpu_furnace_env_test.cpp.
 //
 // A diffuse-white sphere (albedo=1, metalness=0, roughness=1) sits alone in a
 // constant-radiance environment (scene.environment = (1,1,1) everywhere). For
@@ -7,23 +7,19 @@
 //
 //     L_o = (ρ/π) · ∫ L_i cos θ dω = (1/π) · Le · π = Le = 1.0
 //
-// So every pixel covering the sphere must read exactly 1.0. Any deviation is a
-// direct BRDF / throughput / sampling bug (energy gain or loss). The white
-// furnace is the canonical correctness check for a path tracer's BSDF — now
-// the more important since the Vulkan PT is the project's sole path tracer and
-// ground-truth source.
+// So every pixel covering the sphere must read exactly 1.0. Any deviation is an
+// energy gain or loss in the renderer's IBL / diffuse-integration path. The
+// white furnace is the canonical energy-conservation check.
 //
 // Tonemap=None + outputColorSpace=Linear → readback bytes are raw linear, so
 // 1.0 ↔ 255. Readback uses the renderer's scene-capture buffer
 // (setSceneCaptureEnabled / readSceneRGBPixels): the post-TAA, *pre-overlay*
 // swapchain image, so the measurement is never contaminated by the ImGui HUD.
 //
-// VulkanRenderer differences vs the WGPU original:
-//   • It IS the path tracer — no `usePathTracer` toggle, no separate
-//     `pathTracer()` object; settings live directly on the renderer.
+// Notes on the deferred VulkanRenderer:
 //   • No `frameCount()` accessor — we track accumulated frames ourselves
-//     (reset on camera move / material change, mirroring the renderer's own
-//     accumulation reset).
+//     (reset on camera move / material change; the renderer resets its own GI
+//     accumulation internally on the same events).
 //   • Clean readback via scene capture instead of an offscreen RenderTarget +
 //     fullscreen preview quad.
 //   • Runtime material edits propagate via Material::needsUpdate() (the
@@ -32,7 +28,7 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/renderers/VulkanPathTracer.hpp"
+#include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/textures/Texture.hpp"
 #include "threepp/threepp.hpp"
 
@@ -149,9 +145,9 @@ namespace {
 }// namespace
 
 int main() {
-    Canvas canvas("Vulkan PT - White Furnace (Env-only)", {{"vsync", false}});
+    Canvas canvas("VulkanRenderer - White Furnace (Env-only)", {{"vsync", false}});
 
-    VulkanPathTracer renderer(canvas);
+    VulkanRenderer renderer(canvas);
     // Raw linear readback: 1.0 ↔ 255, no tone curve, no sRGB encode.
     renderer.outputColorSpace = ColorSpace::Linear;
     renderer.toneMapping = ToneMapping::None;
@@ -163,7 +159,6 @@ int main() {
     renderer.setDenoise(false);
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(0.f);// 0 → 1e30 sentinel: no cap during validation
-    renderer.setMaxBounces(4);
 
     // Clean, overlay-free readback of the post-TAA scene image.
     renderer.setSceneCaptureEnabled(true);
@@ -190,9 +185,6 @@ int main() {
     // ── UI / measurement state ──
     bool denoiserOn = renderer.denoise();
     bool restirOn = renderer.restirDIEnabled();
-    bool restirGiOn = renderer.restirGIEnabled();
-    int spp = renderer.samplesPerPixel();
-    int maxBounces = renderer.maxBounces();
     int measureEveryN = 32;
     float roughness = 1.0f;
     float metalness = 0.0f;
@@ -205,7 +197,6 @@ int main() {
     Stats stats{};
     int statsFrame = -1;
     bool fresh = true;
-    bool pendingReset = false;// deferred: resetAccumulation() must run outside render()
     std::vector<unsigned char> pixels;
 
     auto resetMeasurement = [&] {
@@ -215,7 +206,6 @@ int main() {
         fresh = true;
     };
     auto requestReset = [&] {
-        pendingReset = true;
         resetMeasurement();
     };
     auto applyMaterial = [&] {
@@ -283,18 +273,6 @@ int main() {
             renderer.setRestirDIEnabled(restirOn);
             requestReset();
         }
-        if (ImGui::Checkbox("ReSTIR GI", &restirGiOn)) {
-            renderer.setRestirGIEnabled(restirGiOn);
-            requestReset();
-        }
-        if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8)) {
-            renderer.setMaxBounces(maxBounces);
-            requestReset();
-        }
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 8)) {
-            renderer.setSamplesPerPixel(spp);
-            requestReset();
-        }
 
         ImGui::Separator();
         ImGui::Text("Material preset");
@@ -348,13 +326,6 @@ int main() {
     Vector3 lastCamTgt = controls.target;
 
     canvas.animate([&] {
-        // Deferred accumulation reset (resetAccumulation issues a
-        // vkDeviceWaitIdle and must not run inside render()).
-        if (pendingReset) {
-            renderer.resetAccumulation();
-            pendingReset = false;
-        }
-
         controls.update();
 
         // Camera motion resets the renderer's own accumulation; keep our frame

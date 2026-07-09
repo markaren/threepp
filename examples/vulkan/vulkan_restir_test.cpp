@@ -1,9 +1,8 @@
 // VulkanRenderer Showcase — "The Jewel Room" (port of wgpu_restir_test)
 // ─────────────────────────────────────────────────────────────────────────────
-// Demonstrates ReSTIR DI + ReSTIR GI on Vulkan, plus the renderer's other
-// material features:
+// Demonstrates ReSTIR DI on the deferred Vulkan renderer, plus the renderer's
+// other material features:
 //   • ReSTIR DI         — 16 ceiling lights + 4 animated orbital emissives
-//   • ReSTIR GI         — bounce-1 reservoir reuse on diffuse surfaces
 //   • Beer-Lambert glass — amber & emerald spheres cast colored light
 //   • Dispersion        — crystal ball shows prismatic colour separation
 //   • Clearcoat         — piano-black lacquer sphere
@@ -14,7 +13,6 @@
 //
 // Keyboard shortcuts:
 //   R  — toggle ReSTIR DI
-//   G  — toggle ReSTIR GI
 //   D  — toggle denoiser
 //   A  — toggle light animation
 
@@ -25,7 +23,7 @@
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/renderers/VulkanPathTracer.hpp"
+#include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/threepp.hpp"
 
 #include <array>
@@ -382,18 +380,17 @@ int main() {
     Canvas canvas("VulkanRenderer — The Jewel Room (ReSTIR test)",
                   {{"vsync", false}});
 
-    VulkanPathTracer renderer(canvas);
+    VulkanRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
 
-    // Default-on ReSTIR DI + GI so the demo opens showing the variance-reduction
-    // path. Both are independently toggleable at runtime (R / G hotkeys or the
-    // ImGui checkboxes). Denoiser on by default for the "polished" look; off
-    // gives the raw PT signal so the variance differences between DI/GI on/off
-    // are clearly visible without the atrous smoothing absorbing them.
+    // Default-on ReSTIR DI so the demo opens showing the variance-reduction
+    // path. It is toggleable at runtime (R hotkey or the ImGui checkbox).
+    // Denoiser on by default for the "polished" look; off gives the raw signal
+    // so the variance difference with DI on/off is clearly visible without the
+    // atrous smoothing absorbing it.
     renderer.setDenoise(true);
     renderer.setRestirDIEnabled(true);
-    renderer.setRestirGIEnabled(true);
     renderer.setFireflyClamp(20.0f);
 
     // ── Scene ──────────────────────────────────────────────────────────────────
@@ -429,11 +426,9 @@ int main() {
 
     // ── State ──────────────────────────────────────────────────────────────────
     bool restirDI = renderer.restirDIEnabled();
-    bool restirGI = renderer.restirGIEnabled();
     bool denoiserOn = renderer.denoise();
     bool animating = true;
     float exposure = renderer.toneMappingExposure;
-    int spp = renderer.samplesPerPixel();
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
     float orbitTime = 0.f;
@@ -442,10 +437,6 @@ int main() {
         if (ev.key == Key::R) {
             restirDI = !restirDI;
             renderer.setRestirDIEnabled(restirDI);
-        }
-        if (ev.key == Key::G) {
-            restirGI = !restirGI;
-            renderer.setRestirGIEnabled(restirGI);
         }
         if (ev.key == Key::D) {
             denoiserOn = !denoiserOn;
@@ -464,7 +455,7 @@ int main() {
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Separator();
 
-        ImGui::TextDisabled("[R] ReSTIR DI [G] ReSTIR GI");
+        ImGui::TextDisabled("[R] ReSTIR DI");
         ImGui::TextDisabled("[A] animate  [D] denoise");
         ImGui::Separator();
 
@@ -473,13 +464,9 @@ int main() {
 
         if (ImGui::Checkbox("ReSTIR DI (R)", &restirDI))
             renderer.setRestirDIEnabled(restirDI);
-        if (ImGui::Checkbox("ReSTIR GI (G)", &restirGI))
-            renderer.setRestirGIEnabled(restirGI);
         if (ImGui::Checkbox("Denoiser (D)", &denoiserOn))
             renderer.setDenoise(denoiserOn);
         ImGui::Checkbox("Animate (A)", &animating);
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
-            renderer.setSamplesPerPixel(spp);
 
         ImGui::Separator();
         ImGui::TextDisabled("Ring (L to R):");

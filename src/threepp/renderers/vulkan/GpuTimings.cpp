@@ -74,7 +74,6 @@ namespace threepp::vulkan {
         lastTimings_.gbufResolveMs = 0.f;
         lastTimings_.shadeBMs      = 0.f;
         lastTimings_.overlayMs     = 0.f;
-        lastTimings_.photonEmitMs  = 0.f;
         lastTimings_.pathTraceMs   = 0.f;
         lastTimings_.denoiseMs     = 0.f;
         lastTimings_.taaMs         = 0.f;
@@ -104,7 +103,6 @@ namespace threepp::vulkan {
         // Overlay timings collapse the depth prepass + draw pair into a
         // single "overlay" column for the public API.
         lastTimings_.overlayMs    = pairMs(TP_OverlayDepth) + pairMs(TP_OverlayDraw);
-        lastTimings_.photonEmitMs = pairMs(TP_PhotonEmit);
         lastTimings_.pathTraceMs  = pairMs(TP_PathTrace);
         lastTimings_.denoiseMs    = pairMs(TP_Denoise);
         lastTimings_.taaMs        = pairMs(TP_TAA);

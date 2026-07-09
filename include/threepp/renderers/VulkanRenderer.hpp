@@ -5,8 +5,8 @@
 // Shades a clean, analytic, noise-free base from the raster material G-buffer
 // (direct analytic lights + split-sum specular IBL + approximate diffuse IBL)
 // plus ray-queried ambient occlusion / global illumination — interactive and
-// noise-free, the default for synthetic-perception work. The reference path
-// tracer lives in its sibling VulkanPathTracer; both share VulkanRendererCore.
+// noise-free, the default for synthetic-perception work. Its shared
+// infrastructure lives in the VulkanRendererCore base.
 //
 // Co-exists with GLRenderer / WgpuRenderer; selected by the application when a
 // Canvas is created with GraphicsAPI::Vulkan.

@@ -3,7 +3,6 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
-#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/FogExp2.hpp"
 #include "threepp/threepp.hpp"
@@ -98,7 +97,6 @@ int main(int argc, char** argv) {
     float dofFocus = 0.f;  // --dof S: thin-lens DoF focused at S meters (f/2 aperture)
     int optOccl = -1;      // --occl 0|1: two-phase GPU occlusion culling
     int optTaaHdr = -1;    // --taa-hdr 0|1: setTaaHdrInput (deferred renderer only)
-    bool usePT = false;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -128,7 +126,6 @@ int main(int argc, char** argv) {
         else if (a == "--dof" && i + 1 < argc) dofFocus = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--occl" && i + 1 < argc) optOccl = std::atoi(argv[++i]);
         else if (a == "--taa-hdr" && i + 1 < argc) optTaaHdr = std::atoi(argv[++i]);
-        else if (a == "--pt") usePT = true;
     }
     if (!fs::exists(modelFolder) || !fs::is_directory(modelFolder)) {
         std::cerr << "Invalid folder path: " << fs::absolute(modelFolder) << std::endl;
@@ -143,25 +140,19 @@ int main(int argc, char** argv) {
     std::cout << "Found " << models.size() << " models. Use Left/Right (or P/N) to browse." << std::endl;
 
     Canvas canvas(Canvas::Parameters()
-                          .title("Vulkan PT - GLTF Samples")
+                          .title("Vulkan Deferred - GLTF Samples")
                           .vsync(false)
                           .size(winW > 0 ? winW : 960, winH > 0 ? winH : 600));
 
-    std::unique_ptr<VulkanRendererCore> rendererPtr =
-            usePT ? std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanPathTracer>(canvas))
-                  : std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanRenderer>(canvas));
-    VulkanRendererCore& renderer = *rendererPtr;
-    auto* pt = dynamic_cast<VulkanPathTracer*>(&renderer);
-    if (auto* vr = dynamic_cast<VulkanRenderer*>(&renderer)) {
-        if (optProbe >= 0) vr->setProbeGI(optProbe != 0);
-        if (optSsr >= 0) vr->setSsrReflections(optSsr != 0);
-        if (optSunExt >= 0) vr->setEnvSunExtraction(optSunExt != 0);
-        if (volFogCli) vr->setVolumetricFog(true);
-        if (mblurCli > 0.f) vr->setMotionBlur(mblurCli);
-        if (sunPolicy == "always") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Always);
-        else if (sunPolicy == "off") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Off);
-        else if (sunPolicy == "auto") vr->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Auto);
-    }
+    VulkanRenderer renderer(canvas);
+    if (optProbe >= 0) renderer.setProbeGI(optProbe != 0);
+    if (optSsr >= 0) renderer.setSsrReflections(optSsr != 0);
+    if (optSunExt >= 0) renderer.setEnvSunExtraction(optSunExt != 0);
+    if (volFogCli) renderer.setVolumetricFog(true);
+    if (mblurCli > 0.f) renderer.setMotionBlur(mblurCli);
+    if (sunPolicy == "always") renderer.setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Always);
+    else if (sunPolicy == "off") renderer.setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Off);
+    else if (sunPolicy == "auto") renderer.setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Auto);
     if (optSunRad >= 0.f) renderer.setSunAngularRadius(optSunRad);
     if (optOccl >= 0) renderer.setOcclusionCulling(optOccl != 0);
     if (optTaaHdr >= 0) renderer.setTaaHdrInput(optTaaHdr != 0);
@@ -292,7 +283,6 @@ int main(int argc, char** argv) {
     float exposure = renderer.toneMappingExposure;
     int toneMode = static_cast<int>(renderer.toneMapping);
     bool dirLight = sun->visible;
-    int spp = pt ? pt->samplesPerPixel() : 1;
     bool fogOn = fogOnCli;
     float fogDensity = fogOnCli ? fogDensityCli : 0.05f;
     float fogColor[3] = {0.55f, 0.6f, 0.7f};
@@ -303,19 +293,18 @@ int main(int argc, char** argv) {
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
         ImGui::SetNextWindowSize({300, 0});
-        ImGui::Begin("Vulkan PT - GLTF Samples");
+        ImGui::Begin("Vulkan Deferred - GLTF Samples");
         ImGui::Text("FPS: %.1f", fps);
 
         ImGui::Separator();
         ImGui::Text("Model: %s", currentModel >= 0 ? models[currentModel].name.c_str() : "none");
         if (loadedModel && loadedModel->isLoading()) ImGui::Text("Loading...");
         ImGui::Text("Left/Right arrows to browse");
-        ImGui::TextDisabled(pt ? "Mode: Path tracer (--pt)" : "Mode: Deferred (default)");
 
-        // Raster G-buffer debug views. "Albedo" exercises the new raster-first
+        // Raster G-buffer debug views. "Albedo" exercises the raster-first
         // material attachment (linear base colour in rgb, metalness in alpha).
         static int debugView = 0;
-        const char* dbgItems[] = {"Off (PT)", "Normal", "Motion", "InstanceID", "Albedo"};
+        const char* dbgItems[] = {"Off", "Normal", "Motion", "InstanceID", "Albedo"};
         if (ImGui::Combo("Debug view", &debugView, dbgItems, IM_ARRAYSIZE(dbgItems)))
             renderer.setHybridDebugView(debugView);
 
@@ -345,22 +334,9 @@ int main(int argc, char** argv) {
             renderer.setDenoise(denoise);
         }
 
-        if (pt) {
-            bool perSpp = pt->perSppJitterHybrid();
-            if (ImGui::Checkbox("Per-spp AA jitter", &perSpp))
-                pt->setPerSppJitterHybrid(perSpp);
-        }
-
         bool restirDI = renderer.restirDIEnabled();
         if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
             renderer.setRestirDIEnabled(restirDI);
-        }
-
-        if (pt) {
-            bool restirGI = pt->restirGIEnabled();
-            if (ImGui::Checkbox("ReSTIR GI", &restirGI)) {
-                pt->setRestirGIEnabled(restirGI);
-            }
         }
 
         if (ImGui::CollapsingHeader("Fog (FogExp2 + HG)")) {
@@ -372,9 +348,6 @@ int main(int argc, char** argv) {
                 ImGui::SliderFloat("Anisotropy g", &fogG, -0.9f, 0.9f, "%.2f");
             }
         }
-
-        if (pt && ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
-            pt->setSamplesPerPixel(spp);
 
         ImGui::End();
     });
@@ -476,10 +449,10 @@ int main(int argc, char** argv) {
         if (shotPath.empty()) {
             ui.render();
         } else if (modelReady && ++shotFrame >= shotFrames) {
-            if (auto* vr = dynamic_cast<VulkanRenderer*>(&renderer); vr && shotFrame == shotFrames) {
-                const auto d = vr->envSunDirection();
-                const auto c = vr->envSunColor();
-                std::cout << "envSunFound=" << vr->envSunFound()
+            if (shotFrame == shotFrames) {
+                const auto d = renderer.envSunDirection();
+                const auto c = renderer.envSunColor();
+                std::cout << "envSunFound=" << renderer.envSunFound()
                           << " dir=(" << d.x << "," << d.y << "," << d.z << ")"
                           << " colorE=(" << c.x << "," << c.y << "," << c.z << ")" << std::endl;
             }

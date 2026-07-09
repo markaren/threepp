@@ -1,8 +1,8 @@
-// Single source of truth for Vulkan path-tracer constants and MaterialDesc
-// layout. Included by VulkanRenderer.cpp (host) and by the path-tracer
-// shaders (closest_hit, closest_hit_alpha, photon_chit, etc.) via glslang's
+// Single source of truth for Vulkan renderer constants and the MaterialDesc
+// layout. Included by VulkanRenderer.cpp (host) and by the Vulkan shaders
+// (deferred_shade.comp, event_shade.comp, probe_update.comp, …) via glslang's
 // `#extension GL_GOOGLE_include_directive`. Cross-language: the C++ compiler
-// defines __cplusplus and sees the C++ branch; GLSL preprocessor doesn't,
+// defines __cplusplus and sees the C++ branch; the GLSL preprocessor doesn't,
 // so it sees the GLSL branch.
 //
 // Adding or removing a MaterialDesc field requires editing only this file —
@@ -16,23 +16,6 @@
 // `albedoMaps[kMaxMaterialTextures]` in every shader. Bumping requires a
 // clean rebuild so every translation unit picks up the new size.
 #define kMaxMaterialTextures 2048
-
-// Photon-map cell hash space. kPhotonGridSize cells × kPhotonsPerCell slots
-// each form the storage for caustic photon emit + gather.
-#define kPhotonGridBits  16
-#define kPhotonGridSize  (1u << kPhotonGridBits)
-#define kPhotonsPerCell  8u
-
-// Photon emit raygen dimensions: kPhotonEmitDim × kPhotonEmitDim paths/frame.
-// 256² = 65 536 photons/frame. Earlier 512² was 4× this — visibly diminishing
-// returns past ~64 K because per-cell capacity (kPhotonsPerCell = 8) saturates
-// quickly on hot caustic patches and overflow scaling absorbs the rest.
-#define kPhotonEmitDim   256
-
-// World-space grid cell size (metres) — same value used by photon_emit.rgen
-// when depositing and closest_hit.rchit when gathering. They must agree or
-// photons land in cells the gather can't find.
-#define kGatherRadius    0.15
 
 // TLAS instance visibility groups (VkAccelerationStructureInstanceKHR.mask).
 // Opaque + alpha-CUTOUT instances carry kRayMaskOpaque; alpha-BLEND and

@@ -1,4 +1,4 @@
-// Vulkan PT — fog (homogeneous participating media) showcase.
+// Vulkan deferred — fog (homogeneous participating media) showcase.
 // Cornell-style room with a SpotLight aimed across the camera so god rays
 // form prominently when fog is enabled. Mirrors examples/wgpu/wgpu_cornell_box.cpp's
 // fog UI surface (FogExp2 density + sRGB tint + Henyey-Greenstein anisotropy).
@@ -14,7 +14,6 @@
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/FogExp2.hpp"
 #include "threepp/threepp.hpp"
@@ -117,22 +116,16 @@ namespace {
 
 int main(int argc, char** argv) {
 
-    // Headless capture (dev): vulkan_fog --shot <name.png> [--frames N] [--pt]
+    // Headless capture (dev): vulkan_fog --shot <name.png> [--frames N]
     std::string shotPath;
     int shotFrames = 240, shotFrame = 0;
-    bool shotPT = false;
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (std::string(argv[i]) == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
-        else if (std::string(argv[i]) == "--pt") shotPT = true;
     }
 
-    Canvas canvas("Vulkan PT - Fog", {{"vsync", false}});
-    std::unique_ptr<VulkanRendererCore> rendererPtr =
-            shotPT ? std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanPathTracer>(canvas))
-                   : std::unique_ptr<VulkanRendererCore>(std::make_unique<VulkanRenderer>(canvas));
-    VulkanRendererCore& renderer = *rendererPtr;
-    auto* pt = dynamic_cast<VulkanPathTracer*>(&renderer);
+    Canvas canvas("Vulkan Deferred - Fog", {{"vsync", false}});
+    VulkanRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 0.9f;
 
@@ -170,14 +163,13 @@ int main(int argc, char** argv) {
     float fogDensity = 0.08f;
     float fogColor[3] = {0.55f, 0.55f, 0.62f};
     float fogG = 0.6f;// HG anisotropy: forward-scattering god rays by default
-    int spp = pt ? pt->samplesPerPixel() : 1;
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
         ImGui::SetNextWindowSize({320, 0});
-        ImGui::Begin("Vulkan PT - Fog");
+        ImGui::Begin("Vulkan Deferred - Fog");
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Separator();
 
@@ -192,10 +184,6 @@ int main(int argc, char** argv) {
             ImGui::ColorEdit3("Color", fogColor);
             ImGui::SliderFloat("Anisotropy g", &fogG, -0.9f, 0.9f, "%.2f");
         }
-
-        ImGui::Separator();
-        if (pt && ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
-            pt->setSamplesPerPixel(spp);
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");

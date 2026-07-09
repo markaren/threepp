@@ -1,21 +1,12 @@
-// Shared base for the two Vulkan renderers.
+// Shared base for the Vulkan renderer.
 //
-// threepp ships two Vulkan rendering strategies that share almost all of their
-// infrastructure — device/swapchain context, acceleration structures, scene
-// build + visibility, material/geometry buffers, the raster G-buffer prepass,
-// and the bloom / TAA / overlay post-stack. They differ only in how the scene
-// is shaded:
-//
-//   VulkanRenderer    — deferred: a clean analytic G-buffer shade (direct
-//                       lights + IBL) plus ray-queried AO/GI. Noise-free,
-//                       interactive; the default for synthetic-perception work.
-//   VulkanPathTracer  — the reference path tracer: photon caustics + RT
-//                       megakernel + à-trous denoiser + ReSTIR DI/GI. The
-//                       ground-truth / photorealism path.
-//
-// This base owns (through the derived leaf's pImpl) all the shared machinery and
-// implements the shared public API once. The mode-specific shade is injected
-// through the virtual recordSceneDispatch hook (see VulkanRenderer.cpp).
+// Owns (through the derived leaf's pImpl) all of the Vulkan infrastructure —
+// device/swapchain context, acceleration structures, scene build + visibility,
+// material/geometry buffers, the raster G-buffer prepass, and the bloom / TAA /
+// overlay post-stack — and implements the shared public API once. The concrete
+// leaf, VulkanRenderer, injects its deferred G-buffer shade through the virtual
+// recordSceneDispatch hook (see VulkanRenderer.cpp). Kept as a separate base so
+// the shared machinery is reusable should another shading strategy be added.
 
 #ifndef THREEPP_VULKANRENDERERCORE_HPP
 #define THREEPP_VULKANRENDERERCORE_HPP
@@ -182,8 +173,8 @@ namespace threepp {
         void setRenderScale(float scale);
         [[nodiscard]] float renderScale() const;
 
-        // Denoiser toggle for the active renderer — PT à-trous or deferred SVGF.
-        // Default on.
+        // Deferred SVGF denoiser toggle (the ray-queried AO/GI + shadow
+        // channels). Default on.
         void setDenoise(bool enabled);
         [[nodiscard]] bool denoise() const;
 
@@ -191,8 +182,8 @@ namespace threepp {
         void setDeferredDenoise(bool enabled);
         [[nodiscard]] bool deferredDenoise() const;
 
-        // Per-NEE-sample firefly clamp used by both the deferred highlight suppress
-        // and the PT megakernel. Default 30.0; 0 disables (1e30 sentinel).
+        // Per-NEE-sample firefly clamp used by the deferred highlight suppress.
+        // Default 30.0; 0 disables (1e30 sentinel).
         void setFireflyClamp(float cap);
         [[nodiscard]] float fireflyClamp() const;
 
@@ -201,19 +192,18 @@ namespace threepp {
         // this cone, so thin occluders (slats, railings, foliage) cast a narrow
         // stable penumbra instead of a per-frame hard-shadow coin flip that TAA
         // cannot converge. The real sun subtends ~0.27°; default 0.5. 0 restores
-        // the exact hard 1-ray shadow. No effect on the path tracer.
+        // the exact hard 1-ray shadow.
         void setSunAngularRadius(float degrees);
         [[nodiscard]] float sunAngularRadius() const;
 
         // ReSTIR DI master toggle (streaming RIS + temporal + spatial reuse at
-        // primary surfaces). Active in the PT megakernel and as a deferred NEE
-        // optimization. Off (default) falls back to per-light NEE.
+        // primary surfaces) for the deferred shade's next-event estimation. Off
+        // (default) falls back to per-light NEE.
         void setRestirDIEnabled(bool enabled);
         [[nodiscard]] bool restirDIEnabled() const;
 
-        // Normal-map vMF/Toksvig specular AA (deferred G-buffer raster path
-        // only; the path tracer's closest_hit.rchit is unaffected). Recovers
-        // the normal-map minification variance already baked into a filtered
+        // Normal-map vMF/Toksvig specular AA (deferred G-buffer raster path).
+        // Recovers the normal-map minification variance already baked into a filtered
         // (mip/trilinear) tap's shortened vector length and folds it into the
         // G-buffer roughness BEFORE the geometric spec-AA pass reads it, so
         // a high-frequency normal map shading a rough dielectric doesn't
@@ -390,11 +380,10 @@ namespace threepp {
 
         // Per-frame timings (milliseconds). See FrameTimings.
         struct FrameTimings {
-            float photonEmitMs   = 0.f;// caustic photon trace (when visible)
-            float pathTraceMs    = 0.f;// main RT megakernel / deferred shade
-            float denoiseMs      = 0.f;// à-trous passes + finalize tonemap
-            float taaMs          = 0.f;// hybrid TAA resolve compute
-            float rasterGbufMs   = 0.f;// hybrid G-buffer prepass
+            float pathTraceMs    = 0.f;// deferred shade compute
+            float denoiseMs      = 0.f;// deferred SVGF denoise passes
+            float taaMs          = 0.f;// TAA resolve compute
+            float rasterGbufMs   = 0.f;// raster G-buffer prepass
             float gbufResolveMs  = 0.f;// MSAA dominant-sample resolve (0 unless setGbufferMsaa > 1)
             float shadeBMs       = 0.f;// MSAA dispatch B: per-sample edge shading (0 unless setGbufferMsaa > 1)
             float overlayMs      = 0.f;// hybrid overlay depth + draw
