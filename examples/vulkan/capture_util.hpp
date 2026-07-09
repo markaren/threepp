@@ -73,10 +73,10 @@ namespace capture {
     inline std::string frameTimingsJson(const threepp::VulkanRenderer::FrameTimings& t) {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
-            "{\"photonEmitMs\":%.3f,\"pathTraceMs\":%.3f,\"denoiseMs\":%.3f,"
+            "{\"pathTraceMs\":%.3f,\"denoiseMs\":%.3f,"
             "\"taaMs\":%.3f,\"rasterGbufMs\":%.3f,\"overlayMs\":%.3f,"
             "\"cpuEnsureSceneMs\":%.3f,\"cpuRecordMs\":%.3f,\"cpuFrameMs\":%.3f}",
-            t.photonEmitMs, t.pathTraceMs, t.denoiseMs, t.taaMs, t.rasterGbufMs,
+            t.pathTraceMs, t.denoiseMs, t.taaMs, t.rasterGbufMs,
             t.overlayMs, t.cpuEnsureSceneMs, t.cpuRecordMs, t.cpuFrameMs);
         return std::string(buf);
     }

@@ -1,4 +1,4 @@
-﻿// Private implementation header — shared by VulkanRenderer.cpp and VulkanPathTracer.cpp.
+﻿// Private implementation header — the shared CoreImpl for VulkanRenderer.cpp.
 // Never include from public API headers.
 // VMA_IMPLEMENTATION must be #defined in VulkanRenderer.cpp BEFORE including this file.
 #pragma once
@@ -1096,23 +1096,6 @@ namespace threepp {
         std::array<VkDeviceSize, kFramesInFlight> emissiveTriBufferCapacity{};
         uint32_t emissiveTriCountThisFrame_ = 0;
         float    emissiveTotalPowerThisFrame_ = 0.0f;
-        // True if any material in the current scene has transmission > 0
-        // (glass / transmissive detection). Set during the materialDescs build.
-        bool     sceneHasGlass_ = false;
-        // Scene-feature presence flags, detected once per matDescs rebuild.
-        bool     sceneHasClearcoat_ = false;
-        bool     sceneHasIridescence_ = false;
-        bool     sceneHasSheen_ = false;
-        // Per-frame frustum-cull result: any glass-flagged entry visible?
-        // Resolved by cullEntriesAgainstFrustum() as a side effect of the
-        // pass that tags every entry's MeshEntry::inFrustum.
-        bool     glassVisibleThisFrame_ = false;
-        // Ascending indices into lastVisibleEntries_ for transmissive-material
-        // entries. Maintained alongside materialDescs builds (full rebuild +
-        // the materialValuesSame=false hot path); a matrix-only frame keeps the
-        // existing list valid since glass identity is per-entry, not per-xfm.
-        // Used by cullEntriesAgainstFrustum to resolve glassVisibleThisFrame_.
-        std::vector<size_t> glassEntryIndices_;
         // Per-NEE firefly clamp; pushed to shaders as float bits in slot [11].
         // 1e30f sentinel disables the clamp (set via setFireflyClamp(0)).
         float    fireflyClamp_ = 30.f;
@@ -4758,8 +4741,6 @@ namespace threepp {
         // command-processor time regardless of whether anything actually
         // rasterizes — at 1500-mesh scenes that's ~22 ms eaten by draws
         // whose vertex shader transforms all land outside the clip cube.
-        // The PT path is untouched: TLAS culling handles visibility
-        // implicitly on the ray-traced side.
         //
         // Deformable entries (skinned / displaced / morphed) keep
         // inFrustum=true unconditionally — their local AABB is the rest-
@@ -4768,12 +4749,7 @@ namespace threepp {
         // tight bound every frame on the CPU isn't worth the cost; the
         // GPU pays a small constant for these. Overlay entries also stay
         // on (debug viz should always render).
-        //
-        // Side effect: also resolves glassVisibleThisFrame_ from the same
-        // walk. The flag is true iff at least one transmissive entry passed
-        // the cull.
         void cullEntriesAgainstFrustum(Camera& camera) {
-            glassVisibleThisFrame_ = false;
             if (lastVisibleEntries_.empty()) return;
             // Combine projection * matrixWorldInverse to extract the world-
             // space frustum (Three.js convention; Camera::updateMatrixWorld
@@ -4782,13 +4758,7 @@ namespace threepp {
             vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
             Frustum frustum;
             frustum.setFromProjectionMatrix(vp);
-            // Pre-compute a sparse "is glass" lookup. glassEntryIndices_ is
-            // already sorted ascending (built by walking entries in order),
-            // so we can iterate it in lockstep with i.
-            size_t gi = 0;
-            const size_t gN = glassEntryIndices_.size();
-            for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
-                auto& en = lastVisibleEntries_[i];
+            for (auto& en : lastVisibleEntries_) {
                 // Default-include conservative cases — they always draw. Deformers
                 // (skinned/displaced/morphed/tet) are here because their cached local
                 // AABB doesn't reflect the per-frame deformed extents, so frustum-
@@ -4805,12 +4775,6 @@ namespace threepp {
                     std::memcpy(w.elements.data(), en.worldMatrix.data(), 64);
                     worldAabb.applyMatrix4(w);
                     en.inFrustum = frustum.intersectsBox(worldAabb);
-                }
-                // Advance the glass-index cursor in lockstep; if this entry
-                // is glass AND in-frustum, light the global flag.
-                while (gi < gN && glassEntryIndices_[gi] < i) ++gi;
-                if (gi < gN && glassEntryIndices_[gi] == i && en.inFrustum) {
-                    glassVisibleThisFrame_ = true;
                 }
             }
         }
@@ -6031,30 +5995,6 @@ namespace threepp {
                             matDescsCached_[i] = md;
                         }
                         for (auto& d : matDescsDirty_) d = true;
-                        sceneHasGlass_ = false;
-                        sceneHasClearcoat_ = false;
-                        sceneHasIridescence_ = false;
-                        sceneHasSheen_ = false;
-                        glassEntryIndices_.clear();
-                        // matDescsCached_ is ENTRIES-indexed (overlay slots left
-                        // default), so index it directly by i. glassEntryIndices_
-                        // stays entry-index based (cullEntriesAgainstFrustum walks
-                        // it in lockstep with i).
-                        for (size_t i = 0; i < entries.size(); ++i) {
-                            if (entries[i].isOverlay) continue;
-                            const auto& md = matDescsCached_[i];
-                            if (md.transmission > 0.0f) {
-                                sceneHasGlass_ = true;
-                                glassEntryIndices_.push_back(i);
-                            }
-                            if (md.clearcoat > 0.0f) sceneHasClearcoat_ = true;
-                            if (md.iridescence > 0.0f) sceneHasIridescence_ = true;
-                            if (md.sheenRoughness > 0.0f &&
-                                (md.sheenColor[0] > 0.0f || md.sheenColor[1] > 0.0f ||
-                                 md.sheenColor[2] > 0.0f)) {
-                                sceneHasSheen_ = true;
-                            }
-                        }
                         cacheCullFlags(matDescsCached_);
                     }
                     // Update prevSceneFingerprint so later frames compare
@@ -6493,29 +6433,6 @@ namespace threepp {
             }
             matDescsCached_ = matDescs;
             for (auto& d : matDescsDirty_) d = false;
-            sceneHasGlass_ = false;
-            sceneHasClearcoat_ = false;
-            sceneHasIridescence_ = false;
-            sceneHasSheen_ = false;
-            glassEntryIndices_.clear();
-            // matDescs is now ENTRIES-indexed, so index it directly by i (was a
-            // separate filtered counter mi). glassEntryIndices_ stays entry-index
-            // based — cullEntriesAgainstFrustum walks it in lockstep with i.
-            for (size_t i = 0; i < entries.size(); ++i) {
-                if (entries[i].isOverlay) continue;
-                const auto& md = matDescs[i];
-                if (md.transmission > 0.0f) {
-                    sceneHasGlass_ = true;
-                    glassEntryIndices_.push_back(i);
-                }
-                if (md.clearcoat > 0.0f) sceneHasClearcoat_ = true;
-                if (md.iridescence > 0.0f) sceneHasIridescence_ = true;
-                if (md.sheenRoughness > 0.0f &&
-                    (md.sheenColor[0] > 0.0f || md.sheenColor[1] > 0.0f ||
-                     md.sheenColor[2] > 0.0f)) {
-                    sceneHasSheen_ = true;
-                }
-            }
             cacheCullFlags(matDescs);
 
             // Topology rebuild: the prev gbuf holds mesh IDs keyed by
@@ -7698,11 +7615,7 @@ namespace threepp {
                                 : VK_CULL_MODE_BACK_BIT;
                 // Blend decals (alphaCutoff == -2 sentinel from materialFromMesh)
                 // go to bucket [3]: drawn last, with the albedo-blend pipeline.
-                // Deferred (VulkanRenderer) only — its shade reads the blended albedo
-                // attachment. VulkanPathTracer's hybrid raygen re-samples material
-                // textures via the ids/UV attachments (which the decal pipeline
-                // write-masks), so there decals stay on the stochastic
-                // screen-door path that the PT accumulator converges.
+                // The deferred shade reads the blended albedo attachment.
                 const bool isDecal = decalsEnabled() &&
                                      (i < matDescsCached_.size()) &&
                                      (matDescsCached_[i].alphaCutoff == -2.0f);
@@ -7728,8 +7641,8 @@ namespace threepp {
                 di.indexAddr   = indexed ? rec->index.address : 0ull;
                 // Per-vertex color: only when the material opts in (vertexColors)
                 // and the geometry uploaded a color buffer — matches the
-                // GeometryDesc::colorAddress gate so VulkanRenderer and VulkanPathTracer
-                // agree. gbuffer.frag multiplies albedo by the interpolated value.
+                // GeometryDesc::colorAddress gate. gbuffer.frag multiplies albedo
+                // by the interpolated value.
                 {
                     const auto dmat = en.mesh->material();
                     di.colorAddr = (rec->color.handle != VK_NULL_HANDLE && dmat && dmat->vertexColors)
@@ -9416,10 +9329,9 @@ namespace threepp {
             deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
             deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                                     VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-            // Consumed by raygen (VulkanPathTracer) AND the deferred shade compute
-            // pass (VulkanRenderer) — make the attachments visible to both stages.
-            deps[1].dstStageMask  = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
-                                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+            // Consumed by the deferred shade compute pass — make the
+            // attachments visible to that stage.
+            deps[1].dstStageMask  = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
             deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
             deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -10183,8 +10095,7 @@ namespace threepp {
 
             // DECAL_PASS=1 specialization flips gbuffer.frag from the stochastic
             // screen-door to "emit texture alpha as the blend factor". The
-            // regular pipelines keep DECAL_PASS=0, so in VulkanPathTracer (where
-            // decals draw with the regular pipeline) they stay on the screen-door.
+            // regular pipelines keep DECAL_PASS=0.
             const uint32_t kDecalPassOn = 1u;
             VkSpecializationMapEntry decalSpecEntry{0, 0, sizeof(uint32_t)};
             VkSpecializationInfo decalSpecInfo{1, &decalSpecEntry, sizeof(uint32_t), &kDecalPassOn};
@@ -12810,17 +12721,15 @@ namespace threepp {
 
         [[nodiscard]] uint32_t gbufferMsaa() const { return gbufMsaaSamples_; }
 
-        // Mode-specific scene shade. Called from recordCommandBuffer between the
-        // shared G-buffer/AS head and the shared bloom/TAA tail. Each leaf
-        // overrides this once: VulkanRenderer::Impl dispatches the analytic
-        // deferred shade; VulkanPathTracer::Impl dispatches the reference PT.
+        // Scene shade hook. Called from recordCommandBuffer between the shared
+        // G-buffer/AS head and the shared bloom/TAA tail. VulkanRenderer::Impl
+        // overrides it to dispatch the analytic deferred shade.
         virtual void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
                                          VkExtent2D ext, VkExtent2D ptExt,
                                          uint32_t exposureBits) = 0;
 
         // True when decal meshes (layer-tagged as decals) should be drawn
-        // into the raster G-buffer. Deferred renders decals; the PT leaf skips
-        // them (the megakernel doesn't consume the G-buffer decal attachment).
+        // into the raster G-buffer. The deferred renderer renders decals.
         virtual bool decalsEnabled() const = 0;
 
         // HDRI sun extraction (deferred only). When true,
@@ -14926,8 +14835,7 @@ namespace threepp {
             // slot now (the other slot flushes when its frame comes around).
             flushMaterialDescsIfDirty(currentFrame);
             // Per-frame frustum cull: tags every entry with `inFrustum`
-            // for the raster passes to consume, and resolves
-            // glassVisibleThisFrame_ as a side effect.
+            // for the raster passes to consume.
             cullEntriesAgainstFrustum(camera);
             // Hybrid raster prepass: lazy-create resources on first use,
             // refresh attachments on resize, then upload the per-frame

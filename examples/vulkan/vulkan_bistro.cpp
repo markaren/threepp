@@ -172,12 +172,11 @@ int main(int argc, char** argv) {
         // if (++frames >= 60) {
         //     std::cout << std::fixed << std::setprecision(2)
         //               << "frame " << t.cpuFrameMs << " ms"
-        //               << " | PT " << t.pathTraceMs
+        //               << " | shade " << t.pathTraceMs
         //               << " | denoise " << t.denoiseMs
         //               << " | TAA " << t.taaMs
         //               << " | gbuf " << t.rasterGbufMs
         //               << " | overlay " << t.overlayMs
-        //               << " | photon " << t.photonEmitMs
         //               << " | cpu(scene " << t.cpuEnsureSceneMs
         //               << ", record " << t.cpuRecordMs << ")"
         //               << '\n';

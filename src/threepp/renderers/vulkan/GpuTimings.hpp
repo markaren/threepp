@@ -24,19 +24,18 @@ namespace threepp::vulkan {
 
     // One slot per bracketed GPU pass. timingMask records which passes wrote
     // both endpoints so readBack() can skip pools that weren't touched this
-    // frame (photon emit on no-glass frames, overlay on no-overlay frames, …).
+    // frame (overlay on no-overlay frames, DoF when disabled, …).
     enum TimingPass : uint32_t {
         TP_RasterGbuf   = 0,
         TP_OverlayDepth = 1,
-        TP_PhotonEmit   = 2,
-        TP_PathTrace    = 3,
-        TP_Denoise      = 4,
-        TP_TAA          = 5,
-        TP_OverlayDraw  = 6,
-        TP_GbufResolve  = 7,// MSAA dominant-sample resolve (setGbufferMsaa > 1 only)
-        TP_ShadeB       = 8,// MSAA dispatch B: per-sample edge shading (setGbufferMsaa > 1 only)
-        TP_Dof          = 9,// thin-lens depth of field (setDepthOfField only)
-        TP_COUNT        = 10,
+        TP_PathTrace    = 2,
+        TP_Denoise      = 3,
+        TP_TAA          = 4,
+        TP_OverlayDraw  = 5,
+        TP_GbufResolve  = 6,// MSAA dominant-sample resolve (setGbufferMsaa > 1 only)
+        TP_ShadeB       = 7,// MSAA dispatch B: per-sample edge shading (setGbufferMsaa > 1 only)
+        TP_Dof          = 8,// thin-lens depth of field (setDepthOfField only)
+        TP_COUNT        = 9,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

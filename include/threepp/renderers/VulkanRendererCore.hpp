@@ -380,7 +380,6 @@ namespace threepp {
 
         // Per-frame timings (milliseconds). See FrameTimings.
         struct FrameTimings {
-            float photonEmitMs   = 0.f;// legacy field, always 0 (path tracer removed)
             float pathTraceMs    = 0.f;// deferred shade compute
             float denoiseMs      = 0.f;// deferred SVGF denoise passes
             float taaMs          = 0.f;// TAA resolve compute
