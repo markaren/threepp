@@ -2,8 +2,7 @@
 
 // Debug-view resolve for VulkanRenderer::setHybridDebugView(). Samples one
 // channel of the hybrid raster G-buffer and writes a human-readable RGB
-// visualization straight to the swapchain, bypassing the path tracer /
-// deferred shade.
+// visualization straight to the swapchain, bypassing deferred shade.
 //
 // Replaces the old raw vkCmdBlitImage debug path, which could only show the
 // world-normal attachment correctly:

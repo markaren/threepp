@@ -6,8 +6,8 @@
 //
 // The vertex color (HSL→RGB) and the texture are LINEAR (an sRGB-tagged texture
 // is hardware-decoded to linear on sample). The swapchain is B8G8R8A8_UNORM with
-// no hardware sRGB write-out and the path-traced image is sRGB-encoded by
-// denoise.comp, so we apply the same linear→sRGB OETF here. Without it particles
+// no hardware sRGB write-out and the rendered image is sRGB-encoded by
+// post_composite.comp, so we apply the same linear→sRGB OETF here. Without it particles
 // composite darker/more-saturated than the rest of the frame. Blending (alpha vs
 // additive) is set by the pipeline variant, not here. Untextured particle systems
 // bind a 1×1 white default so the sampler is always valid.

@@ -90,8 +90,8 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
 }
 
 // Exact diffuse irradiance from a quad area light — Lambert's polygon form factor (the
-// identity-transform case of LTC). Smooth + correct (no closest-point hotspots; matches
-// the PT's soft area-light falloff), closed-form (no LUT). Returns the Lambertian factor
+// identity-transform case of LTC). Smooth + correct (no closest-point hotspots; a
+// physically-exact soft area-light falloff), closed-form (no LUT). Returns the Lambertian factor
 // Φ so that diffuse_out = diffuseColor · Φ · lightRadiance. Corners c0..c3 in winding
 // order; max(.,0) clamps the back/under-horizon result.
 float rectFormFactor(vec3 N, vec3 P, vec3 c0, vec3 c1, vec3 c2, vec3 c3) {
@@ -284,7 +284,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         const vec3  vN   = rl.halfV / vLen;
         const float area = 4.0 * uLen * vLen;
 
-        // DIFFUSE — exact polygon form factor (smooth, matches the PT; no hotspots),
+        // DIFFUSE — exact polygon form factor (smooth, physically exact; no hotspots),
         // gated by a SOFT shadow: average visibility over a jittered 4×4 grid of points
         // on the rect (one shadow ray each) → a real penumbra instead of the hard single-
         // ray shaft (the window-frame occlusion was projecting sharp light cones). The

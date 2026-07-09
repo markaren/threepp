@@ -40,15 +40,15 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // the path with medium tracking across the bounce; a single inline ray can't.)
     vec3 tint = vec3(1.0);
     if (pm.attenuationDistance > 0.0)
-        // 2× the crossing depth → matches the PT's down+up Beer-Lambert (2 crossings
+        // 2× the crossing depth → an approximate down+up Beer-Lambert (2 crossings
         // over a dark seabed). The deeper absorption darkens it AND shifts it bluer
         // (red absorbs first), turning the old washed grey into rich deep-ocean blue.
         tint = pow(max(pm.attenuationColor, vec3(1e-6)), vec3(2.0 * pm.thickness / pm.attenuationDistance));
     // Lit by the sky's BRIGHTNESS (scalar luminance), NOT the coloured env — the
     // coloured sky washed the absorption hue to a dull grey. Scalar skylight keeps
     // the deep blue SATURATED. A view-depth term deepens it looking straight down
-    // (longer water column) → the foreground-deep / horizon-bright gradient the PT
-    // shows. Dimmed (×0.45) because the deep body sits over a near-black seabed.
+    // (longer water column) → a foreground-deep / horizon-bright gradient.
+    // Dimmed (×0.45) because the deep body sits over a near-black seabed.
     //
     // BOTH terms keyed on SMOOTH per-view quantities, NOT the chop-perturbed N:
     // skyLum at the fixed zenith, depthFade on the view ELEVATION (V.y). Keying
@@ -68,7 +68,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // (only reflect+transmit), so the deferred water was flat/dull; the env
     // reflection alone misses it (the scene's directional sun isn't baked into the
     // HDRI). The clearcoat layer (pm.clearcoat) adds a 2nd tighter lobe. This is the
-    // bulk of the dull→epic difference; the PT gets it from its analytic light NEE.
+    // bulk of the dull→epic difference, added here via analytic light NEE.
     {
         const float specRough = max(pm.roughness, 0.03);
         const float kG        = (specRough + 1.0) * (specRough + 1.0) / 8.0;
@@ -302,8 +302,8 @@ void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, ino
 // • reflect  = ray-traced sky + scene (mirror; the surface is near-smooth),
 // • transmit = enter the front face → trace through to the back face → refract
 //   out → continue to the SCENE BEHIND, all distortion-correct, then tint by the
-//   glass colour + Beer-Lambert over the in-glass path length. This mirrors
-//   closest_hit's closed-glass intent (ior>1.01 → tint = albedo) but in 2 bounces
+//   glass colour + Beer-Lambert over the in-glass path length (ior>1.01 → tint =
+//   albedo) but in 2 bounces
 //   rather than full path continuation, so deep multi-bounce caustics inside
 //   concave glass are approximated (fine for spheres; goblet stems lose a little).
 // Tunable middleground "finish" for glass: a gentle frost FLOOR so glass is
@@ -312,12 +312,12 @@ void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, ino
 // softer/dreamier glass, drop to 0 for a perfect lens; raise GSAMP if the soft
 // shows residual grain on moving glass (costs proportionally).
 const float kGlassFrost = 0.04;// near-sharp glass: a wide frost lobe scatters the HDR sun into static speckle
-const float kGlassMaxRough = 0.14;// PT parity: the path tracer clamps the primary refraction lobe to
+const float kGlassMaxRough = 0.14;// Clamps the primary refraction lobe to
                               // alpha 0.02 (≈ roughness 0.14) because a wide refraction lobe is
                               // per-pixel variance no denoiser can fix. Deferred used the raw material
                               // roughness here, so asset glass with a mid-grey roughness map (e.g. the
                               // OpenChessSet pawn domes) blurred into a milky ball — structureless,
-                              // duller than the PT reference. Same trade as the PT: frosted glass
+                              // duller than intended. The trade: frosted glass
                               // renders polished at primary, but it stays GLASS.
 const int   kGlassSamples = 1;// ONE sharp Fresnel reflect+refract sample → NO discrete-microfacet ghost
                               // copies. The frost (roughness blur) is applied afterwards by the reflection
@@ -334,7 +334,7 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
     const float ior     = max(pm.ior, 1.0);
     const float r0      = pow((1.0 - ior) / (1.0 + ior), 2.0);
     // Microfacet roughness: the material's, floored to kGlassFrost and capped at
-    // kGlassMaxRough (PT parity — see the const). The slight softening is the
+    // kGlassMaxRough (see the const). The slight softening is the
     // "less perfect" the user wanted AND it lets the multi-bounce surface
     // REFLECTIONS read through the refraction (a perfectly clear lens hides
     // them — "no recursive reflections"). The reflection itself is the
@@ -421,7 +421,7 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
                 // Blend content composited inside the volume layers over the
                 // (remaining) behind term; the glass tint applies to both —
                 // an embedded symbol is seen through the front surface, so it
-                // picks up the glass colour like the PT reference shows.
+                // should physically pick up the glass colour.
                 transmitColor = (overC + overT * behind) * tint;
             }
         }

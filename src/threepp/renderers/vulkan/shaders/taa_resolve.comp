@@ -9,7 +9,7 @@
 //   binding 8: sceneHdrTex        — HDR-MODE ONLY: linear-HDR scene (RENDER extent)
 //   binding 9: bloomTex           — HDR-MODE ONLY: bloom pyramid level 0 (half RENDER extent)
 //
-// When the path tracer renders below the swapchain resolution
+// When the renderer renders below the swapchain resolution
 // (renderScale < 1) the input + gbuffer are at the render extent while
 // the history + output are at the swapchain extent: the pass becomes a
 // temporal upsampler — each frame's jittered low-res sample is folded
@@ -84,7 +84,7 @@ layout(push_constant) uniform Pc {
     float blendAlpha;// base new-sample weight (0.1 = strong AA, slow ghost decay)
     uint  width;     // PANE (scissor region) output size — dispatch + writes
     uint  height;
-    uint  inWidth;   // PANE (scissor region) input size (path-trace render extent)
+    uint  inWidth;   // PANE (scissor region) input size (renderScale render extent)
     uint  inHeight;
     // bit 0 = writeSwap (1 = write the swapchain here; 0 = a downstream RCAS
     //         sharpen pass, or in HDR mode PostComposite, owns the next read
@@ -198,8 +198,6 @@ vec3 sampleHistoryCR(vec2 uv) {
 // Spatial FXAA (FXAA3 "console" variant) on the LDR input. This is the deferred
 // path's anti-aliasing now that camera jitter is off (jitter+TAA flickered). It
 // edge-detects via luma and blends along the edge — stable, no temporal shimmer.
-// On the already-temporally-AA'd PT path it's a near-no-op: smooth edges fall
-// under the contrast threshold and pass through unchanged.
 vec3 fxaa(sampler2D tex, vec2 uv, vec2 rcpFrame) {
     const vec3 L = vec3(0.299, 0.587, 0.114);
     const vec3 rgbM = texture(tex, uv).rgb;

@@ -5,14 +5,14 @@
 
 // ───────────────────────────────────────────────────────────────────────────
 // ReSTIR DI (deferred) — emissive area-light direct lighting.
-// Ported from the PT's closest_hit.rchit ReSTIR DI. The coherent emissiveNEE
+// The coherent emissiveNEE
 // above is noise-free but BIASED (a fixed sample set lights some emitter faces
 // more than others); per-pixel dithering it just trades the bias for noise that
 // EXPLODES with light count (Bistro = 1000s of emissive tris → un-denoisable).
 // ReSTIR resolves both: importance-RESAMPLE M emissive candidates into ONE
 // reservoir (weighted by unshadowed contribution), cast ONE shadow ray, and
-// (Stage B) reuse the reservoir across frames so it converges to smooth — what
-// the PT does. Stage A here = init RIS + visibility, NO temporal/spatial reuse
+// (Stage B) reuse the reservoir across frames so it converges to smooth.
+// Stage A here = init RIS + visibility, NO temporal/spatial reuse
 // yet → 1 shadow ray (vs emissiveNEE's 16 = faster) but still single-sample
 // noisy until Stage B adds the reservoir ping-pong. lightType ≥ 1000 ⇒ emissive
 // triangle (analytic dir/point/spot keep their own noise-free analytic loops).
@@ -126,7 +126,7 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     // surface (prev-normal match), read LAST frame's reservoir, re-evaluate ITS
     // target p_hat at THIS pixel (the point of ReSTIR reuse), and merge. The single
     // per-frame sample thus accumulates into an effective many-sample estimate that
-    // converges to SMOOTH — the deferred equivalent of the PT's temporal accumulation.
+    // converges to SMOOTH via this temporal accumulation.
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     {
         const vec2 uv   = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
@@ -162,8 +162,8 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
         }
     }
     // ── Snapshot the PRE-SPATIAL reservoir ── this (NOT the post-spatial r) is what
-    // gets persisted for next frame's temporal merge, matching the PT (closest_hit
-    // Stage 1c) + WGPU. Persisting the post-spatial reservoir would feed spatial
+    // gets persisted for next frame's temporal merge. Persisting the post-spatial
+    // reservoir would feed spatial
     // contributions — which don't generalise across reprojection — back into the
     // temporal M, biasing the weights and producing visible temporal instability.
     Reservoir rPreSpatial = r;
@@ -173,7 +173,7 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     float persistW = rPreSpatial.W;
     if (pc.fireflyClamp < 1e20) persistW = min(persistW, 5.0);
 
-    // ── Stage 1c: spatial reuse ── (ported from closest_hit.rchit:1458)
+    // ── Stage 1c: spatial reuse ──
     // Tap a few random neighbours from the PREV-frame reservoir buffer (bindings
     // 28/30), validate each against THIS pixel's surface (prev-normal cone + world
     // distance — the same prev gbuffer the temporal stage validates against), and
@@ -183,7 +183,7 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     // with little/no history (the frame-after-disocclusion noise the temporal-only
     // path couldn't fix). M-cap 4/neighbour; spMax 5 static / 2 in motion (fewer
     // stale taps under motion). Reads prev-frame neighbours so there's no second
-    // dispatch / barrier — exactly like the PT + WGPU.
+    // dispatch / barrier.
     {
         const vec2  size   = vec2(float(pc.width), float(pc.height));
         const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
@@ -195,7 +195,7 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
         for (uint sp = 0u; sp < spMax; ++sp) {
             if (r.M >= mTarget) break;
             const float ang = rnd(seed) * TWO_PI;
-            const float rad = sqrt(rnd(seed)) * 20.0;// 20px tap radius (matches the PT)
+            const float rad = sqrt(rnd(seed)) * 20.0;// 20px tap radius
             const ivec2 off = ivec2(int(rad * cos(ang)), int(rad * sin(ang)));
             if (off.x == 0 && off.y == 0) continue;
             const ivec2 spPx = clamp(px + off, ivec2(0), maxPx);
@@ -328,9 +328,8 @@ float gReflEmitterScale = 1.0;
 //    temporally accumulated (TAA) by the caller.
 //  • DENOISER OFF → the deterministic Fibonacci AO + gated "far≈sky" approximation
 //    (noise-free WITHOUT a denoiser; the clean fallback for non-denoised scenes).
-// Blue-noise tile lookup — mirrors raygen.rgen's helper exactly (same step
-// rates, same 64-wrap), so the deferred GI dithers off the same void-and-cluster
-// tile the PT uses. Two `salt` values step the lookup along different irrational
+// Blue-noise tile lookup — dithers the deferred GI off the 64×64 void-and-cluster
+// tile (blueNoiseTex). Two `salt` values step the lookup along different irrational
 // rates → decorrelated x/y samples.
 float blueNoiseDef(uvec2 px, uint frame, uint salt) {
     const ivec2 step = ivec2(47, 17) * int(salt + 1u);

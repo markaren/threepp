@@ -7,7 +7,8 @@
 // MaterialDesc, and shades it with the scene's directional lights only —
 // no shadows, no bounces, no path tracing. Output is packed BGRA8
 // (matching swapchain format) in the same buffer event_detect.comp would
-// otherwise read from the PT-noisy swapchain copy, so the downstream
+// otherwise read from the stochastic-noise swapchain copy (deferred_shade.comp's
+// 1-2 spp reflections/GI), so the downstream
 // detector pipeline is unchanged.
 //
 // What's modelled:
@@ -29,7 +30,7 @@
 //     point. Static shadow edges don't fire DVS events anyway; only
 //     moving shadows do, and those are caught downstream by detecting
 //     events on the surfaces the shadow sweeps across.
-//   • Indirect / GI — by definition, the PT branch we're avoiding.
+//   • Indirect / GI — by definition, the stochastic branch we're avoiding.
 //
 // The output deliberately matches the swapchain BGRA8 layout so the
 // existing event_detect.comp consumes it without modification.

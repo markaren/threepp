@@ -6,7 +6,7 @@
 
 // Writes displaced positions and normals for an FFT-driven ocean surface
 // directly into the BLAS vertex/normal buffers (host-mapped, same memory
-// the AS build reads). The path tracer's BLAS-rebuild-in-place mechanism
+// the AS build reads). The BLAS-rebuild-in-place mechanism
 // (refreshSkinnedBlas in VulkanRenderer.cpp) then refits the AS against
 // these new positions and the TLAS sees an updated bounding volume.
 //
@@ -22,7 +22,7 @@
 // Cascades that aren't bound on the host side are gated off by cascadeMask.
 //
 // Normals come from finite differences on the height field (4-tap central
-// difference). The path tracer's transmission Fresnel is sensitive to the
+// difference). The water/glass shading's transmission Fresnel is sensitive to the
 // surface normal so we compute it from the same cascades that drove the
 // displacement — keeps the geometry and shading consistent.
 
@@ -124,8 +124,8 @@ float sampleBicubicR(sampler2D tex, vec2 uv) {
 
 // Smooth height for the normal stencil — cascades 0+1 ONLY. Cascade 2's
 // 8 m tile is far below what the mesh resolves: sampled at a metres-wide
-// stencil it only aliases into the vertex normals, and BOTH shading paths
-// (chit + deferred) re-add the cascade-2 gradient per pixel from
+// stencil it only aliases into the vertex normals, and the deferred shading
+// re-adds the cascade-2 gradient per pixel from
 // oceanFineHeight anyway, so including it here double-counted the chop.
 float sampleHeightSmooth(vec2 worldXZ) {
     float h = 0.0;

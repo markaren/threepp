@@ -1,17 +1,17 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : require
 
-// Hybrid raster G-buffer prepass. Produces depth, world-space normal,
-// screen-space motion vector and per-pixel instance/flags so the PT raygen
-// can skip its primary BVH trace and continue from bounce 1 using exact
-// raster primary visibility. AA happens in raster (TAA), not as Monte
-// Carlo on the PT primary — that's what eliminates the moving-object
-// shake under continuous camera motion.
+// Raster G-buffer prepass. Produces depth, world-space normal,
+// screen-space motion vector and per-pixel instance/flags for
+// deferred_shade.comp to shade analytically, using exact raster primary
+// visibility instead of a traced primary ray. AA happens in raster (TAA)
+// — that's what eliminates the moving-object shake under continuous
+// camera motion.
 //
 // Vertex / normal inputs are bound from the same device buffers that BLAS
 // reads (VERTEX_BUFFER_BIT was added at allocation; see VulkanRenderer.cpp).
-// No upload duplication; raster prepass and PT shadow rays warm the same
-// cache lines.
+// No upload duplication; the raster prepass and ray-query shadow/reflection
+// rays warm the same cache lines.
 
 layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 currVPjittered;  // for gl_Position; primary AA jitter applied here
@@ -27,8 +27,8 @@ layout(set = 0, binding = 0) uniform CameraUbo {
 
 // motionMat[i] = prev_world_i * inverse(current_world_i). Apply to a
 // current-frame world-space point to get its previous-frame world position.
-// Same physical buffer as raygen.rgen's binding 10 — bound here under
-// raster's own descriptor set so the layouts stay independent.
+// Bound here under the raster prepass's own descriptor set, independent of
+// other pipelines' layouts.
 layout(set = 0, binding = 1, scalar) readonly buffer MotionMatBuf {
     mat4 motionMat[];
 };
@@ -43,7 +43,7 @@ layout(push_constant) uniform PC {
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
-layout(location = 2) in vec2 inUv;// passthrough for raygen texture sampling
+layout(location = 2) in vec2 inUv;// passthrough for deferred_shade.comp texture sampling
 // Previous-frame local-space vertex position. For SkinnedMesh + DisplacedMesh
 // the host maintains a separate prev-pose buffer; for static meshes the host
 // binds rec->vertex here so inPrevPos == inPos and motion reduces to the
@@ -93,7 +93,7 @@ void main() {
     // threepp's projection matrix follows the GL convention (Y up in NDC).
     // Vulkan NDC has Y pointing down, so we negate Y at the gl_Position
     // boundary. vCurrClipUnjit / vPrevClip are kept in GL convention so
-    // motion vectors stay self-consistent (raygen will Y-flip on read).
+    // motion vectors stay self-consistent (taa_resolve.comp Y-flips on read).
     gl_Position    = cam.currVPjittered * worldPos;
     gl_Position.y  = -gl_Position.y;
 }

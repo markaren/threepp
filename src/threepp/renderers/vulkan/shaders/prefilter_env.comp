@@ -73,7 +73,7 @@ vec3 importanceSampleGGX(vec2 u, vec3 N, float a) {
     return normalize(T * H_local.x + B * H_local.y + N * H_local.z);
 }
 
-// Equirect → world direction. Matches closest_hit.rchit's UV convention
+// Equirect → world direction. Matches deferred_shade's sampleEnvLod UV convention
 // (u = 0.5 + atan2(z,x)/2π, v = 0.5 + asin(y)/π) so a sky pixel at uv on
 // mip 0 maps to the same direction we'd sample at on the prefiltered mips.
 vec3 dirFromUV(vec2 uv) {

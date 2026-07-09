@@ -35,8 +35,8 @@ layout(set = 0, binding = 5) uniform sampler2D displace2;
 // Foam accumulator — read previous value (imageLoad) and write the new
 // one (imageStore) on the same image. Each invocation only touches its
 // own texel, so there's no cross-thread race; ping-pong textures aren't
-// needed. The chit samples this same image via a separate sampler-typed
-// descriptor for filtered reads at arbitrary world XZ.
+// needed. deferred_shade.comp (oceanFoamWorld) samples this same image via a
+// separate sampler-typed descriptor for filtered reads at arbitrary world XZ.
 layout(set = 0, binding = 6, r32f) uniform image2D foam;
 
 // Per-disturbance point source — splatted into the foam texture with a
@@ -228,7 +228,7 @@ void main() {
     // matter how smoothly it is sampled; graded deposits leave the shading
     // lifecycle mask a real gradient to shape. Genuinely breaking crests
     // (multi-texel folding, coarse+fine overlapping) still saturate toward 1.
-    // NOTE: the shading mask in deferred_shade.comp / closest_hit.rchit is
+    // NOTE: the shading mask in deferred_shade.comp is
     // calibrated to this curve (sheet solidifies from coverage ≈ 0.55) — they
     // must be retuned TOGETHER or the ocean under/over-foams.
     const float foamCoarse  = max(foldCoarse - 0.02, 0.0) / 0.12;

@@ -7,8 +7,8 @@
 //
 // The atlas + tint are LINEAR (TextSprite bakes color.r*255 linear bytes;
 // non-sRGB atlases are sampled raw). The swapchain is B8G8R8A8_UNORM with
-// no hardware sRGB write-out, and the path-traced image is encoded by
-// denoise.comp, so we apply the same linear→sRGB OETF here. Without it,
+// no hardware sRGB write-out, and the rendered image is encoded by
+// post_composite.comp, so we apply the same linear→sRGB OETF here. Without it,
 // non-white sprites/text render darker than the rest of the frame.
 
 layout(set = 0, binding = 0) uniform sampler2D spriteMap;

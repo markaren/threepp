@@ -1,9 +1,9 @@
 #version 460
 
 // Hybrid-mode raster overlay (wireframe + line) vertex shader. The pipeline
-// runs after the PT denoise + TAA composite and writes onto the swapchain
+// runs after the TAA composite and writes onto the swapchain
 // directly, depth-tested against the G-buffer depth attachment so overlays
-// are correctly occluded by path-traced surfaces. Sub-pixel-stable: the MVP
+// are correctly occluded by scene surfaces. Sub-pixel-stable: the MVP
 // uses the *unjittered* camera matrices to match the post-TAA raster
 // position, otherwise wireframes shimmer one pixel per frame.
 //

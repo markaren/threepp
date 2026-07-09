@@ -3,7 +3,7 @@
 // Dominant-sample resolve for the MSAA raster G-buffer (VulkanRenderer,
 // setGbufferMsaa(2|4)). Runs once per frame, right after the MSAA raster
 // pass (recordRasterGbufPass) and before every existing single-sample
-// consumer (DeferredShade, TaaResolve, raygen hybrid set, debug blit) —
+// consumer (DeferredShade, TaaResolve, debug blit) —
 // none of which change: they keep reading rasterGbufs[f].{normal,motion,
 // ids,uv,albedo} exactly as before; this pass is what fills those images
 // when MSAA is on.

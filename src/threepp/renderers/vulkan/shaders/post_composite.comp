@@ -3,8 +3,8 @@
 // PostComposite — the camera/display end of the HDR pipeline (PostComposite
 // pass class; split out of BloomPass, which now owns only the bloom pyramid).
 //
-// Reads the linear-HDR scene (sceneHdr, written by the deferred shade /
-// PT resolve), optionally adds the blurred bloom buffer in linear HDR, then:
+// Reads the linear-HDR scene (sceneHdr, written by the deferred shade),
+// optionally adds the blurred bloom buffer in linear HDR, then:
 //   exposure → white balance (Bradford, linear) → tone map → grading LUT
 //   (display-referred 33³) → sRGB encode → TAA input image.
 //

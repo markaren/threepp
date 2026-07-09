@@ -7,7 +7,7 @@
 // wireframe / line overlays — so the overlay pass's depth test compares
 // like-with-like and doesn't shimmer between frames.
 //
-// The G-buffer's own depth attachment is kept jittered (TAA + chit primary
+// The G-buffer's own depth attachment is kept jittered (TAA + deferred_shade.comp
 // rely on it being sampled at the same offsets the color attachments were
 // rasterized with). This prepass is independent.
 //

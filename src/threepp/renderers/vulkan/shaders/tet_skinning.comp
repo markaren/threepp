@@ -1,6 +1,6 @@
 #version 460
 
-// GPU tetrahedral skinning for PhysX soft bodies — the Vulkan path-tracer
+// GPU tetrahedral skinning for PhysX soft bodies — the Vulkan renderer's
 // counterpart of the GL <tetskinning_*> shader chunks. Runs once per tet-skinned
 // mesh per frame, writing deformed positions/normals into the BLAS vertex/normal
 // buffers; the BLAS refit then reads them (same pattern as skinning.comp and

@@ -24,12 +24,10 @@
 //     (reflected hits are fully shaded — lit + shadowed), prefiltered-env IBL
 //     on rough surfaces,
 //   • approximate diffuse IBL.
-// RenderMode::ReferencePT (the path tracer) is untouched — this only runs in
-// RenderMode::RasterFirst.
 //
-// BRDF math is copied verbatim from shade_common.glsl; geometry fetch for the
-// reflection hit mirrors closest_hit.rchit (GeometryDesc + buffer-reference
-// vertex/normal/index buffers + barycentric interpolation).
+// Geometry fetch for the reflection hit uses a GeometryDesc (buffer-reference
+// vertex/normal/index buffers + barycentric interpolation) mirroring
+// VulkanCoreImpl::GeometryDesc.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -79,7 +77,7 @@ layout(set = 0, binding = 7, rgba16f) uniform image2D outImage;
 layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
 layout(set = 0, binding = 9, scalar) readonly buffer MatBuf  { MaterialDesc mats[]; };
 
-// Geometry fetch for reflection-hit normals + UVs — mirrors closest_hit.rchit.
+// Geometry fetch for reflection-hit normals + UVs — mirrors VulkanCoreImpl::GeometryDesc.
 layout(buffer_reference, scalar) readonly buffer NormalBuf { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf  { uint  i[]; };
 layout(buffer_reference, scalar) readonly buffer UvBuf     { float u[]; };
@@ -90,17 +88,17 @@ struct GeometryDesc {
     uint64_t uvAddress;
     uint64_t foamAddress;
     uint64_t prevVertexAddress;
-    uint64_t colorAddress;// unused here, kept for layout match with closest_hit.rchit
+    uint64_t colorAddress;// unused here, kept for layout match with VulkanCoreImpl::GeometryDesc
     uint     indexed;
     uint     _pad;
 };
 layout(set = 0, binding = 10, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
 // Bindless material textures (reflection hits sample these). Indexed by the
-// material's per-map texIndex — same array + convention as closest_hit binding 8.
+// material's per-map texIndex.
 layout(set = 0, binding = 11) uniform sampler2D albedoMaps[kMaxMaterialTextures];
-// Emissive triangles (area-light NEE). Packed as the path tracer's EmTri:
-// v0.xyz/area, v1.xyz/cumPower(CDF), v2.xyz/power, emission.rgb. Same buffer
-// as the RT set's binding 14 (per-frame emissiveTriBuffers).
+// Emissive triangles (area-light NEE), packed as EmTri:
+// v0.xyz/area, v1.xyz/cumPower(CDF), v2.xyz/power, emission.rgb (per-frame
+// emissiveTriBuffers).
 struct EmTri {
     vec4 v0;       // xyz = pos, w = area
     vec4 v1;       // xyz = pos, w = cumPower (running power CDF)
@@ -110,7 +108,7 @@ struct EmTri {
 layout(set = 0, binding = 12, scalar) readonly buffer EmissiveTriBuf { EmTri emissiveTris[]; };
 
 // Ocean FFT fine-cascade height (sub-mesh chop) + world-space foam accumulator.
-// Mirror closest_hit bindings 32 + 44. Both fall back to 1×1 dummies (and the
+// Both fall back to 1×1 dummies (and the
 // tile-size push constants to 0) when no DisplacedMesh is in the scene, so the
 // thin-shell water branch's `tileSize > 0` gates skip sampling them entirely.
 layout(set = 0, binding = 13) uniform sampler2D oceanFineHeight;
@@ -120,10 +118,8 @@ layout(set = 0, binding = 14) uniform sampler2D oceanFoamWorld;
 // (12 m mapping). Replaces the per-pixel procedural noise octaves in the
 // foam block — a sampled texture is band-limited at distance via its mip
 // chain (no shimmer under TAA) and 2 fetches replace ~20 hash evaluations.
-// Mirrors RT binding 45.
 layout(set = 0, binding = 34) uniform sampler2D foamDetailTex;
-// 64×64 R8 void-and-cluster blue-noise tile (the SAME tile the PT path binds at
-// its set's binding 27). Used to dither the stochastic GI hemisphere directions
+// 64×64 R8 void-and-cluster blue-noise tile. Used to dither the stochastic GI hemisphere directions
 // so the 1-spp residual is high-frequency (à-trous-removable) instead of the
 // low-frequency clumps white noise leaves behind — the AO speckle.
 layout(set = 0, binding = 35) uniform sampler2D blueNoiseTex;
@@ -146,8 +142,8 @@ layout(set = 0, binding = 21) uniform sampler2D momentsPrevTex;   // PREV E[L²]
 layout(set = 0, binding = 24) uniform sampler2D gbufDepthPrevTex; // PREV depth (depth-discontinuity disocclusion)
 layout(set = 0, binding = 25, rgba16f) uniform image2D reflectImage;// sharp mirror-ray reflection radiance (.rgb pre-weighted, .a=roughness); denoise blurs by roughness
 layout(set = 0, binding = 26) uniform sampler2D reflectPrevTex;   // PREV reflect (other fif) — temporal AA history
-// ReSTIR DI reservoir ping-pong (STORAGE images, GENERAL layout — the SAME images
-// the PT path uses). 27/28 = lightPos.xyz + lightType.w (rgba32f) write/read; 29/30
+// ReSTIR DI reservoir ping-pong (STORAGE images, GENERAL layout).
+// 27/28 = lightPos.xyz + lightType.w (rgba32f) write/read; 29/30
 // = W_sum/M/W/p_hat (rgba16f) write/read. READ = last frame's reservoir (temporal
 // reuse); WRITE = this frame's, persisted for next frame's read.
 layout(set = 0, binding = 27, rgba32f) uniform writeonly image2D reservoirPosWrite;
@@ -162,8 +158,8 @@ layout(set = 0, binding = 30, rgba16f) uniform readonly  image2D reservoirWRead;
 // narrow where converged (preserves the lobe detail).
 layout(set = 0, binding = 31, rgba16f) uniform writeonly image2D reflAuxWrite;
 layout(set = 0, binding = 32) uniform sampler2D reflAuxPrevTex;
-// Scene fog (homogeneous medium) — the SAME per-frame GpuFogUbo the PT path
-// consumes, so scene.fog drives both modes from one source of truth.
+// Scene fog (homogeneous medium) — the SAME per-frame GpuFogUbo LidarScanner
+// binds, so scene.fog drives both consumers from one source of truth.
 // waterSurfaceY caps the medium (underwater fog stops at the surface).
 layout(set = 0, binding = 33, scalar) uniform FogUbo {
     vec3  sigmaT;        // per-channel extinction (1/world unit)
@@ -242,7 +238,7 @@ layout(set = 0, binding = 45, rgba16f) uniform writeonly image2D directUImage;
 // analytic direct split below loops its own cell's lights instead of the UBO
 // arrays — the UBO's 8-per-type slots (the STRONGEST 8, same sort) remain the
 // source for every other consumer (reflection hits, GI rays, volumetric
-// beams, probes, PT), where screen-space clusters can't apply.
+// beams, probes), where screen-space clusters can't apply.
 // KEEP IN SYNC with cluster_build.comp + GpuClusterLight (VulkanCoreImpl.hpp).
 struct ClusterLight {
     vec3  position;   float range;
@@ -546,14 +542,13 @@ void main() {
     uint seed = pcgHash(uint(px.x) ^ pcgHash(uint(px.y) ^ 0x85ebca6bu));
 
     // ── FFT fine-cascade normal: recover the sub-mesh chop the rasterised wave
-    // geometry can't resolve (mirrors closest_hit's oceanFineHeight gradient).
+    // geometry can't resolve, via an oceanFineHeight central-difference gradient.
     // Gated on thin-shell + an active ocean (dummy tex + tile size 0 otherwise),
     // so it's a no-op for every non-ocean surface. Must run before N is used.
     if (pm.thinWalled != 0 && pc.oceanFineTileSize > 0.0) {
         // The FFT DisplacedMesh's gbuffer normal comes out INVERTED (pointing down
         // into the water) → NdotV≈0 → Fresnel pinned at ~1 → the ocean read as a
-        // flat, dull sky reflection with NO depth gradient (the whole reason it
-        // looked dull vs the PT, which uses geometry normals directly). Water is
+        // flat, dull sky reflection with NO depth gradient. Water is
         // always viewed from above, so face the camera. Done BEFORE the fine-cascade
         // perturbation so the chop tilt is added in the correct (up) frame.
         if (dot(N, V) < 0.0) N = -N;
@@ -607,7 +602,6 @@ void main() {
     vec3        F0    = mix(vec3(0.04) * pm.specularIntensity * pm.specularColor, albedo, metalness);
     // Thin-film iridescence (KHR_materials_iridescence). Modulates F0 with the
     // wavelength-dependent interference colour; lobe shape (GGX) is unchanged.
-    // Mirrors closest_hit.rchit so the raster-first base matches the path tracer.
     // Skipped when factor == 0 → non-iridescent surfaces pay only the branch.
     if (pm.iridescence > 0.0) {
         const vec3 irid = evalIridescence(1.0, pm.iridescenceIOR, NdotV,
@@ -858,8 +852,8 @@ void main() {
     }
     if (reflBlend > 0.0 && opaqueRefl && !reflSkip) {
         // Emitter self-emission scale for the ray (the other half of the split):
-        // DIELECTRICS → 0: F0≈0.04, a reflected small emitter is ~invisible in the
-        // PT, yet a full-radiance hit produced bright "probe speckles" (their faint
+        // DIELECTRICS → 0: F0≈0.04, so a reflected small emitter is physically
+        // ~invisible, yet a full-radiance hit produced bright "probe speckles" (their faint
         // correct highlight now comes from emissiveSpecNEE). METALS → (1−specNEET):
         // near-mirror keeps the sharp BRDF-sampled lamp image; rough hands the
         // energy to the NEE above.
@@ -1016,7 +1010,7 @@ void main() {
                     // Demodulate the mix(): hand glassCol·t to the reflection denoise
                     // (which ADDS blur(reflect)) and scale the opaque base by (1-t), so
                     // the recombine reconstructs mix(lit, blur(glass), t) — frosted.
-                    // Same clamped roughness as shadeGlass (PT-parity cap) so the
+                    // Same clamped roughness as shadeGlass (see kGlassMaxRough) so the
                     // denoise blur matches the lobe that produced the sample.
                     const float gr = glassRough(pm.roughness);
                     // .a NEGATIVE = glass marker: the denoise gives it a minimum AA blur

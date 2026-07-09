@@ -36,8 +36,8 @@ vec3 froxelInscatter(vec2 fuv, float viewDist) {
 // motion with a short cap. Only near-MIRROR content actually shifts with the
 // camera (a surface reproject can't follow it → ghost), so only that resets.
 // In between, the cap blends: motion-scaled (24→6, the GI channel's pattern)
-// for rough, down to 1 (reset) as roughness → mirror. Thresholds match the
-// PT's view-dependence factor (1 - smoothstep(0.05, 0.30, roughness)).
+// for rough, down to 1 (reset) as roughness → mirror. Thresholds use a
+// view-dependence factor (1 - smoothstep(0.05, 0.30, roughness)).
 bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, out float histCap) {
     const vec2 mv   = texture(gbufMotionTex, uv).rg;
     const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
@@ -301,9 +301,8 @@ bool ssrTraceHiZ(vec3 O, vec3 Rd, out vec3 color) {
     return true;
 }
 
-// ── Sheen (KHR_materials_sheen) — verbatim from shade_common.glsl so the
-// deferred (RasterFirst) sheen matches the path-traced (ReferencePT) sheen.
-// The deferred base BRDF omitted this, so satin/velvet/fabric read flat.
+// ── Sheen (KHR_materials_sheen). The deferred base BRDF omitted
+// this, so satin/velvet/fabric read flat.
 float D_Charlie(float NdotH, float roughness) {
     const float invAlpha = 1.0 / max(roughness * roughness, 1e-4);
     const float sin2h    = max(1.0 - NdotH * NdotH, 1e-7);
@@ -322,9 +321,8 @@ float IBLSheenBRDF(float dotNV, float roughness) {
     return clamp(DG / PI, 0.0, 1.0);
 }
 
-// ── Thin-film iridescence (KHR_materials_iridescence, Belcour & Barla 2017) —
-// verbatim from shade_common.glsl so the deferred (RasterFirst) iridescence
-// matches the path-traced (ReferencePT) result. The deferred base BRDF omitted
+// ── Thin-film iridescence (KHR_materials_iridescence, Belcour & Barla 2017).
+// The deferred base BRDF omitted
 // this, so soap-film / oil-slick / nacre F0 read as plain dielectric. Modulates
 // dielectric F0 with wavelength-dependent thin-film interference; the lobe shape
 // (GGX) is unchanged, only the Fresnel base shifts per channel.
@@ -543,8 +541,7 @@ float fbm4(vec2 p) {
 // bilinear taps (Sigg & Hadwiger, GPU Gems 2 ch. 20). Plain bilinear
 // renders every isolated foam texel as a soft axis-aligned SQUARE (the
 // bilinear tent's support is a square), which reads as a grid artifact up
-// close; the cubic kernel reconstructs round, C1-smooth blobs. Kept in
-// lockstep with closest_hit.rchit.
+// close; the cubic kernel reconstructs round, C1-smooth blobs.
 float sampleFoamBicubic(vec2 uv) {
     const vec2 res = vec2(textureSize(oceanFoamWorld, 0));
     const vec2 st  = uv * res - 0.5;
@@ -663,8 +660,8 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
         // correct, low-variance estimator for the broad DIFFUSE term — but the WRONG
         // one for the peaked SPECULAR lobe: at low roughness a single sample lands
         // near the GGX peak and the firefly clamp leaves a bright "probe speckle"
-        // highlight (which the PT, using BRDF sampling + MIS, never shows). Emitter
-        // specular is owned by the reflection ray at near-mirror roughness and by
+        // highlight (a proper BRDF-sampling + MIS estimator would never show this).
+        // Emitter specular is owned by the reflection ray at near-mirror roughness and by
         // emissiveSpecNEE on rough lobes (the specNEET split in main()).
         const vec3  H  = normalize(V + L);
         const vec3  Fr = fresnelSchlick(max(dot(V, H), 0.0), F0);

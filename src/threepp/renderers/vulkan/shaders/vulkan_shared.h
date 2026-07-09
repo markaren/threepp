@@ -62,7 +62,8 @@ namespace threepp::vulkan_pt {
         float sheenColor[3];
         float sheenRoughness;
         // Side enum (matches threepp::Side): 0 = Front, 1 = Back, 2 = Double.
-        // Drives the chit pass-through gate (wrong-side hits skip the surface)
+        // Drives the ray-hit pass-through gate in lidar.rchit / probe_update.comp
+        // (wrong-side hits skip the surface)
         // and the raster gbuffer cull mode (BACK / FRONT / NONE respectively).
         int32_t sideMode;
         float uvTransform[9];
@@ -83,7 +84,7 @@ namespace threepp::vulkan_pt {
         // Stable per-Material-asset index, deduplicated by Material* pointer
         // when the matDescs buffer is built (VulkanRenderer.cpp). Adjacent
         // meshes that share one Material C++ object get the SAME value, so
-        // the raygen bilinear reproject can accept cross-mesh-same-material
+        // a reproject/reuse consumer can accept cross-mesh-same-material
         // taps — kills the visible seam at tiled-wall boundaries during
         // camera motion. mesh-asset/material-asset only; not a hash.
         uint32_t materialAssetIdx;

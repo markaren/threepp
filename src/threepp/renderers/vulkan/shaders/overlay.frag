@@ -4,7 +4,7 @@
 // (ortho-HUD filled meshes + lines, and the world-space wireframe/line
 // overlay). threepp material colors are linear; the swapchain is
 // VK_FORMAT_B8G8R8A8_UNORM (no hardware sRGB write-out), and the
-// path-traced image is sRGB-encoded in denoise.comp before it lands here.
+// rendered image is sRGB-encoded in post_composite.comp before it lands here.
 // So we must apply the same linear->sRGB OETF, else overlay geometry is
 // drawn darker than the rest of the frame (dark fills collapse to black).
 

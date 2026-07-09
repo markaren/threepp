@@ -314,7 +314,7 @@ void main() {
         if (!vert) { imageStore(atrousB, px, vec4(blurred, cR.a)); return; }
         // ── DESPECKLE bright emitter "probe speckles" ────────────────────────────
         // A small bright emitter reflected by a GLOSSY surface is rendered by the
-        // single mirror ray at FULL radiance — but its true (PT) value is the
+        // single mirror ray at FULL radiance — but its true physically-correct value is the
         // lobe-coverage fraction, which for a sub-lobe source is ~nothing. The
         // energy-conserving blur above only softens the spike into a speck. Once the
         // surface is even slightly glossy (rough > 0.04 → the reflection lobe is

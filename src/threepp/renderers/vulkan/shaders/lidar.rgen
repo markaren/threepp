@@ -8,7 +8,8 @@
 // Path-traced LIDAR — raygen.
 //
 // One beam per launched thread. Reads (origin, direction) from a host-uploaded
-// BeamBuf, traces against the same TLAS the main path tracer uses, and writes
+// BeamBuf, traces against the same TLAS the deferred shading pass's ray-query
+// shadows/reflections use, and writes
 // up to `maxReturns` per-beam LidarResult entries (hit position, distance,
 // surface normal, normalised intensity, instance id). The closest-hit shader
 // (lidar.rchit) evaluates the LIDAR equation — Lambertian back-scatter

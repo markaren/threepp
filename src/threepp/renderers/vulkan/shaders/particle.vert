@@ -4,7 +4,7 @@
 // ParticleSystem shader (src/threepp/objects/ParticleSystem.cpp): the renderer
 // has no generic ShaderMaterial path, so the particle Mesh is drawn here by a
 // dedicated billboard pass in the post-TAA overlay block rather than the
-// PT/G-buffer path.
+// G-buffer path.
 //
 // The geometry stores 4 coincident verts per particle (all at the particle
 // CENTER); the quad is expanded HERE from the per-vertex data:

@@ -7,7 +7,7 @@
 // so the shader only needs to apply the center/rotation/scale math that's
 // per-vertex, then re-projects the screen-aligned quad through the ortho
 // projection. Used by the ortho HUD overlay pass — TextSprite + Sprite —
-// drawn after the PT image is composited onto the swapchain.
+// drawn after the rendered image is composited onto the swapchain.
 
 layout(location = 0) in vec3 inPos;   // local quad position, -0.5..0.5
 layout(location = 1) in vec2 inUv;    // 0..1 corner UVs

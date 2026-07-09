@@ -22,8 +22,8 @@ float hgPhase(float mu, float g) {
 
 // ── Scene fog (deferred) ─────────────────────────────────────────────────────
 // Beer-Lambert extinction toward the fog colour over the PRIMARY distance —
-// the raster-side approximation of the PT's true volumetric scattering (which
-// also fogs reflected/refracted sub-paths; here only the camera→surface leg is
+// an approximation of true volumetric scattering (a full path-traced solution
+// would also fog reflected/refracted sub-paths; here only the camera→surface leg is
 // fogged). Sky pixels stay unfogged (three.js background semantics). The
 // fogged path is clipped to y < waterSurfaceY, so the underwater medium ends
 // exactly at the wave surface.
@@ -44,7 +44,8 @@ vec3 applySceneFog(vec3 col, vec3 ro, vec3 hit) {
     const vec3 tr = exp(-fog.sigmaT * d);
     // In-scatter = fog ALBEDO × an ambient-light estimate (env mean + scene
     // ambient). The fog colour is a single-scattering albedo in this engine
-    // (the PT lights the medium with real NEE) — mixing toward it directly,
+    // (a full volumetric NEE solution would light the medium directly)
+    // — mixing toward it directly,
     // three.js-style, makes fog GLOW in dark scenes (a black Cornell room
     // washed out to white). Spot-light in-scatter is added separately by the
     // fog-driven volumetricSpotScatter march (the god rays).

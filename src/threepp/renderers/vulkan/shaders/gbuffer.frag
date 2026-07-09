@@ -18,18 +18,18 @@
 // per-pixel IDs/flags. Depth is written automatically.
 //
 // Normal mapping is done here via screen-space derivatives
-// of vWorldPos + vUv. Without it, primary surfaces look flat; chit's
-// non-hybrid path samples the normal map and most assets rely on it for
-// surface detail (mortar lines, fabric weave, brick relief, etc.).
+// of vWorldPos + vUv. Without it, primary surfaces look flat; most assets
+// rely on the normal map for surface detail (mortar lines, fabric weave,
+// brick relief, etc.).
 //
 // Raster-first: albedo / roughness / metalness are also
 // sampled here and written to the G-buffer so the deferred shading pass can
-// light the surface analytically. Sampling matches closest_hit.rchit exactly
-// (albedo.rgb, roughness from .g, metalness from .b, per-channel uvTransforms,
-// hardware sRGB decode on the albedo view) so RasterFirst and ReferencePT
-// agree. Fragment-shader derivatives give correct mip selection for free —
-// raygen needs the lodBias attachment because RT shaders have none, but here
-// plain texture() is correct.
+// light the surface analytically (albedo.rgb, roughness from .g, metalness
+// from .b, per-channel uvTransforms, hardware sRGB decode on the albedo
+// view). Fragment-shader derivatives give correct mip selection for free —
+// deferred_shade.comp's ray-query reflection/GI hits need the lodBias
+// attachment because those bounce rays have no fragment-shader derivatives,
+// but here plain texture() is correct.
 
 layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 currVPjittered;
@@ -55,19 +55,19 @@ layout(location = 7) in vec3 vColor;// per-vertex color (material.vertexColors);
 layout(location = 8) flat in uint vStableId;// stable per-object id (host-assigned; NOT the visible-set index)
 
 // Attachment 0: world-space normal (rgba16f). .xyz = n*0.5+0.5 encoded world
-// normal, .w = linear roughness (raster-first deferred pass reads it; raygen
-// samples only .xyz). rgba16f is necessary for ocean wave normals — rgba8
+// normal, .w = linear roughness (the deferred_shade.comp shading pass reads
+// both). rgba16f is necessary for ocean wave normals — rgba8
 // loses too much precision on the FFT-driven detail.
 layout(location = 0) out vec4 outNormal;
 
-// Attachment 1: motion vector in NDC delta (rg16f). raygen converts to
+// Attachment 1: motion vector in NDC delta (rg16f). TaaResolve converts to
 // pixel-space when sampling the temporal accumulator. Stationary pixels
 // produce zero motion.
 layout(location = 1) out vec4 outMotion;
 
 // Attachment 2: per-pixel IDs + flags (rgba16ui).
-//   .x = instanceCustomIndex + 1 (matches raygen Payload.hitInstanceId
-//        convention; 0 reserved for sky/miss because the render pass
+//   .x = instanceCustomIndex + 1 (matches deferred_shade.comp's
+//        gbufIdsTex.x convention; 0 reserved for sky/miss because the render pass
 //        clears IDs to 0 before any draw). This is the PER-FRAME visible-set
 //        index — used internally (reproject/motionMat), NOT stable across frames.
 //   .y = STABLE per-object instance id (host-assigned, persists across frames
@@ -81,14 +81,13 @@ layout(location = 1) out vec4 outMotion;
 //   .w = reserved (repacked with MSAA coverage metadata by gbuf_resolve.comp)
 layout(location = 2) out uvec4 outIds;
 
-// Attachment 3: material UV + LOD bias (rgba16f). .rg = UV (chit normally
-// interpolates from triangle vertices; we precompute here so raygen's hybrid
-// primary skips the primary traceRayEXT). .b = log2(max(|dUV/dx|, |dUV/dy|))
-// — a texture-size-independent footprint. raygen adds log2(textureSize) per
-// sample to drive textureLod. Without this, raygen's `texture()` calls (RT
-// shaders have no implicit derivatives) snap to mip 0 and per-frame texture
-// shimmer survives TAA — which non-hybrid PT averages out via accumulated
-// samples but hybrid (1-2 spp/frame) cannot.
+// Attachment 3: material UV + LOD bias (rgba16f). .rg = UV, precomputed here
+// so deferred_shade.comp's emissive-map sample doesn't need triangle
+// interpolation. .b = log2(max(|dUV/dx|, |dUV/dy|)) — a texture-size-
+// independent footprint. Consumers add log2(textureSize) per sample to drive
+// textureLod. Without this, ray-traced hits (reflection/GI bounces have no
+// implicit derivatives) would snap to mip 0 and per-frame texture shimmer
+// would survive TAA at the deferred pass's 1-2 spp/frame sample count.
 layout(location = 3) out vec4 outUv;
 
 // Attachment 4: albedo + metalness (rgba8 unorm). .rgb = linear base colour
@@ -102,9 +101,9 @@ layout(location = 4) out vec4 outAlbedoMetal;
 // Set to 1 on the decal pipeline variant (rasterGbufDecalPipeline): bucket-[3]
 // blend decals draw with albedo alpha-blending + write-masked id/normal/motion
 // attachments, so this shader emits texture alpha as the blend factor instead
-// of running the stochastic screen-door. 0 everywhere else — in ReferencePT
-// mode decal materials draw with the regular pipeline and fall back to the
-// screen-door (the PT accumulator converges it; the deferred one can't).
+// of running the stochastic screen-door. 0 everywhere else, where decal
+// materials draw with the regular pipeline and fall back to the
+// screen-door (TAA converges it over multiple frames; a single frame can't).
 layout(constant_id = 0) const uint DECAL_PASS = 0u;
 
 // Per-pixel, per-frame hash in [0,1) for the stochastic alpha-blend screen-
@@ -145,19 +144,19 @@ void main() {
     // Normal map perturbation. TBN derived from screen-space derivatives:
     // (dpx, dpy) = world-space partial derivatives of position
     // (duvx, duvy) = uv derivatives.
-    // Tangent T = (dpx · duvy.y - dpy · duvx.y) / det. Same construction
-    // as chit's per-triangle tangent (closest_hit.rchit:1050-1086), just
-    // expressed via fragment-shader derivatives so we don't need triangle
-    // vertex/UV data here.
+    // Tangent T = (dpx · duvy.y - dpy · duvx.y) / det, expressed via
+    // fragment-shader derivatives so we don't need triangle vertex/UV data
+    // here.
     //
     // Skipped on water (is_water flag bit 0): the FFT cascade normal map
-    // is a chit-specific input applied as part of its water BSDF, not a
+    // is a water-specific input applied as part of the water BSDF in
+    // deferred_shade_50_water_glass.glsl, not a
     // generic surface perturbation — running it here would tile the foam
     // normal across the wave geometry and produce visible cellular noise.
     const MaterialDesc m = gbufMats[vInstanceIdx];
     const bool isWater = (vFlags & 1u) != 0u;
-    // vMF/Toksvig normal-map specular AA (v1: deferred raster G-buffer only —
-    // closest_hit.rchit is untouched, see project_deferred_shade_parity notes).
+    // vMF/Toksvig normal-map specular AA (deferred raster G-buffer only;
+    // see project_deferred_shade_parity notes).
     // A trilinear-minified normal-map tap's raw filtered vector is SHORTER
     // than unit length in proportion to the sub-texel normal variance the mip
     // already averaged away — that shortening is free, physically-grounded
@@ -236,35 +235,34 @@ void main() {
         }
     }
 
-    // ── PBR material sampling — mirrors closest_hit.rchit:705-739 so the
-    // deferred (RasterFirst) shade matches the path-traced (ReferencePT) shade.
+    // ── PBR material sampling.
     // Per-channel transformed UVs.
     const vec2 uvAlbedo     = (m.uvTransform           * vec3(vUv, 1.0)).xy;
     const vec2 uvRoughMetal = (m.uvTransformRoughMetal * vec3(vUv, 1.0)).xy;
 
     // Albedo: scalar PBR colour × bound albedo map (.rgb). Albedo views are
-    // VK_FORMAT_*_SRGB so texture() returns linear, exactly as in chit.
+    // VK_FORMAT_*_SRGB so texture() returns linear.
     vec3  albedoSample = vec3(1.0);
     float albedoAlpha  = 1.0;
     if (m.albedoTexIndex >= 0) {
         const int  ai    = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
         const vec4 texel = texture(gbufAlbedoMaps[nonuniformEXT(ai)], uvAlbedo);
         albedoSample = texel.rgb;
-        albedoAlpha  = texel.a;// linear (alpha is never sRGB-decoded) → matches chit
+        albedoAlpha  = texel.a;// linear (alpha is never sRGB-decoded)
     }
     // Per-vertex color (material.vertexColors): vColor is white when the mesh
     // has no "color" attribute, so this multiply is a no-op then. Linear working
-    // space — matches m.albedo and the closest_hit.rchit vertex-color path.
+    // space — matches m.albedo.
     const vec3 albedo = m.albedo * albedoSample * vColor;
 
     // glTF packs roughness in .g and metalness in .b; threepp's roughnessMap /
     // metalnessMap usually point at the same packed texture. Multiplicative —
-    // matches three.js and chit.
+    // matches three.js.
     //
     // MeshBasicMaterial (unlit) is flagged with material roughness < 0 (see
     // VulkanRenderer::materialFromMesh). Preserve that sentinel through the
     // G-buffer — don't sample the rough/metal maps or clamp — so the deferred
-    // pass can emit the base colour unlit, matching closest_hit.rchit's
+    // pass (deferred_shade.comp) can emit the base colour unlit via its own
     // `roughness < 0` gate. Clamping here would turn the unlit surface into a
     // glossy one that reflects the environment.
     float roughness = m.roughness;
@@ -301,14 +299,13 @@ void main() {
         }
     }
 
-    // ── Alpha cutout / blend test (mirrors closest_hit_alpha.rahit). The
+    // ── Alpha cutout / blend test. The
     // raster prepass draws every visible mesh regardless of transparency
     // (buildIndirectDrawData does not filter), so without this, alpha-tested
     // foliage/decals fill their cutout holes with opaque G-buffer data and
     // BLEND surfaces render fully opaque. Discarding here writes no depth/ID,
     // so the deferred pass sees sky (or the opaque surface behind, which the
-    // depth test lets win) through the hole — matching the PT any-hit's
-    // ignoreIntersectionEXT. alphaCutoff semantics match the host
+    // depth test lets win) through the hole. alphaCutoff semantics match the host
     // (VulkanRenderer::materialFromMesh: d.alphaCutoff = mat->alphaTest):
     //   > 0  cutout : discard fragments below the cutoff.
     //   < 0  BLEND  : stochastic screen-door so the surface behind shows
@@ -329,8 +326,8 @@ void main() {
         } else if (isDecal) {
             if (albedoAlpha <= 0.004) discard;// nothing to blend
         } else {
-            // BLEND: variance-reduced stochastic rejection, matching the PT
-            // any-hit's 0.99 (accept) / 0.01 (reject) early-outs.
+            // BLEND: variance-reduced stochastic rejection with 0.99 (accept)
+            // / 0.01 (reject) early-outs.
             if (albedoAlpha <= 0.01) {
                 discard;
             } else if (albedoAlpha < 0.99) {
@@ -340,8 +337,8 @@ void main() {
     }
 
     // Remap [-1, 1] → [0, 1] so negative components are visible in the
-    // BGRA8_UNORM debug blit (which clamps negatives to 0). raygen reverses
-    // this with `n * 2 - 1` when reading the attachment. .w carries linear
+    // BGRA8_UNORM debug blit (which clamps negatives to 0). deferred_shade.comp
+    // reverses this with `n * 2 - 1` when reading the attachment. .w carries linear
     // roughness for the deferred pass.
     outNormal = vec4(N * 0.5 + 0.5, roughness);
     // Decals emit texture alpha as the blend factor (the decal pipeline's
@@ -353,11 +350,7 @@ void main() {
     vec2 prevNDC = vPrevClip.xy      / vPrevClip.w;
     // Motion vector points from current pixel to where the surface WAS last
     // frame. Tested adding a (curr_jitter - prev_jitter) delta here; sign
-    // flip didn't change behavior, so the shake source isn't TAA reproject —
-    // it's the PT accumulator's reproject reading a jittered chit
-    // hitWorldPos. raygen now overrides hitWorldPos to a pixel-center-
-    // deterministic value (see raygen primaryWorldPosHybrid override after
-    // the primary traceRayEXT). Motion vec stays jitter-free.
+    // flip didn't change behavior. Motion vec stays jitter-free.
     vec2 motion = prevNDC - currNDC;
     // .b = this surface's OWN previous NDC depth (same convention as the depth
     // buffer: both are (VP·worldPos).z/w). The deferred GI disocclusion compares
@@ -368,14 +361,14 @@ void main() {
     // wrongly reset any surface that moves in depth → dust on animated meshes.
     outMotion = vec4(motion, vPrevClip.z / vPrevClip.w, 0.0);
 
-    // .x = per-frame visible index +1 (clear-to-0 = sky, matches raygen's
-    // Payload.hitInstanceId). .y = stable per-object id (host-assigned; 0 when
+    // .x = per-frame visible index +1 (clear-to-0 = sky, matches
+    // deferred_shade.comp's gbufIdsTex.x convention). .y = stable per-object id (host-assigned; 0 when
     // unassigned/sky). .z = flags | class byte (already packed into vFlags host-
     // side, bits 8..15). Truncates to uint16 per channel — class fits in 8..15.
     outIds = uvec4(vInstanceIdx + 1u, vStableId, vFlags, 0u);
 
     // log2 of the per-pixel UV-footprint diameter (texture-size-independent).
-    // raygen turns this into a per-texture LOD via `bias + log2(textureSize.x)`.
+    // A consumer would turn this into a per-texture LOD via `bias + log2(textureSize.x)`.
     // Floor at -16 to keep textureLod's clamp from biting the rare
     // duvx==duvy==0 case (degenerate triangle / fully orthogonal view).
     const float fp2 = max(dot(duvx, duvx), dot(duvy, duvy));
