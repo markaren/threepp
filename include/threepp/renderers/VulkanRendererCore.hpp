@@ -43,6 +43,10 @@ namespace threepp {
         // read-back frames.
         [[nodiscard]] WindowSize framebufferSize() const;
 
+        // Pixel ratio is unsupported on the Vulkan backend: the swapchain is
+        // sized in native device pixels, so getTargetPixelRatio() always
+        // returns 1 and setPixelRatio() warns once and ignores the value.
+        // Use setRenderScale for resolution scaling.
         [[nodiscard]] float getTargetPixelRatio() const override;
         void setPixelRatio(float value) override;
 
@@ -58,8 +62,14 @@ namespace threepp {
         [[nodiscard]] float getClearAlpha() const override;
         void setClearAlpha(float alpha) override;
 
+        // Unsupported on the Vulkan backend (the deferred pipeline rewrites
+        // every attachment each render()); warns once and returns.
         void clear(bool color = true, bool depth = true, bool stencil = true) override;
 
+        // Offscreen render targets are unsupported (swapchain-only renderer).
+        // getRenderTarget() returns nullptr (= default framebuffer, matching
+        // three.js semantics); a non-null setRenderTarget() warns once and is
+        // ignored — use readGBufferAOV/readRGBPixels for capture instead.
         RenderTarget* getRenderTarget() override;
         void setRenderTarget(RenderTarget* renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0) override;
 

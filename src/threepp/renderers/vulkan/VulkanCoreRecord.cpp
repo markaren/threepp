@@ -1608,6 +1608,18 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
 void VulkanRendererCore::CoreImpl::recordSceneCapture(VkCommandBuffer cb, uint32_t imageIndex) {
             const VkExtent2D ext = ctx->swapchainExtent();
             if (ext.width == 0 || ext.height == 0) return;
+            // Copying out of the swapchain requires it to have been created
+            // with TRANSFER_SRC usage. setSceneCaptureEnabled throws when the
+            // context already exists; this covers a pre-first-render enable.
+            if (!ctx->swapchainSupportsTransferSrc()) {
+                static bool warned = false;
+                if (!warned) {
+                    warned = true;
+                    std::cerr << "[VulkanRenderer] scene capture skipped: the surface "
+                                 "does not support TRANSFER_SRC swapchain usage\n";
+                }
+                return;
+            }
             if (sceneCaptureBufW_ != ext.width || sceneCaptureBufH_ != ext.height ||
                 sceneCaptureBuf_.handle == VK_NULL_HANDLE) {
                 destroyBuffer(ctx->allocator(), sceneCaptureBuf_);

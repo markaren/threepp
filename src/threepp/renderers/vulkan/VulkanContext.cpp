@@ -634,6 +634,15 @@ namespace threepp::vulkan {
         ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                         VK_IMAGE_USAGE_STORAGE_BIT |
                         VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        // readRGBPixels()/recordSceneCapture() copy straight from the swapchain
+        // image, which is only legal when the image was created with
+        // TRANSFER_SRC usage (VUID-vkCmdCopyImageToBuffer-srcImage-00186).
+        // Every desktop WSI supports it in practice, but the spec only
+        // guarantees COLOR_ATTACHMENT — request it conditionally and remember
+        // the answer so the readback entry points can fail loudly instead of
+        // issuing an invalid copy.
+        swapchainTransferSrc_ = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+        if (swapchainTransferSrc_) ci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         ci.preTransform = caps.currentTransform;
         ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         ci.presentMode = chosenMode;

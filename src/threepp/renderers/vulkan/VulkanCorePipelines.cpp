@@ -416,8 +416,12 @@ void VulkanRendererCore::CoreImpl::createRasterGbufImages(uint32_t w, uint32_t h
                 // STORAGE+SAMPLED + ping-pong as indirect: deferred_shade reproject-
                 // accumulates it, deferred_denoise reads it for the per-pixel
                 // temporal variance that guides the à-trous (crisp where stable,
-                // blurred where noisy).
-                g.momentsSq = createAttachmentImage2D(w, h, VK_FORMAT_R16_SFLOAT,
+                // blurred where noisy). R32 (not R16): E[L²] SQUARES the un-pre-
+                // exposed indirect luminance, so fp16 overflows to Inf once
+                // lum > ~256 — routine with physical light units (sun in klux) —
+                // and Inf−E[L]² turns the variance NaN. R32F storage is a
+                // mandatory format; the extra bandwidth is 2 B/px.
+                g.momentsSq = createAttachmentImage2D(w, h, VK_FORMAT_R32_SFLOAT,
                                                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                       VK_IMAGE_ASPECT_COLOR_BIT, N("momentsSq"));
                 // SVGF multi-pass à-trous ping-pong scratch (rgb=GI, a=variance).

@@ -63,6 +63,10 @@ namespace threepp::vulkan {
         VkExtent2D         swapchainExtent() const { return swapchainExtent_; }
         const std::vector<VkImage>&     swapchainImages() const { return swapchainImages_; }
         const std::vector<VkImageView>& swapchainImageViews() const { return swapchainImageViews_; }
+        // True when the surface allowed TRANSFER_SRC swapchain usage — the
+        // precondition for every path that copies the presented image out
+        // (readRGBPixels, scene capture). See createSwapchain.
+        bool swapchainSupportsTransferSrc() const { return swapchainTransferSrc_; }
 
         bool rayTracingEnabled() const { return rayTracingEnabled_; }
 
@@ -131,6 +135,7 @@ namespace threepp::vulkan {
         VkExtent2D               swapchainExtent_{};
         std::vector<VkImage>     swapchainImages_;
         std::vector<VkImageView> swapchainImageViews_;
+        bool                     swapchainTransferSrc_ = false;
 
         bool vsync_ = true;// FIFO when true, else MAILBOX/IMMEDIATE (see createSwapchain)
         bool rayTracingEnabled_ = false;

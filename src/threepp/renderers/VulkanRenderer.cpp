@@ -465,8 +465,21 @@ namespace threepp {
         core()->needsResize = true;
     }
 
-    float VulkanRendererCore::getTargetPixelRatio() const { return core()->pixelRatio; }
-    void VulkanRendererCore::setPixelRatio(float v) { core()->pixelRatio = v; }
+    // Pixel ratio is a GL/canvas concept (logical-pixel → device-pixel scale).
+    // The Vulkan swapchain is already sized in native device pixels, so there
+    // is no logical domain to scale — the ratio is always 1 and the setter is
+    // a warned no-op rather than misleading mutable state. Resolution scaling
+    // goes through setRenderScale, the one supported lever.
+    float VulkanRendererCore::getTargetPixelRatio() const { return 1.f; }
+    void VulkanRendererCore::setPixelRatio(float) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::cerr << "[VulkanRenderer] setPixelRatio: unsupported (the swapchain is "
+                         "native-pixel; use setRenderScale for resolution scaling) — "
+                         "call ignored\n";
+        }
+    }
 
     void VulkanRendererCore::setViewport(const Vector4& v) { core()->viewport = v; }
     void VulkanRendererCore::setViewport(int x, int y, int w, int h) {
@@ -489,10 +502,28 @@ namespace threepp {
     float VulkanRendererCore::getClearAlpha() const { return core()->clearAlpha; }
     void VulkanRendererCore::setClearAlpha(float a) { core()->clearAlpha = a; }
 
-    void VulkanRendererCore::clear(bool, bool, bool) {}
+    void VulkanRendererCore::clear(bool, bool, bool) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::cerr << "[VulkanRenderer] clear(): unsupported — the deferred pipeline "
+                         "rewrites every attachment each render(); call ignored\n";
+        }
+    }
 
+    // nullptr = "rendering to the default framebuffer" in three.js semantics —
+    // accurate here, the swapchain is the only target this renderer has.
     RenderTarget* VulkanRendererCore::getRenderTarget() { return nullptr; }
-    void VulkanRendererCore::setRenderTarget(RenderTarget*, int, int) {}
+    void VulkanRendererCore::setRenderTarget(RenderTarget* renderTarget, int, int) {
+        if (!renderTarget) return;// null = default framebuffer — already the only mode
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::cerr << "[VulkanRenderer] setRenderTarget(): offscreen render targets are "
+                         "unsupported (swapchain-only renderer); call ignored — use "
+                         "readGBufferAOV/readRGBPixels for capture\n";
+        }
+    }
 
     void VulkanRendererCore::writeFramebuffer(const std::filesystem::path& filename) {
         auto ext = filename.extension().string();
@@ -534,6 +565,16 @@ namespace threepp {
         const auto       h     = ext.height;
         const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
         if (w == 0 || h == 0) return {};
+
+        // The copy below is only legal when the swapchain was created with
+        // TRANSFER_SRC usage (see VulkanContext::createSwapchain). Universally
+        // available on desktop; fail loudly rather than issue an invalid copy.
+        if (!ctx->swapchainSupportsTransferSrc()) {
+            throw std::runtime_error(
+                    "VulkanRenderer::readRGBPixels: the surface does not support "
+                    "TRANSFER_SRC swapchain usage, so the presented image cannot be "
+                    "copied out on this platform");
+        }
 
         // Wait so the previously presented swapchain image is fully written
         // and stable. Cheap unless the user is hammering render() — they
@@ -653,6 +694,16 @@ namespace threepp {
     }
 
     void VulkanRendererCore::setSceneCaptureEnabled(bool enabled) {
+        // Scene capture copies the mid-frame swapchain image into a staging
+        // buffer (recordSceneCapture) — same TRANSFER_SRC precondition as
+        // readRGBPixels. ctx may not exist yet (pre-first-render enable);
+        // recordSceneCapture re-checks and skips with a warning in that case.
+        if (enabled && core()->ctx && !core()->ctx->swapchainSupportsTransferSrc()) {
+            throw std::runtime_error(
+                    "VulkanRenderer::setSceneCaptureEnabled: the surface does not "
+                    "support TRANSFER_SRC swapchain usage, so scene capture is "
+                    "unavailable on this platform");
+        }
         core()->sceneCaptureEnabled_ = enabled;
     }
 

@@ -34,7 +34,7 @@ layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;    // x = instanceId
 layout(set = 0, binding = 6) uniform sampler2D  gbufAlbedoTex; // rgb=albedo, a=metalness
 layout(set = 0, binding = 7,  rgba16f) uniform image2D outImage;            // sceneHdr (recombine: read+write)
 layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;// accumulated GI (.rgb), histLen (.a); written by the SVGF history feedback
-layout(set = 0, binding = 20, r16f)    uniform readonly image2D momentsImage; // E[L²]
+layout(set = 0, binding = 20, r32f)    uniform readonly image2D momentsImage; // E[L²] (r32 — the square overflows fp16 at lum≈256)
 layout(set = 0, binding = 22, rgba16f) uniform image2D atrousA;            // ping-pong (rgb=GI, a=variance)
 layout(set = 0, binding = 23, rgba16f) uniform image2D atrousB;
 layout(set = 0, binding = 25, rgba16f) uniform readonly image2D reflectImage;// sharp mirror reflection (.rgb pre-weighted, .a=roughness)
@@ -528,6 +528,13 @@ void main() {
         imageStore(shadowVisImage, px, vec4(cS.x, sv.yzw));
     }
 
+    // Variance rides the rgba16f ping-pong's .a — cap it at fp16 max so a
+    // physically-hot moment (the r32f E[L²] carries values ≫ 65504) doesn't
+    // land as Inf in the carry. Loss-free in effect: lumPhi = 4·sqrt(var)
+    // only needs the magnitude's ORDER to loosen the edge stop, and
+    // sqrt(6.5e4) already means "blur everything".
+    const float fV16 = min(fV, 6.5e4);
+
     if (pc.dstMode == 2u) {
         // Recombine: sceneHdr += blur(indirect) · diffuseColor (matches
         // shadeDiffuseDirect's albedo·(1-metalness)) + directU × R̃ (the
@@ -542,10 +549,10 @@ void main() {
                                             * fogTransmittance(camPos, Pc) * recombineCoverage(px)
                                             * uintBitsToFloat(pc.preExpBits), 1.0));
     } else if (pc.dstMode == 0u) {
-        imageStore(atrousA, px, vec4(fC, fV));
+        imageStore(atrousA, px, vec4(fC, fV16));
         imageStore(shadowAtrousA, px, vec4(fS, fVS, 0.0, 0.0));
     } else {
-        imageStore(atrousB, px, vec4(fC, fV));
+        imageStore(atrousB, px, vec4(fC, fV16));
         imageStore(shadowAtrousB, px, vec4(fS, fVS, 0.0, 0.0));
     }
 }

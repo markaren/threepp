@@ -137,7 +137,7 @@ layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;
 layout(set = 0, binding = 17) uniform sampler2D giPrevTex;      // 1-frame GI history (reprojected)
 layout(set = 0, binding = 18) uniform sampler2D gbufMotionTex;  // .rg = NDC motion
 layout(set = 0, binding = 19) uniform sampler2D gbufNormalPrevTex;// prev world normals (geometric disocclusion)
-layout(set = 0, binding = 20, r16f) uniform image2D momentsImage; // SVGF E[L²] accumulator (this frame)
+layout(set = 0, binding = 20, r32f) uniform image2D momentsImage; // SVGF E[L²] accumulator (this frame; r32 — the square overflows fp16 at lum≈256)
 layout(set = 0, binding = 21) uniform sampler2D momentsPrevTex;   // PREV E[L²] (reprojected SVGF history)
 layout(set = 0, binding = 24) uniform sampler2D gbufDepthPrevTex; // PREV depth (depth-discontinuity disocclusion)
 layout(set = 0, binding = 25, rgba16f) uniform image2D reflectImage;// sharp mirror-ray reflection radiance (.rgb pre-weighted, .a=roughness); denoise blurs by roughness
@@ -1156,6 +1156,15 @@ void main() {
                                   : (giSkip ? texture(giPrevTex, uv) : vec4(0.0));
         const vec3  prev  = prevT.rgb;
         valid = valid && all(lessThan(abs(prev), vec3(1e6)));// NaN/garbage guard
+        // fp16-SAFE clamp on the NEW sample: indirect + the à-trous ping-pongs
+        // are rgba16f (max 65504) and NOT pre-exposed (pre-exposure applies at
+        // the sceneHdr store). Physical light units (sun in klux) push the
+        // demodulated indirect past that — an unclamped accumulate stores Inf,
+        // the |prev| guard above then resets the history EVERY frame (permanent
+        // 1-frame GI = flicker) and E[L²]−E[L]² turns the SVGF variance NaN.
+        // Radiance this hot is beyond any exposure the tonemapper meets, so
+        // the clamp is visually free; prev ≤ the same bound by induction.
+        diffInd = min(diffInd, vec3(6.5e4));
         // MOTION-SCALED temporal cap: a fixed cap can't be both clean (static needs
         // a LONG history to average the 1-spp noise) and lag-free (motion needs a
         // SHORT one, else the slow running mean trails the camera/object as a
