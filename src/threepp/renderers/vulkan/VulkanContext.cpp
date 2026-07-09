@@ -300,28 +300,6 @@ namespace threepp::vulkan {
             props2.pNext = &rtPipelineProperties_;
             vkGetPhysicalDeviceProperties2(physicalDevice_, &props2);
 
-            // Probe for VK_NV_ray_tracing_invocation_reorder (SER). Extension
-            // presence alone isn't enough — also need the feature's
-            // rayTracingInvocationReorder bit set on this device. Both are
-            // queried here so the rest of the renderer can branch on a single
-            // boolean. Non-NVIDIA GPUs and pre-Ampere NVIDIA fall through to
-            // the fallback raygen SPV.
-            const auto pickedExts = deviceExtensions(physicalDevice_);
-            if (hasExtension(pickedExts, VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME)) {
-                VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV reorderFeat{};
-                reorderFeat.sType =
-                        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV;
-                VkPhysicalDeviceFeatures2 feat2{};
-                feat2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-                feat2.pNext = &reorderFeat;
-                vkGetPhysicalDeviceFeatures2(physicalDevice_, &feat2);
-                rayTracingInvocationReorderSupported_ =
-                        reorderFeat.rayTracingInvocationReorder == VK_TRUE;
-            }
-            std::cerr << "[VulkanContext] SER (VK_NV_ray_tracing_invocation_reorder): "
-                      << (rayTracingInvocationReorderSupported_ ? "enabled" : "fallback")
-                      << "\n";
-
             // Probe for VK_KHR_ray_query — lets compute shaders trace inline
             // rays (rayQueryEXT). Used by the raster-first deferred shading pass
             // for hard shadow rays. Optional: ReferencePT doesn't need it, so a
@@ -402,9 +380,6 @@ namespace threepp::vulkan {
         std::vector<const char*> extensions(kBaseDeviceExtensions.begin(), kBaseDeviceExtensions.end());
         if (rayTracingEnabled_) {
             extensions.insert(extensions.end(), kRayTracingExtensions.begin(), kRayTracingExtensions.end());
-            if (rayTracingInvocationReorderSupported_) {
-                extensions.push_back(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
-            }
             if (rayQuerySupported_) {
                 extensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
             }
@@ -453,14 +428,6 @@ namespace threepp::vulkan {
         fRT.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
         fRT.rayTracingPipeline = VK_TRUE;
 
-        // SER feature struct — only chained when both extension and feature
-        // probed positive at pickPhysicalDevice. Driver rejects vkCreateDevice
-        // if we chain it without the extension being in the enabled-extension
-        // list above (the conditional `extensions.push_back(...)` handles that).
-        VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV fReorder{};
-        fReorder.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV;
-        fReorder.rayTracingInvocationReorder = VK_TRUE;
-
         // Inline ray query (rayQueryEXT in compute) for the raster-first
         // deferred shadow pass. Chained at the tail (after f13) when supported.
         VkPhysicalDeviceRayQueryFeaturesKHR fRQ{};
@@ -470,10 +437,6 @@ namespace threepp::vulkan {
         if (rayTracingEnabled_) {
             fRT.pNext = &f12;
             fAS.pNext = &fRT;
-            if (rayTracingInvocationReorderSupported_) {
-                // Splice fReorder at the head of the chain so it precedes fAS.
-                fReorder.pNext = &fAS;
-            }
             if (rayQuerySupported_) {
                 fRQ.pNext = f13.pNext;// preserve any existing tail (currently null)
                 f13.pNext = &fRQ;
@@ -508,9 +471,7 @@ namespace threepp::vulkan {
         // 1.0, universally supported on RT-capable hardware.
         features2.features.independentBlend = VK_TRUE;
         if (rayTracingEnabled_) {
-            features2.pNext = rayTracingInvocationReorderSupported_
-                                      ? static_cast<void*>(&fReorder)
-                                      : static_cast<void*>(&fAS);
+            features2.pNext = &fAS;
         } else {
             features2.pNext = &f12;
         }
@@ -630,7 +591,7 @@ namespace threepp::vulkan {
         // of spinning the GPU at 100% (matches the WGPU backend, and avoids starving
         // co-resident compute such as on-device inference). vsync off -> prefer
         // MAILBOX (uncapped, no tearing) then IMMEDIATE, for lowest latency / fastest
-        // progressive path-tracer convergence.
+        // progressive temporal (TAA/ReSTIR) convergence.
         VkPresentModeKHR chosenMode = VK_PRESENT_MODE_FIFO_KHR;// guaranteed; vsync-capped
         if (!vsync_) {
             bool hasMailbox = false, hasImmediate = false;

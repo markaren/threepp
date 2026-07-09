@@ -64,10 +64,11 @@ namespace threepp::vulkan {
         // scene / camera — the ortho HUD scene and its camera.
         // screenSpaceOnly — when true, only sprites with Sprite::screenSpace=true
         //                   are drawn (used for the automatic screen-space sprite
-        //                   compositing after the PT body).
+        //                   compositing after the deferred-shaded frame body).
         // regionW == 0 → full frame. Otherwise the overlay is clipped to the
         // swapchain sub-rect (regionX, regionY, regionW, regionH) — used for
-        // split-screen secondary panes (overlay-only, drawn beside a PT pane).
+        // split-screen secondary panes (overlay-only, drawn beside the
+        // primary deferred-render pane).
         void record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex,
                     Object3D& scene, Camera& camera, bool screenSpaceOnly,
                     uint32_t regionX = 0, uint32_t regionY = 0,

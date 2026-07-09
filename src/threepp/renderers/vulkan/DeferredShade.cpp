@@ -94,16 +94,16 @@ namespace threepp::vulkan {
         set(24, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV gbuf depth (geometric GI disocclusion: depth discontinuity)
         set(25, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reflect (sharp mirror-ray reflection radiance; shade writes, reflection denoise reads)
         set(26, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV reflect (other fif index) = 1-frame reflection/glass history (temporal AA)
-        // ReSTIR DI reservoir ping-pong (shared with the PT path's reservoir images).
+        // ReSTIR DI reservoir ping-pong images.
         // 27/28 = lightPos+type write/read (rgba32f); 29/30 = W_sum/M/W/p_hat write/read
-        // (rgba16f). Storage images (the PT images have no SAMPLED usage), GENERAL layout.
+        // (rgba16f). Storage images (no SAMPLED usage), GENERAL layout.
         set(27, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir pos+type WRITE (this frame)
         set(28, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir pos+type READ (prev frame, temporal reuse)
         set(29, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir W_sum/M/W/p_hat WRITE
         set(30, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir W_sum/M/W/p_hat READ
         set(31, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reflAux CUR (reflection-denoiser auxiliary; mirrors 25)
         set(32, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV reflAux (other fif index) = 1-frame reflection-denoiser history (mirrors 26)
-        set(33, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // scene fog UBO (shared with the PT path)
+        set(33, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // scene fog UBO
         set(34, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // tileable foam detail (R=bubbles, G=lace; mirrors RT binding 45)
         set(35, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // blue-noise tile (GI hemisphere dithering)
         set(36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // probe SH-L1 store (ProbeGI, read)
@@ -323,7 +323,7 @@ namespace threepp::vulkan {
             prevReflAuxInfo.sampler     = gbufSampler_;
             prevReflAuxInfo.imageView   = in.reflAux[(f + 1u) % framesInFlight_];
             prevReflAuxInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            VkDescriptorBufferInfo fogInfo{};// scene fog (same UBO the PT consumes)
+            VkDescriptorBufferInfo fogInfo{};// scene fog UBO
             fogInfo.buffer = in.fogBuf[f];
             fogInfo.offset = 0;
             fogInfo.range  = in.fogRange;

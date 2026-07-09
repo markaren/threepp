@@ -863,7 +863,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
           "vkResetDescriptorPool(sprite)");
 
     // Collect visible sprites. traverseVisible skips invisible
-    // subtrees the same way the PT walk does. effWorld captures the
+    // subtrees the same way the deferred scene walk does. effWorld captures the
     // world matrix used for the draw — for screenSpace sprites we
     // synthesise this from screenAnchor + viewport + position
     // instead of using sp->matrixWorld (which carries the user's
@@ -924,10 +924,11 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     //
     // ONLY in the true ortho/HUD path (screenSpaceOnly == false). The
     // screenSpaceOnly == true call comes from the perspective path
-    // (beginFrameForPT, compositing screen-space Sprites over the PT
-    // image): a perspective scene's Lines are already drawn correctly by
-    // the 3D hybrid overlay, so collecting them here would double-draw
-    // them through the internal screen-space camera at wrong positions.
+    // (beginDeferredFrame, compositing screen-space Sprites over the
+    // deferred-shaded image): a perspective scene's Lines are already drawn
+    // correctly by the 3D hybrid overlay, so collecting them here would
+    // double-draw them through the internal screen-space camera at wrong
+    // positions.
     struct OrthoLineDraw {
         Line* line = nullptr;
         bool  isSegments = false;
@@ -951,8 +952,8 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
 
     // Collect filled Mesh overlays (flat MeshBasicMaterial-style fills,
     // e.g. SVG ShapeGeometry HUD art). Same gating as lines: only the
-    // explicit ortho/HUD render, never the PT screen-space auto-pass
-    // (which would wrongly flatten the path-traced 3D scene's meshes).
+    // explicit ortho/HUD render, never the perspective screen-space
+    // auto-pass (which would wrongly flatten the rendered 3D scene's meshes).
     struct OrthoMeshDraw {
         Mesh*   mesh = nullptr;
         Matrix4 world;
@@ -982,7 +983,8 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     // Collect Points objects (point clouds). POINT_LIST topology; the push
     // constant's color.w carries PointsMaterial::size (pixels). Requires a
     // per-vertex "color" attribute — the point pipeline always reads binding 1.
-    // Same ortho/HUD gating as lines/meshes (never the PT screen-space pass).
+    // Same ortho/HUD gating as lines/meshes (never the perspective
+    // screen-space auto-pass).
     struct OrthoPointDraw {
         Points* points = nullptr;
         Matrix4 world;

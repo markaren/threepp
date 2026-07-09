@@ -103,7 +103,7 @@ namespace threepp::vulkan {
         // Overlay timings collapse the depth prepass + draw pair into a
         // single "overlay" column for the public API.
         lastTimings_.overlayMs    = pairMs(TP_OverlayDepth) + pairMs(TP_OverlayDraw);
-        lastTimings_.pathTraceMs  = pairMs(TP_PathTrace);
+        lastTimings_.pathTraceMs  = pairMs(TP_DeferredShade);// public field name kept for API stability
         lastTimings_.denoiseMs    = pairMs(TP_Denoise);
         lastTimings_.taaMs        = pairMs(TP_TAA);
         lastTimings_.dofMs        = pairMs(TP_Dof);

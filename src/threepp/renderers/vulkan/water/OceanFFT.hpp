@@ -1,4 +1,4 @@
-// FFT-based ocean simulation primitives for the Vulkan path tracer.
+// FFT-based ocean simulation primitives for the Vulkan deferred renderer.
 //
 // PhillipsSpectrum   — Generates the static h0(k) initial spectrum (one-shot).
 // DynamicSpectrum    — Time-evolves h0(k) into ht/dht/displacement (per frame).

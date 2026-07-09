@@ -1,7 +1,7 @@
 // BloomPass — the HDR bloom pyramid of the shared post stack.
 //
 // The shade/resolve stage writes the linear-HDR scene into sceneHdr (bound to
-// the shared RT descriptor set's binding 1). This pass then runs the Jimenez
+// the deferred shade's descriptor set binding 1). This pass then runs the Jimenez
 // 2014 ("Next Generation Post Processing in Call of Duty: Advanced Warfare")
 // progressive bloom pyramid:
 //   1. downsample chain: sceneHdr → 1/2 → 1/4 → … → ~1/64 with the 13-tap

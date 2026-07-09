@@ -15,6 +15,10 @@
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanCoreImpl.hpp"
 
+// stb_image_write — implementation is already compiled in GLRenderer.cpp.
+// Only this TU calls stbi_write_*() (screenshot/--shot capture path).
+#include "stb_image_write.h"
+
 namespace threepp {
 
 
@@ -64,7 +68,7 @@ namespace threepp {
         }
 
         // CPU per-frame tick: lazy-init, then read histogram + advance EMA.
-        void onBeginFrameForPT(uint32_t frame, float dt) override {
+        void onBeginDeferredFrame(uint32_t frame, float dt) override {
             if (!autoExposureEnabled_) return;
             if (!autoExposure_) {
                 autoExposure_ = std::make_unique<vulkan::AutoExposure>(*ctx, kFramesInFlight);
@@ -93,8 +97,9 @@ namespace threepp {
 
         bool decalsEnabled() const override { return true; }
 
-        // Deferred: the PT-style gbuf ping-pong is never written — the post
-        // composite's solid-bg sky test must read the raster ids attachment.
+        // The legacy gbuf ping-pong sky-id format is never written by this
+        // renderer — the post composite's solid-bg sky test must read the
+        // raster ids attachment instead.
         bool skyIdsFromRasterGbuf() const override { return true; }
 
         // HDRI sun → analytic light (see CoreImpl::envSunExtractionWanted).
@@ -240,7 +245,7 @@ namespace threepp {
                 fdep.pMemoryBarriers = &fbar;
                 vkCmdPipelineBarrier2(cb, &fdep);
             }
-            gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
+            gpuTimings_->begin(cb, TP_DeferredShade, currentFrame);
             deferredShade_->recordDispatch(cb, currentFrame,
                                            regionRenderExt_.width, regionRenderExt_.height,
                                            envImage.mipLevels, /*shadows=*/true,
@@ -259,7 +264,7 @@ namespace threepp {
                                            clusterLightCountThisFrame_, froxelsActive,
                                            ssrActive, preExpBits_, prevPreExpBits_,
                                            envIsBgColor);
-            gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
+            gpuTimings_->end(cb, TP_DeferredShade, currentFrame);// pathTraceMs = deferred SHADE only
 
             // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
             // Opt-in (gbufShadeBEnabled_, default false) and only when
@@ -416,19 +421,20 @@ namespace threepp {
                 core()->frameState_ != CoreImpl::FrameState::Idle &&
                 core()->scissorTest &&
                 core()->scissor.z >= 1.f && core()->scissor.w >= 1.f;
-        // Only the PT-bound (perspective-camera) primary render() call needs the
-        // scene-build pass — it populates lastVisibleEntries_, the BLAS
-        // cache, motion bits and the per-mesh fingerprint state the PT
-        // pipeline reads. The HUD pattern's second call (ortho camera over
-        // a separate HUD scene) must not touch any of that, or it clobbers
-        // motionThisFrame_ / meshMovedBits_ / lastVisibleEntries_ and the
-        // next PT frame cold-starts (visibly drops to ~1-spp quality).
+        // Only the deferred-render-bound (perspective-camera) primary
+        // render() call needs the scene-build pass — it populates
+        // lastVisibleEntries_, the BLAS cache, motion bits and the per-mesh
+        // fingerprint state the deferred shade pipeline reads. The HUD
+        // pattern's second call (ortho camera over a separate HUD scene)
+        // must not touch any of that, or it clobbers meshMovedBits_ /
+        // lastVisibleEntries_ and the next deferred frame
+        // cold-starts (visibly drops to ~1-spp quality).
         // The ortho overlay record path walks the HUD scene directly instead.
         if (!camera.is<OrthographicCamera>() && !secondaryOverlayPane) {
             const auto sceneStart = std::chrono::high_resolution_clock::now();
             core()->ensureSceneBuilt(scene);
             // World-space Sprites (screenSpace == false) are drawn by the overlay
-            // billboard pass, not the PT/G-buffer path. Snapshot them each frame
+            // billboard pass, not the deferred/G-buffer path. Snapshot them each frame
             // with fresh world matrices (ensureSceneBuilt just ran
             // updateMatrixWorld) — independent of the snapshot/lean machinery,
             // since impact sprites move/spawn/expire every frame.
@@ -793,7 +799,7 @@ namespace threepp {
                                staging.handle, 1, &region);
 
         // Restore the resting layout so the next frame's consumers (deferred
-        // shade / TAA / raygen) find the attachment where they expect it.
+        // shade / TAA) find the attachment where they expect it.
         VkImageMemoryBarrier toRest = toSrc;
         toRest.oldLayout            = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         toRest.newLayout            = restLayout;
@@ -869,11 +875,11 @@ namespace threepp {
             // images before resize() destroys them.
             vkDeviceWaitIdle(impl.ctx->device());
             impl.eventCam_->resize(w, h);
-            // Set up the deterministic shade pipeline — eliminates PT
-            // noise as a source of false events. The detector now reads
-            // the shade output (eventLumaBuf_) instead of the scene
-            // capture buffer, so we don't need to enable sceneCapture
-            // for the event camera to work.
+            // Set up the deterministic shade pipeline — eliminates
+            // stochastic shading noise as a source of false events. The
+            // detector now reads the shade output (eventLumaBuf_) instead of
+            // the scene capture buffer, so we don't need to enable
+            // sceneCapture for the event camera to work.
             impl.createEventShadePipeline();
             impl.allocateEventLumaBuffer(w, h);
         }
@@ -996,12 +1002,6 @@ namespace threepp {
         g = std::max(-0.95f, std::min(g, 0.95f));
         if (g != core()->fogAnisotropy_) {
             core()->fogAnisotropy_ = g;
-            // Force the per-pixel motion path to halve FC so the new phase
-            // function settles quickly. The fog UBO hash will catch this on
-            // the next updateFogUbo call too, but flagging here covers the
-            // case where setFogAnisotropy is invoked without changing density.
-            core()->motionThisFrame_      = true;
-            core()->cameraMovedThisFrame_ = true;
         }
     }
 
@@ -1259,10 +1259,6 @@ namespace threepp {
     void VulkanRenderer::setVolumetricFog(bool enabled) {
         if (enabled != pimpl_->deferredVolFog_) {
             pimpl_->deferredVolFog_ = enabled;
-            // Toggling changes inscatter every pixel → drop TAA history so the
-            // shafts appear/vanish without a ghosted cross-fade.
-            pimpl_->motionThisFrame_      = true;
-            pimpl_->cameraMovedThisFrame_ = true;
         }
     }
 

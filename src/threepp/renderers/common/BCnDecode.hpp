@@ -1,13 +1,13 @@
-#ifndef THREEPP_WGPUPATHTRACERBCN_HPP
-#define THREEPP_WGPUPATHTRACERBCN_HPP
+#ifndef THREEPP_BCNDECODE_HPP
+#define THREEPP_BCNDECODE_HPP
 
-// Private header — software BCn / DXT decompressor used by the path tracer's
-// texture atlas builder. Not part of the public API.
+// Private header — software BCn/DXT decode for compressed-texture upload in
+// the Vulkan renderer. Not part of the public API.
 
 #include <cstdint>
 #include <vector>
 
-namespace threepp::wgpu_pt {
+namespace threepp::bcn {
 
     /// Decompress an entire BCn / DXT texture level to RGBA8.
     /// Supports DXT1 (BC1), DXT3 (BC2), DXT5 (BC3), BC4, BC5, BC7 and the sRGB
@@ -15,6 +15,6 @@ namespace threepp::wgpu_pt {
     /// codec). Returns an empty vector if the format is unsupported (e.g. BC6H).
     std::vector<std::uint8_t> bcnDecompress(const std::uint8_t* blocks, int w, int h, unsigned int glFmt);
 
-}// namespace threepp::wgpu_pt
+}// namespace threepp::bcn
 
-#endif//THREEPP_WGPUPATHTRACERBCN_HPP
+#endif//THREEPP_BCNDECODE_HPP

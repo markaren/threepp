@@ -1,9 +1,8 @@
-// PostComposite — the camera/display end of the shared HDR post stack.
+// PostComposite — the camera/display end of the HDR post stack.
 //
-// The deferred shade / PT resolve write the linear-HDR scene into
-// BloomPass::sceneHdr; BloomPass (now pyramid-only) optionally builds the
-// blurred bloom buffer from it. This pass closes the HDR path in ONE
-// dispatch (post_composite.comp):
+// The deferred shade writes the linear-HDR scene into BloomPass::sceneHdr;
+// BloomPass (now pyramid-only) optionally builds the blurred bloom buffer
+// from it. This pass closes the HDR path in ONE dispatch (post_composite.comp):
 //
 //   sceneHdr (+ bloom) → exposure → white balance (Bradford CAT, linear)
 //     → tone map (incl. AgX) → sRGB encode → grading LUT (encoded domain)
@@ -85,7 +84,7 @@ namespace threepp::vulkan {
         struct DescriptorWriteInputs {
             const VkImageView* sceneHdrPerFrame  = nullptr;// [framesInFlight]
             const VkImageView* bloomPerFrame     = nullptr;// [framesInFlight]
-            const VkImageView* gbufPerFrame      = nullptr;// [framesInFlight] PT gbuf (.w = id+1)
+            const VkImageView* gbufPerFrame      = nullptr;// [framesInFlight] legacy gbuf ping-pong (.w = id+1); unused in deferred mode, see skyFromRasterIds
             const VkImageView* rasterIdsPerFrame = nullptr;// [framesInFlight] raster ids (.x = id+1)
             const VkImageView* taaInputPerFrame  = nullptr;// [framesInFlight]
             const VkImageView* hdrScenePerFrame  = nullptr;// [framesInFlight] HDR-mode-only
@@ -123,7 +122,7 @@ namespace threepp::vulkan {
         // exposure, preExposureBits = the factor already baked into sceneHdr
         // by the shade/resolve (1.0 in legacy mode). skyFromRasterIds: the
         // deferred renderer's sky test reads the raster ids attachment (the
-        // PT-style gbuf ping-pong is never written on that path).
+        // legacy gbuf ping-pong format is never written on that path).
         // `srcWidth`/`srcHeight` = the RENDER-extent size of the sky-mask
         // sources (gbufImg/rasterIdsTex) — needed only when width/height (the
         // dispatch extent) differ from them, i.e. HDR mode at renderScale<1.

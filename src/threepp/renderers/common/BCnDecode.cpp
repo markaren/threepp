@@ -1,8 +1,8 @@
-#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
+#include "threepp/renderers/common/BCnDecode.hpp"
 
 #include <cstring>
 
-namespace threepp::wgpu_pt {
+namespace threepp::bcn {
 
 namespace {
 
@@ -217,4 +217,4 @@ std::vector<std::uint8_t> bcnDecompress(const std::uint8_t* blocks, int w, int h
     return out;
 }
 
-}// namespace threepp::wgpu_pt
+}// namespace threepp::bcn

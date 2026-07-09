@@ -26,16 +26,19 @@ namespace threepp::vulkan {
     // both endpoints so readBack() can skip pools that weren't touched this
     // frame (overlay on no-overlay frames, DoF when disabled, …).
     enum TimingPass : uint32_t {
-        TP_RasterGbuf   = 0,
-        TP_OverlayDepth = 1,
-        TP_PathTrace    = 2,
-        TP_Denoise      = 3,
-        TP_TAA          = 4,
-        TP_OverlayDraw  = 5,
-        TP_GbufResolve  = 6,// MSAA dominant-sample resolve (setGbufferMsaa > 1 only)
-        TP_ShadeB       = 7,// MSAA dispatch B: per-sample edge shading (setGbufferMsaa > 1 only)
-        TP_Dof          = 8,// thin-lens depth of field (setDepthOfField only)
-        TP_COUNT        = 9,
+        TP_RasterGbuf    = 0,
+        TP_OverlayDepth  = 1,
+        TP_DeferredShade = 2,// internal name for the deferred-shade compute
+                             // dispatch timing bracket; bridges to the public
+                             // VulkanRenderer::FrameTimings::pathTraceMs field
+                             // (kept for API stability — see GpuTimings.cpp).
+        TP_Denoise       = 3,
+        TP_TAA           = 4,
+        TP_OverlayDraw   = 5,
+        TP_GbufResolve   = 6,// MSAA dominant-sample resolve (setGbufferMsaa > 1 only)
+        TP_ShadeB        = 7,// MSAA dispatch B: per-sample edge shading (setGbufferMsaa > 1 only)
+        TP_Dof           = 8,// thin-lens depth of field (setDepthOfField only)
+        TP_COUNT         = 9,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

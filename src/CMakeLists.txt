@@ -633,6 +633,15 @@ if (THREEPP_WITH_VULKAN)
             "threepp/objects/Ocean.cpp"
             "threepp/renderers/vulkan/VulkanContext.cpp"
             "threepp/renderers/vulkan/VulkanResources.cpp"
+            "threepp/renderers/vulkan/VulkanCoreGeometry.cpp"
+            "threepp/renderers/vulkan/VulkanCoreScene.cpp"
+            "threepp/renderers/vulkan/VulkanCoreUploads.cpp"
+            "threepp/renderers/vulkan/VulkanCoreIndirect.cpp"
+            "threepp/renderers/vulkan/VulkanCorePipelines.cpp"
+            "threepp/renderers/vulkan/VulkanCoreDescriptors.cpp"
+            "threepp/renderers/vulkan/VulkanCoreTextures.cpp"
+            "threepp/renderers/vulkan/VulkanCoreRecord.cpp"
+            "threepp/renderers/vulkan/VulkanCoreFrame.cpp"
             "threepp/renderers/vulkan/LidarScanner.cpp"
             "threepp/renderers/vulkan/EnvPrefilter.cpp"
             "threepp/renderers/vulkan/EventCameraDetector.cpp"
@@ -657,12 +666,12 @@ if (THREEPP_WITH_VULKAN)
     )
 endif ()
 
-# BCn / DXT software decoder used by the Vulkan path tracer's texture atlas
-# builder. (Originally shared with the now-removed WGPU path tracer; the WGPU
-# forward-raster backend does not use it.)
+# BCn / DXT software decode for compressed-texture upload in the Vulkan
+# renderer. (Originally shared with the now-removed Vulkan path tracer; the
+# WGPU forward-raster backend does not use it.)
 if (THREEPP_WITH_VULKAN)
     list(APPEND sources
-            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.cpp"
+            "threepp/renderers/common/BCnDecode.cpp"
     )
 endif ()
 

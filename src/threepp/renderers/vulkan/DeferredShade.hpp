@@ -4,13 +4,14 @@
 // produced by the raster prepass and shades a clean, analytic, noise-free base
 // (direct analytic lights + split-sum specular IBL + approximate diffuse IBL)
 // straight into the BloomPass sceneHdr image. The existing bloom + TAA tail
-// then finishes the frame exactly as it does for the path-traced ReferencePT
-// mode — only the surface-shading stage differs.
+// then finishes the frame the same way regardless of the shading stage
+// upstream of it — only the surface-shading stage differs between renderer
+// configurations.
 //
-// This pass owns no images: it writes BloomPass::sceneHdrView(frame), the same
-// linear-HDR target denoise.comp writes in ReferencePT. It uses its own
-// focused descriptor layout (it does NOT touch the shared RT descriptor set),
-// so it cannot regress the path tracer.
+// This pass owns no images: it writes BloomPass::sceneHdrView(frame), the
+// same linear-HDR target every shading stage writes into. It uses its own
+// focused descriptor layout, keeping its footprint independent of the rest
+// of the renderer.
 
 #ifndef THREEPP_VULKAN_DEFERRED_SHADE_HPP
 #define THREEPP_VULKAN_DEFERRED_SHADE_HPP
@@ -62,13 +63,13 @@ namespace threepp::vulkan {
             const VkImageView* shadowAtrousA = nullptr;// [framesInFlight] storage (rg16f)
             const VkImageView* shadowAtrousB = nullptr;// [framesInFlight] storage (rg16f)
             const VkImageView* sceneHdr   = nullptr;// [framesInFlight] output (storage)
-            // Scene fog (homogeneous medium) — the SAME per-frame UBO the PT path
-            // consumes (GpuFogUbo: sigmaT/enabled/color/anisotropy/waterSurfaceY).
+            // Scene fog (homogeneous medium) — the per-frame UBO
+            // (GpuFogUbo: sigmaT/enabled/color/anisotropy/waterSurfaceY).
             const VkBuffer*    fogBuf     = nullptr;// [framesInFlight]
             VkDeviceSize       fogRange   = 0;
-            // ReSTIR DI reservoir ping-pong — [2] PHYSICAL images (not per-frame): the
-            // shared PT reservoir images. rewriteDescriptors picks write=slot(f&1),
-            // read=other per frame, matching the RT set's ping-pong. STORAGE images.
+            // ReSTIR DI reservoir ping-pong — [2] PHYSICAL images (not per-frame).
+            // rewriteDescriptors picks write=slot(f&1), read=other per frame.
+            // STORAGE images.
             const VkImageView* reservoirPos = nullptr;// [2] lightPos.xyz + lightType.w (rgba32f)
             const VkImageView* reservoirW   = nullptr;// [2] W_sum/M/W/p_hat (rgba16f)
             VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;// shared scene TLAS (shadow + reflection rays)
@@ -89,9 +90,9 @@ namespace threepp::vulkan {
             VkImageView        foamDetailView    = VK_NULL_HANDLE;
             VkSampler          foamDetailSampler = VK_NULL_HANDLE;
             // 64×64 R8 void-and-cluster blue-noise tile (the renderer's shared
-            // blueNoiseImage, also bound by the PT path) — dithers the stochastic
-            // GI hemisphere directions. Sampled through gbufSampler_ (NEAREST is
-            // correct: the shader computes exact texel-center UVs).
+            // blueNoiseImage) — dithers the stochastic GI hemisphere directions.
+            // Sampled through gbufSampler_ (NEAREST is correct: the shader
+            // computes exact texel-center UVs).
             VkImageView        blueNoise = VK_NULL_HANDLE;
             // World-space irradiance probe grid (ProbeGI, bindings 36/37/54).
             // Always valid — ProbeGI allocates all three at construction; the
@@ -136,7 +137,7 @@ namespace threepp::vulkan {
         void rewriteEmissive(uint32_t frame, VkBuffer emissiveTriBuf);
 
         // Dispatch the deferred shade over the render extent. width/height =
-        // path-trace render extent (== G-buffer extent). envMipCount drives the
+        // the deferred render extent (== G-buffer extent). envMipCount drives the
         // roughness→mip mapping for specular IBL. The caller is responsible for
         // making the G-buffer visible to COMPUTE (the raster G-buffer render
         // pass declares a COMPUTE consumer dependency) and for the sceneHdr

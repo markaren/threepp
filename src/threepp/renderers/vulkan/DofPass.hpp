@@ -2,8 +2,8 @@
 //
 // Runs between the shade/denoise (sceneHdr final) and the bloom pyramid /
 // PostComposite, so defocused highlights still bloom and tone-map as HDR.
-// Shared by both Vulkan renderers (the raster G-buffer depth exists in both;
-// the PT hybrid prepass rasterizes it for TAA anyway).
+// Consumes the raster G-buffer depth, which the hybrid prepass rasterizes
+// for TAA anyway.
 //
 // Jimenez-style half-res scatter-as-gather (4 dispatches, ~fixed cost):
 //   1. dof_coc     — half-res prefilter + signed thin-lens CoC from depth

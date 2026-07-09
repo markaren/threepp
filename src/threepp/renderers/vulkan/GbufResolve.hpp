@@ -6,8 +6,8 @@
 // sample whose instance id has the most votes among the K live samples
 // (ties broken by nearest reversed-Z depth) and writes that sample's
 // G-buffer data into the EXISTING single-sample images — the same images
-// every consumer (DeferredShade, TaaResolve, the raygen hybrid descriptor
-// set, the debug blit) already reads, unchanged. See gbuf_resolve.comp for
+// every consumer (DeferredShade, TaaResolve, the deferred shade's hybrid
+// descriptor set, the debug blit) already reads, unchanged. See gbuf_resolve.comp for
 // the full per-pixel algorithm and the ids.w metadata packing (dominant
 // index + same-cluster mask + complex/edge flag), consumed by a later
 // per-sample shading phase.

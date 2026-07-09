@@ -66,17 +66,6 @@ namespace threepp::vulkan {
 
         bool rayTracingEnabled() const { return rayTracingEnabled_; }
 
-        // NVIDIA Shader Execution Reordering (VK_NV_ray_tracing_invocation_reorder).
-        // When true, the raygen pipeline loads the SER variant of the raygen
-        // SPV (hitObjectNV / reorderThreadNV / hitObjectExecuteShaderNV around
-        // the bounce trace) which warp-reorders threads by hit material before
-        // the closest_hit invocation — typically a 10-30% speed-up on incoherent
-        // diffuse-bounce paths on Ada / Ampere. Falls back to plain traceRayEXT
-        // when unsupported (AMD, Intel, older NVIDIA, software fallback).
-        bool rayTracingInvocationReorderSupported() const {
-            return rayTracingInvocationReorderSupported_;
-        }
-
         // VK_KHR_ray_query — inline ray tracing from any stage (compute). Used
         // by the raster-first deferred shading pass for hard shadow rays.
         // Optional; ReferencePT works without it.
@@ -145,7 +134,6 @@ namespace threepp::vulkan {
 
         bool vsync_ = true;// FIFO when true, else MAILBOX/IMMEDIATE (see createSwapchain)
         bool rayTracingEnabled_ = false;
-        bool rayTracingInvocationReorderSupported_ = false;
         bool rayQuerySupported_ = false;
         bool externalMemorySupported_ = false;
         VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtPipelineProperties_{};
