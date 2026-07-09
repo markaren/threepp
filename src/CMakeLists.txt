@@ -602,7 +602,6 @@ if (THREEPP_WITH_VULKAN)
     list(APPEND publicHeaders
             "threepp/renderers/VulkanRendererCore.hpp"
             "threepp/renderers/VulkanRenderer.hpp"
-            "threepp/renderers/VulkanPathTracer.hpp"
             "threepp/helpers/PathTracedLidarSensor.hpp"
             # FFT-displaced ocean: the renderer is the only consumer (recognised
             # via dynamic_cast), so the object types live with it under Vulkan.
@@ -615,8 +614,6 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/AutoExposure.hpp"
             "threepp/renderers/vulkan/GbufResolve.hpp"
             "threepp/renderers/vulkan/LidarScanner.hpp"
-            "threepp/renderers/vulkan/PhotonCaustics.hpp"
-            "threepp/renderers/vulkan/Denoiser.hpp"
             "threepp/renderers/vulkan/EnvPrefilter.hpp"
             "threepp/renderers/vulkan/EventCameraDetector.hpp"
             "threepp/renderers/vulkan/SkinningPipeline.hpp"
@@ -631,15 +628,12 @@ if (THREEPP_WITH_VULKAN)
     )
     list(APPEND sources
             "threepp/renderers/VulkanRenderer.cpp"
-            "threepp/renderers/VulkanPathTracer.cpp"
             "threepp/helpers/PathTracedLidarSensor.cpp"
             "threepp/objects/DisplacedMesh.cpp"
             "threepp/objects/Ocean.cpp"
             "threepp/renderers/vulkan/VulkanContext.cpp"
             "threepp/renderers/vulkan/VulkanResources.cpp"
             "threepp/renderers/vulkan/LidarScanner.cpp"
-            "threepp/renderers/vulkan/PhotonCaustics.cpp"
-            "threepp/renderers/vulkan/Denoiser.cpp"
             "threepp/renderers/vulkan/EnvPrefilter.cpp"
             "threepp/renderers/vulkan/EventCameraDetector.cpp"
             "threepp/renderers/vulkan/SkinningPipeline.cpp"
@@ -885,52 +879,6 @@ if (THREEPP_WITH_VULKAN)
     endif ()
 
     include(${PROJECT_SOURCE_DIR}/cmake/CompileVulkanShaders.cmake)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/raygen.rgen"
-        kRaygenRgenSpv
-        _rgen_spv_h)
-    # SER variant — same raygen with `-DSER=1`. Loaded at pipeline creation
-    # iff VulkanContext::rayTracingInvocationReorderSupported() is true (i.e.
-    # device exposes VK_NV_ray_tracing_invocation_reorder + the feature bit).
-    # Other vendors / older NVIDIA fall through to the fallback SPV above.
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/raygen.rgen"
-        kRaygenRgenSerSpv
-        _rgen_ser_spv_h
-        VARIANT_SUFFIX ser
-        DEFINES SER=1)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/miss.rmiss"
-        kMissRmissSpv
-        _miss_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shadow_miss.rmiss"
-        kShadowMissRmissSpv
-        _shadow_miss_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/closest_hit.rchit"
-        kClosestHitRchitSpv
-        _chit_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/closest_hit_alpha.rahit"
-        kClosestHitAlphaRahitSpv
-        _ahit_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shadow_anyhit.rahit"
-        kShadowAnyhitRahitSpv
-        _shadow_ahit_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/photon_emit.rgen"
-        kPhotonEmitRgenSpv
-        _photon_emit_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/photon_miss.rmiss"
-        kPhotonMissRmissSpv
-        _photon_miss_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/photon_chit.rchit"
-        kPhotonChitRchitSpv
-        _photon_chit_spv_h)
     # Path-traced LIDAR scanner — private ray-tracing pipeline that emits
     # one beam per launched thread, evaluates the LIDAR equation in the
     # closest-hit shader, and writes per-beam returns back to the host
@@ -974,14 +922,6 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/prefilter_env.comp"
         kPrefilterEnvCompSpv
         _prefilter_env_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/denoise.comp"
-        kDenoiseCompSpv
-        _denoise_spv_h)
-    compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/denoise_atrous.comp"
-        kDenoiseAtrousCompSpv
-        _denoise_atrous_spv_h)
     # Post stack: progressive bloom pyramid (Jimenez 2014 — Karis 13-tap down
     # chain + 3x3 tent additive upsample, vulkan/BloomPass.{hpp,cpp}) + the
     # exposure/white-balance/tone-map/grade/sRGB composite that closes the

@@ -5,7 +5,7 @@
 [![Conan Center](https://img.shields.io/conan/v/threepp)](https://conan.io/center/recipes/threepp)
 
 A cross-platform C++20 3D library with the high-level API of [three.js](https://github.com/mrdoob/three.js/) —
-and modern backends: OpenGL, WebGPU, and a real-time path-tracing Vulkan renderer.
+and modern backends: OpenGL, WebGPU, and a deferred Vulkan renderer with ray-traced accents.
 
 ![Real-time ray-traced FFT ocean](doc/screenshots/pt_ocean.png)
 *Real-time FFT ocean — Vulkan deferred-hybrid renderer (raster-first, with ray-traced shadows & reflections) ([examples/vulkan/vulkan_ocean.cpp](examples/vulkan/vulkan_ocean.cpp))*
@@ -19,8 +19,8 @@ and modern backends: OpenGL, WebGPU, and a real-time path-tracing Vulkan rendere
 ## Highlights
 
 * Three rendering backends behind one scene graph: OpenGL 3.3 raster, WebGPU raster,
-  and a Vulkan **real-time path tracer** (ReSTIR DI/GI, denoising,
-  hybrid raster-first deferred mode)
+  and a **deferred Vulkan renderer** (raster G-buffer with ray-traced AO, GI,
+  reflections and shadows; denoised, with TAA)
 * **Python bindings** — pybind11 bindings for the core scene API; renders to NumPy arrays
 * FFT-displaced ocean, water & sky shaders, PMREM environment maps
 * Path-traced sensor simulation: LIDAR, depth sensor, event camera
@@ -31,11 +31,11 @@ and modern backends: OpenGL, WebGPU, and a real-time path-tracing Vulkan rendere
 
 > **Primary use case: research and education.** `threepp` is built for research, prototyping, and
 > learning — not as a production-hardened engine. **API and behavioural stability are not prioritized:**
-> APIs may change, and backends (especially the path tracer) evolve rapidly. Pin a tag/commit if you
+> APIs may change, and backends (especially the Vulkan backend) evolve rapidly. Pin a tag/commit if you
 > need reproducibility, and expect to track changes if you follow `master`.
 
 The core library is mature and feature-complete, with advanced rendering capabilities including
-real-time path tracing on the Vulkan backend. It is usable for a wide variety of rendering applications,
+the deferred Vulkan backend. It is usable for a wide variety of rendering applications,
 from interactive 3D apps to robotics and scientific visualization.
 
 The high-level API is mostly in line with three.js [r129](https://github.com/mrdoob/three.js/tree/r129)
@@ -83,7 +83,7 @@ Yay!
 - **Few dependencies.** Small enough to build without dependency hell and reason about
   end-to-end.
 - **Full access.** Almost entirely first-party source — an agent can read and modify any layer, from
-  the scene graph to the path-tracer's shaders.
+  the scene graph to the Vulkan renderer's shaders.
 - **Tight write → compile → display → save → evaluate loop.** Low overhead from code to a
   rendered image and back: compile, render (headless if needed), screenshot, judge, iterate.
 
@@ -157,7 +157,7 @@ int main() {
 }
 ```
 
-Swap `GLRenderer` for `VulkanRenderer` (real-time path tracing) or `WgpuRenderer` —
+Swap `GLRenderer` for `VulkanRenderer` (deferred, ray-traced accents) or `WgpuRenderer` —
 the scene code stays the same.
 
 ### Python
@@ -331,7 +331,7 @@ set_languages("c++20")
 
 | | |
 |:---:|:---:|
-| <img src="doc/screenshots/deferred_ocean_night.png" width="400" alt="Ocean night"><br>*Lighthouse at night — deferred hybrid, volumetric beam ([vulkan_ocean](examples/vulkan/vulkan_ocean.cpp))* | <img src="doc/screenshots/bistro.png" width="400" alt="Bistro"><br>*Lumberyard Bistro, path traced ([vulkan_bistro](examples/vulkan/vulkan_bistro.cpp))* |
+| <img src="doc/screenshots/deferred_ocean_night.png" width="400" alt="Ocean night"><br>*Lighthouse at night — deferred hybrid, volumetric beam ([vulkan_ocean](examples/vulkan/vulkan_ocean.cpp))* | <img src="doc/screenshots/bistro.png" width="400" alt="Bistro"><br>*Lumberyard Bistro, deferred ([vulkan_bistro](examples/vulkan/vulkan_bistro.cpp))* |
 | <img src="doc/screenshots/tps.png" width="400" alt="Shooter"><br>*Third-person shooter ([projects/Shooter](examples/projects/Shooter))* | <img src="doc/screenshots/lidar.png" width="400" alt="Lidar"><br>*LIDAR* |
 | <img src="doc/screenshots/detect.png" width="400" alt="Inference"><br>*RF-DETR detection* | <img src="doc/screenshots/water_sky.png" width="400" alt="Water+sky"><br>*Water and sky shaders* |
 | <img src="doc/screenshots/animation.png" width="400" alt="Animation"><br>*Skinned animation* | <img src="doc/screenshots/Shadows.PNG" width="400" alt="Shadows"><br>*Shadow mapping* |

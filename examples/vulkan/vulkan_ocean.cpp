@@ -23,7 +23,6 @@
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/DisplacedMesh.hpp"
 #include "threepp/objects/Ocean.hpp"
-#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"

@@ -5,11 +5,9 @@
 
 #include "VulkanContext.hpp"
 #include "VulkanResources.hpp"
-#include "Denoiser.hpp"
 #include "EnvPrefilter.hpp"
 #include "EventCameraDetector.hpp"
 #include "LidarScanner.hpp"
-#include "PhotonCaustics.hpp"
 #include "SkinningPipeline.hpp"
 #include "TetSkinningPipeline.hpp"
 #include "GpuTimings.hpp"
@@ -28,8 +26,7 @@
 #include "WaterDisplacePipeline.hpp"
 #include "FoamWorldPipeline.hpp"
 #include "GrassWindPipeline.hpp"
-#include "shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
-#include "../wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
+#include "shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures — same source the shaders read
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/cameras/OrthographicCamera.hpp"
@@ -64,7 +61,6 @@
 #include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
-#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/renderers/vulkan/water/OceanFFT.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -72,15 +68,7 @@
 // stb_image_write — implementation is already compiled in GLRenderer.cpp.
 #include "stb_image_write.h"
 
-#include "threepp/renderers/vulkan/shaders/raygen.rgen.spv.h"
-#include "threepp/renderers/vulkan/shaders/raygen.rgen.ser.spv.h"
-#include "threepp/renderers/vulkan/shaders/miss.rmiss.spv.h"
-#include "threepp/renderers/vulkan/shaders/shadow_miss.rmiss.spv.h"
-#include "threepp/renderers/vulkan/shaders/closest_hit.rchit.spv.h"
-#include "threepp/renderers/vulkan/shaders/closest_hit_alpha.rahit.spv.h"
-#include "threepp/renderers/vulkan/shaders/shadow_anyhit.rahit.spv.h"
-// (photon shader SPVs moved into vulkan/PhotonCaustics.cpp)
-// (denoise + denoise_atrous shader SPVs moved into vulkan/Denoiser.cpp)
+// (RT-pipeline / photon / denoise shader SPVs removed with the path tracer)
 // (prefilter_env shader SPV moved into vulkan/EnvPrefilter.cpp)
 // (skinning shader SPV moved into vulkan/SkinningPipeline.cpp)
 // (water_displace shader SPV moved into vulkan/WaterDisplacePipeline.cpp)
@@ -144,7 +132,6 @@ namespace threepp {
     using vulkan::TimingPass;
     using vulkan::TP_RasterGbuf;
     using vulkan::TP_OverlayDepth;
-    using vulkan::TP_PhotonEmit;
     using vulkan::TP_PathTrace;
     using vulkan::TP_Denoise;
     using vulkan::TP_TAA;
@@ -161,8 +148,8 @@ namespace threepp {
         // GPU schedule (queue is still serial — async compute would do that,
         // and is a much larger change).
         //
-        // The 2-slot ping-pong (accumImagesPP / gbufImagesPP / denoiser_'s
-        // moments / reservoirImagesPP) stays at 2 entries — Vulkan queue execution is
+        // The 2-slot ping-pong (the ReSTIR DI reservoir images) stays at 2
+        // entries — Vulkan queue execution is
         // strictly in-order within a queue, so when frame N+2 writes slot
         // (N+2)&1 the prior owner of that slot (frame N) has fully completed
         // on the GPU. Temporal reproject still reads "the previous frame"
@@ -745,9 +732,9 @@ namespace threepp {
         // updateLightsUbo re-injects it as an analytic directional light.
         vulkan::EnvPrefilter::SunExtract envSun_{};
 
-        // Ocean fine-cascade normal-map source (binding 21 in rtDsLayout).
+        // Ocean fine-cascade normal-map source (deferred shade ocean binding).
         // Default 1×1 dummy R32F, replaced with the active DisplacedMesh's
-        // cascade-2 height image when one is in the scene. closest_hit
+        // cascade-2 height image when one is in the scene. deferred_shade.comp
         // samples this on `thinWalled` materials at world-space XZ via
         // finite differences to perturb the macro normal — adds sub-mesh
         // chop detail (FFT cells finer than the 1 m mesh resolves).
@@ -756,17 +743,17 @@ namespace threepp {
         VkSampler   oceanFineHeightSampler = VK_NULL_HANDLE;
         float       oceanFineTileSize     = 0.f;          // 0 disables sampling in shader
 
-        // World-space foam (binding 33). Built by FoamWorldPipeline each
-        // frame from a DisplacedMesh's foamImage. closest_hit samples it
-        // at world XZ on water hits — replaces the per-vertex foam buffer
-        // that used to live on the BLAS. Held as a dummy 1×1 R32F when no
-        // DisplacedMesh is in the scene.
+        // World-space foam (deferred shade ocean binding). Built by
+        // FoamWorldPipeline each frame from a DisplacedMesh's foamImage.
+        // deferred_shade.comp samples it at world XZ on water hits — replaces
+        // the per-vertex foam buffer that used to live on the BLAS. Held as a
+        // dummy 1×1 R32F when no DisplacedMesh is in the scene.
         Image2D oceanFoamDummy{};
         VkImageView oceanFoamView   = VK_NULL_HANDLE;
         VkSampler   oceanFoamSampler = VK_NULL_HANDLE;
         float       oceanFoamTileSize = 0.f;              // 0 disables sampling
 
-        // Tileable foam detail texture (RT binding 45 / deferred binding 34).
+        // Tileable foam detail texture (deferred shade foam binding).
         // R = micro bubble brightness (three value-noise octaves matching the
         // old procedural micro look over a 4 m world mapping), G = ridged
         // lace/filament pattern (12 m mapping). Baked once at startup with a
@@ -779,21 +766,12 @@ namespace threepp {
         // Conditional CDF: w×h R32F texture; row r holds the cumulative
         // distribution over columns at that latitude.
         // Marginal CDF: h×1 R32F texture; row r holds the cumulative marginal
-        // probability of picking row r (latitudes weighted by cos(latitude)).
-        // totalSum = Σ lum·cos(lat) — pdf normalisation.
-        // Rebuilt whenever the env texture changes; bound 1×1 dummy (totalSum=0)
-        // when env is solid color or default — chit gates env CDF on totalSum>0.
-        Image2D envCdfImage{};
-        Image2D envMargImage{};
         // 64×64 R8 blue-noise tile for sub-pixel jitter. Generated once via
         // void-and-cluster (Ulichney 1993) and uploaded at startup. Adjacent
         // pixels share correlated values (silhouette stability) but globally
         // decorrelated (no coherent shake). Animated temporally by offsetting
         // the lookup coords per frame; AA convergence via accumulator.
         Image2D blueNoiseImage{};
-        uint32_t envCdfWidth_  = 1;
-        uint32_t envCdfHeight_ = 1;
-        float    envCdfTotalSum_ = 0.0f;
 
         // PMREM: GGX-prefiltered env mip chain. Built once per env
         // upload — see vulkan/EnvPrefilter.{hpp,cpp}. Owns the prefilter
@@ -808,10 +786,9 @@ namespace threepp {
         // Cache key is Texture* — the same Texture across multiple meshes only
         // uploads once. All material textures share textureSampler_ (linear,
         // repeat); per-texture filter/wrap is a v2 concern.
-        // kMaxMaterialTextures, kPhotonGridBits, kPhotonGridSize, kPhotonsPerCell,
-        // kPhotonEmitDim, and kGatherRadius all come from the shared header
-        // (vulkan_shared.h, included near the top of this file). Editing any of
-        // them there propagates to every shader on the next clean rebuild.
+        // kMaxMaterialTextures comes from the shared header (vulkan_shared.h,
+        // included near the top of this file). Editing it there propagates to
+        // every shader on the next clean rebuild.
         std::vector<Image2D> materialTextures;// owns image + view (sampler is shared)
         // Cache value: (weak_ptr liveness tag, bindless slot, uploaded version).
         // The weak_ptr lets ensureSceneBuilt prune entries when a Texture is
@@ -837,56 +814,18 @@ namespace threepp {
         std::vector<uint32_t> retiredTextureSlots_;
         VkSampler textureSampler_ = VK_NULL_HANDLE;
 
-        // Continuous-motion accumulation. Two ping-pong slots for the running
-        // mean (.rgb) plus per-pixel frame count (.w packed via uintBitsToFloat),
-        // and two ping-pong gbuf slots holding primary world hit (.xyz) plus
-        // mesh-ID guard (.w packed). At frame N the shader writes slot
-        // (N & 1) and reads slot ((N+1) & 1). sampleIndex now drives only the
-        // Halton jitter; per-pixel FC packed in accumImage.w replaces it as
-        // the accumulation count and survives camera / object motion.
-        std::array<Image2D, 2> accumImagesPP{};
-        std::array<Image2D, 2> gbufImagesPP{};
-        // ReSTIR DI Stage 1b — per-pixel reservoir ping-pong storage. Two
+        // ReSTIR DI reservoir ping-pong storage, consumed by the deferred
+        // shade's next-event estimation (DeferredShade reservoirPos/W). Two
         // physical images per logical buffer: reservoirPosImagesPP carries
         // lightPos.xyz + lightType.w (rgba32f), reservoirWImagesPP carries
-        // W_sum + M + W + p_hat (rgba16f). Bindings 28/30 = write (frame N),
-        // 29/31 = read (frame N-1); descriptor sets are baked once with the
-        // f&1 → image-slot mapping just like accumImagesPP / gbufImagesPP.
+        // W_sum + M + W + p_hat (rgba16f). At frame N the shade writes slot
+        // (N & 1) and reads slot ((N+1) & 1).
         std::array<Image2D, 2> reservoirPosImagesPP{};
         std::array<Image2D, 2> reservoirWImagesPP{};
-        // ReSTIR GI Stage 1b — per-pixel reservoir ping-pong storage. Three
-        // physical images per logical buffer (all rgba32f for precision on
-        // world-space xs):
-        //   giResXsImagesPP : xs.xyz + W_sum   (chosen sample position + RIS sum)
-        //   giResNsImagesPP : ns.xyz + M       (chosen sample normal + count)
-        //   giResLoImagesPP : Lo.rgb + W       (chosen sample radiance + finalized RIS weight)
-        // omegaI is re-derived per-frame as `normalize(xs - currentHitPos)` so
-        // it doesn't need its own storage pair. p_hat is also not stored —
-        // resampling re-evaluates target at OUR pixel via evalGiTarget, so the
-        // stored sample's p_hat (computed at a possibly-different pixel) is
-        // discarded each merge. Bindings 38/40/42 = write (frame N), 39/41/43
-        // = read (frame N-1); descriptor sets bake the f&1 → image-slot map.
-        std::array<Image2D, 2> giResXsImagesPP{};
-        std::array<Image2D, 2> giResNsImagesPP{};
-        std::array<Image2D, 2> giResLoImagesPP{};
-        // Filtered and moments ping-pong images are owned by `denoiser_`;
-        // bindings 20 / 33 / 34 are wired via accessors at descriptor-write
-        // time. See vulkan/Denoiser.hpp.
         uint32_t accumWriteIdx_ = 0;
+        // Frame counter driving Halton jitter + blue-noise offset for the
+        // deferred shade's stochastic GI / soft-shadow sampling.
         uint32_t sampleIndex = 0;
-        // Samples per pixel per frame. Each sample is an independent
-        // jittered primary ray; raygen sums them and the accumulator
-        // advances FC by `spp` so the running mean stays correctly weighted.
-        uint32_t samplesPerPixel_ = 1;
-        // # of extra primary rays fired at detected silhouette pixels
-        // (gbufIds-mismatch / depth-gradient / diagonal neighbour).
-        // 0 disables silhouette MSAA entirely.
-        uint32_t edgeMsaaExtra_   = 1;
-        // Max real scatter events per path (raygen kMaxBounces). 4 matches the
-        // prior compile-time value; setMaxBounces clamps to [1, 16]. Diffuse /
-        // glossy primaries further cap themselves at 3 / 4 in raygen, so this
-        // mostly affects deeper metal / mirror / glass paths.
-        uint32_t maxBounces_      = 4;
         // Prev-frame camera packed as four vec4s (matches PrevCameraUbo):
         //   [0..3]  = vec4(pos.xyz,  projScaleX)   → prevCamPosX
         //   [4..7]  = vec4(fwd.xyz,  projScaleY)   → prevCamFwdY
@@ -1157,21 +1096,10 @@ namespace threepp {
         std::array<VkDeviceSize, kFramesInFlight> emissiveTriBufferCapacity{};
         uint32_t emissiveTriCountThisFrame_ = 0;
         float    emissiveTotalPowerThisFrame_ = 0.0f;
-        // True if any material in the current scene has transmission > 0.
-        // Gates the 27-cell caustic gather in closest_hit. Photon emit also
-        // requires glassVisibleThisFrame_ below — emitting 512×512 photon
-        // paths per frame is wasted work when no glass is in the camera
-        // frustum (no caustic gather can read fresh photons anyway). Gather
-        // stays gated on sceneHasGlass_ only so caustics persist visually
-        // for a few frames after the camera turns away from glass (read
-        // from the world-space photon grid until it's overwritten by the
-        // next emit pass).
+        // True if any material in the current scene has transmission > 0
+        // (glass / transmissive detection). Set during the materialDescs build.
         bool     sceneHasGlass_ = false;
-        // Scene-feature flags fed into the chit's kSceneFeatures spec constant
-        // at first-frame pipeline build (see currentSceneFeatures()). When a
-        // feature is absent in the scene's materials, the corresponding chit
-        // branch (iridescence Fresnel mix / clearcoat lobe / sheen NEE) is
-        // DCEd out of the SPV entirely. Detected once per matDescs rebuild.
+        // Scene-feature presence flags, detected once per matDescs rebuild.
         bool     sceneHasClearcoat_ = false;
         bool     sceneHasIridescence_ = false;
         bool     sceneHasSheen_ = false;
@@ -1179,16 +1107,11 @@ namespace threepp {
         // Resolved by cullEntriesAgainstFrustum() as a side effect of the
         // pass that tags every entry's MeshEntry::inFrustum.
         bool     glassVisibleThisFrame_ = false;
-        // (photon-count initialization flag is now owned by photon_;
-        // access via photon_->isInitialized() / markUninitialized())
-        // Ascending indices into lastVisibleEntries_ for transmissive-
-        // material entries. Maintained alongside materialDescs builds
-        // (full rebuild + the materialValuesSame=false hot path); a
-        // matrix-only frame keeps the existing list valid since glass
-        // identity is per-entry, not per-xfm. Used by
-        // cullEntriesAgainstFrustum to test only the (small) subset of
-        // visible-test results for glass membership when deciding whether
-        // photon emit should run.
+        // Ascending indices into lastVisibleEntries_ for transmissive-material
+        // entries. Maintained alongside materialDescs builds (full rebuild +
+        // the materialValuesSame=false hot path); a matrix-only frame keeps the
+        // existing list valid since glass identity is per-entry, not per-xfm.
+        // Used by cullEntriesAgainstFrustum to resolve glassVisibleThisFrame_.
         std::vector<size_t> glassEntryIndices_;
         // Per-NEE firefly clamp; pushed to shaders as float bits in slot [11].
         // 1e30f sentinel disables the clamp (set via setFireflyClamp(0)).
@@ -1293,49 +1216,6 @@ namespace threepp {
         std::vector<VkCullModeFlags> lastVisibleCullMode_;
         bool sceneBuilt_ = false;
 
-        // Ray-tracing pipeline.
-        VkDescriptorSetLayout rtDsLayout = VK_NULL_HANDLE;
-        VkPipelineLayout      rtPipelineLayout = VK_NULL_HANDLE;
-
-        // RT pipeline variants. Cross product of (SER on/off) × (restirDI
-        // chit spec constant). Up to 4 variants; SER ones only built on
-        // supported devices. All variants are built at first-frame pipeline
-        // build — vkCreateRayTracingPipelinesKHR hangs on a second call
-        // against the same pipeline layout on NVIDIA drivers, so we eat the
-        // per-variant one-time cost instead of rebuilding on toggle.
-        // setRestirDIEnabled is zero-cost (just changes which slot
-        // activeRtVariant picks).
-        //
-        // Index layout: variantIndex(useSer, restirDI) =
-        //     (useSer ? 2 : 0) + (restirDI ? 1 : 0)
-        struct RtPipelineVariant {
-            VkPipeline pipeline = VK_NULL_HANDLE;
-            Buffer     sbtBuffer{};
-            VkStridedDeviceAddressRegionKHR rgenRegion{};
-            VkStridedDeviceAddressRegionKHR missRegion{};
-            VkStridedDeviceAddressRegionKHR hitRegion{};
-        };
-        std::array<RtPipelineVariant, 4> rtVariants_{};
-        static uint32_t rtVariantIndex(bool useSer, bool restirDI) {
-            return (useSer ? 2u : 0u) + (restirDI ? 1u : 0u);
-        }
-        // Convenience accessors — read which variant is active from
-        // shouldUseSerRaygen() (which folds restirGIEnabled_ + driver
-        // support into a single bool).
-        const RtPipelineVariant& activeRtVariant() const {
-            return rtVariants_[rtVariantIndex(shouldUseSerRaygen(), restirDIEnabled_)];
-        }
-        RtPipelineVariant& activeRtVariant() {
-            return rtVariants_[rtVariantIndex(shouldUseSerRaygen(), restirDIEnabled_)];
-        }
-        VkStridedDeviceAddressRegionKHR callRegion{};// unused (no callable shaders)
-
-        // Photon caustics subsystem (pipeline + SBT + count/data buffers).
-        // Encapsulated as a separate module — see vulkan/PhotonCaustics.{hpp,cpp}.
-        // Owns its state; this Impl just holds the unique_ptr and routes
-        // descriptor binding + dispatch through the class.
-        std::unique_ptr<vulkan::PhotonCaustics> photon_;
-
         // Path-traced LIDAR scanner — see vulkan/LidarScanner.{hpp,cpp}.
         // Owns its own RT pipeline + SBT + descriptor set; reuses the
         // main TLAS + geomDescs + matDescs via per-scan binding updates.
@@ -1406,14 +1286,9 @@ namespace threepp {
         uint32_t eventCamUserW_ = 0;
         uint32_t eventCamUserH_ = 0;
 
-        // Spatial denoiser — see vulkan/Denoiser.{hpp,cpp}. Owns the atrous
-        // + finalize compute pipelines and the filtered + moments ping-pong
-        // images. Shares rtDsLayout so a single per-frame descriptor set
-        // drives RT raygen, atrous, and finalize.
-        std::unique_ptr<vulkan::Denoiser> denoiser_;
-        // THREEPP_DENOISE=0 disables denoising from the environment — an A/B
-        // discriminator for "is this artifact shading or temporal/denoise?"
-        // without plumbing a flag through every example.
+        // THREEPP_DENOISE=0 disables the deferred SVGF denoiser from the
+        // environment — an A/B discriminator for "is this artifact shading or
+        // temporal/denoise?" without plumbing a flag through every example.
         bool denoiseEnabled_ = []() {
             const char* e = std::getenv("THREEPP_DENOISE");
             return !(e && e[0] == '0');
@@ -1806,9 +1681,9 @@ namespace threepp {
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
 
-        // Deferred shade pass (VulkanRenderer only). Shades the material G-buffer
-        // analytically into bloom_->sceneHdr; bloom + TAA finish the frame unchanged.
-        // Owns no images and does not touch rtDsLayout.
+        // Deferred shade pass. Shades the material G-buffer analytically into
+        // bloom_->sceneHdr; bloom + TAA finish the frame. Owns its own focused
+        // descriptor set (see DeferredShade.hpp).
         std::unique_ptr<vulkan::DeferredShade> deferredShade_;
         // World-space irradiance probe grid (multi-bounce GI for the deferred
         // gather — see vulkan/ProbeGI.hpp). Created alongside deferredShade_;
@@ -1890,32 +1765,21 @@ namespace threepp {
         // enabling occlusion culling mid-run.
         bool taaHdrPlumbingDirty_ = true;
 
-        bool perSppJitterHybrid_ = true;
-        // Tracks what each per-frame slot's binding 1 (RT denoise output)
-        // currently points at, so the per-frame rewrite block only fires on
-        // a real state change: -1 = unknown/needs rewrite, 0 = swapchain
-        // image view, 1 = taa_->inputView(frame). allocateAndUpdate-
-        // Descriptors writes swapchain (sets to 0); swapchain recreation
-        // reruns that path. Used to be rewritten unconditionally every frame,
-        // burning imageCount_ vkUpdateDescriptorSets calls for nothing.
-        std::array<int8_t, kFramesInFlight> binding1Mode_{};
         // Per-frame-slot gate for the raster descriptor's binding 3 — the
         // 2048-entry bindless material-texture array. Its contents are
         // identical every frame and only change when the scene texture table
-        // is rebuilt (the same event that rebinds the RT side's binding 8 in
-        // rewriteSceneDescriptors / allocateAndUpdateDescriptors). Rewriting
-        // all 2048 entries every frame burned a vkUpdateDescriptorSets call +
-        // a ~48 KB host array fill for nothing. 1 = current, 0 = needs
-        // (re)write; value-inits to 0 so the first frame writes it. Invalidated
-        // (->0) at scene (re)build; each slot rewrites on its next
-        // uploadRasterCameraUbo, before recordCommandBuffer binds the set.
-        // Mirrors binding1Mode_. rasterDescSets live in their own pool
-        // (rasterDescPool, init-only) so swapchain / main-pool rebuilds don't
-        // affect them — only a texture-table change does.
+        // is rebuilt. Rewriting all 2048 entries every frame burned a
+        // vkUpdateDescriptorSets call + a ~48 KB host array fill for nothing.
+        // 1 = current, 0 = needs (re)write; value-inits to 0 so the first
+        // frame writes it. Invalidated (->0) at scene (re)build; each slot
+        // rewrites on its next uploadRasterCameraUbo, before
+        // recordCommandBuffer binds the set. rasterDescSets live in their own
+        // pool (rasterDescPool, init-only) so swapchain / main-pool rebuilds
+        // don't affect them — only a texture-table change does.
         std::array<int8_t, kFramesInFlight> rasterMatTexValid_{};
 
-        // ── Lower-resolution path-trace mode ────────────────────────────
-        // renderScale_ < 1 runs raygen, denoise, and the raster G-buffer at
+        // ── Lower-resolution render mode ────────────────────────────────
+        // renderScale_ < 1 runs the deferred shade + the raster G-buffer at
         // renderExtent() instead of the swapchain extent. The TAA pass then
         // upsamples to full resolution (it dispatches at the swapchain extent
         // with a full-res history — see taa_resolve.comp); with TAA off a
@@ -1964,37 +1828,6 @@ namespace threepp {
         // (same pattern as bounces). Forwarded to chit via
         // pc.motionFlags bit 4 each frame.
         bool restirDIEnabled_ = true;
-        // ReSTIR DI visibility reuse (Bitterli 2020 §5). When on, the chit
-        // shadow-tests the RIS-selected candidate before temporal/spatial reuse
-        // and discards occluded ones, so history converges onto visible lights.
-        // One extra shadow ray per RIS pixel. Forwarded via pc.motionFlags bit 8.
-        // Default on — it's the quality win that makes DI worthwhile in interiors;
-        // only meaningful while restirDIEnabled_ is also set.
-        bool restirDIVisibilityReuse_ = true;
-        // ReSTIR GI master toggle. Stage 1a: when on, primary chit launches a
-        // BSDF-sampled sub-ray to generate a single-sample reservoir for the
-        // indirect contribution at primary, then hands off to raygen with the
-        // sub-trace's xs as the new origin for bounce 2 (skipping classic
-        // bounce 1 to avoid double-counting). At M=1 the contribution is
-        // statistically equivalent to classic MC; later stages (1b temporal,
-        // 1c spatial) provide the actual variance reduction. Forwarded to
-        // chit via pc.motionFlags bit 6 each frame.
-        bool restirGIEnabled_ = false;
-        // User opt-out for SER (setSerEnabled). Default true; when false the
-        // path tracer runs the plain-traceRayEXT fallback raygen even on
-        // SER-capable hardware. Folded into shouldUseSerRaygen() below so the
-        // flip just selects the already-built fallback variant — no rebuild.
-        bool serEnabled_ = true;
-        // SER helps the GI-off case but *hurts* the GI-on case because
-        // ReSTIR GI Stage 2's recursive sub-trace inside the chit undoes
-        // the warp-reorder coherence the raygen reorderThreadNV bought us.
-        // Both pipelines are pre-built (see rtVariants_); activeRtVariant()
-        // picks each frame based on this gate — which also folds in the
-        // user opt-out (serEnabled_) and driver support.
-        bool shouldUseSerRaygen() const {
-            return serEnabled_ && ctx->rayTracingInvocationReorderSupported()
-                   && !restirGIEnabled_;
-        }
         // Hybrid raster overlay: layer index for opt-in overlay objects
         // (alongside auto-detected wireframe materials + Line/LineSegments).
         // -1 disables layer-based selection. Mirrors WGPU PT's overlayLayer_.
@@ -2043,19 +1876,10 @@ namespace threepp {
         };
         HybridDebugView hybridDebugView_ = HybridDebugView::Off;
 
-        // Debug: gate raygen to exit immediately after step-0 primary trace
-        // so pathTraceMs measures roughly the primary-trace cost. See
-        // VulkanPathTracer::setMeasurePrimaryTraceOnly.
-        bool measurePrimaryTraceOnly_ = false;
-
         // Per-frame-in-flight camera UBO (viewInverse + projInverse).
         // 2 mat4 packed back-to-back, std140 layout.
         std::array<Buffer, kFramesInFlight> cameraUbos{};
 
-        // Descriptor pool + sets indexed by [frame * imageCount + image] so
-        // each set can reference both a per-frame UBO and a per-image view.
-        VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
-        std::vector<VkDescriptorSet> descriptorSets;
         uint32_t imageCount_ = 0;
 
         // Per-frame command resources.
@@ -2142,22 +1966,13 @@ namespace threepp {
             // ready if scene.environment is set before the first render().
             envPrefilter_ = std::make_unique<vulkan::EnvPrefilter>(*ctx, cmdPool);
             createDefaultEnvImage();
-            rebuildDefaultEnvCdfImages();// 1×1 dummy so descriptors are valid before any HDR upload
             createTextureSampler();
             createDefaultMaterialTexture();
-            // Builds both fallback + SER variants (when supported) and their
-            // SBTs in one pass.
-            createRtPipeline();
-            // Denoiser reuses rtDsLayout for its descriptor set (single
-            // per-frame set drives raygen + atrous + finalize) and needs
-            // cmdPool for one-shot image transitions in createImages. Must
-            // construct before createAccumImage since clearGbufImages now
-            // includes denoiser_->momentsImage(0/1).
-            denoiser_ = std::make_unique<vulkan::Denoiser>(*ctx, rtDsLayout, cmdPool);
+            // Allocates the ReSTIR DI reservoir ping-pong images the deferred
+            // shade's NEE consumes.
             createAccumImage();
             skinning_ = std::make_unique<vulkan::SkinningPipeline>(*ctx);
             tetSkinning_ = std::make_unique<vulkan::TetSkinningPipeline>(*ctx);
-            photon_ = std::make_unique<vulkan::PhotonCaustics>(*ctx, rtPipelineLayout);
             waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
             foamWorld_     = std::make_unique<vulkan::FoamWorldPipeline>(*ctx);
             grassWind_     = std::make_unique<vulkan::GrassWindPipeline>(*ctx);
@@ -2203,7 +2018,6 @@ namespace threepp {
                 // grid UBO's enable flag until setProbeGI(true)).
                 probeGI_ = std::make_unique<vulkan::ProbeGI>(*ctx, kFramesInFlight);
             }
-            createDescriptorPool();
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
             createOceanFoamDummy_();// must run before descriptor writes (binding 33)
@@ -2246,22 +2060,6 @@ namespace threepp {
             for (auto f : inFlight) if (f) vkDestroyFence(d, f, nullptr);
             if (cmdPool) vkDestroyCommandPool(d, cmdPool, nullptr);
             gpuTimings_.reset();// query pool destruction while device is still valid
-
-            if (descriptorPool) vkDestroyDescriptorPool(d, descriptorPool, nullptr);
-
-            for (auto& v : rtVariants_) {
-                destroyBuffer(ctx->allocator(), v.sbtBuffer);
-                if (v.pipeline) vkDestroyPipeline(d, v.pipeline, nullptr);
-            }
-            // Photon caustics owns its pipeline + SBT + buffers; reset
-            // before destroying the shared rtPipelineLayout it references.
-            photon_.reset();
-            // Denoiser owns atrous + finalize pipelines + its own pipeline
-            // layout (built from rtDsLayout) + filtered/moments images.
-            // Reset before destroying rtDsLayout for symmetry with photon_.
-            denoiser_.reset();
-            if (rtPipelineLayout) vkDestroyPipelineLayout(d, rtPipelineLayout, nullptr);
-            if (rtDsLayout)       vkDestroyDescriptorSetLayout(d, rtDsLayout, nullptr);
 
             if (tlas) ctx->rt().destroyAccelerationStructure(d, tlas, nullptr);
             destroyBuffer(ctx->allocator(), tlasBuffer);
@@ -2405,19 +2203,12 @@ namespace threepp {
             for (auto& b : meshMovedBitsBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : emissiveTriBuffers) destroyBuffer(ctx->allocator(), b);
             destroyImage2D(ctx->allocator(), d, envImage);
-            destroyImage2D(ctx->allocator(), d, envCdfImage);
-            destroyImage2D(ctx->allocator(), d, envMargImage);
             destroyImage2D(ctx->allocator(), d, blueNoiseImage);
             destroyImage2D(ctx->allocator(), d, oceanFineHeightDummy);
             destroyImage2D(ctx->allocator(), d, oceanFoamDummy);
             destroyImage2D(ctx->allocator(), d, foamDetailImage);
-            for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), d, img);
-            for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), d, img);
-            for (auto& img : giResXsImagesPP) destroyImage2D(ctx->allocator(), d, img);
-            for (auto& img : giResNsImagesPP) destroyImage2D(ctx->allocator(), d, img);
-            for (auto& img : giResLoImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
             materialTextures.clear();
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
@@ -4184,7 +3975,7 @@ namespace threepp {
                 if (fineTile > 0.f) {
                     oceanFineHeightView = state->cascades[fineIdx].dyn->ht().view;
                     oceanFineTileSize   = fineTile;
-                    rewriteOceanFineDescriptors_();
+                    rewriteDeferredDescriptors();
                 }
             }
 
@@ -4194,7 +3985,7 @@ namespace threepp {
             // until the DisplacedMesh is destroyed, so we only rewrite once.
             oceanFoamView     = state->foamImage.view;
             oceanFoamTileSize = state->foamTileSize;
-            rewriteOceanFoamDescriptors_();
+            rewriteDeferredDescriptors();
 
             auto* raw = state.get();
             displacedStates.emplace(&dm, std::move(state));
@@ -4979,9 +4770,8 @@ namespace threepp {
         // on (debug viz should always render).
         //
         // Side effect: also resolves glassVisibleThisFrame_ from the same
-        // walk so the photon emit gating doesn't need a separate frustum
-        // build. The flag is true iff at least one transmissive entry
-        // passed the cull.
+        // walk. The flag is true iff at least one transmissive entry passed
+        // the cull.
         void cullEntriesAgainstFrustum(Camera& camera) {
             glassVisibleThisFrame_ = false;
             if (lastVisibleEntries_.empty()) return;
@@ -6786,24 +6576,20 @@ namespace threepp {
             }
             meshMovedBits_.resize(neededBitWords, 0u);
 
-            if (sceneBuilt_) {
-                rewriteSceneDescriptors();
-            } else {
-                allocateAndUpdateDescriptors();
-            }
-            // The (re)build above rebound the RT bindless texture array
-            // (binding 8). The raster descriptor's binding 3 mirrors that same
-            // table, so invalidate its per-slot cache — each frame slot then
-            // re-writes binding 3 on its next uploadRasterCameraUbo. This is
-            // the only event that changes the table, so it's the only place
-            // the raster mirror needs invalidating.
+            // Re-point the deferred shade's descriptor set at the (re)built
+            // scene resources — TLAS, geom/material descs, the bindless
+            // material-texture array and the emissive-tri buffer. A rebuild
+            // freed and recreated those, so the set would otherwise dangle.
+            rewriteDeferredDescriptors();
+            // The (re)build above rebound the bindless texture array. The
+            // raster descriptor's binding 3 mirrors that same table, so
+            // invalidate its per-slot cache — each frame slot then re-writes
+            // binding 3 on its next uploadRasterCameraUbo. This is the only
+            // event that changes the table, so it's the only place the raster
+            // mirror needs invalidating.
             rasterMatTexValid_.fill(0);
             prevSceneFingerprint = std::move(currFp);
             sceneBuilt_ = true;
-            // Structural change invalidates the photon grid: cells from the
-            // old scene's world layout linger and would leak into the new
-            // scene's gather. Force the one-shot zero-fill shim to re-run.
-            if (photon_) photon_->markUninitialized();
         }
 
         void createCameraUbos() {
@@ -6917,34 +6703,15 @@ namespace threepp {
         void clearGbufImages() {
             VkCommandBuffer cb = beginOneShot();
 
-            // Includes ReSTIR DI reservoir ping-pong (28/29 pos, 30/31 W) so
-            // M=0 on frame 0's read side and the temporal-reuse path correctly
-            // sees "no prior history" instead of garbage.
-            // Also includes ReSTIR GI reservoir ping-pong (38/39 xs+Wsum,
-            // 40/41 ns+M, 42/43 Lo+W) — the chit's validity check (ns is a
-            // unit vector AND prevW>0 AND prevM>0) rejects zero-cleared slots
-            // so first-frame reads see "no prior history" cleanly.
-            // Also includes denoiser_'s moments images (33/34) so M2=0 on
-            // first read — variance reads from a stale-undefined moments slot
-            // would give huge spurious variance, blowing the σ_lum estimate.
-            // Also includes the albedo ping-pong (35/36) so both slots' .a=0
-            // on first read — raygen's temporal blend uses prev albedo at
-            // mesh-ID validated taps, and uninitialised .a=garbage would
-            // fool the demod-valid gate.
-            std::array<VkImage, 19> images = {
-                    gbufImagesPP[0].image, gbufImagesPP[1].image,
-                    accumImagesPP[0].image, accumImagesPP[1].image,
+            // Clears the ReSTIR DI reservoir ping-pong (pos + W) so M=0 on
+            // frame 0's read side and the deferred shade's temporal-reuse path
+            // correctly sees "no prior history" instead of garbage.
+            std::array<VkImage, 4> images = {
                     reservoirPosImagesPP[0].image, reservoirPosImagesPP[1].image,
                     reservoirWImagesPP[0].image, reservoirWImagesPP[1].image,
-                    giResXsImagesPP[0].image, giResXsImagesPP[1].image,
-                    giResNsImagesPP[0].image, giResNsImagesPP[1].image,
-                    giResLoImagesPP[0].image, giResLoImagesPP[1].image,
-                    denoiser_->momentsImage(0), denoiser_->momentsImage(1),
-                    denoiser_->albedoImage(0), denoiser_->albedoImage(1),
-                    denoiser_->albedoSnapshotImage(),
             };
 
-            std::array<VkImageMemoryBarrier2, 19> toTransfer{};
+            std::array<VkImageMemoryBarrier2, 4> toTransfer{};
             for (size_t i = 0; i < images.size(); ++i) {
                 toTransfer[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toTransfer[i].srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -6974,12 +6741,12 @@ namespace threepp {
                                      &clear, 1, &range);
             }
 
-            std::array<VkImageMemoryBarrier2, 19> toGeneral{};
+            std::array<VkImageMemoryBarrier2, 4> toGeneral{};
             for (size_t i = 0; i < images.size(); ++i) {
                 toGeneral[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toGeneral[i].srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
                 toGeneral[i].srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                toGeneral[i].dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                toGeneral[i].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 toGeneral[i].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
                                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                 toGeneral[i].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -7264,30 +7031,6 @@ namespace threepp {
             vmaUnmapMemory(ctx->allocator(), emissiveTriBuffers[frame].alloc);
             emissiveBufferVersion_[frame] = cachedEmissiveVersion_;
             return grew;
-        }
-
-        // Rewrite binding 14 (emissive-tri SSBO) across all sets for the given
-        // frame-in-flight. Called when buildAndUploadEmissiveTris reports the
-        // backing buffer was reallocated.
-        void rewriteEmissiveTriDescriptors(uint32_t frame) {
-            VkDescriptorBufferInfo bufInfo{};
-            bufInfo.buffer = emissiveTriBuffers[frame].handle;
-            bufInfo.offset = 0;
-            bufInfo.range  = VK_WHOLE_SIZE;
-            std::vector<VkWriteDescriptorSet> writes(imageCount_);
-            for (uint32_t k = 0; k < imageCount_; ++k) {
-                const uint32_t setIdx = frame * imageCount_ + k;
-                writes[k] = {};
-                writes[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[k].dstSet = descriptorSets[setIdx];
-                writes[k].dstBinding = 14;
-                writes[k].descriptorCount = 1;
-                writes[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                writes[k].pBufferInfo = &bufInfo;
-            }
-            vkUpdateDescriptorSets(ctx->device(),
-                                   static_cast<uint32_t>(writes.size()),
-                                   writes.data(), 0, nullptr);
         }
 
         // Grow motionMatBuffers[frame] in-place if the current scene's
@@ -9325,21 +9068,10 @@ namespace threepp {
         }
 
         void createAccumImage() {
-            // Render extent, not swapchain extent — every per-pixel PT
-            // buffer (accum, gbuf, reservoirs, denoiser) is sized to the
-            // resolution raygen actually launches at. Equal to the
-            // swapchain extent unless renderScale_ < 1.
+            // Render extent, not swapchain extent — the per-pixel ReSTIR DI
+            // reservoir images are sized to the resolution the deferred shade
+            // launches at. Equal to the swapchain extent unless renderScale_ < 1.
             const VkExtent2D ext = renderExtent();
-            for (size_t i = 0; i < accumImagesPP.size(); ++i) {
-                accumImagesPP[i] = createStorageImage2D(
-                        ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                        0, i == 0 ? "accumImagePP[0]" : "accumImagePP[1]");
-            }
-            for (size_t i = 0; i < gbufImagesPP.size(); ++i) {
-                gbufImagesPP[i] = createStorageImage2D(
-                        ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                        0, i == 0 ? "gbufImagePP[0]" : "gbufImagePP[1]");
-            }
             for (size_t i = 0; i < reservoirPosImagesPP.size(); ++i) {
                 reservoirPosImagesPP[i] = createStorageImage2D(
                         ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
@@ -9350,32 +9082,9 @@ namespace threepp {
                         ext.width, ext.height, VK_FORMAT_R16G16B16A16_SFLOAT,
                         0, i == 0 ? "reservoirWImagePP[0]" : "reservoirWImagePP[1]");
             }
-            // ReSTIR GI reservoir ping-pong — all rgba32f for world-space xs
-            // precision (rgba16f would lose ~mm-level accuracy at typical
-            // scene scales and break the visibility test's distance check).
-            for (size_t i = 0; i < giResXsImagesPP.size(); ++i) {
-                giResXsImagesPP[i] = createStorageImage2D(
-                        ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                        0, i == 0 ? "giResXsImagePP[0]" : "giResXsImagePP[1]");
-            }
-            for (size_t i = 0; i < giResNsImagesPP.size(); ++i) {
-                giResNsImagesPP[i] = createStorageImage2D(
-                        ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                        0, i == 0 ? "giResNsImagePP[0]" : "giResNsImagePP[1]");
-            }
-            for (size_t i = 0; i < giResLoImagesPP.size(); ++i) {
-                giResLoImagesPP[i] = createStorageImage2D(
-                        ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                        0, i == 0 ? "giResLoImagePP[0]" : "giResLoImagePP[1]");
-            }
-            // Filtered + moments ping-pong are owned by Denoiser; ctor must
-            // have already constructed denoiser_ before this is reached.
-            denoiser_->createImages(ext.width, ext.height);
-            // Storage memory contents are undefined after vmaCreateImage —
-            // clear all four slots to 0 so the first frame's reproject sees
-            // mesh-ID 0 (= miss) and cold-starts with histFc=0 instead of
-            // reading garbage that may alias a real mesh-ID and pull in
-            // arbitrary mean / fc values.
+            // Storage memory contents are undefined after vmaCreateImage — clear
+            // both reservoir slots to 0 so the first frame's temporal-reuse read
+            // sees M=0 (no prior history) instead of garbage.
             clearGbufImages();
             sampleIndex = 0;
             accumWriteIdx_ = 0;
@@ -11809,7 +11518,11 @@ namespace threepp {
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 sceneViews[f] = bloom_->sceneHdrView(f);
                 bloomViews[f] = bloom_->bloomView(f);
-                gbufViews[f]  = gbufImagesPP[f].view;
+                // PostComposite's gbuf binding was the old PT sky source; the
+                // deferred path's solid-bg sky test reads the raster ids
+                // (skyIdsFromRasterGbuf()), so bind a valid raster view here —
+                // it is unused in deferred mode but must stay non-null.
+                gbufViews[f]  = rasterGbufs[f].ids.view;
                 idsViews[f]   = rasterGbufs[f].ids.view;
                 taaInViews[f] = taa_->inputView(f);
                 // HDR-mode-only (setTaaHdrInput): PostComposite's binding 6
@@ -11877,9 +11590,9 @@ namespace threepp {
         void rewriteDeferredDescriptors() {
             // Needs a built TLAS (binding 8) + material buffer (binding 9). Both
             // come from the scene build; before then there's nothing to bind and
-            // the deferred pass can't dispatch anyway. allocateAndUpdateDescriptors
-            // (which runs right after the TLAS build) calls this, so the first
-            // valid write lands before the first deferred dispatch.
+            // the deferred pass can't dispatch anyway. ensureSceneBuilt calls
+            // this right after the TLAS build, so the first valid write lands
+            // before the first deferred dispatch.
             if (!deferredShade_ || tlas == VK_NULL_HANDLE) return;
             std::array<VkBuffer, kFramesInFlight>    camBufs{};
             std::array<VkBuffer, kFramesInFlight>    lightBufs{};
@@ -12605,53 +12318,13 @@ namespace threepp {
                 materialTextures[kv.second.slot] = rebuilt;// same slot index, new view
                 kv.second.version = sp->version();
             }
-            // The bindless material array is referenced by three descriptor sets:
-            // the PT set (binding 8) and deferred-compute set (binding 11) are
-            // rewritten here; the gbuffer raster set (binding 3) is refreshed
-            // lazily by invalidating its per-frame validity flag. All three must
-            // see the new image views or the (deferred) gbuffer keeps
-            // sampling the freed view.
-            rewriteSceneDescriptors();
+            // The bindless material array is referenced by the deferred-compute
+            // set (binding 11), rewritten here; the gbuffer raster set (binding
+            // 3) is refreshed lazily by invalidating its per-frame validity
+            // flag. Both must see the new image views or the (deferred) gbuffer
+            // keeps sampling the freed view.
+            rewriteDeferredDescriptors();
             rasterMatTexValid_.fill(0);
-        }
-
-        // (Re)allocate envCdfImage / envMargImage from a built EnvCdfResult.
-        // Caller must vkDeviceWaitIdle and destroy old images first. When called
-        // with a degenerate 1×1 CDF (totalSum=0), the chit gates env importance
-        // sampling off and falls back to BSDF-sampled env NEE — same behavior
-        // as before this feature landed. envCdfWidth_/Height_/TotalSum_ are
-        // mirrored into the push constant on the next renderFrame.
-        void rebuildEnvCdfImages(const wgpu_pt::EnvCdfResult& cdf) {
-            destroyImage2D(ctx->allocator(), ctx->device(), envCdfImage);
-            destroyImage2D(ctx->allocator(), ctx->device(), envMargImage);
-            envCdfImage = createSampledImage2D(
-                    static_cast<uint32_t>(cdf.width),
-                    static_cast<uint32_t>(cdf.height),
-                    VK_FORMAT_R32_SFLOAT,
-                    cdf.conditional.data(),
-                    cdf.conditional.size() * sizeof(float),
-                    VK_FILTER_NEAREST,
-                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-                    "envCdfImage (conditional)");
-            // Marginal is uploaded as h×1 (width=h, height=1) so the shader
-            // can fetch entry mid via `texelFetch(envMargTex, ivec2(mid, 0))`,
-            // matching WGPU's `cdfSearch(envMargTex, 0, envH, xi)` access
-            // pattern. width=1/height=h would route every binary-search lookup
-            // to texel (0,0) and silently break importance sampling.
-            envMargImage = createSampledImage2D(
-                    static_cast<uint32_t>(cdf.height),
-                    1u,
-                    VK_FORMAT_R32_SFLOAT,
-                    cdf.marginal.data(),
-                    cdf.marginal.size() * sizeof(float),
-                    VK_FILTER_NEAREST,
-                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-                    "envMargImage (marginal CDF)");
-            envCdfWidth_    = static_cast<uint32_t>(cdf.width);
-            envCdfHeight_   = static_cast<uint32_t>(cdf.height);
-            envCdfTotalSum_ = cdf.totalSum;
         }
 
         // Generate a 64×64 blue-noise tile via void-and-cluster (Ulichney 1993).
@@ -12874,11 +12547,11 @@ namespace threepp {
                     "foamDetail (512x512 RG8 bubbles+lace, mipped)");
         }
 
-        // 1×1 R32F dummy used at binding 32 when no DisplacedMesh is in the
-        // scene. closest_hit gates on pc.oceanFineTileSize > 0 so the sampler
-        // result is unread; the descriptor still needs a valid view/sampler
-        // to keep the layout populated. Replaced (view only) with the active
-        // ocean's cascade-2 height image via rewriteOceanFineDescriptors_().
+        // 1×1 R32F dummy ocean height used when no DisplacedMesh is in the
+        // scene. deferred_shade.comp gates on oceanFineTileSize > 0 so the
+        // sampler result is unread; the descriptor still needs a valid
+        // view/sampler to keep the layout populated. Replaced (view only) with
+        // the active ocean's cascade-2 height image via rewriteDeferredDescriptors().
         void createOceanFineDummy_() {
             const float zero = 0.0f;
             oceanFineHeightDummy = createSampledImage2D(
@@ -12891,7 +12564,7 @@ namespace threepp {
                     "oceanFineHeightDummy (1x1, binding 32 placeholder)");
             // Transition to GENERAL so the descriptor layout matches the
             // cascade-2 storage image's layout (also GENERAL after IFFT). One
-            // declared layout simplifies rewriteOceanFineDescriptors_().
+            // declared layout simplifies the descriptor rewrite.
             {
                 VkCommandBuffer cb = beginOneShot();
                 VkImageMemoryBarrier imb{};
@@ -12954,74 +12627,6 @@ namespace threepp {
             oceanFoamTileSize = 0.0f;
         }
 
-        // Re-write descriptor binding 32 across all sets to point at the
-        // currently active view/sampler/tileSize. Called from ensureDisplacedState
-        // after the FFT cascades are constructed (and on first switchover from
-        // dummy → cascade-2). The cascade-2 VkImage handle is stable for the
-        // lifetime of the DisplacedMesh, so we only need to rewrite once.
-        // Safe no-op when descriptors haven't been allocated yet — the first
-        // structural scene build calls ensureDisplacedState before
-        // allocateAndUpdateDescriptors, and the latter picks up the current
-        // oceanFineHeightView/Sampler/TileSize values via the standard path.
-        void rewriteOceanFineDescriptors_() {
-            if (descriptorSets.empty()) return;
-            const uint32_t totalSets = imageCount_ * kFramesInFlight;
-            std::vector<VkDescriptorImageInfo> infos(totalSets);
-            std::vector<VkWriteDescriptorSet>  writes(totalSets);
-            for (uint32_t i = 0; i < totalSets; ++i) {
-                infos[i].sampler     = oceanFineHeightSampler;
-                infos[i].imageView   = oceanFineHeightView;
-                infos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                writes[i] = VkWriteDescriptorSet{};
-                writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[i].dstSet = descriptorSets[i];
-                writes[i].dstBinding = 32;
-                writes[i].descriptorCount = 1;
-                writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[i].pImageInfo = &infos[i];
-            }
-            vkUpdateDescriptorSets(ctx->device(),
-                                   static_cast<uint32_t>(writes.size()),
-                                   writes.data(), 0, nullptr);
-        }
-
-        // Re-write descriptor binding 44 (world-space foam) across all chit
-        // sets. Mirrors rewriteOceanFineDescriptors_; called once when a
-        // DisplacedMesh appears (the foam VkImage handle stays put for the
-        // lifetime of that mesh, so per-frame writes aren't needed).
-        void rewriteOceanFoamDescriptors_() {
-            if (descriptorSets.empty()) return;
-            const uint32_t totalSets = imageCount_ * kFramesInFlight;
-            std::vector<VkDescriptorImageInfo> infos(totalSets);
-            std::vector<VkWriteDescriptorSet>  writes(totalSets);
-            for (uint32_t i = 0; i < totalSets; ++i) {
-                infos[i].sampler     = oceanFoamSampler;
-                infos[i].imageView   = oceanFoamView;
-                infos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                writes[i] = VkWriteDescriptorSet{};
-                writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[i].dstSet = descriptorSets[i];
-                writes[i].dstBinding = 44;
-                writes[i].descriptorCount = 1;
-                writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[i].pImageInfo = &infos[i];
-            }
-            vkUpdateDescriptorSets(ctx->device(),
-                                   static_cast<uint32_t>(writes.size()),
-                                   writes.data(), 0, nullptr);
-        }
-
-        // Build a degenerate 1×1 CDF (totalSum=0) for the case where the env is
-        // solid color or default. Shader uses totalSum=0 as the "no CDF" gate.
-        void rebuildDefaultEnvCdfImages() {
-            wgpu_pt::EnvCdfResult dummy;
-            dummy.width = 1; dummy.height = 1;
-            dummy.conditional = {1.0f};
-            dummy.marginal    = {1.0f};
-            dummy.totalSum    = 0.0f;
-            rebuildEnvCdfImages(dummy);
-        }
-
         // Detect the active env texture (scene.environment, falling back to
         // scene.background.texture()) and upload it if it differs from the
         // currently bound one. Returns true when descriptors must be rewritten.
@@ -13054,7 +12659,6 @@ namespace threepp {
                     envBgColor    = c;
                     envTextureIdUploaded = 0xFFFFFFFFu;
                     envSun_ = {};
-                    rebuildDefaultEnvCdfImages();// no importance sampling on solid colors
                     return true;
                 }
                 if (envIsDefault) return false;
@@ -13063,7 +12667,6 @@ namespace threepp {
                 createDefaultEnvImage();
                 envIsBgColor = false;
                 envSun_ = {};
-                rebuildDefaultEnvCdfImages();
                 return true;
             }
             envIsBgColor = false;
@@ -13100,1353 +12703,7 @@ namespace threepp {
                     envSunExtractionWanted(), &envSun_);
             envIsDefault = false;
             envTextureIdUploaded = tex->id;
-
-            // Build the luminance CDF from mip 0 (source equirect, RGBA float).
-            // Used by chit's env NEE to importance-sample bright HDRI features
-            // (sun discs, sky bands) via the marginal/conditional CDF pair.
-            const auto cdf = wgpu_pt::buildEnvCdf<float>(src, static_cast<int>(w), static_cast<int>(h));
-            rebuildEnvCdfImages(cdf);
             return true;
-        }
-
-        void createRtPipeline() {
-            // 0=TLAS, 1=storage image (swapchain), 2=camera UBO, 3=geometry SSBO,
-            // 4=material SSBO, 5=lights UBO, 6=env equirect,
-            // 7=accum write image (ping-pong), 8=material texture array,
-            // 9=prev camera UBO (motion), 10=motion matrix SSBO (motion),
-            // 11=prev accum read image (ping-pong), 12=gbuf write image
-            // (ping-pong), 13=prev gbuf read image (ping-pong).
-            // Bindings 22-26: hybrid raster G-buffer attachments — read by
-            // raygen for primary visibility (depth + worldPos reconstruction,
-            // motion vector for reproject, normal for shading, instance ID
-            // for material lookup, UV for texture sampling on the primary).
-            // Always present in the layout; raygen gates use on the hybrid
-            // push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 46> bindings{};
-            bindings[0].binding = 0;
-            bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-            bindings[0].descriptorCount = 1;
-            bindings[0].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                     VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;// shadow rays
-            bindings[1].binding = 1;
-            bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[1].descriptorCount = 1;
-            // outImage is now written by denoise.comp (compute), not raygen.
-            // RAYGEN flag retained so the descriptor layout stays valid for
-            // both pipelines that share rtDsLayout.
-            bindings[1].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                     VK_SHADER_STAGE_COMPUTE_BIT;
-            bindings[2].binding = 2;
-            bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            bindings[2].descriptorCount = 1;
-            // Compute denoise reads cam.viewInverse for camera world pos.
-            bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                     VK_SHADER_STAGE_COMPUTE_BIT;
-            bindings[3].binding = 3;
-            bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[3].descriptorCount = 1;
-            bindings[3].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                     VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
-            bindings[4].binding = 4;
-            bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[4].descriptorCount = 1;
-            // COMPUTE added so denoise_atrous can read mats[].materialAssetIdx
-            // for the cross-mesh same-material tap-acceptance gate.
-            // RAYGEN added for the hybrid reproject bilinear-tap material gate
-            // and primary-hit material asset capture.
-            bindings[4].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                     VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
-                                     VK_SHADER_STAGE_COMPUTE_BIT |
-                                     VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            bindings[5].binding = 5;
-            bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            bindings[5].descriptorCount = 1;
-            // RAYGEN added so volumeInscatter can NEE to analytic lights from
-            // primary-ray scatter points.
-            bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                     VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            bindings[6].binding = 6;
-            bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[6].descriptorCount = 1;
-            // RAYGEN added for volumeInscatter env-NEE (uniform-sphere fallback).
-            bindings[6].stageFlags = VK_SHADER_STAGE_MISS_BIT_KHR |
-                                     VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                     VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            bindings[7].binding = 7;
-            bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[7].descriptorCount = 1;
-            // Raygen writes; compute denoise reads radiance + per-pixel FC;
-            // closest_hit reads .w (per-pixel FC) for the GI primary
-            // saturation gate (skip sub-trace on converged pixels).
-            bindings[7].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                     VK_SHADER_STAGE_COMPUTE_BIT |
-                                     VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            // Bindless material albedo array. Fixed-cap kMaxMaterialTextures
-            // so we can avoid VK_EXT_descriptor_indexing's variable-descriptor-
-            // count plumbing for v1; closest_hit indexes via mdesc.albedoTexIndex.
-            bindings[8].binding = 8;
-            bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[8].descriptorCount = kMaxMaterialTextures;
-            // RAYGEN added for primary-hit albedo capture from bindless array.
-            bindings[8].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                     VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
-                                     VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            // Continuous-motion bindings.
-            bindings[9].binding = 9;
-            bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            bindings[9].descriptorCount = 1;
-            // CLOSEST_HIT added so chit can reproject for ReSTIR DI temporal reuse.
-            bindings[9].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                     VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            bindings[10].binding = 10;
-            bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[10].descriptorCount = 1;
-            bindings[10].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            bindings[11].binding = 11;
-            bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[11].descriptorCount = 1;
-            bindings[11].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            bindings[12].binding = 12;
-            bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[12].descriptorCount = 1;
-            // Compute denoise reads gbuf for worldPos + mesh-ID edge stops.
-            bindings[12].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                     VK_SHADER_STAGE_COMPUTE_BIT;
-            bindings[13].binding = 13;
-            bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[13].descriptorCount = 1;
-            // CLOSEST_HIT added so chit can read prev worldPos for ReSTIR DI
-            // temporal-reuse depth validation.
-            bindings[13].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                      VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            // Binding 14 — per-frame emissive-triangle CDF (closest_hit reads
-            // it for emissive-mesh NEE). One slot per frame-in-flight; rewritten
-            // by rewriteEmissiveTriDescriptors when the buffer grows.
-            bindings[14].binding = 14;
-            bindings[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[14].descriptorCount = 1;
-            // RAYGEN added for volumeInscatter emissive-tri NEE.
-            bindings[14].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                      VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            // Binding 15 — photon count array (written by photon emit raygen,
-            // read by closest_hit for caustic gather).
-            bindings[15].binding = 15;
-            bindings[15].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[15].descriptorCount = 1;
-            bindings[15].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                      VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            // Binding 16 — photon position/flux/direction data (same pipelines).
-            bindings[16].binding = 16;
-            bindings[16].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[16].descriptorCount = 1;
-            bindings[16].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                      VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            // Binding 17 — fog UBO (homogeneous participating media).
-            // Read by raygen (primary-ray transmittance + volumeInscatter) and
-            // closest_hit (per-light shadow-ray attenuation). Updated each frame
-            // by updateFogUbo from scene.fog.
-            bindings[17].binding = 17;
-            bindings[17].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            bindings[17].descriptorCount = 1;
-            bindings[17].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                      VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            // Binding 18 — env conditional luminance CDF (R32F, w×h). Row r holds
-            // cumulative distribution over columns at latitude r. Sampled in chit
-            // for env importance sampling (and in miss for the BRDF→env MIS
-            // complement at scattered miss, which needs envImportancePdf).
-            bindings[18].binding = 18;
-            bindings[18].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[18].descriptorCount = 1;
-            // RAYGEN added so the hybrid bounce-0-on-raster path can call
-            // envNeeOpaque (which calls sampleEnvImportance / envImportancePdf)
-            // for opaque non-silhouette primary pixels.
-            bindings[18].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                      VK_SHADER_STAGE_MISS_BIT_KHR |
-                                      VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            // Binding 19 — env marginal luminance CDF (R32F, 1×h). Picks a row
-            // (latitude) before sampling the conditional row at that latitude.
-            bindings[19].binding = 19;
-            bindings[19].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[19].descriptorCount = 1;
-            // RAYGEN added (paired with binding 18) for the bounce-0-on-raster
-            // env CDF NEE path.
-            bindings[19].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                      VK_SHADER_STAGE_MISS_BIT_KHR |
-                                      VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            // Binding 20 — multi-pass à-trous ping-pong intermediates. 2-element
-            // storage image array (rgba32f). Pass 0 reads accumImage and writes
-            // [0]; pass 1 reads [0] and writes [1]; pass 2 reads [1] and writes
-            // [0]; finalize (denoise.comp) reads [0]. COMPUTE-only.
-            bindings[20].binding = 20;
-            bindings[20].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[20].descriptorCount = 2;
-            bindings[20].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            // Binding 21 — per-instance moved-bitmask SSBO (one bit per TLAS
-            // instance, packed into u32 words). Sized at scene rebuild via
-            // ensureMeshMovedBitsCapacity, uploaded per frame from
-            // meshMovedBits_. Read by raygen.isMeshMoved() to gate FC halving
-            // per-pixel under partial scene motion.
-            bindings[21].binding = 21;
-            bindings[21].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[21].descriptorCount = 1;
-            bindings[21].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-            // Bindings 22-26 — hybrid raster G-buffer attachments. Sampled by
-            // raygen when the hybrid push-constant bit is set; ignored
-            // otherwise (descriptors stay populated so the layout is valid
-            // either way). Same physical images created by ensureHybridResources;
-            // descriptor writes route raygen at frame f to rasterGbufs[f].
-            bindings[22].binding = 22;// world-space normal (rgba16f, decoded n*2-1)
-            bindings[22].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[22].descriptorCount = 1;
-            bindings[22].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            bindings[23].binding = 23;// motion vector (rgba16f, NDC delta in .rg)
-            bindings[23].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[23].descriptorCount = 1;
-            bindings[23].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            bindings[24].binding = 24;// depth (d32_sfloat, depth aspect view)
-            bindings[24].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[24].descriptorCount = 1;
-            bindings[24].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            bindings[25].binding = 25;// IDs+flags (rgba16ui, usampler2D in shader)
-            bindings[25].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[25].descriptorCount = 1;
-            bindings[25].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            bindings[26].binding = 26;// material UV (rgba16f, only rg used)
-            bindings[26].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[26].descriptorCount = 1;
-            bindings[26].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            bindings[27].binding = 27;// 64×64 R8 blue-noise tile for sub-pixel jitter
-            bindings[27].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[27].descriptorCount = 1;
-            bindings[27].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-            // Bindings 28-31 — ReSTIR DI Stage 1b reservoir ping-pong storage.
-            // 28/29: lightPos.xyz + lightType.w (rgba32f, write/read)
-            // 30/31: W_sum, M, W, p_hat (rgba16f, write/read)
-            // Frame N writes 28/30, reads 29/31; descriptor-set 1 (next f) flips
-            // the physical images so each frame's read sees the prior frame's
-            // write. Same pattern as accumImagesPP / gbufImagesPP.
-            bindings[28].binding = 28;
-            bindings[28].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[28].descriptorCount = 1;
-            bindings[28].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            bindings[29].binding = 29;
-            bindings[29].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[29].descriptorCount = 1;
-            bindings[29].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            bindings[30].binding = 30;
-            bindings[30].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[30].descriptorCount = 1;
-            bindings[30].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            bindings[31].binding = 31;
-            bindings[31].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[31].descriptorCount = 1;
-            bindings[31].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-
-            // Binding 32 — ocean fine-cascade height image (R32F via RG32F .r).
-            // Default 1×1 dummy when no DisplacedMesh is in the scene; swapped
-            // to cascade-2 height when an FFT ocean is active. closest_hit reads
-            // it on thinWalled materials to perturb the shading normal at world-
-            // space XZ via finite differences. Gated by pc.oceanFineTileSize > 0.
-            bindings[32].binding = 32;
-            bindings[32].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[32].descriptorCount = 1;
-            bindings[32].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-
-            // Bindings 33/34 — temporal moments ping-pong (R32F).
-            // 33 = write (this frame, raygen); 34 = read (prev frame, raygen).
-            // Atrous reads binding 33 (the just-written current-frame moments)
-            // to compute per-pixel variance = max(M2 − luminance(mean)², 0)
-            // for the σ_lum edge stop. Same ping-pong pattern as
-            // accumImagesPP / gbufImagesPP — descriptor sets bake the f&1 →
-            // slot mapping at allocation time.
-            bindings[33].binding = 33;
-            bindings[33].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[33].descriptorCount = 1;
-            bindings[33].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                      VK_SHADER_STAGE_COMPUTE_BIT;
-            bindings[34].binding = 34;
-            bindings[34].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[34].descriptorCount = 1;
-            bindings[34].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-            // Bindings 35/36 — primary-surface albedo ping-pong (rgba8).
-            // 35 = write (current frame): raygen FC-blends prev albedo
-            // (binding 36) with payload.primaryAlbedo and writes here.
-            // Atrous reads binding 35 to demodulate radiance.
-            // 36 = read (prev frame): raygen samples via bilinear reproject
-            // with same mesh-ID + depth gates as accumImage reproject.
-            bindings[35].binding = 35;
-            bindings[35].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[35].descriptorCount = 1;
-            bindings[35].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                      VK_SHADER_STAGE_COMPUTE_BIT;
-            bindings[36].binding = 36;
-            bindings[36].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[36].descriptorCount = 1;
-            bindings[36].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-
-            // Binding 37 — snapshot of chit's per-frame albedo (no temporal
-            // blend). Raygen writes; atrous reads at center for re-mod.
-            // Preserves texture crispness while temporal blend on 35/36
-            // smooths noise on the demod division side.
-            bindings[37].binding = 37;
-            bindings[37].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[37].descriptorCount = 1;
-            bindings[37].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                      VK_SHADER_STAGE_COMPUTE_BIT;
-
-            // Bindings 38-43 — ReSTIR GI Stage 1b reservoir ping-pong storage.
-            // 38/39: xs.xyz + W_sum   (rgba32f write/read)
-            // 40/41: ns.xyz + M       (rgba32f write/read)
-            // 42/43: Lo.rgb + W       (rgba32f write/read)
-            // Frame N writes 38/40/42 and reads 39/41/43; descriptor sets in
-            // alloc bake the f&1 → physical slot mapping (like accumImagesPP).
-            // CLOSEST_HIT only — raygen doesn't touch these; chit does both
-            // the temporal-merge read and the post-merge persistence write.
-            bindings[38].binding = 38;
-            bindings[38].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[38].descriptorCount = 1;
-            bindings[38].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            bindings[39].binding = 39;
-            bindings[39].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[39].descriptorCount = 1;
-            bindings[39].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            bindings[40].binding = 40;
-            bindings[40].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[40].descriptorCount = 1;
-            bindings[40].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            bindings[41].binding = 41;
-            bindings[41].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[41].descriptorCount = 1;
-            bindings[41].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            bindings[42].binding = 42;
-            bindings[42].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[42].descriptorCount = 1;
-            bindings[42].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            bindings[43].binding = 43;
-            bindings[43].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[43].descriptorCount = 1;
-            bindings[43].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-
-            // Binding 44 — world-space foam (R32F via combined-image-sampler).
-            // Built by FoamWorldPipeline each frame; closest_hit samples at
-            // hit-position world XZ to apply foam coverage on water surfaces.
-            // Default 1×1 dummy when no DisplacedMesh exists; swapped to the
-            // active mesh's foam image once one comes online. Gated in the
-            // shader by pc.oceanFoamTileSize > 0.
-            bindings[44].binding = 44;
-            bindings[44].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[44].descriptorCount = 1;
-            bindings[44].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-
-            // Binding 45 — baked tileable foam detail (RG8, mipped). Static
-            // for the renderer's lifetime; closest_hit samples it in the foam
-            // block (R = bubbles, G = lace) instead of evaluating procedural
-            // value noise per pixel. Mirrors deferred binding 34.
-            bindings[45].binding = 45;
-            bindings[45].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bindings[45].descriptorCount = 1;
-            bindings[45].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-
-            VkDescriptorSetLayoutCreateInfo dlci{};
-            dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            dlci.bindingCount = static_cast<uint32_t>(bindings.size());
-            dlci.pBindings = bindings.data();
-            check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rtDsLayout),
-                  "vkCreateDescriptorSetLayout(RT)");
-
-            // 52-byte push constant. Layout matches the host-side `pc[13]`
-            // assembled in renderFrame and the GLSL PushConstants struct in
-            // raygen.rgen / closest_hit.rchit / miss.rmiss. Well under the
-            // 128-byte minimum push-constant guarantee. Per-instance moved
-            // bits moved out to the binding 21 SSBO (no longer 128-mesh capped).
-            //
-            //   [0] sampleIndex            (raygen)
-            //   [1] env mip count          (closest_hit)
-            //   [2] toneMapping enum
-            //   [3] exposure as float bits
-            //   [4] motionFlags: bit 0 = any motion this frame (mesh or
-            //       camera), bit 1 = camera viewProj changed, bit 2 = scene
-            //       has any glass material. Raygen takes a self-tap of
-            //       accum/gbuf when bit 0 is clear, avoiding round-trip
-            //       reproject precision drift on static scenes.
-            //   [5]  emissiveCount       (closest_hit reads for NEE CDF)
-            //   [6]  emissiveTotalPower  (float bits — CDF normalisation)
-            //   [7]  samplesPerPixel     (raygen — # of jittered primary rays
-            //        per frame; in-frame samples are summed with weight `spp`)
-            //   [8]  envCdfWidth         (closest_hit + miss — env importance sample)
-            //   [9]  envCdfHeight        (closest_hit + miss — env importance sample)
-            //   [10] envCdfTotalSum bits (float — pdf normalisation; 0 disables CDF)
-            //   [11] fireflyClamp bits   (float — per-NEE luminance cap; 1e30 disables)
-            //   [12] oceanFineTileSize bits (float — fine-cascade tile size in m;
-            //        0 disables FFT-fine-normal perturbation on thinWalled hits)
-            //   [13] edgeMsaaExtra      (raygen — extra primary samples at detected
-            //        silhouettes; 0 disables, N → (N+1)× total samples at edges)
-            //   [14] oceanFoamTileSize bits (float — world-space foam tile size in m;
-            //        0 disables foam sampling on water hits)
-            //   [15] maxBounces        (raygen — host-driven scatter-event cap;
-            //        replaces the prior compile-time kMaxBounces in raygen.rgen)
-            VkPushConstantRange pcRange{};
-            pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                 VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                 VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
-                                 VK_SHADER_STAGE_MISS_BIT_KHR;
-            pcRange.offset = 0;
-            pcRange.size   = 64;
-
-            VkPipelineLayoutCreateInfo plci{};
-            plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            plci.setLayoutCount = 1;
-            plci.pSetLayouts = &rtDsLayout;
-            plci.pushConstantRangeCount = 1;
-            plci.pPushConstantRanges = &pcRange;
-            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &rtPipelineLayout),
-                  "vkCreatePipelineLayout(RT)");
-
-            // Pipeline + SBT creation is deferred to buildAllRtPipelines(),
-            // called lazily on first frame once ensureSceneBuilt has detected
-            // scene features (sceneHasGlass_ etc.). That lets us spec-constant
-            // those features into chit without bloating the variant matrix.
-        }
-
-        // Builds all RT pipeline variants for the current scene-feature set.
-        // Called lazily on first frame after ensureSceneBuilt has detected
-        // sceneHasGlass_ and other scene-fixed properties. Variant axes are
-        // SER × hybrid × restirDI (runtime-toggleable); scene features go in
-        // as a uint bitmask spec constant on chit and don't multiply variants.
-        bool rtPipelinesBuilt_ = false;
-        // Snapshot of currentSceneFeatures() used at the most recent variant
-        // build. Compared every frame against the live value; if the scene
-        // swapped to a model with different features (gltf_samples-style),
-        // we invalidate all baked variants and rebuild the active one fresh.
-        // Sentinel 0xFFFFFFFFu means "no build has happened yet" — initial
-        // mismatch on first frame is fine because rtPipelinesBuilt_ gates
-        // the invalidation path.
-        uint32_t lastBuiltSceneFeatures_ = 0xFFFFFFFFu;
-
-        // First-frame entry. Builds only the variant matching the user's
-        // current toggle state; the other 7 (or 3, non-SER) variants are
-        // built lazily by ensureCurrentRtVariantBuilt() on first toggle.
-        // RT-pipeline compile is expensive (~1-2s each on NVIDIA for
-        // threepp's chit), so eager-building all 8 was costing 10+s. Most
-        // users never toggle, so we pay 1 compile at startup and only the
-        // others if the user actually flips a switch.
-        void buildAllRtPipelines() {
-            const uint32_t sceneFeats = currentSceneFeatures();
-            buildSingleRtVariant(shouldUseSerRaygen(), restirDIEnabled_, sceneFeats);
-            lastBuiltSceneFeatures_ = sceneFeats;
-            rtPipelinesBuilt_ = true;
-        }
-
-        // Throws out every built pipeline + SBT after a scene swap. Called
-        // from ensureCurrentRtVariantBuilt() when currentSceneFeatures() has
-        // changed since the last build (e.g. a glass model replaced a glass-
-        // free one — kSceneFeatHasGlass flips and the caustic gather DCE is
-        // now wrong). vkDeviceWaitIdle drains any in-flight GPU work using
-        // the old pipelines before we destroy them.
-        void invalidateAllRtVariants() {
-            vkDeviceWaitIdle(ctx->device());
-            for (auto& v : rtVariants_) {
-                if (v.pipeline != VK_NULL_HANDLE) {
-                    vkDestroyPipeline(ctx->device(), v.pipeline, nullptr);
-                    v.pipeline = VK_NULL_HANDLE;
-                }
-                destroyBuffer(ctx->allocator(), v.sbtBuffer);
-                v.sbtBuffer  = {};
-                v.rgenRegion = {};
-                v.missRegion = {};
-                v.hitRegion  = {};
-            }
-        }
-
-        // Lazy build of the active variant. Called every frame (cheap null
-        // check); also detects scene-feature drift (gltf_samples model swap)
-        // and tears down baked-stale variants. vkDeviceWaitIdle before the
-        // create call drains any in-flight GPU work — NVIDIA's reported
-        // hang on subsequent vkCreateRayTracingPipelinesKHR calls against
-        // the same pipeline layout appears to be tied to overlapping work.
-        void ensureCurrentRtVariantBuilt() {
-            const uint32_t newFeats = currentSceneFeatures();
-            if (rtPipelinesBuilt_ && newFeats != lastBuiltSceneFeatures_) {
-                // Scene features changed since last build (model swap).
-                // All baked spec-constant variants are stale — caustic
-                // gather / clearcoat lobe / iridescence Fresnel / sheen NEE
-                // DCE states no longer match what the chit needs. Discard
-                // everything; the active variant will rebuild below.
-                invalidateAllRtVariants();
-                lastBuiltSceneFeatures_ = newFeats;
-            }
-            const bool useSer = shouldUseSerRaygen();
-            const bool rdi = restirDIEnabled_;
-            const uint32_t idx = rtVariantIndex(useSer, rdi);
-            if (rtVariants_[idx].pipeline != VK_NULL_HANDLE) return;
-            vkDeviceWaitIdle(ctx->device());
-            buildSingleRtVariant(useSer, rdi, newFeats);
-        }
-
-        // Scene-feature bitmask matching chit's kSceneFeatures spec constant.
-        // Bit assignments must stay in lock-step with closest_hit.rchit
-        // (kSceneFeatHasGlass / Clearcoat / Iridescence / Sheen).
-        //   bit 0 = sceneHasGlass        — gates caustic photon gather
-        //   bit 1 = sceneHasClearcoat    — gates clearcoat lobe setup
-        //   bit 2 = sceneHasIridescence  — gates evalIridescence Fresnel mix
-        //   bit 3 = sceneHasSheen        — gates Charlie NDF sheen NEE terms
-        uint32_t currentSceneFeatures() const {
-            uint32_t f = 0;
-            if (sceneHasGlass_)        f |= 1u;
-            if (sceneHasClearcoat_)    f |= 2u;
-            if (sceneHasIridescence_)  f |= 4u;
-            if (sceneHasSheen_)        f |= 8u;
-            return f;
-        }
-
-        // Single-variant pipeline build. Called once at first frame for the
-        // active variant, and again by ensureCurrentRtVariantBuilt() on each
-        // toggle that lands in an unbuilt slot.
-        void buildSingleRtVariant(bool useSer, bool restirDISpec,
-                                  uint32_t sceneFeatures) {
-            auto loadModule = [this](const uint32_t* code, size_t size) {
-                VkShaderModuleCreateInfo smci{};
-                smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-                smci.codeSize = size;
-                smci.pCode = code;
-                VkShaderModule m = VK_NULL_HANDLE;
-                check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &m),
-                      "vkCreateShaderModule(RT)");
-                return m;
-            };
-
-            VkShaderModule rgenMod = useSer
-                    ? loadModule(kRaygenRgenSerSpv, sizeof(kRaygenRgenSerSpv))
-                    : loadModule(kRaygenRgenSpv,    sizeof(kRaygenRgenSpv));
-            VkShaderModule missMod    = loadModule(kMissRmissSpv,            sizeof(kMissRmissSpv));
-            VkShaderModule sMissMod   = loadModule(kShadowMissRmissSpv,      sizeof(kShadowMissRmissSpv));
-            VkShaderModule chitMod    = loadModule(kClosestHitRchitSpv,      sizeof(kClosestHitRchitSpv));
-            VkShaderModule ahitMod    = loadModule(kClosestHitAlphaRahitSpv, sizeof(kClosestHitAlphaRahitSpv));
-            VkShaderModule sahitMod   = loadModule(kShadowAnyhitRahitSpv,    sizeof(kShadowAnyhitRahitSpv));
-
-            // Shader groups: same layout as other variants.
-            std::array<VkRayTracingShaderGroupCreateInfoKHR, 5> groups{};
-            for (auto& g : groups) {
-                g.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-                g.generalShader = VK_SHADER_UNUSED_KHR;
-                g.closestHitShader = VK_SHADER_UNUSED_KHR;
-                g.anyHitShader = VK_SHADER_UNUSED_KHR;
-                g.intersectionShader = VK_SHADER_UNUSED_KHR;
-            }
-            groups[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-            groups[0].generalShader = 0;
-            groups[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-            groups[1].generalShader = 1;
-            groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-            groups[2].generalShader = 2;
-            groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-            groups[3].closestHitShader = 3;
-            groups[3].anyHitShader = 4;
-            groups[4].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-            groups[4].anyHitShader = 5;
-
-            // Raygen spec data (kSceneFeatures at constant_id 1).
-            struct RgenSpecData {
-                uint32_t sceneFeatures;
-            } rgenSpecData{
-                sceneFeatures,
-            };
-            VkSpecializationMapEntry rgenMapEntries[1]{};
-            rgenMapEntries[0].constantID = 1;
-            rgenMapEntries[0].offset = offsetof(RgenSpecData, sceneFeatures);
-            rgenMapEntries[0].size = sizeof(uint32_t);
-            VkSpecializationInfo rgenSpecInfo{};
-            rgenSpecInfo.mapEntryCount = 1;
-            rgenSpecInfo.pMapEntries = rgenMapEntries;
-            rgenSpecInfo.dataSize = sizeof(RgenSpecData);
-            rgenSpecInfo.pData = &rgenSpecData;
-
-            // Chit spec data (kRestirDIEnabled + kSceneFeatures).
-            struct ChitSpecData {
-                VkBool32 restirDIEnabled;
-                uint32_t sceneFeatures;
-            } chitSpecData{
-                restirDISpec ? VK_TRUE : VK_FALSE,
-                sceneFeatures,
-            };
-            VkSpecializationMapEntry chitMapEntries[2]{};
-            chitMapEntries[0].constantID = 0;
-            chitMapEntries[0].offset = offsetof(ChitSpecData, restirDIEnabled);
-            chitMapEntries[0].size = sizeof(VkBool32);
-            chitMapEntries[1].constantID = 1;
-            chitMapEntries[1].offset = offsetof(ChitSpecData, sceneFeatures);
-            chitMapEntries[1].size = sizeof(uint32_t);
-            VkSpecializationInfo chitSpecInfo{};
-            chitSpecInfo.mapEntryCount = 2;
-            chitSpecInfo.pMapEntries = chitMapEntries;
-            chitSpecInfo.dataSize = sizeof(ChitSpecData);
-            chitSpecInfo.pData = &chitSpecData;
-
-            // Stages: 0=rgen, 1=primary miss, 2=shadow miss,
-            //         3=path closest-hit, 4=path any-hit (alpha),
-            //         5=shadow any-hit (glass+cutout).
-            std::array<VkPipelineShaderStageCreateInfo, 6> stages{};
-            for (auto& s : stages) {
-                s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-                s.pName = "main";
-            }
-            stages[0].stage  = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            stages[0].module = rgenMod;
-            stages[0].pSpecializationInfo = &rgenSpecInfo;
-            stages[1].stage  = VK_SHADER_STAGE_MISS_BIT_KHR;
-            stages[1].module = missMod;
-            stages[2].stage  = VK_SHADER_STAGE_MISS_BIT_KHR;
-            stages[2].module = sMissMod;
-            stages[3].stage  = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            stages[3].module = chitMod;
-            stages[3].pSpecializationInfo = &chitSpecInfo;
-            stages[4].stage  = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
-            stages[4].module = ahitMod;
-            stages[5].stage  = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
-            stages[5].module = sahitMod;
-
-            VkRayTracingPipelineCreateInfoKHR rci{};
-            rci.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
-            rci.stageCount = static_cast<uint32_t>(stages.size());
-            rci.pStages    = stages.data();
-            rci.groupCount = static_cast<uint32_t>(groups.size());
-            rci.pGroups    = groups.data();
-            // depth 4: primary chit → GI sub-trace → sub-sub-trace → shadow.
-            rci.maxPipelineRayRecursionDepth = 4;
-            rci.layout = rtPipelineLayout;
-
-            const uint32_t idx = rtVariantIndex(useSer, restirDISpec);
-            check(ctx->rt().createRayTracingPipelines(
-                          ctx->device(), VK_NULL_HANDLE, ctx->pipelineCache(),
-                          1, &rci, nullptr, &rtVariants_[idx].pipeline),
-                  "vkCreateRayTracingPipelinesKHR (single)");
-            createShaderBindingTable(useSer, restirDISpec);
-
-            vkDestroyShaderModule(ctx->device(), rgenMod,  nullptr);
-            vkDestroyShaderModule(ctx->device(), missMod,  nullptr);
-            vkDestroyShaderModule(ctx->device(), sMissMod, nullptr);
-            vkDestroyShaderModule(ctx->device(), chitMod,  nullptr);
-            vkDestroyShaderModule(ctx->device(), ahitMod,  nullptr);
-            vkDestroyShaderModule(ctx->device(), sahitMod, nullptr);
-        }
-
-        void createShaderBindingTable(bool useSer, bool restirDISpec) {
-            RtPipelineVariant& v = rtVariants_[rtVariantIndex(useSer, restirDISpec)];
-            const auto& props = ctx->rtPipelineProperties();
-            const uint32_t handleSize = props.shaderGroupHandleSize;
-            const uint32_t handleAlignment = props.shaderGroupHandleAlignment;
-            const uint32_t baseAlignment = props.shaderGroupBaseAlignment;
-            const uint32_t handleSizeAligned = alignUp(handleSize, handleAlignment);
-
-            // 5 groups: rgen, primary miss, shadow miss, path hit, shadow hit.
-            // Miss region: 2 records. Hit region: 2 records (path=sbtOffset 0, shadow=sbtOffset 1).
-            constexpr uint32_t groupCount = 5;
-            const uint32_t handlesDataSize = groupCount * handleSize;
-            std::vector<uint8_t> handles(handlesDataSize);
-            check(ctx->rt().getRayTracingShaderGroupHandles(
-                          ctx->device(), v.pipeline, 0, groupCount,
-                          handlesDataSize, handles.data()),
-                  "vkGetRayTracingShaderGroupHandlesKHR");
-
-            // Per-region: base aligned to shaderGroupBaseAlignment, stride = aligned
-            // handle size. Region size must be a multiple of stride and >= base alignment.
-            const uint32_t rgenRegionBytes = alignUp(handleSizeAligned, baseAlignment);
-            const uint32_t missRegionBytes = alignUp(2 * handleSizeAligned, baseAlignment);
-            const uint32_t hitRegionBytes  = alignUp(2 * handleSizeAligned, baseAlignment);
-            const VkDeviceSize sbtSize =
-                    static_cast<VkDeviceSize>(rgenRegionBytes) +
-                    static_cast<VkDeviceSize>(missRegionBytes) +
-                    static_cast<VkDeviceSize>(hitRegionBytes);
-
-            v.sbtBuffer = createBuffer(
-                    ctx->allocator(), ctx->device(), sbtSize,
-                    VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
-                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
-
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), v.sbtBuffer.alloc, &mapped);
-            std::memset(mapped, 0, sbtSize);
-            uint8_t* dst = static_cast<uint8_t*>(mapped);
-
-            // rgen at start of buffer.
-            std::memcpy(dst, handles.data() + 0 * handleSize, handleSize);
-            // miss[0] = primary, miss[1] = shadow. Packed at handleSizeAligned stride.
-            std::memcpy(dst + rgenRegionBytes + 0 * handleSizeAligned,
-                        handles.data() + 1 * handleSize, handleSize);
-            std::memcpy(dst + rgenRegionBytes + 1 * handleSizeAligned,
-                        handles.data() + 2 * handleSize, handleSize);
-            // hit[0] = path hit group (sbtOffset=0), hit[1] = shadow hit group (sbtOffset=1).
-            std::memcpy(dst + rgenRegionBytes + missRegionBytes + 0 * handleSizeAligned,
-                        handles.data() + 3 * handleSize, handleSize);
-            std::memcpy(dst + rgenRegionBytes + missRegionBytes + 1 * handleSizeAligned,
-                        handles.data() + 4 * handleSize, handleSize);
-            vmaUnmapMemory(ctx->allocator(), v.sbtBuffer.alloc);
-
-            const VkDeviceAddress base = v.sbtBuffer.address;
-            v.rgenRegion.deviceAddress = base;
-            v.rgenRegion.stride = rgenRegionBytes;
-            v.rgenRegion.size   = rgenRegionBytes;
-            v.missRegion.deviceAddress = base + rgenRegionBytes;
-            v.missRegion.stride = handleSizeAligned;
-            v.missRegion.size   = missRegionBytes;
-            v.hitRegion.deviceAddress = base + rgenRegionBytes + missRegionBytes;
-            v.hitRegion.stride = handleSizeAligned;
-            v.hitRegion.size   = hitRegionBytes;
-            callRegion = {};
-        }
-
-        void createDescriptorPool() {
-            imageCount_ = static_cast<uint32_t>(ctx->swapchainImages().size());
-            const uint32_t totalSets = imageCount_ * kFramesInFlight;
-            std::array<VkDescriptorPoolSize, 5> ps{};
-            ps[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-            ps[0].descriptorCount = totalSets;
-            ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            ps[1].descriptorCount = totalSets * 22;// bindings 1, 7, 11, 12, 13 + 20×2 (filtered ping-pong) + 28-31 (ReSTIR DI reservoir ping-pong) + 33,34 (moments ping-pong) + 35,36,37 (albedo ping-pong + snapshot) + 38-43 (ReSTIR GI reservoir ping-pong)
-            ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            ps[2].descriptorCount = totalSets * 4;// bindings 2 (camera), 5 (lights), 9 (prevCamera), 17 (fog)
-            ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            ps[3].descriptorCount = totalSets * 7;// bindings 3,4,10,14 (existing) + 15,16 (photon) + 21 (meshMovedBits)
-            ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5 + 1 + 1 + 1 + 1);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV) + binding 27 (blue noise tile) + binding 32 (ocean fine-cascade height) + binding 44 (world-space foam) + binding 45 (foam detail tile)
-
-            VkDescriptorPoolCreateInfo ci{};
-            ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            ci.maxSets = totalSets;
-            ci.poolSizeCount = static_cast<uint32_t>(ps.size());
-            ci.pPoolSizes = ps.data();
-            check(vkCreateDescriptorPool(ctx->device(), &ci, nullptr, &descriptorPool),
-                  "vkCreateDescriptorPool(RT)");
-        }
-
-        void allocateAndUpdateDescriptors() {
-            const uint32_t totalSets = imageCount_ * kFramesInFlight;
-            std::vector<VkDescriptorSetLayout> layouts(totalSets, rtDsLayout);
-            VkDescriptorSetAllocateInfo ai{};
-            ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool = descriptorPool;
-            ai.descriptorSetCount = totalSets;
-            ai.pSetLayouts = layouts.data();
-            descriptorSets.resize(totalSets);
-            check(vkAllocateDescriptorSets(ctx->device(), &ai, descriptorSets.data()),
-                  "vkAllocateDescriptorSets(RT)");
-
-            VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
-            asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
-            asWrite.accelerationStructureCount = 1;
-            asWrite.pAccelerationStructures = &tlas;
-
-            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                for (uint32_t i = 0; i < imageCount_; ++i) {
-                    const uint32_t idx = f * imageCount_ + i;
-
-                    VkWriteDescriptorSet wAS{};
-                    wAS.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wAS.pNext = &asWrite;
-                    wAS.dstSet = descriptorSets[idx];
-                    wAS.dstBinding = 0;
-                    wAS.descriptorCount = 1;
-                    wAS.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-
-                    // Binding 1 (denoise output) is initialised to the
-                    // swapchain image as a placeholder; renderFrame rewrites
-                    // it per-frame to taa_->inputView(f) so TAA can resolve
-                    // it before swapchain present.
-                    VkDescriptorImageInfo imgInfo{};
-                    imgInfo.imageView = ctx->swapchainImageViews()[i];
-                    imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wImg{};
-                    wImg.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wImg.dstSet = descriptorSets[idx];
-                    wImg.dstBinding = 1;
-                    wImg.descriptorCount = 1;
-                    wImg.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wImg.pImageInfo = &imgInfo;
-
-                    VkDescriptorBufferInfo bufInfo{};
-                    bufInfo.buffer = cameraUbos[f].handle;
-                    bufInfo.offset = 0;
-                    bufInfo.range = VK_WHOLE_SIZE;
-                    VkWriteDescriptorSet wUbo{};
-                    wUbo.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wUbo.dstSet = descriptorSets[idx];
-                    wUbo.dstBinding = 2;
-                    wUbo.descriptorCount = 1;
-                    wUbo.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                    wUbo.pBufferInfo = &bufInfo;
-
-                    VkDescriptorBufferInfo geomInfo{};
-                    geomInfo.buffer = geometryDescsBuffer.handle;
-                    geomInfo.offset = 0;
-                    geomInfo.range = VK_WHOLE_SIZE;
-                    VkWriteDescriptorSet wGeom{};
-                    wGeom.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGeom.dstSet = descriptorSets[idx];
-                    wGeom.dstBinding = 3;
-                    wGeom.descriptorCount = 1;
-                    wGeom.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    wGeom.pBufferInfo = &geomInfo;
-
-                    VkDescriptorBufferInfo matInfo{};
-                    matInfo.buffer = materialDescsBuffers[f].handle;
-                    matInfo.offset = 0;
-                    matInfo.range = VK_WHOLE_SIZE;
-                    VkWriteDescriptorSet wMat{};
-                    wMat.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wMat.dstSet = descriptorSets[idx];
-                    wMat.dstBinding = 4;
-                    wMat.descriptorCount = 1;
-                    wMat.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    wMat.pBufferInfo = &matInfo;
-
-                    VkDescriptorBufferInfo lightsInfo{};
-                    lightsInfo.buffer = lightsUbos[f].handle;
-                    lightsInfo.offset = 0;
-                    lightsInfo.range = VK_WHOLE_SIZE;
-                    VkWriteDescriptorSet wLights{};
-                    wLights.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wLights.dstSet = descriptorSets[idx];
-                    wLights.dstBinding = 5;
-                    wLights.descriptorCount = 1;
-                    wLights.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                    wLights.pBufferInfo = &lightsInfo;
-
-                    VkDescriptorImageInfo envInfo{};
-                    envInfo.sampler     = envImage.sampler;
-                    envInfo.imageView   = envImage.view;
-                    envInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    VkWriteDescriptorSet wEnv{};
-                    wEnv.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wEnv.dstSet = descriptorSets[idx];
-                    wEnv.dstBinding = 6;
-                    wEnv.descriptorCount = 1;
-                    wEnv.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wEnv.pImageInfo = &envInfo;
-
-                    // Ping-pong: frame f writes slot (f & 1), reads (1 - (f & 1)).
-                    // Two frames in flight + two slots align perfectly: descriptors
-                    // are baked once and never need rewrite per frame.
-                    const uint32_t writeSlot = f & 1u;
-                    const uint32_t readSlot  = 1u - writeSlot;
-
-                    VkDescriptorImageInfo accumInfo{};
-                    accumInfo.imageView   = accumImagesPP[writeSlot].view;
-                    accumInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wAccum{};
-                    wAccum.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wAccum.dstSet = descriptorSets[idx];
-                    wAccum.dstBinding = 7;
-                    wAccum.descriptorCount = 1;
-                    wAccum.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wAccum.pImageInfo = &accumInfo;
-
-                    // Binding 8 — fill all kMaxMaterialTextures slots; unused
-                    // tail slots get the white default so the descriptor write
-                    // is always valid.
-                    std::array<VkDescriptorImageInfo, kMaxMaterialTextures> matTexInfos{};
-                    fillMaterialTextureInfos(matTexInfos);
-                    VkWriteDescriptorSet wMatTex{};
-                    wMatTex.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wMatTex.dstSet = descriptorSets[idx];
-                    wMatTex.dstBinding = 8;
-                    wMatTex.dstArrayElement = 0;
-                    wMatTex.descriptorCount = kMaxMaterialTextures;
-                    wMatTex.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wMatTex.pImageInfo = matTexInfos.data();
-
-                    VkDescriptorBufferInfo prevCamInfo{};
-                    prevCamInfo.buffer = prevCameraUbos[f].handle;
-                    prevCamInfo.offset = 0;
-                    prevCamInfo.range  = VK_WHOLE_SIZE;
-                    VkWriteDescriptorSet wPrevCam{};
-                    wPrevCam.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wPrevCam.dstSet = descriptorSets[idx];
-                    wPrevCam.dstBinding = 9;
-                    wPrevCam.descriptorCount = 1;
-                    wPrevCam.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                    wPrevCam.pBufferInfo = &prevCamInfo;
-
-                    VkDescriptorBufferInfo motionInfo{};
-                    motionInfo.buffer = motionMatBuffers[f].handle;
-                    motionInfo.offset = 0;
-                    motionInfo.range  = VK_WHOLE_SIZE;
-                    VkWriteDescriptorSet wMotion{};
-                    wMotion.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wMotion.dstSet = descriptorSets[idx];
-                    wMotion.dstBinding = 10;
-                    wMotion.descriptorCount = 1;
-                    wMotion.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    wMotion.pBufferInfo = &motionInfo;
-
-                    VkDescriptorImageInfo prevAccumInfo{};
-                    prevAccumInfo.imageView   = accumImagesPP[readSlot].view;
-                    prevAccumInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wPrevAccum{};
-                    wPrevAccum.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wPrevAccum.dstSet = descriptorSets[idx];
-                    wPrevAccum.dstBinding = 11;
-                    wPrevAccum.descriptorCount = 1;
-                    wPrevAccum.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wPrevAccum.pImageInfo = &prevAccumInfo;
-
-                    VkDescriptorImageInfo gbufInfo{};
-                    gbufInfo.imageView   = gbufImagesPP[writeSlot].view;
-                    gbufInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wGbuf{};
-                    wGbuf.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGbuf.dstSet = descriptorSets[idx];
-                    wGbuf.dstBinding = 12;
-                    wGbuf.descriptorCount = 1;
-                    wGbuf.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wGbuf.pImageInfo = &gbufInfo;
-
-                    VkDescriptorImageInfo prevGbufInfo{};
-                    prevGbufInfo.imageView   = gbufImagesPP[readSlot].view;
-                    prevGbufInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wPrevGbuf{};
-                    wPrevGbuf.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wPrevGbuf.dstSet = descriptorSets[idx];
-                    wPrevGbuf.dstBinding = 13;
-                    wPrevGbuf.descriptorCount = 1;
-                    wPrevGbuf.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wPrevGbuf.pImageInfo = &prevGbufInfo;
-
-                    VkDescriptorBufferInfo emTriInfo{};
-                    emTriInfo.buffer = emissiveTriBuffers[f].handle;
-                    emTriInfo.offset = 0;
-                    emTriInfo.range  = VK_WHOLE_SIZE;
-                    VkWriteDescriptorSet wEmTri{};
-                    wEmTri.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wEmTri.dstSet = descriptorSets[idx];
-                    wEmTri.dstBinding = 14;
-                    wEmTri.descriptorCount = 1;
-                    wEmTri.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    wEmTri.pBufferInfo = &emTriInfo;
-
-                    VkDescriptorBufferInfo photonCntInfo{};
-                    photonCntInfo.buffer = photon_->countBuffer();
-                    photonCntInfo.offset = 0;
-                    photonCntInfo.range  = VK_WHOLE_SIZE;
-                    VkWriteDescriptorSet wPhotonCnt{};
-                    wPhotonCnt.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wPhotonCnt.dstSet = descriptorSets[idx];
-                    wPhotonCnt.dstBinding = 15;
-                    wPhotonCnt.descriptorCount = 1;
-                    wPhotonCnt.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    wPhotonCnt.pBufferInfo = &photonCntInfo;
-
-                    VkDescriptorBufferInfo photonDataInfo{};
-                    photonDataInfo.buffer = photon_->dataBuffer();
-                    photonDataInfo.offset = 0;
-                    photonDataInfo.range  = VK_WHOLE_SIZE;
-                    VkWriteDescriptorSet wPhotonData{};
-                    wPhotonData.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wPhotonData.dstSet = descriptorSets[idx];
-                    wPhotonData.dstBinding = 16;
-                    wPhotonData.descriptorCount = 1;
-                    wPhotonData.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    wPhotonData.pBufferInfo = &photonDataInfo;
-
-                    VkDescriptorBufferInfo fogInfo{};
-                    fogInfo.buffer = fogUbos[f].handle;
-                    fogInfo.offset = 0;
-                    fogInfo.range  = VK_WHOLE_SIZE;
-                    VkWriteDescriptorSet wFog{};
-                    wFog.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wFog.dstSet = descriptorSets[idx];
-                    wFog.dstBinding = 17;
-                    wFog.descriptorCount = 1;
-                    wFog.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                    wFog.pBufferInfo = &fogInfo;
-
-                    VkDescriptorImageInfo envCdfInfo{};
-                    envCdfInfo.sampler     = envCdfImage.sampler;
-                    envCdfInfo.imageView   = envCdfImage.view;
-                    envCdfInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    VkWriteDescriptorSet wEnvCdf{};
-                    wEnvCdf.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wEnvCdf.dstSet = descriptorSets[idx];
-                    wEnvCdf.dstBinding = 18;
-                    wEnvCdf.descriptorCount = 1;
-                    wEnvCdf.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wEnvCdf.pImageInfo = &envCdfInfo;
-
-                    VkDescriptorImageInfo envMargInfo{};
-                    envMargInfo.sampler     = envMargImage.sampler;
-                    envMargInfo.imageView   = envMargImage.view;
-                    envMargInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    VkWriteDescriptorSet wEnvMarg{};
-                    wEnvMarg.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wEnvMarg.dstSet = descriptorSets[idx];
-                    wEnvMarg.dstBinding = 19;
-                    wEnvMarg.descriptorCount = 1;
-                    wEnvMarg.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wEnvMarg.pImageInfo = &envMargInfo;
-
-                    // Binding 20 — denoise à-trous ping-pong (rgba32f, count=2).
-                    // Both filtered slots are baked here; the shader uses
-                    // filteredArray[N] indexed by a per-pass push constant.
-                    std::array<VkDescriptorImageInfo, 2> filteredInfos{};
-                    filteredInfos[0].imageView   = denoiser_->filteredView(0);
-                    filteredInfos[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    filteredInfos[1].imageView   = denoiser_->filteredView(1);
-                    filteredInfos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wFiltered{};
-                    wFiltered.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wFiltered.dstSet = descriptorSets[idx];
-                    wFiltered.dstBinding = 20;
-                    wFiltered.dstArrayElement = 0;
-                    wFiltered.descriptorCount = 2;
-                    wFiltered.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wFiltered.pImageInfo = filteredInfos.data();
-
-                    VkDescriptorBufferInfo meshMovedInfo{};
-                    meshMovedInfo.buffer = meshMovedBitsBuffers[f].handle;
-                    meshMovedInfo.offset = 0;
-                    meshMovedInfo.range  = VK_WHOLE_SIZE;
-                    VkWriteDescriptorSet wMeshMoved{};
-                    wMeshMoved.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wMeshMoved.dstSet = descriptorSets[idx];
-                    wMeshMoved.dstBinding = 21;
-                    wMeshMoved.descriptorCount = 1;
-                    wMeshMoved.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    wMeshMoved.pBufferInfo = &meshMovedInfo;
-
-                    // Bindings 22-26: hybrid gbuffer attachments. raygen at
-                    // frame f reads rasterGbufs[f].* (built one frame ahead).
-                    // ensureHybridResources runs in the ctor before this, so
-                    // the views are valid.
-                    VkDescriptorImageInfo gbufNormalInfo{};
-                    gbufNormalInfo.sampler     = gbufSampler_;
-                    gbufNormalInfo.imageView   = rasterGbufs[f].normal.view;
-                    gbufNormalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    VkWriteDescriptorSet wGbufNormal{};
-                    wGbufNormal.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGbufNormal.dstSet = descriptorSets[idx];
-                    wGbufNormal.dstBinding = 22;
-                    wGbufNormal.descriptorCount = 1;
-                    wGbufNormal.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wGbufNormal.pImageInfo = &gbufNormalInfo;
-
-                    VkDescriptorImageInfo gbufMotionInfo{};
-                    gbufMotionInfo.sampler     = gbufSampler_;
-                    gbufMotionInfo.imageView   = rasterGbufs[f].motion.view;
-                    gbufMotionInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    VkWriteDescriptorSet wGbufMotion{};
-                    wGbufMotion.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGbufMotion.dstSet = descriptorSets[idx];
-                    wGbufMotion.dstBinding = 23;
-                    wGbufMotion.descriptorCount = 1;
-                    wGbufMotion.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wGbufMotion.pImageInfo = &gbufMotionInfo;
-
-                    VkDescriptorImageInfo gbufDepthInfo{};
-                    gbufDepthInfo.sampler     = gbufSampler_;
-                    gbufDepthInfo.imageView   = rasterGbufs[f].depth.view;
-                    gbufDepthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                    VkWriteDescriptorSet wGbufDepth{};
-                    wGbufDepth.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGbufDepth.dstSet = descriptorSets[idx];
-                    wGbufDepth.dstBinding = 24;
-                    wGbufDepth.descriptorCount = 1;
-                    wGbufDepth.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wGbufDepth.pImageInfo = &gbufDepthInfo;
-
-                    VkDescriptorImageInfo gbufIdsInfo{};
-                    gbufIdsInfo.sampler     = gbufSampler_;
-                    gbufIdsInfo.imageView   = rasterGbufs[f].ids.view;
-                    gbufIdsInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    VkWriteDescriptorSet wGbufIds{};
-                    wGbufIds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGbufIds.dstSet = descriptorSets[idx];
-                    wGbufIds.dstBinding = 25;
-                    wGbufIds.descriptorCount = 1;
-                    wGbufIds.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wGbufIds.pImageInfo = &gbufIdsInfo;
-
-                    VkDescriptorImageInfo gbufUvInfo{};
-                    gbufUvInfo.sampler     = gbufSampler_;
-                    gbufUvInfo.imageView   = rasterGbufs[f].uv.view;
-                    gbufUvInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    VkWriteDescriptorSet wGbufUv{};
-                    wGbufUv.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGbufUv.dstSet = descriptorSets[idx];
-                    wGbufUv.dstBinding = 26;
-                    wGbufUv.descriptorCount = 1;
-                    wGbufUv.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wGbufUv.pImageInfo = &gbufUvInfo;
-
-                    VkDescriptorImageInfo blueNoiseInfo{};
-                    blueNoiseInfo.sampler     = blueNoiseImage.sampler;
-                    blueNoiseInfo.imageView   = blueNoiseImage.view;
-                    blueNoiseInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    VkWriteDescriptorSet wBlueNoise{};
-                    wBlueNoise.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wBlueNoise.dstSet = descriptorSets[idx];
-                    wBlueNoise.dstBinding = 27;
-                    wBlueNoise.descriptorCount = 1;
-                    wBlueNoise.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wBlueNoise.pImageInfo = &blueNoiseInfo;
-
-                    // Bindings 28-31 — ReSTIR DI Stage 1b reservoir ping-pong.
-                    // 28 = pos+type write (this frame), 29 = pos+type read (prev),
-                    // 30 = W_sum/M/W/p_hat write, 31 = same read. f&1 picks slot.
-                    VkDescriptorImageInfo resPosWriteInfo{};
-                    resPosWriteInfo.imageView   = reservoirPosImagesPP[writeSlot].view;
-                    resPosWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wResPosWrite{};
-                    wResPosWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wResPosWrite.dstSet = descriptorSets[idx];
-                    wResPosWrite.dstBinding = 28;
-                    wResPosWrite.descriptorCount = 1;
-                    wResPosWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wResPosWrite.pImageInfo = &resPosWriteInfo;
-
-                    VkDescriptorImageInfo resPosReadInfo{};
-                    resPosReadInfo.imageView   = reservoirPosImagesPP[readSlot].view;
-                    resPosReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wResPosRead{};
-                    wResPosRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wResPosRead.dstSet = descriptorSets[idx];
-                    wResPosRead.dstBinding = 29;
-                    wResPosRead.descriptorCount = 1;
-                    wResPosRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wResPosRead.pImageInfo = &resPosReadInfo;
-
-                    VkDescriptorImageInfo resWWriteInfo{};
-                    resWWriteInfo.imageView   = reservoirWImagesPP[writeSlot].view;
-                    resWWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wResWWrite{};
-                    wResWWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wResWWrite.dstSet = descriptorSets[idx];
-                    wResWWrite.dstBinding = 30;
-                    wResWWrite.descriptorCount = 1;
-                    wResWWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wResWWrite.pImageInfo = &resWWriteInfo;
-
-                    VkDescriptorImageInfo resWReadInfo{};
-                    resWReadInfo.imageView   = reservoirWImagesPP[readSlot].view;
-                    resWReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wResWRead{};
-                    wResWRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wResWRead.dstSet = descriptorSets[idx];
-                    wResWRead.dstBinding = 31;
-                    wResWRead.descriptorCount = 1;
-                    wResWRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wResWRead.pImageInfo = &resWReadInfo;
-
-                    // Binding 32 — ocean fine-cascade height (default dummy until
-                    // a DisplacedMesh appears and rewrites the view via
-                    // rewriteOceanFineDescriptors).
-                    VkDescriptorImageInfo oceanFineInfo{};
-                    oceanFineInfo.sampler     = oceanFineHeightSampler;
-                    oceanFineInfo.imageView   = oceanFineHeightView;
-                    oceanFineInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wOceanFine{};
-                    wOceanFine.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wOceanFine.dstSet = descriptorSets[idx];
-                    wOceanFine.dstBinding = 32;
-                    wOceanFine.descriptorCount = 1;
-                    wOceanFine.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wOceanFine.pImageInfo = &oceanFineInfo;
-
-                    // Bindings 33/34 — temporal moments ping-pong (R32F).
-                    // Same writeSlot/readSlot mapping as accumImagesPP.
-                    VkDescriptorImageInfo momentsWriteInfo{};
-                    momentsWriteInfo.imageView   = denoiser_->momentsView(writeSlot);
-                    momentsWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wMomentsWrite{};
-                    wMomentsWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wMomentsWrite.dstSet = descriptorSets[idx];
-                    wMomentsWrite.dstBinding = 33;
-                    wMomentsWrite.descriptorCount = 1;
-                    wMomentsWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wMomentsWrite.pImageInfo = &momentsWriteInfo;
-
-                    VkDescriptorImageInfo momentsReadInfo{};
-                    momentsReadInfo.imageView   = denoiser_->momentsView(readSlot);
-                    momentsReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wMomentsRead{};
-                    wMomentsRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wMomentsRead.dstSet = descriptorSets[idx];
-                    wMomentsRead.dstBinding = 34;
-                    wMomentsRead.descriptorCount = 1;
-                    wMomentsRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wMomentsRead.pImageInfo = &momentsReadInfo;
-
-                    // Bindings 35/36 — primary-surface albedo ping-pong
-                    // (RGBA8). Raygen FC-blends prev albedo (36, prev slot)
-                    // with chit's payload.primaryAlbedo, writes to 35
-                    // (current write slot). Atrous reads 35. Same write/
-                    // read slot mapping as accumImagesPP / momentsImagesPP.
-                    VkDescriptorImageInfo albedoWriteInfo{};
-                    albedoWriteInfo.imageView   = denoiser_->albedoView(writeSlot);
-                    albedoWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wAlbedoWrite{};
-                    wAlbedoWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wAlbedoWrite.dstSet = descriptorSets[idx];
-                    wAlbedoWrite.dstBinding = 35;
-                    wAlbedoWrite.descriptorCount = 1;
-                    wAlbedoWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wAlbedoWrite.pImageInfo = &albedoWriteInfo;
-
-                    VkDescriptorImageInfo albedoReadInfo{};
-                    albedoReadInfo.imageView   = denoiser_->albedoView(readSlot);
-                    albedoReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wAlbedoRead{};
-                    wAlbedoRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wAlbedoRead.dstSet = descriptorSets[idx];
-                    wAlbedoRead.dstBinding = 36;
-                    wAlbedoRead.descriptorCount = 1;
-                    wAlbedoRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wAlbedoRead.pImageInfo = &albedoReadInfo;
-
-                    // Binding 37 — snapshot albedo (single buffer, not
-                    // ping-pong). Same view across all frames.
-                    VkDescriptorImageInfo albedoSnapInfo{};
-                    albedoSnapInfo.imageView   = denoiser_->albedoSnapshotView();
-                    albedoSnapInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wAlbedoSnap{};
-                    wAlbedoSnap.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wAlbedoSnap.dstSet = descriptorSets[idx];
-                    wAlbedoSnap.dstBinding = 37;
-                    wAlbedoSnap.descriptorCount = 1;
-                    wAlbedoSnap.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wAlbedoSnap.pImageInfo = &albedoSnapInfo;
-
-                    // Bindings 38-43 — ReSTIR GI reservoir ping-pong storage.
-                    // 38/40/42 = write (this frame), 39/41/43 = read (prev).
-                    // f&1 picks slot, same as DI's reservoir bindings.
-                    VkDescriptorImageInfo giXsWriteInfo{};
-                    giXsWriteInfo.imageView   = giResXsImagesPP[writeSlot].view;
-                    giXsWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wGiXsWrite{};
-                    wGiXsWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGiXsWrite.dstSet = descriptorSets[idx];
-                    wGiXsWrite.dstBinding = 38;
-                    wGiXsWrite.descriptorCount = 1;
-                    wGiXsWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wGiXsWrite.pImageInfo = &giXsWriteInfo;
-
-                    VkDescriptorImageInfo giXsReadInfo{};
-                    giXsReadInfo.imageView   = giResXsImagesPP[readSlot].view;
-                    giXsReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wGiXsRead{};
-                    wGiXsRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGiXsRead.dstSet = descriptorSets[idx];
-                    wGiXsRead.dstBinding = 39;
-                    wGiXsRead.descriptorCount = 1;
-                    wGiXsRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wGiXsRead.pImageInfo = &giXsReadInfo;
-
-                    VkDescriptorImageInfo giNsWriteInfo{};
-                    giNsWriteInfo.imageView   = giResNsImagesPP[writeSlot].view;
-                    giNsWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wGiNsWrite{};
-                    wGiNsWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGiNsWrite.dstSet = descriptorSets[idx];
-                    wGiNsWrite.dstBinding = 40;
-                    wGiNsWrite.descriptorCount = 1;
-                    wGiNsWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wGiNsWrite.pImageInfo = &giNsWriteInfo;
-
-                    VkDescriptorImageInfo giNsReadInfo{};
-                    giNsReadInfo.imageView   = giResNsImagesPP[readSlot].view;
-                    giNsReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wGiNsRead{};
-                    wGiNsRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGiNsRead.dstSet = descriptorSets[idx];
-                    wGiNsRead.dstBinding = 41;
-                    wGiNsRead.descriptorCount = 1;
-                    wGiNsRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wGiNsRead.pImageInfo = &giNsReadInfo;
-
-                    VkDescriptorImageInfo giLoWriteInfo{};
-                    giLoWriteInfo.imageView   = giResLoImagesPP[writeSlot].view;
-                    giLoWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wGiLoWrite{};
-                    wGiLoWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGiLoWrite.dstSet = descriptorSets[idx];
-                    wGiLoWrite.dstBinding = 42;
-                    wGiLoWrite.descriptorCount = 1;
-                    wGiLoWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wGiLoWrite.pImageInfo = &giLoWriteInfo;
-
-                    VkDescriptorImageInfo giLoReadInfo{};
-                    giLoReadInfo.imageView   = giResLoImagesPP[readSlot].view;
-                    giLoReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wGiLoRead{};
-                    wGiLoRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wGiLoRead.dstSet = descriptorSets[idx];
-                    wGiLoRead.dstBinding = 43;
-                    wGiLoRead.descriptorCount = 1;
-                    wGiLoRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wGiLoRead.pImageInfo = &giLoReadInfo;
-
-                    // Binding 44 — world-space foam (dummy by default; the
-                    // active DisplacedMesh rewrites this once it comes online
-                    // via rewriteOceanFoamDescriptors_).
-                    VkDescriptorImageInfo oceanFoamInfo{};
-                    oceanFoamInfo.sampler     = oceanFoamSampler;
-                    oceanFoamInfo.imageView   = oceanFoamView;
-                    oceanFoamInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wOceanFoam{};
-                    wOceanFoam.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wOceanFoam.dstSet = descriptorSets[idx];
-                    wOceanFoam.dstBinding = 44;
-                    wOceanFoam.descriptorCount = 1;
-                    wOceanFoam.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wOceanFoam.pImageInfo = &oceanFoamInfo;
-
-                    // Binding 45 — baked tileable foam detail (static, mipped,
-                    // SHADER_READ_ONLY for the renderer's lifetime).
-                    VkDescriptorImageInfo foamDetailInfo{};
-                    foamDetailInfo.sampler     = foamDetailImage.sampler;
-                    foamDetailInfo.imageView   = foamDetailImage.view;
-                    foamDetailInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    VkWriteDescriptorSet wFoamDetail{};
-                    wFoamDetail.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wFoamDetail.dstSet = descriptorSets[idx];
-                    wFoamDetail.dstBinding = 45;
-                    wFoamDetail.descriptorCount = 1;
-                    wFoamDetail.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    wFoamDetail.pImageInfo = &foamDetailInfo;
-
-                    std::array<VkWriteDescriptorSet, 46> writes{
-                            wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
-                            wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
-                            wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
-                            wMeshMoved,
-                            wGbufNormal, wGbufMotion, wGbufDepth, wGbufIds, wGbufUv,
-                            wBlueNoise,
-                            wResPosWrite, wResPosRead, wResWWrite, wResWRead,
-                            wOceanFine,
-                            wMomentsWrite, wMomentsRead,
-                            wAlbedoWrite, wAlbedoRead, wAlbedoSnap,
-                            wGiXsWrite, wGiXsRead, wGiNsWrite, wGiNsRead,
-                            wGiLoWrite, wGiLoRead,
-                            wOceanFoam, wFoamDetail};
-                    vkUpdateDescriptorSets(ctx->device(),
-                                           static_cast<uint32_t>(writes.size()),
-                                           writes.data(), 0, nullptr);
-                }
-            }
-            // Binding 1 just got initialised to swapchain views (see imgInfo
-            // above) — record that so renderFrame's per-frame rewrite block
-            // can detect a hybrid-on transition without firing on every frame.
-            binding1Mode_.fill(0);
-
-            // The TLAS + material buffer the raster-first deferred pass binds
-            // are now valid (this runs right after the scene/TLAS build), so
-            // refresh its descriptor set. No-op until ray query is supported.
-            rewriteDeferredDescriptors();
         }
 
         // Populate `infos` with the current bindless material-texture array,
@@ -14465,198 +12722,6 @@ namespace threepp {
             }
         }
 
-        // Rewrite bindings 0 (TLAS), 3 (geom desc), 4 (mat desc), 8 (material
-        // texture array) across every descriptor set. Used by ensureSceneBuilt's
-        // rebuild path so we don't have to reset the descriptor pool when the
-        // scene changes. Binding 8 is rewritten too because a rebuild may have
-        // added new material textures (kept-alive tail slots still point at
-        // the white default; harmless to redundantly re-bind).
-        void rewriteSceneDescriptors() {
-            const uint32_t totalSets = imageCount_ * kFramesInFlight;
-
-            VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
-            asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
-            asWrite.accelerationStructureCount = 1;
-            asWrite.pAccelerationStructures = &tlas;
-
-            VkDescriptorBufferInfo geomInfo{};
-            geomInfo.buffer = geometryDescsBuffer.handle;
-            geomInfo.offset = 0;
-            geomInfo.range = VK_WHOLE_SIZE;
-
-            // Per-frame matDescs ring — set idx maps to frame f = idx / imageCount_,
-            // and that set must bind materialDescsBuffers[f] (each frame-in-flight
-            // owns its own slot so the hot path can flush without a device wait).
-            std::array<VkDescriptorBufferInfo, kFramesInFlight> matInfos{};
-            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                matInfos[f].buffer = materialDescsBuffers[f].handle;
-                matInfos[f].offset = 0;
-                matInfos[f].range  = VK_WHOLE_SIZE;
-            }
-
-            std::array<VkDescriptorImageInfo, kMaxMaterialTextures> matTexInfos{};
-            fillMaterialTextureInfos(matTexInfos);
-
-            std::vector<VkWriteDescriptorSet> writes;
-            writes.reserve(totalSets * 4);
-            for (uint32_t i = 0; i < totalSets; ++i) {
-                const uint32_t f = i / imageCount_;
-                VkWriteDescriptorSet wAS{};
-                wAS.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                wAS.pNext = &asWrite;
-                wAS.dstSet = descriptorSets[i];
-                wAS.dstBinding = 0;
-                wAS.descriptorCount = 1;
-                wAS.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-                writes.push_back(wAS);
-
-                VkWriteDescriptorSet wGeom{};
-                wGeom.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                wGeom.dstSet = descriptorSets[i];
-                wGeom.dstBinding = 3;
-                wGeom.descriptorCount = 1;
-                wGeom.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                wGeom.pBufferInfo = &geomInfo;
-                writes.push_back(wGeom);
-
-                VkWriteDescriptorSet wMat{};
-                wMat.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                wMat.dstSet = descriptorSets[i];
-                wMat.dstBinding = 4;
-                wMat.descriptorCount = 1;
-                wMat.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                wMat.pBufferInfo = &matInfos[f];
-                writes.push_back(wMat);
-
-                VkWriteDescriptorSet wMatTex{};
-                wMatTex.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                wMatTex.dstSet = descriptorSets[i];
-                wMatTex.dstBinding = 8;
-                wMatTex.dstArrayElement = 0;
-                wMatTex.descriptorCount = kMaxMaterialTextures;
-                wMatTex.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                wMatTex.pImageInfo = matTexInfos.data();
-                writes.push_back(wMatTex);
-            }
-
-            // Binding 10 (motion matrix SSBO) may have grown during this
-            // rebuild — rewrite it across all sets so descriptor 10 references
-            // the (possibly new) buffer handle for each frame-in-flight.
-            // Storage outside the loop so the pBufferInfo pointers stay live
-            // through vkUpdateDescriptorSets.
-            std::array<VkDescriptorBufferInfo, kFramesInFlight> motionInfos{};
-            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                motionInfos[f].buffer = motionMatBuffers[f].handle;
-                motionInfos[f].offset = 0;
-                motionInfos[f].range  = VK_WHOLE_SIZE;
-            }
-            // Binding 14 (emissive-tri SSBO) — same per-frame story as
-            // motion. Even though buildAndUploadEmissiveTris already triggers
-            // its own per-frame descriptor rewrite when it grows, refreshing
-            // here is harmless and keeps the rebuild path complete.
-            std::array<VkDescriptorBufferInfo, kFramesInFlight> emTriInfos{};
-            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                emTriInfos[f].buffer = emissiveTriBuffers[f].handle;
-                emTriInfos[f].offset = 0;
-                emTriInfos[f].range  = VK_WHOLE_SIZE;
-            }
-            // Binding 21 (mesh-moved bits SSBO) — handle changed when
-            // ensureMeshMovedBitsCapacity grew the buffer.
-            std::array<VkDescriptorBufferInfo, kFramesInFlight> meshMovedInfos{};
-            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                meshMovedInfos[f].buffer = meshMovedBitsBuffers[f].handle;
-                meshMovedInfos[f].offset = 0;
-                meshMovedInfos[f].range  = VK_WHOLE_SIZE;
-            }
-            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                for (uint32_t k = 0; k < imageCount_; ++k) {
-                    const uint32_t setIdx = f * imageCount_ + k;
-                    VkWriteDescriptorSet wMotion{};
-                    wMotion.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wMotion.dstSet = descriptorSets[setIdx];
-                    wMotion.dstBinding = 10;
-                    wMotion.descriptorCount = 1;
-                    wMotion.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    wMotion.pBufferInfo = &motionInfos[f];
-                    writes.push_back(wMotion);
-
-                    VkWriteDescriptorSet wEmTri{};
-                    wEmTri.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wEmTri.dstSet = descriptorSets[setIdx];
-                    wEmTri.dstBinding = 14;
-                    wEmTri.descriptorCount = 1;
-                    wEmTri.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    wEmTri.pBufferInfo = &emTriInfos[f];
-                    writes.push_back(wEmTri);
-
-                    VkWriteDescriptorSet wMeshMoved{};
-                    wMeshMoved.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wMeshMoved.dstSet = descriptorSets[setIdx];
-                    wMeshMoved.dstBinding = 21;
-                    wMeshMoved.descriptorCount = 1;
-                    wMeshMoved.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    wMeshMoved.pBufferInfo = &meshMovedInfos[f];
-                    writes.push_back(wMeshMoved);
-                }
-            }
-
-            vkUpdateDescriptorSets(ctx->device(),
-                                   static_cast<uint32_t>(writes.size()),
-                                   writes.data(), 0, nullptr);
-
-            // Deferred (VulkanRenderer): the deferred descriptor set holds its OWN copies of
-            // the scene-dependent handles — mats (binding 9), geom descs (10),
-            // the bindless material-texture array (11), the emissive-tri buffer
-            // (12) and the TLAS (8). A rebuild above freed and recreated those
-            // buffers, so the deferred set now dangles: its buffer-device-
-            // address dereferences (fetchHit on geoms[], emissiveNEE on
-            // emissiveTris[]) would read freed memory → GPU page fault → device
-            // lost → crash at the next refitTlas one-shot wait (and a black
-            // frame in between). rewriteSceneDescriptors only refreshes the RT
-            // set, so re-point the deferred set here too. We're already past
-            // vkDeviceWaitIdle (see ensureSceneBuilt's rebuild path), so the
-            // sets are not in flight. No-op when ray_query is unavailable.
-            rewriteDeferredDescriptors();
-        }
-
-        // Rewrite only binding 6 across every descriptor set (called
-        // when refreshEnvTextureFromScene replaces the env image). Avoids
-        // re-allocating the pool / sets.
-        void rewriteEnvDescriptors() {
-            const uint32_t totalSets = imageCount_ * kFramesInFlight;
-            // Three writes per set: env image (binding 6) + env CDF (18) + env marg (19).
-            std::vector<VkDescriptorImageInfo> envInfos(totalSets);
-            std::vector<VkDescriptorImageInfo> cdfInfos(totalSets);
-            std::vector<VkDescriptorImageInfo> margInfos(totalSets);
-            std::vector<VkWriteDescriptorSet>  writes(totalSets * 3);
-            for (uint32_t i = 0; i < totalSets; ++i) {
-                envInfos[i].sampler     = envImage.sampler;
-                envInfos[i].imageView   = envImage.view;
-                envInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                cdfInfos[i].sampler     = envCdfImage.sampler;
-                cdfInfos[i].imageView   = envCdfImage.view;
-                cdfInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                margInfos[i].sampler     = envMargImage.sampler;
-                margInfos[i].imageView   = envMargImage.view;
-                margInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-                auto& wEnv  = writes[i * 3 + 0];
-                auto& wCdf  = writes[i * 3 + 1];
-                auto& wMarg = writes[i * 3 + 2];
-                wEnv.sType = wCdf.sType = wMarg.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                wEnv.dstSet = wCdf.dstSet = wMarg.dstSet = descriptorSets[i];
-                wEnv.dstBinding  = 6;  wEnv.descriptorCount  = 1; wEnv.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wEnv.pImageInfo  = &envInfos[i];
-                wCdf.dstBinding  = 18; wCdf.descriptorCount  = 1; wCdf.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wCdf.pImageInfo  = &cdfInfos[i];
-                wMarg.dstBinding = 19; wMarg.descriptorCount = 1; wMarg.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wMarg.pImageInfo = &margInfos[i];
-            }
-            vkUpdateDescriptorSets(ctx->device(),
-                                   static_cast<uint32_t>(writes.size()),
-                                   writes.data(), 0, nullptr);
-            // The raster-first deferred pass also samples the env (its own
-            // binding 2); refresh it with the new env image / sampler.
-            rewriteDeferredDescriptors();
-        }
-
         // Rebuild every resource sized to the PT render extent — the accum /
         // gbuf / reservoir / GI ping-pongs, the denoiser + TAA images, the
         // raster G-buffer, the upscale intermediates — plus the descriptor
@@ -14664,28 +12729,20 @@ namespace threepp {
         // renderScale changes. createAccumImage resets accumulation; the
         // caller must have the GPU idle before this runs.
         void reallocateRenderExtentResources() {
-            for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
-            for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
-            for (auto& img : giResXsImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
-            for (auto& img : giResNsImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
-            for (auto& img : giResLoImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
-            // Filtered + moments destroyed implicitly by denoiser_->createImages
-            // inside createAccumImage below.
-            createAccumImage();// resets sampleIndex + clears prevWorldMats
+            createAccumImage();// reallocates the reservoir images + clears them
             // Resize hybrid raster attachments BEFORE descriptor rewrites —
-            // bindings 22-26 point at rasterGbufs[f].*.view, so stale views
-            // from the old extent need to be replaced before the new
-            // descriptor sets capture them.
+            // bindings point at rasterGbufs[f].*.view, so stale views from the
+            // old extent need to be replaced before the new descriptor sets
+            // capture them.
             ensureHybridResources();
             // TAA + upscale intermediates live at the render extent too;
-            // rebuild before any descriptor write captures their views (RT
-            // binding 1, all TAA descriptor sets).
+            // rebuild before any descriptor write captures their views.
             {
-                // TAA input is the path-trace render extent; history +
-                // output are the swapchain extent. When they differ the
-                // resolve pass runs as a temporal upsampler.
+                // TAA input is the render extent; history + output are the
+                // swapchain extent. When they differ the resolve pass runs as
+                // a temporal upsampler.
                 const VkExtent2D inExt  = renderExtent();
                 const VkExtent2D outExt = ctx->swapchainExtent();
                 taa_->createImages(inExt.width, inExt.height,
@@ -14693,17 +12750,6 @@ namespace threepp {
             }
             bloom_->createImages(renderExtent().width, renderExtent().height);
             onAfterBloomCreateImages();
-            vkDestroyDescriptorPool(ctx->device(), descriptorPool, nullptr);
-            descriptorPool = VK_NULL_HANDLE;
-            descriptorSets.clear();
-            createDescriptorPool();
-            // Only repopulate descriptors if scene resources exist. Pre-first-
-            // render callers (e.g. setRenderScale during init) hit a fresh pool
-            // with no TLAS/buffers; the first ensureSceneBuilt would then
-            // double-allocate into a full pool and fail with OUT_OF_POOL_MEMORY.
-            if (sceneBuilt_) {
-                allocateAndUpdateDescriptors();
-            }
             // TAA descriptor sets are persistent (pool lives inside TaaResolve);
             // just rewrite them to the new image / view handles.
             rewriteTaaDescriptors();
@@ -14712,9 +12758,6 @@ namespace threepp {
                                       // its own taaHdrInput_ gate)
             taaHdrPlumbingDirty_ = false;// handled by the call just above
             rewriteDeferredDescriptors();// raster gbuf + sceneHdr views changed
-            // The descriptor pool was rebuilt — force the per-frame binding-1
-            // target rewrite to re-run regardless of its prior cached mode.
-            binding1Mode_.fill(-1);
         }
 
         void recreateSwapchainAndDescriptors() {
@@ -15646,15 +13689,15 @@ namespace threepp {
             toGeneral.subresourceRange.levelCount = 1;
             toGeneral.subresourceRange.layerCount = 1;
 
-            // Ensure prior frames' accumulator + gbuf writes are visible to
+            // Ensure prior frames' ReSTIR DI reservoir writes are visible to
             // this frame's read-modify-write. We barrier both ping-pong slots
             // since over consecutive frames the read-from / write-to roles
-            // alternate. Layout stays in GENERAL for all four storage images.
+            // alternate. Layout stays in GENERAL for both storage images.
             VkImageMemoryBarrier2 accumGbufTemplate{};
             accumGbufTemplate.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            accumGbufTemplate.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            accumGbufTemplate.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             accumGbufTemplate.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            accumGbufTemplate.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            accumGbufTemplate.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             accumGbufTemplate.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
                                               VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
             accumGbufTemplate.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -15665,31 +13708,15 @@ namespace threepp {
             accumGbufTemplate.subresourceRange.levelCount = 1;
             accumGbufTemplate.subresourceRange.layerCount = 1;
 
-            std::array<VkImageMemoryBarrier2, 17> preBarriers{};
+            std::array<VkImageMemoryBarrier2, 5> preBarriers{};
             preBarriers[0] = toGeneral;
-            preBarriers[1] = accumGbufTemplate; preBarriers[1].image = accumImagesPP[0].image;
-            preBarriers[2] = accumGbufTemplate; preBarriers[2].image = accumImagesPP[1].image;
-            preBarriers[3] = accumGbufTemplate; preBarriers[3].image = gbufImagesPP[0].image;
-            preBarriers[4] = accumGbufTemplate; preBarriers[4].image = gbufImagesPP[1].image;
             // ReSTIR DI reservoir ping-pong: frame N writes one slot, reads the
             // other; the barrier ensures frame N-1's write is visible to frame
-            // N's read in the same RT_SHADER stage.
-            preBarriers[5] = accumGbufTemplate; preBarriers[5].image = reservoirPosImagesPP[0].image;
-            preBarriers[6] = accumGbufTemplate; preBarriers[6].image = reservoirPosImagesPP[1].image;
-            preBarriers[7] = accumGbufTemplate; preBarriers[7].image = reservoirWImagesPP[0].image;
-            preBarriers[8] = accumGbufTemplate; preBarriers[8].image = reservoirWImagesPP[1].image;
-            // ReSTIR GI reservoir ping-pong (3 image-pairs: xs, ns, Lo).
-            preBarriers[9]  = accumGbufTemplate; preBarriers[9].image  = giResXsImagesPP[0].image;
-            preBarriers[10] = accumGbufTemplate; preBarriers[10].image = giResXsImagesPP[1].image;
-            preBarriers[11] = accumGbufTemplate; preBarriers[11].image = giResNsImagesPP[0].image;
-            preBarriers[12] = accumGbufTemplate; preBarriers[12].image = giResNsImagesPP[1].image;
-            preBarriers[13] = accumGbufTemplate; preBarriers[13].image = giResLoImagesPP[0].image;
-            preBarriers[14] = accumGbufTemplate; preBarriers[14].image = giResLoImagesPP[1].image;
-            // Temporal moments ping-pong: same RT_SHADER → RT_SHADER fence as
-            // accum/gbuf. Atrous reads the just-written slot via the existing
-            // memory barrier (barrierMem RT→COMPUTE in the denoise block).
-            preBarriers[15] = accumGbufTemplate; preBarriers[15].image = denoiser_->momentsImage(0);
-            preBarriers[16] = accumGbufTemplate; preBarriers[16].image = denoiser_->momentsImage(1);
+            // N's read in the deferred shade's COMPUTE stage.
+            preBarriers[1] = accumGbufTemplate; preBarriers[1].image = reservoirPosImagesPP[0].image;
+            preBarriers[2] = accumGbufTemplate; preBarriers[2].image = reservoirPosImagesPP[1].image;
+            preBarriers[3] = accumGbufTemplate; preBarriers[3].image = reservoirWImagesPP[0].image;
+            preBarriers[4] = accumGbufTemplate; preBarriers[4].image = reservoirWImagesPP[1].image;
             VkDependencyInfo dep{};
             dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
             dep.imageMemoryBarrierCount = static_cast<uint32_t>(preBarriers.size());
@@ -15737,7 +13764,8 @@ namespace threepp {
                 vkCmdPipelineBarrier2(cb, &clrDep);
             }
 
-            // descriptorSets index is shared by photon and primary RT pipelines.
+            // Per-frame set index (unused by the deferred leaf, which drives
+            // DeferredShade from currentFrame; kept for the dispatch signature).
             const uint32_t setIdx = currentFrame * imageCount_ + imageIndex;
 
             // Extents + exposure are shared by both render modes and by the
@@ -15759,8 +13787,8 @@ namespace threepp {
             std::memcpy(&preExpBits_, &preExp, sizeof(preExpBits_));
             std::memcpy(&prevPreExpBits_, &prevPreExp, sizeof(prevPreExpBits_));
 
-            // Dispatch to the leaf renderer (VulkanPathTracer: PT raygen + denoiser;
-            // VulkanRenderer: deferred shade compute); bloom + TAA below are shared.
+            // Dispatch the deferred shade compute (VulkanRenderer::Impl);
+            // bloom + TAA below are shared.
             recordSceneDispatch(cb, setIdx, ext, ptExt, exposureBits);
 
             // ── Thin-lens depth of field (opt-in) ──────────────────────────────
@@ -16898,8 +14926,8 @@ namespace threepp {
             // slot now (the other slot flushes when its frame comes around).
             flushMaterialDescsIfDirty(currentFrame);
             // Per-frame frustum cull: tags every entry with `inFrustum`
-            // for the raster passes to consume, and resolves the photon-
-            // emit gating flag (glassVisibleThisFrame_) as a side effect.
+            // for the raster passes to consume, and resolves
+            // glassVisibleThisFrame_ as a side effect.
             cullEntriesAgainstFrustum(camera);
             // Hybrid raster prepass: lazy-create resources on first use,
             // refresh attachments on resize, then upload the per-frame
@@ -16912,47 +14940,13 @@ namespace threepp {
             // by the indirect-drawing gbuf pass. Runs after the cull
             // pass + camera upload (depends on both) and before record.
             buildIndirectDrawData(currentFrame);
-            // Binding 1 (RT denoise output) always targets the TAA input;
-            // TAA resolves it to the swapchain (upsampling when renderScale_
-            // < 1). Only rewrite when this slot's actual binding differs from the
-            // desired mode — avoids firing imageCount_ vkUpdateDescriptorSets
-            // calls per frame for nothing once the steady state was reached.
-            //
-            // TAA's spatial+temporal smoothing is what fixes the moving-object
-            // shake from per-frame Halton jitter; the PT accumulator + à-trous
-            // gives stills quality (chit primary is high-quality input), TAA
-            // sits on top to handle motion.
-            {
-                const int8_t desired = 1;// binding 1 → bloom sceneHdr (HDR resolve)
-                if (binding1Mode_[currentFrame] != desired) {
-                    for (uint32_t i = 0; i < imageCount_; ++i) {
-                        const uint32_t idx = currentFrame * imageCount_ + i;
-                        VkDescriptorImageInfo info{};
-                        // denoise.comp (resolve) writes linear HDR here; the
-                        // bloom/composite pass then tonemaps it into the TAA
-                        // input. (Was taa_->inputView before the HDR split.)
-                        info.imageView   = bloom_->sceneHdrView(currentFrame);
-                        info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                        VkWriteDescriptorSet w{};
-                        w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                        w.dstSet          = descriptorSets[idx];
-                        w.dstBinding      = 1;
-                        w.descriptorCount = 1;
-                        w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                        w.pImageInfo      = &info;
-                        vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
-                    }
-                    binding1Mode_[currentFrame] = desired;
-                }
-            }
             uploadMeshMovedBits(currentFrame);
             // Same fence guarantees emissiveTriBuffers[currentFrame] is no
-            // longer in use; rebuild the per-frame CDF and rewrite binding 14
-            // if the buffer grew.
+            // longer in use; rebuild the per-frame CDF and rewrite the emissive
+            // binding if the buffer grew.
             if (buildAndUploadEmissiveTris(currentFrame, lastVisibleEntries_)) {
-                rewriteEmissiveTriDescriptors(currentFrame);
-                // Keep the raster-first deferred pass's emissive binding fresh
-                // (same per-frame buffer grows for it too).
+                // Keep the deferred pass's emissive binding fresh when the
+                // per-frame buffer grows.
                 if (deferredShade_) {
                     deferredShade_->rewriteEmissive(currentFrame,
                                                     emissiveTriBuffers[currentFrame].handle);
@@ -16961,11 +14955,10 @@ namespace threepp {
                 }
             }
             if (refreshEnvTextureFromScene(scene)) {
-                rewriteEnvDescriptors();
-                // Env is a primary radiance source — can't reproject, so
-                // wipe history. Clearing the gbuf alone makes the mesh-ID
-                // guard miss everywhere → next frame's reproject sets
-                // histFc=0 globally and we cold-start from sample 1.
+                rewriteDeferredDescriptors();
+                // Env is a primary radiance source — can't reproject, so wipe
+                // the ReSTIR DI reservoir history so the next frame cold-starts
+                // instead of reusing samples lit by the old environment.
                 vkDeviceWaitIdle(ctx->device());
                 clearGbufImages();
             }

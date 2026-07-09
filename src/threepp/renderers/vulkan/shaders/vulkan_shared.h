@@ -1,9 +1,9 @@
-// Single source of truth for Vulkan path-tracer constants and MaterialDesc
-// layout. Included by VulkanRenderer.cpp (host) and by the path-tracer
-// shaders (closest_hit, closest_hit_alpha, photon_chit, etc.) via glslang's
-// `#extension GL_GOOGLE_include_directive`. Cross-language: the C++ compiler
-// defines __cplusplus and sees the C++ branch; GLSL preprocessor doesn't,
-// so it sees the GLSL branch.
+// Single source of truth for Vulkan renderer constants and the MaterialDesc
+// layout. Included by VulkanRenderer.cpp (host) and by the Vulkan shaders
+// (deferred_shade.comp, shade_common.glsl, event_shade.comp, probe_update.comp,
+// …) via glslang's `#extension GL_GOOGLE_include_directive`. Cross-language:
+// the C++ compiler defines __cplusplus and sees the C++ branch; the GLSL
+// preprocessor doesn't, so it sees the GLSL branch.
 //
 // Adding or removing a MaterialDesc field requires editing only this file —
 // every consumer picks up the change through a clean rebuild. The

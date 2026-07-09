@@ -7,13 +7,10 @@
 //   VulkanRenderer.cpp (this)  — VulkanRenderer::Impl override (DeferredShade +
 //                                auto-exposure) + VulkanRendererCore/VulkanRenderer
 //                                public method bodies.
-//   VulkanPathTracer.cpp       — VulkanPathTracer::Impl override (RT raygen + à-trous
-//                                denoise) + VulkanPathTracer public method bodies.
 //
-// VulkanRenderer (deferred): raster G-buffer supplies primary visibility;
+// VulkanRenderer (deferred): the raster G-buffer supplies primary visibility;
 //   deferred_shade.comp lights it analytically and adds ray-query accents
-//   (shadows, reflections, AO/GI), denoised + TAA-resolved.
-// See VulkanPathTracer.cpp for the iterative path-tracer leaf.
+//   (shadows, reflections, AO/GI), denoised (SVGF) + TAA-resolved.
 
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanCoreImpl.hpp"
@@ -441,19 +438,6 @@ namespace threepp {
                             std::chrono::high_resolution_clock::now() - sceneStart)
                             .count();
         }
-        // Lazy RT pipeline build (first frame). Deferred from constructor so
-        // scene-feature spec constants (kSceneFeatures bitmask, e.g. has-glass
-        // gating the caustic gather DCE) can be baked into chit with the
-        // detected values from ensureSceneBuilt above. Subsequent frames hit
-        // the early-out for free.
-        if (!core()->rtPipelinesBuilt_) {
-            core()->buildAllRtPipelines();
-        }
-        // After init, also ensure the *current* variant is built. The first-
-        // frame build only constructs the active variant; if the user has
-        // since toggled into an unbuilt slot, fill it in now (pays a one-time
-        // pipeline-compile cost on first toggle, then never again).
-        core()->ensureCurrentRtVariantBuilt();
         core()->renderFrame(scene, camera);
         core()->gpuTimings_->setCpuFrameMs(
                 std::chrono::duration<float, std::milli>(

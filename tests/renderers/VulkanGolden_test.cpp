@@ -1,7 +1,7 @@
-// VulkanGolden_test — golden-image regression net for the Vulkan PT/deferred path.
+// VulkanGolden_test — golden-image regression net for the Vulkan deferred path.
 //
-// The Vulkan path tracer + denoiser is the most regression-prone code in the
-// tree (see the long history of temporal-artifact fixes: ghosting, slow-pan
+// The Vulkan deferred renderer + denoiser is the most regression-prone code in
+// the tree (see the long history of temporal-artifact fixes: ghosting, slow-pan
 // smear, fireflies, albedo demod, ReSTIR feedback loops, …) and had ZERO
 // automated coverage. This renders a few fixed, deterministic scenes that
 // exercise those paths and compares each to a committed reference, so a fix can
@@ -12,7 +12,6 @@
 //                                exit nonzero if any scene regresses
 //   VulkanGolden_test --update   (re)write references — ONLY after an
 //                                intentional, reviewed change to renderer output
-//   VulkanGolden_test --pt       use the ReferencePT path (<name>_pt.ppm)
 // Or via CTest: `ctest -R VulkanGolden_test`. Exits 42 (→ CTest "Skipped") when
 // no Vulkan/RT GPU is available, so CI without RT hardware doesn't fail.
 //
@@ -29,7 +28,6 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/renderers/VulkanPathTracer.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
 #include "capture_util.hpp"// examples/vulkan (shared via target include dir)
@@ -86,35 +84,29 @@ namespace {
 }// namespace
 
 int main(int argc, char** argv) {
-    bool update = false, usePT = false;
+    bool update = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--update") == 0) update = true;
-        else if (std::strcmp(argv[i], "--pt") == 0) usePT = true;
     }
 
     // Construction throws without a Vulkan/RT GPU (or a display) — treat that as
     // a CTest skip rather than a failure.
     std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRendererCore> rendererPtr;
+    std::unique_ptr<VulkanRenderer> rendererPtr;
     try {
         canvasPtr = std::make_unique<Canvas>(
                 Canvas::Parameters().title("VulkanGolden_test").size(kW, kH).vsync(false));
-        if (usePT)
-            rendererPtr = std::make_unique<VulkanPathTracer>(*canvasPtr);
-        else
-            rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
+        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
     } catch (const std::exception& e) {
         std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
         return kSkipCode;
     }
     Canvas& canvas = *canvasPtr;
-    VulkanRendererCore& renderer = *rendererPtr;
-    auto* pt = dynamic_cast<VulkanPathTracer*>(&renderer);
+    VulkanRenderer& renderer = *rendererPtr;
 
     renderer.setDenoise(true);
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(6.0f);
-    if (pt) pt->setMaxBounces(4);
     renderer.setRenderScale(1.0f);// full-res readback, no upscale variance
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
@@ -192,7 +184,6 @@ int main(int argc, char** argv) {
     };
 
     const fs::path goldenDir = fs::path(PROJECT_FOLDER) / "tests" / "renderers" / "golden";
-    const std::string suffix = usePT ? "_pt" : "";
 
     size_t sceneIdx = 0;
     int frame = 0, failures = 0, missing = 0;
@@ -215,7 +206,7 @@ int main(int argc, char** argv) {
         std::exit((update || (failures == 0 && missing == 0)) ? 0 : 1);
     };
 
-    buildCurrent();// first scene; renderer isn't built yet, so NO resetAccumulation here
+    buildCurrent();// first scene
 
     // Render through canvas.animate — the proven Vulkan present path (the --shot
     // capture loop uses the same). A static camera over kFrames lets the
@@ -226,7 +217,7 @@ int main(int argc, char** argv) {
 
         const std::vector<unsigned char> px = renderer.readRGBPixels();
         const auto& gs = scenes[sceneIdx];
-        const fs::path ref = goldenDir / (gs.name + suffix + ".ppm");
+        const fs::path ref = goldenDir / (gs.name + ".ppm");
         if (update) {
             writePPM(ref, px, kW, kH);
             std::printf("[update] wrote %s (%dx%d)\n", ref.string().c_str(), kW, kH);
@@ -248,7 +239,6 @@ int main(int argc, char** argv) {
 
         frame = 0;
         if (++sceneIdx >= scenes.size()) finish();// prints summary + exits
-        if (pt) pt->resetAccumulation();// next scene starts clean (renderer is built now)
         buildCurrent();
     });
     return 0;

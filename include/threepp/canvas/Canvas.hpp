@@ -90,7 +90,6 @@ namespace threepp {
         friend class WgpuRenderer;
         friend class GLRenderer;
         friend class VulkanRenderer;
-        friend class VulkanPathTracer;
 
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
