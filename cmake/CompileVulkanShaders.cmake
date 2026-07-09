@@ -40,16 +40,6 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
     else()
         set(_out_header "${_gen_dir}/${_name}.spv.h")
     endif()
-    set(_shared_header "${_src_dir}/vulkan_shared.h")
-    # raygen.rgen #includes shade_primary.glsl; we list it here as a global
-    # dep so edits to shade_primary trigger a raygen rebuild. Cheap (<1s
-    # extra glslangValidator invocations on the unrelated shaders that
-    # don't include it).
-    set(_shade_primary "${_src_dir}/shade_primary.glsl")
-    # deferred_shade.comp + probe_update.comp #include probe_common.glsl —
-    # same global-dep treatment.
-    set(_probe_common "${_src_dir}/probe_common.glsl")
-
     file(MAKE_DIRECTORY "${_gen_dir}")
 
     set(_define_flags "")
@@ -73,20 +63,19 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
         list(APPEND _opt_flags "-Os")
     endif ()
 
-    # Only depend on the shared headers when they actually sit beside the shader
-    # source. Core shaders live next to vulkan_shared.h / shade_primary.glsl;
-    # out-of-tree shaders (e.g. example inference kernels) don't, and a DEPENDS
-    # on a missing file would break the build graph.
-    set(_extra_deps "")
-    if (EXISTS "${_shared_header}")
-        list(APPEND _extra_deps "${_shared_header}")
-    endif ()
-    if (EXISTS "${_shade_primary}")
-        list(APPEND _extra_deps "${_shade_primary}")
-    endif ()
-    if (EXISTS "${_probe_common}")
-        list(APPEND _extra_deps "${_probe_common}")
-    endif ()
+    # Depend on every .glsl/.h that sits beside the shader source, whatever its
+    # name. Shaders in this dir #include each other freely (vulkan_shared.h,
+    # probe_common.glsl, the deferred_shade_NN_*.glsl split, ...) and any of
+    # them can be transitively pulled into any shader here, so a glob is the
+    # only dependency list that can't go stale as files are added/renamed.
+    # Cheap (<1s extra glslangValidator invocations on the unrelated shaders
+    # that don't actually include the touched file). CONFIGURE_DEPENDS makes
+    # the generator re-run the glob at build time (ninja re-checks it), so
+    # adding a new .glsl/.h picks it up without a manual reconfigure.
+    # Out-of-tree shaders (e.g. example inference kernels) have no .glsl/.h
+    # neighbours, so the glob returns empty there — no DEPENDS on anything,
+    # same as before.
+    file(GLOB _extra_deps CONFIGURE_DEPENDS "${_src_dir}/*.glsl" "${_src_dir}/*.h")
 
     add_custom_command(
         OUTPUT  "${_out_header}"
