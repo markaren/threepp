@@ -448,30 +448,30 @@ namespace threepp::vulkan {
                   "vkCreateSampler(postComposite.nearest)");
         }
 
-        // Layout: combined samplers @0,1 ; storage images @2,3 ; sampler3D @4 ;
-        // usampler2D @5 (raster ids) ; HDR-mode-only combined sampler @6
-        // (resolved HDR history) ; HDR-mode-only storage image @7 (hdrOut_).
-        VkDescriptorSetLayoutBinding bnd[8]{};
+        // Layout: combined samplers @0,1 ; storage image @3 (binding 2 retired:
+        // the PT-era gbuf ping-pong sky source — the deferred sky test reads
+        // the raster ids at @5) ; sampler3D @4 ; usampler2D @5 (raster ids) ;
+        // HDR-mode-only combined sampler @6 (resolved HDR history) ;
+        // HDR-mode-only storage image @7 (hdrOut_).
+        VkDescriptorSetLayoutBinding bnd[7]{};
         bnd[0].binding = 0;
         bnd[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bnd[1].binding = 1;
         bnd[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bnd[2].binding = 2;
+        bnd[2].binding = 3;
         bnd[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        bnd[3].binding = 3;
-        bnd[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        bnd[4].binding = 4;
+        bnd[3].binding = 4;
+        bnd[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bnd[4].binding = 5;
         bnd[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bnd[5].binding = 5;
+        bnd[5].binding = 6;
         bnd[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bnd[6].binding = 6;
-        bnd[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bnd[7].binding = 7;
-        bnd[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bnd[6].binding = 7;
+        bnd[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         for (auto& b : bnd) { b.descriptorCount = 1; b.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT; }
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 8;
+        dlci.bindingCount = 7;
         dlci.pBindings = bnd;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(postComposite)");
@@ -514,7 +514,7 @@ namespace threepp::vulkan {
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[0].descriptorCount = framesInFlight_ * 5;// 4 base + 1 HDR-mode scene
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[1].descriptorCount = framesInFlight_ * 3;// 2 base + 1 HDR-mode output
+        sizes[1].descriptorCount = framesInFlight_ * 2;// 1 base (TAA input) + 1 HDR-mode output
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -552,7 +552,6 @@ namespace threepp::vulkan {
             };
             VkDescriptorImageInfo cScene = sampled(in.sceneHdrPerFrame[f]);
             VkDescriptorImageInfo cBloom = sampled(in.bloomPerFrame[f]);
-            VkDescriptorImageInfo cGbuf  = storage(in.gbufPerFrame[f]);
             VkDescriptorImageInfo cOut   = storage(in.taaInputPerFrame[f]);
             VkDescriptorImageInfo cLut   = sampled(gradeLut_.view);
             VkDescriptorImageInfo cIds{};
@@ -570,7 +569,7 @@ namespace threepp::vulkan {
                                                                ? hdrOut_[f].view
                                                                : in.taaInputPerFrame[f]);
 
-            VkWriteDescriptorSet w[8]{};
+            VkWriteDescriptorSet w[7]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* info) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -582,13 +581,12 @@ namespace threepp::vulkan {
             };
             setw(0, 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cScene);
             setw(1, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cBloom);
-            setw(2, 2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cGbuf);
-            setw(3, 3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cOut);
-            setw(4, 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cLut);
-            setw(5, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cIds);
-            setw(6, 6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cHdrScene);
-            setw(7, 7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cHdrOut);
-            vkUpdateDescriptorSets(ctx_.device(), 8, w, 0, nullptr);
+            setw(2, 3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cOut);
+            setw(3, 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cLut);
+            setw(4, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cIds);
+            setw(5, 6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cHdrScene);
+            setw(6, 7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cHdrOut);
+            vkUpdateDescriptorSets(ctx_.device(), 7, w, 0, nullptr);
         }
     }
 
@@ -597,7 +595,6 @@ namespace threepp::vulkan {
                                        uint32_t toneMapping, uint32_t exposureBits,
                                        uint32_t preExposureBits,
                                        bool bgIsSolidColor, float effBloomIntensity,
-                                       bool skyFromRasterIds,
                                        uint32_t srcWidth, uint32_t srcHeight,
                                        bool hdrMode) {
         if (srcWidth == 0)  srcWidth  = width;
@@ -624,8 +621,9 @@ namespace threepp::vulkan {
 
         uint32_t intensityBits;
         std::memcpy(&intensityBits, &effBloomIntensity, sizeof(intensityBits));
+        // bit 2 (4u) retired: was the PT-era gbuf sky-source select.
         const uint32_t postFlags = (wbActive_ ? 1u : 0u) | (lutActive_ ? 2u : 0u) |
-                                   (skyFromRasterIds ? 4u : 0u) | (hdrMode ? 8u : 0u);
+                                   (hdrMode ? 8u : 0u);
 
         struct Pc {
             uint32_t u[8];

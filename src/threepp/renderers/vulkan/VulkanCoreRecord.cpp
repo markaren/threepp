@@ -1001,8 +1001,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       static_cast<uint32_t>(toneMapping_),
                                       exposureBits, preExpBits_, envIsBgColor,
-                                      effBloomIntensity,
-                                      skyIdsFromRasterGbuf());
+                                      effBloomIntensity);
 
                 // Raster TAA / temporal upsampler. Reads denoise output from
                 // the TAA input image (render extent), blends with reprojected
@@ -1059,14 +1058,13 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
 
                 // PostComposite now runs at DISPLAY resolution, reading the
                 // resolve's HDR output (no second bloom add — pass <= 0).
-                // skyFromRasterIds's mask still lives at render resolution
+                // The sky mask (raster ids) still lives at render resolution
                 // (regionRenderExt_), so pass it as the src extent.
                 post_->recordDispatch(cb, currentFrame,
                                       regionSwapExt_.width, regionSwapExt_.height,
                                       static_cast<uint32_t>(toneMapping_),
                                       exposureBits, preExpBits_, envIsBgColor,
                                       /*effBloomIntensity=*/0.f,
-                                      skyIdsFromRasterGbuf(),
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       /*hdrMode=*/true);
 

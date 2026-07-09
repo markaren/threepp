@@ -1754,7 +1754,15 @@ namespace threepp {
         VkCommandPool                                cmdPool = VK_NULL_HANDLE;
         std::array<VkCommandBuffer, kFramesInFlight> cmdBuffers{};
         std::array<VkSemaphore,     kFramesInFlight> imageAvailable{};
-        std::array<VkSemaphore,     kFramesInFlight> renderFinished{};
+        // Present-wait semaphores are PER SWAPCHAIN IMAGE (indexed by the
+        // acquired image index), not per frame-in-flight: a binary semaphore
+        // handed to vkQueuePresentKHR stays "in use" until the presentation
+        // engine releases that image (signalled by a later acquire of the
+        // SAME index), so a frame-indexed semaphore can be re-signalled
+        // while the swapchain still holds it (VUID-vkQueueSubmit2-semaphore-
+        // 03868). Sized to the swapchain image count; recreated with the
+        // swapchain (createRenderFinishedSemaphores).
+        std::vector<VkSemaphore> renderFinished;
         std::array<VkFence,         kFramesInFlight> inFlight{};
 
         uint32_t currentFrame = 0;
@@ -2167,6 +2175,12 @@ namespace threepp {
         }
 
         void createCommandResources();
+
+        // (Re)create the per-swapchain-image present-wait semaphores. Called
+        // from createCommandResources and again on every swapchain recreation
+        // (the image count can change and retired semaphores may be left in
+        // an indeterminate signalled state). Requires an idle device.
+        void createRenderFinishedSemaphores();
 
         // Allocate, begin, return a one-shot command buffer.
         VkCommandBuffer beginOneShot();
@@ -5049,14 +5063,6 @@ namespace threepp {
         [[nodiscard]] virtual float currentExposure() const {
             return physicalCamera_ ? physicalExposure() : toneMappingExposure_;
         }
-
-        // The post composite's solid-bg sky test: this base default assumes
-        // the legacy gbuf ping-pong sky-id format (.w = id+1) is written
-        // (the now-removed path tracer's convention). The deferred renderer
-        // never writes that format (it stays zero — keying on it there
-        // bypassed tone mapping on EVERY pixel of a solid-bg scene), so it
-        // overrides this to read the raster G-buffer ids attachment instead.
-        [[nodiscard]] virtual bool skyIdsFromRasterGbuf() const { return false; }
 
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex);
 

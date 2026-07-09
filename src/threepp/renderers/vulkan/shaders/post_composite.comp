@@ -26,14 +26,15 @@
 // frame-in-flight-, not swapchain-image-, indexed, so it can't write the
 // swapchain directly; the caller finalizes hdrOutImg into the swapchain via
 // TaaResolve's existing swapchain-indexed RCAS/copy machinery). The sky-mask
-// sources (gbufImg/rasterIdsTex) still live at RENDER resolution, so a pixel
+// source (rasterIdsTex) still lives at RENDER resolution, so a pixel
 // at display-res `px` maps to mask texel `px * srcWH / dispatchWH`.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0) uniform sampler2D sceneHdrTex;            // linear HDR, render extent
 layout(set = 0, binding = 1) uniform sampler2D bloomTex;               // blurred bloom (half res)
-layout(set = 0, binding = 2, rgba32f) uniform readonly image2D gbufImg;// .w = instanceId+1 (0 = sky)
+// (binding 2 retired: the PT-era gbuf ping-pong sky source — the deferred
+// renderer's sky test reads rasterIdsTex below; PT was removed 2026-07-09.)
 // No format qualifier: the TAA-input image is VK_FORMAT_B8G8R8A8_UNORM (matches
 // the swapchain channel order) but GLSL has no bgra8 format qualifier. Declaring
 // rgba8 here mismatches the bound VkImageView and yields undefined stores
@@ -47,11 +48,8 @@ layout(set = 0, binding = 3) uniform writeonly image2D outImage;// TAA input (bg
 // default path never pays the fetch; the image is always bound ("always
 // bound, harmlessly unused" — the identity content is never read).
 layout(set = 0, binding = 4) uniform sampler3D gradeLutTex;// 33³ rgba16f
-// The DEFERRED (raster-first) renderer's sky source for the bypass below:
-// the raster G-buffer ids attachment (.x = instanceCustomIndex+1, 0 = sky).
-// The deferred path never writes the PT-style gbufImg ping-pong (it stays
-// zero), so keying the bypass on it there bypassed EVERY pixel — a solid-bg
-// deferred scene never tone-mapped at all. postFlags bit 2 selects this.
+// The sky source for the solid-bg bypass below: the raster G-buffer ids
+// attachment (.x = instanceCustomIndex+1, 0 = sky).
 layout(set = 0, binding = 5) uniform usampler2D rasterIdsTex;
 // HDR-mode-only (harmlessly bound + unused otherwise): the TAA resolve's
 // output (binding 6, sampled — already bloomed + exposure-rescaled linear
@@ -68,7 +66,7 @@ layout(push_constant) uniform Pc {
     uint width;
     uint height;
     uint postFlags;          // bit 0 = white balance active, bit 1 = grade LUT active,
-                             // bit 2 = sky test reads rasterIdsTex (deferred renderer),
+                             // bit 2 retired (was: PT-era gbuf sky source select),
                              // bit 3 = HDR mode (setTaaHdrInput)
     uint preExposureBits;    // float-bits: exposure already baked into sceneHdr (1.0 = none)
     vec4 wbRow0;             // white-balance mat3 rows (linear sRGB → linear sRGB),
@@ -219,9 +217,7 @@ void main() {
     const ivec2 maskPx = hdr ? ivec2(vec2(px) * vec2(float(pc.srcWidth), float(pc.srcHeight))
                                      / vec2(float(pc.width), float(pc.height)))
                              : px;
-    const float skyW = ((pc.postFlags & 4u) != 0u)
-            ? float(texelFetch(rasterIdsTex, maskPx, 0).x)
-            : imageLoad(gbufImg, maskPx).w;
+    const float skyW = float(texelFetch(rasterIdsTex, maskPx, 0).x);
     const bool bypass = (pc.bgIsSolidColor != 0u) && (skyW < 0.5);
     vec3 outRgb;
     if (bypass) {

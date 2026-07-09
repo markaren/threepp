@@ -50,18 +50,12 @@ void VulkanRendererCore::CoreImpl::rewriteBloomDescriptors() {
             }
             std::array<VkImageView, kFramesInFlight> sceneViews{};
             std::array<VkImageView, kFramesInFlight> bloomViews{};
-            std::array<VkImageView, kFramesInFlight> gbufViews{};
             std::array<VkImageView, kFramesInFlight> idsViews{};
             std::array<VkImageView, kFramesInFlight> taaInViews{};
             std::array<VkImageView, kFramesInFlight> hdrSceneViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 sceneViews[f] = bloom_->sceneHdrView(f);
                 bloomViews[f] = bloom_->bloomView(f);
-                // PostComposite's gbuf binding was the old PT sky source; the
-                // deferred path's solid-bg sky test reads the raster ids
-                // (skyIdsFromRasterGbuf()), so bind a valid raster view here —
-                // it is unused in deferred mode but must stay non-null.
-                gbufViews[f]  = rasterGbufs[f].ids.view;
                 idsViews[f]   = rasterGbufs[f].ids.view;
                 taaInViews[f] = taa_->inputView(f);
                 // HDR-mode-only (setTaaHdrInput): PostComposite's binding 6
@@ -82,7 +76,6 @@ void VulkanRendererCore::CoreImpl::rewriteBloomDescriptors() {
             vulkan::PostComposite::DescriptorWriteInputs in{};
             in.sceneHdrPerFrame  = sceneViews.data();
             in.bloomPerFrame     = bloomViews.data();
-            in.gbufPerFrame      = gbufViews.data();
             in.rasterIdsPerFrame = idsViews.data();
             in.taaInputPerFrame  = taaInViews.data();
             in.hdrScenePerFrame  = hdrSceneViews.data();

@@ -25,9 +25,19 @@ void VulkanRendererCore::CoreImpl::createCommandResources() {
             fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
             for (uint32_t i = 0; i < kFramesInFlight; ++i) {
                 check(vkCreateSemaphore(ctx->device(), &sci, nullptr, &imageAvailable[i]), "vkCreateSemaphore A");
-                check(vkCreateSemaphore(ctx->device(), &sci, nullptr, &renderFinished[i]), "vkCreateSemaphore B");
                 check(vkCreateFence(ctx->device(), &fci, nullptr, &inFlight[i]), "vkCreateFence");
             }
+            createRenderFinishedSemaphores();
+        }
+
+void VulkanRendererCore::CoreImpl::createRenderFinishedSemaphores() {
+            for (auto s : renderFinished)
+                if (s) vkDestroySemaphore(ctx->device(), s, nullptr);
+            renderFinished.assign(ctx->swapchainImages().size(), VK_NULL_HANDLE);
+            VkSemaphoreCreateInfo sci{};
+            sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            for (auto& s : renderFinished)
+                check(vkCreateSemaphore(ctx->device(), &sci, nullptr, &s), "vkCreateSemaphore B");
         }
 
 VkCommandBuffer VulkanRendererCore::CoreImpl::beginOneShot() {
@@ -233,7 +243,8 @@ void VulkanRendererCore::CoreImpl::reallocateRenderExtentResources() {
         }
 
 void VulkanRendererCore::CoreImpl::recreateSwapchainAndDescriptors() {
-            ctx->recreateSwapchain();
+            ctx->recreateSwapchain();// device-idles internally
+            createRenderFinishedSemaphores();
             reallocateRenderExtentResources();
             size = WindowSize{static_cast<int>(ctx->swapchainExtent().width),
                               static_cast<int>(ctx->swapchainExtent().height)};
@@ -524,9 +535,12 @@ void VulkanRendererCore::CoreImpl::endFrame() {
             waitInfo.semaphore = imageAvailable[currentFrame];
             waitInfo.stageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
 
+            // Per-IMAGE, not per-frame: safe to re-signal only once this image
+            // index has been re-acquired, which is exactly when the prior
+            // present's wait on it is guaranteed consumed (see the member note).
             VkSemaphoreSubmitInfo signalInfo{};
             signalInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-            signalInfo.semaphore = renderFinished[currentFrame];
+            signalInfo.semaphore = renderFinished[imageIndex];
             signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
             VkCommandBufferSubmitInfo cbInfo{};
@@ -547,7 +561,7 @@ void VulkanRendererCore::CoreImpl::endFrame() {
             VkPresentInfoKHR pi{};
             pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
             pi.waitSemaphoreCount = 1;
-            pi.pWaitSemaphores = &renderFinished[currentFrame];
+            pi.pWaitSemaphores = &renderFinished[imageIndex];
             VkSwapchainKHR sc = ctx->swapchain();
             pi.swapchainCount = 1;
             pi.pSwapchains = &sc;

@@ -97,11 +97,6 @@ namespace threepp {
 
         bool decalsEnabled() const override { return true; }
 
-        // The legacy gbuf ping-pong sky-id format is never written by this
-        // renderer — the post composite's solid-bg sky test must read the
-        // raster ids attachment instead.
-        bool skyIdsFromRasterGbuf() const override { return true; }
-
         // HDRI sun → analytic light (see CoreImpl::envSunExtractionWanted).
         // ONE-SUN POLICY: Auto extracts (mip clamp) but injects the analytic
         // sun only while the scene carries no visible DirectionalLight — an

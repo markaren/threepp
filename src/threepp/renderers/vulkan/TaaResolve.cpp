@@ -982,13 +982,16 @@ namespace threepp::vulkan {
                 srcI.sampler     = sampler_;
                 // hdrOutPerFrame[f] is VK_NULL_HANDLE when PostComposite's
                 // HDR-mode output scratch hasn't been allocated yet (HDR
-                // mode never enabled — the common case). Fall back to the
-                // swapchain view so the descriptor never holds a genuinely
+                // mode never enabled — the common case). Fall back to a TAA
+                // history view so the descriptor never holds a genuinely
                 // null image view; harmless, since recordPostFinalize (the
                 // only reader of this set) is never called while HDR mode
-                // is off.
+                // is off. NOT the swapchain view: this is a SAMPLED binding
+                // and the swapchain lacks SAMPLED usage — even an unread
+                // descriptor write must reference a usage-compatible view
+                // (VUID-VkWriteDescriptorSet-descriptorType-00337).
                 srcI.imageView   = hdrOutPerFrame[f] != VK_NULL_HANDLE
-                        ? hdrOutPerFrame[f] : swapchainViews[i];
+                        ? hdrOutPerFrame[f] : historyImagesPP_[0].view;
                 srcI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 VkDescriptorImageInfo dstI{};
                 dstI.imageView   = swapchainViews[i];

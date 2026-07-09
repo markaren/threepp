@@ -32,7 +32,7 @@
 // already-exposure-rescaled HDR history slot, and this pass runs at DISPLAY
 // resolution (not the render extent) doing ONLY exposure/WB/tonemap/grade/
 // sRGB — no second bloom add (the caller passes effBloomIntensity <= 0 in
-// this mode). The sky-mask sources (gbufImg / rasterIdsTex) still live at
+// this mode). The sky-mask source (rasterIdsTex) still lives at
 // RENDER resolution, so `srcWidth`/`srcHeight` (recordDispatch) tell the
 // shader how to scale its dispatch-space (display) texel index down to the
 // mask's native texel grid.
@@ -73,8 +73,8 @@ namespace threepp::vulkan {
         PostComposite& operator=(const PostComposite&) = delete;
 
         // Rewrite per-frame descriptor sets. One view per frame-in-flight:
-        // the linear-HDR scene, the bloom pyramid's level 0, the G-buffer
-        // storage view (solid-bg sky bypass) and the TAA input (output).
+        // the linear-HDR scene, the bloom pyramid's level 0, the raster ids
+        // attachment (solid-bg sky bypass) and the TAA input (output).
         // hdrScenePerFrame (HDR mode only): TaaResolve's resolved HDR history
         // slot (TaaResolve::historyView(TaaResolve::writeSlotFor(f))) —
         // bound to a SEPARATE combined-image-sampler binding (6) from the
@@ -84,7 +84,6 @@ namespace threepp::vulkan {
         struct DescriptorWriteInputs {
             const VkImageView* sceneHdrPerFrame  = nullptr;// [framesInFlight]
             const VkImageView* bloomPerFrame     = nullptr;// [framesInFlight]
-            const VkImageView* gbufPerFrame      = nullptr;// [framesInFlight] legacy gbuf ping-pong (.w = id+1); unused in deferred mode, see skyFromRasterIds
             const VkImageView* rasterIdsPerFrame = nullptr;// [framesInFlight] raster ids (.x = id+1)
             const VkImageView* taaInputPerFrame  = nullptr;// [framesInFlight]
             const VkImageView* hdrScenePerFrame  = nullptr;// [framesInFlight] HDR-mode-only
@@ -120,12 +119,11 @@ namespace threepp::vulkan {
         // barrier included). effBloomIntensity is the level-normalized
         // intensity (<= 0 skips the bloom add); exposureBits = the FULL
         // exposure, preExposureBits = the factor already baked into sceneHdr
-        // by the shade/resolve (1.0 in legacy mode). skyFromRasterIds: the
-        // deferred renderer's sky test reads the raster ids attachment (the
-        // legacy gbuf ping-pong format is never written on that path).
+        // by the shade/resolve (1.0 in legacy mode). The solid-bg sky test
+        // reads the raster ids attachment (rasterIdsPerFrame).
         // `srcWidth`/`srcHeight` = the RENDER-extent size of the sky-mask
-        // sources (gbufImg/rasterIdsTex) — needed only when width/height (the
-        // dispatch extent) differ from them, i.e. HDR mode at renderScale<1.
+        // source (rasterIdsTex) — needed only when width/height (the
+        // dispatch extent) differ from it, i.e. HDR mode at renderScale<1.
         // Default 0 ⇒ assumed equal to width/height (today's LDR behaviour,
         // byte-identical). `hdrMode`: reads hdrScenePerFrame (no bloom re-add
         // — pass effBloomIntensity <= 0) and writes hdrOut_ instead of the
@@ -135,7 +133,6 @@ namespace threepp::vulkan {
                             uint32_t toneMapping, uint32_t exposureBits,
                             uint32_t preExposureBits,
                             bool bgIsSolidColor, float effBloomIntensity,
-                            bool skyFromRasterIds,
                             uint32_t srcWidth = 0, uint32_t srcHeight = 0,
                             bool hdrMode = false);
 
