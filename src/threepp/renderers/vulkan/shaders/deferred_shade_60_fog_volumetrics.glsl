@@ -371,5 +371,16 @@ vec4 cloudMarch(vec3 ro, vec3 rd, float maxLod, ivec2 px, float tSceneMax) {
             if (T < 0.02) break;
         }
     }
+    // Aerial perspective: distant clouds sink into the same atmospheric haze the
+    // sky fades to (applySkyFog), keyed on the march-entry distance. Fades the
+    // cloud in-scatter toward the horizon sky colour and lifts transmittance so
+    // far clouds lose contrast against the sky — the depth cue that keeps a
+    // 30 km deck from reading as a flat cutout.
+    const float aerial = 1.0 - exp(-t0 * 2.2e-5);// ~45 km haze scale
+    if (aerial > 0.001) {
+        const vec3 haze = sampleEnvLod(rd, maxLod) + lights.ambient;
+        scat = mix(scat, haze * (1.0 - T), aerial);
+        T    = mix(T, 1.0, aerial * 0.6);
+    }
     return vec4(scat, T);
 }

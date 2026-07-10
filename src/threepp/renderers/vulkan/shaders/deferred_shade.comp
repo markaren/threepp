@@ -622,6 +622,10 @@ void main() {
         // it entirely, so a scene whose ONLY light is the sun (spot_slam: no
         // point/spot lights) showed effectively un-fogged water while the
         // terrain got the full aerial glow.
+        {
+            const vec4 cl = cloudMarch(camPos, -V, maxLod, px, length(worldPos - camPos));
+            wcol = wcol * cl.a + cl.rgb;
+        }
         wcol += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))
               + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px)
               + volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);
@@ -1089,6 +1093,14 @@ void main() {
         // skyEdgeW==0 — byte-identical to the pre-MSAA output.
         vec3 outC = lit * domWeight;
         if (skyEdgeW > 0.0) outC += skyEdgeW * skyBackground(ndc);
+        // DEPTH-AWARE cloud layer: march camera→surface and composite the cloud
+        // in-scatter/extinction in FRONT of the terrain (a drone above the deck
+        // sees clouds between it and the ground). tSceneMax = surface distance
+        // clips the march at the G-buffer depth. No-op when clouds are off.
+        {
+            const vec4 cl = cloudMarch(camPos, -V, maxLod, px, length(worldPos - camPos));
+            outC = outC * cl.a + cl.rgb;
+        }
         // Volumetric in-scatter is a per-PIXEL view-ray integral, independent
         // of which G-buffer sample won — add it ONCE at FULL weight AFTER the
         // coverage weighting. (It used to be folded into `lit` before the
