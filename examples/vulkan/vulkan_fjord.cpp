@@ -37,6 +37,7 @@
 #include "threepp/extras/vegetation/TreeTextures.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
+#include "threepp/extras/vegetation/GrassTiles.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/GrassMesh.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
@@ -516,69 +517,9 @@ namespace {
         return v;
     }
 
-    // Merged grass blades → one GrassMesh (GPU wind + single BLAS refit).
-    struct Blade {
-        Vector3 pos;
-        Vector3 scale;
-        Quaternion yaw;
-    };
-
-    std::shared_ptr<BufferGeometry> makeGrassGeometry(const std::vector<Blade>& blades) {
-        constexpr int seg = 4;
-        constexpr float wBase = 0.05f;
-        const Vector3 bottom{0.055f, 0.11f, 0.035f};
-        const Vector3 top{0.19f, 0.30f, 0.10f};
-        struct V {
-            Vector3 p, n;
-            float u, vy;
-            Vector3 c;
-        };
-        std::vector<V> tmpl;
-        std::vector<unsigned int> tidx;
-        for (int i = 0; i <= seg; ++i) {
-            const float t = static_cast<float>(i) / seg;
-            const float w = wBase * (1.f - t);
-            Vector3 c{bottom.x + (top.x - bottom.x) * t, bottom.y + (top.y - bottom.y) * t,
-                      bottom.z + (top.z - bottom.z) * t};
-            for (int s = 0; s < 2; ++s)
-                tmpl.push_back({Vector3{(s == 0 ? -w : w), t, 0.f}, Vector3{0.f, 0.85f, 0.53f},
-                                (s == 0 ? 0.f : 1.f), t, c});
-        }
-        for (int i = 0; i < seg; ++i) {
-            const auto a = static_cast<unsigned int>(i * 2);
-            tidx.insert(tidx.end(), {a, a + 1u, a + 2u, a + 1u, a + 3u, a + 2u});
-        }
-
-        std::vector<float> pos, nrm, uv, col, hfrac;
-        std::vector<unsigned int> idx;
-        pos.reserve(blades.size() * tmpl.size() * 3);
-        Matrix4 m;
-        for (const auto& bl : blades) {
-            const auto base = static_cast<unsigned int>(pos.size() / 3);
-            m.compose(bl.pos, bl.yaw, bl.scale);
-            for (const auto& tv : tmpl) {
-                Vector3 p = tv.p;
-                p.applyMatrix4(m);
-                Vector3 n = tv.n;
-                n.applyQuaternion(bl.yaw);
-                n.normalize();
-                pos.insert(pos.end(), {p.x, p.y, p.z});
-                nrm.insert(nrm.end(), {n.x, n.y, n.z});
-                uv.insert(uv.end(), {tv.u, tv.vy});
-                col.insert(col.end(), {tv.c.x, tv.c.y, tv.c.z});
-                hfrac.push_back(tv.vy);
-            }
-            for (unsigned int t : tidx) idx.push_back(base + t);
-        }
-        auto geo = BufferGeometry::create();
-        geo->setIndex(idx);
-        geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
-        geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
-        geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
-        geo->setAttribute("color", FloatBufferAttribute::create(col, 3));
-        geo->setAttribute("heightFrac", FloatBufferAttribute::create(hfrac, 1));
-        return geo;
-    }
+    // Grass blades are merged into GrassMesh tiles by the reusable helper
+    // threepp::vegetation::buildGrassTiles (extras/vegetation/GrassTiles.hpp) —
+    // see the "valley meadow grass" block in main().
 
     // Low-poly faceted boulder (from the forest demo).
     std::shared_ptr<BufferGeometry> makeRock(unsigned int seed) {
@@ -814,6 +755,12 @@ int main(int argc, char** argv) {
     float startTime = 17.6f;// golden hour (sunset ~18:45)
     float startCycle = 0.f; // hours per second (0 = paused)
     bool startFly = false;// begin on the cinematic flight path
+    // Grass A/B toggle for perf measurement: --single-grass builds the whole
+    // valley meadow as ONE merged GrassMesh (its single valley-spanning AABB is
+    // ~always on screen and near, so it is never frustum/occlusion-culled and its
+    // wind never freezes — the "no culling" baseline). The default builds the
+    // same blades as a grid of GrassMesh tiles (cullable + distance-frozen).
+    bool singleGrass = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
@@ -821,6 +768,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--cam") == 0 && i + 1 < argc) shotCam = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--cycle") == 0 && i + 1 < argc) startCycle = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--fly") == 0) startFly = true;
+        else if (std::strcmp(argv[i], "--single-grass") == 0) singleGrass = true;
     }
 
     Canvas canvas("threepp - FJORD (Vulkan deferred)", {{"vsync", false}});
@@ -1081,23 +1029,40 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ── meadow grass (GPU wind GrassMesh) ───────────────────────────────────
-    std::shared_ptr<GrassMesh> grass;
+    // ── valley meadow grass (GPU wind, tiled) ───────────────────────────────
+    // Widened from the original 46 m disk (15 k blades in one merged mesh) to
+    // cover the whole walkable valley floor (~150 m, ~105 k blades ≈ 7x). Built
+    // as a grid of GrassMesh tiles so the renderer can frustum/occlusion-cull the
+    // off-screen tiles and distance-freeze the wind on the far ones. Same look
+    // (material, colours, wind) as before — sway stays seamless across tile
+    // borders because the phase derives from each blade's world XZ. The
+    // --single-grass flag rebuilds the identical blades as ONE merged mesh: its
+    // single valley-spanning AABB is ~always on screen and near, so it is never
+    // culled and never freezes — the "no culling" baseline for A/B measurement.
+    std::vector<std::shared_ptr<GrassMesh>> grassTiles;
     {
-        std::vector<Blade> blades;
-        blades.reserve(15000);
+        constexpr float kMeadowRadius = 190.f;   // valley-floor coverage (was 46)
+        constexpr size_t kBladeTarget = 300000;  // ~17x the AREA at the original density
+        std::vector<vegetation::GrassBlade> blades;
+        blades.reserve(kBladeTarget);
         std::mt19937 rng(7u);
         std::uniform_real_distribution<float> u01(0.f, 1.f);
         const Vector3 up{0.f, 1.f, 0.f};
-        while (blades.size() < 15000) {
+        // Bounded attempt loop — rejection sampling (water / rock walls) can't
+        // guarantee the target count, so cap the attempts instead of spinning.
+        for (int a = 0; a < 2000000 && blades.size() < kBladeTarget; ++a) {
             const float ang = u01(rng) * kTau;
-            const float rr = std::sqrt(u01(rng)) * 46.f;
+            const float rr = std::sqrt(u01(rng)) * kMeadowRadius;
             const float x = padX + std::cos(ang) * rr;
             const float z = kPadZ + std::sin(ang) * rr;
             const float h = terrainH(x, z);
-            if (h < 0.6f) continue;// not into the water
-            Blade bl;
-            bl.pos.set(x, h - 0.04f, z);
+            if (h < 0.6f) continue;   // not into the water
+            if (h > 52.f) continue;   // stay off the rock walls / scree
+            // Thin out as the ground climbs so grass fades into the slope rather
+            // than ending in a hard altitude line (reuses the terrain's smoothstep).
+            if (h > 34.f && u01(rng) < smoothstepf(34.f, 52.f, h)) continue;
+            vegetation::GrassBlade bl;
+            bl.position.set(x, h - 0.04f, z);
             const float s = 0.5f + u01(rng) * 0.5f;
             bl.scale.set(s, 0.28f + u01(rng) * 0.38f, s);
             bl.yaw.setFromAxisAngle(up, u01(rng) * kTau);
@@ -1108,11 +1073,34 @@ int main(int argc, char** argv) {
         grassMat->vertexColors = true;
         grassMat->side = Side::Double;
         grassMat->envMapIntensity = 0.35f;
-        grass = GrassMesh::create(makeGrassGeometry(blades), grassMat);
-        grass->name = "meadow";
-        grass->params.windDir = Vector2(0.8f, 0.6f);
-        grass->params.windStrength = 0.16f;
-        scene.add(grass);
+
+        GrassMesh::Params mp;
+        mp.windDir = Vector2(0.8f, 0.6f);
+        mp.windStrength = 0.16f;
+        // Freeze the wind + BLAS refit on tiles whose nearest edge is farther
+        // than this from the camera; ~4 tile widths keeps every visibly-swaying
+        // blade animated while dropping the far majority. (Ignored below for the
+        // single-mesh baseline so it always animates the whole field.)
+        mp.maxAnimDistance = 95.f;
+
+        if (singleGrass) {
+            auto one = GrassMesh::create(vegetation::buildGrassGeometry(blades), grassMat);
+            one->name = "meadow";
+            one->params = mp;
+            one->params.maxAnimDistance = 0.f;// baseline never freezes
+            scene.add(one);
+            grassTiles.push_back(one);
+        } else {
+            // ~40 m tiles over a 190 m disk ⇒ ~70 non-empty tiles: coarse enough
+            // to keep the per-tile CPU/record overhead (one BLAS refit + one TLAS
+            // instance + one draw each) modest, fine enough to cull/freeze most of
+            // the field when the camera isn't standing in the middle of it.
+            grassTiles = vegetation::buildGrassTiles(blades, 40.f, grassMat, mp);
+            for (auto& t : grassTiles) scene.add(t);
+        }
+        std::cout << "meadow: " << blades.size() << " blades in "
+                  << grassTiles.size() << (singleGrass ? " merged mesh" : " tiles")
+                  << std::endl;
     }
 
     // ── cabin, dock, lantern, boat ──────────────────────────────────────────
@@ -1326,6 +1314,17 @@ int main(int argc, char** argv) {
                 camera.position.set(xWater - 16.f, 2.4f, kPadZ + 9.f);
                 controls.target.set(padX, 4.f, kPadZ);
                 break;
+            case 4:// INSIDE the valley meadow — grass fills the frame (worst case
+                   // for grass cost; most tiles on screen and near ⇒ animated)
+                camera.position.set(padX + 18.f, 5.5f, kPadZ + 18.f);
+                controls.target.set(padX - 90.f, 3.0f, kPadZ - 90.f);
+                break;
+            case 5:// standing in the meadow but looking AWAY up-fjord — most grass
+                   // is behind the camera (best case: frustum-culled) and the rest
+                   // is far (distance-frozen wind)
+                camera.position.set(padX, 7.f, kPadZ - 120.f);
+                controls.target.set(channelCenterX(-700.f), 90.f, -700.f);
+                break;
         }
         controls.update();
     };
@@ -1511,8 +1510,13 @@ int main(int argc, char** argv) {
                                        ? 0.12f
                                        : std::min(1.f, 0.12f + (camera.position.y - 60.f) / 200.f);
         ocean->warpToward(camera.position.x, camera.position.z, warpCoef);
-        grass->params.time = tElapsed;
-        grass->params.windStrength = 0.10f + 0.02f * windSpeed;
+        // Advance the wind clock on ALL tiles (frozen far tiles ignore it until
+        // they re-enter range). Only time + windStrength change; windDir and
+        // maxAnimDistance persist from setup.
+        for (auto& t : grassTiles) {
+            t->params.time = tElapsed;
+            t->params.windStrength = 0.10f + 0.02f * windSpeed;
+        }
         smoke.update(dt);
         boat->position.y = -0.14f + 0.05f * std::sin(tElapsed * 0.9f) + 0.02f * std::sin(tElapsed * 1.7f + 1.f);
         boat->rotation.z = 0.030f * std::sin(tElapsed * 0.7f);

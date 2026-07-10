@@ -126,8 +126,21 @@ void VulkanRendererCore::CoreImpl::cullEntriesAgainstFrustum(Camera& camera) {
                 // (skinned/displaced/morphed/tet) are here because their cached local
                 // AABB doesn't reflect the per-frame deformed extents, so frustum-
                 // culling them risks popping a still-on-screen body out of the gbuffer.
-                if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isGrass || en.isMorphed || en.isTet) {
+                if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isMorphed || en.isTet) {
                     en.inFrustum = true;
+                } else if (en.isGrass) {
+                    // Grass CAN be frustum-culled: unlike the other deformers, its
+                    // deformed extent has a tight provable bound. The CPU position
+                    // attribute is the rest pose; grass_wind.comp displaces each
+                    // vertex by windDir·bend with |bend| ≤ 0.85·windStrength, so the
+                    // rest AABB dilated by windStrength conservatively encloses every
+                    // swayed pose (windDir is ~unit). Test THAT box normally — this
+                    // is what lets a large tiled meadow cull its off-screen tiles.
+                    // (The tile still stays in the TLAS for shadows/reflections/GI;
+                    // inFrustum only gates the raster G-buffer draw.)
+                    Box3 worldAabb;
+                    if (!grassSwayWorldAabb(en, worldAabb)) { en.inFrustum = true; continue; }
+                    en.inFrustum = frustum.intersectsBox(worldAabb);
                 } else {
                     auto geom = en.mesh->geometry();
                     if (!geom) { en.inFrustum = true; continue; }
@@ -861,10 +874,23 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                 if (entries[i].isDisplaced) entryDisplacedDirty[i] = true;
             }
 
-            // GrassMesh — same: intrinsically dirty every frame (wind advances).
+            // GrassMesh — intrinsically dirty every frame (wind advances) UNLESS
+            // the field is frozen by the distance gate (params.maxAnimDistance).
+            // A frozen (far) field is NOT dirty ⇒ it is not queued for a wind
+            // dispatch/BLAS refit, not folded into grassDirtyAny, and not marked
+            // moved — it holds its last displaced pose. It STILL stays in the TLAS
+            // (culling never touches the TLAS), so off-screen/ranged grass keeps
+            // casting shadows and appearing in reflections/GI. Grass keeps no
+            // prevVertex buffer, so a skipped frame reports zero per-vertex motion
+            // exactly like an animated frame — no TAA ghosting from the freeze.
             std::vector<bool> entryGrassDirty(entries.size(), false);
-            for (size_t i = 0; i < entries.size(); ++i) {
-                if (entries[i].isGrass) entryGrassDirty[i] = true;
+            {
+                // Camera world position (translation column of matrixWorld).
+                const auto& cw = camera.matrixWorld->elements;
+                const Vector3 camPos(cw[12], cw[13], cw[14]);
+                for (size_t i = 0; i < entries.size(); ++i) {
+                    if (entries[i].isGrass) entryGrassDirty[i] = grassShouldAnimate(entries[i], camPos);
+                }
             }
 
             // Morphed meshes — dirty when morphTargetInfluences changed.
@@ -1724,9 +1750,17 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     recPtr = st->blas.get();
                     if (existed) {
                         // Existing grass: defer the wind refit to the frame cb
-                        // (same rationale as the ocean above).
-                        pendingGrassDeforms_.emplace_back(gm, st);
-                        ++gm->frameTick;
+                        // (same rationale as the ocean above) — but honour the
+                        // distance-gated freeze so a structural rebuild triggered
+                        // by unrelated scene churn (e.g. terrain LOD tile swaps as
+                        // the camera roams the valley) doesn't wake every frozen
+                        // far field. recPtr already keeps the field in the TLAS.
+                        const auto& cw = camera.matrixWorld->elements;
+                        const Vector3 camPos(cw[12], cw[13], cw[14]);
+                        if (grassShouldAnimate(en, camPos)) {
+                            pendingGrassDeforms_.emplace_back(gm, st);
+                            ++gm->frameTick;
+                        }
                     } else {
                         // Prime the BLAS with the first wind pose before the first trace.
                         refreshGrassBlas(*gm, *st, static_cast<float>(glfwGetTime()));

@@ -209,13 +209,20 @@ namespace threepp {
             if (wantOcclMeta) {
                 // Same rules as cullEntriesAgainstFrustum: deformers'
                 // cached local AABB is stale per frame → always draw;
-                // missing bounds → always draw.
+                // missing bounds → always draw. Grass is the exception —
+                // its swayed extent has a tight provable bound (rest AABB
+                // dilated by windStrength; grass_wind.comp keeps
+                // bend ≤ 0.85·windStrength), so it does NOT get the always-
+                // draw bit and can be occlusion-culled behind terrain like a
+                // static mesh, using that same dilated box.
                 vulkan::OcclusionCull::CullMeta cm{};
                 cm.stableId = di.stableId;
-                bool always = en.isSkinned || en.isDisplaced || en.isGrass ||
+                bool always = en.isSkinned || en.isDisplaced ||
                               en.isMorphed || en.isTet;
                 Box3 worldAabb;
-                if (!always) {
+                if (en.isGrass) {
+                    if (!grassSwayWorldAabb(en, worldAabb)) always = true;
+                } else if (!always) {
                     auto geom = en.mesh->geometry();
                     if (geom && !geom->boundingBox) geom->computeBoundingBox();
                     if (geom && geom->boundingBox) {
