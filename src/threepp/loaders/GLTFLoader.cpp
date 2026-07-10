@@ -129,6 +129,14 @@ namespace threepp {
         constexpr int WRAP_CLAMP_TO_EDGE = 33071;
         constexpr int WRAP_MIRRORED_REPEAT = 33648;
 
+        // glTF sampler filter modes (OpenGL enum values).
+        constexpr int FILTER_NEAREST = 9728;
+        constexpr int FILTER_LINEAR = 9729;
+        constexpr int FILTER_NEAREST_MIPMAP_NEAREST = 9984;
+        constexpr int FILTER_LINEAR_MIPMAP_NEAREST = 9985;
+        constexpr int FILTER_NEAREST_MIPMAP_LINEAR = 9986;
+        constexpr int FILTER_LINEAR_MIPMAP_LINEAR = 9987;
+
         int componentSize(int componentType) {
             switch (componentType) {
                 case COMP_BYTE:
@@ -749,6 +757,33 @@ namespace threepp {
                     };
                     tex->wrapS = toWrap(wrapS);
                     tex->wrapT = toWrap(wrapT);
+
+                    // Filters: only override threepp's defaults (magFilter=Linear,
+                    // minFilter=LinearMipmapLinear, generateMipmaps=true) when the
+                    // sampler explicitly specifies one — an unspecified filter is
+                    // glTF "auto", which those defaults already match.
+                    if (samp.contains("magFilter")) {
+                        tex->magFilter = samp["magFilter"].get<int>() == FILTER_NEAREST
+                                                 ? Filter::Nearest
+                                                 : Filter::Linear;
+                    }
+                    if (samp.contains("minFilter")) {
+                        switch (samp["minFilter"].get<int>()) {
+                            case FILTER_NEAREST:                tex->minFilter = Filter::Nearest; break;
+                            case FILTER_LINEAR:                 tex->minFilter = Filter::Linear; break;
+                            case FILTER_NEAREST_MIPMAP_NEAREST: tex->minFilter = Filter::NearestMipmapNearest; break;
+                            case FILTER_LINEAR_MIPMAP_NEAREST:  tex->minFilter = Filter::LinearMipmapNearest; break;
+                            case FILTER_NEAREST_MIPMAP_LINEAR:  tex->minFilter = Filter::NearestMipmapLinear; break;
+                            case FILTER_LINEAR_MIPMAP_LINEAR:   tex->minFilter = Filter::LinearMipmapLinear; break;
+                            default: break;
+                        }
+                        // A non-mipmap min filter samples only the base level, so
+                        // mipmap generation is pointless (and the GL renderer keys
+                        // its glGenerateMipmap on this flag).
+                        const int mf = samp["minFilter"].get<int>();
+                        tex->generateMipmaps =
+                                (mf != FILTER_NEAREST && mf != FILTER_LINEAR);
+                    }
                 }
 
                 textureCache[key] = tex;
