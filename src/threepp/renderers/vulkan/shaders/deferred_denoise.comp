@@ -83,7 +83,10 @@ const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
 vec3 worldFromDepth(ivec2 q, float depth) {
     const vec2 uv  = (vec2(q) + 0.5) / vec2(float(pc.width), float(pc.height));
-    const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    // + jitter: the G-buffer was rasterized with a jittered projection, so the
+    // depth at this texel belongs to the jittered ray — same convention as the
+    // shade pass's reconstruction (keeps plane edge stops + fog on-surface).
+    const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + cam.jitter.xy;
     const vec4 vh  = cam.projInverse * vec4(ndc, depth, 1.0);
     return (cam.viewInverse * vec4(vh.xyz / vh.w, 1.0)).xyz;
 }
