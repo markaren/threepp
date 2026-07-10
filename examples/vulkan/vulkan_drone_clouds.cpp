@@ -113,12 +113,14 @@ int main(int argc, char** argv) {
     std::string shotPath;
     int shotFrames = 160, shotFrame = 0, shotCam = 0;
     bool startFree = false;
+    bool noClouds = false;// perf A/B: render with the cloud layer off
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (a == "--cam" && i + 1 < argc) shotCam = std::atoi(argv[++i]);
         else if (a == "--free") startFree = true;
+        else if (a == "--noclouds") noClouds = true;
     }
 
     Canvas canvas("Vulkan Deferred - Volumetric Clouds", {{"vsync", false}});
@@ -156,8 +158,8 @@ int main(int argc, char** argv) {
     cloudCfg.topY        = 1150.f;
     cloudCfg.wind        = Vector3(14.f, 0.f, 4.f);
     cloudCfg.evolveSpeed = 1.0f;
-    bool cloudsOn = true;
-    renderer.setClouds(cloudCfg);
+    bool cloudsOn = !noClouds;
+    if (cloudsOn) renderer.setClouds(cloudCfg);
 
     PerspectiveCamera camera(55.f, canvas.aspect(), 1.f, 60000.f);
     OrbitControls controls{camera, canvas};

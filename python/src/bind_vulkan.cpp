@@ -708,6 +708,31 @@ namespace threepp_py {
                 .def_property("volumetric_fog",
                               [](PyVulkanRenderer& r) { return r.native().volumetricFog(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setVolumetricFog(v); })
+                // Volumetric clouds — a far-field raymarched, wind-driven cloud
+                // deck in the world-space shell [bottom_y, top_y], composited
+                // over the sky and (depth-aware) in front of terrain. Lit by the
+                // scene's DirectionalLight sun. Call set_clouds(...) to enable,
+                // disable_clouds() to turn off (default off; off is free).
+                .def("set_clouds",
+                     [](PyVulkanRenderer& r, float coverage, float density,
+                        float bottom_y, float top_y, const Vector3& wind, float evolve_speed) {
+                         VulkanRenderer::CloudSettings s;
+                         s.coverage    = coverage;
+                         s.density     = density;
+                         s.bottomY     = bottom_y;
+                         s.topY        = top_y;
+                         s.wind        = wind;
+                         s.evolveSpeed = evolve_speed;
+                         r.native().setClouds(s);
+                     },
+                     py::arg("coverage") = 0.45f, py::arg("density") = 1.0f,
+                     py::arg("bottom_y") = 600.0f, py::arg("top_y") = 1400.0f,
+                     py::arg("wind") = Vector3(8.f, 0.f, 2.f), py::arg("evolve_speed") = 1.0f,
+                     "Enable the volumetric cloud layer. coverage 0..1 (0=clear, "
+                     "1=overcast); density multiplier; bottom_y/top_y world-Y shell; "
+                     "wind m/s xz drift; evolve_speed shape churn rate.")
+                .def("disable_clouds", [](PyVulkanRenderer& r) { r.native().setClouds(std::nullopt); },
+                     "Turn the volumetric cloud layer off (default).")
                 // Automatic exposure (eye adaptation). When enabled the renderer
                 // samples the scene's log-luma histogram each frame and adapts
                 // toneMappingExposure automatically. toneMappingExposure is ignored
