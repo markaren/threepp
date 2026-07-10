@@ -8,8 +8,12 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <set>
 #include <stdexcept>
+#include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <threepp/animation/AnimationClip.hpp>
@@ -159,9 +163,43 @@ namespace threepp {
             std::vector<std::vector<uint8_t>> buffers;
             fs::path basePath;
 
-            // Cache to avoid duplicate GPU uploads
-            std::unordered_map<int, std::shared_ptr<Texture>> textureCache;
+            // Cache to avoid duplicate GPU uploads.
+            // Textures are keyed by (texIdx, colorSpace): the same glTF texture
+            // is legitimately used in multiple roles (e.g. baseColor sRGB and,
+            // elsewhere, as a Linear data map), and each colour-space variant
+            // needs its own tagged Texture. Caching per variant means each is
+            // built (and its pixels copied) at most once instead of on every
+            // request. ColorSpace is stored as its underlying int.
+            std::map<std::pair<int, int>, std::shared_ptr<Texture>> textureCache;
             std::unordered_map<int, std::shared_ptr<Material>> materialCache;
+
+            // Decoded image cache, keyed by glTF image index. Avoids re-running
+            // the (expensive) stb_image decode when one image backs several
+            // textures or several colour-space variants. Shared, immutable.
+            std::unordered_map<int, std::shared_ptr<Image>> imageCache;
+
+            // Decoded-geometry cache, keyed by (meshIdx, primIdx, hasSkin).
+            // loadMesh is invoked once per referencing node; without this the
+            // same primitive is fully re-decoded for every node. Cached
+            // BufferGeometry is shared by all referencing meshes (renderers key
+            // GPU uploads on geometry id, so sharing = one upload). Morph
+            // influences and variant tags stay per-Mesh; only the immutable
+            // vertex/index/morph-attribute data is shared.
+            std::map<std::tuple<int, int, bool>, std::shared_ptr<BufferGeometry>> geometryCache;
+
+            // KHR_texture_transform result cache, keyed by
+            // (texIdx, colorSpace, offX, offY, scaleX, scaleY, rotation, texCoord).
+            // A transform requires cloning the base texture; caching by the full
+            // parameter set means identical transforms clone at most once instead
+            // of once per material slot / call site.
+            std::map<std::tuple<int, int, float, float, float, float, float, int>,
+                     std::shared_ptr<Texture>> textureTransformCache;
+
+            // Guards one-time KHR_materials_variants mapping collection per
+            // (meshIdx, primIdx): loadMesh runs per node, and the mappings are
+            // appended to primVariantData, so without this guard a
+            // multiply-referenced mesh would register duplicate variant entries.
+            std::set<std::pair<int, int>> variantsCollected;
 
             // Skeleton support
             std::unordered_set<int> jointNodeSet;
@@ -515,24 +553,36 @@ namespace threepp {
                 return loader.load(raw, 4, false);
             }
 
+            // Decode an image once and cache the (shared, immutable) result by
+            // image index, so multiple textures / colour-space variants that
+            // reference the same source don't re-run the stb_image decode.
+            std::shared_ptr<Image> loadImageDataCached(int imageIdx) {
+                if (auto it = imageCache.find(imageIdx); it != imageCache.end())
+                    return it->second;
+                auto img = loadImageData(imageIdx);
+                if (!img) return nullptr;
+                auto sp = std::make_shared<Image>(std::move(*img));
+                imageCache[imageIdx] = sp;
+                return sp;
+            }
+
             std::shared_ptr<Texture> loadTexture(int texIdx, ColorSpace cs = ColorSpace::sRGB) {
-                auto it = textureCache.find(texIdx);
-                if (it != textureCache.end()) {
-                    auto cached = it->second;
-                    if (cached && cached->colorSpace == cs) return cached;
-                    // Same image used in a different role (e.g. color + data) → clone with new tag
-                    auto clone = cached->clone();
-                    clone->colorSpace = cs;
-                    return clone;
-                }
+                const std::pair<int, int> key{texIdx, static_cast<int>(cs)};
+                if (auto it = textureCache.find(key); it != textureCache.end())
+                    return it->second;
 
                 const auto& texDef = gltf["textures"][texIdx];
                 int imageIdx = texDef.value("source", -1);
                 if (imageIdx < 0) return nullptr;
 
-                auto image = loadImageData(imageIdx);
+                auto image = loadImageDataCached(imageIdx);
+                if (!image) return nullptr;
 
-                auto tex = Texture::create(*image);
+                // Copy the shared decoded image into the texture (colour-space
+                // tag differs per variant, so pixel storage can't be shared —
+                // the cache above still avoids re-decoding, and this variant is
+                // built at most once).
+                auto tex = Texture::create(std::vector<Image>{*image});
                 tex->colorSpace = cs;
                 tex->needsUpdate();
 
@@ -556,14 +606,19 @@ namespace threepp {
                     tex->wrapT = toWrap(wrapT);
                 }
 
-                textureCache[texIdx] = tex;
+                textureCache[key] = tex;
                 return tex;
             }
 
-            // Apply KHR_texture_transform from a textureInfo JSON node.
-            // Returns a (possibly cloned) texture with transform applied.
+            // Load a texture and apply KHR_texture_transform (+ non-zero
+            // texCoord) from a textureInfo JSON node. When no transform is
+            // present and texCoord == 0 the shared base texture is returned
+            // unchanged (no clone). Otherwise a transformed clone is produced
+            // and cached by (texIdx, colorSpace, offset/scale/rotation/texCoord),
+            // so identical transforms clone at most once instead of per slot.
             std::shared_ptr<Texture> applyTextureTransform(
-                    const json& texInfo, std::shared_ptr<Texture> tex) {
+                    const json& texInfo, int texIdx, ColorSpace cs = ColorSpace::sRGB) {
+                auto tex = loadTexture(texIdx, cs);
                 if (!tex) return tex;
                 int texCoordVal = texInfo.value("texCoord", 0);
                 bool hasTransform = false;
@@ -584,6 +639,12 @@ namespace threepp {
                     texCoordVal = tt.value("texCoord", texCoordVal);
                 }
                 if (!hasTransform && texCoordVal == 0) return tex;
+
+                const std::tuple<int, int, float, float, float, float, float, int> key{
+                        texIdx, static_cast<int>(cs), offX, offY, scX, scY, rot, texCoordVal};
+                if (auto it = textureTransformCache.find(key); it != textureTransformCache.end())
+                    return it->second;
+
                 // Clone to avoid sharing transforms between channels
                 auto clone = tex->clone();
                 clone->offset = {offX, offY};
@@ -592,6 +653,7 @@ namespace threepp {
                 clone->center = {0, 0};
                 clone->texCoord = texCoordVal;
                 clone->updateMatrix();
+                textureTransformCache[key] = clone;
                 return clone;
             }
 
@@ -619,7 +681,7 @@ namespace threepp {
                         }
                         if (pbr.contains("baseColorTexture")) {
                             int ti = pbr["baseColorTexture"]["index"].get<int>();
-                            basicMat->map = applyTextureTransform(pbr["baseColorTexture"], loadTexture(ti));
+                            basicMat->map = applyTextureTransform(pbr["baseColorTexture"], ti);
                         }
                     }
                     std::string alphaMode = matDef.value("alphaMode", "OPAQUE");
@@ -675,7 +737,7 @@ namespace threepp {
                     // Base color texture
                     if (pbr.contains("baseColorTexture")) {
                         int ti = pbr["baseColorTexture"]["index"].get<int>();
-                        mat->map = applyTextureTransform(pbr["baseColorTexture"], loadTexture(ti));
+                        mat->map = applyTextureTransform(pbr["baseColorTexture"], ti);
                     }
 
                     // Metalness / roughness
@@ -685,7 +747,7 @@ namespace threepp {
                     // Metallic-roughness texture (G=roughness, B=metalness per spec)
                     if (pbr.contains("metallicRoughnessTexture")) {
                         int ti = pbr["metallicRoughnessTexture"]["index"].get<int>();
-                        auto tex = applyTextureTransform(pbr["metallicRoughnessTexture"], loadTexture(ti, ColorSpace::Linear));
+                        auto tex = applyTextureTransform(pbr["metallicRoughnessTexture"], ti, ColorSpace::Linear);
                         mat->metalnessMap = tex;
                         mat->roughnessMap = tex;
                     }
@@ -694,7 +756,7 @@ namespace threepp {
                 // Normal map
                 if (matDef.contains("normalTexture")) {
                     int ti = matDef["normalTexture"]["index"].get<int>();
-                    mat->normalMap = applyTextureTransform(matDef["normalTexture"], loadTexture(ti, ColorSpace::Linear));
+                    mat->normalMap = applyTextureTransform(matDef["normalTexture"], ti, ColorSpace::Linear);
                     float scale = matDef["normalTexture"].value("scale", 1.0f);
                     mat->normalScale = Vector2{scale, scale};
                 }
@@ -702,7 +764,7 @@ namespace threepp {
                 // Occlusion map
                 if (matDef.contains("occlusionTexture")) {
                     int ti = matDef["occlusionTexture"]["index"].get<int>();
-                    mat->aoMap = applyTextureTransform(matDef["occlusionTexture"], loadTexture(ti, ColorSpace::Linear));
+                    mat->aoMap = applyTextureTransform(matDef["occlusionTexture"], ti, ColorSpace::Linear);
                     mat->aoMapIntensity = matDef["occlusionTexture"].value("strength", 1.0f);
                 }
 
@@ -713,7 +775,7 @@ namespace threepp {
                 }
                 if (matDef.contains("emissiveTexture")) {
                     int ti = matDef["emissiveTexture"]["index"].get<int>();
-                    mat->emissiveMap = applyTextureTransform(matDef["emissiveTexture"], loadTexture(ti));
+                    mat->emissiveMap = applyTextureTransform(matDef["emissiveTexture"], ti);
                 }
 
                 // Alpha mode
@@ -842,6 +904,87 @@ namespace threepp {
             //  Mesh
             // -----------------------------------------------------------------------
 
+            // Decode one primitive's BufferGeometry (attributes, morph deltas,
+            // index, computed normals). Cached by (meshIdx, primIdx, hasSkin) and
+            // shared by every Mesh that references the primitive — the immutable
+            // vertex data is decoded exactly once.
+            std::shared_ptr<BufferGeometry> buildPrimitiveGeometry(
+                    int meshIdx, int primIdx, const json& prim, bool hasSkin) {
+                const std::tuple<int, int, bool> key{meshIdx, primIdx, hasSkin};
+                if (auto it = geometryCache.find(key); it != geometryCache.end())
+                    return it->second;
+
+                auto geometry = BufferGeometry::create();
+                const auto& attrs = prim["attributes"];
+
+                auto addFloatAttr = [&](const char* gltfKey, const char* threeKey, int itemSize) {
+                    if (!attrs.contains(gltfKey)) return;
+                    int accIdx = attrs[gltfKey].get<int>();
+                    auto data = readFloats(accIdx);
+                    geometry->setAttribute(
+                            threeKey,
+                            FloatBufferAttribute::create(std::move(data), itemSize));
+                };
+
+                addFloatAttr("POSITION", "position", 3);
+                addFloatAttr("NORMAL", "normal", 3);
+                addFloatAttr("TEXCOORD_0", "uv", 2);
+                addFloatAttr("TEXCOORD_1", "uv2", 2);
+                // COLOR_0: use actual accessor component count (VEC3 or VEC4)
+                if (attrs.contains("COLOR_0")) {
+                    int accIdx = attrs["COLOR_0"].get<int>();
+                    auto [ptr, stride, count, ct, nc] = getAccessor(accIdx);
+                    auto data = readFloats(accIdx);
+                    geometry->setAttribute("color",
+                            FloatBufferAttribute::create(std::move(data), nc));
+                }
+                addFloatAttr("TANGENT", "tangent", 4);
+
+                if (hasSkin) {
+                    if (attrs.contains("JOINTS_0")) {
+                        auto data = readJointIndicesAsFloat(attrs["JOINTS_0"].get<int>());
+                        geometry->setAttribute("skinIndex",
+                                FloatBufferAttribute::create(std::move(data), 4));
+                    }
+                    addFloatAttr("WEIGHTS_0", "skinWeight", 4);
+                }
+
+                // --- Morph targets (POSITION/NORMAL deltas) ---
+                // glTF morph targets are always relative (deltas from the base attribute).
+                if (prim.contains("targets")) {
+                    const auto& targets = prim["targets"];
+                    for (const auto& target : targets) {
+                        if (target.contains("POSITION")) {
+                            auto data = readFloats(target["POSITION"].get<int>());
+                            geometry->getOrCreateMorphAttribute("position")
+                                    ->emplace_back(FloatBufferAttribute::create(std::move(data), 3));
+                        }
+                        if (target.contains("NORMAL")) {
+                            auto data = readFloats(target["NORMAL"].get<int>());
+                            geometry->getOrCreateMorphAttribute("normal")
+                                    ->emplace_back(FloatBufferAttribute::create(std::move(data), 3));
+                        }
+                    }
+                    if (!targets.empty()) {
+                        geometry->morphTargetsRelative = true;
+                    }
+                }
+
+                // --- Indices ---
+                if (prim.contains("indices")) {
+                    auto indices = readIndices(prim["indices"].get<int>());
+                    geometry->setIndex(std::move(indices));
+                }
+
+                // Compute vertex normals if absent
+                if (!attrs.contains("NORMAL")) {
+                    geometry->computeVertexNormals();
+                }
+
+                geometryCache[key] = geometry;
+                return geometry;
+            }
+
             std::shared_ptr<Object3D> loadMesh(int meshIdx, bool hasSkin = false) {
                 const auto& meshDef = gltf["meshes"][meshIdx];
                 const auto& primitives = meshDef["primitives"];
@@ -871,78 +1014,11 @@ namespace threepp {
                         continue;
                     }
 
-                    auto geometry = BufferGeometry::create();
-
-                    // --- Attributes ---
+                    // Shared, cached geometry (decoded once per mesh/prim/skin).
+                    auto geometry = buildPrimitiveGeometry(meshIdx, primIdx, prim, hasSkin);
                     const auto& attrs = prim["attributes"];
 
-                    auto addFloatAttr = [&](const char* gltfKey, const char* threeKey, int itemSize) {
-                        if (!attrs.contains(gltfKey)) return;
-                        int accIdx = attrs[gltfKey].get<int>();
-                        auto data = readFloats(accIdx);
-                        geometry->setAttribute(
-                                threeKey,
-                                FloatBufferAttribute::create(std::move(data), itemSize));
-                    };
-
-                    addFloatAttr("POSITION", "position", 3);
-                    addFloatAttr("NORMAL", "normal", 3);
-                    addFloatAttr("TEXCOORD_0", "uv", 2);
-                    addFloatAttr("TEXCOORD_1", "uv2", 2);
-                    // COLOR_0: use actual accessor component count (VEC3 or VEC4)
-                    if (attrs.contains("COLOR_0")) {
-                        int accIdx = attrs["COLOR_0"].get<int>();
-                        auto [ptr, stride, count, ct, nc] = getAccessor(accIdx);
-                        auto data = readFloats(accIdx);
-                        geometry->setAttribute("color",
-                                FloatBufferAttribute::create(std::move(data), nc));
-                    }
-                    addFloatAttr("TANGENT", "tangent", 4);
-
-                    if (hasSkin) {
-                        if (attrs.contains("JOINTS_0")) {
-                            auto data = readJointIndicesAsFloat(attrs["JOINTS_0"].get<int>());
-                            geometry->setAttribute("skinIndex",
-                                    FloatBufferAttribute::create(std::move(data), 4));
-                        }
-                        addFloatAttr("WEIGHTS_0", "skinWeight", 4);
-                    }
-
-                    // --- Morph targets (POSITION/NORMAL deltas) ---
-                    // glTF morph targets are always relative (deltas from the base attribute).
-                    size_t numMorphTargets = 0;
-                    if (prim.contains("targets")) {
-                        const auto& targets = prim["targets"];
-                        numMorphTargets = targets.size();
-                        for (const auto& target : targets) {
-                            if (target.contains("POSITION")) {
-                                auto data = readFloats(target["POSITION"].get<int>());
-                                geometry->getOrCreateMorphAttribute("position")
-                                        ->emplace_back(FloatBufferAttribute::create(std::move(data), 3));
-                            }
-                            if (target.contains("NORMAL")) {
-                                auto data = readFloats(target["NORMAL"].get<int>());
-                                geometry->getOrCreateMorphAttribute("normal")
-                                        ->emplace_back(FloatBufferAttribute::create(std::move(data), 3));
-                            }
-                        }
-                        if (numMorphTargets > 0) {
-                            geometry->morphTargetsRelative = true;
-                        }
-                    }
-
-                    // --- Indices ---
-                    if (prim.contains("indices")) {
-                        auto indices = readIndices(prim["indices"].get<int>());
-                        geometry->setIndex(std::move(indices));
-                    }
-
-                    // Compute vertex normals if absent
-                    if (!attrs.contains("NORMAL")) {
-                        geometry->computeVertexNormals();
-                    }
-
-                    // --- Material ---
+                    // --- Material (cached by matIdx) ---
                     std::shared_ptr<Material> mat;
                     if (prim.contains("material") && gltf.contains("materials")) {
                         mat = loadMaterial(prim["material"].get<int>());
@@ -957,6 +1033,11 @@ namespace threepp {
                     else
                         mesh = Mesh::create(geometry, mat);
 
+                    // Morph influences are per-Mesh: the morph delta attributes
+                    // live on the shared geometry; the weights selecting them do
+                    // not. Count comes from the primitive's target list.
+                    const size_t numMorphTargets =
+                            prim.contains("targets") ? prim["targets"].size() : 0;
                     if (numMorphTargets > 0) {
                         auto& influences = mesh->morphTargetInfluences();
                         influences.assign(numMorphTargets, 0.0f);
@@ -970,14 +1051,17 @@ namespace threepp {
                         }
                     }
 
-                    // Tag for KHR_materials_variants post-load resolution
+                    // Tag for KHR_materials_variants post-load resolution (per-Mesh)
                     mesh->userData["__gltfMeshIdx"] = meshIdx;
                     mesh->userData["__gltfPrimIdx"] = primIdx;
 
-                    // Collect per-primitive variant mappings
+                    // Collect per-primitive variant mappings exactly once per
+                    // (mesh, prim): loadMesh may run for several referencing nodes,
+                    // and the mappings are appended — the guard prevents duplicates.
                     if (!variantNames.empty() &&
                         prim.contains("extensions") &&
-                        prim["extensions"].contains("KHR_materials_variants")) {
+                        prim["extensions"].contains("KHR_materials_variants") &&
+                        variantsCollected.insert({meshIdx, primIdx}).second) {
                         const auto& vext = prim["extensions"]["KHR_materials_variants"];
                         if (vext.contains("mappings")) {
                             for (const auto& mapping : vext["mappings"]) {
