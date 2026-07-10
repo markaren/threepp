@@ -155,6 +155,66 @@ namespace threepp {
             return 0;
         }
 
+        // Decode a single accessor component to float, honouring the accessor's
+        // `normalized` flag per glTF 2.0 §3.6.2.2. When normalized, integer types
+        // map to [0,1] (unsigned) or [-1,1] (signed); otherwise the integer value
+        // is taken verbatim (the KHR_mesh_quantization case, where a node/UV
+        // transform performs the dequantization). Signed BYTE (5120) is handled
+        // in both branches — the previous switch dropped it to 0.0.
+        inline float decodeComponentFloat(const uint8_t* src, int ct, bool normalized) {
+            switch (ct) {
+                case COMP_FLOAT: {
+                    float t;
+                    std::memcpy(&t, src, 4);
+                    return t;
+                }
+                case COMP_UNSIGNED_BYTE: {
+                    uint8_t t = *src;
+                    return normalized ? t / 255.f : static_cast<float>(t);
+                }
+                case COMP_BYTE: {
+                    int8_t t;
+                    std::memcpy(&t, src, 1);
+                    return normalized ? std::max(-1.f, t / 127.f) : static_cast<float>(t);
+                }
+                case COMP_UNSIGNED_SHORT: {
+                    uint16_t t;
+                    std::memcpy(&t, src, 2);
+                    return normalized ? t / 65535.f : static_cast<float>(t);
+                }
+                case COMP_SHORT: {
+                    int16_t t;
+                    std::memcpy(&t, src, 2);
+                    return normalized ? std::max(-1.f, t / 32767.f) : static_cast<float>(t);
+                }
+                case COMP_UNSIGNED_INT: {
+                    uint32_t t;
+                    std::memcpy(&t, src, 4);
+                    return static_cast<float>(t);
+                }
+            }
+            return 0.f;
+        }
+
+        // Decode a single integer index component (never normalized).
+        inline uint32_t decodeIndex(const uint8_t* src, int ct) {
+            switch (ct) {
+                case COMP_UNSIGNED_BYTE:
+                    return *src;
+                case COMP_UNSIGNED_SHORT: {
+                    uint16_t t;
+                    std::memcpy(&t, src, 2);
+                    return t;
+                }
+                case COMP_UNSIGNED_INT: {
+                    uint32_t t;
+                    std::memcpy(&t, src, 4);
+                    return t;
+                }
+            }
+            return 0;
+        }
+
         // ===========================================================================
         //  Parser state
         // ===========================================================================
@@ -254,12 +314,18 @@ namespace threepp {
             }
 
             struct AccessorData {
-                const uint8_t* ptr;
+                const uint8_t* ptr;// nullptr for a sparse accessor with no base bufferView
                 size_t byteStride;
                 size_t count;
                 int componentType;
                 int numComponents;
+                bool normalized;
             };
+
+            // Byte span occupied by `count` elements of `elemSize` bytes at `stride`.
+            static size_t accessorSpan(size_t count, size_t stride, size_t elemSize) {
+                return count == 0 ? 0 : (count - 1) * stride + elemSize;
+            }
 
             // Decode a KHR_meshopt_compression bufferView on first access and cache it.
             const std::vector<uint8_t>& decodeMeshoptBV(int bvIdx) {
@@ -276,6 +342,9 @@ namespace threepp {
                 std::string filter = ext.value("filter", "NONE");
 
                 const auto& compressed = resolveBuffer(bufIdx);
+                if (byteOffset + byteLength > compressed.size())
+                    throw std::runtime_error("EXT_meshopt_compression: source range out of bounds (bufferView " +
+                                             std::to_string(bvIdx) + ")");
                 const uint8_t* src = compressed.data() + byteOffset;
 
                 auto& decoded = meshoptCache[bvIdx];
@@ -308,116 +377,192 @@ namespace threepp {
 
             AccessorData getAccessor(int accessorIdx) {
                 const auto& acc = gltf["accessors"][accessorIdx];
-                int bvIdx = acc["bufferView"].get<int>();
-                const auto& bv = gltf["bufferViews"][bvIdx];
                 size_t accOff = acc.value("byteOffset", 0);
                 size_t count = acc["count"].get<size_t>();
                 int ct = acc["componentType"].get<int>();
                 std::string type = acc["type"].get<std::string>();
                 int nc = typeCount(type);
+                bool normalized = acc.value("normalized", false);
+                const size_t elemSize = static_cast<size_t>(componentSize(ct) * nc);
+
+                // A sparse accessor may omit bufferView entirely (its base is all
+                // zeros, fully replaced by the sparse overlay). Callers handle a
+                // null pointer by zero-filling the base.
+                if (!acc.contains("bufferView"))
+                    return {nullptr, elemSize, count, ct, nc, normalized};
+
+                int bvIdx = acc["bufferView"].get<int>();
+                const auto& bv = gltf["bufferViews"][bvIdx];
 
                 if (bv.contains("extensions") &&
                     bv["extensions"].contains("KHR_meshopt_compression")) {
                     size_t byteStride = bv["extensions"]["KHR_meshopt_compression"]["byteStride"].get<size_t>();
                     const auto& decoded = decodeMeshoptBV(bvIdx);
-                    return {decoded.data() + accOff, byteStride, count, ct, nc};
+                    if (accOff + accessorSpan(count, byteStride, elemSize) > decoded.size())
+                        throw std::runtime_error("Accessor " + std::to_string(accessorIdx) +
+                                                 " out of bounds of decoded meshopt bufferView");
+                    return {decoded.data() + accOff, byteStride, count, ct, nc, normalized};
                 }
 
                 int bufIdx = bv["buffer"].get<int>();
                 size_t bvOffset = bv.value("byteOffset", 0);
                 size_t bvStride = bv.value("byteStride", 0);
                 const auto& buf = resolveBuffer(bufIdx);
+                size_t stride = bvStride > 0 ? bvStride : elemSize;
+
+                // Validate the accessor's byte span fits both its bufferView (if a
+                // byteLength is declared) and the backing buffer, so malformed
+                // offsets/strides/counts fail cleanly instead of reading OOB.
+                const size_t span = accessorSpan(count, stride, elemSize);
+                if (bv.contains("byteLength")) {
+                    size_t bvLen = bv["byteLength"].get<size_t>();
+                    if (accOff + span > bvLen)
+                        throw std::runtime_error("Accessor " + std::to_string(accessorIdx) +
+                                                 " out of bounds of bufferView " + std::to_string(bvIdx));
+                }
+                if (bvOffset + accOff + span > buf.size())
+                    throw std::runtime_error("Accessor " + std::to_string(accessorIdx) +
+                                             " out of bounds of buffer " + std::to_string(bufIdx));
+
                 const uint8_t* base = buf.data() + bvOffset + accOff;
-                size_t stride = bvStride > 0 ? bvStride : static_cast<size_t>(componentSize(ct) * nc);
-                return {base, stride, count, ct, nc};
+                return {base, stride, count, ct, nc, normalized};
             }
 
-            // Read accessor into flat float vector
+            // Raw pointer into a plain (uncompressed) bufferView at an extra byte
+            // offset, validating that `neededBytes` fit. Used for sparse index /
+            // value bufferViews.
+            const uint8_t* plainBufferViewPtr(int bvIdx, size_t extraOffset, size_t neededBytes) {
+                const auto& bv = gltf["bufferViews"][bvIdx];
+                int bufIdx = bv["buffer"].get<int>();
+                size_t bvOffset = bv.value("byteOffset", 0);
+                const auto& buf = resolveBuffer(bufIdx);
+                const size_t start = bvOffset + extraOffset;
+                if (start + neededBytes > buf.size())
+                    throw std::runtime_error("Sparse bufferView " + std::to_string(bvIdx) +
+                                             " out of bounds");
+                return buf.data() + start;
+            }
+
+            // Apply an accessor's `sparse` overlay onto an already-materialised
+            // flat buffer. `writeElement(index, valuePtr)` writes the nc
+            // components at sparse position `index`, reading them from `valuePtr`
+            // (values share the accessor's componentType). Shared by the float and
+            // index decoders.
+            template<class WriteFn>
+            void applySparse(const json& sparse, int accCt, int nc, WriteFn&& writeElement) {
+                size_t sCount = sparse["count"].get<size_t>();
+                if (sCount == 0) return;
+
+                const auto& idxDef = sparse["indices"];
+                int idxBv = idxDef["bufferView"].get<int>();
+                size_t idxOff = idxDef.value("byteOffset", 0);
+                int idxCt = idxDef["componentType"].get<int>();
+                const size_t idxCompSize = static_cast<size_t>(componentSize(idxCt));
+
+                const auto& valDef = sparse["values"];
+                int valBv = valDef["bufferView"].get<int>();
+                size_t valOff = valDef.value("byteOffset", 0);
+                const size_t valElemSize = static_cast<size_t>(componentSize(accCt) * nc);
+
+                const uint8_t* idxPtr = plainBufferViewPtr(idxBv, idxOff, sCount * idxCompSize);
+                const uint8_t* valPtr = plainBufferViewPtr(valBv, valOff, sCount * valElemSize);
+
+                for (size_t k = 0; k < sCount; ++k) {
+                    uint32_t target = decodeIndex(idxPtr + k * idxCompSize, idxCt);
+                    writeElement(target, valPtr + k * valElemSize);
+                }
+            }
+
+            // Read accessor into a flat float vector, honouring `normalized` and
+            // applying any sparse overlay. A sparse accessor with no base
+            // bufferView starts zero-filled.
             std::vector<float> readFloats(int accessorIdx) {
-                auto [ptr, stride, count, ct, nc] = getAccessor(accessorIdx);
-                std::vector<float> out;
-                out.reserve(count * nc);
-                for (size_t i = 0; i < count; ++i) {
-                    const uint8_t* row = ptr + i * stride;
-                    for (int j = 0; j < nc; ++j) {
-                        const uint8_t* src = row + j * componentSize(ct);
-                        float val = 0.f;
-                        switch (ct) {
-                            case COMP_FLOAT: {
-                                float tmp;
-                                std::memcpy(&tmp, src, 4);
-                                val = tmp;
-                                break;
-                            }
-                            case COMP_UNSIGNED_BYTE:
-                                val = *src / 255.f;
-                                break;
-                            case COMP_UNSIGNED_SHORT: {
-                                uint16_t tmp;
-                                std::memcpy(&tmp, src, 2);
-                                val = tmp / 65535.f;
-                                break;
-                            }
-                            case COMP_SHORT: {
-                                int16_t tmp;
-                                std::memcpy(&tmp, src, 2);
-                                val = std::max(-1.f, tmp / 32767.f);
-                                break;
-                            }
-                            default:
-                                break;
-                        }
-                        out.push_back(val);
+                auto [ptr, stride, count, ct, nc, normalized] = getAccessor(accessorIdx);
+                const size_t compSize = static_cast<size_t>(componentSize(ct));
+                std::vector<float> out(count * nc, 0.f);
+
+                if (ptr) {
+                    for (size_t i = 0; i < count; ++i) {
+                        const uint8_t* row = ptr + i * stride;
+                        for (int j = 0; j < nc; ++j)
+                            out[i * nc + j] = decodeComponentFloat(row + j * compSize, ct, normalized);
                     }
+                }
+
+                const auto& acc = gltf["accessors"][accessorIdx];
+                if (acc.contains("sparse")) {
+                    // Structured bindings can't be captured by a lambda pre-C++20
+                    // in a fully portable way; copy the ones the lambda needs.
+                    const int lct = ct, lnc = nc;
+                    const bool lnorm = normalized;
+                    const size_t lcomp = compSize;
+                    applySparse(acc["sparse"], ct, nc,
+                                [&, lct, lnc, lnorm, lcomp](uint32_t target, const uint8_t* valPtr) {
+                                    if (static_cast<size_t>(target) * lnc + lnc > out.size()) return;
+                                    for (int j = 0; j < lnc; ++j)
+                                        out[target * lnc + j] =
+                                                decodeComponentFloat(valPtr + j * lcomp, lct, lnorm);
+                                });
                 }
                 return out;
             }
 
             std::vector<uint32_t> readIndices(int accessorIdx) {
-                auto [ptr, stride, count, ct, nc] = getAccessor(accessorIdx);
-                std::vector<uint32_t> out;
-                out.reserve(count);
-                for (size_t i = 0; i < count; ++i) {
-                    const uint8_t* src = ptr + i * stride;
-                    uint32_t val = 0;
-                    switch (ct) {
-                        case COMP_UNSIGNED_BYTE:
-                            val = *src;
-                            break;
-                        case COMP_UNSIGNED_SHORT:
-                            std::memcpy(&val, src, 2);
-                            val &= 0xFFFF;
-                            break;
-                        case COMP_UNSIGNED_INT:
-                            std::memcpy(&val, src, 4);
-                            break;
-                        default:
-                            break;
-                    }
-                    out.push_back(val);
+                auto [ptr, stride, count, ct, nc, accNormalized] = getAccessor(accessorIdx);
+                std::vector<uint32_t> out(count, 0u);
+
+                if (ptr) {
+                    for (size_t i = 0; i < count; ++i)
+                        out[i] = decodeIndex(ptr + i * stride, ct);
+                }
+
+                const auto& acc = gltf["accessors"][accessorIdx];
+                if (acc.contains("sparse")) {
+                    const int lct = ct;
+                    applySparse(acc["sparse"], ct, nc,
+                                [&, lct](uint32_t target, const uint8_t* valPtr) {
+                                    if (target >= out.size()) return;
+                                    out[target] = decodeIndex(valPtr, lct);
+                                });
                 }
                 return out;
             }
 
-            // Read JOINTS_0 accessor as float without normalisation
+            // Read JOINTS_0 accessor as float without normalisation (joint
+            // indices are integers, never in [0,1]). Sparse overlay applied raw.
             std::vector<float> readJointIndicesAsFloat(int accessorIdx) {
-                auto [ptr, stride, count, ct, nc] = getAccessor(accessorIdx);
-                std::vector<float> out;
-                out.reserve(count * nc);
-                for (size_t i = 0; i < count; ++i) {
-                    const uint8_t* row = ptr + i * stride;
-                    for (int j = 0; j < nc; ++j) {
-                        const uint8_t* src = row + j * componentSize(ct);
-                        float val = 0.f;
-                        if (ct == COMP_UNSIGNED_BYTE)
-                            val = static_cast<float>(*src);
-                        else if (ct == COMP_UNSIGNED_SHORT) {
-                            uint16_t tmp;
-                            std::memcpy(&tmp, src, 2);
-                            val = static_cast<float>(tmp);
-                        }
-                        out.push_back(val);
+                auto [ptr, stride, count, ct, nc, accNormalized] = getAccessor(accessorIdx);
+                const size_t compSize = static_cast<size_t>(componentSize(ct));
+                std::vector<float> out(count * nc, 0.f);
+
+                auto decodeRaw = [](const uint8_t* src, int ct) -> float {
+                    if (ct == COMP_UNSIGNED_BYTE) return static_cast<float>(*src);
+                    if (ct == COMP_UNSIGNED_SHORT) {
+                        uint16_t t;
+                        std::memcpy(&t, src, 2);
+                        return static_cast<float>(t);
                     }
+                    return 0.f;
+                };
+
+                if (ptr) {
+                    for (size_t i = 0; i < count; ++i) {
+                        const uint8_t* row = ptr + i * stride;
+                        for (int j = 0; j < nc; ++j)
+                            out[i * nc + j] = decodeRaw(row + j * compSize, ct);
+                    }
+                }
+
+                const auto& acc = gltf["accessors"][accessorIdx];
+                if (acc.contains("sparse")) {
+                    const int lct = ct, lnc = nc;
+                    const size_t lcomp = compSize;
+                    applySparse(acc["sparse"], ct, nc,
+                                [&, lct, lnc, lcomp](uint32_t target, const uint8_t* valPtr) {
+                                    if (static_cast<size_t>(target) * lnc + lnc > out.size()) return;
+                                    for (int j = 0; j < lnc; ++j)
+                                        out[target * lnc + j] = decodeRaw(valPtr + j * lcomp, lct);
+                                });
                 }
                 return out;
             }
@@ -933,7 +1078,7 @@ namespace threepp {
                 // COLOR_0: use actual accessor component count (VEC3 or VEC4)
                 if (attrs.contains("COLOR_0")) {
                     int accIdx = attrs["COLOR_0"].get<int>();
-                    auto [ptr, stride, count, ct, nc] = getAccessor(accIdx);
+                    auto [ptr, stride, count, ct, nc, accNormalized] = getAccessor(accIdx);
                     auto data = readFloats(accIdx);
                     geometry->setAttribute("color",
                             FloatBufferAttribute::create(std::move(data), nc));
@@ -1436,15 +1581,30 @@ namespace threepp {
 
                 if (magic != GLB_MAGIC) throw std::runtime_error("Not a GLB file (bad magic)");
 
+                // The declared container length must not claim more bytes than we
+                // actually have; a truncated GLB otherwise reads past the buffer.
+                if (totalLength > data.size())
+                    throw std::runtime_error("GLB truncated: header length " +
+                                             std::to_string(totalLength) + " exceeds file size " +
+                                             std::to_string(data.size()));
+                // Never scan past the declared length even if the file has trailing bytes.
+                const size_t end = totalLength >= 12 ? totalLength : data.size();
+
                 size_t offset = 12;
                 std::string jsonText;
                 bool gotJSON = false, gotBIN = false;
 
-                while (offset + 8 <= data.size()) {
+                while (offset + 8 <= end) {
                     uint32_t chunkLen, chunkType;
                     std::memcpy(&chunkLen, data.data() + offset, 4);
                     std::memcpy(&chunkType, data.data() + offset + 4, 4);
                     offset += 8;
+
+                    // Each chunk's declared payload must fit within the container.
+                    if (chunkLen > end - offset)
+                        throw std::runtime_error("GLB chunk overruns file (offset " +
+                                                 std::to_string(offset) + ", len " +
+                                                 std::to_string(chunkLen) + ")");
 
                     if (chunkType == GLB_CHUNK_JSON && !gotJSON) {
                         jsonText = std::string(reinterpret_cast<const char*>(data.data() + offset), chunkLen);
