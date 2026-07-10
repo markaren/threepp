@@ -1257,7 +1257,8 @@ namespace threepp {
                 auto levels = geometrylod::generateChain(
                         job.positions.data(), vertexCount, idxData, idxCount,
                         /*sparse=*/job.indices.empty(),
-                        job.normals.empty() ? nullptr : job.normals.data());
+                        job.normals.empty() ? nullptr : job.normals.data(),
+                        job.normalWeight);
                 std::lock_guard<std::mutex> lk(lodResultMutex_);
                 lodResultQueue_.push_back({job.geom, job.geomVersion, std::move(levels)});
             }
@@ -1269,12 +1270,33 @@ namespace threepp {
         // reset after a stale-result discard in drainLodResults). Returns
         // false when nothing was enqueued (no position attribute) so the
         // caller never strands the record in Queued with no result coming.
-        bool enqueueLodJob(const BufferGeometry* geomPtr, unsigned int geomVersion, BufferGeometry& geom) {
+        // Simplifier normal-weight from the enqueueing mesh's material:
+        // w = 0.5·glossiness² (glossiness = 1−roughness). Matte foliage
+        // (r≈0.85 → w≈0.01) simplifies essentially position-only — the far-
+        // vegetation LOD win depends on it; glossy paint (r≈0.25 → w≈0.28)
+        // keeps the normal field charged so panels never flatten visibly
+        // (the CarConcept lesson). Unlit renders no shading at all → 0.
+        // Unknown/absent material stays conservative at 0.5. dynamic_cast is
+        // fine here: once per geometry lifetime, not per frame.
+        static float lodNormalWeightFor(const Mesh& mesh) {
+            auto mat = mesh.material();
+            if (!mat) return 0.5f;
+            if (dynamic_cast<MeshBasicMaterial*>(mat.get())) return 0.f;
+            if (auto* r = dynamic_cast<MaterialWithRoughness*>(mat.get())) {
+                const float gloss = 1.f - std::clamp(r->roughness, 0.f, 1.f);
+                return 0.5f * gloss * gloss;
+            }
+            return 0.5f;
+        }
+
+        bool enqueueLodJob(const BufferGeometry* geomPtr, unsigned int geomVersion, BufferGeometry& geom,
+                           float normalWeight) {
             auto* posAttr = geom.getAttribute<float>("position");
             if (!posAttr) return false;
             LodJob job;
             job.geom = geomPtr;
             job.geomVersion = geomVersion;
+            job.normalWeight = normalWeight;
             const auto& pos = posAttr->array();
             job.positions.assign(pos.begin(), pos.end());
             const auto vtxCount = posAttr->count();

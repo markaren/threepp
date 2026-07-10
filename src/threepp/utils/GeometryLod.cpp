@@ -11,17 +11,12 @@ namespace threepp::geometrylod {
         constexpr size_t kMinIndices = 384;// 128 triangles
         constexpr float kTargetErrorRel = 0.05f;
         constexpr size_t kRefuseNumerator = 85;// stop if new count > 85% of previous
-        // Normal-attribute weight (per component) for simplifyWithAttributes.
-        // Attributes enter meshopt's quadric pre-multiplied by this, in the
-        // same extent-normalized space as positions — so a unit of normal
-        // deviation costs like 0.5× the mesh extent of positional error.
-        // gltfpack's convention for normals; see generateChain's header doc.
-        constexpr float kNormalWeight = 0.5f;
     }// namespace
 
     std::vector<Level> generateChain(const float* positions, size_t vertexCount,
                                       const uint32_t* indices, size_t indexCount,
-                                      bool sparse, const float* normals) {
+                                      bool sparse, const float* normals,
+                                      float normalWeight) {
         std::vector<Level> chain;
         if (!positions || !indices || vertexCount < 3 || indexCount < kMinIndices) return chain;
 
@@ -50,12 +45,13 @@ namespace threepp::geometrylod {
             // deviation (simplifier.cpp folds the attribute quadric into
             // c.error), so glossy curved surfaces stop simplifying / report
             // honest bounds instead of flattening their shading for free.
-            static const float kNormalWeights[3] = {kNormalWeight, kNormalWeight, kNormalWeight};
-            const size_t newCount = normals
+            const bool useAttrs = normals && normalWeight > 0.f;
+            const float nw[3] = {normalWeight, normalWeight, normalWeight};
+            const size_t newCount = useAttrs
                     ? meshopt_simplifyWithAttributes(
                               dst.data(), src.data(), src.size(),
                               positions, vertexCount, 3 * sizeof(float),
-                              normals, 3 * sizeof(float), kNormalWeights, 3,
+                              normals, 3 * sizeof(float), nw, 3,
                               /*vertex_lock=*/nullptr,
                               targetCount, kTargetErrorRel, options, &resultErrorRel)
                     : meshopt_simplify(

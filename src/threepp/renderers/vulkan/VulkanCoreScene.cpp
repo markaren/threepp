@@ -507,7 +507,8 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                                 // marks Failed, not Queued: no result is coming,
                                 // so Queued would strand the record forever.
                                 auto geomSp = en.mesh->geometry();
-                                rec.lodState = (geomSp && enqueueLodJob(en.lodGeomKey, rec.geomVersion, *geomSp))
+                                rec.lodState = (geomSp && enqueueLodJob(en.lodGeomKey, rec.geomVersion, *geomSp,
+                                                                        lodNormalWeightFor(*en.mesh)))
                                         ? BlasRecord::LodState::Queued
                                         : BlasRecord::LodState::Failed;
                             } else if (!lodBudgetWarned_) {

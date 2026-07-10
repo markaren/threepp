@@ -90,18 +90,25 @@ namespace threepp::geometrylod {
     // screen-space-error selection. Leave FALSE for regular indexed input.
     //
     // normals: OPTIONAL tightly packed xyz floats (stride 3 floats/vertex,
-    // same count as positions), or null. When present, simplification runs
-    // meshopt_simplifyWithAttributes with the normals in the error metric,
-    // and `error` charges normal deviation as equivalent object-space length.
-    // This is what protects SHADING on smooth glossy geometry: a car body
-    // panel's look is mm-scale curvature under specular reflection — a
-    // position-only metric flattens it with a tiny (sub-pixel-passing)
-    // positional error while the normal field, and with it the paint's
-    // entire reflection, collapses (the CarConcept regression). With normals
-    // charged, such collapses either don't happen or report an error bound
-    // large enough that selection keeps LOD0 until genuinely far away —
-    // while flat-ish geometry (leaf cards, walls) is unaffected since its
-    // collapses carry ~zero normal deviation.
+    // same count as positions), or null. When present (and normalWeight > 0),
+    // simplification runs meshopt_simplifyWithAttributes with the normals in
+    // the error metric, and `error` charges normal deviation as equivalent
+    // object-space length. This is what protects SHADING on smooth glossy
+    // geometry: a car body panel's look is mm-scale curvature under specular
+    // reflection — a position-only metric flattens it with a tiny
+    // (sub-pixel-passing) positional error while the normal field, and with
+    // it the paint's entire reflection, collapses (the CarConcept
+    // regression). With normals charged, such collapses either don't happen
+    // or report an error bound large enough that selection keeps LOD0 until
+    // genuinely far away.
+    //
+    // normalWeight: per-component attribute weight — how much a unit of
+    // normal deviation costs relative to the mesh extent of positional
+    // error. Callers should scale it by how normal-SENSITIVE the surface's
+    // shading is (glossiness): 0.5 fully protects glossy paint; ~0.01 lets
+    // matte foliage simplify essentially position-only (a flat weight killed
+    // the instanced-vegetation LOD win that motivated the feature); 0 (or
+    // null normals) is exactly meshopt_simplify.
     //
     // Returns an empty vector if the source is too small/degenerate to
     // simplify at all (already below the minimum index count, unindexed
@@ -109,7 +116,8 @@ namespace threepp::geometrylod {
     std::vector<Level> generateChain(const float* positions, size_t vertexCount,
                                       const uint32_t* indices, size_t indexCount,
                                       bool sparse = false,
-                                      const float* normals = nullptr);
+                                      const float* normals = nullptr,
+                                      float normalWeight = 0.5f);
 
     // Welds NON-indexed triangle soup into a canonical index buffer so
     // generateChain has topology to collapse. Soup (three unshared vertices

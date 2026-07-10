@@ -831,7 +831,7 @@ int main(int argc, char** argv) {
     // re-expose midnight back to daylight — night must stay dark.
     renderer.setAutoExposureRange(-2.5f, 1.5f);
     renderer.setAutoExposureSpeed(shotPath.empty() ? 2.0f : 12.0f);
-    renderer.setGbufferMsaa(2);// leaf canopies + grass edges
+    // renderer.setGbufferMsaa(2);// leaf canopies + grass edges
     renderer.setRenderScale(0.85f);
     renderer.setSunAngularRadius(0.6f);// soft RT sun shadows
     renderer.setVolumetricFog(true);   // god rays through the fjord walls
@@ -1491,12 +1491,17 @@ int main(int argc, char** argv) {
             const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
             renderer.writeFramebuffer(path);
             const auto t = renderer.lastFrameTimings();
+            const auto ls = renderer.autoLodStats();
             std::cout << "wrote " << path.string() << " (" << fps << " fps)\n"
                       << "  gbuf " << t.rasterGbufMs << "  shade " << t.shadeBMs
                       << "  denoise " << t.denoiseMs << "  taa " << t.taaMs
                       << "  cpuEnsure " << t.cpuEnsureSceneMs << "  cpuRecord " << t.cpuRecordMs
                       << "  cpuFrame " << t.cpuFrameMs
-                      << "  tiles " << tiles->activeTiles() << std::endl;
+                      << "  tiles " << tiles->activeTiles()
+                      << "  lod=[" << ls.entriesPerLevel[0] << "," << ls.entriesPerLevel[1] << ","
+                      << ls.entriesPerLevel[2] << "," << ls.entriesPerLevel[3] << ","
+                      << ls.entriesPerLevel[4] << "," << ls.entriesPerLevel[5] << "]"
+                      << " chains=" << ls.chainsReady << std::endl;
             std::exit(0);
         }
     });
