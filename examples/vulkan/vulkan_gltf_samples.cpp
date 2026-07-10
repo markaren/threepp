@@ -97,6 +97,7 @@ int main(int argc, char** argv) {
     float dofFocus = 0.f;  // --dof S: thin-lens DoF focused at S meters (f/2 aperture)
     int optOccl = -1;      // --occl 0|1: two-phase GPU occlusion culling
     int optTaaHdr = -1;    // --taa-hdr 0|1: setTaaHdrInput (deferred renderer only)
+    int optLod = -1;       // --lod 0|1: automatic mesh LOD (shading-error triage)
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -126,6 +127,7 @@ int main(int argc, char** argv) {
         else if (a == "--dof" && i + 1 < argc) dofFocus = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--occl" && i + 1 < argc) optOccl = std::atoi(argv[++i]);
         else if (a == "--taa-hdr" && i + 1 < argc) optTaaHdr = std::atoi(argv[++i]);
+        else if (a == "--lod" && i + 1 < argc) optLod = std::atoi(argv[++i]);
     }
     if (!fs::exists(modelFolder) || !fs::is_directory(modelFolder)) {
         std::cerr << "Invalid folder path: " << fs::absolute(modelFolder) << std::endl;
@@ -156,6 +158,7 @@ int main(int argc, char** argv) {
     if (optSunRad >= 0.f) renderer.setSunAngularRadius(optSunRad);
     if (optOccl >= 0) renderer.setOcclusionCulling(optOccl != 0);
     if (optTaaHdr >= 0) renderer.setTaaHdrInput(optTaaHdr != 0);
+    if (optLod >= 0) renderer.setAutoLod(optLod != 0);
     if (dofFocus > 0.f) {// thin-lens DoF: wide-open aperture, focus at S meters
         renderer.setCameraExposure(2.0f, 1.f / 125.f, 100.f);
         renderer.setFocusDistance(dofFocus);

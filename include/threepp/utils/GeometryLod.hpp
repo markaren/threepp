@@ -89,12 +89,27 @@ namespace threepp::geometrylod {
     // OVER-estimate (subset extents <= full extents) — conservative for
     // screen-space-error selection. Leave FALSE for regular indexed input.
     //
+    // normals: OPTIONAL tightly packed xyz floats (stride 3 floats/vertex,
+    // same count as positions), or null. When present, simplification runs
+    // meshopt_simplifyWithAttributes with the normals in the error metric,
+    // and `error` charges normal deviation as equivalent object-space length.
+    // This is what protects SHADING on smooth glossy geometry: a car body
+    // panel's look is mm-scale curvature under specular reflection — a
+    // position-only metric flattens it with a tiny (sub-pixel-passing)
+    // positional error while the normal field, and with it the paint's
+    // entire reflection, collapses (the CarConcept regression). With normals
+    // charged, such collapses either don't happen or report an error bound
+    // large enough that selection keeps LOD0 until genuinely far away —
+    // while flat-ish geometry (leaf cards, walls) is unaffected since its
+    // collapses carry ~zero normal deviation.
+    //
     // Returns an empty vector if the source is too small/degenerate to
     // simplify at all (already below the minimum index count, unindexed
     // triangle soup with < 3 indices, or a null pointer).
     std::vector<Level> generateChain(const float* positions, size_t vertexCount,
                                       const uint32_t* indices, size_t indexCount,
-                                      bool sparse = false);
+                                      bool sparse = false,
+                                      const float* normals = nullptr);
 
     // Welds NON-indexed triangle soup into a canonical index buffer so
     // generateChain has topology to collapse. Soup (three unshared vertices

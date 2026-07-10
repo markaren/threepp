@@ -1256,7 +1256,8 @@ namespace threepp {
                 // parameter doc in GeometryLod.hpp.
                 auto levels = geometrylod::generateChain(
                         job.positions.data(), vertexCount, idxData, idxCount,
-                        /*sparse=*/job.indices.empty());
+                        /*sparse=*/job.indices.empty(),
+                        job.normals.empty() ? nullptr : job.normals.data());
                 std::lock_guard<std::mutex> lk(lodResultMutex_);
                 lodResultQueue_.push_back({job.geom, job.geomVersion, std::move(levels)});
             }
@@ -1276,20 +1277,24 @@ namespace threepp {
             job.geomVersion = geomVersion;
             const auto& pos = posAttr->array();
             job.positions.assign(pos.begin(), pos.end());
+            const auto vtxCount = posAttr->count();
+            // Normals feed the simplifier's ATTRIBUTE metric on every path
+            // (indexed and soup) — without them the position-only quadric
+            // flattens smooth glossy surfaces' shading for free (the
+            // CarConcept regression; see generateChain's header doc). On the
+            // soup path they additionally drive the weld's seam preservation.
+            if (auto* nrmAttr = geom.getAttribute<float>("normal");
+                nrmAttr && nrmAttr->count() == vtxCount &&
+                nrmAttr->array().size() == static_cast<size_t>(vtxCount) * 3) {
+                const auto& nrm = nrmAttr->array();
+                job.normals.assign(nrm.begin(), nrm.end());
+            }
             if (const auto* idxAttr = geom.getIndex()) {
                 const auto& idx = idxAttr->array();
                 job.indices.assign(idx.begin(), idx.end());
             } else {
-                // Soup: the worker welds before simplifying — give the weld
-                // every attribute stream that exists with a matching count
-                // so its binary-equality test preserves genuine seams.
-                const auto vtxCount = posAttr->count();
-                if (auto* nrmAttr = geom.getAttribute<float>("normal");
-                    nrmAttr && nrmAttr->count() == vtxCount &&
-                    nrmAttr->array().size() == static_cast<size_t>(vtxCount) * 3) {
-                    const auto& nrm = nrmAttr->array();
-                    job.normals.assign(nrm.begin(), nrm.end());
-                }
+                // Soup weld only: UVs join the binary-equality test so
+                // genuine UV seams stay split.
                 if (auto* uvAttr = geom.getAttribute<float>("uv");
                     uvAttr && uvAttr->count() == vtxCount &&
                     uvAttr->array().size() == static_cast<size_t>(vtxCount) * 2) {
