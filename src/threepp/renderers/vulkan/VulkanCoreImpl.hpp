@@ -3600,6 +3600,47 @@ namespace threepp {
         void refreshDisplacedBlas(DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds);
 
         // ── GrassMesh helpers ────────────────────────────────────────────
+        // Conservative world-space AABB for a wind-swayed grass field, shared by
+        // the frustum cull, the occlusion-cull meta build, and the distance-gated
+        // freeze so all three test the SAME box. The CPU-side "position" attribute
+        // IS the rest pose (the GPU displaces a private copy into the BLAS), and
+        // grass_wind.comp bends each vertex by windDir·(gust·windStrength·hf²) with
+        // |gust| ≤ 0.85 and hf² ≤ 1, so the swayed vertex never leaves the rest
+        // AABB dilated by windStrength (windDir is ~unit — |component| ≤ 1). That
+        // makes the dilation a provably conservative bound, which is the whole
+        // reason grass can be culled at all. Returns false (→ caller treats the
+        // field as always-visible / always-animate) if the geometry has no bounds.
+        // en.mesh is known to be a GrassMesh (cached en.isGrass flag), so the
+        // static_cast avoids the per-entry dynamic_cast the hot loops must not pay.
+        bool grassSwayWorldAabb(const MeshEntry& en, Box3& out) const {
+            auto* gm = static_cast<GrassMesh*>(en.mesh);
+            auto geom = gm->geometry();
+            if (!geom) return false;
+            if (!geom->boundingBox) geom->computeBoundingBox();
+            if (!geom->boundingBox) return false;
+            out = *geom->boundingBox;
+            Matrix4 w;
+            std::memcpy(w.elements.data(), en.worldMatrix.data(), 64);
+            out.applyMatrix4(w);
+            out.expandByScalar(gm->params.windStrength);
+            return true;
+        }
+
+        // Distance-gated wind/refit freeze decision (see GrassMesh::Params::
+        // maxAnimDistance). 0 ⇒ always animate. Otherwise animate only while the
+        // camera is within maxAnimDistance of the field's sway-dilated AABB;
+        // beyond that the field is frozen (skips the per-frame dispatch + refit,
+        // holds its last pose). Distance is measured to the nearest point of the
+        // box so a large field animates whenever the camera is anywhere near it.
+        bool grassShouldAnimate(const MeshEntry& en, const Vector3& camPos) const {
+            auto* gm = static_cast<GrassMesh*>(en.mesh);
+            const float maxD = gm->params.maxAnimDistance;
+            if (maxD <= 0.f) return true;
+            Box3 box;
+            if (!grassSwayWorldAabb(en, box)) return true;// no bounds → animate
+            return box.distanceToPoint(camPos) <= maxD;
+        }
+
         // Lazy create the per-GrassMesh state: a BLAS over the rest geometry
         // (built ALLOW_UPDATE, refit each frame) plus an immutable copy of the
         // rest positions and the per-vertex height fractions the wind shader

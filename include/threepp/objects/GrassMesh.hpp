@@ -35,6 +35,18 @@ namespace threepp {
             float windStrength = 0.18f;     // sway amplitude
             Vector2 windDir{0.8f, 0.6f};    // horizontal wind direction (world XZ)
             float time = 0.f;               // animation clock (seconds); set per frame
+            // Distance-gated wind/refit freeze (Vulkan path). When > 0, the
+            // renderer skips the per-frame wind dispatch + BLAS refit for this
+            // field once the camera is farther than maxAnimDistance from the
+            // field's (sway-dilated) world AABB: the blades hold their last
+            // displaced pose — visually indistinguishable at range, and the
+            // BLAS still holds valid geometry so shadow/reflection/GI rays keep
+            // hitting it (a frozen field is NEVER removed from the TLAS).
+            // 0 (default) = always animate, matching the pre-tiling behaviour.
+            // Sway is absolute-time based (not incremental), so a field that
+            // re-enters range resumes cleanly — its pose jumps straight to the
+            // correct phase for the current time with no catch-up.
+            float maxAnimDistance = 0.f;
         };
         Params params;
 
