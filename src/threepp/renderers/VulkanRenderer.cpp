@@ -240,6 +240,29 @@ namespace threepp {
                 fdep.pMemoryBarriers = &fbar;
                 vkCmdPipelineBarrier2(cb, &fdep);
             }
+            // Half-res volumetric cloud march (cloud_march.comp): raymarch the
+            // cloud deck + temporally reproject at half res, off the per-pixel
+            // shade critical path. Only when clouds are enabled (off = free /
+            // image-identical). Reads the resolved G-buffer depth/ids (already
+            // COMPUTE-visible via the raster pass dependency); the barrier below
+            // makes its cloudColor write visible to the shade's bilinear sample.
+            if (cloudsEnabled_) {
+                deferredShade_->recordCloudMarch(cb, currentFrame,
+                                                 regionRenderExt_.width, regionRenderExt_.height,
+                                                 envImage.mipLevels, sampleIndex,
+                                                 deferredCamDeltaLen_, deferredCamRotAngle_);
+                VkMemoryBarrier2 cldBar{};
+                cldBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                cldBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                cldBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                cldBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                cldBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                VkDependencyInfo cldDep{};
+                cldDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                cldDep.memoryBarrierCount = 1;
+                cldDep.pMemoryBarriers = &cldBar;
+                vkCmdPipelineBarrier2(cb, &cldDep);
+            }
             gpuTimings_->begin(cb, TP_DeferredShade, currentFrame);
             deferredShade_->recordDispatch(cb, currentFrame,
                                            regionRenderExt_.width, regionRenderExt_.height,

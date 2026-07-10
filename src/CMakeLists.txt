@@ -996,6 +996,12 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/froxel_integrate.comp"
         kFroxelIntegrateCompSpv
         _froxel_integrate_spv_h)
+    # Half-res volumetric cloud march (deferred): far-field raymarched cloud
+    # deck + temporal reprojection. See DeferredShade::recordCloudMarch.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/cloud_march.comp"
+        kCloudMarchCompSpv
+        _cloud_march_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/probe_update.comp"
         kProbeUpdateCompSpv

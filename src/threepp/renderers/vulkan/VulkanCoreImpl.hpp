@@ -1637,6 +1637,8 @@ namespace threepp {
             Image2D       shadowAtrousB;// rg16f — shadow-ratio à-trous ping-pong (the other half)
             Image2D       froxelScatter;// rgba16f 3D (128×72×64, FIXED size) — froxel in-scatter accumulator (.a=histLen); STORAGE + SAMPLED, ping-ponged like indirect
             Image2D       froxelLut;    // rgba16f 3D — front-to-back-integrated volumetric LUT; STORAGE (integrate) + SAMPLED (shade, trilinear)
+            Image2D       cloudColor;   // rgba16f HALF-res — cloud march result (rgb=in-scatter, a=transmittance); STORAGE (march) + SAMPLED (shade upsample + prev-fif reproject), ping-ponged
+            Image2D       cloudAux;     // rg16f HALF-res — cloud mean-depth (.r) + temporal histLen (.g); STORAGE (march) + SAMPLED (prev-fif history), ping-ponged
             Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
             // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
             // an extra depth-only prepass (overlay_depth.vert) right after

@@ -143,6 +143,8 @@ void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors() {
             std::array<VkImageView, kFramesInFlight> shadowAtrousBViews{};
             std::array<VkImageView, kFramesInFlight> froxelScatterViews{};
             std::array<VkImageView, kFramesInFlight> froxelLutViews{};
+            std::array<VkImageView, kFramesInFlight> cloudColorViews{};
+            std::array<VkImageView, kFramesInFlight> cloudAuxViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             std::array<VkBuffer, kFramesInFlight> fogBufs{};
             std::array<VkBuffer, kFramesInFlight> cloudBufs{};
@@ -184,6 +186,8 @@ void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors() {
                 shadowAtrousBViews[f] = rasterGbufs[f].shadowAtrousB.view;
                 froxelScatterViews[f] = rasterGbufs[f].froxelScatter.view;
                 froxelLutViews[f]     = rasterGbufs[f].froxelLut.view;
+                cloudColorViews[f]    = rasterGbufs[f].cloudColor.view;
+                cloudAuxViews[f]      = rasterGbufs[f].cloudAux.view;
                 sceneHdrViews[f] = bloom_->sceneHdrView(f);
                 const bool haveMS = gbufMsaaSamples_ > 1 && rasterGbufs[f].normalMS.view != VK_NULL_HANDLE;
                 normalMSViews[f] = haveMS ? rasterGbufs[f].normalMS.view : gbufDummyMS_[0].view;
@@ -222,6 +226,8 @@ void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors() {
             in.clusterLights    = clusterLightBufs.data();
             in.froxelScatter    = froxelScatterViews.data();
             in.froxelLut        = froxelLutViews.data();
+            in.cloudColor       = cloudColorViews.data();
+            in.cloudAux         = cloudAuxViews.data();
             in.sceneHdr         = sceneHdrViews.data();
             in.fogBuf           = fogBufs.data();
             in.fogRange         = sizeof(GpuFogUbo);

@@ -133,6 +133,13 @@ namespace threepp::vulkan {
             // Always bound (tiny); clouds.enabled == 0 makes the march a no-op.
             const VkBuffer*    cloudUbo   = nullptr;// [framesInFlight]
             VkDeviceSize       cloudRange = 0;
+            // Half-res cloud march (bindings 59-63) — the per-FIF cloud
+            // in-scatter/transmittance image (rgba16f) + its rg16f aux
+            // (mean-depth/history), each ping-ponged across frames-in-flight
+            // for the temporal reprojection. Always bound (small); the march
+            // is only dispatched when clouds are enabled.
+            const VkImageView* cloudColor = nullptr;// [framesInFlight] rgba16f half-res
+            const VkImageView* cloudAux   = nullptr;// [framesInFlight] rg16f half-res
         };
         void rewriteDescriptors(const DescriptorWriteInputs& in);
 
@@ -223,6 +230,19 @@ namespace threepp::vulkan {
                            float camDeltaLen, float camRotAngle,
                            uint32_t clusterLightCount);
 
+        // Half-resolution volumetric cloud march (cloud_march.comp). One
+        // dispatch over the HALF render extent that writes the cloud
+        // in-scatter/transmittance image the full-res shade upsamples, with a
+        // temporal reprojection EMA against the previous frame's result. Record
+        // BEFORE the shade dispatch (and after the froxel barrier) with a
+        // compute→compute barrier after (the shade samples cloudColor). Only
+        // dispatch when clouds are enabled — off = free / image-identical.
+        // width/height = the FULL render extent (the shader derives half res).
+        void recordCloudMarch(VkCommandBuffer cb, uint32_t frame,
+                              uint32_t width, uint32_t height, uint32_t envMipCount,
+                              uint32_t frameCounter,
+                              float camDeltaLen, float camRotAngle);
+
         // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
         // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor
         // set); the caller inserts a compute→compute barrier between them.
@@ -250,6 +270,7 @@ namespace threepp::vulkan {
         VkPipeline            clusterPipe_  = VK_NULL_HANDLE;// clustered light culling (cluster_build.comp)
         VkPipeline            froxelInjectPipe_    = VK_NULL_HANDLE;// froxel in-scatter (froxel_inject.comp)
         VkPipeline            froxelIntegratePipe_ = VK_NULL_HANDLE;// froxel LUT integrate (froxel_integrate.comp)
+        VkPipeline            cloudMarchPipe_      = VK_NULL_HANDLE;// half-res cloud march (cloud_march.comp)
         VkDescriptorPool      descPool_     = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [framesInFlight]
 

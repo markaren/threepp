@@ -114,6 +114,8 @@ void VulkanRendererCore::CoreImpl::destroyRasterGbufImages() {
                 destroyImage2D(ctx->allocator(), d, g.shadowAtrousB);
                 destroyImage2D(ctx->allocator(), d, g.froxelScatter);
                 destroyImage2D(ctx->allocator(), d, g.froxelLut);
+                destroyImage2D(ctx->allocator(), d, g.cloudColor);
+                destroyImage2D(ctx->allocator(), d, g.cloudAux);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
                 destroyImage2D(ctx->allocator(), d, g.normalMS);
@@ -473,6 +475,19 @@ void VulkanRendererCore::CoreImpl::createRasterGbufImages(uint32_t w, uint32_t h
                 g.froxelLut = createImage3D(128, 72, 64, VK_FORMAT_R16G16B16A16_SFLOAT,
                                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                             N("froxelLut"));
+                // Half-res volumetric cloud march targets (cloud_march.comp).
+                // Sized to HALF the render extent — the ~4× perf win — and
+                // recreated here on resize (which also resets the temporal
+                // history). KEEP the half-res derivation in sync with
+                // cloud_march.comp ((w+1)/2). Always allocated (small); the
+                // march is only dispatched when clouds are enabled.
+                const uint32_t hw = (w + 1u) / 2u, hh = (h + 1u) / 2u;
+                g.cloudColor = createAttachmentImage2D(hw, hh, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                       VK_IMAGE_ASPECT_COLOR_BIT, N("cloudColor"));
+                g.cloudAux = createAttachmentImage2D(hw, hh, VK_FORMAT_R16G16_SFLOAT,
+                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("cloudAux"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                    N("depth"));
@@ -603,6 +618,8 @@ void VulkanRendererCore::CoreImpl::createRasterGbufImages(uint32_t w, uint32_t h
                 pushInit(g.shadowAtrousB.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.froxelScatter.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.froxelLut.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.cloudColor.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.cloudAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
                 if (gbufMsaaSamples_ > 1) {
                     pushInit(g.normalMS.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
