@@ -423,7 +423,12 @@ namespace threepp {
         // this UBO's jitter must match or every consumer reconstructing
         // with cam.jitter (deferred_shade worldPos, hybrid V) lands
         // off the rasterized surface.
-        const bool rasterJitterOn = gbufMsaaSamples_ <= 1;
+        // Event camera ON also forces UNJITTERED: event_shade reads the raw
+        // raster gbuf, and per-frame Halton jitter dithers silhouette coverage
+        // so a STATIC scene fires spurious +/- events every frame (the "event
+        // view flickers with no motion" bug). A physical DVS never sees TAA
+        // jitter. Must match uploadRasterCameraUbo's identical gate.
+        const bool rasterJitterOn = gbufMsaaSamples_ <= 1 && !eventCamEnabled_;
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
         data[32] = jClipX;
@@ -550,7 +555,14 @@ namespace threepp {
         // jittered coverage flips and edge flicker returns at full
         // strength, 6.7k px/frame vs 5.1k at msaa=1. Unjittered MSAA
         // upsampling is STABLE; its trade is spatial softness, not noise.)
-        const bool rasterJitterOn = kRasterJitterEnabled && gbufMsaaSamples_ <= 1;
+        // Event camera ON forces UNJITTERED (must match updateCameraUbo's
+        // gate): event_shade reads this raw gbuf, and the per-frame Halton
+        // coverage flip at silhouettes makes a STATIC scene emit spurious
+        // events every frame — the DVS "flickers with no motion". A real
+        // event camera sees no jitter; transform/camera motion still flows
+        // through motionMat, so genuine motion events are unaffected.
+        const bool rasterJitterOn =
+                kRasterJitterEnabled && gbufMsaaSamples_ <= 1 && !eventCamEnabled_;
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
 
