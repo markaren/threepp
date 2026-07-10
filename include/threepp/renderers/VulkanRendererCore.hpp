@@ -240,7 +240,12 @@ namespace threepp {
         // Object3D::autoLod == false (self-managed LOD — TileTerrain sets it
         // on its quadtree tiles), and anything under a manual threepp::LOD
         // node (its levels are hand-authored already).
-        // setAutoLod(false) is the manual override / debug escape.
+        // setAutoLod(false) is the manual override / debug escape. Toggle
+        // semantics: takes effect at the next render() (every entry snaps
+        // back to full detail on disable); generated chains and in-flight
+        // background jobs are KEPT across a disable/enable cycle (results are
+        // geometry-version-guarded, so nothing stale is ever consumed), and
+        // autoLodStats() reflects the most recent render, not the setter.
         void setAutoLod(bool enabled);
         [[nodiscard]] bool autoLod() const;
 

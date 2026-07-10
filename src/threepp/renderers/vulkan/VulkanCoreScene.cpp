@@ -207,7 +207,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
             // Rebuilt below as the walk visits each threepp::LOD node — a
             // mesh entry whose parent chain hits one of these is exempt from
             // auto-LOD (see the selection pass just after this expansion).
-            manualLodRoots_.clear();
+            manualLodLevelRoots_.clear();
             // traverseVisible (not traverse) so an invisible parent hides its
             // whole subtree — matches three.js / GLRenderer convention. Plain
             // `traverse` walks every node regardless of visibility, leaking
@@ -231,7 +231,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     // Auto-LOD exemption: every level object under a manual
                     // LOD node is author-selected already; don't let auto-LOD
                     // swap index buffers underneath that choice.
-                    for (Object3D* child : lod->children) manualLodRoots_.insert(child);
+                    for (Object3D* child : lod->children) manualLodLevelRoots_.insert(child);
                     return;
                 }
                 // Line / LineSegments: never part of the traced/rasterized
@@ -349,13 +349,13 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                                    m->material() && m->material()->tetSkinning &&
                                    m->material()->tetTexture != nullptr;
                 // Auto-LOD selection caches — once per Mesh, shared by every
-                // instance entry (see the MeshEntry field doc). manualLodRoots_
+                // instance entry (see the MeshEntry field doc). manualLodLevelRoots_
                 // is complete for this mesh's ancestors: traverseVisible is
                 // pre-order, so an enclosing LOD node registered its level
                 // objects before we got here.
                 bool lodExempt = !m->autoLod;// per-object opt-out (self-managed LOD, e.g. terrain tiles)
                 for (Object3D* p = m->parent; !lodExempt && p; p = p->parent) {
-                    if (manualLodRoots_.count(p)) lodExempt = true;
+                    if (manualLodLevelRoots_.count(p)) lodExempt = true;
                 }
                 const MaterialWithEmissive* lodEmissive = nullptr;
                 if (auto mat = m->material()) {
@@ -419,7 +419,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
             probeGridDirty_     = true;// scene structure changed → re-fit the probe grid
             }// !snapLean
 
-            // ── Automatic mesh LOD selection (setAutoLod; default off) ──────
+            // ── Automatic mesh LOD selection (setAutoLod; ON by default) ────
             // Runs UNCONDITIONALLY every frame — camera motion alone can flip
             // a level even when nothing else about the scene changed — right
             // after entries got fresh world matrices from WHICHEVER path
@@ -445,6 +445,13 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     auto* persp = dynamic_cast<PerspectiveCamera*>(&camera);
                     Vector3 camPos;
                     if (persp) camPos.setFromMatrixPosition(*camera.matrixWorld);
+                    // renderExtent() is the INTERNAL (render-scale-applied)
+                    // resolution the G-buffer rasterizes at — τ below is in
+                    // G-buffer pixels, i.e. the resolution the geometric error
+                    // is actually sampled at. (Post-TAA upscale can stretch a
+                    // render pixel to ~1.3 display pixels at scale 0.75; the
+                    // fjord/harness visual gates validated the threshold at
+                    // that operating point.)
                     const float renderHeightPx = static_cast<float>(renderExtent().height);
                     const float tanHalfFovY = persp
                             ? std::tan(math::degToRad(persp->getEffectiveFOV()) * 0.5f)

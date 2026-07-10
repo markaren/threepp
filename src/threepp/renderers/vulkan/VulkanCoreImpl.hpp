@@ -1155,7 +1155,7 @@ namespace threepp {
         // already hand-authored; auto-LOD swapping index buffers underneath
         // an author-selected discrete level would fight that choice. Membership
         // test walks Object3D::parent by raw pointer — no dynamic_cast.
-        std::unordered_set<const Object3D*> manualLodRoots_;
+        std::unordered_set<const Object3D*> manualLodLevelRoots_;
         // Background chain-generation worker: a single lazily-started
         // std::thread (not a pool — LOD job volume is low: one job per
         // eligible unique geometry, ever, per geomVersion) draining a

@@ -464,6 +464,21 @@ void VulkanRendererCore::CoreImpl::drainLodResults() {
 
                 rec.lodLevels.reserve(result.levels.size());
                 for (const auto& lvl : result.levels) {
+                    // HARD budget enforcement at allocation time. The enqueue
+                    // gate only sees RESIDENT bytes — a burst of jobs queued
+                    // while still under budget would otherwise finalize far
+                    // past the cap once their results return. Stopping
+                    // mid-chain keeps the FINER levels already built (a valid,
+                    // conservative chain — errors stay monotonic); levels that
+                    // didn't fit are simply never selectable.
+                    if (lodIndexBytes_ + lodBlasBytes_ >= kLodByteBudget) {
+                        if (!lodBudgetWarned_) {
+                            std::cerr << "[VulkanRenderer] auto-LOD: 256 MiB byte budget reached — "
+                                         "truncating chains; no further levels will be built this session\n";
+                            lodBudgetWarned_ = true;
+                        }
+                        break;
+                    }
                     BlasRecord::LodLevel out{};
                     if (!buildLodLevelFor(rec, lvl, out, pending)) continue;
                     lodIndexBytes_ += out.index.size;
@@ -472,6 +487,9 @@ void VulkanRendererCore::CoreImpl::drainLodResults() {
                     rec.lodLevels.push_back(out);
                 }
                 if (rec.lodLevels.empty()) {
+                    // Includes the over-budget-before-first-level case: Failed
+                    // (not None) so selection doesn't spin re-enqueuing while
+                    // the cap holds. Deliberately never retried this session.
                     rec.lodState = BlasRecord::LodState::Failed;
                 } else {
                     rec.lodState = BlasRecord::LodState::Ready;
