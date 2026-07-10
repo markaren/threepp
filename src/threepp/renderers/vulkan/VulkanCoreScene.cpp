@@ -353,9 +353,9 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                 // is complete for this mesh's ancestors: traverseVisible is
                 // pre-order, so an enclosing LOD node registered its level
                 // objects before we got here.
-                bool lodUnderManual = false;
-                for (Object3D* p = m->parent; p; p = p->parent) {
-                    if (manualLodRoots_.count(p)) { lodUnderManual = true; break; }
+                bool lodExempt = !m->autoLod;// per-object opt-out (self-managed LOD, e.g. terrain tiles)
+                for (Object3D* p = m->parent; !lodExempt && p; p = p->parent) {
+                    if (manualLodRoots_.count(p)) lodExempt = true;
                 }
                 const MaterialWithEmissive* lodEmissive = nullptr;
                 if (auto mat = m->material()) {
@@ -369,7 +369,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     lodRadius = geom->boundingBox->getSize().length() * 0.5f;
                 }
                 auto setLodCaches = [&](MeshEntry& e) {
-                    e.lodUnderManualLod = lodUnderManual;
+                    e.lodExemptStatic = lodExempt;
                     e.lodEmissive       = lodEmissive;
                     e.lodGeomKey        = geom.get();
                     e.lodCenter[0]      = lodCenter.x;
@@ -452,11 +452,13 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
 
                     for (auto& en : entries) {
                         if (en.isOverlay || en.isParticle) continue;// not scene geometry — no LOD concept
-                        // Deformers (stale local AABB), authored manual-LOD
-                        // subtrees, and non-perspective cameras (SSE needs a
-                        // pinhole model): full detail.
+                        // Deformers (stale local AABB), opted-out meshes
+                        // (Object3D::autoLod == false — self-managed LOD like
+                        // terrain tiles), authored manual-LOD subtrees, and
+                        // non-perspective cameras (SSE needs a pinhole model):
+                        // full detail.
                         if (en.isSkinned || en.isDisplaced || en.isGrass || en.isMorphed || en.isTet ||
-                            en.lodUnderManualLod || !persp) {
+                            en.lodExemptStatic || !persp) {
                             if (en.lodLevel != 0) lodChangedThisFrame_ = true;
                             en.lodLevel = 0;
                             ++stats.entriesPerLevel[0];

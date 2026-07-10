@@ -972,7 +972,9 @@ namespace threepp {
             // version paid a dynamic_cast + ancestor hash-walk + shared_ptr
             // derefs PER ENTRY PER FRAME (~2-4 ms on 4k-entry scenes; measured
             // as the whole feature's CPU cost on Bistro/fjord).
-            //   lodUnderManualLod — mesh sits under a threepp::LOD subtree
+            //   lodExemptStatic — mesh opted out (Object3D::autoLod == false,
+            //     e.g. TileTerrain tiles, which are their own LOD system) or
+            //     sits under a threepp::LOD subtree
             //     (structure changes force a full expansion ⇒ can't go stale).
             //   lodEmissive — cached MaterialWithEmissive cast (material
             //     POINTER swaps force a full expansion). VALUES are read live
@@ -984,7 +986,7 @@ namespace threepp {
             //     unknown ⇒ entry stays LOD0. lodSphereDirty re-derives it
             //     after an in-place geometry edit (set by the geom-dirty
             //     detection, consumed lazily by the next selection pass).
-            bool lodUnderManualLod = false;
+            bool lodExemptStatic = false;
             bool lodSphereDirty    = false;
             const MaterialWithEmissive* lodEmissive = nullptr;
             const BufferGeometry* lodGeomKey = nullptr;

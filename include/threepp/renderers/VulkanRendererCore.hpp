@@ -236,8 +236,10 @@ namespace threepp {
         // reduce TAA edge shimmer (that is sub-pixel coverage + the 1-spp
         // shading floor, not triangle density).
         // Exempt (always LOD0): skinned/displaced/grass/morphed/tet meshes,
-        // overlay/particle entries, emissive materials, and anything under
-        // a manual threepp::LOD node (its levels are hand-authored already).
+        // overlay/particle entries, emissive materials, meshes with
+        // Object3D::autoLod == false (self-managed LOD — TileTerrain sets it
+        // on its quadtree tiles), and anything under a manual threepp::LOD
+        // node (its levels are hand-authored already).
         // setAutoLod(false) is the manual override / debug escape.
         void setAutoLod(bool enabled);
         [[nodiscard]] bool autoLod() const;

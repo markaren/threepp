@@ -99,6 +99,13 @@ namespace threepp {
         // When this is set, it checks every frame if the object is in the frustum of the camera before rendering the object.
         // If set to false the object gets rendered every frame even if it is not in the frustum of the camera. Default is true.
         bool frustumCulled = true;
+        // Opt-out for the renderer's automatic mesh LOD (Vulkan setAutoLod).
+        // Set false on meshes that manage their own level of detail (e.g.
+        // TileTerrain quadtree tiles) — stacking automatic simplification on
+        // top of system-managed LOD flattens shading against neighbours at
+        // other levels for little performance return. Default is true
+        // (checked on the mesh itself, not inherited).
+        bool autoLod = true;
         // This value allows the default rendering order of scene graph objects to be overridden although opaque and transparent objects remain sorted independently.
         // When this property is set for an instance of Group, all descendants objects will be sorted and rendered together. Sorting is from lowest to highest renderOrder. Default value is 0.
         unsigned int renderOrder = 0;
