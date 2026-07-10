@@ -57,6 +57,18 @@ namespace threepp {
             return *this;
         }
 
+        // Move overload: takes ownership of the index array without copying it.
+        // Preferred by overload resolution for rvalue std::vector<unsigned int>
+        // arguments (an exact non-template match beats the ArrayLike template),
+        // so `setIndex(std::move(indices))` moves rather than copies.
+        BufferGeometry& setIndex(std::vector<unsigned int>&& index) {
+
+            this->index_ = IntBufferAttribute::create(std::move(index), 1);
+            ++attributesVersion_;
+
+            return *this;
+        }
+
         // Internal STRUCTURAL version of the attribute set: bumped whenever an
         // attribute (or the index, or a morph-attribute list) is added,
         // replaced or removed — NOT when attribute *contents* mutate (that is

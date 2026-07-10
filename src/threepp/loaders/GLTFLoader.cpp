@@ -934,7 +934,7 @@ namespace threepp {
                     // --- Indices ---
                     if (prim.contains("indices")) {
                         auto indices = readIndices(prim["indices"].get<int>());
-                        geometry->setIndex(indices);
+                        geometry->setIndex(std::move(indices));
                     }
 
                     // Compute vertex normals if absent

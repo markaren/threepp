@@ -409,6 +409,15 @@ namespace threepp {
             return std::unique_ptr<TypedBufferAttribute>(new TypedBufferAttribute({std::ranges::begin(range), std::ranges::end(range)}, itemSize, normalized));
         }
 
+        // Move overload: takes ownership of `array` without copying its contents.
+        // Loaders that decode large attribute/index arrays should prefer this to
+        // avoid a transient duplicate of every buffer. Disambiguated from the
+        // std::ranges::range template above via a distinct rvalue-vector signature.
+        static std::unique_ptr<TypedBufferAttribute> create(std::vector<T>&& array, int itemSize, bool normalized = false) {
+
+            return std::unique_ptr<TypedBufferAttribute>(new TypedBufferAttribute(std::move(array), itemSize, normalized));
+        }
+
     protected:
         TypedBufferAttribute() = default;
 
@@ -416,6 +425,9 @@ namespace threepp {
 
         TypedBufferAttribute(const std::vector<T>& array, int itemSize, bool normalized)
             : BufferAttribute(itemSize, normalized), array_(array), count_(array_.size() / itemSize) {}
+
+        TypedBufferAttribute(std::vector<T>&& array, int itemSize, bool normalized)
+            : BufferAttribute(itemSize, normalized), array_(std::move(array)), count_(static_cast<int>(array_.size()) / itemSize) {}
 
     private:
         std::vector<T> array_;
