@@ -660,7 +660,16 @@ namespace threepp {
         // `MaterialDesc md{};` call sites unchanged.
         using MaterialDesc = threepp::vulkan_pt::MaterialDesc;
 
-        Buffer geometryDescsBuffer;
+        // Per-frame-in-flight GeometryDesc storage — same fence-gated ring as
+        // materialDescsBuffers below. Ringed for auto-LOD: a level switch
+        // repoints GeometryDesc::indexAddress/indexed, and the single-buffer
+        // version needed a vkDeviceWaitIdle on every switch frame to patch it
+        // in place — a stall exactly when the camera moves (the frames where
+        // responsiveness matters most). Hot path stages in geomDescsCached_ +
+        // flips geomDescsDirty_[*]; renderFrame's flushGeometryDescsIfDirty
+        // memcpys into this frame's slot once its fence has signaled.
+        std::array<Buffer, kFramesInFlight> geometryDescsBuffers{};
+        std::array<bool, kFramesInFlight> geomDescsDirty_{};
         // Per-frame-in-flight MaterialDesc storage. Was a single shared buffer
         // gated by vkDeviceWaitIdle on every animated-pbr update; now one buffer
         // per kFramesInFlight slot so the upload after a fence wait races
@@ -1122,19 +1131,17 @@ namespace threepp {
         // deformer paths already use (blasDeformed) — an AS-reference change
         // per VkAccelerationStructureInstanceKHR is only unambiguously legal
         // under MODE_BUILD, not the incremental MODE_UPDATE refit. Also
-        // gates the one-time geomDescsCached_ → geometryDescsBuffer patch
-        // (see below) so RT secondary rays (reflections/GI/lidar/probe
-        // update) read the SAME index buffer the swapped BLAS was built
-        // from — without it, gl_PrimitiveID from a hit against a coarser
-        // BLAS would misindex the still-LOD0 GeometryDesc::indexAddress.
+        // flips geomDescsDirty_[*] so RT secondary rays (reflections/GI/
+        // lidar/probe update) read the SAME index buffer the swapped BLAS
+        // was built from — without it, gl_PrimitiveID from a hit against a
+        // coarser BLAS would misindex the still-LOD0
+        // GeometryDesc::indexAddress.
         bool lodChangedThisFrame_ = false;
         // Host mirror of the last-uploaded GeometryDesc array (entries-
         // indexed, same layout as the `geomDescs` local built in the full
-        // rebuild). geometryDescsBuffer is a SINGLE buffer (not per-frame-
-        // in-flight — see its declaration), so patching it requires the
-        // same vkDeviceWaitIdle-gated pattern already used elsewhere in
-        // ensureSceneBuilt for shared-buffer mutations; kept cheap by only
-        // touching it on the rare frame a LOD level actually changed.
+        // rebuild). The lean auto-LOD path patches indexAddress/indexed in
+        // place here; the per-frame ring flush (flushGeometryDescsIfDirty)
+        // carries it to the GPU stall-free.
         std::vector<GeometryDesc> geomDescsCached_;
         // Manual threepp::LOD subtrees, rebuilt every FULL scene expansion
         // (cleared at the start of the traverseVisible walk). A mesh entry
@@ -2301,7 +2308,7 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), tlasBuffer);
             for (auto& b : tlasInstancesBuffers) destroyBuffer(ctx->allocator(), b);
             destroyBuffer(ctx->allocator(), tlasRefitScratch_);
-            destroyBuffer(ctx->allocator(), geometryDescsBuffer);
+            for (auto& b : geometryDescsBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : materialDescsBuffers) destroyBuffer(ctx->allocator(), b);
             destroyBuffer(ctx->allocator(), sceneCaptureBuf_);
             destroyBuffer(ctx->allocator(), eventLumaBuf_);
@@ -3601,6 +3608,9 @@ namespace threepp {
         // retired, so the memcpy races nothing. Replaces the old shared-buffer
         // path that called vkDeviceWaitIdle on every animated-pbr update.
         void flushMaterialDescsIfDirty(uint32_t frame);
+        // Same fence-gated ring flush for GeometryDescs (auto-LOD level
+        // switches repoint indexAddress/indexed — see geomDescsCached_).
+        void flushGeometryDescsIfDirty(uint32_t frame);
 
         // Per-frame frustum cull: tag every entry with `inFrustum` so raster
         // passes (gbuf prepass, overlay depth prepass) can skip off-screen

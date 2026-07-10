@@ -69,7 +69,7 @@ namespace threepp::vulkan {
             VkSampler       envSampler  = VK_NULL_HANDLE;
             VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
             const VkBuffer* materialBuf = nullptr;// [framesInFlight] MaterialDesc[]
-            VkBuffer        geomDescBuf = VK_NULL_HANDLE;// GeometryDesc[]
+            const VkBuffer* geomDescBuf = nullptr;// [framesInFlight] GeometryDesc[] (ringed for auto-LOD level switches)
             const VkDescriptorImageInfo* materialTex = nullptr;// bindless array
             uint32_t        materialTexCount = 0;
             const VkBuffer* emissiveTriBuf = nullptr;// [framesInFlight] EmTri[]

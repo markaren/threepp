@@ -123,11 +123,14 @@ void VulkanRendererCore::CoreImpl::scanLidar(const std::vector<LidarBeam>& beams
             // are stable while we read them.
             vkDeviceWaitIdle(ctx->device());
 
-            // Force-flush MaterialDescs into buffer slot 0 — gives us a
-            // known-good frame target without having to chase `currentFrame`
-            // semantics across render() calls.
+            // Force-flush Material/GeometryDescs into buffer slot 0 — gives us
+            // a known-good frame target without having to chase `currentFrame`
+            // semantics across render() calls. (Safe: the device-wide drain
+            // above means nothing is reading either slot.)
             matDescsDirty_[0] = true;
             flushMaterialDescsIfDirty(0);
+            geomDescsDirty_[0] = true;
+            flushGeometryDescsIfDirty(0);
 
             // Push constants encode the LIDAR equation parameters. The
             // shader multiplies the raw `laserPower · f_back · cos θ · η / r²`
@@ -187,7 +190,7 @@ void VulkanRendererCore::CoreImpl::scanLidar(const std::vector<LidarBeam>& beams
 
             lidar_->scan(ctx->graphicsQueue(),
                          tlas,
-                         geometryDescsBuffer.handle, geometryDescsBuffer.size,
+                         geometryDescsBuffers[0].handle, geometryDescsBuffers[0].size,
                          materialDescsBuffers[0].handle, materialDescsBuffers[0].size,
                          fogUbos[fogSlot].handle, fogUbos[fogSlot].size,
                          pc,
@@ -332,6 +335,13 @@ bool VulkanRendererCore::CoreImpl::beginDeferredFrame(Object3D& scene, Camera& c
             // matDescsCached_ + flipped matDescsDirty_[*]=true; flush this
             // slot now (the other slot flushes when its frame comes around).
             flushMaterialDescsIfDirty(currentFrame);
+            // Same fence guarantee covers geometryDescsBuffers[currentFrame]:
+            // an auto-LOD level switch patched geomDescsCached_ + flipped
+            // geomDescsDirty_[*] in ensureSceneBuilt; landing the flush here —
+            // post-fence, pre-record — keeps this frame's GeometryDescs
+            // consistent with this frame's TLAS (which references the newly
+            // selected level BLASes) without any device stall.
+            flushGeometryDescsIfDirty(currentFrame);
             // Per-frame frustum cull: tags every entry with `inFrustum`
             // for the raster passes to consume.
             cullEntriesAgainstFrustum(camera);

@@ -74,7 +74,7 @@ namespace threepp::vulkan {
             const VkImageView* reservoirW   = nullptr;// [2] W_sum/M/W/p_hat (rgba16f)
             VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;// shared scene TLAS (shadow + reflection rays)
             const VkBuffer*    materialBuf = nullptr;// [framesInFlight] MaterialDesc[] (emissive)
-            VkBuffer           geomDescBuf = VK_NULL_HANDLE;// GeometryDesc[] (reflection-hit normals/UVs)
+            const VkBuffer*    geomDescBuf = nullptr;// [framesInFlight] GeometryDesc[] (reflection-hit normals/UVs; ringed for auto-LOD level switches)
             const VkDescriptorImageInfo* materialTex = nullptr;// bindless array (reflection-hit textures)
             uint32_t           materialTexCount = 0;          // == kMaxMaterialTextures
             const VkBuffer*    emissiveTriBuf = nullptr;// [framesInFlight] EmTri[] (emissive NEE)

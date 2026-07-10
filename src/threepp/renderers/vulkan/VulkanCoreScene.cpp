@@ -104,6 +104,18 @@ void VulkanRendererCore::CoreImpl::flushMaterialDescsIfDirty(uint32_t frame) {
             vmaUnmapMemory(ctx->allocator(), materialDescsBuffers[frame].alloc);
         }
 
+void VulkanRendererCore::CoreImpl::flushGeometryDescsIfDirty(uint32_t frame) {
+            if (!geomDescsDirty_[frame]) return;
+            geomDescsDirty_[frame] = false;
+            if (geomDescsCached_.empty()) return;
+            if (geometryDescsBuffers[frame].handle == VK_NULL_HANDLE) return;
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), geometryDescsBuffers[frame].alloc, &mapped);
+            std::memcpy(mapped, geomDescsCached_.data(),
+                        geomDescsCached_.size() * sizeof(GeometryDesc));
+            vmaUnmapMemory(ctx->allocator(), geometryDescsBuffers[frame].alloc);
+        }
+
 void VulkanRendererCore::CoreImpl::cullEntriesAgainstFrustum(Camera& camera) {
             if (lastVisibleEntries_.empty()) return;
             // Combine projection * matrixWorldInverse to extract the world-
@@ -1248,19 +1260,16 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                             instances.push_back(inst);
                         }
                         if (lodChangedThisFrame_ && !geomDescsCached_.empty()) {
-                            // geometryDescsBuffer is a SINGLE buffer (not per-
-                            // frame-in-flight — prior frames' in-flight compute
-                            // may still be reading it), unlike matDescsCached_'s
-                            // per-slot ring. Same drain-then-mutate pattern the
-                            // geomDirtyAny path above already uses for shared
-                            // BLAS buffers. Rare (LOD switches are hysteresis-
-                            // gated), so the stall is acceptable.
-                            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (pre-geomDescs LOD patch)");
-                            void* mapped = nullptr;
-                            vmaMapMemory(ctx->allocator(), geometryDescsBuffer.alloc, &mapped);
-                            std::memcpy(mapped, geomDescsCached_.data(),
-                                        geomDescsCached_.size() * sizeof(GeometryDesc));
-                            vmaUnmapMemory(ctx->allocator(), geometryDescsBuffer.alloc);
+                            // geomDescsCached_ was patched in place above; the
+                            // per-frame-in-flight ring carries it to the GPU
+                            // stall-free — renderFrame flushes THIS frame's
+                            // slot right after its fence signals (before any
+                            // recording that consumes it), the other slot when
+                            // its frame comes around. Same model as matDescs;
+                            // this replaced a vkDeviceWaitIdle per switch
+                            // frame, which hitched exactly when the camera
+                            // was moving.
+                            for (auto& d : geomDescsDirty_) d = true;
                         }
                         const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny || lodChangedThisFrame_;
                         // Stage the refit; recordCommandBuffer records it into the
@@ -1389,13 +1398,15 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                 }
                 destroyBuffer(ctx->allocator(), tlasBuffer);
                 for (auto& b : tlasInstancesBuffers) { destroyBuffer(ctx->allocator(), b); b = {}; }
-                destroyBuffer(ctx->allocator(), geometryDescsBuffer);
+                for (auto& b : geometryDescsBuffers) {
+                    destroyBuffer(ctx->allocator(), b);
+                    b = {};
+                }
                 for (auto& b : materialDescsBuffers) {
                     destroyBuffer(ctx->allocator(), b);
                     b = {};
                 }
                 tlasBuffer = {};
-                geometryDescsBuffer = {};
 
                 // Prune stale cache entries whose underlying objects have been
                 // destroyed (typical on model swap). Keeping them risks an
@@ -1813,7 +1824,14 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
             }
 
             buildTlas(instances);
-            uploadDescBuffer(geometryDescsBuffer, geomDescs);
+            // Every per-frame GeometryDesc slot seeded fresh — same ring
+            // model as the matDescs loop below; the lean auto-LOD patch
+            // flips geomDescsDirty_ and flushGeometryDescsIfDirty carries
+            // deltas per slot from then on.
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                uploadDescBuffer(geometryDescsBuffers[f], geomDescs);
+            }
+            for (auto& d : geomDescsDirty_) d = false;
             // Host mirror for the lean-path auto-LOD patch above. geomDescs
             // just built already reflects each entry's CURRENT en.lodLevel
             // (the selection pass runs before this heavy rebuild, so an

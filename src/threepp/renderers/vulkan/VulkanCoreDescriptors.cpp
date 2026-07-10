@@ -225,7 +225,10 @@ void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors() {
             in.fogRange         = sizeof(GpuFogUbo);
             in.tlas             = tlas;
             in.materialBuf      = matBufs.data();
-            in.geomDescBuf      = geometryDescsBuffer.handle;
+            std::array<VkBuffer, kFramesInFlight> geomBufs{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f)
+                geomBufs[f] = geometryDescsBuffers[f].handle;
+            in.geomDescBuf      = geomBufs.data();
             in.materialTex      = matTexInfos.data();
             in.materialTexCount = kMaxMaterialTextures;
             in.emissiveTriBuf   = emBufs.data();
@@ -290,7 +293,7 @@ void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors() {
                 pin.envSampler       = envImage.sampler;
                 pin.tlas             = tlas;
                 pin.materialBuf      = matBufs.data();
-                pin.geomDescBuf      = geometryDescsBuffer.handle;
+                pin.geomDescBuf      = geomBufs.data();
                 pin.materialTex      = matTexInfos.data();
                 pin.materialTexCount = kMaxMaterialTextures;
                 pin.emissiveTriBuf   = emBufs.data();
