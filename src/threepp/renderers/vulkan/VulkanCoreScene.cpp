@@ -440,8 +440,8 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                         }
 
                         auto geom = m->geometry();
-                        if (!geom || !geom->getIndex()) {
-                            en.lodLevel = 0;// unindexed geometry — LOD needs an index buffer to swap
+                        if (!geom) {
+                            en.lodLevel = 0;
                             ++stats.entriesPerLevel[0];
                             continue;
                         }
@@ -453,12 +453,23 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                         }
                         BlasRecord& rec = *blasIt->second;
 
-                        const uint32_t triCount = rec.indexCount / 3u;
-                        const bool eligible = triCount >= 4096u;
+                        // NON-indexed soup (FBX-style loaders never call
+                        // setIndex) is eligible too: the chain generator welds
+                        // it into canonical indices, and the levels drive
+                        // INDEXED draws against the unchanged soup vertex
+                        // buffer (selectLodGeom reports the indexed-ness).
+                        const uint32_t triCount =
+                                (rec.indexCount != 0u ? rec.indexCount : rec.vertexCount) / 3u;
+                        const bool eligible = triCount >= 1024u;
                         if (eligible && rec.lodState == BlasRecord::LodState::None) {
                             if ((lodIndexBytes_ + lodBlasBytes_) <= kLodByteBudget) {
-                                enqueueLodJob(geom.get(), rec.geomVersion, *geom);
-                                rec.lodState = BlasRecord::LodState::Queued;
+                                // Failed enqueue (no position attribute — can't
+                                // happen for a live BlasRecord, but be defensive)
+                                // marks Failed, not Queued: no result is coming,
+                                // so Queued would strand the record forever.
+                                rec.lodState = enqueueLodJob(geom.get(), rec.geomVersion, *geom)
+                                        ? BlasRecord::LodState::Queued
+                                        : BlasRecord::LodState::Failed;
                             } else if (!lodBudgetWarned_) {
                                 std::cerr << "[VulkanRenderer] auto-LOD: 256 MiB byte budget reached — "
                                              "no further chains will be generated this session\n";
@@ -1159,11 +1170,14 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                                 // read GeometryDesc::indexAddress keyed by gl_PrimitiveID
                                 // from whichever BLAS this instance references — it must
                                 // track the SAME level, or a hit against a coarser BLAS
-                                // misindexes the still-LOD0 index buffer. Patched into the
-                                // buffer itself (vkDeviceWaitIdle-gated) below, only on a
-                                // frame where a level actually changed.
+                                // misindexes the still-LOD0 index buffer. `indexed` rides
+                                // along: a level of a non-indexed soup record IS an
+                                // indexed fetch. Patched into the buffer itself
+                                // (vkDeviceWaitIdle-gated) below, only on a frame where a
+                                // level actually changed.
                                 if (i < geomDescsCached_.size()) {
                                     geomDescsCached_[i].indexAddress = lodSel.indexAddress;
+                                    geomDescsCached_[i].indexed = lodSel.indexed ? 1u : 0u;
                                 }
                             }
                             VkAccelerationStructureInstanceKHR inst{};
@@ -1680,7 +1694,9 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                         (recPtr->prevVertex.handle != VK_NULL_HANDLE && !warpReproject)
                                 ? recPtr->prevVertex.address
                                 : recPtr->vertex.address;
-                gdesc.indexed = recPtr->index.handle != VK_NULL_HANDLE ? 1u : 0u;
+                // Per SELECTION, not per record: a level of a non-indexed
+                // soup record IS indexed (welded canonical indices).
+                gdesc.indexed = lodSel.indexed ? 1u : 0u;
                 // Per-vertex color only when the material opts in (three.js
                 // semantics: vertexColors == true) AND the geometry uploaded a
                 // color buffer. 0 otherwise → chit skips the modulation.

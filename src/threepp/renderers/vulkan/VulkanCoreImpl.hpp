@@ -351,15 +351,24 @@ namespace threepp {
             VkDeviceAddress asAddress;
             VkDeviceAddress indexAddress;
             uint32_t indexCount;
+            // A selected LEVEL is always an indexed draw — even when the
+            // record itself is non-indexed soup (the chain generator welds
+            // soup into canonical indices whose VALUES are original vertex
+            // ids, so levels index the record's unchanged soup vertex
+            // buffer). Fallback = the record's own indexed-ness. Consumers
+            // (DrawInfo::indexed, GeometryDesc::indexed) must read THIS,
+            // never rec.index.handle directly.
+            bool indexed;
         };
         static LodGeomSel selectLodGeom(const BlasRecord& rec, uint8_t lodLevel) {
             if (lodLevel > 0 && static_cast<size_t>(lodLevel - 1) < rec.lodLevels.size()) {
                 const auto& lvl = rec.lodLevels[lodLevel - 1];
                 if (lvl.as != VK_NULL_HANDLE) {
-                    return {lvl.address, lvl.index.address, lvl.indexCount};
+                    return {lvl.address, lvl.index.address, lvl.indexCount, true};
                 }
             }
-            return {rec.address, rec.index.address, rec.indexCount};
+            return {rec.address, rec.index.address, rec.indexCount,
+                    rec.index.handle != VK_NULL_HANDLE};
         }
 
         // Per-SkinnedMesh deformed-geometry BLAS. Unlike static meshes, skinned
@@ -1127,7 +1136,18 @@ namespace threepp {
             const BufferGeometry* geom = nullptr;
             unsigned int geomVersion = 0;
             std::vector<float> positions;// tightly packed xyz
+            // Indexed geometry: the source index array; normals/uvs stay
+            // empty (the weld step is skipped, topology already exists).
+            // NON-indexed soup (FBX-style loaders never call setIndex):
+            // empty — the worker first welds identical-attribute duplicates
+            // into canonical indices (buildCanonicalIndices) so the
+            // simplifier has shared edges to collapse. normals/uvs feed that
+            // weld's equality test so genuine seams/hard edges stay split;
+            // they carry copies only when the stream exists with matching
+            // counts.
             std::vector<uint32_t> indices;
+            std::vector<float> normals;// soup only; tightly packed xyz
+            std::vector<float> uvs;    // soup only; tightly packed xy
         };
         std::deque<LodJob> lodJobQueue_;
         struct LodResult {
@@ -1172,28 +1192,72 @@ namespace threepp {
                     job = std::move(lodJobQueue_.front());
                     lodJobQueue_.pop_front();
                 }
+                const size_t vertexCount = job.positions.size() / 3;
+                // Soup input: weld first (identical-attribute duplicates →
+                // canonical indices over the ORIGINAL vertex ids), then
+                // simplify those. An empty weld result flows through as an
+                // empty chain ⇒ LodState::Failed at drain, same as any other
+                // degenerate geometry.
+                std::vector<uint32_t> canonical;
+                const uint32_t* idxData = job.indices.data();
+                size_t idxCount = job.indices.size();
+                if (job.indices.empty()) {
+                    canonical = geometrylod::buildCanonicalIndices(
+                            job.positions.data(),
+                            job.normals.empty() ? nullptr : job.normals.data(),
+                            job.uvs.empty() ? nullptr : job.uvs.data(),
+                            vertexCount);
+                    idxData = canonical.data();
+                    idxCount = canonical.size();
+                }
+                // sparse=true for welded soup: the canonical indices reference
+                // only ~1/6 of the soup vertex buffer (the representatives),
+                // and meshopt needs SimplifySparse to keep the unreferenced
+                // duplicates out of its wedge/seam analysis — see the
+                // parameter doc in GeometryLod.hpp.
                 auto levels = geometrylod::generateChain(
-                        job.positions.data(), job.positions.size() / 3,
-                        job.indices.data(), job.indices.size());
+                        job.positions.data(), vertexCount, idxData, idxCount,
+                        /*sparse=*/job.indices.empty());
                 std::lock_guard<std::mutex> lk(lodResultMutex_);
                 lodResultQueue_.push_back({job.geom, job.geomVersion, std::move(levels)});
             }
         }
-        // Snapshots geom's position/index arrays and hands them to the
-        // worker. Called from the selection pass the first time an eligible
-        // entry references a record whose lodState is None (never attempted,
-        // or reset after a stale-result discard in drainLodResults).
-        void enqueueLodJob(const BufferGeometry* geomPtr, unsigned int geomVersion, BufferGeometry& geom) {
+        // Snapshots geom's position/index (or, for non-indexed soup, its
+        // position/normal/uv) arrays and hands them to the worker. Called
+        // from the selection pass the first time an eligible entry
+        // references a record whose lodState is None (never attempted, or
+        // reset after a stale-result discard in drainLodResults). Returns
+        // false when nothing was enqueued (no position attribute) so the
+        // caller never strands the record in Queued with no result coming.
+        bool enqueueLodJob(const BufferGeometry* geomPtr, unsigned int geomVersion, BufferGeometry& geom) {
             auto* posAttr = geom.getAttribute<float>("position");
-            auto* idxAttr = geom.getIndex();
-            if (!posAttr || !idxAttr) return;
+            if (!posAttr) return false;
             LodJob job;
             job.geom = geomPtr;
             job.geomVersion = geomVersion;
             const auto& pos = posAttr->array();
             job.positions.assign(pos.begin(), pos.end());
-            const auto& idx = idxAttr->array();
-            job.indices.assign(idx.begin(), idx.end());
+            if (const auto* idxAttr = geom.getIndex()) {
+                const auto& idx = idxAttr->array();
+                job.indices.assign(idx.begin(), idx.end());
+            } else {
+                // Soup: the worker welds before simplifying — give the weld
+                // every attribute stream that exists with a matching count
+                // so its binary-equality test preserves genuine seams.
+                const auto vtxCount = posAttr->count();
+                if (auto* nrmAttr = geom.getAttribute<float>("normal");
+                    nrmAttr && nrmAttr->count() == vtxCount &&
+                    nrmAttr->array().size() == static_cast<size_t>(vtxCount) * 3) {
+                    const auto& nrm = nrmAttr->array();
+                    job.normals.assign(nrm.begin(), nrm.end());
+                }
+                if (auto* uvAttr = geom.getAttribute<float>("uv");
+                    uvAttr && uvAttr->count() == vtxCount &&
+                    uvAttr->array().size() == static_cast<size_t>(vtxCount) * 2) {
+                    const auto& uv = uvAttr->array();
+                    job.uvs.assign(uv.begin(), uv.end());
+                }
+            }
             ensureLodWorkerStarted();
             {
                 std::lock_guard<std::mutex> lk(lodJobMutex_);
@@ -1201,22 +1265,45 @@ namespace threepp {
             }
             lodJobCv_.notify_one();
             ++lodChainsQueuedCount_;
+            return true;
         }
-        // Pops AT MOST ONE completed chain per call (called once per frame
-        // from ensureSceneBuilt) and finalizes it into GPU resources — the
-        // "budget one geometry finalized per frame" rule. Building a level's
-        // BLAS is a one-shot submit+wait (see buildLodLevelFor); bounding it
-        // to one geometry/frame keeps a chain-ready burst (e.g. right after
-        // setAutoLod(true) on a big scene) from stalling the frame on a run
-        // of synchronous AS builds.
+        // Per-frame chain-finalization budget (drainLodResults, called once
+        // per frame from ensureSceneBuilt): up to 16 geometries OR 8 MiB of
+        // new level resources (index buffers + BLAS storage), whichever hits
+        // first. All of a frame's level BLAS builds are recorded into ONE
+        // one-shot submit+wait (flushLodLevelBuilds) — a submit per level
+        // (or even per geometry) at Bistro-scale entry counts costs more in
+        // queue round-trips than the batching saves. Stale results (record
+        // evicted / geomVersion moved on) and failed chains are processed
+        // outside the budget — they create no resources and cost only a
+        // hash lookup + state write each.
         void drainLodResults();
-        // Builds one level's index buffer + static BLAS (PREFER_FAST_TRACE,
-        // no ALLOW_UPDATE — LOD levels are immutable once built) against
-        // `rec`'s EXISTING vertex buffer/address. Mirrors buildBlasFor's
-        // BLAS-build shape for the subset that differs (index-only geometry
-        // input). Returns false (leaves `out` default) on a degenerate/zero-
+        // One level's deferred BLAS build, produced by buildLodLevelFor and
+        // consumed by flushLodLevelBuilds — resources (AS handle, storage,
+        // index buffer, scratch) already exist; only the build execution is
+        // deferred so a whole frame's worth records into one command buffer.
+        struct LodPendingBuild {
+            VkAccelerationStructureKHR as = VK_NULL_HANDLE;
+            VkDeviceAddress vertexAddress = 0;
+            VkDeviceAddress indexAddress = 0;
+            uint32_t maxVertex = 0;
+            uint32_t primitiveCount = 0;
+            Buffer scratch{};// per-build scratch: concurrent builds in one cmdbuf must not alias
+        };
+        // Creates one level's index buffer + AS handle/storage/address
+        // (PREFER_FAST_TRACE, no ALLOW_UPDATE — LOD levels are immutable
+        // once built) against `rec`'s EXISTING vertex buffer, and appends
+        // the deferred build to `pending`. Mirrors buildBlasFor's BLAS-build
+        // shape for the subset that differs (index-only geometry input; the
+        // AS device address is queried at creation — it's a property of the
+        // storage binding, valid before the build executes). Returns false
+        // (leaves `out` default, appends nothing) on a degenerate/zero-
         // primitive level.
-        bool buildLodLevelFor(BlasRecord& rec, const geometrylod::Level& level, BlasRecord::LodLevel& out);
+        bool buildLodLevelFor(BlasRecord& rec, const geometrylod::Level& level,
+                              BlasRecord::LodLevel& out, std::vector<LodPendingBuild>& pending);
+        // Records every pending level build into one one-shot command
+        // buffer, submits, waits, and frees the per-build scratches.
+        void flushLodLevelBuilds(std::vector<LodPendingBuild>& pending);
         // Destroys every level's AS/storage/index and decrements the running
         // byte totals — called from every blasCache erase site (destructor,
         // eviction prune, geomVersion-changed rebuild) so a record's LOD

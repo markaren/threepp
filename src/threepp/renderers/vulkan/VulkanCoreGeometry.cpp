@@ -258,15 +258,20 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
             return rec;
         }
 
-// Builds one auto-LOD chain level: a new index buffer + a static BLAS built
-// against `rec`'s EXISTING vertex buffer (positions are never touched by
-// simplification — every index in `level.indices` still refers into
-// rec->vertex, same as LOD0). Subset of buildBlasFor's shape restricted to
-// index-only geometry input; no normal/uv/color buffers (those are shared
-// with LOD0 via the same vertexAddress-keyed lookup the shaders already do).
+// Creates one auto-LOD chain level's resources: a new index buffer + a
+// static BLAS built against `rec`'s EXISTING vertex buffer (positions are
+// never touched by simplification — every index in `level.indices` still
+// refers into rec->vertex, same as LOD0; for welded soup the canonical
+// index VALUES are original vertex ids, so the same holds). Subset of
+// buildBlasFor's shape restricted to index-only geometry input; no normal/
+// uv/color buffers (those are shared with LOD0 via the same vertexAddress-
+// keyed lookup the shaders already do). The build itself is DEFERRED into
+// `pending` — drainLodResults batches a whole frame's builds into one
+// one-shot submit via flushLodLevelBuilds.
 bool VulkanRendererCore::CoreImpl::buildLodLevelFor(BlasRecord& rec,
                                                      const geometrylod::Level& level,
-                                                     BlasRecord::LodLevel& out) {
+                                                     BlasRecord::LodLevel& out,
+                                                     std::vector<LodPendingBuild>& pending) {
             if (level.indices.empty()) return false;
             if (rec.vertex.handle == VK_NULL_HANDLE || rec.vertexCount == 0) return false;
             const uint32_t primitiveCount = static_cast<uint32_t>(level.indices.size() / 3);
@@ -289,6 +294,9 @@ bool VulkanRendererCore::CoreImpl::buildLodLevelFor(BlasRecord& rec,
             std::memcpy(mapped, level.indices.data(), ibBytes);
             vmaUnmapMemory(ctx->allocator(), out.index.alloc);
 
+            // Size query needs a fully-specified build info; a LOCAL struct is
+            // fine here (only the final batched cmdBuildAccelerationStructures
+            // needs pointer-stable storage — flushLodLevelBuilds rebuilds it).
             VkAccelerationStructureGeometryTrianglesDataKHR triData{};
             triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
             triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -341,73 +349,138 @@ bool VulkanRendererCore::CoreImpl::buildLodLevelFor(BlasRecord& rec,
             check(ctx->rt().createAccelerationStructure(ctx->device(), &blasCreate, nullptr, &out.as),
                   "vkCreateAccelerationStructureKHR(LOD level BLAS)");
 
-            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
-            blasBuild.dstAccelerationStructure = out.as;
-            blasBuild.scratchData.deviceAddress = scratch.address;
-
-            VkAccelerationStructureBuildRangeInfoKHR range{};
-            range.primitiveCount = primitiveCount;
-            const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
-
-            VkCommandBuffer cb = beginOneShot();
-            ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
-            endAndSubmitOneShot(cb, "buildLodLevelFor");
-            destroyBuffer(ctx->allocator(), scratch);
-
+            // The AS device address is a property of the storage binding —
+            // valid immediately at creation, before the build executes.
             VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
             addrInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
             addrInfo.accelerationStructure = out.as;
             out.address = ctx->rt().getAccelerationStructureDeviceAddress(ctx->device(), &addrInfo);
+
+            LodPendingBuild build{};
+            build.as = out.as;
+            build.vertexAddress = rec.vertex.address;
+            build.indexAddress = out.index.address;
+            build.maxVertex = rec.vertexCount - 1;
+            build.primitiveCount = primitiveCount;
+            // Per-build scratch — concurrent builds recorded into one command
+            // buffer must not alias scratch memory (same rule as
+            // refreshGeomBlasBatch's per-record persistent scratch).
+            build.scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
+            pending.push_back(build);
 
             out.indexCount  = static_cast<uint32_t>(level.indices.size());
             out.errorBound  = level.error;
             return true;
         }
 
-// Drains at most ONE finished chain per call (see the "budget one geometry
-// finalized per frame" doc comment on the declaration) and turns it into
-// GPU resources on `rec`. Discards stale results: the record may have been
-// evicted (geometry destroyed) or its geomVersion may have moved on (the
-// user mutated vertices in place after the job was snapshotted) since the
-// job was enqueued — either way the simplified data no longer matches
-// anything live, so it's dropped and lodState reset to None so a fresh job
-// gets queued next time the (now-different) geometry is seen as eligible.
+void VulkanRendererCore::CoreImpl::flushLodLevelBuilds(std::vector<LodPendingBuild>& pending) {
+            if (pending.empty()) return;
+            const uint32_t N = static_cast<uint32_t>(pending.size());
+            // The build-info structs must stay pointer-stable until the GPU
+            // executes them (pGeometries / rangePtrs are read at submit), so
+            // they live in N-sized vectors that outlast the submit-wait —
+            // same shape as refreshGeomBlasBatch's Phase D.
+            std::vector<VkAccelerationStructureGeometryTrianglesDataKHR> triDatas(N);
+            std::vector<VkAccelerationStructureGeometryKHR>              blasGeoms(N);
+            std::vector<VkAccelerationStructureBuildGeometryInfoKHR>     blasBuilds(N);
+            std::vector<VkAccelerationStructureBuildRangeInfoKHR>        ranges(N);
+            std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> rangePtrs(N);
+            for (uint32_t k = 0; k < N; ++k) {
+                const auto& b = pending[k];
+                triDatas[k].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+                triDatas[k].vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+                triDatas[k].vertexData.deviceAddress = b.vertexAddress;
+                triDatas[k].vertexStride = 3 * sizeof(float);
+                triDatas[k].maxVertex = b.maxVertex;
+                triDatas[k].indexType = VK_INDEX_TYPE_UINT32;
+                triDatas[k].indexData.deviceAddress = b.indexAddress;
+
+                blasGeoms[k].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+                blasGeoms[k].geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+                blasGeoms[k].geometry.triangles = triDatas[k];
+                blasGeoms[k].flags = 0;
+
+                blasBuilds[k].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+                blasBuilds[k].type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                blasBuilds[k].flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+                blasBuilds[k].mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+                blasBuilds[k].geometryCount = 1;
+                blasBuilds[k].pGeometries = &blasGeoms[k];
+                blasBuilds[k].dstAccelerationStructure = b.as;
+                blasBuilds[k].scratchData.deviceAddress = b.scratch.address;
+
+                ranges[k].primitiveCount = b.primitiveCount;
+                rangePtrs[k] = &ranges[k];
+            }
+
+            VkCommandBuffer cb = beginOneShot();
+            ctx->rt().cmdBuildAccelerationStructures(cb, N, blasBuilds.data(), rangePtrs.data());
+            endAndSubmitOneShot(cb, "auto-LOD level BLAS batch");
+
+            for (auto& b : pending) destroyBuffer(ctx->allocator(), b.scratch);
+            pending.clear();
+        }
+
+// Drains finished chains up to the per-frame budget (16 geometries OR 8 MiB
+// of new level resources, whichever hits first — see the declaration) and
+// turns them into GPU resources. All of the frame's level BLAS builds are
+// recorded into ONE one-shot submit at the end. Discards stale results: the
+// record may have been evicted (geometry destroyed) or its geomVersion may
+// have moved on (the user mutated vertices in place after the job was
+// snapshotted) since the job was enqueued — either way the simplified data
+// no longer matches anything live, so it's dropped; lodState resets to None
+// so a fresh job gets queued next time the (now-different) geometry is seen
+// as eligible. Stale/failed results don't count against the budget — they
+// create no resources.
 void VulkanRendererCore::CoreImpl::drainLodResults() {
-            LodResult result;
-            {
-                std::lock_guard<std::mutex> lk(lodResultMutex_);
-                if (lodResultQueue_.empty()) return;
-                result = std::move(lodResultQueue_.front());
-                lodResultQueue_.pop_front();
-            }
-            --lodChainsQueuedCount_;
+            constexpr uint32_t kMaxGeomsPerFrame = 16;
+            constexpr uint64_t kMaxNewBytesPerFrame = 8ull * 1024ull * 1024ull;
 
-            auto it = blasCache.find(result.geom);
-            if (it == blasCache.end()) return;// record evicted while the job was in flight
-            BlasRecord& rec = *it->second;
-            if (rec.geomVersion != result.geomVersion) {
-                rec.lodState = BlasRecord::LodState::None;// stale — re-enqueue will pick up the new version
-                return;
-            }
-            if (result.levels.empty()) {
-                rec.lodState = BlasRecord::LodState::Failed;
-                return;
+            uint32_t finalizedGeoms = 0;
+            uint64_t newBytes = 0;
+            std::vector<LodPendingBuild> pending;
+
+            while (finalizedGeoms < kMaxGeomsPerFrame && newBytes < kMaxNewBytesPerFrame) {
+                LodResult result;
+                {
+                    std::lock_guard<std::mutex> lk(lodResultMutex_);
+                    if (lodResultQueue_.empty()) break;
+                    result = std::move(lodResultQueue_.front());
+                    lodResultQueue_.pop_front();
+                }
+                --lodChainsQueuedCount_;
+
+                auto it = blasCache.find(result.geom);
+                if (it == blasCache.end()) continue;// record evicted while the job was in flight
+                BlasRecord& rec = *it->second;
+                if (rec.geomVersion != result.geomVersion) {
+                    rec.lodState = BlasRecord::LodState::None;// stale — re-enqueue will pick up the new version
+                    continue;
+                }
+                if (result.levels.empty()) {
+                    rec.lodState = BlasRecord::LodState::Failed;
+                    continue;
+                }
+
+                rec.lodLevels.reserve(result.levels.size());
+                for (const auto& lvl : result.levels) {
+                    BlasRecord::LodLevel out{};
+                    if (!buildLodLevelFor(rec, lvl, out, pending)) continue;
+                    lodIndexBytes_ += out.index.size;
+                    lodBlasBytes_  += out.storage.size;
+                    newBytes       += out.index.size + out.storage.size;
+                    rec.lodLevels.push_back(out);
+                }
+                if (rec.lodLevels.empty()) {
+                    rec.lodState = BlasRecord::LodState::Failed;
+                } else {
+                    rec.lodState = BlasRecord::LodState::Ready;
+                    ++lodChainsReadyCount_;
+                    ++finalizedGeoms;
+                }
             }
 
-            rec.lodLevels.reserve(result.levels.size());
-            for (const auto& lvl : result.levels) {
-                BlasRecord::LodLevel out{};
-                if (!buildLodLevelFor(rec, lvl, out)) continue;
-                lodIndexBytes_ += out.index.size;
-                lodBlasBytes_  += out.storage.size;
-                rec.lodLevels.push_back(out);
-            }
-            if (rec.lodLevels.empty()) {
-                rec.lodState = BlasRecord::LodState::Failed;
-            } else {
-                rec.lodState = BlasRecord::LodState::Ready;
-                ++lodChainsReadyCount_;
-            }
+            flushLodLevelBuilds(pending);
         }
 
 void VulkanRendererCore::CoreImpl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState& st) {

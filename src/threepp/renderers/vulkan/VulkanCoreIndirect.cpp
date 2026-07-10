@@ -87,13 +87,16 @@ namespace threepp {
             const BlasRecord* rec = resolveBlasForEntry(en);
             if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
 
-            const bool indexed = (rec->index.handle != VK_NULL_HANDLE);
             // Auto-LOD: en.lodLevel==0 for every non-eligible entry (the
             // selection pass in ensureSceneBuilt only sets it >0 on plain
-            // indexed static geometry), so this passthrough is a no-op
-            // everywhere else. Must resolve identically to the TLAS instance
-            // fill in ensureSceneBuilt — both read en.lodLevel verbatim.
+            // static geometry), so this passthrough is a no-op everywhere
+            // else. Must resolve identically to the TLAS instance fill in
+            // ensureSceneBuilt — both read en.lodLevel verbatim. Indexed-ness
+            // is PER SELECTION, not per record: a level of a non-indexed soup
+            // record is an indexed draw (welded canonical indices) against
+            // the same soup vertex buffer.
             const auto lodSel = selectLodGeom(*rec, en.lodLevel);
+            const bool indexed = lodSel.indexed;
             const uint32_t vcount = indexed ? lodSel.indexCount : rec->vertexCount;
             if (vcount == 0u) continue;
 
