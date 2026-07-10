@@ -801,7 +801,7 @@ namespace threepp {
             float hfBaseY;      // height-fog base world Y
             float hfFalloff;    // height-fog exponential height scale (m)
             float hfNoiseAmount;// 0 = smooth analytic .. 1 = fully noise-modulated
-            float _pad;         // pad to 64 bytes (shader ignores)
+            float shadowActive; // 1.0 = cloud shadow map valid this frame (clouds on)
         };
         static_assert(sizeof(GpuCloudUbo) == 64);
         std::array<Buffer, kFramesInFlight> cloudUbos{};
@@ -1653,6 +1653,7 @@ namespace threepp {
             Image2D       froxelLut;    // rgba16f 3D — front-to-back-integrated volumetric LUT; STORAGE (integrate) + SAMPLED (shade, trilinear)
             Image2D       cloudColor;   // rgba16f HALF-res — cloud march result (rgb=in-scatter, a=transmittance); STORAGE (march) + SAMPLED (shade upsample + prev-fif reproject), ping-ponged
             Image2D       cloudAux;     // rg16f HALF-res — cloud mean-depth (.r) + temporal histLen (.g); STORAGE (march) + SAMPLED (prev-fif history), ping-ponged
+            Image2D       cloudShadow;  // r8 512² (FIXED) — top-down cloud transmittance over an 8 km camera-centred square; STORAGE (shadow pass) + SAMPLED (surface/froxel/water sun); regenerated per frame
             Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
             // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
             // an extra depth-only prepass (overlay_depth.vert) right after

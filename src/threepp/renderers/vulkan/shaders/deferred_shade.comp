@@ -289,13 +289,17 @@ layout(set = 0, binding = 58, scalar) uniform CloudUbo {
     float hfBaseY;      // height-fog base world Y
     float hfFalloff;    // height-fog exponential height scale (m)
     float hfNoiseAmount;// 0 = smooth analytic .. 1 = fully noise-modulated
-    float _pad;
+    float shadowActive; // 1.0 = cloud shadow map valid this frame
 } clouds;
 
 // Half-res cloud march result (cloud_march.comp, binding 59). LINEAR sampler —
 // the full-res shade composites it with ONE bilinear upsample tap. rgb =
 // in-scatter, a = transmittance. Gated by clouds.enabled (off = col*1 + 0).
 layout(set = 0, binding = 61) uniform sampler2D cloudColorTex;// composited by compositeClouds() below the push block
+// Cloud shadow map (cloud_shadow.comp, binding 65) — top-down cloud
+// transmittance over an 8 km camera-centred square. Sampled by cloudShadowSample()
+// (deferred_shade_10_lighting_utils.glsl) to attenuate the sun on the ground.
+layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;
 
 #include "probe_common.glsl"// probeIrradiance()
 

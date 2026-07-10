@@ -105,6 +105,11 @@ float heightFogDensity(vec3 p, float time) {
     return max(base * mix(1.0, n * 2.0, amt), 0.0);
 }
 
+// σ per unit cloud density — KEEP IN SYNC with cloud_march.comp's sigmaMul so
+// the far march and the cloud shadow map read the cloud at the same optical
+// scale.
+const float kCloudSigmaMul = 0.05;
+
 // Near-field extinction σ_t for the heterogeneous froxels: HEIGHT FOG ONLY.
 // The far cloud march (cloud_march.comp) already integrates the cloud over the
 // WHOLE 0→far ray — including in front of near surfaces and when the camera is

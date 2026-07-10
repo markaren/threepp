@@ -1002,6 +1002,12 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/cloud_march.comp"
         kCloudMarchCompSpv
         _cloud_march_spv_h)
+    # Cloud shadow map (deferred): top-down cloud transmittance projected to the
+    # ground. See DeferredShade::recordCloudShadow.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/cloud_shadow.comp"
+        kCloudShadowCompSpv
+        _cloud_shadow_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/probe_update.comp"
         kProbeUpdateCompSpv

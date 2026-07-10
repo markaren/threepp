@@ -479,12 +479,15 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     uint  nL = 0u;
     vec3  U    = vec3(0.0);
     float wSum = 0.0;
+    // Moving cloud shadows: the directional SUN on the ground is attenuated by
+    // the cloud transmittance overhead (cloudShadowSample; 1.0 when clouds off).
+    const float cloudShadow = cloudShadowSample(P);
     for (uint i = 0u; i < lights.dirCount; ++i) {
         const vec3 L = normalize(lights.dirLights[i].direction);
         vec3 c = vec3(0.0);
         if (dot(N, L) > 0.0)
             c = evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
-              * lights.dirLights[i].color;
+              * lights.dirLights[i].color * cloudShadow;
         U += c;
         lw[nL] = dot(c, LUM); wSum += lw[nL]; ++nL;
     }

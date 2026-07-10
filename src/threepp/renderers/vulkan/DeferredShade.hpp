@@ -140,6 +140,9 @@ namespace threepp::vulkan {
             // is only dispatched when clouds are enabled.
             const VkImageView* cloudColor = nullptr;// [framesInFlight] rgba16f half-res
             const VkImageView* cloudAux   = nullptr;// [framesInFlight] rg16f half-res
+            // Cloud shadow map (bindings 64/65) — 512² R8 top-down cloud
+            // transmittance, per FIF, regenerated each frame.
+            const VkImageView* cloudShadow = nullptr;// [framesInFlight] r8 512²
         };
         void rewriteDescriptors(const DescriptorWriteInputs& in);
 
@@ -243,6 +246,12 @@ namespace threepp::vulkan {
                               uint32_t frameCounter,
                               float camDeltaLen, float camRotAngle);
 
+        // Cloud shadow map (cloud_shadow.comp): a 512² top-down cloud
+        // transmittance field regenerated each frame. Record BEFORE the froxel
+        // pass (the froxel sun term samples it) and the shade, with a
+        // compute→compute barrier after. Only dispatch when clouds are on.
+        void recordCloudShadow(VkCommandBuffer cb, uint32_t frame, uint32_t frameCounter);
+
         // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
         // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor
         // set); the caller inserts a compute→compute barrier between them.
@@ -271,6 +280,7 @@ namespace threepp::vulkan {
         VkPipeline            froxelInjectPipe_    = VK_NULL_HANDLE;// froxel in-scatter (froxel_inject.comp)
         VkPipeline            froxelIntegratePipe_ = VK_NULL_HANDLE;// froxel LUT integrate (froxel_integrate.comp)
         VkPipeline            cloudMarchPipe_      = VK_NULL_HANDLE;// half-res cloud march (cloud_march.comp)
+        VkPipeline            cloudShadowPipe_     = VK_NULL_HANDLE;// cloud shadow map (cloud_shadow.comp)
         VkDescriptorPool      descPool_     = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [framesInFlight]
 

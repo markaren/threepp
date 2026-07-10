@@ -214,6 +214,25 @@ namespace threepp {
                 cdep.pMemoryBarriers = &cbar;
                 vkCmdPipelineBarrier2(cb, &cdep);
             }
+            // Cloud shadow map: top-down cloud transmittance regenerated each
+            // frame, sampled by the surface/froxel/water sun terms below (moving
+            // cloud shadows on the ground). Runs before the froxel + shade
+            // passes; the barrier makes its write visible to their sampled reads.
+            // Only when clouds are on (off = free / image-identical).
+            if (cloudsEnabled_) {
+                deferredShade_->recordCloudShadow(cb, currentFrame, sampleIndex);
+                VkMemoryBarrier2 csBar{};
+                csBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                csBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                csBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                csBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                csBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                VkDependencyInfo csDep{};
+                csDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                csDep.memoryBarrierCount = 1;
+                csDep.pMemoryBarriers = &csBar;
+                vkCmdPipelineBarrier2(cb, &csDep);
+            }
             // Froxel volumetrics: inject (RT sun shafts + clustered-light
             // beams, temporal EMA) + integrate (front-to-back LUT), whenever
             // a medium exists this frame. Runs AFTER the cluster barrier

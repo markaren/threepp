@@ -13,6 +13,18 @@ vec3 froxelInscatter(vec2 fuv, float viewDist) {
                   / log(kFroxelZMax / kFroxelZMin);
     return texture(froxelLutTex, vec3(fuv, clamp(t, 0.0, 1.0))).rgb;
 }
+// Cloud shadow transmittance at a world point (bilinear from the top-down
+// cloud shadow map, binding 65). 1.0 (full sun) when clouds/shadows are off or
+// the point is outside the 8 km camera-centred square. KEEP the extent + centre
+// in sync with cloud_shadow.comp.
+float cloudShadowSample(vec3 worldPos) {
+    if (clouds.shadowActive < 0.5) return 1.0;
+    const float halfExt = 4000.0;// == kCloudShadowHalfExt
+    const vec2  cenXZ   = cam.viewInverse[3].xz;
+    const vec2  suv     = (worldPos.xz - cenXZ) / (2.0 * halfExt) + 0.5;
+    if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) return 1.0;
+    return texture(cloudShadowTex, suv).r;
+}
 // Integrated volumetric TRANSMITTANCE (LUT .a) for the same leg — the surface
 // extinction in heterogeneous height-fog mode (the LUT carried the per-slice
 // height-fog + cloud σ front-to-back). 1.0 when the froxels didn't run.

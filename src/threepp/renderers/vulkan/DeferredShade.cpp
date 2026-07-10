@@ -10,6 +10,7 @@
 #include "threepp/renderers/vulkan/shaders/froxel_inject.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/froxel_integrate.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/cloud_march.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/cloud_shadow.comp.spv.h"
 
 #include <array>
 #include <cstring>
@@ -30,6 +31,7 @@ namespace threepp::vulkan {
         if (froxelInjectPipe_)    vkDestroyPipeline(d, froxelInjectPipe_, nullptr);
         if (froxelIntegratePipe_) vkDestroyPipeline(d, froxelIntegratePipe_, nullptr);
         if (cloudMarchPipe_)      vkDestroyPipeline(d, cloudMarchPipe_, nullptr);
+        if (cloudShadowPipe_)     vkDestroyPipeline(d, cloudShadowPipe_, nullptr);
         if (lutSampler_) vkDestroySampler(d, lutSampler_, nullptr);
         if (pipeLayout_) vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
         if (dsLayout_)   vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
@@ -61,7 +63,7 @@ namespace threepp::vulkan {
         lci.minFilter  = VK_FILTER_LINEAR;
         check(vkCreateSampler(d, &lci, nullptr, &lutSampler_), "vkCreateSampler(froxel LUT)");
 
-        VkDescriptorSetLayoutBinding b[64]{};// KEEP the bound == dlci.bindingCount (a lagging bound = stack smash)
+        VkDescriptorSetLayoutBinding b[66]{};// KEEP the bound == dlci.bindingCount (a lagging bound = stack smash)
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -144,10 +146,13 @@ namespace threepp::vulkan {
         set(61, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // cloud color CUR (LINEAR — shade's bilinear upsample)
         set(62, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // cloud aux CUR (rg16f: r=mean depth, g=histLen)
         set(63, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV cloud aux (other fif) — temporal history
+        // Cloud shadow map (cloud_shadow.comp writes 64; surface/froxel/water sun read 65).
+        set(64, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // cloud shadow CUR (r8, storage write)
+        set(65, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // cloud shadow (LINEAR — sun visibility sample)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 64;
+        dlci.bindingCount = 66;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -244,12 +249,25 @@ namespace threepp::vulkan {
         check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciM, nullptr, &cloudMarchPipe_),
               "vkCreateComputePipelines(cloud_march)");
 
+        // Cloud shadow map — same layout again.
+        VkShaderModuleCreateInfo smciS{};
+        smciS.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smciS.codeSize = sizeof(kCloudShadowCompSpv);
+        smciS.pCode    = kCloudShadowCompSpv;
+        VkShaderModule modS = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(d, &smciS, nullptr, &modS), "vkCreateShaderModule(cloud_shadow)");
+        VkComputePipelineCreateInfo cpciS = cpci;
+        cpciS.stage.module = modS;
+        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciS, nullptr, &cloudShadowPipe_),
+              "vkCreateComputePipelines(cloud_shadow)");
+
         vkDestroyShaderModule(d, mod, nullptr);
         vkDestroyShaderModule(d, modD, nullptr);
         vkDestroyShaderModule(d, modC, nullptr);
         vkDestroyShaderModule(d, modF, nullptr);
         vkDestroyShaderModule(d, modI, nullptr);
         vkDestroyShaderModule(d, modM, nullptr);
+        vkDestroyShaderModule(d, modS, nullptr);
     }
 
     void DeferredShade::createDescriptorPool() {
@@ -257,9 +275,9 @@ namespace threepp::vulkan {
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight_ * 6;// camera + lights + fog + probe grid + raster camera (SSR) + cloud
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (30 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise + 5 gbuf MS + shadowVisPrev + froxelScatterPrev + froxelLut + HiZ + prevSceneHdr + cloudColorPrev + cloudColorCur + cloudAuxPrev
+        sizes[1].descriptorCount = framesInFlight_ * (31 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise + 5 gbuf MS + shadowVisPrev + froxelScatterPrev + froxelLut + HiZ + prevSceneHdr + cloudColorPrev + cloudColorCur + cloudAuxPrev + cloudShadow
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[2].descriptorCount = framesInFlight_ * 19;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + reflAux + 4 reservoir (pos/W × write/read) + shadowVis + directU + shadowAtrousA/B + froxelScatter + froxelLut + cloudColor + cloudAux
+        sizes[2].descriptorCount = framesInFlight_ * 20;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + reflAux + 4 reservoir (pos/W × write/read) + shadowVis + directU + shadowAtrousA/B + froxelScatter + froxelLut + cloudColor + cloudAux + cloudShadow
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
         sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -499,6 +517,15 @@ namespace threepp::vulkan {
             cloudAuxPrevInfo.sampler     = lutSampler_;
             cloudAuxPrevInfo.imageView   = in.cloudAux[pf];
             cloudAuxPrevInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            // Cloud shadow map (bindings 64/65): storage write (shadow pass) +
+            // LINEAR sampled read (surface/froxel/water sun visibility). GENERAL.
+            VkDescriptorImageInfo cloudShadowInfo{};
+            cloudShadowInfo.imageView   = in.cloudShadow[f];
+            cloudShadowInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo cloudShadowTexInfo{};
+            cloudShadowTexInfo.sampler     = lutSampler_;
+            cloudShadowTexInfo.imageView   = in.cloudShadow[f];
+            cloudShadowTexInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
             // MSAA raw raster attachments (dispatch B). Bound as plain
             // SHADER_READ_ONLY combined-image-samplers — texelFetch with an
@@ -560,7 +587,7 @@ namespace threepp::vulkan {
             froxelLutTexInfo.imageView   = in.froxelLut[f];
             froxelLutTexInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            VkWriteDescriptorSet w[64]{};
+            VkWriteDescriptorSet w[66]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -644,7 +671,9 @@ namespace threepp::vulkan {
             setw(61, 61, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudColorTexInfo,  nullptr);
             setw(62, 62, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudAuxInfo,       nullptr);
             setw(63, 63, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudAuxPrevInfo,   nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 64, w, 0, nullptr);
+            setw(64, 64, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudShadowInfo,    nullptr);
+            setw(65, 65, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudShadowTexInfo, nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 66, w, 0, nullptr);
         }
     }
 
@@ -799,6 +828,19 @@ namespace threepp::vulkan {
         // One thread per HALF-res pixel (local 8×8).
         const uint32_t hw = (width + 1u) / 2u, hh = (height + 1u) / 2u;
         vkCmdDispatch(cb, (hw + 7u) / 8u, (hh + 7u) / 8u, 1);
+    }
+
+    void DeferredShade::recordCloudShadow(VkCommandBuffer cb, uint32_t frame, uint32_t frameCounter) {
+        // Shared 19-uint push block — the shadow pass consumes only frame (and
+        // reads the cloud shell + sun from the UBOs). The rest ride as zeros.
+        uint32_t pc[19] = {};
+        pc[4] = frameCounter;
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cloudShadowPipe_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+        // One thread per texel of the fixed 512² map (local 8×8).
+        vkCmdDispatch(cb, 512u / 8u, 512u / 8u, 1);
     }
 
     void DeferredShade::recordDenoiseDispatch(VkCommandBuffer cb, uint32_t frame,

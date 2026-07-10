@@ -91,8 +91,20 @@ layout(set = 0, binding = 58, scalar) uniform CloudUbo {
     float hfBaseY;
     float hfFalloff;
     float hfNoiseAmount;
-    float _pad;
+    float shadowActive;
 } clouds;
+
+layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;// top-down cloud transmittance
+// Cloud shadow transmittance at a world point — KEEP IN SYNC with
+// deferred_shade_10_lighting_utils.glsl / cloud_shadow.comp.
+float cloudShadowSample(vec3 worldPos) {
+    if (clouds.shadowActive < 0.5) return 1.0;
+    const float halfExt = 4000.0;
+    const vec2  cenXZ   = cam.viewInverse[3].xz;
+    const vec2  suv     = (worldPos.xz - cenXZ) / (2.0 * halfExt) + 0.5;
+    if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) return 1.0;
+    return texture(cloudShadowTex, suv).r;
+}
 
 layout(push_constant) uniform Pc {
     uint  envMipCount;
@@ -231,7 +243,8 @@ void main() {
                 od += mediumExtinction(x + L * (float(j) + 0.5) * sunStep, clouds.timeSec);
             const float beer  = exp(-od * sunStep);
             const float phase = hgPhase(dot(L, rd), hgG);
-            sum += lights.dirLights[i].color * (vis * beer * phase);
+            // Cloud shadow overhead also dims the volumetric sun in-scatter.
+            sum += lights.dirLights[i].color * (vis * beer * phase * cloudShadowSample(x));
         }
     }
 

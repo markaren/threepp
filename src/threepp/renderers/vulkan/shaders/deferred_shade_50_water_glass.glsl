@@ -90,7 +90,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 const float Fc = 0.04 + 0.96 * pow(1.0 - vdh, 5.0);
                 spec += pm.clearcoat * distGGX(ndh, ccRough) * Gs * Fc / max(4.0 * NdotV * ndl, 1e-4);
             }
-            vec3 c = spec * ndl * lights.dirLights[i].color * vis;
+            vec3 c = spec * ndl * lights.dirLights[i].color * (vis * cloudShadowSample(P));
             // Directional lights are deltas → GGX spikes; clamp so a glint blooms
             // bright but never fireflies. (×4 over the global clamp → bright suns.)
             const float cl = max(max(c.r, c.g), c.b);

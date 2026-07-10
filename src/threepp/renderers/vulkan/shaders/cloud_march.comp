@@ -74,7 +74,7 @@ layout(set = 0, binding = 58, scalar) uniform CloudUbo {
     float hfBaseY;
     float hfFalloff;
     float hfNoiseAmount;
-    float _pad;
+    float shadowActive;
 } clouds;
 
 // Cloud march outputs (half-res) + temporal history (other FIF).

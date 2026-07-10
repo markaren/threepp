@@ -1087,6 +1087,9 @@ namespace threepp {
         ubo.hfBaseY       = heightFogBaseY_;
         ubo.hfFalloff     = heightFogFalloff_;
         ubo.hfNoiseAmount = heightFogNoiseAmount_;
+        // Cloud shadow map is generated + sampled only when clouds are on (it's
+        // the cloud's own transmittance projected to the ground).
+        ubo.shadowActive  = cloudsEnabled_ ? 1.0f : 0.0f;
         uploadHostVisible(ctx->allocator(), cloudUbos[frame], &ubo, sizeof(ubo));
     }
 
