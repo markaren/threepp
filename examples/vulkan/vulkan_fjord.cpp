@@ -1489,14 +1489,15 @@ int main(int argc, char** argv) {
             renderer.setVolumetricFog(volumetrics);
         }
 
-        // Volumetric cloud deck above the ridge line (peaks ~470 m). The wind
-        // slider drives the drift — clouds at altitude run ~3× the surface
-        // wind, on the same heading the ocean waves use (setWind dir 2.1 rad).
+        // Volumetric cloud deck hugging the ridge line (peaks ~470 m) — the
+        // summits pierce the base. The wind slider drives the drift — clouds
+        // at altitude run ~3× the surface wind, on the same heading the ocean
+        // waves use (setWind dir 2.1 rad).
         if (cloudsOn) {
             VulkanRenderer::CloudSettings cl;
             cl.coverage = cloudCover;
-            cl.bottomY = 620.f;
-            cl.topY = 1350.f;
+            cl.bottomY = 250.f;
+            cl.topY = 750.f;
             cl.wind.set(std::cos(2.1f), 0.f, std::sin(2.1f));
             cl.wind.multiplyScalar(windSpeed * 3.f);
             renderer.setClouds(cl);
