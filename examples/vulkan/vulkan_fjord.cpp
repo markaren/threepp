@@ -886,6 +886,58 @@ int main(int argc, char** argv) {
     tileOpts.splitFactor = 1.15f;
     tileOpts.mergeFactor = 1.6f;
     tileOpts.splatTexelsPerQuad = 2;
+    // Tiled cm-scale ground detail (MaterialWithDetailMap): the splat bakes at
+    // ~0.49 m/texel — mush underfoot. A 256² TILEABLE linear noise field
+    // (0.5-neutral: two periodic value-noise octaves + fine speckle, green
+    // channel slightly decorrelated so grass reads organic, not grey) breaks
+    // that up at ~1.25 m repeat; the shader distance-fades it so the far
+    // fjord walls stay pattern-free.
+    {
+        constexpr int D = 256;
+        std::mt19937 drng(4242u);
+        std::uniform_real_distribution<float> u01(0.f, 1.f);
+        auto lattice = [&](int cells) {
+            std::vector<float> v(static_cast<size_t>(cells) * cells);
+            for (auto& x : v) x = u01(drng);
+            return v;
+        };
+        // Periodic (wrapping) bilinear value noise — guarantees the texture tiles.
+        auto sampleLat = [](const std::vector<float>& lat, int cells, float u, float v) {
+            const float fu = u * static_cast<float>(cells), fv = v * static_cast<float>(cells);
+            const int iu = static_cast<int>(fu) % cells, iv = static_cast<int>(fv) % cells;
+            const int ju = (iu + 1) % cells, jv = (iv + 1) % cells;
+            const float tu = fu - std::floor(fu), tv = fv - std::floor(fv);
+            const float a = lat[static_cast<size_t>(iv) * cells + iu], b = lat[static_cast<size_t>(iv) * cells + ju];
+            const float c = lat[static_cast<size_t>(jv) * cells + iu], d = lat[static_cast<size_t>(jv) * cells + ju];
+            return (a + (b - a) * tu) * (1.f - tv) + (c + (d - c) * tu) * tv;
+        };
+        const auto l8 = lattice(8), l32 = lattice(32), l8g = lattice(8);
+        std::vector<unsigned char> px(static_cast<size_t>(D) * D * 4, 255u);
+        std::mt19937 srng(99u);
+        for (int j = 0; j < D; ++j)
+            for (int i = 0; i < D; ++i) {
+                const float u = (static_cast<float>(i) + 0.5f) / D, v = (static_cast<float>(j) + 0.5f) / D;
+                const float n = 0.55f * sampleLat(l8, 8, u, v) + 0.30f * sampleLat(l32, 32, u, v) +
+                                0.15f * u01(srng);
+                // Chroma breakup must stay SUBTLE: the same detail field lands on
+                // snow/rock, where ±0.17 green swings read as purple/green dye
+                // (user screenshot). Luminance carries the breakup; hue barely.
+                const float g = 0.06f * (sampleLat(l8g, 8, u, v) - 0.5f);
+                const float base = 0.5f + 0.42f * (n - 0.5f);// LINEAR, 0.5-neutral
+                const size_t o = (static_cast<size_t>(j) * D + i) * 4;
+                px[o + 0] = static_cast<unsigned char>(std::clamp(base - 0.5f * g, 0.f, 1.f) * 255.f + 0.5f);
+                px[o + 1] = static_cast<unsigned char>(std::clamp(base + g, 0.f, 1.f) * 255.f + 0.5f);
+                px[o + 2] = static_cast<unsigned char>(std::clamp(base - g, 0.f, 1.f) * 255.f + 0.5f);
+            }
+        auto dtex = DataTexture::create(ImageData{std::move(px)}, D, D);
+        dtex->colorSpace = ColorSpace::Linear;// 0.5-neutral overlay — must NOT sRGB-decode
+        dtex->wrapS = dtex->wrapT = TextureWrapping::Repeat;
+        dtex->magFilter = Filter::Linear;
+        dtex->minFilter = Filter::LinearMipmapLinear;
+        tileOpts.detailMap = dtex;
+        tileOpts.detailRepeat = 0.8f;// one repeat per 1.25 m
+        tileOpts.detailStrength = 0.85f;
+    }
     auto tiles = terrain::TileTerrain::create(prov, tileOpts);
     tiles->name = "fjord_terrain";
     scene.add(tiles);

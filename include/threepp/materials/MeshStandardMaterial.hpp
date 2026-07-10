@@ -21,6 +21,7 @@ namespace threepp {
           public MaterialWithRoughness,
           public MaterialWithMetalness,
           public MaterialWithNormalMap,
+          public MaterialWithDetailMap,
           public MaterialWithEmissive,
           public MaterialWithBumpMap,
           public MaterialWithAoMap,

@@ -9,6 +9,7 @@ MeshStandardMaterial::MeshStandardMaterial()
       MaterialWithRoughness(1),
       MaterialWithMetalness(0),
       MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}),
+      MaterialWithDetailMap(0.8f, 1.f),
       MaterialWithEmissive(0x000000, 1),
       MaterialWithBumpMap(1),
       MaterialWithAoMap(1),
@@ -110,6 +111,10 @@ void MeshStandardMaterial::copyInto(Material& material) const {
 
     m->aoMap = aoMap;
     m->aoMapIntensity = aoMapIntensity;
+
+    m->detailMap = detailMap;
+    m->detailRepeat = detailRepeat;
+    m->detailStrength = detailStrength;
 
     m->emissive.copy(emissive);
     m->emissiveMap = emissiveMap;

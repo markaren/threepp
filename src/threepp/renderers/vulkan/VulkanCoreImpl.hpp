@@ -1185,8 +1185,15 @@ namespace threepp {
             // they carry copies only when the stream exists with matching
             // counts.
             std::vector<uint32_t> indices;
-            std::vector<float> normals;// soup only; tightly packed xyz
+            std::vector<float> normals;// tightly packed xyz — simplifier attribute
+                                       // metric (all paths) + soup weld equality
             std::vector<float> uvs;    // soup only; tightly packed xy
+            // Normal-attribute weight for the simplifier, scaled by the
+            // enqueueing entry's material GLOSSINESS: matte foliage barely
+            // charges normal deviation (retiring far detail is the point),
+            // glossy paint charges it fully (shading IS the mm-scale normal
+            // field). See lodNormalWeightFor.
+            float normalWeight = 0.5f;
         };
         std::deque<LodJob> lodJobQueue_;
         struct LodResult {
@@ -3723,6 +3730,10 @@ namespace threepp {
             d.thickness = 0.0f;               // 0 = use back-face actual distance for Beer-Lambert (closed-mesh path)
             d.thinWalled = 0;                 // 0 = closed-mesh BSDF; 1 = thin-shell BSDF (set explicitly via MaterialWithThickness::thinWalled)
             d.occlusionTexIndex = -1;
+            d.detailTexIndex = -1;
+            d.detailRepeat = 0.f;
+            d.detailStrength = 0.f;
+            d._padDetail = 0.f;
             static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
             std::copy(kIdent, kIdent+9, d.uvTransform);
             std::copy(kIdent, kIdent+9, d.uvTransformNormal);
@@ -3831,6 +3842,12 @@ namespace threepp {
                 d.thickness  = std::max(0.0f, th->thickness);
                 d.thinWalled = th->thinWalled ? 1 : 0;
             }
+            if (auto* dm = dynamic_cast<MaterialWithDetailMap*>(mat.get())) {
+                // texIndex stays -1 here; the texture-index fill sites bind it
+                // (detailTexOf gates on detailMap && strength > 0).
+                d.detailRepeat   = dm->detailRepeat;
+                d.detailStrength = std::clamp(dm->detailStrength, 0.f, 1.f);
+            }
             if (auto* sp = dynamic_cast<MaterialWithPbrSpecular*>(mat.get())) {
                 d.specularIntensity   = sp->specularIntensity;
                 d.specularColor[0]    = sp->specularColor.r;
@@ -3884,6 +3901,17 @@ namespace threepp {
             if (!tex) return;
             if (tex->matrixAutoUpdate) tex->updateMatrix();
             std::copy(tex->matrix.elements.begin(), tex->matrix.elements.end(), dst);
+        }
+
+        // Tiled world-anchored detail albedo (MaterialWithDetailMap; terrain
+        // etc.). Returns null when absent or strength is zero.
+        static std::shared_ptr<Texture> detailTexOf(const Mesh& m) {
+            auto mat = m.material();
+            if (!mat) return nullptr;
+            if (auto* dm = dynamic_cast<MaterialWithDetailMap*>(mat.get())) {
+                if (dm->detailMap && dm->detailStrength > 0.f) return dm->detailMap;
+            }
+            return nullptr;
         }
 
         // Walk a material's chain for the albedo (`map`) texture.

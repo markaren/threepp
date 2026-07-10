@@ -1402,6 +1402,9 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                                 md.occlusionTexIndex = ensureMaterialTexture(tex);
                                 copyTexUvTransform(md.uvTransformOcclusion, tex);
                             }
+                            if (auto tex = detailTexOf(*m)) {
+                                md.detailTexIndex = ensureMaterialTexture(tex);
+                            }
                             matDescsCached_[i] = md;
                         }
                         for (auto& d : matDescsDirty_) d = true;
@@ -1898,6 +1901,9 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     if (auto tex = occlusionTexOf(*m)) {
                         md.occlusionTexIndex = ensureMaterialTexture(tex);
                         copyTexUvTransform(md.uvTransformOcclusion, tex);
+                    }
+                    if (auto tex = detailTexOf(*m)) {
+                        md.detailTexIndex = ensureMaterialTexture(tex);
                     }
                     matDescMemo.emplace(matKey, md);
                 }

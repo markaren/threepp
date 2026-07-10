@@ -250,6 +250,55 @@ void main() {
         albedoSample = texel.rgb;
         albedoAlpha  = texel.a;// linear (alpha is never sRGB-decoded)
     }
+    // Tiled world-anchored detail albedo (MaterialWithDetailMap): breaks up
+    // the coarse per-meter macro texel density of large surfaces (terrain
+    // splats) with a cm-scale repeating layer. LINEAR-space texture,
+    // 0.5 = neutral → the ×2 overlay leaves the macro color's mean intact.
+    // World-XZ anchoring (not mesh UVs) keeps the field seamless across
+    // tiles of any size. fwidth-based fade retires the layer once one
+    // repeat approaches pixel scale — mips carry the in-between. Raster-only
+    // by design: the ray-hit shading paths (reflections/GI) never see it.
+    //
+    // STOCHASTIC TILING (Deliot & Heitz 2019, "tiling and blending"): a plain
+    // repeat is visibly periodic within a few tiles. Instead, blend THREE taps
+    // of the same texture at per-lattice-point random UV offsets over a
+    // triangle lattice — no two neighbourhoods repeat. The blend divides the
+    // summed deviations by sqrt(Σw²): the taps are decorrelated, so this
+    // preserves VARIANCE (contrast) exactly around the 0.5 neutral — our
+    // texture is 0.5-centered by construction, so no histogram transform is
+    // needed. textureGrad with the UNoffset uv's derivatives keeps mip
+    // selection continuous across lattice borders.
+    if (m.detailTexIndex >= 0) {
+        const int  di   = clamp(m.detailTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        const vec2 duv  = vWorldPos.xz * m.detailRepeat;
+        const float fade = 1.0 - smoothstep(0.25, 0.75, length(fwidth(duv)));
+        if (fade > 0.001) {
+            // Triangle lattice (~1.15 lattice cells per texture repeat).
+            const mat2 kSkew = mat2(1.0, 0.0, -0.57735027, 1.15470054);
+            const vec2 skewed = kSkew * (duv * 1.154700538);
+            const vec2 baseId = floor(skewed);
+            vec3 bary = vec3(fract(skewed), 0.0);
+            bary.z = 1.0 - bary.x - bary.y;
+            vec2 v1, v2, v3; vec3 w;
+            if (bary.z > 0.0) {
+                w = vec3(bary.z, bary.y, bary.x);
+                v1 = baseId; v2 = baseId + vec2(0, 1); v3 = baseId + vec2(1, 0);
+            } else {
+                w = vec3(-bary.z, 1.0 - bary.y, 1.0 - bary.x);
+                v1 = baseId + vec2(1, 1); v2 = baseId + vec2(1, 0); v3 = baseId + vec2(0, 1);
+            }
+            // Per-lattice-point random UV offset (any fract-noise hash works —
+            // the offsets only need to decorrelate the three taps).
+            #define DETAIL_HASH(p) fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453)
+            const vec2 g1 = dFdx(duv), g2 = dFdy(duv);
+            const vec3 d1 = textureGrad(gbufAlbedoMaps[nonuniformEXT(di)], duv + DETAIL_HASH(v1), g1, g2).rgb;
+            const vec3 d2 = textureGrad(gbufAlbedoMaps[nonuniformEXT(di)], duv + DETAIL_HASH(v2), g1, g2).rgb;
+            const vec3 d3 = textureGrad(gbufAlbedoMaps[nonuniformEXT(di)], duv + DETAIL_HASH(v3), g1, g2).rgb;
+            const vec3 det = 0.5 + ((d1 - 0.5) * w.x + (d2 - 0.5) * w.y + (d3 - 0.5) * w.z)
+                                           * inversesqrt(max(dot(w, w), 1e-6));
+            albedoSample *= mix(vec3(1.0), det * 2.0, m.detailStrength * fade);
+        }
+    }
     // Per-vertex color (material.vertexColors): vColor is white when the mesh
     // has no "color" attribute, so this multiply is a no-op then. Linear working
     // space — matches m.albedo.

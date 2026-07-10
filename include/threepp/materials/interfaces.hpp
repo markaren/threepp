@@ -159,6 +159,26 @@ namespace threepp {
         MaterialWithNormalMap(NormalMapType normalMapType, Vector2 normalScale): normalMapType(normalMapType), normalScale(normalScale) {}
     };
 
+    // threepp extension (no three.js equivalent). Tiled detail albedo layered
+    // over the base `map` at close range — the game-engine answer to large
+    // surfaces (terrain) whose unique-texel macro texture is inevitably
+    // coarse per meter. Sampled WORLD-anchored (worldPos.xz * detailRepeat,
+    // not mesh UVs) so tiles of any size share one seamless detail field.
+    // Texture convention: LINEAR color space, 0.5 = neutral; the shader
+    // applies albedo *= mix(1, 2*detail, strength*fade) and fades the layer
+    // out once a repeat approaches pixel scale (no distant tiling patterns).
+    // Consumed by the Vulkan deferred renderer's raster G-buffer only
+    // (secondary rays skip it — a primary-visibility embellishment).
+    struct MaterialWithDetailMap: virtual Material {
+
+        std::shared_ptr<Texture> detailMap;
+        float detailRepeat;  // repeats per world meter (XZ-anchored)
+        float detailStrength;// 0..1 modulation strength
+
+        MaterialWithDetailMap(float detailRepeat, float detailStrength)
+            : detailRepeat(detailRepeat), detailStrength(detailStrength) {}
+    };
+
     struct MaterialWithMatCap: virtual Material {
 
         std::shared_ptr<Texture> matcap;

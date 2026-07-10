@@ -167,6 +167,18 @@ namespace threepp::terrain {
 
         float roughness = 0.96f;  // tile material
         float metalness = 0.f;
+
+        // Optional tiled detail albedo layered over the per-tile splat by the
+        // Vulkan deferred renderer (MaterialWithDetailMap). The splat's texel
+        // density is bounded by tile resolution (~0.5 m/texel at typical leaf
+        // depth — visibly coarse up close); a repeating cm-scale detail field,
+        // world-XZ anchored so every tile shares it seamlessly, is what makes
+        // game terrain read sharp. LINEAR color space, 0.5 = neutral; the
+        // layer distance-fades in the shader, so it never patterns far away.
+        // Ignored by renderers without detail-map support (GL/WGPU).
+        std::shared_ptr<Texture> detailMap;
+        float detailRepeat = 0.8f;  // repeats per world meter
+        float detailStrength = 1.f; // 0..1 modulation strength
     };
 
     class TileTerrain : public Group {
@@ -467,6 +479,11 @@ namespace threepp::terrain {
                 tex->magFilter = Filter::Linear;
                 tex->minFilter = Filter::Linear;
                 mat->map = tex;
+            }
+            if (o_.detailMap) {
+                mat->detailMap = o_.detailMap;
+                mat->detailRepeat = o_.detailRepeat;
+                mat->detailStrength = o_.detailStrength;
             }
 
             n.mesh = Mesh::create(geo, mat);

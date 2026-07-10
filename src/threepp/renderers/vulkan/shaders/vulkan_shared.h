@@ -102,12 +102,20 @@ namespace threepp::vulkan_pt {
         // taps — kills the visible seam at tiled-wall boundaries during
         // camera motion. mesh-asset/material-asset only; not a hash.
         uint32_t materialAssetIdx;
+        // Tiled world-anchored detail albedo (MaterialWithDetailMap):
+        // LINEAR-space texture, 0.5 = neutral; gbuffer.frag modulates the
+        // base albedo by mix(1, 2*detail, strength*fade). -1 = none.
+        // Raster primary visibility only — ray-hit shading skips it.
+        int32_t detailTexIndex;
+        float detailRepeat;  // repeats per world meter (worldPos.xz anchored)
+        float detailStrength;// 0..1
+        float _padDetail;
     };
 
     // Catches silent layout drift: if any field is added/removed/reordered
     // above, the size changes and this fires. Update the GLSL `MaterialDesc`
     // mirror below to match before bumping the expected size.
-    static_assert(sizeof(MaterialDesc) == 468,
+    static_assert(sizeof(MaterialDesc) == 484,
                   "MaterialDesc size changed — update the GLSL mirror in this file too.");
 }
 
@@ -157,6 +165,10 @@ struct MaterialDesc {
     float thickness;
     int   thinWalled;
     uint  materialAssetIdx;
+    int   detailTexIndex;// tiled world-anchored detail albedo; -1 = none
+    float detailRepeat;  // repeats per world meter (worldPos.xz anchored)
+    float detailStrength;// 0..1
+    float _padDetail;
 };
 
 #endif  // __cplusplus
