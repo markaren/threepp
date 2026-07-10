@@ -1334,6 +1334,8 @@ int main(int argc, char** argv) {
     float cycleSpeed = startCycle;// hours per second (0 = paused)
     float windSpeed = 4.5f;
     float fogScale = 1.f;
+    bool cloudsOn = true;
+    float cloudCover = 0.42f;
     float uiRenderScale = 0.85f;
     bool perfDirty = false;
     bool volumetrics = true;
@@ -1377,6 +1379,12 @@ int main(int argc, char** argv) {
         ImGui::SliderFloat("wind (m/s)", &windSpeed, 0.5f, 12.f, "%.1f");
         ImGui::SliderFloat("haze", &fogScale, 0.f, 4.f, "%.2f");
         ImGui::Checkbox("volumetric god rays", &volumetrics);
+        ImGui::Checkbox("clouds", &cloudsOn);
+        if (cloudsOn) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-90.f);
+            ImGui::SliderFloat("coverage", &cloudCover, 0.f, 1.f, "%.2f");
+        }
         ImGui::SeparatorText("Camera / perf");
         ImGui::Checkbox("cinematic flight (C)", &cinematic);
         if (ImGui::SliderFloat("render scale", &uiRenderScale, 0.4f, 1.f, "%.2f")) perfDirty = true;
@@ -1479,6 +1487,21 @@ int main(int argc, char** argv) {
                 scene.fog.reset();
             }
             renderer.setVolumetricFog(volumetrics);
+        }
+
+        // Volumetric cloud deck above the ridge line (peaks ~470 m). The wind
+        // slider drives the drift — clouds at altitude run ~3× the surface
+        // wind, on the same heading the ocean waves use (setWind dir 2.1 rad).
+        if (cloudsOn) {
+            VulkanRenderer::CloudSettings cl;
+            cl.coverage = cloudCover;
+            cl.bottomY = 620.f;
+            cl.topY = 1350.f;
+            cl.wind.set(std::cos(2.1f), 0.f, std::sin(2.1f));
+            cl.wind.multiplyScalar(windSpeed * 3.f);
+            renderer.setClouds(cl);
+        } else {
+            renderer.setClouds(std::nullopt);
         }
 
         // Window / lantern glow after sundown. emissiveIntensity is a plain
