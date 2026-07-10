@@ -470,6 +470,12 @@ namespace threepp::terrain {
             }
 
             n.mesh = Mesh::create(geo, mat);
+            // Tiles ARE the LOD system here (quadtree level per ring) — the
+            // renderer's auto-LOD stacking on top double-simplifies: adjacent
+            // tiles land on different auto levels and shade differently at
+            // the seams (positional error stays sub-pixel, shading response
+            // doesn't), and every rebake churns a simplification chain.
+            n.mesh->autoLod = false;
             n.mesh->name = "terrain_tile_L" + std::to_string(n.level);
             add(n.mesh);
             ++activeTiles_;

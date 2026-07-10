@@ -1,5 +1,8 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "instance_flags.glsl"// per-instance flag accessors
 
 // SVGF variance-guided MULTI-PASS à-trous wavelet denoiser for the RasterFirst
 // deferred GI. Dispatched as N passes with WIDENING step (1,2,4,8): each pass is a
@@ -364,7 +367,7 @@ void main() {
     // so neighbouring texels of one cutout card can carry OPPOSITE normals —
     // a signed pow-48 stop then refuses the card's own neighbours and the
     // 1-spp GI noise survives unfiltered. ±N is the same surface there.
-    const bool dsided = (texelFetch(gbufIdsTex, px, 0).z & 16u) != 0u;
+    const bool dsided = ifDoubleSided(texelFetch(gbufIdsTex, px, 0).z);
 
     vec4  cC   = readSrc(px);
     float lumC = dot(cC.rgb, LUMA);

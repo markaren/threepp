@@ -378,7 +378,7 @@ namespace threepp::vulkan {
             matInfo.range  = VK_WHOLE_SIZE;
 
             VkDescriptorBufferInfo geomInfo{};
-            geomInfo.buffer = in.geomDescBuf;// single buffer shared across frames
+            geomInfo.buffer = in.geomDescBuf[f];// per-FIF ring (auto-LOD level switches flush per slot)
             geomInfo.offset = 0;
             geomInfo.range  = VK_WHOLE_SIZE;
 

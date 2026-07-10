@@ -1287,6 +1287,18 @@ int main(int argc, char** argv) {
             ImGui::TextDisabled("gbuf %.2f shade %.2f denoise %.2f taa %.2f",
                                 t.rasterGbufMs, t.shadeBMs, t.denoiseMs, t.taaMs);
             ImGui::TextDisabled("terrain tiles %d (baking %d)", tiles->activeTiles(), tiles->pendingBakes());
+            // Auto-LOD engagement: entries drawing a simplified level vs full
+            // detail. The win is geometry-bound phases (flight through the
+            // fjord — press C); near-field orbits keep everything at L0 by
+            // design (sub-pixel error threshold), so gbuf ms + this line are
+            // where the effect is visible, not necessarily headline FPS.
+            const auto al = renderer.autoLodStats();
+            ImGui::TextDisabled("lod L0 %u | simplified %u (chains %u, %.0f MB)",
+                                al.entriesPerLevel[0],
+                                al.entriesPerLevel[1] + al.entriesPerLevel[2] + al.entriesPerLevel[3] +
+                                        al.entriesPerLevel[4] + al.entriesPerLevel[5],
+                                al.chainsReady,
+                                static_cast<double>(al.indexBytes + al.blasBytes) / (1024.0 * 1024.0));
         }
         ImGui::SeparatorText("Time of day");
         ImGui::SliderFloat("hour", &timeOfDay, 0.f, 24.f, "%.2f");
@@ -1305,6 +1317,10 @@ int main(int argc, char** argv) {
         ImGui::SeparatorText("Camera / perf");
         ImGui::Checkbox("cinematic flight (C)", &cinematic);
         if (ImGui::SliderFloat("render scale", &uiRenderScale, 0.4f, 1.f, "%.2f")) perfDirty = true;
+        {
+            bool lodOn = renderer.autoLod();
+            if (ImGui::Checkbox("auto LOD", &lodOn)) renderer.setAutoLod(lodOn);
+        }
         ImGui::TextDisabled("drag=orbit scroll=zoom SPACE=pause");
         ImGui::End();
     });

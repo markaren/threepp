@@ -1,5 +1,7 @@
 #include "VulkanCoreImpl.hpp"
 
+#include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kInstFlag* bit layout
+
 // debug_resolve.comp's embedded SPIR-V array (kDebugResolveCompSpv) is only
 // referenced by createDebugResolvePipeline below — moved out of the header
 // with the rest of this file's methods.
@@ -85,8 +87,17 @@ namespace threepp {
             const BlasRecord* rec = resolveBlasForEntry(en);
             if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
 
-            const bool indexed = (rec->index.handle != VK_NULL_HANDLE);
-            const uint32_t vcount = indexed ? rec->indexCount : rec->vertexCount;
+            // Auto-LOD: en.lodLevel==0 for every non-eligible entry (the
+            // selection pass in ensureSceneBuilt only sets it >0 on plain
+            // static geometry), so this passthrough is a no-op everywhere
+            // else. Must resolve identically to the TLAS instance fill in
+            // ensureSceneBuilt — both read en.lodLevel verbatim. Indexed-ness
+            // is PER SELECTION, not per record: a level of a non-indexed soup
+            // record is an indexed draw (welded canonical indices) against
+            // the same soup vertex buffer.
+            const auto lodSel = selectLodGeom(*rec, en.lodLevel);
+            const bool indexed = lodSel.indexed;
+            const uint32_t vcount = indexed ? lodSel.indexCount : rec->vertexCount;
             if (vcount == 0u) continue;
 
             const VkCullModeFlags wantCull =
@@ -118,7 +129,7 @@ namespace threepp {
             di.prevPosAddr = (rec->prevVertex.handle != VK_NULL_HANDLE && !warpReproject)
                                      ? rec->prevVertex.address
                                      : rec->vertex.address;
-            di.indexAddr   = indexed ? rec->index.address : 0ull;
+            di.indexAddr   = indexed ? lodSel.indexAddress : 0ull;
             // Per-vertex color: only when the material opts in (vertexColors)
             // and the geometry uploaded a color buffer — matches the
             // GeometryDesc::colorAddress gate. gbuffer.frag multiplies albedo
@@ -130,14 +141,12 @@ namespace threepp {
                                        : 0ull;
             }
             di.instanceCustomIndex = static_cast<uint32_t>(i);
-            // Flag bits match the old gbuffer.vert push-constant layout:
-            //   bit 0 = is_water (DisplacedMesh), bit 3 = is_skinned,
-            //   bit 4 = double-sided material (Side::Double),
-            //   bit 5 = persistent per-frame deformer (tet-skinned soft body),
-            //   bit 6 = per-frame texture animation (Material::textureAnimatedHint).
+            // Per-instance flag word — canonical bit layout in
+            // vulkan_shared.h (kInstFlag*); shaders read it back from the
+            // gbuffer IDs .z via the instance_flags.glsl accessors.
             uint32_t flags = 0u;
-            if (en.isDisplaced) flags |= 1u;
-            if (en.isSkinned)   flags |= 8u;
+            if (en.isDisplaced) flags |= kInstFlagWater;
+            if (en.isSkinned)   flags |= kInstFlagSkinned;
             {
                 const auto sm = en.mesh->material();
                 // DOUBLE_SIDED: gbuffer.frag flips N toward the viewer, so on
@@ -147,21 +156,21 @@ namespace threepp {
                 // consumed in deferred_shade.comp / deferred_denoise.comp) or
                 // the GI history cold-starts every frame — measured as 8× the
                 // frame-to-frame flicker on a procedural tree canopy.
-                if (sm && sm->side == Side::Double) flags |= 16u;
+                if (sm && sm->side == Side::Double) flags |= kInstFlagDoubleSided;
                 // TEXTURE-ANIMATED (scrolling UVs, video/live textures): the
                 // pattern moves with NO geometric motion vectors, so the TAA
                 // resolve must hold a short history (α floor) instead of
                 // smearing it. TAA-only — the GI history accumulates
                 // DEMODULATED irradiance, which a texture animation doesn't
                 // change, so bit 6 deliberately does NOT shorten the GI cap.
-                if (sm && sm->textureAnimatedHint) flags |= 64u;
+                if (sm && sm->textureAnimatedHint) flags |= kInstFlagTexAnim;
             }
             // PERSISTENT DEFORMER: a PhysX soft body deforms EVERY frame, so
             // the GI temporal cap in deferred_shade.comp must not chase its
             // oscillating per-pixel motion magnitude (visible pumping on the
             // wobble). The shader pins a constant history cap on this bit;
             // the TAA resolve floors its blend α (shading changes per frame).
-            if (en.isTet) flags |= 32u;
+            if (en.isTet) flags |= kInstFlagDeformer;
             // Semantic CLASS id (0..255) packed into bits 8..15 — inert to
             // every flag bit-test (they mask the low byte) and carried
             // through the MSAA resolve. Read back via outIds.z >> 8.

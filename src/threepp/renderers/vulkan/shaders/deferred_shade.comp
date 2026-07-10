@@ -13,7 +13,8 @@
 // material diversity). Requires shaderSampledImageArrayNonUniformIndexing.
 #extension GL_EXT_nonuniform_qualifier : require
 
-#include "vulkan_shared.h"// MaterialDesc
+#include "vulkan_shared.h"  // MaterialDesc
+#include "instance_flags.glsl"// per-instance flag accessors + reactivity channels
 
 // Raster-first deferred shading. Shades the material G-buffer
 // from the raster prepass into a clean, analytic base + adds ray-traced
@@ -1116,7 +1117,7 @@ void main() {
             // surface for irradiance-history purposes, so compare
             // orientation-agnostically. Single-sided geometry keeps the
             // signed test (a wall's two faces ARE different surfaces).
-            const bool dsided = (giFlagsZ & 16u) != 0u;
+            const bool dsided = ifDoubleSided(giFlagsZ);
             bool found = false;
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
@@ -1178,7 +1179,8 @@ void main() {
         // camera world flow so it tracks. Collapses to length(motionGL) when the
         // camera is still.
         const float giCamNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(length(worldPos - camPos), 0.25);
-        // PERSISTENT DEFORMER (flags bit 5 — tet-skinned soft bodies): the
+        // IRRADIANCE-REACTIVE content (sources + channel semantics:
+        // instance_flags.glsl — today: persistent per-frame deformers): the
         // surface deforms EVERY frame, so |motionGL| swings across the
         // smoothstep window with the wobble and the motion-scaled cap
         // oscillates with it — dragging the blend alpha, the despeckle gate
@@ -1190,10 +1192,10 @@ void main() {
         // deforming 1-spp surface sheds isolated GI sparks every frame and
         // NEEDS it (pinning at 10 disabled it: visible white speckle on soft
         // bodies) — while staying above the spatial variance fallback (4).
-        const bool  giDeformer = (giFlagsZ & 32u) != 0u;
-        const float capF = giDeformer
-                ? 6.0
-                : mix(48.0, 6.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc)));
+        // mix() on the [0..1] reactivity: exact motion-scaled cap at 0; at 1
+        // the pin may sit an ULP off 6.0 — both gates have miles of margin.
+        const float capF = mix(mix(48.0, 6.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc))),
+                               6.0, ifIrradianceReactivity(giFlagsZ));
         // Skip frames carry the history UNCHANGED (no new sample → no histLen
         // increment, no blend); trace frames accumulate as before.
         const float histLen = giSkip ? max(prevT.a, 1.0)
@@ -1279,7 +1281,7 @@ void main() {
                 // Re-derive dsided locally — the GI 3×3 pass above scopes its own
                 // copy inside its `if (valid)` block; giFlagsZ (the source flag) is
                 // still in scope here so this is the same bit test, not a new heuristic.
-                const bool  dsided  = (giFlagsZ & 16u) != 0u;
+                const bool  dsided  = ifDoubleSided(giFlagsZ);
                 const float surfD   = texture(gbufMotionTex, uv).b;// this surface's prev NDC depth (shared by all 4 taps)
                 const vec4  svh     = cam.projInverse * vec4(prevNDC, surfD, 1.0);
                 const float svz     = svh.z / svh.w;

@@ -30,6 +30,7 @@
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/core/InterleavedBufferAttribute.hpp"
 #include "threepp/core/Object3D.hpp"
@@ -41,6 +42,7 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
+#include "threepp/objects/LOD.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Points.hpp"
@@ -76,6 +78,7 @@
 // (debug_resolve.comp.spv moved into vulkan/VulkanCoreIndirect.cpp)
 
 #include "threepp/renderers/common/BCnDecode.hpp"
+#include "threepp/utils/GeometryLod.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -83,14 +86,18 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <limits>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -298,8 +305,71 @@ namespace threepp {
             // vector every frame → persistent denoiser/TAA history rejection
             // (runtime-updated geometry stays noisy / visibly shakes).
             bool prevVertexResyncPending = false;
+
+            // ── Automatic mesh LOD (setAutoLod) ─────────────────────────
+            // One simplified INDEX buffer + its own static BLAS per chain
+            // level, built beyond this record's own (LOD0) vertex/normal/uv/
+            // color buffers — those stay shared across every level (meshopt
+            // never moves or reorders vertices, only drops/reweaves
+            // triangles), so a level swap is purely an index-buffer +
+            // BLAS-reference change, consumed identically by the raster
+            // vertex-pulling path (buildIndirectDrawData) and the TLAS
+            // instance fill (ensureSceneBuilt).
+            struct LodLevel {
+                VkAccelerationStructureKHR as = VK_NULL_HANDLE;
+                Buffer storage;
+                Buffer index;// uint32, indexes into THIS record's own `vertex`
+                VkDeviceAddress address = 0;// BLAS device address
+                uint32_t indexCount = 0;
+                // Absolute object-space screen-space-error bound for this
+                // level (see threepp::geometrylod::Level::error). Multiplied
+                // by world scale + px/unit at selection time.
+                float errorBound = 0.f;
+            };
+            // Chain-generation state. None → not yet attempted (or the prior
+            // attempt's geometry version is stale); Queued → a background
+            // job is in flight; Ready → lodLevels is usable; Failed →
+            // generateChain produced nothing (too small/degenerate) — never
+            // retried for this geomVersion. Touched ONLY on the main thread
+            // (the worker only ever sees copied job data, never the record).
+            enum class LodState : uint8_t { None, Queued, Ready, Failed };
+            LodState lodState = LodState::None;
+            // Index i backs MeshEntry::lodLevel == i+1 (level 0 is this
+            // record's own vertex/index/etc — never stored here).
+            std::vector<LodLevel> lodLevels;
         };
         std::unordered_map<const BufferGeometry*, std::unique_ptr<BlasRecord>> blasCache;
+
+        // Resolved index/AS data for whichever LOD level an entry currently
+        // selects. Falls back to the record's own LOD0 buffers when
+        // lodLevel==0 or that level isn't built yet — the ONLY two call
+        // sites that pick per-entry geometry for rendering (buildIndirectDrawData's
+        // raster path, and the TLAS instance / GeometryDesc fill below) go
+        // through this so the rasterized and ray-traced views of an entry
+        // can never disagree about which triangles exist.
+        struct LodGeomSel {
+            VkDeviceAddress asAddress;
+            VkDeviceAddress indexAddress;
+            uint32_t indexCount;
+            // A selected LEVEL is always an indexed draw — even when the
+            // record itself is non-indexed soup (the chain generator welds
+            // soup into canonical indices whose VALUES are original vertex
+            // ids, so levels index the record's unchanged soup vertex
+            // buffer). Fallback = the record's own indexed-ness. Consumers
+            // (DrawInfo::indexed, GeometryDesc::indexed) must read THIS,
+            // never rec.index.handle directly.
+            bool indexed;
+        };
+        static LodGeomSel selectLodGeom(const BlasRecord& rec, uint8_t lodLevel) {
+            if (lodLevel > 0 && static_cast<size_t>(lodLevel - 1) < rec.lodLevels.size()) {
+                const auto& lvl = rec.lodLevels[lodLevel - 1];
+                if (lvl.as != VK_NULL_HANDLE) {
+                    return {lvl.address, lvl.index.address, lvl.indexCount, true};
+                }
+            }
+            return {rec.address, rec.index.address, rec.indexCount,
+                    rec.index.handle != VK_NULL_HANDLE};
+        }
 
         // Per-SkinnedMesh deformed-geometry BLAS. Unlike static meshes, skinned
         // meshes can't share BLAS even when they share BufferGeometry — each
@@ -590,7 +660,16 @@ namespace threepp {
         // `MaterialDesc md{};` call sites unchanged.
         using MaterialDesc = threepp::vulkan_pt::MaterialDesc;
 
-        Buffer geometryDescsBuffer;
+        // Per-frame-in-flight GeometryDesc storage — same fence-gated ring as
+        // materialDescsBuffers below. Ringed for auto-LOD: a level switch
+        // repoints GeometryDesc::indexAddress/indexed, and the single-buffer
+        // version needed a vkDeviceWaitIdle on every switch frame to patch it
+        // in place — a stall exactly when the camera moves (the frames where
+        // responsiveness matters most). Hot path stages in geomDescsCached_ +
+        // flips geomDescsDirty_[*]; renderFrame's flushGeometryDescsIfDirty
+        // memcpys into this frame's slot once its fence has signaled.
+        std::array<Buffer, kFramesInFlight> geometryDescsBuffers{};
+        std::array<bool, kFramesInFlight> geomDescsDirty_{};
         // Per-frame-in-flight MaterialDesc storage. Was a single shared buffer
         // gated by vkDeviceWaitIdle on every animated-pbr update; now one buffer
         // per kFramesInFlight slot so the upload after a fence wait races
@@ -878,6 +957,41 @@ namespace threepp {
             // Skinned / displaced / morphed entries always stay true; their
             // local AABB doesn't reflect deformed extents.
             bool     inFrustum   = true;
+            // Automatic mesh LOD (setAutoLod): 0 == the geometry's own
+            // (finest) buffers; N>0 selects BlasRecord::lodLevels[N-1].
+            // Written once per frame by the LOD selection pass in
+            // ensureSceneBuilt and read verbatim by both buildIndirectDrawData
+            // (raster) and the TLAS instance fill — never re-derived. Carries
+            // hysteresis state across lean (snapshot-fast-path) frames since
+            // entries persist in lastVisibleEntries_; resets to 0 on a full
+            // re-expansion (rare, and the selection pass re-picks it that
+            // same frame anyway).
+            uint8_t  lodLevel    = 0;
+            // Auto-LOD selection caches, derived ONCE at full expansion so the
+            // per-frame selection pass is pure float math — the uncached
+            // version paid a dynamic_cast + ancestor hash-walk + shared_ptr
+            // derefs PER ENTRY PER FRAME (~2-4 ms on 4k-entry scenes; measured
+            // as the whole feature's CPU cost on Bistro/fjord).
+            //   lodExemptStatic — mesh opted out (Object3D::autoLod == false,
+            //     e.g. TileTerrain tiles, which are their own LOD system) or
+            //     sits under a threepp::LOD subtree
+            //     (structure changes force a full expansion ⇒ can't go stale).
+            //   lodEmissive — cached MaterialWithEmissive cast (material
+            //     POINTER swaps force a full expansion). VALUES are read live
+            //     each frame, so an emissive that turns on later (dusk-driven
+            //     lantern intensity) exempts immediately, cast-free.
+            //   lodGeomKey — blasCache key (geometry pointer swaps force a
+            //     full expansion).
+            //   lodCenter/lodRadius — object-space bounding sphere; radius 0 ⇒
+            //     unknown ⇒ entry stays LOD0. lodSphereDirty re-derives it
+            //     after an in-place geometry edit (set by the geom-dirty
+            //     detection, consumed lazily by the next selection pass).
+            bool lodExemptStatic = false;
+            bool lodSphereDirty    = false;
+            const MaterialWithEmissive* lodEmissive = nullptr;
+            const BufferGeometry* lodGeomKey = nullptr;
+            float lodCenter[3] = {0.f, 0.f, 0.f};
+            float lodRadius = 0.f;
         };
 
         // ── Scene-structure SNAPSHOT (ensureSceneBuilt fast path) ────────────
@@ -908,6 +1022,7 @@ namespace threepp {
             InstancedMesh* inst = nullptr;
             Line*          line = nullptr;
             Points*        pts  = nullptr;
+            LOD*           lod  = nullptr;// kSnapLod nodes: replay walk re-runs level selection
             const void* geom = nullptr;               // mesh/line/points geometry
             BufferGeometry* geomB = nullptr;          // typed view of geom (attributesVersion reads)
             const Material* mat = nullptr;            // mesh material
@@ -936,6 +1051,10 @@ namespace threepp {
         // LineEntry — matches three.js / GLRenderer, which drops a
         // material-hidden object from the render list. [[#mat-visible]]
         static constexpr uint32_t kSnapMatHidden  = 256u;
+        // threepp::LOD node (kind Other + typed sn.lod view). Both walks run
+        // the camera-driven level selection on it — three.js/GLRenderer
+        // parity (projectObject calls lod.update(camera) as it projects).
+        static constexpr uint32_t kSnapLod        = 512u;
         std::vector<SnapNode> sceneSnapshot_;
 
         // Classification-routing flags for a mesh — shared by the snapshot
@@ -944,8 +1063,11 @@ namespace threepp {
 
         // Replay the last expansion's traversal against the snapshot. true ⇒
         // tree shape, visibility, classification routing and all mesh/geom/mat
-        // pointers are unchanged since the last full expansion.
-        bool sceneSnapshotMatches(Object3D& scene);
+        // pointers are unchanged since the last full expansion. Also re-runs
+        // LOD level selection (camera-driven visibility mutation) on kSnapLod
+        // nodes — a level switch makes the walk diverge from the snapshot ⇒
+        // false ⇒ the full pass re-expands with the new level.
+        bool sceneSnapshotMatches(Object3D& scene, Camera& camera);
 
         // Previous-frame camera (proj_prev * view_prev) for primary-hit
         // reprojection. One UBO per frame-in-flight so updates don't race the
@@ -1002,6 +1124,241 @@ namespace threepp {
         // mip 0 (nLen ~= 1), and strictly reduces normal-map minification
         // shimmer otherwise — a "just right" default, not an opt-in.
         bool     normalMapToksvig_ = true;
+
+        // ── Automatic mesh LOD (setAutoLod; ON by default) ──────────────────
+        // Default-on since the full measurement pass: Bistro (per-pixel-bound
+        // worst case) neutral, fjord flight +32% FPS, quality below animation
+        // noise, switch frames stall-free (geomDescs ring). setAutoLod(false)
+        // remains as the manual override / debug escape (Toksvig pattern).
+        bool autoLod_ = true;
+        // Set by the selection pass in ensureSceneBuilt (VulkanCoreScene.cpp)
+        // when ANY entry's chosen level changed this frame; read right after
+        // to fold into the same "force a full TLAS rebuild" trigger the
+        // deformer paths already use (blasDeformed) — an AS-reference change
+        // per VkAccelerationStructureInstanceKHR is only unambiguously legal
+        // under MODE_BUILD, not the incremental MODE_UPDATE refit. Also
+        // flips geomDescsDirty_[*] so RT secondary rays (reflections/GI/
+        // lidar/probe update) read the SAME index buffer the swapped BLAS
+        // was built from — without it, gl_PrimitiveID from a hit against a
+        // coarser BLAS would misindex the still-LOD0
+        // GeometryDesc::indexAddress.
+        bool lodChangedThisFrame_ = false;
+        // Host mirror of the last-uploaded GeometryDesc array (entries-
+        // indexed, same layout as the `geomDescs` local built in the full
+        // rebuild). The lean auto-LOD path patches indexAddress/indexed in
+        // place here; the per-frame ring flush (flushGeometryDescsIfDirty)
+        // carries it to the GPU stall-free.
+        std::vector<GeometryDesc> geomDescsCached_;
+        // Manual threepp::LOD subtrees, rebuilt every FULL scene expansion
+        // (cleared at the start of the traverseVisible walk). A mesh entry
+        // under one of these is exempt from auto-LOD — its levels are
+        // already hand-authored; auto-LOD swapping index buffers underneath
+        // an author-selected discrete level would fight that choice. Membership
+        // test walks Object3D::parent by raw pointer — no dynamic_cast.
+        std::unordered_set<const Object3D*> manualLodLevelRoots_;
+        // Background chain-generation worker: a single lazily-started
+        // std::thread (not a pool — LOD job volume is low: one job per
+        // eligible unique geometry, ever, per geomVersion) draining a
+        // mutex+condvar job queue. Jobs snapshot (copy) position/index data
+        // at enqueue time, so the worker never touches live BufferGeometry /
+        // Vulkan state — no lifetime races with a scene the main thread
+        // mutates or tears down while a job runs. Joined in ~CoreImpl before
+        // anything Vulkan-related is torn down (the worker is pure CPU).
+        std::thread lodWorker_;
+        std::mutex lodJobMutex_;
+        std::condition_variable lodJobCv_;
+        bool lodWorkerStop_ = false;
+        struct LodJob {
+            const BufferGeometry* geom = nullptr;
+            unsigned int geomVersion = 0;
+            std::vector<float> positions;// tightly packed xyz
+            // Indexed geometry: the source index array; normals/uvs stay
+            // empty (the weld step is skipped, topology already exists).
+            // NON-indexed soup (FBX-style loaders never call setIndex):
+            // empty — the worker first welds identical-attribute duplicates
+            // into canonical indices (buildCanonicalIndices) so the
+            // simplifier has shared edges to collapse. normals/uvs feed that
+            // weld's equality test so genuine seams/hard edges stay split;
+            // they carry copies only when the stream exists with matching
+            // counts.
+            std::vector<uint32_t> indices;
+            std::vector<float> normals;// soup only; tightly packed xyz
+            std::vector<float> uvs;    // soup only; tightly packed xy
+        };
+        std::deque<LodJob> lodJobQueue_;
+        struct LodResult {
+            const BufferGeometry* geom = nullptr;
+            unsigned int geomVersion = 0;
+            std::vector<geometrylod::Level> levels;// empty ⇒ degenerate/failed
+        };
+        std::mutex lodResultMutex_;
+        std::deque<LodResult> lodResultQueue_;
+        // Running byte totals for every finalized LOD index buffer + BLAS
+        // storage, updated as chains finalize / are evicted — cheap O(1)
+        // bookkeeping instead of a full blasCache walk every frame. Gates
+        // the hard cap on new chain GENERATION (already-finalized chains are
+        // never evicted early to enforce it — see setAutoLod's doc comment).
+        uint64_t lodIndexBytes_ = 0;
+        uint64_t lodBlasBytes_  = 0;
+        bool lodBudgetWarned_ = false;
+        static constexpr uint64_t kLodByteBudget = 256ull * 1024ull * 1024ull;
+        // Unique-geometry chain-state counters (NOT per-entry), maintained
+        // at enqueue/drain time — surfaced via autoLodStats().
+        uint32_t lodChainsReadyCount_  = 0;
+        uint32_t lodChainsQueuedCount_ = 0;
+        VulkanRendererCore::AutoLodStats autoLodStats_{};
+
+        void ensureLodWorkerStarted() {
+            if (lodWorker_.joinable()) return;
+            lodWorker_ = std::thread([this] { lodWorkerMain(); });
+        }
+        void lodWorkerMain() {
+            for (;;) {
+                LodJob job;
+                {
+                    std::unique_lock<std::mutex> lk(lodJobMutex_);
+                    lodJobCv_.wait(lk, [this] { return lodWorkerStop_ || !lodJobQueue_.empty(); });
+                    // Exit immediately on stop, even with jobs still queued —
+                    // shutdown must be bounded; nothing will ever drain their
+                    // results after this. A job already popped and mid-
+                    // simplify (the loop body below, no lock held) still
+                    // runs to completion — can't interrupt meshopt mid-call,
+                    // and its result is simply never drained.
+                    if (lodWorkerStop_) return;
+                    job = std::move(lodJobQueue_.front());
+                    lodJobQueue_.pop_front();
+                }
+                const size_t vertexCount = job.positions.size() / 3;
+                // Soup input: weld first (identical-attribute duplicates →
+                // canonical indices over the ORIGINAL vertex ids), then
+                // simplify those. An empty weld result flows through as an
+                // empty chain ⇒ LodState::Failed at drain, same as any other
+                // degenerate geometry.
+                std::vector<uint32_t> canonical;
+                const uint32_t* idxData = job.indices.data();
+                size_t idxCount = job.indices.size();
+                if (job.indices.empty()) {
+                    canonical = geometrylod::buildCanonicalIndices(
+                            job.positions.data(),
+                            job.normals.empty() ? nullptr : job.normals.data(),
+                            job.uvs.empty() ? nullptr : job.uvs.data(),
+                            vertexCount);
+                    idxData = canonical.data();
+                    idxCount = canonical.size();
+                }
+                // sparse=true for welded soup: the canonical indices reference
+                // only ~1/6 of the soup vertex buffer (the representatives),
+                // and meshopt needs SimplifySparse to keep the unreferenced
+                // duplicates out of its wedge/seam analysis — see the
+                // parameter doc in GeometryLod.hpp.
+                auto levels = geometrylod::generateChain(
+                        job.positions.data(), vertexCount, idxData, idxCount,
+                        /*sparse=*/job.indices.empty());
+                std::lock_guard<std::mutex> lk(lodResultMutex_);
+                lodResultQueue_.push_back({job.geom, job.geomVersion, std::move(levels)});
+            }
+        }
+        // Snapshots geom's position/index (or, for non-indexed soup, its
+        // position/normal/uv) arrays and hands them to the worker. Called
+        // from the selection pass the first time an eligible entry
+        // references a record whose lodState is None (never attempted, or
+        // reset after a stale-result discard in drainLodResults). Returns
+        // false when nothing was enqueued (no position attribute) so the
+        // caller never strands the record in Queued with no result coming.
+        bool enqueueLodJob(const BufferGeometry* geomPtr, unsigned int geomVersion, BufferGeometry& geom) {
+            auto* posAttr = geom.getAttribute<float>("position");
+            if (!posAttr) return false;
+            LodJob job;
+            job.geom = geomPtr;
+            job.geomVersion = geomVersion;
+            const auto& pos = posAttr->array();
+            job.positions.assign(pos.begin(), pos.end());
+            if (const auto* idxAttr = geom.getIndex()) {
+                const auto& idx = idxAttr->array();
+                job.indices.assign(idx.begin(), idx.end());
+            } else {
+                // Soup: the worker welds before simplifying — give the weld
+                // every attribute stream that exists with a matching count
+                // so its binary-equality test preserves genuine seams.
+                const auto vtxCount = posAttr->count();
+                if (auto* nrmAttr = geom.getAttribute<float>("normal");
+                    nrmAttr && nrmAttr->count() == vtxCount &&
+                    nrmAttr->array().size() == static_cast<size_t>(vtxCount) * 3) {
+                    const auto& nrm = nrmAttr->array();
+                    job.normals.assign(nrm.begin(), nrm.end());
+                }
+                if (auto* uvAttr = geom.getAttribute<float>("uv");
+                    uvAttr && uvAttr->count() == vtxCount &&
+                    uvAttr->array().size() == static_cast<size_t>(vtxCount) * 2) {
+                    const auto& uv = uvAttr->array();
+                    job.uvs.assign(uv.begin(), uv.end());
+                }
+            }
+            ensureLodWorkerStarted();
+            {
+                std::lock_guard<std::mutex> lk(lodJobMutex_);
+                lodJobQueue_.push_back(std::move(job));
+            }
+            lodJobCv_.notify_one();
+            ++lodChainsQueuedCount_;
+            return true;
+        }
+        // Per-frame chain-finalization budget (drainLodResults, called once
+        // per frame from ensureSceneBuilt): up to 16 geometries OR 8 MiB of
+        // new level resources (index buffers + BLAS storage), whichever hits
+        // first. All of a frame's level BLAS builds are recorded into ONE
+        // one-shot submit+wait (flushLodLevelBuilds) — a submit per level
+        // (or even per geometry) at Bistro-scale entry counts costs more in
+        // queue round-trips than the batching saves. Stale results (record
+        // evicted / geomVersion moved on) and failed chains are processed
+        // outside the budget — they create no resources and cost only a
+        // hash lookup + state write each.
+        void drainLodResults();
+        // One level's deferred BLAS build, produced by buildLodLevelFor and
+        // consumed by flushLodLevelBuilds — resources (AS handle, storage,
+        // index buffer, scratch) already exist; only the build execution is
+        // deferred so a whole frame's worth records into one command buffer.
+        struct LodPendingBuild {
+            VkAccelerationStructureKHR as = VK_NULL_HANDLE;
+            VkDeviceAddress vertexAddress = 0;
+            VkDeviceAddress indexAddress = 0;
+            uint32_t maxVertex = 0;
+            uint32_t primitiveCount = 0;
+            Buffer scratch{};// per-build scratch: concurrent builds in one cmdbuf must not alias
+        };
+        // Creates one level's index buffer + AS handle/storage/address
+        // (PREFER_FAST_TRACE, no ALLOW_UPDATE — LOD levels are immutable
+        // once built) against `rec`'s EXISTING vertex buffer, and appends
+        // the deferred build to `pending`. Mirrors buildBlasFor's BLAS-build
+        // shape for the subset that differs (index-only geometry input; the
+        // AS device address is queried at creation — it's a property of the
+        // storage binding, valid before the build executes). Returns false
+        // (leaves `out` default, appends nothing) on a degenerate/zero-
+        // primitive level.
+        bool buildLodLevelFor(BlasRecord& rec, const geometrylod::Level& level,
+                              BlasRecord::LodLevel& out, std::vector<LodPendingBuild>& pending);
+        // Records every pending level build into one one-shot command
+        // buffer, submits, waits, and frees the per-build scratches.
+        void flushLodLevelBuilds(std::vector<LodPendingBuild>& pending);
+        // Destroys every level's AS/storage/index and decrements the running
+        // byte totals — called from every blasCache erase site (destructor,
+        // eviction prune, geomVersion-changed rebuild) so a record's LOD
+        // resources never outlive the record itself.
+        void destroyBlasLodLevels(BlasRecord& rec) {
+            for (auto& lvl : rec.lodLevels) {
+                if (lvl.as) ctx->rt().destroyAccelerationStructure(ctx->device(), lvl.as, nullptr);
+                lodBlasBytes_  -= std::min<uint64_t>(lodBlasBytes_,  lvl.storage.size);
+                lodIndexBytes_ -= std::min<uint64_t>(lodIndexBytes_, lvl.index.size);
+                destroyBuffer(ctx->allocator(), lvl.storage);
+                destroyBuffer(ctx->allocator(), lvl.index);
+            }
+            if (rec.lodState == BlasRecord::LodState::Ready && !rec.lodLevels.empty()) {
+                lodChainsReadyCount_ = lodChainsReadyCount_ > 0 ? lodChainsReadyCount_ - 1 : 0;
+            }
+            rec.lodLevels.clear();
+            rec.lodState = BlasRecord::LodState::None;
+        }
+
         // Cached CDF blob (16 floats per tri) reused across frames when no
         // emissive mesh moved + entries-list size unchanged. The CPU walk in
         // buildAndUploadEmissiveTris is the dominant per-frame cost on
@@ -1917,6 +2274,22 @@ namespace threepp {
         }
 
         ~CoreImpl() {
+            // Stop the auto-LOD background worker first — it's pure CPU (no
+            // Vulkan handles touched), so this is safe even when ctx is
+            // null. Must happen before the blasCache teardown below, which
+            // destroys the same records' lodLevels AS/buffers the worker
+            // could otherwise still be racing to enqueue results against
+            // (drainLodResults only ever runs from ensureSceneBuilt, which
+            // can't run concurrently with this destructor, but the queue
+            // itself is shared state the worker thread still owns until
+            // joined).
+            {
+                std::lock_guard<std::mutex> lk(lodJobMutex_);
+                lodWorkerStop_ = true;
+            }
+            lodJobCv_.notify_all();
+            if (lodWorker_.joinable()) lodWorker_.join();
+
             if (!ctx) return;
             VkDevice d = ctx->device();
             // If a frame was mid-record when the renderer was destroyed (the
@@ -1941,7 +2314,7 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), tlasBuffer);
             for (auto& b : tlasInstancesBuffers) destroyBuffer(ctx->allocator(), b);
             destroyBuffer(ctx->allocator(), tlasRefitScratch_);
-            destroyBuffer(ctx->allocator(), geometryDescsBuffer);
+            for (auto& b : geometryDescsBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : materialDescsBuffers) destroyBuffer(ctx->allocator(), b);
             destroyBuffer(ctx->allocator(), sceneCaptureBuf_);
             destroyBuffer(ctx->allocator(), eventLumaBuf_);
@@ -1955,6 +2328,7 @@ namespace threepp {
             if (debugResolveDsLayout_)       vkDestroyDescriptorSetLayout(d, debugResolveDsLayout_, nullptr);
 
             for (auto& [_, rec] : blasCache) {
+                destroyBlasLodLevels(*rec);
                 if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
                 destroyBuffer(ctx->allocator(), rec->storage);
                 destroyBuffer(ctx->allocator(), rec->vertex);
@@ -3240,6 +3614,9 @@ namespace threepp {
         // retired, so the memcpy races nothing. Replaces the old shared-buffer
         // path that called vkDeviceWaitIdle on every animated-pbr update.
         void flushMaterialDescsIfDirty(uint32_t frame);
+        // Same fence-gated ring flush for GeometryDescs (auto-LOD level
+        // switches repoint indexAddress/indexed — see geomDescsCached_).
+        void flushGeometryDescsIfDirty(uint32_t frame);
 
         // Per-frame frustum cull: tag every entry with `inFrustum` so raster
         // passes (gbuf prepass, overlay depth prepass) can skip off-screen
@@ -3534,7 +3911,7 @@ namespace threepp {
         // compares. Cheap. The rare rebuild path waits the GPU idle, retires
         // the TLAS + scene desc buffers, and rewrites bindings 0/3/4 across
         // every descriptor set without re-allocating from the pool.
-        void ensureSceneBuilt(Object3D& scene);
+        void ensureSceneBuilt(Object3D& scene, Camera& camera);
 
         void createCameraUbos();
 

@@ -73,9 +73,9 @@ layout(location = 1) out vec4 outMotion;
 //   .y = STABLE per-object instance id (host-assigned, persists across frames
 //        and visible-set changes; 0 = sky). The recoverable label for
 //        instance segmentation — see VulkanRendererCore::setObjectInstanceId.
-//   .z = flags in bits 0..7 (bit 0 is_water, bit 1 transmissive, bit 2
-//        thinWalled, bit 3 skinned, bit 4 double, bit 5 deformer, bit 6
-//        tex-anim) | semantic CLASS id in bits 8..15 (0 = unset). Consumers
+//   .z = per-instance flags in bits 0..7 | semantic CLASS id in bits 8..15
+//        (0 = unset). Canonical bit layout: vulkan_shared.h (kInstFlag*);
+//        shader consumers use the instance_flags.glsl accessors. Consumers
 //        bit-test the low byte, so the class byte is inert to them; the MSAA
 //        resolve carries the dominant sample's .z through unchanged.
 //   .w = reserved (repacked with MSAA coverage metadata by gbuf_resolve.comp)

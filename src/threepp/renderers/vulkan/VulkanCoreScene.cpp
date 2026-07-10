@@ -20,7 +20,7 @@ uint32_t VulkanRendererCore::CoreImpl::snapMeshFlags(Mesh& m, const MaterialWith
             return fl;
         }
 
-bool VulkanRendererCore::CoreImpl::sceneSnapshotMatches(Object3D& scene) {
+bool VulkanRendererCore::CoreImpl::sceneSnapshotMatches(Object3D& scene, Camera& camera) {
             if (!sceneBuilt_ || sceneSnapshot_.empty()) return false;
             if (prevSceneFingerprint.size() != lastVisibleEntries_.size()) return false;
             size_t cur = 0;
@@ -33,7 +33,16 @@ bool VulkanRendererCore::CoreImpl::sceneSnapshotMatches(Object3D& scene) {
                 }
                 const SnapNode& sn = sceneSnapshot_[cur++];
                 const uint32_t kind = sn.flags & kSnapKindMask;
-                if (kind == kSnapKindOther) return;// pointer identity is all we need
+                if (kind == kSnapKindOther) {
+                    // LOD parity (see the full pass): re-run level selection
+                    // every frame. Pre-order walk ⇒ the mutation lands before
+                    // this LOD's children are visited, so a level switch makes
+                    // the node sequence diverge from the snapshot at the
+                    // swapped subtree ⇒ ok=false ⇒ full re-expansion picks up
+                    // the new level's meshes.
+                    if ((sn.flags & kSnapLod) != 0u && sn.lod->autoUpdate) sn.lod->update(camera);
+                    return;// otherwise pointer identity is all we need
+                }
                 // Same object at the same address ⇒ same dynamic type — the
                 // typed pointers recorded by the full pass are still valid, so
                 // the walk pays zero dynamic_casts. attributesVersion()
@@ -95,6 +104,18 @@ void VulkanRendererCore::CoreImpl::flushMaterialDescsIfDirty(uint32_t frame) {
             vmaUnmapMemory(ctx->allocator(), materialDescsBuffers[frame].alloc);
         }
 
+void VulkanRendererCore::CoreImpl::flushGeometryDescsIfDirty(uint32_t frame) {
+            if (!geomDescsDirty_[frame]) return;
+            geomDescsDirty_[frame] = false;
+            if (geomDescsCached_.empty()) return;
+            if (geometryDescsBuffers[frame].handle == VK_NULL_HANDLE) return;
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), geometryDescsBuffers[frame].alloc, &mapped);
+            std::memcpy(mapped, geomDescsCached_.data(),
+                        geomDescsCached_.size() * sizeof(GeometryDesc));
+            vmaUnmapMemory(ctx->allocator(), geometryDescsBuffers[frame].alloc);
+        }
+
 void VulkanRendererCore::CoreImpl::cullEntriesAgainstFrustum(Camera& camera) {
             if (lastVisibleEntries_.empty()) return;
             // Combine projection * matrixWorldInverse to extract the world-
@@ -125,13 +146,18 @@ void VulkanRendererCore::CoreImpl::cullEntriesAgainstFrustum(Camera& camera) {
             }
         }
 
-void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
+void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // force=false (matching GLRenderer/WgpuRenderer): with
             // updateMatrix()'s change-detection early-out, only subtrees whose
             // transforms actually moved pay the world-matrix multiplies — a
             // forced pass re-multiplied every node every frame (several
             // ms/frame on Bistro's node count, static or not).
             scene.updateMatrixWorld();
+            // A parentless camera (the common case — not add()ed to the scene)
+            // is untouched by the scene's updateMatrixWorld, but the LOD level
+            // selection below reads camera.matrixWorld. Same guard as
+            // GLRenderer::render; change-detected early-out ⇒ ~free.
+            if (!camera.parent) camera.updateMatrixWorld();
 
             // Honour live edits to already-uploaded material textures (e.g. a
             // DataTexture re-baked via setData + needsUpdate). Cheap version
@@ -150,7 +176,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
             // caught: matrices by the memcmp diff, material/geometry edits by
             // their version reads, structure/visibility/texture-routing
             // changes by the snapshot walk itself (mismatch ⇒ full path).
-            const bool snapLean = sceneSnapshotMatches(scene);
+            const bool snapLean = sceneSnapshotMatches(scene, camera);
             std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
             std::vector<MeshFingerprint> currFp;
             if (snapLean) {
@@ -178,6 +204,10 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
             std::vector<MeshEntry> built;
             std::vector<LineEntry> builtLines;
             sceneSnapshot_.clear();
+            // Rebuilt below as the walk visits each threepp::LOD node — a
+            // mesh entry whose parent chain hits one of these is exempt from
+            // auto-LOD (see the selection pass just after this expansion).
+            manualLodLevelRoots_.clear();
             // traverseVisible (not traverse) so an invisible parent hides its
             // whole subtree — matches three.js / GLRenderer convention. Plain
             // `traverse` walks every node regardless of visibility, leaking
@@ -185,6 +215,25 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
             scene.traverseVisible([&](Object3D& o) {
                 SnapNode sn{};
                 sn.obj = &o;
+                // three.js parity — LOD level selection (GLRenderer::
+                // projectObject runs lod.update(camera) as it projects).
+                // traverseVisible is PRE-ORDER: this LOD's children are
+                // visited after this callback, so the rest of this walk
+                // already sees the level picked for this frame's camera.
+                // Recorded with a typed view + kSnapLod so the replay walk
+                // re-runs the selection cast-free (Object3D is a virtual
+                // base — the replay cannot static_cast down).
+                if (auto* lod = dynamic_cast<LOD*>(&o)) {
+                    if (lod->autoUpdate) lod->update(camera);
+                    sn.lod   = lod;
+                    sn.flags = kSnapKindOther | kSnapLod;
+                    sceneSnapshot_.push_back(sn);
+                    // Auto-LOD exemption: every level object under a manual
+                    // LOD node is author-selected already; don't let auto-LOD
+                    // swap index buffers underneath that choice.
+                    for (Object3D* child : lod->children) manualLodLevelRoots_.insert(child);
+                    return;
+                }
                 // Line / LineSegments: never part of the traced/rasterized
                 // scene, always overlay.
                 // Collected before the Mesh dispatch so subclasses don't
@@ -299,6 +348,35 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                 const bool isTet = !isSkinned && !isDisplaced && !isGrass && !isMorphed &&
                                    m->material() && m->material()->tetSkinning &&
                                    m->material()->tetTexture != nullptr;
+                // Auto-LOD selection caches — once per Mesh, shared by every
+                // instance entry (see the MeshEntry field doc). manualLodLevelRoots_
+                // is complete for this mesh's ancestors: traverseVisible is
+                // pre-order, so an enclosing LOD node registered its level
+                // objects before we got here.
+                bool lodExempt = !m->autoLod;// per-object opt-out (self-managed LOD, e.g. terrain tiles)
+                for (Object3D* p = m->parent; !lodExempt && p; p = p->parent) {
+                    if (manualLodLevelRoots_.count(p)) lodExempt = true;
+                }
+                const MaterialWithEmissive* lodEmissive = nullptr;
+                if (auto mat = m->material()) {
+                    lodEmissive = dynamic_cast<MaterialWithEmissive*>(mat.get());
+                }
+                if (!geom->boundingBox) geom->computeBoundingBox();
+                Vector3 lodCenter;
+                float lodRadius = 0.f;
+                if (geom->boundingBox) {
+                    lodCenter = geom->boundingBox->getCenter();
+                    lodRadius = geom->boundingBox->getSize().length() * 0.5f;
+                }
+                auto setLodCaches = [&](MeshEntry& e) {
+                    e.lodExemptStatic = lodExempt;
+                    e.lodEmissive       = lodEmissive;
+                    e.lodGeomKey        = geom.get();
+                    e.lodCenter[0]      = lodCenter.x;
+                    e.lodCenter[1]      = lodCenter.y;
+                    e.lodCenter[2]      = lodCenter.z;
+                    e.lodRadius         = lodRadius;
+                };
                 if (inst && inst->count() > 0) {
                     Matrix4 instMat;
                     Matrix4 world;
@@ -316,6 +394,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                         e.isMorphed    = isMorphed;
                         e.isTet        = isTet;
                         e.isInstanced  = true;
+                        setLodCaches(e);
                         std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
                         built.push_back(e);
                     }
@@ -330,6 +409,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                     e.isGrass      = isGrass;
                     e.isMorphed    = isMorphed;
                     e.isTet        = isTet;
+                    setLodCaches(e);
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
                     built.push_back(e);
                 }
@@ -338,6 +418,195 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
             lastVisibleLines_   = std::move(builtLines);
             probeGridDirty_     = true;// scene structure changed → re-fit the probe grid
             }// !snapLean
+
+            // ── Automatic mesh LOD selection (setAutoLod; ON by default) ────
+            // Runs UNCONDITIONALLY every frame — camera motion alone can flip
+            // a level even when nothing else about the scene changed — right
+            // after entries got fresh world matrices from WHICHEVER path
+            // produced them above (lean in-place diff or full re-expansion),
+            // so this one spot covers both. Writes only MeshEntry::lodLevel +
+            // lodChangedThisFrame_/autoLodStats_; the BLAS-address/index-
+            // buffer swap itself happens later in this function (the lean
+            // TLAS-refit instance loop) and in the full-rebuild instance loop
+            // further down — both read en.lodLevel verbatim, never re-deriving.
+            lodChangedThisFrame_ = false;
+            if (autoLod_) drainLodResults();// budget: one geometry finalized per frame
+            {
+                VulkanRendererCore::AutoLodStats stats{};
+                stats.indexBytes   = lodIndexBytes_;
+                stats.blasBytes    = lodBlasBytes_;
+                stats.chainsReady  = lodChainsReadyCount_;
+                stats.chainsQueued = lodChainsQueuedCount_;
+                if (autoLod_) {
+                    // Hot path by design: everything type- or structure-derived
+                    // was cached on the entry at expansion (see MeshEntry doc) —
+                    // this loop is float math + one blasCache hash per entry.
+                    // The uncached version cost 2-4 ms/frame at 4k entries.
+                    auto* persp = dynamic_cast<PerspectiveCamera*>(&camera);
+                    Vector3 camPos;
+                    if (persp) camPos.setFromMatrixPosition(*camera.matrixWorld);
+                    // renderExtent() is the INTERNAL (render-scale-applied)
+                    // resolution the G-buffer rasterizes at — τ below is in
+                    // G-buffer pixels, i.e. the resolution the geometric error
+                    // is actually sampled at. (Post-TAA upscale can stretch a
+                    // render pixel to ~1.3 display pixels at scale 0.75; the
+                    // fjord/harness visual gates validated the threshold at
+                    // that operating point.)
+                    const float renderHeightPx = static_cast<float>(renderExtent().height);
+                    const float tanHalfFovY = persp
+                            ? std::tan(math::degToRad(persp->getEffectiveFOV()) * 0.5f)
+                            : 0.f;
+
+                    for (auto& en : entries) {
+                        if (en.isOverlay || en.isParticle) continue;// not scene geometry — no LOD concept
+                        // Deformers (stale local AABB), opted-out meshes
+                        // (Object3D::autoLod == false — self-managed LOD like
+                        // terrain tiles), authored manual-LOD subtrees, and
+                        // non-perspective cameras (SSE needs a pinhole model):
+                        // full detail.
+                        if (en.isSkinned || en.isDisplaced || en.isGrass || en.isMorphed || en.isTet ||
+                            en.lodExemptStatic || !persp) {
+                            if (en.lodLevel != 0) lodChangedThisFrame_ = true;
+                            en.lodLevel = 0;
+                            ++stats.entriesPerLevel[0];
+                            continue;
+                        }
+                        // Emissive VALUES read live off the expansion-cached
+                        // cast — NEE's per-tri CDF (buildAndUploadEmissiveTris)
+                        // caches world-space triangles and would not notice a
+                        // silent index-buffer swap underneath it. Live values
+                        // (not a cached verdict) so a lantern whose intensity
+                        // ramps up at dusk exempts the moment it turns on.
+                        if (en.lodEmissive &&
+                            (en.lodEmissive->emissive.r > 0.f || en.lodEmissive->emissive.g > 0.f ||
+                             en.lodEmissive->emissive.b > 0.f || en.lodEmissive->emissiveMap)) {
+                            if (en.lodLevel != 0) lodChangedThisFrame_ = true;
+                            en.lodLevel = 0;
+                            ++stats.entriesPerLevel[0];
+                            continue;
+                        }
+
+                        auto blasIt = blasCache.find(en.lodGeomKey);
+                        if (blasIt == blasCache.end()) {
+                            en.lodLevel = 0;// brand-new geometry this frame — no LOD0 record to chain off yet
+                            ++stats.entriesPerLevel[0];
+                            continue;
+                        }
+                        BlasRecord& rec = *blasIt->second;
+
+                        // NON-indexed soup (FBX-style loaders never call
+                        // setIndex) is eligible too: the chain generator welds
+                        // it into canonical indices, and the levels drive
+                        // INDEXED draws against the unchanged soup vertex
+                        // buffer (selectLodGeom reports the indexed-ness).
+                        const uint32_t triCount =
+                                (rec.indexCount != 0u ? rec.indexCount : rec.vertexCount) / 3u;
+                        const bool eligible = triCount >= 1024u;
+                        if (eligible && rec.lodState == BlasRecord::LodState::None) {
+                            if ((lodIndexBytes_ + lodBlasBytes_) <= kLodByteBudget) {
+                                // The enqueue snapshots attribute data, so it needs
+                                // the live geometry — the ONLY shared_ptr deref
+                                // left in this loop, paid once per geometry
+                                // lifetime. Failed enqueue (no position attribute)
+                                // marks Failed, not Queued: no result is coming,
+                                // so Queued would strand the record forever.
+                                auto geomSp = en.mesh->geometry();
+                                rec.lodState = (geomSp && enqueueLodJob(en.lodGeomKey, rec.geomVersion, *geomSp))
+                                        ? BlasRecord::LodState::Queued
+                                        : BlasRecord::LodState::Failed;
+                            } else if (!lodBudgetWarned_) {
+                                std::cerr << "[VulkanRenderer] auto-LOD: 256 MiB byte budget reached — "
+                                             "no further chains will be generated this session\n";
+                                lodBudgetWarned_ = true;
+                            }
+                        }
+
+                        if (rec.lodState != BlasRecord::LodState::Ready || rec.lodLevels.empty()) {
+                            en.lodLevel = 0;
+                            ++stats.entriesPerLevel[0];
+                            continue;
+                        }
+
+                        // Re-derive the cached object-space sphere after an
+                        // in-place geometry edit (flagged by the geom-dirty
+                        // detection; boundingBox was invalidated there too).
+                        if (en.lodSphereDirty) {
+                            en.lodSphereDirty = false;
+                            if (auto g = en.mesh->geometry()) {
+                                if (!g->boundingBox) g->computeBoundingBox();
+                                if (g->boundingBox) {
+                                    const Vector3 c = g->boundingBox->getCenter();
+                                    en.lodCenter[0] = c.x;
+                                    en.lodCenter[1] = c.y;
+                                    en.lodCenter[2] = c.z;
+                                    en.lodRadius = g->boundingBox->getSize().length() * 0.5f;
+                                }
+                            }
+                        }
+                        if (en.lodRadius <= 0.f) {
+                            en.lodLevel = 0;// unknown bounds — stay at full detail
+                            ++stats.entriesPerLevel[0];
+                            continue;
+                        }
+
+                        // World bounding sphere straight off the entry's
+                        // column-major world matrix — no Matrix4 round-trip.
+                        const float* M = en.worldMatrix.data();
+                        const float cx = M[0] * en.lodCenter[0] + M[4] * en.lodCenter[1] + M[8] * en.lodCenter[2] + M[12];
+                        const float cy = M[1] * en.lodCenter[0] + M[5] * en.lodCenter[1] + M[9] * en.lodCenter[2] + M[13];
+                        const float cz = M[2] * en.lodCenter[0] + M[6] * en.lodCenter[1] + M[10] * en.lodCenter[2] + M[14];
+                        const float s0 = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
+                        const float s1 = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
+                        const float s2 = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
+                        const float worldScale = std::sqrt(std::max(s0, std::max(s1, s2)));
+                        const float worldRadius = en.lodRadius * worldScale;
+                        const float dx = camPos.x - cx, dy = camPos.y - cy, dz = camPos.z - cz;
+                        const float distToCenter = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+                        uint8_t selected = 0;// camera-inside-sphere (or degenerate FOV) default: full detail
+                        if (distToCenter > worldRadius && tanHalfFovY > 1e-6f) {
+                            const float dist = distToCenter - worldRadius;
+                            const float pxPerUnit = renderHeightPx / (2.f * tanHalfFovY * dist);
+                            auto projErrorOf = [&](uint8_t lvl) -> float {
+                                if (lvl == 0) return 0.f;
+                                return rec.lodLevels[lvl - 1].errorBound * worldScale * pxPerUnit;
+                            };
+                            // Coarsest level whose projected error still fits under τ=0.75px.
+                            for (uint8_t i = static_cast<uint8_t>(rec.lodLevels.size()); i >= 1; --i) {
+                                if (projErrorOf(i) <= 0.75f) { selected = i; break; }
+                            }
+                            // Hysteresis around the entry's CURRENT level (carried across
+                            // lean frames via lastVisibleEntries_) — prevents a level right
+                            // at the threshold from flip-flopping every frame.
+                            const uint8_t cur = (en.lodLevel <= rec.lodLevels.size()) ? en.lodLevel : uint8_t{0};
+                            uint8_t next = cur;
+                            if (selected > cur && projErrorOf(selected) <= 0.6f) next = selected;
+                            else if (selected < cur && projErrorOf(cur) > 0.75f) next = selected;
+                            selected = next;
+                        }
+
+                        if (selected != en.lodLevel) lodChangedThisFrame_ = true;
+                        en.lodLevel = selected;
+                        ++stats.entriesPerLevel[std::min<uint8_t>(selected, 5)];
+                    }
+                } else {
+                    // Feature off (or just turned off this frame): every
+                    // entry snaps straight back to LOD0. Cheap even on huge
+                    // scenes (one field compare/write per entry) and matters
+                    // for correctness — without it, an entry's level from a
+                    // prior setAutoLod(true) session would persist forever
+                    // (MeshEntry::lodLevel survives across lean frames).
+                    uint32_t nonOverlay = 0;
+                    for (auto& en : entries) {
+                        if (en.isOverlay || en.isParticle) continue;
+                        if (en.lodLevel != 0) lodChangedThisFrame_ = true;
+                        en.lodLevel = 0;
+                        ++nonOverlay;
+                    }
+                    stats.entriesPerLevel[0] = nonOverlay;
+                }
+                autoLodStats_ = stats;
+            }
 
             // Change flags shared by the LEAN in-place diff and the generic
             // compare loop below — exactly one of the two fills them.
@@ -434,6 +703,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                             entryGeomDirty[i] = true;
                             // boundingBox invalidation — mirrors the generic loop.
                             if (auto gg = en.mesh->geometry()) gg->boundingBox.reset();
+                            entries[i].lodSphereDirty = true;// auto-LOD's cached sphere follows
                         }
                     }
                     if (xfmChanged) {
@@ -682,6 +952,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                     if (geomChanged && !entries[i].isParticle) {
                         geomDirtyAny = true;
                         entryGeomDirty[i] = true;
+                        entries[i].lodSphereDirty = true;// auto-LOD's cached sphere follows
                         // Invalidate the cached boundingBox so the next
                         // cullEntriesAgainstFrustum recomputes it from the
                         // current positions. Without this, plain meshes with
@@ -834,6 +1105,23 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                                 break;
                             }
 
+                            // An in-place vertex rewrite invalidates any auto-LOD
+                            // chain: the level BLASes BAKE positions (a stale level
+                            // would ray-trace the pre-edit shape) and the chain's
+                            // error bounds measured the old surface. The device-wide
+                            // drain above makes the destroy safe. lodState=None ⇒
+                            // the selection pass re-enqueues against the new
+                            // geomVersion; selectLodGeom falls back to LOD0 for
+                            // every consumer meanwhile. lodChangedThisFrame_ must be
+                            // forced: selection already ran this frame and may have
+                            // left en.lodLevel > 0 — the EFFECTIVE level changes to
+                            // 0 right here, and without the flag the geomDescs GPU
+                            // patch would skip while the TLAS falls back, leaving a
+                            // stale per-level index address behind.
+                            if (rec.lodState != BlasRecord::LodState::None) {
+                                destroyBlasLodLevels(rec);
+                                lodChangedThisFrame_ = true;
+                            }
                             refreshOps.push_back({entries[i].mesh->geometry().get(), &rec});
                             refreshedGeoms.insert(geomKey);
                         }
@@ -890,7 +1178,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                         }
                     }
 
-                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny) {
+                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny || lodChangedThisFrame_) {
                         // TLAS refit: needed when instance transforms change
                         // (matricesSame=false) AND when any skinned BLAS was
                         // just rebuilt — the TLAS's per-instance wrapped AABB
@@ -900,6 +1188,10 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                         // BLAS handles + buffer addresses are unchanged so
                         // geomDescs / matDescs stay valid; we just rewrite the
                         // tlasInstancesBuffer in place and call MODE_UPDATE.
+                        // EXCEPT auto-LOD: a level switch DOES change which
+                        // BLAS (and which index buffer) an entry's instance
+                        // references — see the plain-geometry branch below
+                        // and the geomDescsCached_ patch after this loop.
                         std::vector<VkAccelerationStructureInstanceKHR> instances;
                         instances.reserve(entries.size());
                         // instanceCustomIndex == entry index (matches the entries-
@@ -938,7 +1230,21 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                                 const BufferGeometry* geomKey = en.mesh->geometry().get();
                                 auto it = blasCache.find(geomKey);
                                 if (it == blasCache.end()) continue;// shouldn't happen on transform-only
-                                blasAddr = it->second->address;
+                                const auto lodSel = selectLodGeom(*it->second, en.lodLevel);
+                                blasAddr = lodSel.asAddress;
+                                // RT secondary hits (reflections/GI/lidar/probe update)
+                                // read GeometryDesc::indexAddress keyed by gl_PrimitiveID
+                                // from whichever BLAS this instance references — it must
+                                // track the SAME level, or a hit against a coarser BLAS
+                                // misindexes the still-LOD0 index buffer. `indexed` rides
+                                // along: a level of a non-indexed soup record IS an
+                                // indexed fetch. Patched into the buffer itself
+                                // (vkDeviceWaitIdle-gated) below, only on a frame where a
+                                // level actually changed.
+                                if (i < geomDescsCached_.size()) {
+                                    geomDescsCached_[i].indexAddress = lodSel.indexAddress;
+                                    geomDescsCached_[i].indexed = lodSel.indexed ? 1u : 0u;
+                                }
                             }
                             VkAccelerationStructureInstanceKHR inst{};
                             const auto& e = en.worldMatrix;
@@ -962,7 +1268,19 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                             inst.accelerationStructureReference = blasAddr;
                             instances.push_back(inst);
                         }
-                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny;
+                        if (lodChangedThisFrame_ && !geomDescsCached_.empty()) {
+                            // geomDescsCached_ was patched in place above; the
+                            // per-frame-in-flight ring carries it to the GPU
+                            // stall-free — renderFrame flushes THIS frame's
+                            // slot right after its fence signals (before any
+                            // recording that consumes it), the other slot when
+                            // its frame comes around. Same model as matDescs;
+                            // this replaced a vkDeviceWaitIdle per switch
+                            // frame, which hitched exactly when the camera
+                            // was moving.
+                            for (auto& d : geomDescsDirty_) d = true;
+                        }
+                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny || lodChangedThisFrame_;
                         // Stage the refit; recordCommandBuffer records it into the
                         // frame cb after the deformable BLAS rebuilds (no drain).
                         pendingTlasInstances_ = std::move(instances);
@@ -1089,13 +1407,15 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                 }
                 destroyBuffer(ctx->allocator(), tlasBuffer);
                 for (auto& b : tlasInstancesBuffers) { destroyBuffer(ctx->allocator(), b); b = {}; }
-                destroyBuffer(ctx->allocator(), geometryDescsBuffer);
+                for (auto& b : geometryDescsBuffers) {
+                    destroyBuffer(ctx->allocator(), b);
+                    b = {};
+                }
                 for (auto& b : materialDescsBuffers) {
                     destroyBuffer(ctx->allocator(), b);
                     b = {};
                 }
                 tlasBuffer = {};
-                geometryDescsBuffer = {};
 
                 // Prune stale cache entries whose underlying objects have been
                 // destroyed (typical on model swap). Keeping them risks an
@@ -1105,6 +1425,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                 for (auto it = blasCache.begin(); it != blasCache.end(); ) {
                     if (it->second->liveCheck.expired()) {
                         auto& rec = it->second;
+                        destroyBlasLodLevels(*rec);
                         if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
                         destroyBuffer(ctx->allocator(), rec->storage);
                         destroyBuffer(ctx->allocator(), rec->vertex);
@@ -1344,6 +1665,13 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                         const unsigned int curVer = geomVersionOf(*m->geometry());
                         if (it->second->geomVersion != curVer) {
                             auto& old = it->second;
+                            // Topology/positions changed under this geometry
+                            // pointer — any existing LOD chain simplified the
+                            // OLD data and no longer matches. Destroy it; the
+                            // fresh BlasRecord created below starts at
+                            // LodState::None and the selection pass re-
+                            // enqueues a new chain next time it's eligible.
+                            destroyBlasLodLevels(*old);
                             if (old->as) ctx->rt().destroyAccelerationStructure(ctx->device(), old->as, nullptr);
                             destroyBuffer(ctx->allocator(), old->storage);
                             destroyBuffer(ctx->allocator(), old->vertex);
@@ -1391,13 +1719,24 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                 inst.mask = kRayMaskOpaque;// placeholder; set to Opaque/Alpha once md is built below
                 inst.instanceShaderBindingTableRecordOffset = 0;
                 inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-                inst.accelerationStructureReference = recPtr->address;
+                // en.lodLevel==0 for every deformer/exempt entry (auto-LOD
+                // selection above only ever sets it on plain cached
+                // geometry), so this passthrough is a no-op for them —
+                // recPtr may point at a SkinnedMeshState/DisplacedMeshState/
+                // etc.'s own BlasRecord, which selectLodGeom treats
+                // identically to a LOD0 blasCache record.
+                const auto lodSel = selectLodGeom(*recPtr, en.lodLevel);
+                inst.accelerationStructureReference = lodSel.asAddress;
                 instances.push_back(inst);
 
                 GeometryDesc gdesc{};
                 gdesc.vertexAddress = recPtr->vertex.address;
                 gdesc.normalAddress = recPtr->normal.address;
-                gdesc.indexAddress  = recPtr->index.address;
+                // Must reference the SAME index buffer the selected BLAS
+                // level was built from — RT secondary hits (reflections/GI/
+                // lidar/probe update) read this keyed by gl_PrimitiveID,
+                // which only lines up against that exact index array.
+                gdesc.indexAddress  = lodSel.indexAddress;
                 gdesc.uvAddress     = recPtr->uv.address;// 0 if no UV attribute
                 gdesc.foamAddress   = recPtr->isOceanSurface ? 1ull : 0ull;// 0/1 flag (not an address); 1 == FFT-displaced ocean surface
                 // prevVertexAddress: skinned + displaced meshes have a real
@@ -1420,7 +1759,9 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
                         (recPtr->prevVertex.handle != VK_NULL_HANDLE && !warpReproject)
                                 ? recPtr->prevVertex.address
                                 : recPtr->vertex.address;
-                gdesc.indexed = recPtr->index.handle != VK_NULL_HANDLE ? 1u : 0u;
+                // Per SELECTION, not per record: a level of a non-indexed
+                // soup record IS indexed (welded canonical indices).
+                gdesc.indexed = lodSel.indexed ? 1u : 0u;
                 // Per-vertex color only when the material opts in (three.js
                 // semantics: vertexColors == true) AND the geometry uploaded a
                 // color buffer. 0 otherwise → chit skips the modulation.
@@ -1492,7 +1833,21 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
             }
 
             buildTlas(instances);
-            uploadDescBuffer(geometryDescsBuffer, geomDescs);
+            // Every per-frame GeometryDesc slot seeded fresh — same ring
+            // model as the matDescs loop below; the lean auto-LOD patch
+            // flips geomDescsDirty_ and flushGeometryDescsIfDirty carries
+            // deltas per slot from then on.
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                uploadDescBuffer(geometryDescsBuffers[f], geomDescs);
+            }
+            for (auto& d : geomDescsDirty_) d = false;
+            // Host mirror for the lean-path auto-LOD patch above. geomDescs
+            // just built already reflects each entry's CURRENT en.lodLevel
+            // (the selection pass runs before this heavy rebuild, so an
+            // entry whose geometry/BLAS wasn't touched by this particular
+            // rebuild can still carry a >0 level from before) — this is
+            // just the persistent copy the lean path patches in place.
+            geomDescsCached_ = geomDescs;
             // Seed every per-frame slot with the fresh matDescs so the first
             // few frames don't try to flush against a half-initialised ring.
             // matDescsCached_ stays in sync as the host-side authoritative

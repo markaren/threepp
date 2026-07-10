@@ -224,6 +224,44 @@ namespace threepp {
         void setNormalMapToksvig(bool enabled);
         [[nodiscard]] bool normalMapToksvig() const;
 
+        // ── Automatic mesh LOD (ON by default) ────────────────────────────
+        // Per-geometry chains of simplified INDEX buffers (vertex positions/
+        // normals/UVs untouched — index-only), generated in the background
+        // with meshoptimizer and selected per-entry per-frame by projected
+        // screen-space error (sub-pixel at the switch, so transitions are
+        // invisible). Consumed identically by the raster G-buffer and the
+        // ray-tracing TLAS. This is a PERFORMANCE feature for geometry-bound
+        // scenes (measured: fjord flythrough +32% FPS, per-pixel-bound
+        // Bistro neutral) — measurement showed it does NOT meaningfully
+        // reduce TAA edge shimmer (that is sub-pixel coverage + the 1-spp
+        // shading floor, not triangle density).
+        // Exempt (always LOD0): skinned/displaced/grass/morphed/tet meshes,
+        // overlay/particle entries, emissive materials, meshes with
+        // Object3D::autoLod == false (self-managed LOD — TileTerrain sets it
+        // on its quadtree tiles), and anything under a manual threepp::LOD
+        // node (its levels are hand-authored already).
+        // setAutoLod(false) is the manual override / debug escape. Toggle
+        // semantics: takes effect at the next render() (every entry snaps
+        // back to full detail on disable); generated chains and in-flight
+        // background jobs are KEPT across a disable/enable cycle (results are
+        // geometry-version-guarded, so nothing stale is ever consumed), and
+        // autoLodStats() reflects the most recent render, not the setter.
+        void setAutoLod(bool enabled);
+        [[nodiscard]] bool autoLod() const;
+
+        // Debug/harness stats snapshot from the last render()'s LOD
+        // selection pass. entriesPerLevel[0] is LOD0 (unsimplified); [1..4]
+        // are the generated chain levels; [5] is a defensive catch-all
+        // beyond the 4-level cap (should always read 0).
+        struct AutoLodStats {
+            uint32_t entriesPerLevel[6] = {};
+            uint64_t indexBytes = 0;// resident LOD index-buffer bytes (all levels, all geometries)
+            uint64_t blasBytes  = 0;// resident LOD BLAS storage bytes
+            uint32_t chainsReady  = 0;// unique geometries with a finalized chain
+            uint32_t chainsQueued = 0;// unique geometries with a chain job in flight
+        };
+        [[nodiscard]] AutoLodStats autoLodStats() const;
+
         // HDR bloom, added in linear HDR before the tone-map curve. 0 disables.
         void setBloomIntensity(float intensity);
         [[nodiscard]] float bloomIntensity() const;
