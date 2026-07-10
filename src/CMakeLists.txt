@@ -203,6 +203,7 @@ set(publicHeaders
         "threepp/textures/Texture.hpp"
 
         "threepp/utils/BufferGeometryUtils.hpp"
+        "threepp/utils/GeometryLod.hpp"
         "threepp/utils/ImageUtils.hpp"
         "threepp/utils/StringUtils.hpp"
         "threepp/utils/TaskManager.hpp"
@@ -478,6 +479,7 @@ set(sources
         "threepp/textures/DepthTexture.cpp"
 
         "threepp/utils/BufferGeometryUtils.cpp"
+        "threepp/utils/GeometryLod.cpp"
         "threepp/utils/ImageUtils.cpp"
         "threepp/utils/StringUtils.cpp"
         "threepp/utils/TaskManager.cpp"

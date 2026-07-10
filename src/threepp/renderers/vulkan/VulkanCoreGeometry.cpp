@@ -258,6 +258,158 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
             return rec;
         }
 
+// Builds one auto-LOD chain level: a new index buffer + a static BLAS built
+// against `rec`'s EXISTING vertex buffer (positions are never touched by
+// simplification — every index in `level.indices` still refers into
+// rec->vertex, same as LOD0). Subset of buildBlasFor's shape restricted to
+// index-only geometry input; no normal/uv/color buffers (those are shared
+// with LOD0 via the same vertexAddress-keyed lookup the shaders already do).
+bool VulkanRendererCore::CoreImpl::buildLodLevelFor(BlasRecord& rec,
+                                                     const geometrylod::Level& level,
+                                                     BlasRecord::LodLevel& out) {
+            if (level.indices.empty()) return false;
+            if (rec.vertex.handle == VK_NULL_HANDLE || rec.vertexCount == 0) return false;
+            const uint32_t primitiveCount = static_cast<uint32_t>(level.indices.size() / 3);
+            if (primitiveCount == 0) return false;
+
+            const VkBufferUsageFlags idxUsage =
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+
+            const VkDeviceSize ibBytes = level.indices.size() * sizeof(uint32_t);
+            out.index = createBuffer(
+                    ctx->allocator(), ctx->device(), ibBytes,
+                    idxUsage, VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), out.index.alloc, &mapped);
+            std::memcpy(mapped, level.indices.data(), ibBytes);
+            vmaUnmapMemory(ctx->allocator(), out.index.alloc);
+
+            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            triData.vertexData.deviceAddress = rec.vertex.address;
+            triData.vertexStride = 3 * sizeof(float);
+            triData.maxVertex = rec.vertexCount - 1;
+            triData.indexType = VK_INDEX_TYPE_UINT32;
+            triData.indexData.deviceAddress = out.index.address;
+
+            VkAccelerationStructureGeometryKHR blasGeom{};
+            blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            blasGeom.geometry.triangles = triData;
+            // Same any-hit-visible flags as LOD0 (0, not OPAQUE) — a
+            // simplified level of an alpha-tested surface must still run
+            // the any-hit alpha cutout, not just its opaque triangles.
+            blasGeom.flags = 0;
+
+            VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+            blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            // No ALLOW_UPDATE: LOD levels are static once built (their vertex
+            // source never refits in place — a geometry-version bump instead
+            // destroys the whole chain, see the geomVersion-changed rebuild
+            // path in VulkanCoreScene.cpp), so PREFER_FAST_TRACE alone is
+            // strictly better (smaller build, faster trace).
+            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+            blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            blasBuild.geometryCount = 1;
+            blasBuild.pGeometries = &blasGeom;
+
+            VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
+            blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(),
+                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    &blasBuild, &primitiveCount, &blasSizes);
+
+            out.storage = createBuffer(
+                    ctx->allocator(), ctx->device(), blasSizes.accelerationStructureSize,
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO);
+
+            VkAccelerationStructureCreateInfoKHR blasCreate{};
+            blasCreate.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+            blasCreate.buffer = out.storage.handle;
+            blasCreate.size = blasSizes.accelerationStructureSize;
+            blasCreate.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            check(ctx->rt().createAccelerationStructure(ctx->device(), &blasCreate, nullptr, &out.as),
+                  "vkCreateAccelerationStructureKHR(LOD level BLAS)");
+
+            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
+            blasBuild.dstAccelerationStructure = out.as;
+            blasBuild.scratchData.deviceAddress = scratch.address;
+
+            VkAccelerationStructureBuildRangeInfoKHR range{};
+            range.primitiveCount = primitiveCount;
+            const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+
+            VkCommandBuffer cb = beginOneShot();
+            ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
+            endAndSubmitOneShot(cb, "buildLodLevelFor");
+            destroyBuffer(ctx->allocator(), scratch);
+
+            VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
+            addrInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+            addrInfo.accelerationStructure = out.as;
+            out.address = ctx->rt().getAccelerationStructureDeviceAddress(ctx->device(), &addrInfo);
+
+            out.indexCount  = static_cast<uint32_t>(level.indices.size());
+            out.errorBound  = level.error;
+            return true;
+        }
+
+// Drains at most ONE finished chain per call (see the "budget one geometry
+// finalized per frame" doc comment on the declaration) and turns it into
+// GPU resources on `rec`. Discards stale results: the record may have been
+// evicted (geometry destroyed) or its geomVersion may have moved on (the
+// user mutated vertices in place after the job was snapshotted) since the
+// job was enqueued — either way the simplified data no longer matches
+// anything live, so it's dropped and lodState reset to None so a fresh job
+// gets queued next time the (now-different) geometry is seen as eligible.
+void VulkanRendererCore::CoreImpl::drainLodResults() {
+            LodResult result;
+            {
+                std::lock_guard<std::mutex> lk(lodResultMutex_);
+                if (lodResultQueue_.empty()) return;
+                result = std::move(lodResultQueue_.front());
+                lodResultQueue_.pop_front();
+            }
+            --lodChainsQueuedCount_;
+
+            auto it = blasCache.find(result.geom);
+            if (it == blasCache.end()) return;// record evicted while the job was in flight
+            BlasRecord& rec = *it->second;
+            if (rec.geomVersion != result.geomVersion) {
+                rec.lodState = BlasRecord::LodState::None;// stale — re-enqueue will pick up the new version
+                return;
+            }
+            if (result.levels.empty()) {
+                rec.lodState = BlasRecord::LodState::Failed;
+                return;
+            }
+
+            rec.lodLevels.reserve(result.levels.size());
+            for (const auto& lvl : result.levels) {
+                BlasRecord::LodLevel out{};
+                if (!buildLodLevelFor(rec, lvl, out)) continue;
+                lodIndexBytes_ += out.index.size;
+                lodBlasBytes_  += out.storage.size;
+                rec.lodLevels.push_back(out);
+            }
+            if (rec.lodLevels.empty()) {
+                rec.lodState = BlasRecord::LodState::Failed;
+            } else {
+                rec.lodState = BlasRecord::LodState::Ready;
+                ++lodChainsReadyCount_;
+            }
+        }
+
 void VulkanRendererCore::CoreImpl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState& st) {
             if (!st.blas || !sm.skeleton || st.boneCount == 0) return;
 

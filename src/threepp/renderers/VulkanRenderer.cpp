@@ -1408,6 +1408,18 @@ namespace threepp {
         return core()->normalMapToksvig_;
     }
 
+    void VulkanRendererCore::setAutoLod(bool enabled) {
+        core()->autoLod_ = enabled;
+    }
+
+    bool VulkanRendererCore::autoLod() const {
+        return core()->autoLod_;
+    }
+
+    VulkanRendererCore::AutoLodStats VulkanRendererCore::autoLodStats() const {
+        return core()->autoLodStats_;
+    }
+
     VulkanRendererCore::FrameTimings VulkanRendererCore::lastFrameTimings() const {
         return core()->gpuTimings_->timings();
     }
