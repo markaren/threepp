@@ -958,6 +958,29 @@ namespace threepp {
             // re-expansion (rare, and the selection pass re-picks it that
             // same frame anyway).
             uint8_t  lodLevel    = 0;
+            // Auto-LOD selection caches, derived ONCE at full expansion so the
+            // per-frame selection pass is pure float math — the uncached
+            // version paid a dynamic_cast + ancestor hash-walk + shared_ptr
+            // derefs PER ENTRY PER FRAME (~2-4 ms on 4k-entry scenes; measured
+            // as the whole feature's CPU cost on Bistro/fjord).
+            //   lodUnderManualLod — mesh sits under a threepp::LOD subtree
+            //     (structure changes force a full expansion ⇒ can't go stale).
+            //   lodEmissive — cached MaterialWithEmissive cast (material
+            //     POINTER swaps force a full expansion). VALUES are read live
+            //     each frame, so an emissive that turns on later (dusk-driven
+            //     lantern intensity) exempts immediately, cast-free.
+            //   lodGeomKey — blasCache key (geometry pointer swaps force a
+            //     full expansion).
+            //   lodCenter/lodRadius — object-space bounding sphere; radius 0 ⇒
+            //     unknown ⇒ entry stays LOD0. lodSphereDirty re-derives it
+            //     after an in-place geometry edit (set by the geom-dirty
+            //     detection, consumed lazily by the next selection pass).
+            bool lodUnderManualLod = false;
+            bool lodSphereDirty    = false;
+            const MaterialWithEmissive* lodEmissive = nullptr;
+            const BufferGeometry* lodGeomKey = nullptr;
+            float lodCenter[3] = {0.f, 0.f, 0.f};
+            float lodRadius = 0.f;
         };
 
         // ── Scene-structure SNAPSHOT (ensureSceneBuilt fast path) ────────────

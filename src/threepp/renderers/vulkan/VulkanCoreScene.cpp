@@ -336,6 +336,35 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                 const bool isTet = !isSkinned && !isDisplaced && !isGrass && !isMorphed &&
                                    m->material() && m->material()->tetSkinning &&
                                    m->material()->tetTexture != nullptr;
+                // Auto-LOD selection caches — once per Mesh, shared by every
+                // instance entry (see the MeshEntry field doc). manualLodRoots_
+                // is complete for this mesh's ancestors: traverseVisible is
+                // pre-order, so an enclosing LOD node registered its level
+                // objects before we got here.
+                bool lodUnderManual = false;
+                for (Object3D* p = m->parent; p; p = p->parent) {
+                    if (manualLodRoots_.count(p)) { lodUnderManual = true; break; }
+                }
+                const MaterialWithEmissive* lodEmissive = nullptr;
+                if (auto mat = m->material()) {
+                    lodEmissive = dynamic_cast<MaterialWithEmissive*>(mat.get());
+                }
+                if (!geom->boundingBox) geom->computeBoundingBox();
+                Vector3 lodCenter;
+                float lodRadius = 0.f;
+                if (geom->boundingBox) {
+                    lodCenter = geom->boundingBox->getCenter();
+                    lodRadius = geom->boundingBox->getSize().length() * 0.5f;
+                }
+                auto setLodCaches = [&](MeshEntry& e) {
+                    e.lodUnderManualLod = lodUnderManual;
+                    e.lodEmissive       = lodEmissive;
+                    e.lodGeomKey        = geom.get();
+                    e.lodCenter[0]      = lodCenter.x;
+                    e.lodCenter[1]      = lodCenter.y;
+                    e.lodCenter[2]      = lodCenter.z;
+                    e.lodRadius         = lodRadius;
+                };
                 if (inst && inst->count() > 0) {
                     Matrix4 instMat;
                     Matrix4 world;
@@ -353,6 +382,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                         e.isMorphed    = isMorphed;
                         e.isTet        = isTet;
                         e.isInstanced  = true;
+                        setLodCaches(e);
                         std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
                         built.push_back(e);
                     }
@@ -367,6 +397,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     e.isGrass      = isGrass;
                     e.isMorphed    = isMorphed;
                     e.isTet        = isTet;
+                    setLodCaches(e);
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
                     built.push_back(e);
                 }
@@ -395,6 +426,10 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                 stats.chainsReady  = lodChainsReadyCount_;
                 stats.chainsQueued = lodChainsQueuedCount_;
                 if (autoLod_) {
+                    // Hot path by design: everything type- or structure-derived
+                    // was cached on the entry at expansion (see MeshEntry doc) —
+                    // this loop is float math + one blasCache hash per entry.
+                    // The uncached version cost 2-4 ms/frame at 4k entries.
                     auto* persp = dynamic_cast<PerspectiveCamera*>(&camera);
                     Vector3 camPos;
                     if (persp) camPos.setFromMatrixPosition(*camera.matrixWorld);
@@ -405,47 +440,32 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
 
                     for (auto& en : entries) {
                         if (en.isOverlay || en.isParticle) continue;// not scene geometry — no LOD concept
-                        if (en.isSkinned || en.isDisplaced || en.isGrass || en.isMorphed || en.isTet) {
-                            en.lodLevel = 0;// deformers: local AABB is stale, never simplify
-                            ++stats.entriesPerLevel[0];
-                            continue;
-                        }
-                        if (!persp) {
-                            en.lodLevel = 0;// non-perspective camera reached here — be defensive
-                            ++stats.entriesPerLevel[0];
-                            continue;
-                        }
-                        Mesh* m = en.mesh;
-                        bool underManualLod = false;
-                        for (Object3D* p = m->parent; p; p = p->parent) {
-                            if (manualLodRoots_.count(p)) { underManualLod = true; break; }
-                        }
-                        if (underManualLod) {
-                            en.lodLevel = 0;// author already picked discrete levels here
-                            ++stats.entriesPerLevel[0];
-                            continue;
-                        }
-                        if (auto matSp = m->material()) {
-                            if (auto* em = dynamic_cast<MaterialWithEmissive*>(matSp.get())) {
-                                const bool nonBlack = em->emissive.r > 0.f || em->emissive.g > 0.f || em->emissive.b > 0.f;
-                                if (nonBlack || em->emissiveMap) {
-                                    // Emissive NEE's per-tri CDF (buildAndUploadEmissiveTris)
-                                    // caches world-space triangle positions and would not
-                                    // notice a silent index-buffer swap underneath it.
-                                    en.lodLevel = 0;
-                                    ++stats.entriesPerLevel[0];
-                                    continue;
-                                }
-                            }
-                        }
-
-                        auto geom = m->geometry();
-                        if (!geom) {
+                        // Deformers (stale local AABB), authored manual-LOD
+                        // subtrees, and non-perspective cameras (SSE needs a
+                        // pinhole model): full detail.
+                        if (en.isSkinned || en.isDisplaced || en.isGrass || en.isMorphed || en.isTet ||
+                            en.lodUnderManualLod || !persp) {
+                            if (en.lodLevel != 0) lodChangedThisFrame_ = true;
                             en.lodLevel = 0;
                             ++stats.entriesPerLevel[0];
                             continue;
                         }
-                        auto blasIt = blasCache.find(geom.get());
+                        // Emissive VALUES read live off the expansion-cached
+                        // cast — NEE's per-tri CDF (buildAndUploadEmissiveTris)
+                        // caches world-space triangles and would not notice a
+                        // silent index-buffer swap underneath it. Live values
+                        // (not a cached verdict) so a lantern whose intensity
+                        // ramps up at dusk exempts the moment it turns on.
+                        if (en.lodEmissive &&
+                            (en.lodEmissive->emissive.r > 0.f || en.lodEmissive->emissive.g > 0.f ||
+                             en.lodEmissive->emissive.b > 0.f || en.lodEmissive->emissiveMap)) {
+                            if (en.lodLevel != 0) lodChangedThisFrame_ = true;
+                            en.lodLevel = 0;
+                            ++stats.entriesPerLevel[0];
+                            continue;
+                        }
+
+                        auto blasIt = blasCache.find(en.lodGeomKey);
                         if (blasIt == blasCache.end()) {
                             en.lodLevel = 0;// brand-new geometry this frame — no LOD0 record to chain off yet
                             ++stats.entriesPerLevel[0];
@@ -463,11 +483,14 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                         const bool eligible = triCount >= 1024u;
                         if (eligible && rec.lodState == BlasRecord::LodState::None) {
                             if ((lodIndexBytes_ + lodBlasBytes_) <= kLodByteBudget) {
-                                // Failed enqueue (no position attribute — can't
-                                // happen for a live BlasRecord, but be defensive)
+                                // The enqueue snapshots attribute data, so it needs
+                                // the live geometry — the ONLY shared_ptr deref
+                                // left in this loop, paid once per geometry
+                                // lifetime. Failed enqueue (no position attribute)
                                 // marks Failed, not Queued: no result is coming,
                                 // so Queued would strand the record forever.
-                                rec.lodState = enqueueLodJob(geom.get(), rec.geomVersion, *geom)
+                                auto geomSp = en.mesh->geometry();
+                                rec.lodState = (geomSp && enqueueLodJob(en.lodGeomKey, rec.geomVersion, *geomSp))
                                         ? BlasRecord::LodState::Queued
                                         : BlasRecord::LodState::Failed;
                             } else if (!lodBudgetWarned_) {
@@ -483,21 +506,41 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                             continue;
                         }
 
-                        if (!geom->boundingBox) geom->computeBoundingBox();
-                        if (!geom->boundingBox) {
-                            en.lodLevel = 0;
+                        // Re-derive the cached object-space sphere after an
+                        // in-place geometry edit (flagged by the geom-dirty
+                        // detection; boundingBox was invalidated there too).
+                        if (en.lodSphereDirty) {
+                            en.lodSphereDirty = false;
+                            if (auto g = en.mesh->geometry()) {
+                                if (!g->boundingBox) g->computeBoundingBox();
+                                if (g->boundingBox) {
+                                    const Vector3 c = g->boundingBox->getCenter();
+                                    en.lodCenter[0] = c.x;
+                                    en.lodCenter[1] = c.y;
+                                    en.lodCenter[2] = c.z;
+                                    en.lodRadius = g->boundingBox->getSize().length() * 0.5f;
+                                }
+                            }
+                        }
+                        if (en.lodRadius <= 0.f) {
+                            en.lodLevel = 0;// unknown bounds — stay at full detail
                             ++stats.entriesPerLevel[0];
                             continue;
                         }
 
-                        Matrix4 world;
-                        std::memcpy(world.elements.data(), en.worldMatrix.data(), 64);
-                        Vector3 worldCenter = geom->boundingBox->getCenter();
-                        worldCenter.applyMatrix4(world);
-                        const float objRadius   = geom->boundingBox->getSize().length() * 0.5f;
-                        const float worldScale  = world.getMaxScaleOnAxis();
-                        const float worldRadius = objRadius * worldScale;
-                        const float distToCenter = camPos.distanceTo(worldCenter);
+                        // World bounding sphere straight off the entry's
+                        // column-major world matrix — no Matrix4 round-trip.
+                        const float* M = en.worldMatrix.data();
+                        const float cx = M[0] * en.lodCenter[0] + M[4] * en.lodCenter[1] + M[8] * en.lodCenter[2] + M[12];
+                        const float cy = M[1] * en.lodCenter[0] + M[5] * en.lodCenter[1] + M[9] * en.lodCenter[2] + M[13];
+                        const float cz = M[2] * en.lodCenter[0] + M[6] * en.lodCenter[1] + M[10] * en.lodCenter[2] + M[14];
+                        const float s0 = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
+                        const float s1 = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
+                        const float s2 = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
+                        const float worldScale = std::sqrt(std::max(s0, std::max(s1, s2)));
+                        const float worldRadius = en.lodRadius * worldScale;
+                        const float dx = camPos.x - cx, dy = camPos.y - cy, dz = camPos.z - cz;
+                        const float distToCenter = std::sqrt(dx * dx + dy * dy + dz * dz);
 
                         uint8_t selected = 0;// camera-inside-sphere (or degenerate FOV) default: full detail
                         if (distToCenter > worldRadius && tanHalfFovY > 1e-6f) {
@@ -639,6 +682,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                             entryGeomDirty[i] = true;
                             // boundingBox invalidation — mirrors the generic loop.
                             if (auto gg = en.mesh->geometry()) gg->boundingBox.reset();
+                            entries[i].lodSphereDirty = true;// auto-LOD's cached sphere follows
                         }
                     }
                     if (xfmChanged) {
@@ -887,6 +931,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     if (geomChanged && !entries[i].isParticle) {
                         geomDirtyAny = true;
                         entryGeomDirty[i] = true;
+                        entries[i].lodSphereDirty = true;// auto-LOD's cached sphere follows
                         // Invalidate the cached boundingBox so the next
                         // cullEntriesAgainstFrustum recomputes it from the
                         // current positions. Without this, plain meshes with
