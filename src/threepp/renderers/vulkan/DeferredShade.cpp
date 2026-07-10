@@ -59,7 +59,7 @@ namespace threepp::vulkan {
         lci.minFilter  = VK_FILTER_LINEAR;
         check(vkCreateSampler(d, &lci, nullptr, &lutSampler_), "vkCreateSampler(froxel LUT)");
 
-        VkDescriptorSetLayoutBinding b[58]{};// KEEP the bound == dlci.bindingCount (a lagging bound = stack smash)
+        VkDescriptorSetLayoutBinding b[59]{};// KEEP the bound == dlci.bindingCount (a lagging bound = stack smash)
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -134,10 +134,11 @@ namespace threepp::vulkan {
         set(55, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // HiZ closest-depth pyramid (hybrid SSR)
         set(56, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV sceneHdr (other fif — SSR colour source)
         set(57, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // raster camera UBO (jittered VP for the SSR march)
+        set(58, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // volumetric cloud-layer UBO (setClouds)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 58;
+        dlci.bindingCount = 59;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -232,7 +233,7 @@ namespace threepp::vulkan {
     void DeferredShade::createDescriptorPool() {
         VkDescriptorPoolSize sizes[5]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[0].descriptorCount = framesInFlight_ * 5;// camera + lights + fog + probe grid + raster camera (SSR)
+        sizes[0].descriptorCount = framesInFlight_ * 6;// camera + lights + fog + probe grid + raster camera (SSR) + cloud
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[1].descriptorCount = framesInFlight_ * (27 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise + 5 gbuf MS + shadowVisPrev + froxelScatterPrev + froxelLut + HiZ + prevSceneHdr
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -449,6 +450,11 @@ namespace threepp::vulkan {
             rcamInfo.offset = 0;
             rcamInfo.range  = VK_WHOLE_SIZE;
 
+            VkDescriptorBufferInfo cloudInfo{};// volumetric cloud-layer UBO (binding 58)
+            cloudInfo.buffer = in.cloudUbo[f];
+            cloudInfo.offset = 0;
+            cloudInfo.range  = in.cloudRange;
+
             // MSAA raw raster attachments (dispatch B). Bound as plain
             // SHADER_READ_ONLY combined-image-samplers — texelFetch with an
             // explicit sample index needs no special layout beyond what
@@ -509,7 +515,7 @@ namespace threepp::vulkan {
             froxelLutTexInfo.imageView   = in.froxelLut[f];
             froxelLutTexInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            VkWriteDescriptorSet w[58]{};
+            VkWriteDescriptorSet w[59]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -587,7 +593,8 @@ namespace threepp::vulkan {
             setw(55, 55, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &hizInfo,       nullptr);
             setw(56, 56, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevSceneInfo, nullptr);
             setw(57, 57, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &rcamInfo);
-            vkUpdateDescriptorSets(ctx_.device(), 58, w, 0, nullptr);
+            setw(58, 58, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &cloudInfo);
+            vkUpdateDescriptorSets(ctx_.device(), 59, w, 0, nullptr);
         }
     }
 

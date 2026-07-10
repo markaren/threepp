@@ -365,6 +365,7 @@ bool VulkanRendererCore::CoreImpl::beginDeferredFrame(Object3D& scene, Camera& c
             updateCameraUbo(currentFrame, camera);
             updateLightsUbo(currentFrame, scene);
             updateFogUbo(currentFrame, scene, camera);
+            updateCloudUbo(currentFrame);
             // Safe to write motionMatBuffers[currentFrame] now that the
             // inFlight[currentFrame] fence has been signaled — the GPU has
             // finished its previous use of this slot.

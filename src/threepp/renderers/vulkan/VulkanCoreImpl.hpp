@@ -780,6 +780,31 @@ namespace threepp {
         float    fogWaterSurfaceY_ = 1e30f;
         uint64_t prevFogHash_ = 0u;
 
+        // Volumetric cloud layer (VulkanRenderer::setClouds). enabled == 0
+        // short-circuits the deferred cloud march (off = free / image-identical).
+        // Layout matches deferred_shade.comp's binding-58 scalar CloudUbo (first
+        // 40 bytes); padded to a 16-byte multiple for UBO sizing.
+        struct GpuCloudUbo {
+            float enabled;      // 1.0 = clouds active
+            float coverage;     // 0 = clear .. 1 = overcast
+            float density;      // density multiplier
+            float bottomY;      // shell base (world Y)
+            float topY;         // shell top (world Y)
+            float evolveSpeed;  // shape churn rate
+            float timeSec;      // wall-clock seconds (wind scroll + evolution)
+            float wind[3];      // m/s xz drift (y ignored)
+            float _pad[2];      // pad to 48 bytes (shader ignores)
+        };
+        static_assert(sizeof(GpuCloudUbo) == 48);
+        std::array<Buffer, kFramesInFlight> cloudUbos{};
+        bool  cloudsEnabled_   = false;
+        float cloudCoverage_   = 0.45f;
+        float cloudDensity_    = 1.0f;
+        float cloudBottomY_    = 600.0f;
+        float cloudTopY_       = 1400.0f;
+        float cloudEvolveSpeed_= 1.0f;
+        float cloudWind_[3]    = {8.0f, 0.0f, 2.0f};
+
         // Environment equirect (HDR float) used by the primary miss
         // for backgrounds and by closest-hit for a single mirror-reflection
         // IBL probe. Default is a 1×1 black dummy so descriptors are always
@@ -2237,6 +2262,7 @@ namespace threepp {
             createCameraUbos();
             createLightsUbos();
             createFogUbos();
+            createCloudUbos();
             // EnvPrefilter owns the PMREM compute pipeline + descriptor pool.
             // Construct before createDefaultEnvImage so the env upload path is
             // ready if scene.environment is set before the first render().
@@ -2491,6 +2517,7 @@ namespace threepp {
             for (auto& b : clusterLightsBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : clusterGridBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : fogUbos) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : cloudUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : motionMatBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : meshMovedBitsBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : emissiveTriBuffers) destroyBuffer(ctx->allocator(), b);
@@ -4308,6 +4335,10 @@ namespace threepp {
         // path halves FC and the new fog state converges quickly.
         void updateFogUbo(uint32_t frame, Object3D& scene, Camera& camera);
 
+        void createCloudUbos();
+        // Pack the setClouds state into the per-frame cloud UBO (binding 58 of
+        // the deferred shade set). Disabled → enabled=0 → the march is a no-op.
+        void updateCloudUbo(uint32_t frame);
 
         // Allocate, transition, and upload an Image2D from a tightly-
         // packed CPU buffer. Pixel layout matches `format`. Caller owns the

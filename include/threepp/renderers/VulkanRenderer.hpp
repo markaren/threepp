@@ -19,6 +19,7 @@
 #include "threepp/renderers/VulkanRendererCore.hpp"
 
 #include <memory>
+#include <optional>
 
 namespace threepp {
 
@@ -93,6 +94,26 @@ namespace threepp {
         // genuine volume rather than flat distance-faded haze.
         void setVolumetricFog(bool enabled);
         [[nodiscard]] bool volumetricFog() const;
+
+        // ── Volumetric clouds (Nubis/HZD-style far-field cloud layer) ────────
+        // A raymarched, wind-driven, procedurally-shaped cloud deck occupying
+        // the world-space shell [bottomY, topY], composited over the sky (and,
+        // depth-aware, in front of terrain). Density is analytic Perlin-Worley
+        // noise (no baked assets), remapped by coverage, shaped by a height
+        // gradient and eroded by detail — the classic Decima recipe. Lit by the
+        // scene's claimed sun (one-sun policy) with a Beer light-march + powder
+        // term + dual-lobe Henyey-Greenstein phase, and by env ambient. nullopt
+        // = off (default), and off is free (image-identical to no clouds).
+        struct CloudSettings {
+            float coverage    = 0.45f;         // 0 = clear sky, 1 = overcast
+            float density     = 1.0f;          // density multiplier
+            float bottomY     = 600.0f;        // shell base (world Y, m)
+            float topY        = 1400.0f;       // shell top (world Y, m)
+            Vector3 wind{8.0f, 0.0f, 2.0f};    // m/s xz drift (y ignored)
+            float evolveSpeed = 1.0f;          // shape churn rate
+        };
+        void setClouds(const std::optional<CloudSettings>& settings);
+        [[nodiscard]] std::optional<CloudSettings> clouds() const;
 
         // Procedural star field on SKY pixels — hash-based points in direction
         // space, pixel-crisp at any resolution/FOV. 0 disables; ~1.0 = night sky.

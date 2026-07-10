@@ -1317,6 +1317,34 @@ namespace threepp {
         return pimpl_->deferredVolFog_;
     }
 
+    void VulkanRenderer::setClouds(const std::optional<CloudSettings>& settings) {
+        if (settings) {
+            pimpl_->cloudsEnabled_    = true;
+            pimpl_->cloudCoverage_    = std::clamp(settings->coverage, 0.f, 1.f);
+            pimpl_->cloudDensity_     = std::max(settings->density, 0.f);
+            pimpl_->cloudBottomY_     = settings->bottomY;
+            pimpl_->cloudTopY_        = std::max(settings->topY, settings->bottomY + 1.f);
+            pimpl_->cloudEvolveSpeed_ = std::max(settings->evolveSpeed, 0.f);
+            pimpl_->cloudWind_[0]     = settings->wind.x;
+            pimpl_->cloudWind_[1]     = settings->wind.y;
+            pimpl_->cloudWind_[2]     = settings->wind.z;
+        } else {
+            pimpl_->cloudsEnabled_ = false;
+        }
+    }
+
+    std::optional<VulkanRenderer::CloudSettings> VulkanRenderer::clouds() const {
+        if (!pimpl_->cloudsEnabled_) return std::nullopt;
+        CloudSettings s;
+        s.coverage    = pimpl_->cloudCoverage_;
+        s.density     = pimpl_->cloudDensity_;
+        s.bottomY     = pimpl_->cloudBottomY_;
+        s.topY        = pimpl_->cloudTopY_;
+        s.evolveSpeed = pimpl_->cloudEvolveSpeed_;
+        s.wind        = Vector3(pimpl_->cloudWind_[0], pimpl_->cloudWind_[1], pimpl_->cloudWind_[2]);
+        return s;
+    }
+
     void VulkanRenderer::setDeferredStarfield(float intensity) {
         pimpl_->deferredStarIntensity_ = std::max(intensity, 0.f);
     }

@@ -128,6 +128,11 @@ namespace threepp::vulkan {
             // and the front-to-back-integrated LUT the shade samples.
             const VkImageView* froxelScatter = nullptr;// [framesInFlight] storage+sampled 3D
             const VkImageView* froxelLut     = nullptr;// [framesInFlight] storage+sampled 3D
+            // Volumetric clouds (binding 58) — the per-frame GpuCloudUbo
+            // (enabled/coverage/density/bottomY/topY/evolveSpeed/timeSec/wind).
+            // Always bound (tiny); clouds.enabled == 0 makes the march a no-op.
+            const VkBuffer*    cloudUbo   = nullptr;// [framesInFlight]
+            VkDeviceSize       cloudRange = 0;
         };
         void rewriteDescriptors(const DescriptorWriteInputs& in);
 

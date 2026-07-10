@@ -1,5 +1,7 @@
 #include "VulkanCoreImpl.hpp"
 
+#include <chrono>
+
 namespace threepp {
 
     void VulkanRendererCore::CoreImpl::createCameraUbos() {
@@ -1046,6 +1048,38 @@ namespace threepp {
         fogEnabledThisFrame_ = ubo.enabled > 0.5f;
 
         uploadHostVisible(ctx->allocator(), fogUbos[frame], &ubo, sizeof(ubo));
+    }
+
+    void VulkanRendererCore::CoreImpl::createCloudUbos() {
+        for (auto& b : cloudUbos) {
+            b = createBuffer(
+                    ctx->allocator(), ctx->device(),
+                    sizeof(GpuCloudUbo),
+                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        }
+    }
+
+    // Pack the setClouds state into the per-frame cloud UBO. timeSec is
+    // wall-clock (frame-rate-independent) so wind drift + shape evolution run
+    // at a fixed real-world speed. Disabled → enabled=0 → cloudMarch() no-ops.
+    void VulkanRendererCore::CoreImpl::updateCloudUbo(uint32_t frame) {
+        GpuCloudUbo ubo{};
+        ubo.enabled     = cloudsEnabled_ ? 1.0f : 0.0f;
+        ubo.coverage    = cloudCoverage_;
+        ubo.density     = cloudDensity_;
+        ubo.bottomY     = cloudBottomY_;
+        ubo.topY        = cloudTopY_;
+        ubo.evolveSpeed = cloudEvolveSpeed_;
+        static const auto cloudEpoch = std::chrono::steady_clock::now();
+        ubo.timeSec     = std::chrono::duration<float>(
+                                  std::chrono::steady_clock::now() - cloudEpoch).count();
+        ubo.wind[0]     = cloudWind_[0];
+        ubo.wind[1]     = cloudWind_[1];
+        ubo.wind[2]     = cloudWind_[2];
+        uploadHostVisible(ctx->allocator(), cloudUbos[frame], &ubo, sizeof(ubo));
     }
 
     void VulkanRendererCore::CoreImpl::createRasterCameraUbos() {

@@ -270,6 +270,22 @@ layout(set = 0, binding = 53) uniform sampler3D froxelLutTex;
 const float kFroxelZMin = 0.25, kFroxelZMax = 512.0;
 // (froxelInscatter() lives just below the push-constant block — it gates on pc.flags.)
 
+// ── Volumetric clouds (binding 58) ─────────────────────────────────────────
+// Far-field raymarched cloud-layer parameters (VulkanRenderer::setClouds). A
+// tiny always-bound UBO — clouds.enabled == 0 short-circuits cloudMarch(), so
+// the layer costs nothing and is image-identical to today when disabled. See
+// cloudMarch()/cloudDensity() in deferred_shade_60_fog_volumetrics.glsl.
+layout(set = 0, binding = 58, scalar) uniform CloudUbo {
+    float enabled;      // 1.0 = clouds active
+    float coverage;     // 0 = clear sky .. 1 = overcast
+    float density;      // density multiplier
+    float bottomY;      // shell base (world Y, m)
+    float topY;         // shell top (world Y, m)
+    float evolveSpeed;  // shape churn rate
+    float timeSec;      // wall-clock seconds (wind scroll + evolution)
+    vec3  wind;         // m/s drift (xz used, y ignored)
+} clouds;
+
 #include "probe_common.glsl"// probeIrradiance()
 
 layout(push_constant) uniform Pc {
@@ -438,7 +454,16 @@ void main() {
         // Storing the sky at full weight here let B add the geometry minority
         // ON TOP (energy = 1 + geoMinW) — a bright rim hugging the sky side of
         // every silhouette, glowing hardest where the sky/haze is bright.
-        vec3 sky = applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS) * domWeight;
+        // Sky radiance, then composite the volumetric cloud layer over it
+        // (clouds sit in front of the infinite sky background). Physical
+        // radiance shares the sky's value domain, so the skyPe scale below
+        // carries the clouds too — consistent under the solid-bg bypass.
+        vec3 skyRad = applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
+        {
+            const vec4 cl = cloudMarch(camPos, dirWS, maxLod, px, 1e30);
+            skyRad = skyRad * cl.a + cl.rgb;
+        }
+        vec3 sky = skyRad * domWeight;
         // SOLID-COLOUR background (flags bit 10): the bg is DISPLAY-referred
         // (the exact clear colour, restored verbatim by the composite's sky
         // bypass), not physical radiance — store it UNexposed so it lives in

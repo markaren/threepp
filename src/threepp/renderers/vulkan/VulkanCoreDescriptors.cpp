@@ -145,6 +145,7 @@ void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors() {
             std::array<VkImageView, kFramesInFlight> froxelLutViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             std::array<VkBuffer, kFramesInFlight> fogBufs{};
+            std::array<VkBuffer, kFramesInFlight> cloudBufs{};
             std::array<VkBuffer, kFramesInFlight> clusterGridBufs{};
             std::array<VkBuffer, kFramesInFlight> clusterLightBufs{};
             // MSAA raw raster attachments (dispatch B). Real views when
@@ -160,6 +161,7 @@ void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors() {
                 camBufs[f]       = cameraUbos[f].handle;
                 lightBufs[f]     = lightsUbos[f].handle;
                 fogBufs[f]       = fogUbos[f].handle;
+                cloudBufs[f]     = cloudUbos[f].handle;
                 clusterGridBufs[f]  = clusterGridBuffers[f].handle;
                 clusterLightBufs[f] = clusterLightsBuffers[f].handle;
                 matBufs[f]       = materialDescsBuffers[f].handle;
@@ -223,6 +225,8 @@ void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors() {
             in.sceneHdr         = sceneHdrViews.data();
             in.fogBuf           = fogBufs.data();
             in.fogRange         = sizeof(GpuFogUbo);
+            in.cloudUbo         = cloudBufs.data();
+            in.cloudRange       = sizeof(GpuCloudUbo);
             in.tlas             = tlas;
             in.materialBuf      = matBufs.data();
             std::array<VkBuffer, kFramesInFlight> geomBufs{};

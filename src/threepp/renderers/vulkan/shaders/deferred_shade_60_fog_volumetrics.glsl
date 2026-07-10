@@ -223,3 +223,153 @@ vec3 skyBackground(vec2 ndc) {
     const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
     return applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
 }
+
+// ── Volumetric clouds (Nubis/HZD-lite, procedural analytic noise) ─────────────
+// A far-field raymarched cloud layer occupying the world-space shell
+// [clouds.bottomY, clouds.topY]. The density field is a Perlin-Worley-style fBm
+// remapped by coverage, shaped by a height gradient (puffy base → wispy top) and
+// eroded at the edges by a higher-frequency Worley fBm — the classic Decima/
+// Horizon recipe, evaluated ANALYTICALLY (hash-based value + cellular noise) so
+// there are NO baked 3D texture assets (the engine is reuse-first / first-party).
+// Wind scrolls the field and evolveSpeed advances an independent phase so the
+// clouds churn rather than merely translate. Lighting per march step: a short
+// Beer light-march toward the sun (self-shadowing), a Beer-powder darkening, a
+// dual-lobe Henyey-Greenstein phase (forward+back), and env ambient graded by
+// height in the layer. Returns vec4(inscatter.rgb, transmittance). Gated on
+// clouds.enabled — a no-op (returns vec4(0,0,0,1)) when clouds are off, so the
+// whole system is free when unused.
+float cloudHash13(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
+}
+vec3 cloudHash33(vec3 p) {
+    p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+             dot(p, vec3(269.5, 183.3, 246.1)),
+             dot(p, vec3(113.5, 271.9, 124.6)));
+    return fract(sin(p) * 43758.5453123);
+}
+float cloudValueNoise(vec3 p) {
+    const vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    const float n000 = cloudHash13(i + vec3(0.0, 0.0, 0.0));
+    const float n100 = cloudHash13(i + vec3(1.0, 0.0, 0.0));
+    const float n010 = cloudHash13(i + vec3(0.0, 1.0, 0.0));
+    const float n110 = cloudHash13(i + vec3(1.0, 1.0, 0.0));
+    const float n001 = cloudHash13(i + vec3(0.0, 0.0, 1.0));
+    const float n101 = cloudHash13(i + vec3(1.0, 0.0, 1.0));
+    const float n011 = cloudHash13(i + vec3(0.0, 1.0, 1.0));
+    const float n111 = cloudHash13(i + vec3(1.0, 1.0, 1.0));
+    return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+               mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+}
+float cloudValueFbm(vec3 p) {
+    float s = 0.0, a = 0.5;
+    for (int i = 0; i < 4; ++i) { s += a * cloudValueNoise(p); p *= 2.02; a *= 0.5; }
+    return s;
+}
+// Inverted Worley (cellular) F1 — bright cores, dark cell walls: the classic
+// cauliflower erosion shape.
+float cloudWorley(vec3 p) {
+    const vec3 id = floor(p);
+    const vec3 fp = fract(p);
+    float d = 1.0;
+    for (int dz = -1; dz <= 1; ++dz)
+    for (int dy = -1; dy <= 1; ++dy)
+    for (int dx = -1; dx <= 1; ++dx) {
+        const vec3 g = vec3(float(dx), float(dy), float(dz));
+        const vec3 o = cloudHash33(id + g);
+        const vec3 r = g + o - fp;
+        d = min(d, dot(r, r));
+    }
+    return 1.0 - clamp(sqrt(d), 0.0, 1.0);
+}
+float cloudWorleyFbm(vec3 p) {
+    return cloudWorley(p) * 0.625 + cloudWorley(p * 2.03) * 0.25 + cloudWorley(p * 4.01) * 0.125;
+}
+float cloudRemap(float v, float a, float b, float c, float d) {
+    return c + (clamp(v, a, b) - a) * (d - c) / max(b - a, 1e-5);
+}
+// Density at a world point (0 outside the shell). time drives wind + evolution.
+float cloudDensity(vec3 p, float time) {
+    const float thick = max(clouds.topY - clouds.bottomY, 1.0);
+    const float h01   = (p.y - clouds.bottomY) / thick;
+    if (h01 < 0.0 || h01 > 1.0) return 0.0;
+    // Height profile: rounded, puffy toward the base, tapering to wisps up top.
+    const float grad = smoothstep(0.0, 0.12, h01) * (1.0 - smoothstep(0.55, 1.0, h01));
+    if (grad <= 0.0) return 0.0;
+    const vec3 wind = vec3(clouds.wind.x, 0.0, clouds.wind.z) * time;
+    const vec3 evo  = vec3(0.0, clouds.evolveSpeed * time * 6.0, 0.0);
+    // Base shape ~ 1.6 km features.
+    float base = cloudValueFbm((p + wind) * 0.00075 + evo * 0.00075);
+    // Coverage carves the layer: higher coverage → more of the field survives.
+    float shape = cloudRemap(base, 1.0 - clamp(clouds.coverage, 0.0, 1.0), 1.0, 0.0, 1.0);
+    shape *= grad;
+    if (shape <= 0.0) return 0.0;
+    // Detail erosion at the edges (~120 m features), scrolling faster than base.
+    const float det = cloudWorleyFbm((p + wind * 2.0) * 0.008 + evo * 0.004);
+    shape = cloudRemap(shape, det * 0.45, 1.0, 0.0, 1.0);
+    return clamp(shape, 0.0, 1.0) * clouds.density;
+}
+// Ray-march the cloud shell. ro/rd = world ray; tSceneMax caps the march to the
+// nearest opaque surface (for depth-aware clipping; pass a large value for sky).
+vec4 cloudMarch(vec3 ro, vec3 rd, float maxLod, ivec2 px, float tSceneMax) {
+    if (clouds.enabled < 0.5) return vec4(0.0, 0.0, 0.0, 1.0);
+    if (abs(rd.y) < 1e-4) return vec4(0.0, 0.0, 0.0, 1.0);// grazing: skip (no robust slab)
+    // Intersect the horizontal slab [bottomY, topY].
+    const float tA = (clouds.bottomY - ro.y) / rd.y;
+    const float tB = (clouds.topY - ro.y) / rd.y;
+    float t0 = max(min(tA, tB), 0.0);
+    float t1 = max(tA, tB);
+    t1 = min(t1, min(tSceneMax, 42000.0));// far cap + scene-depth clip
+    if (t1 <= t0) return vec4(0.0, 0.0, 0.0, 1.0);
+
+    const int   STEPS = 48;
+    const float dt    = (t1 - t0) / float(STEPS);
+    const float jit   = fract(texelFetch(blueNoiseTex, px & 63, 0).r + float(pc.frame) * 0.6180339887);
+
+    vec3 sunDir = (lights.dirCount > 0u) ? normalize(lights.dirLights[0].direction)
+                                         : normalize(vec3(0.3, 0.85, 0.2));
+    vec3 sunCol = (lights.dirCount > 0u) ? lights.dirLights[0].color : vec3(1.6);
+    const vec3  ambTop = sampleEnvLod(vec3(0.0, 1.0, 0.0), max(maxLod - 1.0, 0.0));
+    const vec3  ambBot = sampleEnvLod(vec3(0.0, -0.3, 0.0), maxLod) * 0.6 + lights.ambient;
+    const float mu    = dot(rd, sunDir);
+    // Dual-lobe HG: strong forward peak (silver lining toward the sun) blended
+    // with a weak back lobe (ambient wrap).
+    const float phase = mix(hgPhase(mu, 0.80), hgPhase(mu, -0.15), 0.5) * 4.0 * PI;
+
+    vec3  scat = vec3(0.0);
+    float T    = 1.0;
+    const float time      = clouds.timeSec;
+    const float sigmaMul  = 0.05;   // extinction per unit density per metre
+    const float lightStep = 90.0;   // sun light-march step (m)
+
+    for (int i = 0; i < STEPS; ++i) {
+        const float t = t0 + (float(i) + jit) * dt;
+        const vec3  p = ro + rd * t;
+        const float dens = cloudDensity(p, time);
+        if (dens > 0.001) {
+            const float sigma = dens * sigmaMul;
+            // Short Beer light-march toward the sun (self-shadowing).
+            float sunDepth = 0.0;
+            for (int j = 0; j < 5; ++j) {
+                const vec3 lp = p + sunDir * (float(j) + 0.5) * lightStep;
+                sunDepth += cloudDensity(lp, time);
+            }
+            const float sunT   = exp(-sunDepth * sigmaMul * lightStep);
+            // Beer-powder: darkens cloud interiors, brightens edges toward the sun.
+            const float powder = 1.0 - exp(-dens * 3.2);
+            const vec3  sunLit = sunCol * (sunT * phase * mix(1.0, powder, 0.6));
+            const vec3  amb    = mix(ambBot, ambTop, clamp((p.y - clouds.bottomY) /
+                                     max(clouds.topY - clouds.bottomY, 1.0), 0.0, 1.0));
+            const vec3  src    = sunLit + amb;
+            // Energy-conserving segment integration: ∫ src·σ·e^(-σs) ds.
+            const float stepT  = exp(-sigma * dt);
+            scat += T * src * (1.0 - stepT);
+            T    *= stepT;
+            if (T < 0.02) break;
+        }
+    }
+    return vec4(scat, T);
+}
