@@ -236,7 +236,9 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
             vkCmdCopyBuffer(cb, rec->vertex.handle, rec->prevVertex.handle, 1, &seedCopy);
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
             endAndSubmitOneShot(cb, "buildBlasFor");
-            destroyBuffer(ctx->allocator(), scratch);
+            // Deferred when a batch is open (the shared submit hasn't run yet, so
+            // the scratch is still in use); freed immediately otherwise.
+            destroyBufferMaybeBatched(scratch);
 
             VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
             addrInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;

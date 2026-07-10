@@ -41,6 +41,11 @@ void VulkanRendererCore::CoreImpl::createRenderFinishedSemaphores() {
         }
 
 VkCommandBuffer VulkanRendererCore::CoreImpl::beginOneShot() {
+            // Batch mode: every caller records into ONE shared, already-open
+            // command buffer; the submit is deferred to flushOneShotBatch.
+            if (oneShotBatch_) {
+                if (oneShotBatchCb_ != VK_NULL_HANDLE) return oneShotBatchCb_;
+            }
             VkCommandBufferAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
             ai.commandPool = cmdPool;
@@ -53,10 +58,15 @@ VkCommandBuffer VulkanRendererCore::CoreImpl::beginOneShot() {
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             check(vkBeginCommandBuffer(cb, &bi), "begin one-shot cb");
+            if (oneShotBatch_) oneShotBatchCb_ = cb;// keep open for later callers
             return cb;
         }
 
 void VulkanRendererCore::CoreImpl::endAndSubmitOneShot(VkCommandBuffer cb, const char* label) {
+            // Batch mode: leave the shared cb open; flushOneShotBatch submits it
+            // once for the whole batch. The caller's transient resources are
+            // parked (destroyBufferMaybeBatched) until the flush's wait.
+            if (oneShotBatch_ && cb == oneShotBatchCb_) return;
             check(vkEndCommandBuffer(cb), "end one-shot cb");
             VkSubmitInfo si{};
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -71,6 +81,35 @@ void VulkanRendererCore::CoreImpl::endAndSubmitOneShot(VkCommandBuffer cb, const
                 check(wr, (std::string("wait one-shot (") + label + ")").c_str());
             }
             vkFreeCommandBuffers(ctx->device(), cmdPool, 1, &cb);
+        }
+
+void VulkanRendererCore::CoreImpl::flushOneShotBatch() {
+            // Close the batch window. Any later one-shot returns to immediate
+            // submit even if there is nothing to flush here.
+            oneShotBatch_ = false;
+            if (oneShotBatchCb_ == VK_NULL_HANDLE) {
+                // Nothing recorded, but transient garbage may still have been
+                // parked (defensive — normally empty when no cb was opened).
+                for (auto& b : oneShotBatchGarbage_) destroyBuffer(ctx->allocator(), b);
+                oneShotBatchGarbage_.clear();
+                return;
+            }
+            VkCommandBuffer cb = oneShotBatchCb_;
+            oneShotBatchCb_ = VK_NULL_HANDLE;
+            check(vkEndCommandBuffer(cb), "end one-shot batch cb");
+            VkSubmitInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.commandBufferCount = 1;
+            si.pCommandBuffers = &cb;
+            const VkResult sr = vkQueueSubmit(ctx->graphicsQueue(), 1, &si, VK_NULL_HANDLE);
+            if (sr != VK_SUCCESS) check(sr, "submit one-shot batch");
+            const VkResult wr = vkQueueWaitIdle(ctx->graphicsQueue());
+            if (wr != VK_SUCCESS) check(wr, "wait one-shot batch");
+            vkFreeCommandBuffers(ctx->device(), cmdPool, 1, &cb);
+            // The single wait above guarantees the GPU is done with every parked
+            // transient (BLAS scratch, image staging) — reclaim them now.
+            for (auto& b : oneShotBatchGarbage_) destroyBuffer(ctx->allocator(), b);
+            oneShotBatchGarbage_.clear();
         }
 
 void VulkanRendererCore::CoreImpl::createReservoirImages() {

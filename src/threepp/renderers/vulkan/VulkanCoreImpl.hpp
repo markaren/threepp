@@ -2567,6 +2567,37 @@ namespace threepp {
         // hit a device-lost during runtime debugging.
         void endAndSubmitOneShot(VkCommandBuffer cb, const char* label = "one-shot");
 
+        // ── Batched one-shots ────────────────────────────────────────────────
+        // A structural scene rebuild admits every NEW tile geometry (BLAS build
+        // + prevVertex seed) and its albedo DataTexture (staging copy + mip
+        // blit) through beginOneShot/endAndSubmitOneShot — one vkQueueSubmit +
+        // vkQueueWaitIdle EACH. A burst of tiles then serialises a dozen queue
+        // drains into one frame (measured ~37 ms on fjord flight). While a batch
+        // is open, beginOneShot hands back a single shared command buffer and
+        // endAndSubmitOneShot only closes the caller's recording (no submit);
+        // flushOneShotBatch submits the whole batch once and waits. Transient
+        // resources (BLAS scratch, image staging) that the callers would free
+        // right after their submit are parked in oneShotBatchGarbage_ and
+        // reclaimed after the single wait. Same one-shot semantics from the
+        // caller's view (work is done + resources freed by the time the batch is
+        // flushed), one drain instead of N. Callers must be pure transfer/AS
+        // builds with no read-back before the flush — the tile admit path is.
+        bool            oneShotBatch_ = false;
+        VkCommandBuffer oneShotBatchCb_ = VK_NULL_HANDLE;
+        std::vector<Buffer> oneShotBatchGarbage_;
+
+        void beginOneShotBatch() { oneShotBatch_ = true; }
+        void flushOneShotBatch();
+        // Free `buf` now, or defer it to the next flush when a batch is open.
+        void destroyBufferMaybeBatched(Buffer& buf) {
+            if (oneShotBatch_) {
+                oneShotBatchGarbage_.push_back(buf);
+                buf = {};// caller's handle retired; the garbage copy owns it now
+            } else {
+                destroyBuffer(ctx->allocator(), buf);
+            }
+        }
+
         static unsigned int geomVersionOf(const BufferGeometry& g) {
             unsigned int v = 0;
             if (auto* a = g.getAttribute<float>("position")) v += a->version;
@@ -4399,7 +4430,12 @@ namespace threepp {
             }
 
             endAndSubmitOneShot(cb);
-            destroyBuffer(ctx->allocator(), staging);
+            // Deferred to the batch flush when a batch is open (staging is still
+            // referenced by the not-yet-submitted shared cb); immediate freeing
+            // otherwise. The image view/sampler below are host-side and valid at
+            // once; only the pixel content lands when the batch submit runs,
+            // which happens before any shader samples it.
+            destroyBufferMaybeBatched(staging);
 
             VkImageViewCreateInfo vci{};
             vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;

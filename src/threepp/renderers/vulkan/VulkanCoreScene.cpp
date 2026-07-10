@@ -735,6 +735,17 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
             if (!leanOk) {
             currFp.resize(entries.size());
             const bool prevValid = sceneBuilt_ && prevSceneFingerprint.size() == entries.size();
+            // Per-Material memo for the slow (non-fast-path) branch: the nine
+            // texture-of lookups + materialFromMesh are a pure function of the
+            // mesh's Material* and dominate a structural rebuild when instanced
+            // geometry shares one material across hundreds of entries. Cache the
+            // derived texture pointers + PBR floats and reuse them per material.
+            struct FpMatDerived {
+                std::shared_ptr<Texture> albedoTex, roughnessTex, metalnessTex, normalTex,
+                        transmissionTex, clearcoatTex, clearcoatRoughnessTex, emissiveTex, occlusionTex;
+                std::array<float, 15> pbr;
+            };
+            std::unordered_map<const Material*, FpMatDerived> fpMemo;
             for (size_t i = 0; i < entries.size(); ++i) {
                 const MeshEntry& en = entries[i];
                 Mesh* m = en.mesh;
@@ -774,25 +785,42 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     fp.normAttr = fp.geomTyped->getAttribute<float>("normal");
                     fp.uvAttr   = fp.geomTyped->getAttribute<float>("uv");
                     fp.idxAttr  = fp.geomTyped->getIndex();
-                    fp.albedoTex             = albedoTexOf(*m);
-                    fp.roughnessTex          = roughnessTexOf(*m);
-                    fp.metalnessTex          = metalnessTexOf(*m);
-                    fp.normalTex             = normalTexOf(*m);
-                    fp.transmissionTex       = transmissionTexOf(*m);
-                    fp.clearcoatTex          = clearcoatTexOf(*m);
-                    fp.clearcoatRoughnessTex = clearcoatRoughnessTexOf(*m);
-                    fp.emissiveTex           = emissiveTexOf(*m);
-                    fp.occlusionTex          = occlusionTexOf(*m);
+                    const Material* matKey = matPtr;
+                    auto memoIt = fpMemo.find(matKey);
+                    if (memoIt == fpMemo.end()) {
+                        FpMatDerived d{};
+                        d.albedoTex             = albedoTexOf(*m);
+                        d.roughnessTex          = roughnessTexOf(*m);
+                        d.metalnessTex          = metalnessTexOf(*m);
+                        d.normalTex             = normalTexOf(*m);
+                        d.transmissionTex       = transmissionTexOf(*m);
+                        d.clearcoatTex          = clearcoatTexOf(*m);
+                        d.clearcoatRoughnessTex = clearcoatRoughnessTexOf(*m);
+                        d.emissiveTex           = emissiveTexOf(*m);
+                        d.occlusionTex          = occlusionTexOf(*m);
+                        const MaterialDesc md = materialFromMesh(*m);
+                        d.pbr = {md.albedo[0], md.albedo[1], md.albedo[2],
+                                 md.roughness, md.metalness,
+                                 md.emissive[0], md.emissive[1], md.emissive[2],
+                                 md.emissiveIntensity,
+                                 md.normalScale[0], md.normalScale[1],
+                                 md.transmission, md.ior,
+                                 md.clearcoat, md.clearcoatRoughness};
+                        memoIt = fpMemo.emplace(matKey, std::move(d)).first;
+                    }
+                    const FpMatDerived& d = memoIt->second;
+                    fp.albedoTex             = d.albedoTex;
+                    fp.roughnessTex          = d.roughnessTex;
+                    fp.metalnessTex          = d.metalnessTex;
+                    fp.normalTex             = d.normalTex;
+                    fp.transmissionTex       = d.transmissionTex;
+                    fp.clearcoatTex          = d.clearcoatTex;
+                    fp.clearcoatRoughnessTex = d.clearcoatRoughnessTex;
+                    fp.emissiveTex           = d.emissiveTex;
+                    fp.occlusionTex          = d.occlusionTex;
                     fp.instanceIndex         = en.instanceIndex;
                     fp.matrix                = en.worldMatrix;
-                    const MaterialDesc md = materialFromMesh(*m);
-                    fp.pbr = {md.albedo[0], md.albedo[1], md.albedo[2],
-                              md.roughness, md.metalness,
-                              md.emissive[0], md.emissive[1], md.emissive[2],
-                              md.emissiveIntensity,
-                              md.normalScale[0], md.normalScale[1],
-                              md.transmission, md.ior,
-                              md.clearcoat, md.clearcoatRoughness};
+                    fp.pbr = d.pbr;
                 }
             }
             }// !leanOk (fingerprint re-derivation)
@@ -1608,7 +1636,28 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
             // scene — well below entries.size() in typical content.
             std::unordered_map<const Material*, uint32_t> matAssetMap;
 
+            // Per-Material MaterialDesc memo. materialFromMesh + the nine
+            // texture-of lookups are a ~24-dynamic_cast/entry walk that is a
+            // PURE function of the mesh's Material* (nothing mesh- or instance-
+            // specific), yet this loop runs once per TLAS instance. Instanced
+            // vegetation multiplies one material across hundreds of entries, so
+            // a structural rebuild used to re-derive ~4400 identical descs. Cache
+            // the fully-resolved desc (asset idx + bindless texture indices + UV
+            // transforms — all Material*-invariant within a rebuild) and reuse
+            // it for every later instance of the same material. The first miss
+            // still runs ensureMaterialTexture so the bindless slot is allocated;
+            // later hits reuse the slot index it returned.
+            std::unordered_map<const Material*, MaterialDesc> matDescMemo;
+
+            // Admit every new static geometry (BLAS build) + albedo texture
+            // upload through ONE batched submit instead of a queue drain apiece
+            // — a burst of tile splits otherwise serialises a dozen
+            // vkQueueWaitIdles into this frame. Batching is (re-)armed at the top
+            // of every iteration and flushed just before each deformer branch
+            // (whose FFT/skin/wind refit submits its own readback-bearing command
+            // buffers that must run immediately) and once more before buildTlas.
             for (size_t i = 0; i < entries.size(); ++i) {
+                beginOneShotBatch();// (re)arm; idempotent if a batch is already open
                 const MeshEntry& en = entries[i];
                 Mesh* m = en.mesh;
                 // Particle billboard meshes own their vertex buffers in the
@@ -1617,6 +1666,15 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                 // allocate (or per-frame refit) an AS for them.
                 if (en.isParticle) continue;
                 const BufferGeometry* geomKey = m->geometry().get();
+
+                // Deformer BLAS priming (skinned skin compute, ocean FFT
+                // displace, grass wind refit) submits its own command buffers
+                // with barriers/readbacks that must execute now — never fold
+                // them into the tile-admit batch. Flush what's queued; the next
+                // iteration re-arms for the following static entries.
+                if (en.isSkinned || en.isDisplaced || en.isGrass || en.isTet || en.isMorphed) {
+                    flushOneShotBatch();
+                }
 
                 // Skinned meshes get a per-instance deformed BLAS rather than
                 // sharing the geometry-keyed cache. Two SkinnedMeshes loaded
@@ -1633,20 +1691,42 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     recPtr = st->blas.get();
                 } else if (en.isDisplaced) {
                     auto* dm = static_cast<DisplacedMesh*>(m);
+                    const bool existed = displacedStates.count(dm) > 0;
                     auto* st = ensureDisplacedState(*dm);
                     if (!st) continue;
                     recPtr = st->blas.get();
-                    // Trigger an initial FFT/displace dispatch so the BLAS
-                    // contents (rest grid right now) become the displaced
-                    // surface before the first ray-trace sees it.
-                    refreshDisplacedBlas(*dm, *st, static_cast<float>(glfwGetTime()));
+                    if (existed) {
+                        // Existing ocean on a structural rebuild: refresh through
+                        // the FRAME command buffer (no blocking one-shot), exactly
+                        // as the non-structural deformer path does — a full FFT +
+                        // BLAS refit as a synchronous one-shot stalls the CPU on
+                        // every tile swap. The BLAS keeps last frame's displaced
+                        // content for this frame's TLAS (imperceptible for water);
+                        // recordCommandBuffer refits it before the shade trace.
+                        mirrorDisplacedHeightfields(*dm, *st);
+                        pendingDisplacedDeforms_.emplace_back(dm, st, static_cast<float>(glfwGetTime()));
+                        ++dm->frameTick;
+                    } else {
+                        // First creation: prime synchronously so the very first
+                        // TLAS build + ray-trace see the displaced surface, not
+                        // the rest grid.
+                        refreshDisplacedBlas(*dm, *st, static_cast<float>(glfwGetTime()));
+                    }
                 } else if (en.isGrass) {
                     auto* gm = static_cast<GrassMesh*>(m);
+                    const bool existed = grassStates.count(gm) > 0;
                     auto* st = ensureGrassState(*gm);
                     if (!st) continue;
                     recPtr = st->blas.get();
-                    // Prime the BLAS with the first wind pose before the first trace.
-                    refreshGrassBlas(*gm, *st, static_cast<float>(glfwGetTime()));
+                    if (existed) {
+                        // Existing grass: defer the wind refit to the frame cb
+                        // (same rationale as the ocean above).
+                        pendingGrassDeforms_.emplace_back(gm, st);
+                        ++gm->frameTick;
+                    } else {
+                        // Prime the BLAS with the first wind pose before the first trace.
+                        refreshGrassBlas(*gm, *st, static_cast<float>(glfwGetTime()));
+                    }
                 } else if (en.isTet) {
                     auto* st = ensureTetBlas(*m);
                     if (!st) continue;
@@ -1770,48 +1850,55 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                 gdesc._pad = 0;
                 geomDescs[i] = gdesc;
 
-                MaterialDesc md = materialFromMesh(*m);
-                {
-                    const Material* matKey = m->material().get();
-                    auto [matIt, inserted] = matAssetMap.try_emplace(
-                            matKey, static_cast<uint32_t>(matAssetMap.size()));
-                    md.materialAssetIdx = matIt->second;
-                }
-                if (auto tex = albedoTexOf(*m)) {
-                    md.albedoTexIndex = ensureMaterialTexture(tex);
-                    copyTexUvTransform(md.uvTransform, tex);
-                }
-                if (auto tex = roughnessTexOf(*m)) {
-                    md.roughnessTexIndex = ensureMaterialTexture(tex);
-                    copyTexUvTransform(md.uvTransformRoughMetal, tex);
-                }
-                if (auto tex = metalnessTexOf(*m)) {
-                    md.metalnessTexIndex = ensureMaterialTexture(tex);
-                    if (md.roughnessTexIndex < 0) copyTexUvTransform(md.uvTransformRoughMetal, tex);
-                }
-                if (auto tex = normalTexOf(*m)) {
-                    md.normalTexIndex = ensureMaterialTexture(tex);
-                    copyTexUvTransform(md.uvTransformNormal, tex);
-                }
-                if (auto tex = transmissionTexOf(*m)) {
-                    md.transmissionTexIndex = ensureMaterialTexture(tex);
-                    copyTexUvTransform(md.uvTransformTransmission, tex);
-                }
-                if (auto tex = clearcoatTexOf(*m)) {
-                    md.clearcoatTexIndex = ensureMaterialTexture(tex);
-                    copyTexUvTransform(md.uvTransformClearcoat, tex);
-                }
-                if (auto tex = clearcoatRoughnessTexOf(*m)) {
-                    md.clearcoatRoughnessTexIndex = ensureMaterialTexture(tex);
-                    copyTexUvTransform(md.uvTransformClearcoatRough, tex);
-                }
-                if (auto tex = emissiveTexOf(*m)) {
-                    md.emissiveTexIndex = ensureMaterialTexture(tex);
-                    copyTexUvTransform(md.uvTransformEmissive, tex);
-                }
-                if (auto tex = occlusionTexOf(*m)) {
-                    md.occlusionTexIndex = ensureMaterialTexture(tex);
-                    copyTexUvTransform(md.uvTransformOcclusion, tex);
+                const Material* matKey = m->material().get();
+                MaterialDesc md;
+                auto memoIt = matDescMemo.find(matKey);
+                if (memoIt != matDescMemo.end()) {
+                    md = memoIt->second;// identical for every instance of this material
+                } else {
+                    md = materialFromMesh(*m);
+                    {
+                        auto [matIt, inserted] = matAssetMap.try_emplace(
+                                matKey, static_cast<uint32_t>(matAssetMap.size()));
+                        md.materialAssetIdx = matIt->second;
+                    }
+                    if (auto tex = albedoTexOf(*m)) {
+                        md.albedoTexIndex = ensureMaterialTexture(tex);
+                        copyTexUvTransform(md.uvTransform, tex);
+                    }
+                    if (auto tex = roughnessTexOf(*m)) {
+                        md.roughnessTexIndex = ensureMaterialTexture(tex);
+                        copyTexUvTransform(md.uvTransformRoughMetal, tex);
+                    }
+                    if (auto tex = metalnessTexOf(*m)) {
+                        md.metalnessTexIndex = ensureMaterialTexture(tex);
+                        if (md.roughnessTexIndex < 0) copyTexUvTransform(md.uvTransformRoughMetal, tex);
+                    }
+                    if (auto tex = normalTexOf(*m)) {
+                        md.normalTexIndex = ensureMaterialTexture(tex);
+                        copyTexUvTransform(md.uvTransformNormal, tex);
+                    }
+                    if (auto tex = transmissionTexOf(*m)) {
+                        md.transmissionTexIndex = ensureMaterialTexture(tex);
+                        copyTexUvTransform(md.uvTransformTransmission, tex);
+                    }
+                    if (auto tex = clearcoatTexOf(*m)) {
+                        md.clearcoatTexIndex = ensureMaterialTexture(tex);
+                        copyTexUvTransform(md.uvTransformClearcoat, tex);
+                    }
+                    if (auto tex = clearcoatRoughnessTexOf(*m)) {
+                        md.clearcoatRoughnessTexIndex = ensureMaterialTexture(tex);
+                        copyTexUvTransform(md.uvTransformClearcoatRough, tex);
+                    }
+                    if (auto tex = emissiveTexOf(*m)) {
+                        md.emissiveTexIndex = ensureMaterialTexture(tex);
+                        copyTexUvTransform(md.uvTransformEmissive, tex);
+                    }
+                    if (auto tex = occlusionTexOf(*m)) {
+                        md.occlusionTexIndex = ensureMaterialTexture(tex);
+                        copyTexUvTransform(md.uvTransformOcclusion, tex);
+                    }
+                    matDescMemo.emplace(matKey, md);
                 }
                 matDescs[i] = md;
                 // Visibility group (see vulkan_shared.h): blend/transmissive
@@ -1828,6 +1915,11 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                 }
             }
 
+            // Submit the whole tile-admit batch once (BLAS builds + prevVertex
+            // seeds + texture staging/blits), waiting a single time. After this
+            // returns every new BLAS is built and every new albedo texture is
+            // resident, so buildTlas below can reference the fresh BLAS.
+            flushOneShotBatch();
             buildTlas(instances);
             // Every per-frame GeometryDesc slot seeded fresh — same ring
             // model as the matDescs loop below; the lean auto-LOD patch
