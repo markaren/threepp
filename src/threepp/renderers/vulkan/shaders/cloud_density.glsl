@@ -88,3 +88,31 @@ float cloudDensity(vec3 p, float time) {
     shape = cloudRemap(shape, det * 0.45, 1.0, 0.0, 1.0);
     return clamp(shape, 0.0, 1.0) * clouds.density;
 }
+
+// ── Near-field height fog (heterogeneous froxels) ─────────────────────────────
+// Exponential height falloff × wind-scrolled 3D-noise modulation → drifting
+// ground-mist patches. Returns σ_t (1/m). REQUIRES the height-fog fields on the
+// `clouds` block (hfDensity/hfBaseY/hfFalloff/hfNoiseAmount). Zero when off.
+float heightFogDensity(vec3 p, float time) {
+    if (clouds.hfDensity <= 0.0) return 0.0;
+    const float h = (p.y - clouds.hfBaseY) / max(clouds.hfFalloff, 1e-3);
+    if (h > 24.0) return 0.0;// e^-24 ≈ 0 — nothing left this high
+    const float base = clouds.hfDensity * exp(-max(h, 0.0));
+    // Wind-scrolled fBm churns the patches (shares the cloud wind vector).
+    const vec3  wind = vec3(clouds.wind.x, 0.0, clouds.wind.z) * time;
+    const float n    = cloudValueFbm((p + wind) * 0.02);// ~50 m mist features
+    const float amt  = clamp(clouds.hfNoiseAmount, 0.0, 1.0);
+    return max(base * mix(1.0, n * 2.0, amt), 0.0);
+}
+
+// Near-field extinction σ_t for the heterogeneous froxels: HEIGHT FOG ONLY.
+// The far cloud march (cloud_march.comp) already integrates the cloud over the
+// WHOLE 0→far ray — including in front of near surfaces and when the camera is
+// inside the deck — and composites it via compositeClouds(). Folding
+// cloudDensity into the froxels too would double-count that cloud in the
+// 0–512 m overlap, so the two volumes split cleanly by phenomenon: froxels own
+// the near-ground mist, the far march owns the cloud (no 512 m seam because the
+// cloud is never split across it).
+float mediumExtinction(vec3 p, float time) {
+    return heightFogDensity(p, time);
+}

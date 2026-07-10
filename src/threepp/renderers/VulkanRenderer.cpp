@@ -219,7 +219,8 @@ namespace threepp {
             // a medium exists this frame. Runs AFTER the cluster barrier
             // (inject reads the cluster grid); the barrier below makes the
             // LUT visible to the shade's trilinear sample.
-            const bool froxelsActive = fogEnabledThisFrame_ || deferredVolDensity_ > 0.f;
+            const bool froxelsActive = fogEnabledThisFrame_ || deferredVolDensity_ > 0.f
+                                     || heightFogEnabled_;// hetero near-field height fog needs the froxel LUT
             if (froxelsActive) {
                 deferredShade_->recordFroxels(cb, currentFrame,
                                               regionRenderExt_.width, regionRenderExt_.height,
@@ -1365,6 +1366,28 @@ namespace threepp {
         s.topY        = pimpl_->cloudTopY_;
         s.evolveSpeed = pimpl_->cloudEvolveSpeed_;
         s.wind        = Vector3(pimpl_->cloudWind_[0], pimpl_->cloudWind_[1], pimpl_->cloudWind_[2]);
+        return s;
+    }
+
+    void VulkanRenderer::setHeightFog(const std::optional<HeightFogSettings>& settings) {
+        if (settings) {
+            pimpl_->heightFogEnabled_     = true;
+            pimpl_->heightFogDensity_     = std::max(settings->density, 0.f);
+            pimpl_->heightFogBaseY_       = settings->baseY;
+            pimpl_->heightFogFalloff_     = std::max(settings->falloff, 1.f);
+            pimpl_->heightFogNoiseAmount_ = std::clamp(settings->noiseAmount, 0.f, 1.f);
+        } else {
+            pimpl_->heightFogEnabled_ = false;
+        }
+    }
+
+    std::optional<VulkanRenderer::HeightFogSettings> VulkanRenderer::heightFog() const {
+        if (!pimpl_->heightFogEnabled_) return std::nullopt;
+        HeightFogSettings s;
+        s.density     = pimpl_->heightFogDensity_;
+        s.baseY       = pimpl_->heightFogBaseY_;
+        s.falloff     = pimpl_->heightFogFalloff_;
+        s.noiseAmount = pimpl_->heightFogNoiseAmount_;
         return s;
     }
 

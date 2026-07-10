@@ -115,6 +115,27 @@ namespace threepp {
         void setClouds(const std::optional<CloudSettings>& settings);
         [[nodiscard]] std::optional<CloudSettings> clouds() const;
 
+        // ── Near-field heterogeneous height fog (ground mist, drone low alt) ──
+        // Exponential height falloff × wind-scrolled 3D noise, evaluated inside
+        // the 0.25–512 m view froxels (the near-field volume). Turning it on
+        // switches the froxel volumetrics to the HETEROGENEOUS path: per-slice
+        // density (height fog + any cloud dipping below 512 m), a froxel sun
+        // in-scatter term (1 RT shadow ray + a short self-shadow march), and
+        // LUT-based surface fog — the per-pixel homogeneous sun march is
+        // disabled to avoid double-counting. `scene.fog` (homogeneous) keeps
+        // working exactly as today; this activates only via the setter. nullopt
+        // = off (default) — the froxels stay on the homogeneous path, so off is
+        // free / image-identical. Wind is shared with CloudSettings when both
+        // are active.
+        struct HeightFogSettings {
+            float density     = 0.02f;// σ_t at baseY
+            float baseY       = 0.0f;
+            float falloff     = 80.0f;// exponential height scale (m)
+            float noiseAmount = 0.6f; // 0 = smooth analytic, 1 = fully noise-modulated
+        };
+        void setHeightFog(const std::optional<HeightFogSettings>& settings);
+        [[nodiscard]] std::optional<HeightFogSettings> heightFog() const;
+
         // Procedural star field on SKY pixels — hash-based points in direction
         // space, pixel-crisp at any resolution/FOV. 0 disables; ~1.0 = night sky.
         void setDeferredStarfield(float intensity);

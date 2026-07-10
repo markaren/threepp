@@ -276,14 +276,20 @@ const float kFroxelZMin = 0.25, kFroxelZMax = 512.0;
 // the layer costs nothing and is image-identical to today when disabled. See
 // cloudMarch()/cloudDensity() in deferred_shade_60_fog_volumetrics.glsl.
 layout(set = 0, binding = 58, scalar) uniform CloudUbo {
-    float enabled;      // 1.0 = clouds active
+    float enabled;      // 1.0 = far cloud march active
     float coverage;     // 0 = clear sky .. 1 = overcast
     float density;      // density multiplier
     float bottomY;      // shell base (world Y, m)
     float topY;         // shell top (world Y, m)
     float evolveSpeed;  // shape churn rate
     float timeSec;      // wall-clock seconds (wind scroll + evolution)
+    float heteroActive; // 1.0 = heterogeneous near-field froxels (height fog on)
     vec3  wind;         // m/s drift (xz used, y ignored)
+    float hfDensity;    // height-fog σ_t at baseY (0 = height fog off)
+    float hfBaseY;      // height-fog base world Y
+    float hfFalloff;    // height-fog exponential height scale (m)
+    float hfNoiseAmount;// 0 = smooth analytic .. 1 = fully noise-modulated
+    float _pad;
 } clouds;
 
 // Half-res cloud march result (cloud_march.comp, binding 59). LINEAR sampler —
@@ -622,7 +628,9 @@ void main() {
         // Coverage weighting as in the main path — water-dominant edge pixels
         // reserve geoMinW for dispatch B and blend their own sky minority;
         // the volumetric in-scatter is per-pixel and stays at full weight.
-        wcol = applySceneFog(wcol, camPos, worldPos) * domWeight;
+        wcol = ((clouds.heteroActive > 0.5)
+              ? applyHeteroSurfaceFog(wcol, uv, length(worldPos - camPos), camPos, worldPos)
+              : applySceneFog(wcol, camPos, worldPos)) * domWeight;
         if (skyEdgeW > 0.0) wcol += skyEdgeW * skyBackground(ndc);
         // Volumetric in-scatter — the SAME three terms the opaque path adds
         // below: froxel clustered point-light glow, per-pixel spot beams, and
@@ -1081,7 +1089,14 @@ void main() {
     // extinction, in contrast, multiplies the surface radiance itself
     // (different per sample's worldPos/albedo), so both dispatches apply it
     // to their own `lit`.
-    lit = applySceneFog(lit, camPos, worldPos);// extinction first; the beam march carries its own
+    // Surface extinction. HETEROGENEOUS (setHeightFog): from the froxel LUT
+    // (per-slice height-fog + near-cloud σ) + closed-form beyond 512 m; the
+    // in-scatter is added below via froxelInscatter. HOMOGENEOUS: analytic
+    // Beer-Lambert scene fog (in-scatter folded in). The beam march carries its
+    // own extinction either way.
+    lit = (clouds.heteroActive > 0.5)
+        ? applyHeteroSurfaceFog(lit, uv, length(worldPos - camPos), camPos, worldPos)
+        : applySceneFog(lit, camPos, worldPos);
     if (pc.shadeMode == 1u) {
         // Dispatch B: weighted accumulate into dispatch A's already-written
         // pixel (which stored domWeight*lit for the SAME complex pixel — see

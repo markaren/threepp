@@ -733,6 +733,30 @@ namespace threepp_py {
                      "wind m/s xz drift; evolve_speed shape churn rate.")
                 .def("disable_clouds", [](PyVulkanRenderer& r) { r.native().setClouds(std::nullopt); },
                      "Turn the volumetric cloud layer off (default).")
+                // Near-field heterogeneous height fog — exponential height
+                // falloff × wind-scrolled noise, evaluated in the 0.25-512 m view
+                // froxels. Switches the froxels to the heterogeneous path (local
+                // density + a froxel sun term; the per-pixel sun march is
+                // disabled to avoid double-counting) and drives surface fog from
+                // the froxel LUT. scene.fog keeps working; this is a separate
+                // opt-in. Off is free / image-identical.
+                .def("set_height_fog",
+                     [](PyVulkanRenderer& r, float density, float base_y,
+                        float falloff, float noise_amount) {
+                         VulkanRenderer::HeightFogSettings s;
+                         s.density     = density;
+                         s.baseY       = base_y;
+                         s.falloff     = falloff;
+                         s.noiseAmount = noise_amount;
+                         r.native().setHeightFog(s);
+                     },
+                     py::arg("density") = 0.02f, py::arg("base_y") = 0.0f,
+                     py::arg("falloff") = 80.0f, py::arg("noise_amount") = 0.6f,
+                     "Enable near-field heterogeneous height fog. density = sigma_t "
+                     "at base_y; base_y world-Y; falloff exponential height scale (m); "
+                     "noise_amount 0=smooth..1=fully noise-modulated.")
+                .def("disable_height_fog", [](PyVulkanRenderer& r) { r.native().setHeightFog(std::nullopt); },
+                     "Turn near-field height fog off (default).")
                 // Automatic exposure (eye adaptation). When enabled the renderer
                 // samples the scene's log-luma histogram each frame and adapts
                 // toneMappingExposure automatically. toneMappingExposure is ignored

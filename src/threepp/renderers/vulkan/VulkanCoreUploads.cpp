@@ -1076,9 +1076,17 @@ namespace threepp {
         static const auto cloudEpoch = std::chrono::steady_clock::now();
         ubo.timeSec     = std::chrono::duration<float>(
                                   std::chrono::steady_clock::now() - cloudEpoch).count();
-        ubo.wind[0]     = cloudWind_[0];
-        ubo.wind[1]     = cloudWind_[1];
-        ubo.wind[2]     = cloudWind_[2];
+        // Heterogeneous near-field froxels are gated on the height fog (its
+        // explicit opt-in). Clouds dipping below the 512 m froxel range are
+        // ALSO folded into the medium there, but only when hetero mode is on.
+        ubo.heteroActive  = heightFogEnabled_ ? 1.0f : 0.0f;
+        ubo.wind[0]       = cloudWind_[0];
+        ubo.wind[1]       = cloudWind_[1];
+        ubo.wind[2]       = cloudWind_[2];
+        ubo.hfDensity     = heightFogEnabled_ ? heightFogDensity_ : 0.0f;
+        ubo.hfBaseY       = heightFogBaseY_;
+        ubo.hfFalloff     = heightFogFalloff_;
+        ubo.hfNoiseAmount = heightFogNoiseAmount_;
         uploadHostVisible(ctx->allocator(), cloudUbos[frame], &ubo, sizeof(ubo));
     }
 

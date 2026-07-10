@@ -1,6 +1,7 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_ray_query : require
+#extension GL_GOOGLE_include_directive : enable
 
 // Froxel volumetric lighting — INJECT (Wronski 2014 / Frostbite). One thread
 // per froxel of a kFroxelX×kFroxelY×kFroxelZ view-frustum grid (screen tiles ×
@@ -74,6 +75,25 @@ layout(set = 0, binding = 49, scalar) readonly buffer ClusterLightsBuf { Cluster
 layout(set = 0, binding = 50, rgba16f) uniform writeonly image3D froxelScatterImage;
 layout(set = 0, binding = 51) uniform sampler3D froxelScatterPrevTex;// prev fif (EMA history)
 
+// Cloud + height-fog UBO (heterogeneous near-field medium). Matches the
+// deferred_shade / cloud_march scalar block.
+layout(set = 0, binding = 58, scalar) uniform CloudUbo {
+    float enabled;
+    float coverage;
+    float density;
+    float bottomY;
+    float topY;
+    float evolveSpeed;
+    float timeSec;
+    float heteroActive;
+    vec3  wind;
+    float hfDensity;
+    float hfBaseY;
+    float hfFalloff;
+    float hfNoiseAmount;
+    float _pad;
+} clouds;
+
 layout(push_constant) uniform Pc {
     uint  envMipCount;
     uint  width;
@@ -145,26 +165,16 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
             gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
 }
 
+#include "cloud_density.glsl"// heightFogDensity + mediumExtinction (hetero mode)
+
 void main() {
     const uvec3 f = gl_GlobalInvocationID;
     if (f.x >= kFroxelX || f.y >= kFroxelY || f.z >= kFroxelZ) return;
     const ivec3 fi = ivec3(f);
 
-    // Medium parameters — the volumetricSpotScatter rules verbatim: scene fog
-    // drives σ/g/albedo when active (max'd with the explicit beam density);
-    // pc.volDensity alone gives clear-air beams (the lighthouse).
-    const bool  fogDriven = fog.enabled > 0.5;
-    float sigma     = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
-                                : pc.volDensity;
-    float hgG       = fogDriven ? fog.anisotropy : pc.volAniso;
-    vec3  medAlbedo = fogDriven ? fog.color : vec3(1.0);
-    if (sigma <= 0.0) {
-        imageStore(froxelScatterImage, fi, vec4(0.0));
-        return;
-    }
-
     // Jittered sample position inside the froxel (sub-froxel stratification —
     // the EMA below integrates it; per-frame decorrelated per froxel).
+    // Reconstructed FIRST so the heterogeneous medium can sample density at x.
     uint seed = pcgHash(f.x * 7919u + pcgHash(f.y * 104729u + pcgHash(f.z * 6271u + pc.frame * 26699u)));
     const vec2  uv   = (vec2(f.xy) + vec2(rnd(seed), rnd(seed))) / vec2(float(kFroxelX), float(kFroxelY));
     const float dist = froxelDist(float(f.z) + rnd(seed));
@@ -176,6 +186,27 @@ void main() {
     const vec3  camPos  = cam.viewInverse[3].xyz;
     const vec3  rd      = normalize(x - camPos);// camera → froxel (the view ray)
 
+    // Medium parameters. HOMOGENEOUS (today): scene fog drives σ/g/albedo,
+    // max'd with the explicit beam density; pc.volDensity alone gives clear-air
+    // beams (the lighthouse). HETEROGENEOUS (setHeightFog): σ_t is the LOCAL
+    // mediumExtinction (height fog + any cloud dipping below 512 m) at x; the
+    // albedo/anisotropy fall back to the fog UBO when scene fog is present, else
+    // a bright neutral mist.
+    const bool  hetero    = clouds.heteroActive > 0.5;
+    const bool  fogDriven = fog.enabled > 0.5;
+    float sigma     = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
+                                : pc.volDensity;
+    float hgG       = fogDriven ? fog.anisotropy : pc.volAniso;
+    vec3  medAlbedo = fogDriven ? fog.color : vec3(1.0);
+    if (hetero) {
+        sigma     = mediumExtinction(x, clouds.timeSec);
+        hgG       = fogDriven ? fog.anisotropy : 0.2;
+    }
+    if (sigma <= 0.0) {
+        imageStore(froxelScatterImage, fi, vec4(0.0));
+        return;
+    }
+
     // NO waterSurfaceY cap here: the surface-extinction leg (applySceneFog /
     // fogPathLength) is what the wave surface clips — the volumetric marches
     // this replaces always scattered above the water too (the fjord's aerial
@@ -183,12 +214,26 @@ void main() {
 
     vec3 sum = vec3(0.0);
 
-    // NO directional lights here: sun shafts are carved by thin occluders
-    // (window mullions, tree trunks, robot legs) — high-frequency content
-    // this grid blurs into nothing (FJORD's aerial glow and spot_slam's god
-    // rays both vanished). They stay on the per-pixel RT march
-    // (volumetricDirScatter in deferred_shade.comp). Froxels own only the
-    // LOW-frequency term the marches never had: clustered point-light glow.
+    // Directional SUN in-scatter — HETEROGENEOUS mode ONLY. In dense, low-
+    // frequency fog/cloud the sun term is smooth enough for the froxel grid, so
+    // it moves here and the per-pixel volumetricDirScatter is disabled (no
+    // double count). 1 RT shadow ray (hard tree/terrain occlusion) + a short
+    // self-shadow density march toward the sun (Beer), × HG phase. In the
+    // HOMOGENEOUS path the sun stays per-pixel (thin shafts are high-frequency).
+    if (hetero) {
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+            const vec3  L   = normalize(lights.dirLights[i].direction);
+            const float vis = shadowVis(x, L, 1e30);
+            if (vis <= 0.0) continue;
+            const float sunStep = 12.0;// m
+            float od = 0.0;
+            for (int j = 0; j < 6; ++j)
+                od += mediumExtinction(x + L * (float(j) + 0.5) * sunStep, clouds.timeSec);
+            const float beer  = exp(-od * sunStep);
+            const float phase = hgPhase(dot(L, rd), hgG);
+            sum += lights.dirLights[i].color * (vis * beer * phase);
+        }
+    }
 
     // Clustered POINT lights — the volumetricSpotScatter per-step terms
     // (1 m-clamped inverse square, range window, HG phase, light-leg

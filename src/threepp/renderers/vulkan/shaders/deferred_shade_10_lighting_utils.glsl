@@ -13,6 +13,15 @@ vec3 froxelInscatter(vec2 fuv, float viewDist) {
                   / log(kFroxelZMax / kFroxelZMin);
     return texture(froxelLutTex, vec3(fuv, clamp(t, 0.0, 1.0))).rgb;
 }
+// Integrated volumetric TRANSMITTANCE (LUT .a) for the same leg — the surface
+// extinction in heterogeneous height-fog mode (the LUT carried the per-slice
+// height-fog + cloud σ front-to-back). 1.0 when the froxels didn't run.
+float froxelTransmittance(vec2 fuv, float viewDist) {
+    if ((pc.flags & 256u) == 0u) return 1.0;
+    const float t = log(max(viewDist, kFroxelZMin) / kFroxelZMin)
+                  / log(kFroxelZMax / kFroxelZMin);
+    return texture(froxelLutTex, vec3(fuv, clamp(t, 0.0, 1.0))).a;
+}
 
 // ReBLUR-style TEMPORAL accumulation for the reflection (+ glass). Adaptive blend
 // α = 1/historyLength → fast convergence early, then a long stable mean. Tracks the

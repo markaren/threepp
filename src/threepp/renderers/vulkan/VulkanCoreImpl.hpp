@@ -780,22 +780,30 @@ namespace threepp {
         float    fogWaterSurfaceY_ = 1e30f;
         uint64_t prevFogHash_ = 0u;
 
-        // Volumetric cloud layer (VulkanRenderer::setClouds). enabled == 0
-        // short-circuits the deferred cloud march (off = free / image-identical).
-        // Layout matches deferred_shade.comp's binding-58 scalar CloudUbo (first
-        // 40 bytes); padded to a 16-byte multiple for UBO sizing.
+        // Volumetric cloud layer (VulkanRenderer::setClouds) + near-field
+        // heterogeneous height fog (VulkanRenderer::setHeightFog). Both ride the
+        // one binding-58 scalar UBO (they share wind + timeSec). clouds.enabled
+        // == 0 short-circuits the far cloud march; heteroActive == 0 keeps the
+        // froxel volumetrics on today's homogeneous path (off = free /
+        // image-identical). Layout matches deferred_shade.comp / cloud_march /
+        // froxel_inject / froxel_integrate's scalar CloudUbo block exactly.
         struct GpuCloudUbo {
-            float enabled;      // 1.0 = clouds active
+            float enabled;      // 1.0 = far cloud march active
             float coverage;     // 0 = clear .. 1 = overcast
             float density;      // density multiplier
             float bottomY;      // shell base (world Y)
             float topY;         // shell top (world Y)
             float evolveSpeed;  // shape churn rate
             float timeSec;      // wall-clock seconds (wind scroll + evolution)
+            float heteroActive; // 1.0 = heterogeneous near-field froxels (height fog on)
             float wind[3];      // m/s xz drift (y ignored)
-            float _pad[2];      // pad to 48 bytes (shader ignores)
+            float hfDensity;    // height-fog σ_t at baseY (0 = height fog off)
+            float hfBaseY;      // height-fog base world Y
+            float hfFalloff;    // height-fog exponential height scale (m)
+            float hfNoiseAmount;// 0 = smooth analytic .. 1 = fully noise-modulated
+            float _pad;         // pad to 64 bytes (shader ignores)
         };
-        static_assert(sizeof(GpuCloudUbo) == 48);
+        static_assert(sizeof(GpuCloudUbo) == 64);
         std::array<Buffer, kFramesInFlight> cloudUbos{};
         bool  cloudsEnabled_   = false;
         float cloudCoverage_   = 0.45f;
@@ -804,6 +812,12 @@ namespace threepp {
         float cloudTopY_       = 1400.0f;
         float cloudEvolveSpeed_= 1.0f;
         float cloudWind_[3]    = {8.0f, 0.0f, 2.0f};
+        // Near-field heterogeneous height fog (VulkanRenderer::setHeightFog).
+        bool  heightFogEnabled_    = false;
+        float heightFogDensity_    = 0.02f;
+        float heightFogBaseY_      = 0.0f;
+        float heightFogFalloff_    = 80.0f;
+        float heightFogNoiseAmount_= 0.6f;
 
         // Environment equirect (HDR float) used by the primary miss
         // for backgrounds and by closest-hit for a single mirror-reflection

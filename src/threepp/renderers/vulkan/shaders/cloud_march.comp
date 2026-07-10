@@ -68,7 +68,13 @@ layout(set = 0, binding = 58, scalar) uniform CloudUbo {
     float topY;
     float evolveSpeed;
     float timeSec;
+    float heteroActive;
     vec3  wind;
+    float hfDensity;
+    float hfBaseY;
+    float hfFalloff;
+    float hfNoiseAmount;
+    float _pad;
 } clouds;
 
 // Cloud march outputs (half-res) + temporal history (other FIF).

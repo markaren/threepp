@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
 
 // Froxel volumetric lighting — INTEGRATE. One thread per froxel COLUMN walks
 // the depth slices front-to-back, folding each slice's in-scatter (from the
@@ -14,6 +15,12 @@
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
+layout(set = 0, binding = 0) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+    vec4 jitter;
+} cam;
+
 layout(set = 0, binding = 33, scalar) uniform FogUbo {
     vec3  sigmaT;
     float enabled;
@@ -25,6 +32,25 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
 
 layout(set = 0, binding = 50, rgba16f) uniform readonly image3D froxelScatterImage;
 layout(set = 0, binding = 52, rgba16f) uniform writeonly image3D froxelLutImage;
+
+// Cloud + height-fog UBO (heterogeneous near-field medium). Matches the
+// deferred_shade / cloud_march / froxel_inject scalar block.
+layout(set = 0, binding = 58, scalar) uniform CloudUbo {
+    float enabled;
+    float coverage;
+    float density;
+    float bottomY;
+    float topY;
+    float evolveSpeed;
+    float timeSec;
+    float heteroActive;
+    vec3  wind;
+    float hfDensity;
+    float hfBaseY;
+    float hfFalloff;
+    float hfNoiseAmount;
+    float _pad;
+} clouds;
 
 layout(push_constant) uniform Pc {
     uint  envMipCount;
@@ -56,15 +82,30 @@ float froxelDist(float s) {
     return kFroxelZMin * pow(kFroxelZMax / kFroxelZMin, s / float(kFroxelZ));
 }
 
+#include "cloud_density.glsl"// mediumExtinction (hetero mode)
+
+// World position of a froxel column point at view distance `dist`.
+vec3 froxelWorld(vec2 uv, float dist) {
+    const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    const vec4 vh  = cam.projInverse * vec4(ndc, 0.5, 1.0);
+    const vec3 pv  = vh.xyz / vh.w;
+    const vec3 viewPos = pv * (dist / max(-pv.z, 1e-6));
+    return (cam.viewInverse * vec4(viewPos, 1.0)).xyz;
+}
+
 void main() {
     const uvec2 col = gl_GlobalInvocationID.xy;
     if (col.x >= kFroxelX || col.y >= kFroxelY) return;
 
-    // Same medium σ rule as the inject/marchers (fog-driven, max'd with the
-    // explicit beam density).
+    // HOMOGENEOUS (today): one global σ (fog-driven, max'd with the explicit
+    // beam density). HETEROGENEOUS (setHeightFog): σ_t is evaluated PER SLICE
+    // from mediumExtinction at the slice-centre world position — the analytic
+    // per-slice density that couples the froxels to the far cloud march.
+    const bool  hetero    = clouds.heteroActive > 0.5;
     const bool  fogDriven = fog.enabled > 0.5;
-    const float sigma = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
-                                  : pc.volDensity;
+    const float sigmaHom  = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
+                                      : pc.volDensity;
+    const vec2  uv = (vec2(col) + 0.5) / vec2(float(kFroxelX), float(kFroxelY));
 
     vec3  L = vec3(0.0);
     float T = 1.0;
@@ -73,6 +114,9 @@ void main() {
         const float z1  = froxelDist(float(k + 1u));
         const float seg = z1 - z0;
         const vec3  S   = imageLoad(froxelScatterImage, ivec3(col, k)).rgb;
+        const float sigma = hetero
+            ? mediumExtinction(froxelWorld(uv, 0.5 * (z0 + z1)), clouds.timeSec)
+            : sigmaHom;
         if (sigma > 1e-6) {
             // Analytic homogeneous segment: ∫ S·e^(-σt) dt over the slice.
             L += T * S * ((1.0 - exp(-sigma * seg)) / sigma);

@@ -37,6 +37,34 @@ float fogPathLength(vec3 a, vec3 b) {
     const float t = ya / (ya - yb);               // surface crossing
     return (ya < 0.0) ? full * t : full * (1.0 - t);
 }
+// ── Heterogeneous height-fog surface extinction (setHeightFog) ───────────────
+// Closed-form exponential-height-fog optical depth along [a,b] (ignores the
+// noise modulation — a smooth mean is exactly what the FAR remainder wants).
+float heightFogOpticalDepth(vec3 a, vec3 b) {
+    if (clouds.hfDensity <= 0.0) return 0.0;
+    const float H  = max(clouds.hfFalloff, 1e-3);
+    const float ya = a.y - clouds.hfBaseY;
+    const float yb = b.y - clouds.hfBaseY;
+    const float len = distance(a, b);
+    const float dy  = yb - ya;
+    if (abs(dy) < 1e-3)
+        return clouds.hfDensity * exp(-max(ya, 0.0) / H) * len;
+    // ∫ σ0 e^{-max(y,base)/H} ds  → the analytic segment result.
+    return clouds.hfDensity * H * len / dy * (exp(-max(ya, 0.0) / H) - exp(-max(yb, 0.0) / H));
+}
+// Surface fog in heterogeneous mode: extinction from the froxel LUT (which
+// front-to-back-integrated the per-slice height-fog + near-cloud σ) up to
+// 512 m, continued with the closed-form height-fog integral beyond. In-scatter
+// is added SEPARATELY by the caller via froxelInscatter — this returns
+// extinction only (no double count). fuv = pixel UV, viewDist = surface distance.
+vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit) {
+    float T = froxelTransmittance(fuv, viewDist);
+    if (viewDist > kFroxelZMax) {
+        const vec3 seam = ro + (hit - ro) * (kFroxelZMax / max(viewDist, 1e-3));
+        T *= exp(-heightFogOpticalDepth(seam, hit));
+    }
+    return col * T;
+}
 vec3 applySceneFog(vec3 col, vec3 ro, vec3 hit) {
     if (fog.enabled < 0.5) return col;
     const float d = fogPathLength(ro, hit);
@@ -180,6 +208,10 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
 // (bit 4) so the per-step shadow-ray cost is opt-in; the per-pixel jittered
 // step offset relies on TAA to average into smooth shafts.
 vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
+    // Disabled in HETEROGENEOUS mode: the sun in-scatter moved into the froxel
+    // inject there (dense fog/cloud is low-frequency), so marching it per-pixel
+    // too would double-count.
+    if (clouds.heteroActive > 0.5) return vec3(0.0);
     if (fog.enabled < 0.5 || (pc.flags & 16u) == 0u || lights.dirCount == 0u) return vec3(0.0);
     const float sigma = max(dot(fog.sigmaT, vec3(1.0 / 3.0)), 0.0);
     if (sigma <= 0.0) return vec3(0.0);

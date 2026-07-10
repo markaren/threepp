@@ -114,6 +114,7 @@ int main(int argc, char** argv) {
     int shotFrames = 160, shotFrame = 0, shotCam = 0;
     bool startFree = false;
     bool noClouds = false;// perf A/B: render with the cloud layer off
+    bool heightFog = false;// near-field heterogeneous height fog (Phase C)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -121,6 +122,7 @@ int main(int argc, char** argv) {
         else if (a == "--cam" && i + 1 < argc) shotCam = std::atoi(argv[++i]);
         else if (a == "--free") startFree = true;
         else if (a == "--noclouds") noClouds = true;
+        else if (a == "--heightfog") heightFog = true;
     }
 
     Canvas canvas("Vulkan Deferred - Volumetric Clouds", {{"vsync", false}});
@@ -160,6 +162,16 @@ int main(int argc, char** argv) {
     cloudCfg.evolveSpeed = 1.0f;
     bool cloudsOn = !noClouds;
     if (cloudsOn) renderer.setClouds(cloudCfg);
+
+    // Near-field heterogeneous height fog filling the valley (Phase C). Toggled
+    // with H interactively or forced on with --heightfog for capture.
+    VulkanRenderer::HeightFogSettings hfCfg;
+    hfCfg.density     = 0.06f;
+    hfCfg.baseY       = 0.f;
+    hfCfg.falloff     = 200.f;
+    hfCfg.noiseAmount = 0.7f;
+    bool heightFogOn = heightFog;
+    if (heightFogOn) renderer.setHeightFog(hfCfg);
 
     PerspectiveCamera camera(55.f, canvas.aspect(), 1.f, 60000.f);
     OrbitControls controls{camera, canvas};
@@ -230,12 +242,13 @@ int main(int argc, char** argv) {
             if (cloudsOn) renderer.setClouds(cloudCfg);
         }
         ImGui::Separator();
-        ImGui::TextDisabled("F: flight  C: clouds  drag: orbit");
+        ImGui::TextDisabled("F: flight  C: clouds  H: height fog  drag: orbit");
         ImGui::End();
     });
 
     KeyAdapter keyAdapter(KeyAdapter::KEY_PRESSED, [&](KeyEvent evt) {
         if (evt.key == Key::C) { cloudsOn = !cloudsOn; renderer.setClouds(cloudsOn ? std::optional{cloudCfg} : std::nullopt); }
+        else if (evt.key == Key::H) { heightFogOn = !heightFogOn; renderer.setHeightFog(heightFogOn ? std::optional{hfCfg} : std::nullopt); }
         else if (evt.key == Key::F) { flightOn = !flightOn; controls.enabled = !flightOn; }
     });
     canvas.addKeyListener(keyAdapter);
