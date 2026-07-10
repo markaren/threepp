@@ -483,11 +483,17 @@ void VulkanRendererCore::CoreImpl::createRasterGbufImages(uint32_t w, uint32_t h
                 // cloud_march.comp ((w+1)/2). Always allocated (small); the
                 // march is only dispatched when clouds are enabled.
                 const uint32_t hw = (w + 1u) / 2u, hh = (h + 1u) / 2u;
+                // TRANSFER_DST: cleared to known contents at creation (below) —
+                // a layout transition alone leaves texel contents UNDEFINED, and
+                // random fp16 garbage can pass the march's history-validity
+                // checks on the first clouds-enabled frame.
                 g.cloudColor = createAttachmentImage2D(hw, hh, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                                               VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                                        VK_IMAGE_ASPECT_COLOR_BIT, N("cloudColor"));
-                g.cloudAux = createAttachmentImage2D(hw, hh, VK_FORMAT_R16G16_SFLOAT,
-                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                g.cloudAux = createAttachmentImage2D(hw, hh, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                                             VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                                      VK_IMAGE_ASPECT_COLOR_BIT, N("cloudAux"));
                 // Cloud shadow map — FIXED 512² R8 (independent of the render
                 // extent; recreated here on resize). Top-down cloud
@@ -643,6 +649,34 @@ void VulkanRendererCore::CoreImpl::createRasterGbufImages(uint32_t w, uint32_t h
                                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                  0, 0, nullptr, 0, nullptr,
                                  static_cast<uint32_t>(inits.size()), inits.data());
+            // Cloud temporal history: clear to KNOWN contents (layout init above
+            // leaves texels undefined). Color = the compositing identity
+            // (0,0,0,1); aux = 0 (histLen 0 = invalid history). Runs at creation
+            // AND resize, so first-enable / post-resize frames never blend
+            // garbage that happens to pass the march's validity checks.
+            {
+                VkImageSubresourceRange full{};
+                full.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                full.levelCount = 1;
+                full.layerCount = 1;
+                VkClearColorValue identity{};
+                identity.float32[3] = 1.0f;// (0,0,0,1) — no in-scatter, full T
+                VkClearColorValue zero{};
+                for (auto& g : rasterGbufs) {
+                    vkCmdClearColorImage(initCb, g.cloudColor.image,
+                                         VK_IMAGE_LAYOUT_GENERAL, &identity, 1, &full);
+                    vkCmdClearColorImage(initCb, g.cloudAux.image,
+                                         VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &full);
+                }
+                VkMemoryBarrier mb{};
+                mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                vkCmdPipelineBarrier(initCb,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                     0, 1, &mb, 0, nullptr, 0, nullptr);
+            }
             endAndSubmitOneShot(initCb, "rasterGbuf init layouts");
         }
 

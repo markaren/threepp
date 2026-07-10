@@ -802,10 +802,16 @@ namespace threepp {
             float hfFalloff;    // height-fog exponential height scale (m)
             float hfNoiseAmount;// 0 = smooth analytic .. 1 = fully noise-modulated
             float shadowActive; // 1.0 = cloud shadow map valid this frame (clouds on)
+            float epoch;        // history generation — cloud_march rejects prev-epoch
+                                // history (first-enable garbage, reconfigured decks)
         };
-        static_assert(sizeof(GpuCloudUbo) == 64);
+        static_assert(sizeof(GpuCloudUbo) == 68);
         std::array<Buffer, kFramesInFlight> cloudUbos{};
         bool  cloudsEnabled_   = false;
+        // Bumped by setClouds on enable / material reconfigure (NOT on identical
+        // per-frame re-sets — the fjord demo calls setClouds every frame).
+        // Wrapped &1023: the aux .a channel is fp16, int-exact only to 2048.
+        int   cloudEpoch_      = 1;
         float cloudCoverage_   = 0.45f;
         float cloudDensity_    = 1.0f;
         float cloudBottomY_    = 600.0f;

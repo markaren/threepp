@@ -265,7 +265,8 @@ namespace threepp {
             // shade critical path. Only when clouds are enabled (off = free /
             // image-identical). Reads the resolved G-buffer depth/ids (already
             // COMPUTE-visible via the raster pass dependency); the barrier below
-            // makes its cloudColor write visible to the shade's bilinear sample.
+            // makes its cloudColor + cloudAux writes visible to the shade's
+            // depth-aware upsample.
             if (cloudsEnabled_) {
                 deferredShade_->recordCloudMarch(cb, currentFrame,
                                                  regionRenderExt_.width, regionRenderExt_.height,
@@ -1362,12 +1363,33 @@ namespace threepp {
 
     void VulkanRenderer::setClouds(const std::optional<CloudSettings>& settings) {
         if (settings) {
+            const float coverage = std::clamp(settings->coverage, 0.f, 1.f);
+            const float density  = std::max(settings->density, 0.f);
+            const float bottomY  = settings->bottomY;
+            const float topY     = std::max(settings->topY, settings->bottomY + 1.f);
+            const float evolve   = std::max(settings->evolveSpeed, 0.f);
+            // History epoch: bump ONLY on enable or a material change — the
+            // cloud march drops its temporal history at an epoch boundary
+            // (first-enable undefined contents, reconfigured decks must not
+            // ghost the old pattern for ~24 frames). Demos re-set identical
+            // values every frame; an unconditional bump would permanently
+            // kill the temporal accumulation.
+            // Wind is NOT an epoch trigger: it only changes the drift RATE —
+            // the pattern moves continuously and the motion-shortened EMA
+            // tracks it (and demos tie wind to a live slider).
+            const bool changed = !pimpl_->cloudsEnabled_
+                              || coverage != pimpl_->cloudCoverage_
+                              || density  != pimpl_->cloudDensity_
+                              || bottomY  != pimpl_->cloudBottomY_
+                              || topY     != pimpl_->cloudTopY_
+                              || evolve   != pimpl_->cloudEvolveSpeed_;
+            if (changed) pimpl_->cloudEpoch_ = (pimpl_->cloudEpoch_ + 1) & 1023;
             pimpl_->cloudsEnabled_    = true;
-            pimpl_->cloudCoverage_    = std::clamp(settings->coverage, 0.f, 1.f);
-            pimpl_->cloudDensity_     = std::max(settings->density, 0.f);
-            pimpl_->cloudBottomY_     = settings->bottomY;
-            pimpl_->cloudTopY_        = std::max(settings->topY, settings->bottomY + 1.f);
-            pimpl_->cloudEvolveSpeed_ = std::max(settings->evolveSpeed, 0.f);
+            pimpl_->cloudCoverage_    = coverage;
+            pimpl_->cloudDensity_     = density;
+            pimpl_->cloudBottomY_     = bottomY;
+            pimpl_->cloudTopY_        = topY;
+            pimpl_->cloudEvolveSpeed_ = evolve;
             pimpl_->cloudWind_[0]     = settings->wind.x;
             pimpl_->cloudWind_[1]     = settings->wind.y;
             pimpl_->cloudWind_[2]     = settings->wind.z;

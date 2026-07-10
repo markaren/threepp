@@ -119,14 +119,17 @@ namespace threepp {
         // Exponential height falloff × wind-scrolled 3D noise, evaluated inside
         // the 0.25–512 m view froxels (the near-field volume). Turning it on
         // switches the froxel volumetrics to the HETEROGENEOUS path: per-slice
-        // density (height fog + any cloud dipping below 512 m), a froxel sun
-        // in-scatter term (1 RT shadow ray + a short self-shadow march), and
-        // LUT-based surface fog — the per-pixel homogeneous sun march is
-        // disabled to avoid double-counting. `scene.fog` (homogeneous) keeps
-        // working exactly as today; this activates only via the setter. nullopt
-        // = off (default) — the froxels stay on the homogeneous path, so off is
-        // free / image-identical. Wind is shared with CloudSettings when both
-        // are active.
+        // HEIGHT-FOG density, a froxel sun in-scatter term (1 RT shadow ray +
+        // a short self-shadow march), and LUT-based surface fog — the
+        // per-pixel homogeneous sun march is disabled to avoid double-counting.
+        // NOTE the froxel medium is height fog ONLY: the setClouds layer is
+        // integrated by the far cloud march over the WHOLE ray (including below
+        // 512 m and inside the deck), so the two volumes split by phenomenon —
+        // no cloud/froxel hand-off exists or is needed. `scene.fog`
+        // (homogeneous) keeps working exactly as today; this activates only via
+        // the setter. nullopt = off (default) — the froxels stay on the
+        // homogeneous path, so off is free / image-identical. Wind is shared
+        // with CloudSettings when both are active.
         struct HeightFogSettings {
             float density     = 0.02f;// σ_t at baseY
             float baseY       = 0.0f;

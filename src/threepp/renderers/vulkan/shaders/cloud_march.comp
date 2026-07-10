@@ -75,12 +75,13 @@ layout(set = 0, binding = 58, scalar) uniform CloudUbo {
     float hfFalloff;
     float hfNoiseAmount;
     float shadowActive;
+    float epoch;             // history generation — bumped on enable/reconfigure
 } clouds;
 
 // Cloud march outputs (half-res) + temporal history (other FIF).
 layout(set = 0, binding = 59, rgba16f) uniform writeonly image2D cloudColorImage;// rgb=in-scatter, a=transmittance
 layout(set = 0, binding = 60) uniform sampler2D cloudColorPrevTex;                // prev-frame color (reproject)
-layout(set = 0, binding = 62, rg16f)   uniform writeonly image2D cloudAuxImage;   // r=mean depth, g=histLen
+layout(set = 0, binding = 62, rgba16f) uniform writeonly image2D cloudAuxImage;   // r=mean depth, g=histLen, b=scene dist, a=epoch
 layout(set = 0, binding = 63) uniform sampler2D cloudAuxPrevTex;                   // prev-frame aux
 
 layout(push_constant) uniform Pc {
@@ -123,8 +124,12 @@ float hgPhase(float mu, float g) {
 // opaque surface (depth-aware clipping — a drone above the deck sees clouds
 // BETWEEN it and the ground). Returns vec4(scat, T); outMeanDepth = extinction-
 // weighted mean march distance (for temporal reprojection + aerial keying).
+// outMeanDepth = -1 when the ray never enters the shell (grazing / geometry
+// fully in front): the caller must SKIP temporal reprojection then — a zero
+// depth would reproject the CAMERA POSITION through prevVP and inherit
+// whatever stale history lives at that garbage UV (the chase-cam ghost trails).
 vec4 cloudMarch(vec3 ro, vec3 rd, float maxLod, ivec2 px, float tSceneMax, out float outMeanDepth) {
-    outMeanDepth = 0.0;
+    outMeanDepth = -1.0;
     if (abs(rd.y) < 1e-4) return vec4(0.0, 0.0, 0.0, 1.0);// grazing: no robust slab
     const float tA = (clouds.bottomY - ro.y) / rd.y;
     const float tB = (clouds.topY - ro.y) / rd.y;
@@ -178,7 +183,9 @@ vec4 cloudMarch(vec3 ro, vec3 rd, float maxLod, ivec2 px, float tSceneMax, out f
             if (T < 0.02) break;
         }
     }
-    outMeanDepth = (wSum > 1e-5) ? depthSum / wSum : t0;
+    // Empty shell: reproject at MID-shell — a stable far point. NEVER t0 (t0
+    // can be ~0 with the camera under the deck → camera-position reprojection).
+    outMeanDepth = (wSum > 1e-5) ? depthSum / wSum : 0.5 * (t0 + t1);
     // Aerial perspective: distant clouds sink into the sky haze, keyed on the
     // march-entry distance (~45 km scale).
     const float aerial = 1.0 - exp(-t0 * 2.2e-5);
@@ -202,10 +209,13 @@ void main() {
         return;
     }
 
-    // Full-res UV at this half-res pixel centre → primary ray (pixel-centre;
-    // the march itself is blue-noise jittered along t for temporal convergence).
+    // Full-res UV at this half-res pixel centre → primary ray. cam.jitter.xy
+    // restores the G-buffer's Halton raster jitter (same convention as the
+    // main shade): the depth reconstruction below and the cloud ray must sit
+    // on the SAME raster ray, or tSceneMax clips against a mismatched surface
+    // at grazing geometry. (The march itself is blue-noise jittered along t.)
     const vec2 uv  = (vec2(hp) + 0.5) / vec2(float(hw), float(hh));
-    const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + cam.jitter.xy;
     const vec4 tVS   = cam.projInverse * vec4(ndc, 1.0, 1.0);
     const vec3 dirVS = normalize(tVS.xyz / tVS.w);
     const vec3 rd    = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
@@ -228,34 +238,44 @@ void main() {
     // ── Temporal reprojection + EMA ──────────────────────────────────────────
     // Reproject the (extinction-weighted) cloud point into the previous frame's
     // UNJITTERED screen with rcam.prevVP; blend the prior result in. Validity:
-    // in front of the prev camera, on-screen, and a sane prev history value.
-    const vec3 wpMean = camPos + rd * meanDepth;
-    const vec4 pClip  = rcam.prevVP * vec4(wpMean, 1.0);
+    // a real shell hit this frame (meanDepth ≥ 0 — no-shell pixels must NOT
+    // accumulate: their identity output is exact every frame), in front of the
+    // prev camera, on-screen, same history EPOCH (rejects undefined first-enable
+    // contents and pre-reconfigure patterns), and a sane prev history value.
     vec3  outScat = cur.rgb;
     float outT    = cur.a;
     float hist    = 1.0;
-    if (pClip.w > 1e-4) {
-        const vec2 pNdc = pClip.xy / pClip.w;
-        const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
-        if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
-            const vec4 prevC = texture(cloudColorPrevTex, pUv);
-            const vec2 prevA = texture(cloudAuxPrevTex, pUv).rg;// r=depth, g=histLen
-            const bool valid = prevA.g > 0.5 && prevA.g < 4096.0
-                             && all(lessThan(abs(prevC.rgb), vec3(1e6)))
-                             && prevC.a >= -0.01 && prevC.a <= 1.01;
-            if (valid) {
-                // Motion-shortened cap (froxel_inject rule): a static view
-                // converges long; drone motion drops it toward a few frames.
-                const float motion = pc.camRot * 3.0 + pc.camDelta * 0.5;
-                const float cap    = mix(24.0, 3.0, smoothstep(0.001, 0.02, motion));
-                hist = min(prevA.g + 1.0, cap);
-                const float k = 1.0 / hist;
-                outScat = mix(prevC.rgb, cur.rgb, k);
-                outT    = mix(prevC.a,   cur.a,   k);
+    if (meanDepth >= 0.0) {
+        const vec3 wpMean = camPos + rd * meanDepth;
+        const vec4 pClip  = rcam.prevVP * vec4(wpMean, 1.0);
+        if (pClip.w > 1e-4) {
+            const vec2 pNdc = pClip.xy / pClip.w;
+            const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
+            if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
+                const vec4 prevC = texture(cloudColorPrevTex, pUv);
+                const vec4 prevA = texture(cloudAuxPrevTex, pUv);// r=depth, g=histLen, b=sceneDist, a=epoch
+                const bool valid = prevA.g > 0.5 && prevA.g < 4096.0
+                                 && abs(prevA.a - clouds.epoch) < 0.5
+                                 && all(lessThan(abs(prevC.rgb), vec3(1e6)))
+                                 && prevC.a >= -0.01 && prevC.a <= 1.01;
+                if (valid) {
+                    // Motion-shortened cap (froxel_inject rule): a static view
+                    // converges long; drone motion drops it toward a few frames.
+                    const float motion = pc.camRot * 3.0 + pc.camDelta * 0.5;
+                    const float cap    = mix(24.0, 3.0, smoothstep(0.001, 0.02, motion));
+                    hist = min(prevA.g + 1.0, cap);
+                    const float k = 1.0 / hist;
+                    outScat = mix(prevC.rgb, cur.rgb, k);
+                    outT    = mix(prevC.a,   cur.a,   k);
+                }
             }
         }
     }
 
     imageStore(cloudColorImage, hp, vec4(outScat, outT));
-    imageStore(cloudAuxImage,   hp, vec4(meanDepth, hist, 0.0, 0.0));
+    // .b = the scene distance this march clipped against (fp16-clamped) — the
+    // shade's depth-aware upsample rejects taps whose cloud lies BEHIND its
+    // own pixel's surface. .a = epoch (history generation gate above).
+    imageStore(cloudAuxImage,   hp, vec4(max(meanDepth, 0.0), hist,
+                                         min(tSceneMax, 60000.0), clouds.epoch));
 }

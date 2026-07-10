@@ -296,6 +296,11 @@ layout(set = 0, binding = 58, scalar) uniform CloudUbo {
 // the full-res shade composites it with ONE bilinear upsample tap. rgb =
 // in-scatter, a = transmittance. Gated by clouds.enabled (off = col*1 + 0).
 layout(set = 0, binding = 61) uniform sampler2D cloudColorTex;// composited by compositeClouds() below the push block
+// This frame's cloud aux (binding 66): r=mean cloud depth, g=histLen,
+// b=scene distance the march clipped against, a=epoch. The depth-aware
+// upsample in cloudGather() needs r to reject taps whose cloud lies behind
+// the compositing pixel's own surface.
+layout(set = 0, binding = 66) uniform sampler2D cloudAuxTex;
 // Cloud shadow map (cloud_shadow.comp, binding 65) — top-down cloud
 // transmittance over an 8 km camera-centred square. Sampled by cloudShadowSample()
 // (deferred_shade_10_lighting_utils.glsl) to attenuate the sun on the ground.
@@ -334,13 +339,42 @@ layout(push_constant) uniform Pc {
                               // fetch divides by it to recover UNexposed radiance.
 } pc;
 
+// DEPTH-AWARE 2×2 upsample of the half-res cloud layer at this full-res pixel.
+// A plain bilinear tap bleeds across depth discontinuities: a full-res pixel
+// on a thin foreground object (a ship's mast) blends half-res texels whose
+// centres missed it and marched cloud kilometres BEHIND it — painting cloud
+// onto the object and haloing its silhouette. Each tap therefore only counts
+// when its cloud is actually IN FRONT of this pixel's surface (aux.r mean
+// cloud depth < sceneDist); taps carrying no cloud are the identity and are
+// always safe. All four rejected → identity (cloud fully behind the surface).
+// Sky pixels pass sceneDist=1e30 → nothing rejected → plain bilinear.
+vec4 cloudGather(ivec2 px, float sceneDist) {
+    const ivec2 hsz = textureSize(cloudColorTex, 0);
+    const vec2  uv  = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
+    const vec2  pos = uv * vec2(hsz) - 0.5;
+    const ivec2 b0  = ivec2(floor(pos));
+    const vec2  f   = pos - vec2(b0);
+    const vec4  wb  = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y),
+                           (1.0 - f.x) * f.y,         f.x * f.y);
+    vec4  acc  = vec4(0.0);
+    float wSum = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        const ivec2 tp = clamp(b0 + ivec2(i & 1, i >> 1), ivec2(0), hsz - 1);
+        const vec4  c  = texelFetch(cloudColorTex, tp, 0);
+        const bool hasCloud = (c.a < 0.999) || any(greaterThan(c.rgb, vec3(1e-5)));
+        if (hasCloud && texelFetch(cloudAuxTex, tp, 0).r >= sceneDist) continue;
+        acc  += wb[i] * c;
+        wSum += wb[i];
+    }
+    return (wSum > 1e-4) ? acc / wSum : vec4(0.0, 0.0, 0.0, 1.0);
+}
 // Composite the upsampled half-res cloud layer (binding 61) over `col` at this
-// pixel. A no-op when clouds are off, so the whole system is free/image-
-// identical when unused. rgb = in-scatter, a = transmittance.
-vec3 compositeClouds(vec3 col, ivec2 px) {
+// pixel. sceneDist = this pixel's own camera→surface distance (1e30 for sky).
+// A no-op when clouds are off, so the whole system is free/image-identical
+// when unused. rgb = in-scatter, a = transmittance.
+vec3 compositeClouds(vec3 col, ivec2 px, float sceneDist) {
     if (clouds.enabled < 0.5) return col;
-    const vec2 cuv = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
-    const vec4 cl  = textureLod(cloudColorTex, cuv, 0.0);
+    const vec4 cl = cloudGather(px, sceneDist);
     return col * cl.a + cl.rgb;
 }
 
@@ -484,7 +518,7 @@ void main() {
         // radiance shares the sky's value domain, so the skyPe scale below
         // carries the clouds too — consistent under the solid-bg bypass.
         vec3 skyRad = applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
-        skyRad = compositeClouds(skyRad, px);// upsampled half-res cloud layer over the sky
+        skyRad = compositeClouds(skyRad, px, 1e30);// upsampled half-res cloud layer over the sky
         vec3 sky = skyRad * domWeight;
         // SOLID-COLOUR background (flags bit 10): the bg is DISPLAY-referred
         // (the exact clear colour, restored verbatim by the composite's sky
@@ -646,7 +680,7 @@ void main() {
         // it entirely, so a scene whose ONLY light is the sun (spot_slam: no
         // point/spot lights) showed effectively un-fogged water while the
         // terrain got the full aerial glow.
-        wcol = compositeClouds(wcol, px);// depth-aware cloud layer in front of the water
+        wcol = compositeClouds(wcol, px, length(worldPos - camPos));// depth-aware cloud layer in front of the water
         wcol += froxelInscatter(uv, max(-(viewH.z / viewH.w), 0.0))
               + volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px)
               + volumetricDirScatter(camPos, -V, length(worldPos - camPos), px);
@@ -1111,7 +1145,14 @@ void main() {
         // dispatch B starts), and each pixel is touched by exactly one
         // invocation, so there's no cross-invocation race.
         const vec3 base = imageLoad(outImage, px).rgb;// already pre-exposed by dispatch A
-        imageStore(outImage, px, vec4(base + lit * (msWeight * uintBitsToFloat(pc.preExpBits)), 1.0));
+        // Dispatch A composited the cloud layer over its (coverage-weighted)
+        // result — this minority sample sits behind the same cloud, so its add
+        // must carry the cloud TRANSMITTANCE too (not the in-scatter: dispatch
+        // A already added that once). Without it, complex pixels under cloud
+        // grow a bright unattenuated geometry rim.
+        const float cloudT = (clouds.enabled > 0.5)
+                ? cloudGather(px, length(worldPos - camPos)).a : 1.0;
+        imageStore(outImage, px, vec4(base + lit * (msWeight * cloudT * uintBitsToFloat(pc.preExpBits)), 1.0));
     } else {
         // Dispatch A: at a complex pixel, scale down by the dominant
         // cluster's population fraction and blend the SKY minority's
@@ -1125,7 +1166,7 @@ void main() {
         // in-scatter/extinction in FRONT of the terrain (a drone above the deck
         // sees clouds between it and the ground). tSceneMax = surface distance
         // clips the march at the G-buffer depth. No-op when clouds are off.
-        outC = compositeClouds(outC, px);// depth-aware cloud layer in front of the terrain
+        outC = compositeClouds(outC, px, length(worldPos - camPos));// depth-aware cloud layer in front of the terrain
         // Volumetric in-scatter is a per-PIXEL view-ray integral, independent
         // of which G-buffer sample won — add it ONCE at FULL weight AFTER the
         // coverage weighting. (It used to be folded into `lit` before the

@@ -1077,8 +1077,10 @@ namespace threepp {
         ubo.timeSec     = std::chrono::duration<float>(
                                   std::chrono::steady_clock::now() - cloudEpoch).count();
         // Heterogeneous near-field froxels are gated on the height fog (its
-        // explicit opt-in). Clouds dipping below the 512 m froxel range are
-        // ALSO folded into the medium there, but only when hetero mode is on.
+        // explicit opt-in). The froxel medium is HEIGHT FOG ONLY — the far
+        // cloud march already integrates the cloud over the whole 0→far ray
+        // (including below 512 m), so folding cloudDensity into the froxels
+        // too would double-count it (see mediumExtinction in cloud_density.glsl).
         ubo.heteroActive  = heightFogEnabled_ ? 1.0f : 0.0f;
         ubo.wind[0]       = cloudWind_[0];
         ubo.wind[1]       = cloudWind_[1];
@@ -1090,6 +1092,7 @@ namespace threepp {
         // Cloud shadow map is generated + sampled only when clouds are on (it's
         // the cloud's own transmittance projected to the ground).
         ubo.shadowActive  = cloudsEnabled_ ? 1.0f : 0.0f;
+        ubo.epoch         = static_cast<float>(cloudEpoch_);
         uploadHostVisible(ctx->allocator(), cloudUbos[frame], &ubo, sizeof(ubo));
     }
 
