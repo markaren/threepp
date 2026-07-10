@@ -29,6 +29,20 @@
 #define kRayMaskOpaque 0x01u
 #define kRayMaskAlpha  0x02u
 
+// Per-instance flag word — packed host-side (VulkanCoreIndirect.cpp) into
+// DrawInfo.flags, carried through gbuffer.vert into the gbuffer IDs
+// attachment's .z channel (rgba16ui — truncates to 16 bits, so flags live in
+// bits 0..7 and the semantic CLASS id in bits 8..15). THE canonical bit
+// layout; shader consumers go through the instance_flags.glsl accessors
+// instead of raw masks. Bits 1..2 are reserved (documented for transmissive/
+// thin-walled in an earlier design, never packed — kept so re-introducing
+// them can't silently collide).
+#define kInstFlagWater       0x01u// DisplacedMesh (FFT water / displaced surface)
+#define kInstFlagSkinned     0x08u// GPU-skinned mesh
+#define kInstFlagDoubleSided 0x10u// Side::Double material (±N = same surface)
+#define kInstFlagDeformer    0x20u// persistent per-frame deformer (tet soft body)
+#define kInstFlagTexAnim     0x40u// per-frame texture animation (Material::textureAnimatedHint)
+
 #ifdef __cplusplus
 
 #include <cstdint>

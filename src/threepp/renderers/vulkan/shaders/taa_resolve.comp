@@ -1,4 +1,7 @@
 #version 460
+#extension GL_GOOGLE_include_directive : enable
+
+#include "instance_flags.glsl"// per-instance flag accessors + reactivity channels
 
 // Raster TAA resolve / temporal upsampler. Inputs:
 //   binding 0: taaInputTex        — current frame, post-denoise (RENDER extent)
@@ -312,12 +315,12 @@ void main() {
 
     // Mesh-ID rejection + skinned-mesh detection. Read both at once.
     //   ids.x = instanceCustomIndex+1 (0 = sky/miss)
-    //   ids.z = flags  (bit 0 is_water, bit 3 is_skinned)
+    //   ids.z = per-instance flags (layout: vulkan_shared.h)
     const uvec4 currIds = texture(gbufIdsCurrTex, uvIn);
     const uvec4 prevIds = reprojValid
             ? texture(gbufIdsPrevTex, prevUv * inScale)
             : uvec4(0u);
-    const bool isSkinned = (currIds.z & 8u) != 0u;
+    const bool isSkinned = ifSkinned(currIds.z);
     // NO hard mesh-ID disocclusion reject. Under jitter a silhouette pixel's
     // coverage (hence its mesh-ID) flips EVERY frame, so an ID-mismatch reject
     // fires at every edge every frame → history never accumulates → edges
@@ -542,26 +545,19 @@ void main() {
     // history above is at best the neighbourhood mean, but a freshly revealed
     // surface should read its own current sample, not a clip of stale colour.
     float a = max(clamp((pc.blendAlpha + velocityBump) * antiFlicker, 0.01, 1.0), depthDisocc);
-    // PER-FRAME-CHANGING CONTENT — α floor for two flag classes:
-    //   bit 5 (32u): persistent GEOMETRY deformer (tet-skinned soft bodies).
-    //     Reprojection aligns the geometry, but the shading itself (normals
-    //     swinging, stretch, contact shadowing) changes every frame — an EMA
-    //     at α≈0.1-0.25 displays a 3-8-frame-lagged average of it, read as
-    //     "frames of history dragging behind the fish" (GL, no TAA, is
-    //     crisp). The velocity bump cannot catch this: a body wobbling in
-    //     place has near-zero screen motion yet full shading change — screen
-    //     velocity and shading-change rate are decoupled exactly here (the
-    //     reason the old is_skinned force-high-alpha hack was wrong is the
-    //     reason this flag-scoped floor is right).
-    //   bit 6 (64u): per-frame TEXTURE animation (Material::textureAnimatedHint
-    //     — scrolling conveyor-belt UVs, video textures). The pattern moves
-    //     with ZERO motion vectors, so history blending smears/lags it at any
-    //     reprojection quality.
-    // 0.75 leaves a ~1/3-frame mean shading lag (0.5 still read as a visible
-    // one-frame echo on high-contrast fish texture); the variance clip (and
-    // setGbufferMsaa for edges) covers the reduced temporal AA.
-    const bool perFrameContent = (currIds.z & 96u) != 0u;
-    if (perFrameContent) a = max(a, 0.75);
+    // SHADING-REACTIVE content — α floor toward the current frame. Sources +
+    // channel semantics: instance_flags.glsl (today: persistent deformers +
+    // animated textures — shading changes every frame in ways motion vectors
+    // can't express, so an EMA at α≈0.1-0.25 displays a 3-8-frame-lagged
+    // average of it, read as "frames of history dragging behind" the
+    // content; the velocity bump can't catch it because screen velocity and
+    // shading-change rate are decoupled exactly there). Floor 0.75 leaves a
+    // ~1/3-frame mean shading lag (0.5 still read as a visible one-frame
+    // echo on high-contrast per-frame content); the variance clip (and
+    // setGbufferMsaa for edges) covers the reduced temporal AA. Scaling the
+    // floor by the [0..1] reactivity keeps the binary case exact and lets a
+    // graded source soften it.
+    a = max(a, 0.75 * ifShadingReactivity(currIds.z));
     // `result` is still WORKING space here (companded in HDR mode) — decompand
     // back to true linear right before it leaves the shader. LDR mode: no-op
     // (decompand is only ever called under `hdr`), byte-identical to before.
