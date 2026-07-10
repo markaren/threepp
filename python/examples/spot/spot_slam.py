@@ -176,8 +176,15 @@ def make_rock_geometry(seed):
     T, P  = np.meshgrid(theta, phi, indexing='ij')              # (6,8)
     sinT, cosT = np.sin(T), np.cos(T)
     nx, ny, nz = sinT * np.cos(P), cosT, sinT * np.sin(P)
-    disp = (1.0 + 0.30 * np.sin(2 * P + p1) * sinT + 0.24 * np.cos(3 * P + p2)
-            + 0.22 * np.sin(3 * T + p3) + 0.14 * np.cos(5 * P + 4 * T + p1))
+    # Every phi-dependent term is gated by sinT so it vanishes at the poles
+    # (theta = 0, pi). Ungated cos(3phi)/cos(5phi) give each pole vertex a
+    # DIFFERENT radius, smearing the single pole point into a fan of thin sliver
+    # triangles whose sub-pixel coverage toggles with the TAA jitter and flickers
+    # uniformly every frame. Gated, the pole vertices coincide -> zero-area
+    # triangles that rasterize to nothing, leaving a clean pole fan.
+    disp = (1.0 + sinT * (0.30 * np.sin(2 * P + p1) + 0.24 * np.cos(3 * P + p2)
+                          + 0.14 * np.cos(5 * P + 4 * T + p1))
+            + 0.22 * np.sin(3 * T + p3))
     disp = np.clip(disp, 0.6, 1.5)
     pos = np.stack([nx * disp, ny * disp, nz * disp], -1).reshape(-1, 3)
     nrm = np.stack([nx, ny, nz], -1).reshape(-1, 3)
@@ -632,8 +639,8 @@ def main():
     rend.shadow_map_enabled       = True
     rend.tone_mapping             = tp.ToneMapping.ACESFilmic
     rend.tone_mapping_exposure    = 1.1
-    if hasattr(rend, "gbuffer_msaa"):
-        rend.gbuffer_msaa = 2
+    # if hasattr(rend, "gbuffer_msaa"):
+    #     rend.gbuffer_msaa = 2
 
     # ── scene ─────────────────────────────────────────────────────────────────
     scene = tp.Scene()

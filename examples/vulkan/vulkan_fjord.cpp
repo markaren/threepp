@@ -589,8 +589,15 @@ namespace {
             for (int lon = 0; lon <= lonSegs; ++lon) {
                 const float phi = static_cast<float>(lon) / lonSegs * kTau;
                 const float nx = sinT * std::cos(phi), ny = cosT, nz = sinT * std::sin(phi);
-                float disp = 1.f + 0.30f * std::sin(2.f * phi + p1) * sinT + 0.24f * std::cos(3.f * phi + p2) +
-                             0.22f * std::sin(3.f * theta + p3) + 0.14f * std::cos(5.f * phi + 4.f * theta + p1);
+                // Every phi-dependent term is gated by sinT so it vanishes at the
+                // poles (theta = 0, PI). Ungated cos(3phi)/cos(5phi) give each pole
+                // vertex a DIFFERENT radius, smearing the single pole point into a
+                // fan of thin sliver triangles whose sub-pixel coverage toggles with
+                // the TAA jitter and flickers uniformly every frame. Gated, the pole
+                // vertices coincide → zero-area triangles that rasterize to nothing.
+                float disp = 1.f + sinT * (0.30f * std::sin(2.f * phi + p1) + 0.24f * std::cos(3.f * phi + p2) +
+                                           0.14f * std::cos(5.f * phi + 4.f * theta + p1)) +
+                             0.22f * std::sin(3.f * theta + p3);
                 disp = std::clamp(disp, 0.6f, 1.5f);
                 pos.insert(pos.end(), {nx * disp, ny * disp, nz * disp});
                 nrm.insert(nrm.end(), {nx, ny, nz});
