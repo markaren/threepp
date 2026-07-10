@@ -465,12 +465,16 @@ namespace threepp::vegetation {
                     for (int lon = 0; lon < lonSegs; ++lon) {
                         const unsigned int a = start + static_cast<unsigned int>(lat * rowVerts + lon);
                         const unsigned int b = a + static_cast<unsigned int>(rowVerts);
+                        // CCW from outside — matches the radial normals. Wound the
+                        // other way the puff renders inside-out: culling shows the
+                        // far INNER wall whose normal points away from the viewer,
+                        // so the canopy shades inverted ("lit" on its dark side).
                         indices.push_back(a);
-                        indices.push_back(b);
-                        indices.push_back(a + 1);
                         indices.push_back(a + 1);
                         indices.push_back(b);
+                        indices.push_back(a + 1);
                         indices.push_back(b + 1);
+                        indices.push_back(b);
                     }
                 }
                 baseVert += static_cast<unsigned int>((latSegs + 1) * rowVerts);

@@ -500,7 +500,12 @@ namespace {
                 MeshStandardMaterial::Params{}.color(Color::white).roughness(0.85f).metalness(0.f));
         if (cheapBlob) {
             // Slight brighten: the baked per-vertex canopy tint (0.6–1.1) multiplies this.
-            v.leafMat->color = Color(tp.leafColor[0] * 1.15f, tp.leafColor[1] * 1.15f, tp.leafColor[2] * 1.15f);
+            // leafColor is an sRGB hint (TreeParams doc) — the card path bakes it into an
+            // sRGB-tagged texture (decoded on sample), but material->color is LINEAR
+            // working space. Without the conversion the blobs render ~4x too bright and
+            // read "always lit" (glowing green even at night).
+            v.leafMat->color = Color(tp.leafColor[0] * 1.15f, tp.leafColor[1] * 1.15f, tp.leafColor[2] * 1.15f)
+                                       .convertSRGBToLinear();
             v.leafMat->vertexColors = true;// canopy tint gradient baked per-vertex
         } else {
             v.leafMat->map = vegetation::makeLeafClusterTexture(256, seed, tp.leafColor);
