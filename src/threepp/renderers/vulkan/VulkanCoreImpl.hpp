@@ -1123,8 +1123,12 @@ namespace threepp {
         // shimmer otherwise — a "just right" default, not an opt-in.
         bool     normalMapToksvig_ = true;
 
-        // ── Automatic mesh LOD (setAutoLod; default OFF) ────────────────────
-        bool autoLod_ = false;
+        // ── Automatic mesh LOD (setAutoLod; ON by default) ──────────────────
+        // Default-on since the full measurement pass: Bistro (per-pixel-bound
+        // worst case) neutral, fjord flight +32% FPS, quality below animation
+        // noise, switch frames stall-free (geomDescs ring). setAutoLod(false)
+        // remains as the manual override / debug escape (Toksvig pattern).
+        bool autoLod_ = true;
         // Set by the selection pass in ensureSceneBuilt (VulkanCoreScene.cpp)
         // when ANY entry's chosen level changed this frame; read right after
         // to fold into the same "force a full TLAS rebuild" trigger the

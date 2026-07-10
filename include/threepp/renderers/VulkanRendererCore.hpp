@@ -224,17 +224,21 @@ namespace threepp {
         void setNormalMapToksvig(bool enabled);
         [[nodiscard]] bool normalMapToksvig() const;
 
-        // ── Automatic mesh LOD (debug, default OFF) ───────────────────────
+        // ── Automatic mesh LOD (ON by default) ────────────────────────────
         // Per-geometry chains of simplified INDEX buffers (vertex positions/
         // normals/UVs untouched — index-only), generated in the background
         // with meshoptimizer and selected per-entry per-frame by projected
-        // screen-space error. Consumed identically by the raster G-buffer
-        // and the ray-tracing TLAS, fighting sub-pixel geometric coverage
-        // flicker under TAA jitter on distant/simplifiable geometry.
+        // screen-space error (sub-pixel at the switch, so transitions are
+        // invisible). Consumed identically by the raster G-buffer and the
+        // ray-tracing TLAS. This is a PERFORMANCE feature for geometry-bound
+        // scenes (measured: fjord flythrough +32% FPS, per-pixel-bound
+        // Bistro neutral) — measurement showed it does NOT meaningfully
+        // reduce TAA edge shimmer (that is sub-pixel coverage + the 1-spp
+        // shading floor, not triangle density).
         // Exempt (always LOD0): skinned/displaced/grass/morphed/tet meshes,
         // overlay/particle entries, emissive materials, and anything under
         // a manual threepp::LOD node (its levels are hand-authored already).
-        // OFF by default — v1 of the feature, debug escape only.
+        // setAutoLod(false) is the manual override / debug escape.
         void setAutoLod(bool enabled);
         [[nodiscard]] bool autoLod() const;
 
