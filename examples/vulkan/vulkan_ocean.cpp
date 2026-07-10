@@ -1394,6 +1394,25 @@ int main(int argc, char** argv) {
     float choppiness = ocean->params.choppiness;
     float windSpeed = ocean->params.windSpeed;
     float windTheta = ocean->params.windTheta;
+
+    // Marine cumulus deck over the open sea — drifts on the ocean's wind
+    // heading at ~2.5× the surface speed (wind shear aloft).
+    bool  cloudsOn   = true;
+    float cloudCover = 0.5f;
+    auto applyClouds = [&] {
+        if (cloudsOn) {
+            VulkanRenderer::CloudSettings cl;
+            cl.coverage = cloudCover;
+            cl.bottomY = 450.f;
+            cl.topY = 1100.f;
+            cl.wind.set(std::cos(windTheta), 0.f, std::sin(windTheta));
+            cl.wind.multiplyScalar(windSpeed * 2.5f);
+            renderer.setClouds(cl);
+        } else {
+            renderer.setClouds(std::nullopt);
+        }
+    };
+    applyClouds();
     float exposure  = renderer.toneMappingExposure;
     int   toneMode  = static_cast<int>(renderer.toneMapping);
     float renderScale = renderer.renderScale();
@@ -1559,6 +1578,9 @@ int main(int argc, char** argv) {
         }
 
         ImGui::TextDisabled("Wind changes apply on scene reload.");
+        if (ImGui::Checkbox("Clouds", &cloudsOn)) applyClouds();
+        if (cloudsOn && ImGui::SliderFloat("Cloud cover", &cloudCover, 0.f, 1.f, "%.2f"))
+            applyClouds();
         ImGui::Separator();
         ImGui::TextUnformatted("Night & lighthouse");
         if (ImGui::Checkbox("Night mode", &night)) {
