@@ -150,26 +150,29 @@ namespace threepp::vulkan {
     }
 
     void EventCameraDetector::allocateDescriptorPool() {
+        // kRingSize sets — one per ring slot (see descSets_ in the header).
         std::array<VkDescriptorPoolSize, 2> ps{};
         ps[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        ps[0].descriptorCount = 2;  // scene buf + event stream buf
+        ps[0].descriptorCount = 2 * kRingSize;  // (scene buf + event stream buf) per set
         ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        ps[1].descriptorCount = 2;
+        ps[1].descriptorCount = 2 * kRingSize;  // (log history + accumulator) per set
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = 1;
+        dpci.maxSets       = kRingSize;
         dpci.poolSizeCount = static_cast<uint32_t>(ps.size());
         dpci.pPoolSizes    = ps.data();
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
               "vkCreateDescriptorPool(event_detect)");
 
+        std::array<VkDescriptorSetLayout, kRingSize> layouts{};
+        layouts.fill(dsLayout_);
         VkDescriptorSetAllocateInfo dsai{};
         dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         dsai.descriptorPool     = descPool_;
-        dsai.descriptorSetCount = 1;
-        dsai.pSetLayouts        = &dsLayout_;
-        check(vkAllocateDescriptorSets(ctx_.device(), &dsai, &descSet_),
+        dsai.descriptorSetCount = kRingSize;
+        dsai.pSetLayouts        = layouts.data();
+        check(vkAllocateDescriptorSets(ctx_.device(), &dsai, descSets_.data()),
               "vkAllocateDescriptorSets(event_detect)");
     }
 
@@ -321,9 +324,13 @@ namespace threepp::vulkan {
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
         }
 
-        // Update descriptor binding for the storage images. The scene-buffer
-        // binding is rewritten lazily by updateSceneBinding() when the host
-        // hands us a new VkBuffer handle.
+        // Update the storage-image bindings (1 = log history, 2 = accumulator)
+        // and the per-slot event-stream binding (3) on EVERY ring-slot set.
+        // Both storage images are shared across slots; binding 3 is the one
+        // resource that differs per set — slot i permanently points at
+        // eventStreamRing_[i], so record() only has to *bind* the slot's set.
+        // The scene-buffer binding (0) is rewritten lazily by
+        // updateSceneBinding() when the host hands us a new VkBuffer handle.
         VkDescriptorImageInfo histInfo{};
         histInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         histInfo.imageView   = logHistoryImg_.view;
@@ -331,22 +338,37 @@ namespace threepp::vulkan {
         accInfo.imageLayout  = VK_IMAGE_LAYOUT_GENERAL;
         accInfo.imageView    = accumulatorImg_.view;
 
-        std::array<VkWriteDescriptorSet, 2> w{};
-        w[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[0].dstSet          = descSet_;
-        w[0].dstBinding      = 1;
-        w[0].descriptorCount = 1;
-        w[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        w[0].pImageInfo      = &histInfo;
-        w[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[1].dstSet          = descSet_;
-        w[1].dstBinding      = 2;
-        w[1].descriptorCount = 1;
-        w[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        w[1].pImageInfo      = &accInfo;
-        vkUpdateDescriptorSets(ctx_.device(),
-                                static_cast<uint32_t>(w.size()), w.data(),
-                                0, nullptr);
+        std::array<VkDescriptorBufferInfo, kRingSize> streamInfos{};
+        std::array<VkWriteDescriptorSet, kRingSize * 3> w{};
+        uint32_t wi = 0;
+        for (uint32_t s = 0; s < kRingSize; ++s) {
+            streamInfos[s].buffer = eventStreamRing_[s].handle;
+            streamInfos[s].offset = 0;
+            streamInfos[s].range  = VK_WHOLE_SIZE;
+
+            w[wi].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[wi].dstSet          = descSets_[s];
+            w[wi].dstBinding      = 1;
+            w[wi].descriptorCount = 1;
+            w[wi].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[wi].pImageInfo      = &histInfo;
+            ++wi;
+            w[wi].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[wi].dstSet          = descSets_[s];
+            w[wi].dstBinding      = 2;
+            w[wi].descriptorCount = 1;
+            w[wi].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            w[wi].pImageInfo      = &accInfo;
+            ++wi;
+            w[wi].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[wi].dstSet          = descSets_[s];
+            w[wi].dstBinding      = 3;
+            w[wi].descriptorCount = 1;
+            w[wi].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[wi].pBufferInfo     = &streamInfos[s];
+            ++wi;
+        }
+        vkUpdateDescriptorSets(ctx_.device(), wi, w.data(), 0, nullptr);
 
         width_     = width;
         height_    = height;
@@ -357,19 +379,25 @@ namespace threepp::vulkan {
 
     void EventCameraDetector::updateSceneBinding(VkBuffer sceneBuf) {
         if (sceneBuf == currentSceneBuf_) return;
+        // The scene buffer is shared across all ring slots — rewrite binding 0
+        // on every set. Only reached on a handle change (resize / first bind),
+        // never per-frame, so it can't race an in-flight submission.
         VkDescriptorBufferInfo info{};
         info.buffer = sceneBuf;
         info.offset = 0;
         info.range  = VK_WHOLE_SIZE;
 
-        VkWriteDescriptorSet w{};
-        w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.dstSet          = descSet_;
-        w.dstBinding      = 0;
-        w.descriptorCount = 1;
-        w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        w.pBufferInfo     = &info;
-        vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+        std::array<VkWriteDescriptorSet, kRingSize> w{};
+        for (uint32_t s = 0; s < kRingSize; ++s) {
+            w[s].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[s].dstSet          = descSets_[s];
+            w[s].dstBinding      = 0;
+            w[s].descriptorCount = 1;
+            w[s].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[s].pBufferInfo     = &info;
+        }
+        vkUpdateDescriptorSets(ctx_.device(),
+                                static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         currentSceneBuf_ = sceneBuf;
     }
 
@@ -378,23 +406,13 @@ namespace threepp::vulkan {
 
         updateSceneBinding(sceneBuf);
 
-        // Rebind the current ring slot's event-stream buffer to binding 3.
-        // Slot rotates per frame so the host's readEventStreamInto (which
-        // reads the OLDEST slot) never collides with the GPU's writes.
-        {
-            VkDescriptorBufferInfo streamInfo{};
-            streamInfo.buffer = eventStreamRing_[writeSlot_].handle;
-            streamInfo.offset = 0;
-            streamInfo.range  = VK_WHOLE_SIZE;
-            VkWriteDescriptorSet w{};
-            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w.dstSet          = descSet_;
-            w.dstBinding      = 3;
-            w.descriptorCount = 1;
-            w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            w.pBufferInfo     = &streamInfo;
-            vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
-        }
+        // The write-slot's descriptor set already has binding 3 pointing at
+        // eventStreamRing_[writeSlot_] (wired once in resize()). Slot rotates
+        // per frame so the host's readEventStreamInto (which reads the OLDEST
+        // slot) never collides with the GPU's writes, and — because kRingSize
+        // (3) > kFramesInFlight (2) — this slot's set is not bound by any
+        // still-pending submission, so no per-frame descriptor update is
+        // needed here (that update was the in-flight-set hazard / flicker).
 
         // Zero the event-stream header for this slot. {count=0, capacity,
         // overflow=0, frameTimeUs} — capacity is constant and we don't
@@ -434,7 +452,7 @@ namespace threepp::vulkan {
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                 pipelineLayout_, 0, 1, &descSet_, 0, nullptr);
+                                 pipelineLayout_, 0, 1, &descSets_[writeSlot_], 0, nullptr);
 
         PC pc{};
         pc.width            = width_;

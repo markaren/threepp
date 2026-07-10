@@ -131,8 +131,16 @@ namespace threepp::vulkan {
         VkPipelineLayout      pipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline            pipeline_       = VK_NULL_HANDLE;
         VkDescriptorPool      descPool_       = VK_NULL_HANDLE;
-        VkDescriptorSet       descSet_        = VK_NULL_HANDLE;
-        // Tracks which scene buffer the descriptor currently points at;
+        // One descriptor set per ring slot. record() binds the write-slot's
+        // set; each set's event-stream binding (3) points permanently at that
+        // slot's eventStreamRing_ buffer, so no per-frame descriptor update is
+        // needed. A single shared set rewritten every frame would be modified
+        // while the previous frame's command buffer (still in flight) had it
+        // bound — VUID-vkUpdateDescriptorSets-None-03047, a source of the
+        // event-camera flicker. kRingSize (3) > kFramesInFlight (2), so a
+        // slot's set is never touched while its own submission is pending.
+        std::array<VkDescriptorSet, kRingSize> descSets_{};
+        // Tracks which scene buffer the descriptors currently point at;
         // rewrite only when the buffer handle changes (resize, etc.).
         VkBuffer              currentSceneBuf_ = VK_NULL_HANDLE;
 

@@ -1753,29 +1753,35 @@ void VulkanRendererCore::CoreImpl::createEventShadePipeline() {
                   "vkCreateComputePipelines(event_shade)");
             vkDestroyShaderModule(ctx->device(), mod, nullptr);
 
-            // Single descriptor pool + set, reused every frame; descriptor
-            // writes per-frame because gbuf views + material/light buffers
-            // are per-frame and the swapchain can be resized.
+            // One descriptor set per frame-in-flight, each rewritten every
+            // frame (gbuf views + material/light buffers are per-frame). A
+            // single shared set updated per-frame would be modified while the
+            // OTHER in-flight frame still had it bound in a pending cmd buffer
+            // (VUID-vkUpdateDescriptorSets-None-03047) — the GPU then reads the
+            // racing update's wrong-frame gbuf, which was the event-camera
+            // "binary flicker". Pool sizes scale with the set count.
             std::array<VkDescriptorPoolSize, 3> ps{};
             ps[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[0].descriptorCount = 2;
+            ps[0].descriptorCount = 2 * kFramesInFlight;
             ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            ps[1].descriptorCount = 2;
+            ps[1].descriptorCount = 2 * kFramesInFlight;
             ps[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            ps[2].descriptorCount = 1;
+            ps[2].descriptorCount = 1 * kFramesInFlight;
             VkDescriptorPoolCreateInfo dpci{};
             dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            dpci.maxSets       = 1;
+            dpci.maxSets       = kFramesInFlight;
             dpci.poolSizeCount = static_cast<uint32_t>(ps.size());
             dpci.pPoolSizes    = ps.data();
             check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &eventShadeDescPool_),
                   "vkCreateDescriptorPool(event_shade)");
+            std::array<VkDescriptorSetLayout, kFramesInFlight> layouts{};
+            layouts.fill(eventShadeDsLayout_);
             VkDescriptorSetAllocateInfo dsai{};
             dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             dsai.descriptorPool     = eventShadeDescPool_;
-            dsai.descriptorSetCount = 1;
-            dsai.pSetLayouts        = &eventShadeDsLayout_;
-            check(vkAllocateDescriptorSets(ctx->device(), &dsai, &eventShadeDescSet_),
+            dsai.descriptorSetCount = kFramesInFlight;
+            dsai.pSetLayouts        = layouts.data();
+            check(vkAllocateDescriptorSets(ctx->device(), &dsai, eventShadeDescSets_.data()),
                   "vkAllocateDescriptorSets(event_shade)");
         }
 
@@ -1825,29 +1831,34 @@ void VulkanRendererCore::CoreImpl::recordEventShade(VkCommandBuffer cb, uint32_t
             lumaInfo.offset = 0;
             lumaInfo.range  = VK_WHOLE_SIZE;
 
+            // The inFlight[frame] fence was waited on at the top of
+            // beginDeferredFrame, so this frame's prior use of its own
+            // descriptor set has retired — updating it here can't race the
+            // other in-flight frame's set.
+            VkDescriptorSet ds = eventShadeDescSets_[frame];
             std::array<VkWriteDescriptorSet, 5> w{};
             for (auto& it : w) it.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[0].dstSet = eventShadeDescSet_;
+            w[0].dstSet = ds;
             w[0].dstBinding = 0;
             w[0].descriptorCount = 1;
             w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[0].pImageInfo = &normalInfo;
-            w[1].dstSet = eventShadeDescSet_;
+            w[1].dstSet = ds;
             w[1].dstBinding = 1;
             w[1].descriptorCount = 1;
             w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[1].pImageInfo = &idsInfo;
-            w[2].dstSet = eventShadeDescSet_;
+            w[2].dstSet = ds;
             w[2].dstBinding = 2;
             w[2].descriptorCount = 1;
             w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[2].pBufferInfo = &matInfo;
-            w[3].dstSet = eventShadeDescSet_;
+            w[3].dstSet = ds;
             w[3].dstBinding = 3;
             w[3].descriptorCount = 1;
             w[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             w[3].pBufferInfo = &lightsInfo;
-            w[4].dstSet = eventShadeDescSet_;
+            w[4].dstSet = ds;
             w[4].dstBinding = 4;
             w[4].descriptorCount = 1;
             w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -1859,7 +1870,7 @@ void VulkanRendererCore::CoreImpl::recordEventShade(VkCommandBuffer cb, uint32_t
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, eventShadePipeline_);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                     eventShadePipelineLayout_, 0, 1, &eventShadeDescSet_, 0, nullptr);
+                                     eventShadePipelineLayout_, 0, 1, &ds, 0, nullptr);
 
             struct ShadePC {
                 uint32_t width;       // sensor (output) dims

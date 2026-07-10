@@ -1487,7 +1487,13 @@ namespace threepp {
         VkPipelineLayout      eventShadePipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline            eventShadePipeline_       = VK_NULL_HANDLE;
         VkDescriptorPool      eventShadeDescPool_       = VK_NULL_HANDLE;
-        VkDescriptorSet       eventShadeDescSet_        = VK_NULL_HANDLE;
+        // One descriptor set per frame-in-flight. The set is rewritten every
+        // frame (gbuf views + material/light buffers are per-frame), so a
+        // single shared set would be updated while the other in-flight frame
+        // still has it bound in a pending command buffer —
+        // VUID-vkUpdateDescriptorSets-None-03047. The GPU reading the racing
+        // update (wrong-frame gbuf) was the event-camera "binary flicker".
+        std::array<VkDescriptorSet, kFramesInFlight> eventShadeDescSets_{};
         uint32_t              eventLumaW_ = 0;
         uint32_t              eventLumaH_ = 0;
 
