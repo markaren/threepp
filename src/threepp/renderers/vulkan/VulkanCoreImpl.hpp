@@ -41,6 +41,7 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
+#include "threepp/objects/LOD.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Points.hpp"
@@ -908,6 +909,7 @@ namespace threepp {
             InstancedMesh* inst = nullptr;
             Line*          line = nullptr;
             Points*        pts  = nullptr;
+            LOD*           lod  = nullptr;// kSnapLod nodes: replay walk re-runs level selection
             const void* geom = nullptr;               // mesh/line/points geometry
             BufferGeometry* geomB = nullptr;          // typed view of geom (attributesVersion reads)
             const Material* mat = nullptr;            // mesh material
@@ -936,6 +938,10 @@ namespace threepp {
         // LineEntry — matches three.js / GLRenderer, which drops a
         // material-hidden object from the render list. [[#mat-visible]]
         static constexpr uint32_t kSnapMatHidden  = 256u;
+        // threepp::LOD node (kind Other + typed sn.lod view). Both walks run
+        // the camera-driven level selection on it — three.js/GLRenderer
+        // parity (projectObject calls lod.update(camera) as it projects).
+        static constexpr uint32_t kSnapLod        = 512u;
         std::vector<SnapNode> sceneSnapshot_;
 
         // Classification-routing flags for a mesh — shared by the snapshot
@@ -944,8 +950,11 @@ namespace threepp {
 
         // Replay the last expansion's traversal against the snapshot. true ⇒
         // tree shape, visibility, classification routing and all mesh/geom/mat
-        // pointers are unchanged since the last full expansion.
-        bool sceneSnapshotMatches(Object3D& scene);
+        // pointers are unchanged since the last full expansion. Also re-runs
+        // LOD level selection (camera-driven visibility mutation) on kSnapLod
+        // nodes — a level switch makes the walk diverge from the snapshot ⇒
+        // false ⇒ the full pass re-expands with the new level.
+        bool sceneSnapshotMatches(Object3D& scene, Camera& camera);
 
         // Previous-frame camera (proj_prev * view_prev) for primary-hit
         // reprojection. One UBO per frame-in-flight so updates don't race the
@@ -3534,7 +3543,7 @@ namespace threepp {
         // compares. Cheap. The rare rebuild path waits the GPU idle, retires
         // the TLAS + scene desc buffers, and rewrites bindings 0/3/4 across
         // every descriptor set without re-allocating from the pool.
-        void ensureSceneBuilt(Object3D& scene);
+        void ensureSceneBuilt(Object3D& scene, Camera& camera);
 
         void createCameraUbos();
 

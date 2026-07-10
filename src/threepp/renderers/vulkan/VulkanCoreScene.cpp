@@ -20,7 +20,7 @@ uint32_t VulkanRendererCore::CoreImpl::snapMeshFlags(Mesh& m, const MaterialWith
             return fl;
         }
 
-bool VulkanRendererCore::CoreImpl::sceneSnapshotMatches(Object3D& scene) {
+bool VulkanRendererCore::CoreImpl::sceneSnapshotMatches(Object3D& scene, Camera& camera) {
             if (!sceneBuilt_ || sceneSnapshot_.empty()) return false;
             if (prevSceneFingerprint.size() != lastVisibleEntries_.size()) return false;
             size_t cur = 0;
@@ -33,7 +33,16 @@ bool VulkanRendererCore::CoreImpl::sceneSnapshotMatches(Object3D& scene) {
                 }
                 const SnapNode& sn = sceneSnapshot_[cur++];
                 const uint32_t kind = sn.flags & kSnapKindMask;
-                if (kind == kSnapKindOther) return;// pointer identity is all we need
+                if (kind == kSnapKindOther) {
+                    // LOD parity (see the full pass): re-run level selection
+                    // every frame. Pre-order walk ⇒ the mutation lands before
+                    // this LOD's children are visited, so a level switch makes
+                    // the node sequence diverge from the snapshot at the
+                    // swapped subtree ⇒ ok=false ⇒ full re-expansion picks up
+                    // the new level's meshes.
+                    if ((sn.flags & kSnapLod) != 0u && sn.lod->autoUpdate) sn.lod->update(camera);
+                    return;// otherwise pointer identity is all we need
+                }
                 // Same object at the same address ⇒ same dynamic type — the
                 // typed pointers recorded by the full pass are still valid, so
                 // the walk pays zero dynamic_casts. attributesVersion()
@@ -125,13 +134,18 @@ void VulkanRendererCore::CoreImpl::cullEntriesAgainstFrustum(Camera& camera) {
             }
         }
 
-void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
+void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // force=false (matching GLRenderer/WgpuRenderer): with
             // updateMatrix()'s change-detection early-out, only subtrees whose
             // transforms actually moved pay the world-matrix multiplies — a
             // forced pass re-multiplied every node every frame (several
             // ms/frame on Bistro's node count, static or not).
             scene.updateMatrixWorld();
+            // A parentless camera (the common case — not add()ed to the scene)
+            // is untouched by the scene's updateMatrixWorld, but the LOD level
+            // selection below reads camera.matrixWorld. Same guard as
+            // GLRenderer::render; change-detected early-out ⇒ ~free.
+            if (!camera.parent) camera.updateMatrixWorld();
 
             // Honour live edits to already-uploaded material textures (e.g. a
             // DataTexture re-baked via setData + needsUpdate). Cheap version
@@ -150,7 +164,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
             // caught: matrices by the memcmp diff, material/geometry edits by
             // their version reads, structure/visibility/texture-routing
             // changes by the snapshot walk itself (mismatch ⇒ full path).
-            const bool snapLean = sceneSnapshotMatches(scene);
+            const bool snapLean = sceneSnapshotMatches(scene, camera);
             std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
             std::vector<MeshFingerprint> currFp;
             if (snapLean) {
@@ -185,6 +199,21 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene) {
             scene.traverseVisible([&](Object3D& o) {
                 SnapNode sn{};
                 sn.obj = &o;
+                // three.js parity — LOD level selection (GLRenderer::
+                // projectObject runs lod.update(camera) as it projects).
+                // traverseVisible is PRE-ORDER: this LOD's children are
+                // visited after this callback, so the rest of this walk
+                // already sees the level picked for this frame's camera.
+                // Recorded with a typed view + kSnapLod so the replay walk
+                // re-runs the selection cast-free (Object3D is a virtual
+                // base — the replay cannot static_cast down).
+                if (auto* lod = dynamic_cast<LOD*>(&o)) {
+                    if (lod->autoUpdate) lod->update(camera);
+                    sn.lod   = lod;
+                    sn.flags = kSnapKindOther | kSnapLod;
+                    sceneSnapshot_.push_back(sn);
+                    return;
+                }
                 // Line / LineSegments: never part of the traced/rasterized
                 // scene, always overlay.
                 // Collected before the Mesh dispatch so subclasses don't

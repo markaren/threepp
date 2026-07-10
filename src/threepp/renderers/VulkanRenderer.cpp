@@ -427,7 +427,7 @@ namespace threepp {
         // The ortho overlay record path walks the HUD scene directly instead.
         if (!camera.is<OrthographicCamera>() && !secondaryOverlayPane) {
             const auto sceneStart = std::chrono::high_resolution_clock::now();
-            core()->ensureSceneBuilt(scene);
+            core()->ensureSceneBuilt(scene, camera);
             // World-space Sprites (screenSpace == false) are drawn by the overlay
             // billboard pass, not the deferred/G-buffer path. Snapshot them each frame
             // with fresh world matrices (ensureSceneBuilt just ran
