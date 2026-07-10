@@ -4,6 +4,7 @@
 #include "threepp/renderers/vulkan/water/OceanFFT.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
+#include "threepp/renderers/vulkan/VulkanResources.hpp"// flushHostWrites
 
 #include "threepp/renderers/vulkan/shaders/phillips_spectrum.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/dynamic_spectrum.comp.spv.h"
@@ -273,6 +274,7 @@ namespace threepp::water {
         check(vmaCreateBuffer(ctx_.allocator(), &bci, &aci, &sb, &sa, &info),
               "vmaCreateBuffer(noiseStaging)");
         std::memcpy(info.pMappedData, data.data(), bytes);
+        vulkan::flushHostWrites(ctx_.allocator(), sa, 0, bytes);
 
         // One-shot upload.
         VkCommandPoolCreateInfo pci{};
@@ -362,6 +364,7 @@ namespace threepp::water {
         p.kMin            = settings_.kMin;
         p.kMax            = settings_.kMax;
         std::memcpy(paramsUbo_.mapped, &p, sizeof(p));
+        vulkan::flushHostWrites(ctx_.allocator(), paramsUbo_.alloc, 0, sizeof(p));
     }
 
     void PhillipsSpectrum::createPipeline() {
@@ -601,6 +604,7 @@ namespace threepp::water {
         p.tileSize       = tileSize_;
         p.elapsedSeconds = elapsedSeconds;
         std::memcpy(paramsUbo_.mapped, &p, sizeof(p));
+        vulkan::flushHostWrites(ctx_.allocator(), paramsUbo_.alloc, 0, sizeof(p));
 
         cmdTransitionToGeneral(cb, ht_);
         cmdTransitionToGeneral(cb, dht_);

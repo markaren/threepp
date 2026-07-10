@@ -360,6 +360,7 @@ namespace threepp::vulkan {
         VmaAllocationInfo info{};
         vmaGetAllocationInfo(ctx_.allocator(), staging.alloc, &info);
         std::memcpy(info.pMappedData, texels.data(), bytes);
+        flushHostWrites(ctx_.allocator(), staging.alloc, 0, bytes);
 
         // One-shot copy + layout dance. UI-rate (a slider release), not per
         // frame — the queue-idle wait is deliberate simplicity.

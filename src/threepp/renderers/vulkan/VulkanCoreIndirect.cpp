@@ -301,6 +301,12 @@ namespace threepp {
             offset += n;
         }
 
+        // Bucket-offset writes above land in [0, globalIdx) of each buffer —
+        // flush exactly that; the occl meta rides its own persistently-mapped
+        // buffer, flushed through its owner.
+        flushHostWrites(ctx->allocator(), drawInfoBuffers[frame].alloc, 0, drawBytes);
+        flushHostWrites(ctx->allocator(), indirectCmdBuffers[frame].alloc, 0, cmdBytes);
+        if (occlMetaDst) occl_->flushMeta(frame, globalIdx);
         vmaUnmapMemory(ctx->allocator(), indirectCmdBuffers[frame].alloc);
         vmaUnmapMemory(ctx->allocator(), drawInfoBuffers[frame].alloc);
 

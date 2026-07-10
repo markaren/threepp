@@ -388,6 +388,7 @@ void VulkanRendererCore::CoreImpl::ensureHybridResources() {
                 void* mapped = nullptr;
                 vmaMapMemory(ctx->allocator(), dummyUvBuffer_.alloc, &mapped);
                 std::memset(mapped, 0, kDummyUvBytes);
+                flushHostWrites(ctx->allocator(), dummyUvBuffer_.alloc);
                 vmaUnmapMemory(ctx->allocator(), dummyUvBuffer_.alloc);
             }
             if (gbufSampler_ == VK_NULL_HANDLE) {

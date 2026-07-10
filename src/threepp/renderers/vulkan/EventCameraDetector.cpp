@@ -456,7 +456,7 @@ namespace threepp::vulkan {
         // domain. The buffer is HOST_VISIBLE but the GPU's storage-buffer
         // writes aren't guaranteed visible to host reads without a barrier
         // pairing SHADER_WRITE → HOST_READ across COMPUTE → HOST stages.
-        // The host-side readEventStreamInto will also vmaInvalidateAllocation
+        // The host-side readEventStreamInto also invalidateHostReads()
         // before reading; both are required for correctness on discrete GPUs.
         VkBufferMemoryBarrier streamHostBarrier{};
         streamHostBarrier.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -526,7 +526,7 @@ namespace threepp::vulkan {
         if (src.handle == VK_NULL_HANDLE || src.size < bytes) return 0;
         if (cap < static_cast<size_t>(bytes)) return 0;
 
-        vmaInvalidateAllocation(ctx_.allocator(), src.alloc, 0, bytes);
+        invalidateHostReads(ctx_.allocator(), src.alloc, 0, bytes);
         void* mapped = nullptr;
         if (vmaMapMemory(ctx_.allocator(), src.alloc, &mapped) != VK_SUCCESS) {
             return 0;
@@ -551,7 +551,7 @@ namespace threepp::vulkan {
         const VkDeviceSize hdrBytes = sizeof(EventStreamHeader);
         if (src.size < hdrBytes) return 0;
 
-        vmaInvalidateAllocation(ctx_.allocator(), src.alloc, 0, src.size);
+        invalidateHostReads(ctx_.allocator(), src.alloc, 0, src.size);
         void* mapped = nullptr;
         if (vmaMapMemory(ctx_.allocator(), src.alloc, &mapped) != VK_SUCCESS) {
             return 0;

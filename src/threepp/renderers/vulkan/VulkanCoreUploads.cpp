@@ -33,10 +33,7 @@ namespace threepp {
                     0, 1, 0, 0,
                     0, 0, 1, 0,
                     0, 0, 0, 1};
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), motionMatBuffers[f].alloc, &mapped);
-            std::memcpy(mapped, identity, sizeof(identity));
-            vmaUnmapMemory(ctx->allocator(), motionMatBuffers[f].alloc);
+            uploadHostVisible(ctx->allocator(), motionMatBuffers[f], identity, sizeof(identity));
         }
         // Seed mesh-moved-bits buffers with capacity 1 word (32 meshes worth)
         // so descriptor writes have a valid handle before any scene build.
@@ -50,11 +47,8 @@ namespace threepp {
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
             meshMovedBitsBufferCapacity[f] = 1;
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), meshMovedBitsBuffers[f].alloc, &mapped);
             const uint32_t zero = 0u;
-            std::memcpy(mapped, &zero, sizeof(zero));
-            vmaUnmapMemory(ctx->allocator(), meshMovedBitsBuffers[f].alloc);
+            uploadHostVisible(ctx->allocator(), meshMovedBitsBuffers[f], &zero, sizeof(zero));
         }
         // Seed emissive-tri buffers with capacity 1 so descriptor writes have
         // a valid handle even before any emissive geometry exists. The shader
@@ -166,10 +160,8 @@ namespace threepp {
         if (!anyNonIdentity && motionMatBufferAllIdentity_[frame]) {
             // Buffer slot already holds identities; skip the upload.
         } else {
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), motionMatBuffers[frame].alloc, &mapped);
-            std::memcpy(mapped, data.data(), data.size() * sizeof(float));
-            vmaUnmapMemory(ctx->allocator(), motionMatBuffers[frame].alloc);
+            uploadHostVisible(ctx->allocator(), motionMatBuffers[frame],
+                              data.data(), data.size() * sizeof(float));
             motionMatBufferAllIdentity_[frame] = !anyNonIdentity;
         }
 
@@ -191,10 +183,8 @@ namespace threepp {
         if (meshMovedBits_.empty()) return;
         const VkDeviceSize bytes = meshMovedBits_.size() * sizeof(uint32_t);
         const VkDeviceSize cap   = meshMovedBitsBufferCapacity[frame] * sizeof(uint32_t);
-        void* mapped = nullptr;
-        vmaMapMemory(ctx->allocator(), meshMovedBitsBuffers[frame].alloc, &mapped);
-        std::memcpy(mapped, meshMovedBits_.data(), std::min(bytes, cap));
-        vmaUnmapMemory(ctx->allocator(), meshMovedBitsBuffers[frame].alloc);
+        uploadHostVisible(ctx->allocator(), meshMovedBitsBuffers[frame],
+                          meshMovedBits_.data(), std::min(bytes, cap));
     }
 
     // Walk visible entries, gather emissive triangles in world space, and
@@ -237,11 +227,9 @@ namespace threepp {
                 return false;
             }
             const bool grew = ensureEmissiveTriCapacity(frame, cachedEmissiveTriCount_);
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), emissiveTriBuffers[frame].alloc, &mapped);
-            std::memcpy(mapped, cachedEmissiveData_.data(),
-                        cachedEmissiveData_.size() * sizeof(float));
-            vmaUnmapMemory(ctx->allocator(), emissiveTriBuffers[frame].alloc);
+            uploadHostVisible(ctx->allocator(), emissiveTriBuffers[frame],
+                              cachedEmissiveData_.data(),
+                              cachedEmissiveData_.size() * sizeof(float));
             emissiveBufferVersion_[frame] = cachedEmissiveVersion_;
             return grew;
         }
@@ -348,11 +336,9 @@ namespace threepp {
 
         const bool grew = ensureEmissiveTriCapacity(frame, triCount);
 
-        void* mapped = nullptr;
-        vmaMapMemory(ctx->allocator(), emissiveTriBuffers[frame].alloc, &mapped);
-        std::memcpy(mapped, cachedEmissiveData_.data(),
-                    cachedEmissiveData_.size() * sizeof(float));
-        vmaUnmapMemory(ctx->allocator(), emissiveTriBuffers[frame].alloc);
+        uploadHostVisible(ctx->allocator(), emissiveTriBuffers[frame],
+                          cachedEmissiveData_.data(),
+                          cachedEmissiveData_.size() * sizeof(float));
         emissiveBufferVersion_[frame] = cachedEmissiveVersion_;
         return grew;
     }
@@ -502,10 +488,7 @@ namespace threepp {
         std::memcpy(prevCamBufData_.data(), curBuf, 16 * sizeof(float));
         prevCameraValid = true;
 
-        void* mapped = nullptr;
-        vmaMapMemory(ctx->allocator(), cameraUbos[frame].alloc, &mapped);
-        std::memcpy(mapped, data, sizeof(data));
-        vmaUnmapMemory(ctx->allocator(), cameraUbos[frame].alloc);
+        uploadHostVisible(ctx->allocator(), cameraUbos[frame], data, sizeof(data));
     }
 
     void VulkanRendererCore::CoreImpl::uploadRasterCameraUbo(uint32_t frame, Camera& camera) {
@@ -615,10 +598,7 @@ namespace threepp {
         ubo.prevJitter[2] = normalMapToksvig_ ? 1.f : 0.f;
         ubo.prevJitter[3] = 0.f;
 
-        void* mapped = nullptr;
-        vmaMapMemory(ctx->allocator(), rasterCameraUbos[frame].alloc, &mapped);
-        std::memcpy(mapped, &ubo, sizeof(ubo));
-        vmaUnmapMemory(ctx->allocator(), rasterCameraUbos[frame].alloc);
+        uploadHostVisible(ctx->allocator(), rasterCameraUbos[frame], &ubo, sizeof(ubo));
 
         // Far-plane reprojection for the TAA sky path — must be built
         // BEFORE rasterPrevVP_ rolls over to this frame's VP.
@@ -931,11 +911,9 @@ namespace threepp {
         }
         clusterLightCountThisFrame_ = static_cast<uint32_t>(clusterCollect.size());
         if (!clusterCollect.empty()) {
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), clusterLightsBuffers[frame].alloc, &mapped);
-            std::memcpy(mapped, clusterCollect.data(),
-                        sizeof(GpuClusterLight) * clusterCollect.size());
-            vmaUnmapMemory(ctx->allocator(), clusterLightsBuffers[frame].alloc);
+            uploadHostVisible(ctx->allocator(), clusterLightsBuffers[frame],
+                              clusterCollect.data(),
+                              sizeof(GpuClusterLight) * clusterCollect.size());
         }
 
         // Extracted HDRI sun → analytic directional light (deferred leaf
@@ -987,10 +965,7 @@ namespace threepp {
             prevLightsHash_       = h;
         }
 
-        void* mapped = nullptr;
-        vmaMapMemory(ctx->allocator(), lightsUbos[frame].alloc, &mapped);
-        std::memcpy(mapped, &ubo, sizeof(ubo));
-        vmaUnmapMemory(ctx->allocator(), lightsUbos[frame].alloc);
+        uploadHostVisible(ctx->allocator(), lightsUbos[frame], &ubo, sizeof(ubo));
     }
 
     void VulkanRendererCore::CoreImpl::createFogUbos() {
@@ -1058,10 +1033,7 @@ namespace threepp {
         // explicit clear-air beam density).
         fogEnabledThisFrame_ = ubo.enabled > 0.5f;
 
-        void* mapped = nullptr;
-        vmaMapMemory(ctx->allocator(), fogUbos[frame].alloc, &mapped);
-        std::memcpy(mapped, &ubo, sizeof(ubo));
-        vmaUnmapMemory(ctx->allocator(), fogUbos[frame].alloc);
+        uploadHostVisible(ctx->allocator(), fogUbos[frame], &ubo, sizeof(ubo));
     }
 
     void VulkanRendererCore::CoreImpl::createRasterCameraUbos() {

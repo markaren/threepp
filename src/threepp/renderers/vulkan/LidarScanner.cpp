@@ -227,6 +227,7 @@ namespace threepp::vulkan {
         std::memcpy(dst,                         handles.data() + 0 * handleSize, handleSize);
         std::memcpy(dst + rgenBytes,             handles.data() + 1 * handleSize, handleSize);
         std::memcpy(dst + rgenBytes + missBytes, handles.data() + 2 * handleSize, handleSize);
+        flushHostWrites(ctx_.allocator(), sbtBuf_.alloc, 0, sbtSize);
         vmaUnmapMemory(ctx_.allocator(), sbtBuf_.alloc);
 
         const VkDeviceAddress base = sbtBuf_.address;
@@ -435,14 +436,9 @@ namespace threepp::vulkan {
 
         ensureCapacity(numBeams, slotsPerBeam);
 
-        // Upload beams (mapped, sequential write).
-        {
-            void* mapped = nullptr;
-            check(vmaMapMemory(ctx_.allocator(), beamBuf_.alloc, &mapped),
-                  "vmaMapMemory(lidar beams)");
-            std::memcpy(mapped, beams, numBeams * sizeof(vulkan_lidar::LidarBeam));
-            vmaUnmapMemory(ctx_.allocator(), beamBuf_.alloc);
-        }
+        // Upload beams (mapped, sequential write + flush).
+        uploadHostVisible(ctx_.allocator(), beamBuf_, beams,
+                          numBeams * sizeof(vulkan_lidar::LidarBeam));
 
         updateSceneBindings(tlas, geomDescsBuffer, geomDescsSize,
                             matDescsBuffer, matDescsSize,
@@ -519,11 +515,9 @@ namespace threepp::vulkan {
 
         // Memcpy from mapped readback buffer. VMA HOST_ACCESS_RANDOM keeps it
         // mapped continuously, but the spec requires an invalidate before
-        // reading non-coherent host-visible memory; vmaInvalidateAllocation
-        // is a no-op when the memory is coherent.
-        vmaInvalidateAllocation(ctx_.allocator(), readbackBuf_.alloc,
-                                0,
-                                static_cast<VkDeviceSize>(totalSlots) * sizeof(vulkan_lidar::LidarResult));
+        // reading non-coherent host-visible memory; a no-op when coherent.
+        invalidateHostReads(ctx_.allocator(), readbackBuf_.alloc, 0,
+                            static_cast<VkDeviceSize>(totalSlots) * sizeof(vulkan_lidar::LidarResult));
         void* mapped = nullptr;
         check(vmaMapMemory(ctx_.allocator(), readbackBuf_.alloc, &mapped),
               "vmaMapMemory(lidar readback)");

@@ -669,9 +669,12 @@ namespace threepp {
         // VulkanContext::createSwapchain; the surface format is fixed).
         std::vector<unsigned char> rgb(static_cast<size_t>(w) * h * 3);
         void* mapped = nullptr;
-        vmaInvalidateAllocation(ctx->allocator(), staging.alloc, 0, bytes);
         vulkan::check(vmaMapMemory(ctx->allocator(), staging.alloc, &mapped),
                       "vmaMapMemory(readRGBPixels)");
+        // Invalidate AFTER mapping: vkInvalidateMappedMemoryRanges requires
+        // the memory to be currently host mapped (ad-hoc-mapped staging — a
+        // persistently-mapped buffer wouldn't care about the ordering).
+        vulkan::invalidateHostReads(ctx->allocator(), staging.alloc, 0, bytes);
         const auto* bgra = static_cast<const unsigned char*>(mapped);
         const size_t pixels = static_cast<size_t>(w) * h;
         for (size_t i = 0; i < pixels; ++i) {
@@ -722,11 +725,12 @@ namespace threepp {
         const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
         if (bytes == 0) return {};
 
-        vmaInvalidateAllocation(impl.ctx->allocator(), impl.sceneCaptureBuf_.alloc, 0, bytes);
         void* mapped = nullptr;
         if (vmaMapMemory(impl.ctx->allocator(), impl.sceneCaptureBuf_.alloc, &mapped) != VK_SUCCESS) {
             return {};
         }
+        // AFTER mapping — see readRGBPixels for the ordering rationale.
+        vulkan::invalidateHostReads(impl.ctx->allocator(), impl.sceneCaptureBuf_.alloc, 0, bytes);
         const auto* bgra = static_cast<const unsigned char*>(mapped);
         std::vector<unsigned char> rgb(static_cast<size_t>(w) * h * 3);
         const size_t pixels = static_cast<size_t>(w) * h;
@@ -875,9 +879,10 @@ namespace threepp {
 
         out.resize(static_cast<size_t>(bytes));
         void* mapped = nullptr;
-        vmaInvalidateAllocation(ctx->allocator(), staging.alloc, 0, bytes);
         vulkan::check(vmaMapMemory(ctx->allocator(), staging.alloc, &mapped),
                       "vmaMapMemory(readGBufferAOV)");
+        // AFTER mapping — see readRGBPixels for the ordering rationale.
+        vulkan::invalidateHostReads(ctx->allocator(), staging.alloc, 0, bytes);
         std::memcpy(out.data(), mapped, static_cast<size_t>(bytes));
         vmaUnmapMemory(ctx->allocator(), staging.alloc);
 

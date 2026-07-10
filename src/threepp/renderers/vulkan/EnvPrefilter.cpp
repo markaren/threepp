@@ -279,10 +279,8 @@ namespace threepp::vulkan {
         // Sun path: mip 0 first receives the CLAMPED copy so the prefilter
         // dispatches integrate a sun-free source; the ORIGINAL is copied back
         // over mip 0 in a second submission below (mirror/sky keep the disc).
-        void* mapped = nullptr;
-        vmaMapMemory(ctx_.allocator(), staging.alloc, &mapped);
-        std::memcpy(mapped, sunFound ? clamped.data() : pixels, byteSize);
-        vmaUnmapMemory(ctx_.allocator(), staging.alloc);
+        uploadHostVisible(ctx_.allocator(), staging,
+                          sunFound ? clamped.data() : pixels, byteSize);
 
         // One-shot command buffer: upload mip 0, dispatch prefilter per mip,
         // transition all mips to SHADER_READ_ONLY_OPTIMAL.
@@ -517,9 +515,7 @@ namespace threepp::vulkan {
         // restore the ORIGINAL equirect (sky / clear glass / mirror lookups keep
         // the real sun disc; only mips 1+ stay sun-free), then finalize layouts.
         if (sunFound) {
-            vmaMapMemory(ctx_.allocator(), staging.alloc, &mapped);
-            std::memcpy(mapped, pixels, byteSize);
-            vmaUnmapMemory(ctx_.allocator(), staging.alloc);
+            uploadHostVisible(ctx_.allocator(), staging, pixels, byteSize);
 
             VkCommandBuffer cb2 = VK_NULL_HANDLE;
             check(vkAllocateCommandBuffers(ctx_.device(), &cbai, &cb2),

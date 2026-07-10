@@ -295,6 +295,7 @@ namespace threepp::vulkan {
         void* mapped = nullptr;
         if (vmaMapMemory(ctx_.allocator(), gridUbos_[frame].alloc, &mapped) == VK_SUCCESS) {
             std::memcpy(mapped, &d, sizeof(d));
+            flushHostWrites(ctx_.allocator(), gridUbos_[frame].alloc, 0, sizeof(d));
             vmaUnmapMemory(ctx_.allocator(), gridUbos_[frame].alloc);
         }
     }

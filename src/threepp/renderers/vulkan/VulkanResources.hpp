@@ -14,6 +14,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <cstring>
 
 namespace threepp::vulkan {
 
@@ -46,6 +47,49 @@ namespace threepp::vulkan {
     // Free a buffer (idempotent — safe to call on a zero-initialized Buffer).
     // Zeroes the struct on exit so subsequent calls are no-ops.
     void destroyBuffer(VmaAllocator alloc, Buffer& b);
+
+    // ── Host-visible memory traffic (portable flush/invalidate) ─────────
+    // Desktop GPUs expose HOST_COHERENT on every host-visible heap, so raw
+    // map→memcpy→unmap "just works" there — but the Vulkan spec doesn't
+    // guarantee coherent host-visible memory, and on non-coherent heaps
+    // host writes need vmaFlushAllocation before the GPU reads them (and
+    // host reads need vmaInvalidateAllocation after the GPU writes). Both
+    // are no-ops on coherent memory, so routing ALL host-visible traffic
+    // through these helpers costs nothing on current hardware and removes
+    // the portability hole. VMA rounds the ranges to nonCoherentAtomSize
+    // internally. The VkResults are check()ed — these calls only fail on
+    // invalid arguments (a bug), never at runtime on a healthy device.
+
+    // Whole-blob host→GPU upload: map → memcpy → flush the written range →
+    // unmap. The standard replacement for the map/memcpy/unmap trio.
+    inline void uploadHostVisible(VmaAllocator alloc, const Buffer& b,
+                                  const void* src, VkDeviceSize bytes,
+                                  VkDeviceSize dstOffset = 0) {
+        void* mapped = nullptr;
+        check(vmaMapMemory(alloc, b.alloc, &mapped), "vmaMapMemory(uploadHostVisible)");
+        std::memcpy(static_cast<uint8_t*>(mapped) + dstOffset, src, bytes);
+        check(vmaFlushAllocation(alloc, b.alloc, dstOffset, bytes),
+              "vmaFlushAllocation(uploadHostVisible)");
+        vmaUnmapMemory(alloc, b.alloc);
+    }
+
+    // Flush after STRUCTURED writes through a mapped pointer (field-by-field
+    // stores, loops, persistently-mapped per-frame batches): call once after
+    // the write batch, before the buffer is consumed. Use the defaults
+    // unless the exact written range is trivially at hand.
+    inline void flushHostWrites(VmaAllocator alloc, VmaAllocation allocation,
+                                VkDeviceSize offset = 0, VkDeviceSize size = VK_WHOLE_SIZE) {
+        check(vmaFlushAllocation(alloc, allocation, offset, size),
+              "vmaFlushAllocation(flushHostWrites)");
+    }
+
+    // Mirror direction: invalidate BEFORE reading GPU-written data through a
+    // mapped pointer (readbacks: pixels, lidar returns, event streams, ...).
+    inline void invalidateHostReads(VmaAllocator alloc, VmaAllocation allocation,
+                                    VkDeviceSize offset = 0, VkDeviceSize size = VK_WHOLE_SIZE) {
+        check(vmaInvalidateAllocation(alloc, allocation, offset, size),
+              "vmaInvalidateAllocation(invalidateHostReads)");
+    }
 
     // Dedicated EXPORTABLE device-local buffer for cross-API interop (CUDA).
     // Allocated outside VMA: export requires VkExportMemoryAllocateInfo +

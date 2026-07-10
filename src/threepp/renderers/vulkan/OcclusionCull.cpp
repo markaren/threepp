@@ -222,6 +222,11 @@ namespace threepp::vulkan {
         cullSets_.assign(all.begin() + framesInFlight_, all.end());
     }
 
+    void OcclusionCull::flushMeta(uint32_t frame, uint32_t drawCount) {
+        flushHostWrites(ctx_.allocator(), metaBufs_[frame].alloc,
+                        0, VkDeviceSize(drawCount) * sizeof(CullMeta));
+    }
+
     void OcclusionCull::ensureCapacity(uint32_t frame, uint32_t drawCount) {
         const uint32_t needed = std::max(drawCount, 1u);
 

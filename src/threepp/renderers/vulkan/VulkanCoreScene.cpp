@@ -97,11 +97,9 @@ void VulkanRendererCore::CoreImpl::flushMaterialDescsIfDirty(uint32_t frame) {
             if (!matDescsDirty_[frame]) return;
             matDescsDirty_[frame] = false;
             if (matDescsCached_.empty()) return;
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), materialDescsBuffers[frame].alloc, &mapped);
-            std::memcpy(mapped, matDescsCached_.data(),
-                        matDescsCached_.size() * sizeof(MaterialDesc));
-            vmaUnmapMemory(ctx->allocator(), materialDescsBuffers[frame].alloc);
+            uploadHostVisible(ctx->allocator(), materialDescsBuffers[frame],
+                              matDescsCached_.data(),
+                              matDescsCached_.size() * sizeof(MaterialDesc));
         }
 
 void VulkanRendererCore::CoreImpl::flushGeometryDescsIfDirty(uint32_t frame) {
@@ -109,11 +107,9 @@ void VulkanRendererCore::CoreImpl::flushGeometryDescsIfDirty(uint32_t frame) {
             geomDescsDirty_[frame] = false;
             if (geomDescsCached_.empty()) return;
             if (geometryDescsBuffers[frame].handle == VK_NULL_HANDLE) return;
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), geometryDescsBuffers[frame].alloc, &mapped);
-            std::memcpy(mapped, geomDescsCached_.data(),
-                        geomDescsCached_.size() * sizeof(GeometryDesc));
-            vmaUnmapMemory(ctx->allocator(), geometryDescsBuffers[frame].alloc);
+            uploadHostVisible(ctx->allocator(), geometryDescsBuffers[frame],
+                              geomDescsCached_.data(),
+                              geomDescsCached_.size() * sizeof(GeometryDesc));
         }
 
 void VulkanRendererCore::CoreImpl::cullEntriesAgainstFrustum(Camera& camera) {

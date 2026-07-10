@@ -15,7 +15,8 @@ namespace threepp::vulkan {
 
         // Per-frame host-visible SSBOs (128 uint = 512 bytes).
         // VMA_MEMORY_USAGE_AUTO + HOST_ACCESS flags → GPU-writeable + CPU-readable
-        // without an explicit staging copy; HOST_COHERENT ensures no cache flush.
+        // without an explicit staging copy; tick() invalidates before each read
+        // (a no-op on the HOST_COHERENT heaps desktop GPUs give this).
         constexpr VkDeviceSize sz = kBins * sizeof(uint32_t);
         histBufs_.resize(framesInFlight_);
         for (auto& h : histBufs_) {
@@ -35,6 +36,7 @@ namespace threepp::vulkan {
             if (!h.ptr)
                 throw std::runtime_error("[AutoExposure] histogram buffer is not mapped");
             std::memset(h.ptr, 0, sz);
+            flushHostWrites(ctx_.allocator(), h.buf.alloc, 0, sz);
         }
     }
 
@@ -208,8 +210,8 @@ namespace threepp::vulkan {
         // The previous frame's GPU slot is retired (framesInFlight fence logic).
         const uint32_t prev = (currentFrame + framesInFlight_ - 1) % framesInFlight_;
         // Invalidate CPU cache (required for non-HOST_COHERENT; harmless otherwise).
-        vmaInvalidateAllocation(ctx_.allocator(), histBufs_[prev].buf.alloc,
-                                0, kBins * sizeof(uint32_t));
+        invalidateHostReads(ctx_.allocator(), histBufs_[prev].buf.alloc,
+                            0, kBins * sizeof(uint32_t));
 
         const uint32_t* bins = histBufs_[prev].ptr;
         if (!bins) return;

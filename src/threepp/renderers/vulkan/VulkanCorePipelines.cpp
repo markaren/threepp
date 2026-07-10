@@ -1841,13 +1841,8 @@ void VulkanRendererCore::CoreImpl::createSpriteWorldPipeline() {
                         ctx->allocator(), ctx->device(), sizeof(idx),
                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                void* m = nullptr;
-                vmaMapMemory(ctx->allocator(), spriteQuadVtx_.alloc, &m);
-                std::memcpy(m, quad, sizeof(quad));
-                vmaUnmapMemory(ctx->allocator(), spriteQuadVtx_.alloc);
-                vmaMapMemory(ctx->allocator(), spriteQuadIdx_.alloc, &m);
-                std::memcpy(m, idx, sizeof(idx));
-                vmaUnmapMemory(ctx->allocator(), spriteQuadIdx_.alloc);
+                uploadHostVisible(ctx->allocator(), spriteQuadVtx_, quad, sizeof(quad));
+                uploadHostVisible(ctx->allocator(), spriteQuadIdx_, idx, sizeof(idx));
             }
 
             VkShaderModuleCreateInfo vsmci{};

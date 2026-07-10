@@ -74,6 +74,11 @@ namespace threepp::vulkan {
         // prepareFrame; capacity >= drawCount).
         [[nodiscard]] CullMeta* metaPtr(uint32_t frame) { return metaPtrs_[frame]; }
 
+        // Flush the first `drawCount` records written through metaPtr — call
+        // once after the frame's write batch (non-coherent-heap portability;
+        // no-op on coherent memory).
+        void flushMeta(uint32_t frame, uint32_t drawCount);
+
         // Phase-1 filter dispatch. Leading barrier: prior frames' indirect
         // reads + this frame's host meta writes → compute.
         void recordFilter(VkCommandBuffer cb, uint32_t frame, uint32_t drawCount);

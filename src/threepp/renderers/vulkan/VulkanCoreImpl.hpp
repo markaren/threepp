@@ -118,6 +118,9 @@ namespace threepp {
     using vulkan::destroyBuffer;
     using vulkan::createAsScratchBuffer;
     using vulkan::destroyImage2D;
+    using vulkan::uploadHostVisible;
+    using vulkan::flushHostWrites;
+    using vulkan::invalidateHostReads;
     using vulkan::TimingPass;
     using vulkan::TP_RasterGbuf;
     using vulkan::TP_OverlayDepth;
@@ -2642,10 +2645,7 @@ namespace threepp {
                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), dst.alloc, &mapped);
-                std::memcpy(mapped, src, bytes);
-                vmaUnmapMemory(ctx->allocator(), dst.alloc);
+                uploadHostVisible(ctx->allocator(), dst, src, bytes);
             };
             allocAndUpload(state->baseVertex, posAttr->array().data(),
                            vertexCount * 3 * sizeof(float));
@@ -2677,6 +2677,7 @@ namespace threepp {
                             16 * sizeof(float));
                 std::memset(static_cast<char*>(mapped) + 32 * sizeof(float),
                             0, boneCount * 16 * sizeof(float));
+                flushHostWrites(ctx->allocator(), state->boneMatrices.alloc);
                 vmaUnmapMemory(ctx->allocator(), state->boneMatrices.alloc);
             }
 
@@ -2816,10 +2817,7 @@ namespace threepp {
                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), dst.alloc, &mapped);
-                std::memcpy(mapped, src, bytes);
-                vmaUnmapMemory(ctx->allocator(), dst.alloc);
+                uploadHostVisible(ctx->allocator(), dst, src, bytes);
             };
             allocAndUpload(state->tetIndex,   tiAttr->array().data(),  vertexCount * 4 * sizeof(float));
             allocAndUpload(state->tetWeight,  twAttr->array().data(),  vertexCount * 4 * sizeof(float));
@@ -3535,12 +3533,7 @@ namespace threepp {
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            {
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), state->restPos.alloc, &mapped);
-                std::memcpy(mapped, posAttr->array().data(), posBytes);
-                vmaUnmapMemory(ctx->allocator(), state->restPos.alloc);
-            }
+            uploadHostVisible(ctx->allocator(), state->restPos, posAttr->array().data(), posBytes);
 
             const VkDeviceSize hfBytes = VkDeviceSize(vertexCount) * sizeof(float);
             state->heightFrac = createBuffer(
@@ -3549,12 +3542,7 @@ namespace threepp {
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            {
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), state->heightFrac.alloc, &mapped);
-                std::memcpy(mapped, hfAttr->array().data(), hfBytes);
-                vmaUnmapMemory(ctx->allocator(), state->heightFrac.alloc);
-            }
+            uploadHostVisible(ctx->allocator(), state->heightFrac, hfAttr->array().data(), hfBytes);
 
             state->blas = std::move(blas);
             auto* raw = state.get();
@@ -3601,10 +3589,8 @@ namespace threepp {
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             if (!descs.empty()) {
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), target.alloc, &mapped);
-                std::memcpy(mapped, descs.data(), descs.size() * sizeof(DescT));
-                vmaUnmapMemory(ctx->allocator(), target.alloc);
+                uploadHostVisible(ctx->allocator(), target, descs.data(),
+                                  descs.size() * sizeof(DescT));
             }
         }
 
@@ -4279,10 +4265,7 @@ namespace threepp {
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), staging.alloc, &mapped);
-            std::memcpy(mapped, pixels, byteSize);
-            vmaUnmapMemory(ctx->allocator(), staging.alloc);
+            uploadHostVisible(ctx->allocator(), staging, pixels, byteSize);
 
             VkCommandBuffer cb = beginOneShot();
 
@@ -4570,16 +4553,9 @@ namespace threepp {
             const unsigned int ver = geomVersionOf(*geom);
 
             auto uploadAnim = [&](ParticleGeomRec& rec) {
-                void* m = nullptr;
-                vmaMapMemory(ctx->allocator(), rec.position.alloc, &m);
-                std::memcpy(m, posAttr->array().data(), vtx * 3 * sizeof(float));
-                vmaUnmapMemory(ctx->allocator(), rec.position.alloc);
-                vmaMapMemory(ctx->allocator(), rec.normal.alloc, &m);
-                std::memcpy(m, normAttr->array().data(), vtx * 3 * sizeof(float));
-                vmaUnmapMemory(ctx->allocator(), rec.normal.alloc);
-                vmaMapMemory(ctx->allocator(), rec.color.alloc, &m);
-                std::memcpy(m, colAttr->array().data(), vtx * 3 * sizeof(float));
-                vmaUnmapMemory(ctx->allocator(), rec.color.alloc);
+                uploadHostVisible(ctx->allocator(), rec.position, posAttr->array().data(), vtx * 3 * sizeof(float));
+                uploadHostVisible(ctx->allocator(), rec.normal, normAttr->array().data(), vtx * 3 * sizeof(float));
+                uploadHostVisible(ctx->allocator(), rec.color, colAttr->array().data(), vtx * 3 * sizeof(float));
             };
 
             auto it = particleGeomCache_.find(geom);
@@ -4622,13 +4598,8 @@ namespace threepp {
                                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                         VMA_MEMORY_USAGE_AUTO,
                                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            void* m = nullptr;
-            vmaMapMemory(ctx->allocator(), rec.uv.alloc, &m);
-            std::memcpy(m, uvAttr->array().data(), vtx * 2 * sizeof(float));
-            vmaUnmapMemory(ctx->allocator(), rec.uv.alloc);
-            vmaMapMemory(ctx->allocator(), rec.index.alloc, &m);
-            std::memcpy(m, idxAttr->array().data(), idxCount * sizeof(uint32_t));
-            vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
+            uploadHostVisible(ctx->allocator(), rec.uv, uvAttr->array().data(), vtx * 2 * sizeof(float));
+            uploadHostVisible(ctx->allocator(), rec.index, idxAttr->array().data(), idxCount * sizeof(uint32_t));
             auto [ins, _] = particleGeomCache_.emplace(geom, std::move(rec));
             uploadAnim(ins->second);
             ins->second.animVersion = ver;
@@ -4969,10 +4940,7 @@ namespace threepp {
                             VMA_MEMORY_USAGE_AUTO,
                             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                 }
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), rec.vertex.alloc, &mapped);
-                std::memcpy(mapped, posArr.data(), vbBytes);
-                vmaUnmapMemory(ctx->allocator(), rec.vertex.alloc);
+                uploadHostVisible(ctx->allocator(), rec.vertex, posArr.data(), vbBytes);
                 rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
                 rec.positionVersion = posVer;
 
@@ -4987,9 +4955,7 @@ namespace threepp {
                                 VMA_MEMORY_USAGE_AUTO,
                                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                     }
-                    vmaMapMemory(ctx->allocator(), rec.index.alloc, &mapped);
-                    std::memcpy(mapped, indices.data(), ibBytes);
-                    vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
+                    uploadHostVisible(ctx->allocator(), rec.index, indices.data(), ibBytes);
                     rec.indexCount   = static_cast<uint32_t>(indices.size());
                     rec.indexVersion = idxVer;
                 } else if (rec.index.handle != VK_NULL_HANDLE) {
@@ -5011,9 +4977,7 @@ namespace threepp {
                                 VMA_MEMORY_USAGE_AUTO,
                                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                     }
-                    vmaMapMemory(ctx->allocator(), rec.color.alloc, &mapped);
-                    std::memcpy(mapped, colArr.data(), cbBytes);
-                    vmaUnmapMemory(ctx->allocator(), rec.color.alloc);
+                    uploadHostVisible(ctx->allocator(), rec.color, colArr.data(), cbBytes);
                     rec.colorVersion = colVer;
                 } else if (rec.color.handle != VK_NULL_HANDLE) {
                     destroyBuffer(ctx->allocator(), rec.color);
@@ -5037,10 +5001,7 @@ namespace threepp {
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), rec.vertex.alloc, &mapped);
-            std::memcpy(mapped, posArr.data(), vbBytes);
-            vmaUnmapMemory(ctx->allocator(), rec.vertex.alloc);
+            uploadHostVisible(ctx->allocator(), rec.vertex, posArr.data(), vbBytes);
 
             if (idxAttr && idxAttr->count() > 0) {
                 const auto& indices = idxAttr->array();
@@ -5052,9 +5013,7 @@ namespace threepp {
                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                vmaMapMemory(ctx->allocator(), rec.index.alloc, &mapped);
-                std::memcpy(mapped, indices.data(), ibBytes);
-                vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
+                uploadHostVisible(ctx->allocator(), rec.index, indices.data(), ibBytes);
             }
 
             if (colAttr && colAttr->count() > 0) {
@@ -5066,9 +5025,7 @@ namespace threepp {
                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                vmaMapMemory(ctx->allocator(), rec.color.alloc, &mapped);
-                std::memcpy(mapped, colArr.data(), cbBytes);
-                vmaUnmapMemory(ctx->allocator(), rec.color.alloc);
+                uploadHostVisible(ctx->allocator(), rec.color, colArr.data(), cbBytes);
             }
 
             return &lineGeomCache_.emplace(geom, std::move(rec)).first->second;

@@ -632,12 +632,7 @@ OverlayPass::ensureSpriteGeometryUploaded(const BufferGeometry* geom) {
             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
             VMA_MEMORY_USAGE_AUTO,
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-    {
-        void* mapped = nullptr;
-        vmaMapMemory(ctx_.allocator(), rec.vertex.alloc, &mapped);
-        std::memcpy(mapped, packed.data(), vbSize);
-        vmaUnmapMemory(ctx_.allocator(), rec.vertex.alloc);
-    }
+    uploadHostVisible(ctx_.allocator(), rec.vertex, packed.data(), vbSize);
 
     const auto& indices = idxAttr->array();
     std::vector<uint32_t> idx32(indices.size());
@@ -650,12 +645,7 @@ OverlayPass::ensureSpriteGeometryUploaded(const BufferGeometry* geom) {
             VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
             VMA_MEMORY_USAGE_AUTO,
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-    {
-        void* mapped = nullptr;
-        vmaMapMemory(ctx_.allocator(), rec.index.alloc, &mapped);
-        std::memcpy(mapped, idx32.data(), ibSize);
-        vmaUnmapMemory(ctx_.allocator(), rec.index.alloc);
-    }
+    uploadHostVisible(ctx_.allocator(), rec.index, idx32.data(), ibSize);
     rec.indexCount = static_cast<uint32_t>(idx32.size());
 
     auto [ins, _] = spriteGeomCache_.emplace(geom, std::move(rec));
@@ -707,10 +697,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
         }
-        void* mapped = nullptr;
-        vmaMapMemory(ctx_.allocator(), rec.vertex.alloc, &mapped);
-        std::memcpy(mapped, posArr.data(), vbBytes);
-        vmaUnmapMemory(ctx_.allocator(), rec.vertex.alloc);
+        uploadHostVisible(ctx_.allocator(), rec.vertex, posArr.data(), vbBytes);
         rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
         rec.positionVersion = posVer;
 
@@ -725,9 +712,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             }
-            vmaMapMemory(ctx_.allocator(), rec.index.alloc, &mapped);
-            std::memcpy(mapped, indices.data(), ibBytes);
-            vmaUnmapMemory(ctx_.allocator(), rec.index.alloc);
+            uploadHostVisible(ctx_.allocator(), rec.index, indices.data(), ibBytes);
             rec.indexCount   = static_cast<uint32_t>(indices.size());
             rec.indexVersion = idxVer;
         } else if (rec.index.handle != VK_NULL_HANDLE) {
@@ -749,9 +734,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             }
-            vmaMapMemory(ctx_.allocator(), rec.color.alloc, &mapped);
-            std::memcpy(mapped, colArr.data(), cbBytes);
-            vmaUnmapMemory(ctx_.allocator(), rec.color.alloc);
+            uploadHostVisible(ctx_.allocator(), rec.color, colArr.data(), cbBytes);
             rec.colorVersion = colVer;
         } else if (rec.color.handle != VK_NULL_HANDLE) {
             destroyBuffer(ctx_.allocator(), rec.color);
@@ -775,10 +758,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
             VMA_MEMORY_USAGE_AUTO,
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-    void* mapped = nullptr;
-    vmaMapMemory(ctx_.allocator(), rec.vertex.alloc, &mapped);
-    std::memcpy(mapped, posArr.data(), vbBytes);
-    vmaUnmapMemory(ctx_.allocator(), rec.vertex.alloc);
+    uploadHostVisible(ctx_.allocator(), rec.vertex, posArr.data(), vbBytes);
 
     if (idxAttr && idxAttr->count() > 0) {
         const auto& indices = idxAttr->array();
@@ -790,9 +770,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
                 VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 VMA_MEMORY_USAGE_AUTO,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-        vmaMapMemory(ctx_.allocator(), rec.index.alloc, &mapped);
-        std::memcpy(mapped, indices.data(), ibBytes);
-        vmaUnmapMemory(ctx_.allocator(), rec.index.alloc);
+        uploadHostVisible(ctx_.allocator(), rec.index, indices.data(), ibBytes);
     }
 
     if (colAttr && colAttr->count() > 0) {
@@ -804,9 +782,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VMA_MEMORY_USAGE_AUTO,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-        vmaMapMemory(ctx_.allocator(), rec.color.alloc, &mapped);
-        std::memcpy(mapped, colArr.data(), cbBytes);
-        vmaUnmapMemory(ctx_.allocator(), rec.color.alloc);
+        uploadHostVisible(ctx_.allocator(), rec.color, colArr.data(), cbBytes);
     }
 
     return &lineGeomCache_.emplace(geom, std::move(rec)).first->second;

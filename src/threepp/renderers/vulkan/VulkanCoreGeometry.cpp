@@ -66,10 +66,7 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
                     ctx->allocator(), ctx->device(), vbBytes,
                     geomUsage, VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), rec->vertex.alloc, &mapped);
-            std::memcpy(mapped, positions.data(), vbBytes);
-            vmaUnmapMemory(ctx->allocator(), rec->vertex.alloc);
+            uploadHostVisible(ctx->allocator(), rec->vertex, positions.data(), vbBytes);
 
             const VkDeviceSize nbBytes = normals.size() * sizeof(float);
             rec->normal = createBuffer(
@@ -79,9 +76,7 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            vmaMapMemory(ctx->allocator(), rec->normal.alloc, &mapped);
-            std::memcpy(mapped, normals.data(), nbBytes);
-            vmaUnmapMemory(ctx->allocator(), rec->normal.alloc);
+            uploadHostVisible(ctx->allocator(), rec->normal, normals.data(), nbBytes);
 
             // Optional UV attribute (TEXCOORD_0). closest_hit interpolates and
             // samples albedo with these; absent → bindless texture is ignored.
@@ -97,9 +92,7 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                             VMA_MEMORY_USAGE_AUTO,
                             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                    vmaMapMemory(ctx->allocator(), rec->uv.alloc, &mapped);
-                    std::memcpy(mapped, uvs.data(), uvBytes);
-                    vmaUnmapMemory(ctx->allocator(), rec->uv.alloc);
+                    uploadHostVisible(ctx->allocator(), rec->uv, uvs.data(), uvBytes);
                 }
             }
 
@@ -123,6 +116,7 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                             VMA_MEMORY_USAGE_AUTO,
                             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    void* mapped = nullptr;
                     vmaMapMemory(ctx->allocator(), rec->color.alloc, &mapped);
                     if (itemSize == 3) {
                         std::memcpy(mapped, cols.data(), cbBytes);
@@ -134,6 +128,7 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
                             dst[v * 3 + 2] = cols[v * 4 + 2];
                         }
                     }
+                    flushHostWrites(ctx->allocator(), rec->color.alloc, 0, cbBytes);
                     vmaUnmapMemory(ctx->allocator(), rec->color.alloc);
                 }
             }
@@ -145,9 +140,7 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
                         ctx->allocator(), ctx->device(), ibBytes,
                         geomUsage, VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                vmaMapMemory(ctx->allocator(), rec->index.alloc, &mapped);
-                std::memcpy(mapped, indices.data(), ibBytes);
-                vmaUnmapMemory(ctx->allocator(), rec->index.alloc);
+                uploadHostVisible(ctx->allocator(), rec->index, indices.data(), ibBytes);
             }
 
             VkAccelerationStructureGeometryTrianglesDataKHR triData{};
@@ -289,10 +282,7 @@ bool VulkanRendererCore::CoreImpl::buildLodLevelFor(BlasRecord& rec,
                     ctx->allocator(), ctx->device(), ibBytes,
                     idxUsage, VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), out.index.alloc, &mapped);
-            std::memcpy(mapped, level.indices.data(), ibBytes);
-            vmaUnmapMemory(ctx->allocator(), out.index.alloc);
+            uploadHostVisible(ctx->allocator(), out.index, level.indices.data(), ibBytes);
 
             // Size query needs a fully-specified build info; a LOCAL struct is
             // fine here (only the final batched cmdBuildAccelerationStructures
@@ -530,6 +520,7 @@ void VulkanRendererCore::CoreImpl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMe
                 std::memcpy(dst + b * 16 * sizeof(float),
                             m.elements.data(), 16 * sizeof(float));
             }
+            flushHostWrites(ctx->allocator(), st.boneMatrices.alloc);
             vmaUnmapMemory(ctx->allocator(), st.boneMatrices.alloc);
 
             // Cache the canonical bone matrices for next-frame dirty detection
@@ -566,10 +557,7 @@ void VulkanRendererCore::CoreImpl::refreshTetBlas(Mesh& m, TetMeshState& st) {
             const VkDeviceSize bytes = std::min<VkDeviceSize>(
                     st.tetPosBytes, static_cast<VkDeviceSize>(tetImg.size()) * sizeof(float));
             if (bytes == 0) return;
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), st.tetPos.alloc, &mapped);
-            std::memcpy(mapped, tetImg.data(), bytes);
-            vmaUnmapMemory(ctx->allocator(), st.tetPos.alloc);
+            uploadHostVisible(ctx->allocator(), st.tetPos, tetImg.data(), bytes);
             pendingTetRebuilds_.push_back(&st);
         }
 
@@ -662,40 +650,30 @@ void VulkanRendererCore::CoreImpl::refreshGeomBlasBatch(const std::vector<Vulkan
             }
 
             // Phase C — host writes into the now-snapshotted vertex/normal/uv/
-            // index buffers. Each is host-coherent (HOST_ACCESS_SEQUENTIAL_WRITE
-            // at buildBlasFor time); the implicit submit barrier on the next
-            // phase makes these visible to the BLAS build.
+            // index buffers (flushed for non-coherent portability); the
+            // implicit submit barrier on the next phase makes these visible
+            // to the BLAS build.
             for (size_t k : liveOps) {
                 const auto& geom = *ops[k].geom;
                 auto& rec = *ops[k].rec;
                 auto* posAttr = geom.getAttribute<float>("position");
                 auto* nrmAttr = geom.getAttribute<float>("normal");
 
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), rec.vertex.alloc, &mapped);
-                std::memcpy(mapped, posAttr->array().data(),
-                            posAttr->array().size() * sizeof(float));
-                vmaUnmapMemory(ctx->allocator(), rec.vertex.alloc);
-
-                vmaMapMemory(ctx->allocator(), rec.normal.alloc, &mapped);
-                std::memcpy(mapped, nrmAttr->array().data(),
-                            nrmAttr->array().size() * sizeof(float));
-                vmaUnmapMemory(ctx->allocator(), rec.normal.alloc);
+                uploadHostVisible(ctx->allocator(), rec.vertex, posAttr->array().data(),
+                                  posAttr->array().size() * sizeof(float));
+                uploadHostVisible(ctx->allocator(), rec.normal, nrmAttr->array().data(),
+                                  nrmAttr->array().size() * sizeof(float));
 
                 if (auto* uvAttr = geom.getAttribute<float>("uv");
                     uvAttr && rec.uv.handle != VK_NULL_HANDLE) {
-                    vmaMapMemory(ctx->allocator(), rec.uv.alloc, &mapped);
-                    std::memcpy(mapped, uvAttr->array().data(),
-                                uvAttr->array().size() * sizeof(float));
-                    vmaUnmapMemory(ctx->allocator(), rec.uv.alloc);
+                    uploadHostVisible(ctx->allocator(), rec.uv, uvAttr->array().data(),
+                                      uvAttr->array().size() * sizeof(float));
                 }
 
                 if (auto* idxAttr = geom.getIndex();
                     idxAttr && rec.index.handle != VK_NULL_HANDLE) {
-                    vmaMapMemory(ctx->allocator(), rec.index.alloc, &mapped);
-                    std::memcpy(mapped, idxAttr->array().data(),
-                                idxAttr->array().size() * sizeof(unsigned int));
-                    vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
+                    uploadHostVisible(ctx->allocator(), rec.index, idxAttr->array().data(),
+                                      idxAttr->array().size() * sizeof(unsigned int));
                 }
             }
 
@@ -796,16 +774,10 @@ void VulkanRendererCore::CoreImpl::refreshMorphedBlas(Mesh& mesh, MorphedMeshSta
             cpuMorphBlend(mesh, st.blendedPositions, st.blendedNormals);
             if (st.blendedPositions.empty() || !st.blas) return;
 
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), st.blas->vertex.alloc, &mapped);
-            std::memcpy(mapped, st.blendedPositions.data(),
-                        st.blendedPositions.size() * sizeof(float));
-            vmaUnmapMemory(ctx->allocator(), st.blas->vertex.alloc);
-
-            vmaMapMemory(ctx->allocator(), st.blas->normal.alloc, &mapped);
-            std::memcpy(mapped, st.blendedNormals.data(),
-                        st.blendedNormals.size() * sizeof(float));
-            vmaUnmapMemory(ctx->allocator(), st.blas->normal.alloc);
+            uploadHostVisible(ctx->allocator(), st.blas->vertex, st.blendedPositions.data(),
+                              st.blendedPositions.size() * sizeof(float));
+            uploadHostVisible(ctx->allocator(), st.blas->normal, st.blendedNormals.data(),
+                              st.blendedNormals.size() * sizeof(float));
 
             auto* posAttr = mesh.geometry()->getAttribute<float>("position");
             auto* idxAttr = mesh.geometry()->getIndex();
@@ -1013,11 +985,9 @@ void VulkanRendererCore::CoreImpl::recordDisplacedDeform(VkCommandBuffer cb, Dis
                     dm.foamDisturbances.size(),
                     DisplacedMeshState::kMaxFoamDisturbances));
             if (disturbCount > 0u) {
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), st.foamDisturbBuffer.alloc, &mapped);
-                std::memcpy(mapped, dm.foamDisturbances.data(),
-                            disturbCount * kFoamDisturbStride);
-                vmaUnmapMemory(ctx->allocator(), st.foamDisturbBuffer.alloc);
+                uploadHostVisible(ctx->allocator(), st.foamDisturbBuffer,
+                                  dm.foamDisturbances.data(),
+                                  disturbCount * kFoamDisturbStride);
             }
 
             // (4b) Wake-trail SSBO upload. Same pattern as disturbance buffer:
@@ -1038,11 +1008,9 @@ void VulkanRendererCore::CoreImpl::recordDisplacedDeform(VkCommandBuffer cb, Dis
                     dm.wake.trail.size(),
                     DisplacedMeshState::kMaxWakeSamples));
             if (wakeSampleCount > 0u) {
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), st.wakeTrailBuffer.alloc, &mapped);
-                std::memcpy(mapped, dm.wake.trail.data(),
-                            wakeSampleCount * kWakeSampleStride);
-                vmaUnmapMemory(ctx->allocator(), st.wakeTrailBuffer.alloc);
+                uploadHostVisible(ctx->allocator(), st.wakeTrailBuffer,
+                                  dm.wake.trail.data(),
+                                  wakeSampleCount * kWakeSampleStride);
             }
 
             vulkan::WaterDisplacePipeline::PushConstants pc{};
@@ -1249,6 +1217,7 @@ void VulkanRendererCore::CoreImpl::mirrorDisplacedHeightfields(DisplacedMesh& dm
                         cf.data.assign(cells * 2, 0.f);
                     void* mapped = nullptr;
                     vmaMapMemory(ctx->allocator(), cascades[ci].buf->alloc, &mapped);
+                    invalidateHostReads(ctx->allocator(), cascades[ci].buf->alloc, 0, bytes);
                     std::memcpy(cf.data.data(), mapped, bytes);
                     vmaUnmapMemory(ctx->allocator(), cascades[ci].buf->alloc);
                     cf.dim      = dim;
@@ -1388,11 +1357,8 @@ void VulkanRendererCore::CoreImpl::buildTlas(const std::vector<VkAccelerationStr
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                 if (instanceCount > 0) {
-                    void* mapped = nullptr;
-                    vmaMapMemory(ctx->allocator(), tlasInstancesBuffers[s].alloc, &mapped);
-                    std::memcpy(mapped, instances.data(),
-                                instanceCount * sizeof(VkAccelerationStructureInstanceKHR));
-                    vmaUnmapMemory(ctx->allocator(), tlasInstancesBuffers[s].alloc);
+                    uploadHostVisible(ctx->allocator(), tlasInstancesBuffers[s], instances.data(),
+                                      instanceCount * sizeof(VkAccelerationStructureInstanceKHR));
                 }
             }
 
@@ -1459,11 +1425,8 @@ void VulkanRendererCore::CoreImpl::recordTlasRefit(VkCommandBuffer cb,
             if (instanceCount == 0 || tlas == VK_NULL_HANDLE) return;
 
             Buffer& instBuf = tlasInstancesBuffers[currentFrame];
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), instBuf.alloc, &mapped);
-            std::memcpy(mapped, instances.data(),
-                        instanceCount * sizeof(VkAccelerationStructureInstanceKHR));
-            vmaUnmapMemory(ctx->allocator(), instBuf.alloc);
+            uploadHostVisible(ctx->allocator(), instBuf, instances.data(),
+                              instanceCount * sizeof(VkAccelerationStructureInstanceKHR));
 
             VkAccelerationStructureGeometryInstancesDataKHR instData{};
             instData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
