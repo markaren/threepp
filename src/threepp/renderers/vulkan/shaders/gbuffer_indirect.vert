@@ -98,7 +98,10 @@ void main() {
     const vec4 worldPos     = d.model * vec4(inPos,     1.0);
     const vec4 prevWorldPos = motionMat[d.instanceCustomIndex] * d.model * vec4(inPrevPos, 1.0);
 
-    vWorldNormal = mat3(d.model) * inNormal;
+    // Cofactor = det·(inverse-transpose): correct normals under non-uniform
+    // scale, normalize-safe, no per-vertex inverse (see gbuffer.vert).
+    const mat3 nm = mat3(d.model);
+    vWorldNormal = mat3(cross(nm[1], nm[2]), cross(nm[2], nm[0]), cross(nm[0], nm[1])) * inNormal;
 
     vCurrClipUnjit = cam.currVPunjittered * worldPos;
     vPrevClip      = cam.prevVP           * prevWorldPos;

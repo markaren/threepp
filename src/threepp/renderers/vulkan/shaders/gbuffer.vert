@@ -76,10 +76,12 @@ void main() {
     //                                              change) would miss.
     vec4 prevWorldPos = motionMat[pc.instanceCustomIndex] * pc.model * vec4(inPrevPos, 1.0);
 
-    // mat3(model) is correct for normals only under uniform/no-shear scale.
-    // threepp's scene graphs are typically uniform-scaled; non-uniform
-    // scaled meshes would need transpose(inverse(mat3(model))) here.
-    vWorldNormal = mat3(pc.model) * inNormal;
+    // Normals need the inverse-transpose of the model's linear part under
+    // non-uniform scale. Cofactor form: cof(M) = det(M)·M⁻ᵀ — the det scale
+    // washes out in the frag's normalize, and three cross products beat a
+    // per-vertex inverse(). Matches the ray-query side's transpose(worldToObj).
+    const mat3 m = mat3(pc.model);
+    vWorldNormal = mat3(cross(m[1], m[2]), cross(m[2], m[0]), cross(m[0], m[1])) * inNormal;
 
     vCurrClipUnjit = cam.currVPunjittered * worldPos;
     vPrevClip      = cam.prevVP           * prevWorldPos;
