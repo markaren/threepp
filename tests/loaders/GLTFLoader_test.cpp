@@ -1,5 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include "threepp/lights/PointLight.hpp"
+#include "threepp/lights/SpotLight.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -415,4 +418,41 @@ TEST_CASE("GLTFLoader does not include an unreachable node's mesh") {
     collectMeshes(res->scene.get(), meshes);
     REQUIRE(meshes.size() == 1);
     CHECK(meshes[0]->name != "NoReach");
+}
+
+TEST_CASE("GLTFLoader creates a SpotLight with nested spot cone angles") {
+    std::string json = R"({
+      "asset":{"version":"2.0"},
+      "extensionsUsed":["KHR_lights_punctual"],
+      "extensions":{"KHR_lights_punctual":{"lights":[
+        {"name":"MySpot","type":"spot","intensity":5.0,"range":20.0,
+         "spot":{"innerConeAngle":0.2,"outerConeAngle":0.6}},
+        {"name":"MyPoint","type":"point","intensity":2.0}]}},
+      "nodes":[
+        {"name":"spotNode","extensions":{"KHR_lights_punctual":{"light":0}}},
+        {"name":"pointNode","extensions":{"KHR_lights_punctual":{"light":1}}}],
+      "scenes":[{"nodes":[0,1]}]
+    })";
+
+    auto path = writeTempGlb(makeGlb(json, {}));
+    GLTFLoader loader;
+    auto res = loader.load(path);
+    fs::remove(path);
+
+    REQUIRE(res);
+    SpotLight* spot = nullptr;
+    PointLight* point = nullptr;
+    res->scene->traverse([&](Object3D& o) {
+        if (auto* s = o.as<SpotLight>()) spot = s;
+        else if (auto* p = o.as<PointLight>()) point = p;
+    });
+
+    REQUIRE(spot);
+    CHECK(spot->name == "MySpot");
+    CHECK(spot->distance == 20.0f);
+    CHECK(spot->angle == 0.6f);
+    CHECK_THAT(spot->penumbra, Catch::Matchers::WithinAbs(1.f - 0.2f / 0.6f, 1e-5));
+
+    REQUIRE(point);
+    CHECK(point->name == "MyPoint");
 }

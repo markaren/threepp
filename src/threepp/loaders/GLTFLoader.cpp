@@ -1539,9 +1539,11 @@ namespace threepp {
                         std::shared_ptr<Light> light;
                         if (ltype == "directional") {
                             light = DirectionalLight::create(color, intensity);
-                        } else if (ltype == "spots") {
-                            float innerCone = lightDef.value("innerConeAngle", 0.0f);
-                            float outerCone = lightDef.value("outerConeAngle", math::PI / 4.f);
+                        } else if (ltype == "spot") {
+                            // Cone angles live in the nested "spot" object (KHR_lights_punctual §spot)
+                            const json spotDef = lightDef.value("spot", json::object());
+                            float innerCone = spotDef.value("innerConeAngle", 0.0f);
+                            float outerCone = spotDef.value("outerConeAngle", math::PI / 4.f);
                             float penumbra = (outerCone > 0.f) ? (1.f - innerCone / outerCone) : 0.f;
                             light = SpotLight::create(color, intensity, range, outerCone, penumbra);
                         } else {
