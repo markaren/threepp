@@ -102,11 +102,24 @@ namespace threepp::terrain {
         float slopeGrassMax = 0.28f;// grass → scree slope
         float slopeRockMin = 0.55f; // scree → rock slope
         float bandEdge = 0.07f;     // transition softness
-        // Baked AO: discrete-Laplacian curvature darkens concave folds. Reduce
-        // aoStrength (or set to 0) when viewing without IBL — the term was tuned
-        // for a path-tracer scene with strong ambient fill.
-        float aoStrength = 40.f;    // curvature multiplier (0 = no baked AO)
+        // Baked AO: darkens genuinely concave folds (gullies, terrace insets).
+        // Reduce aoStrength (or set to 0) when viewing without IBL — the term was
+        // tuned for a path-tracer scene with strong ambient fill.
+        //
+        // The concavity measure is DUAL-SCALE + deadbanded (mirrors the hardened
+        // treatment in TerrainSplat.hpp's aoConcavity; see the AO block in
+        // bakeSplatColors below). A naive single-cell Laplacian is a band-pass:
+        // it stipples cell-scale noise bumps into a dark dot field and rings at
+        // sharp slope breaks (concave centre + convex shoulders → parallel dark
+        // companion lines). Requiring concavity at BOTH 1 and 2 cells, then
+        // deadbanding the weaker response at low gain, gates those off while
+        // keeping broad hollows. aoStrength now multiplies a [0,1] concavity (cf.
+        // the old raw-Laplacian ×40), so its scale changed — 0 disables the term.
+        float aoStrength = 0.5f;    // multiplies the [0,1] gated concavity (0 = off)
         float aoMax = 0.30f;        // maximum darkening fraction (0..1)
+        float aoCurvScale = 60.f;   // curvature→response gain (low, avoids tanh saturation)
+        float aoLo = 0.25f;         // deadband: no darkening below this response
+        float aoHi = 0.80f;         // full response above this
         std::array<float, 3> rockColor = {0.39f, 0.36f, 0.33f};// neutral grey-brown
         std::array<float, 3> grassColor = {0.29f, 0.33f, 0.19f};// muted olive ("low+flat" band; sand/ash for other presets)
         std::array<float, 3> screeColor = {0.49f, 0.46f, 0.42f};
@@ -267,8 +280,31 @@ namespace threepp::terrain {
                     const float n1 = fbm(static_cast<float>(x) * 0.16f, static_cast<float>(z) * 0.16f, 4, 2.f, 0.5f);
                     const float n2 = noise2(static_cast<float>(x) * 0.8f, static_cast<float>(z) * 0.8f);
                     const float varia = std::clamp(1.f + 0.15f * n1 + 0.08f * n2, 0.65f, 1.25f);
-                    const float curv = field_[at(xm, z)] + field_[at(xp, z)] + field_[at(x, zm)] + field_[at(x, zp)] - 4.f * hC;
-                    const float ao = 1.f - std::clamp(-curv * tp.aoStrength, 0.f, tp.aoMax);
+                    // Dual-scale gated concavity (grid analogue of TerrainSplat's
+                    // aoConcavity). A single-cell Laplacian band-passes cell-scale
+                    // noise into a dark dot field and RINGS at slope breaks (concave
+                    // centre + convex shoulders → companion dark lines). Instead
+                    // take the discrete Laplacian (normalised field, border-clamped)
+                    // at ε = 1 cell AND 2ε = 2 cells, each /step² so they compare on
+                    // equal footing. Positive = concave hollow. Pits and ringing
+                    // shoulders flip sign (or collapse) between the two scales and
+                    // are gated off; broad hollows stay concave at both. Keep the
+                    // WEAKER magnitude only when both agree, then deadband it at low
+                    // gain so only genuinely broad concavity darkens.
+                    const auto lap = [&](int s) {
+                        const int xa = std::max(x - s, 0), xb = std::min(x + s, dim - 1);
+                        const int za = std::max(z - s, 0), zb = std::min(z + s, dim - 1);
+                        return (field_[at(xa, z)] + field_[at(xb, z)] +
+                                field_[at(x, za)] + field_[at(x, zb)] - 4.f * hC) /
+                               static_cast<float>(s * s);
+                    };
+                    const float l1 = lap(1), l2 = lap(2);
+                    float cc = 0.f;
+                    if (l1 > 0.f && l2 > 0.f) {
+                        const float r = std::tanh(std::min(l1, l2) * tp.aoCurvScale);
+                        cc = smoothstep(tp.aoLo, tp.aoHi, r);
+                    }
+                    const float ao = 1.f - std::clamp(cc * tp.aoStrength, 0.f, tp.aoMax);
 
                     const float inv = (varia * ao) / total;
                     const float r = (tp.grassColor[0] * wGrass + tp.screeColor[0] * wScree + tp.rockColor[0] * wRock + tp.snowColor[0] * wSnow) * inv;
