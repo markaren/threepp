@@ -42,6 +42,18 @@ WORLD_SZ   = 80.0
 AMPLITUDE  = 10.8
 TREE_COUNT = 60
 CLEAR_R    = 7.0     # no trees within this radius of spawn
+
+# Species mix for scatter_trees: (preset, name, weight, needs_frond, translucency, translucency_color)
+# preset indices match apply_tree_preset: 0=Oak, 1=Pine/Spruce (whorl conifer), 2=Birch, 3=Willow.
+TREE_SPECIES = [
+    (0, "oak",    0.30, False, 0.40, (0.55, 0.85, 0.30)),
+    (1, "spruce", 0.35, True,  0.45, (0.50, 0.80, 0.28)),
+    (2, "birch",  0.20, False, 0.42, (0.60, 0.85, 0.35)),
+    (3, "willow", 0.15, False, 0.40, (0.55, 0.85, 0.32)),
+]
+VARIANTS_PER_SPECIES = 5   # a handful of distinct seeds per species (like fjord/forest_demo);
+                           # placements reuse these prototypes so the pool stays cheap
+WATER_BIAS_R = 14.0        # within this radius of the pond centre, favour willows
 SENSOR_W   = 160
 SENSOR_H   = 120
 SENSOR_FAR = 8.0
@@ -99,35 +111,71 @@ def _in_pond(px, py, hz, pond):
 
 
 # ── trees ──────────────────────────────────────────────────────────────────────
-def scatter_trees(scene, gen, params, n=TREE_COUNT, seed=0, world=None, pond=None):
-    """Scatter trees. When `world` is given, add a static box collider per trunk
-    (a "tree stub") so Spot bumps into the trunks; the leafy canopy stays
-    non-colliding. Returns the list of collider proxy meshes (keep them alive)."""
+def build_tree_variants(seed):
+    """Pre-build a small pool of fully-realized tree prototypes (a few seeds per
+    species from TREE_SPECIES, like forest_demo/vulkan_fjord's variant pooling):
+    geometry + bark/leaf textures are shared across every placement of a given
+    prototype — only position/scale/yaw vary per instance. Bounds the number of
+    unique meshes/textures while still giving each species its own silhouette,
+    bark, needle/leaf cutout and foliage translucency."""
+    rng  = np.random.default_rng(seed + 9001)
+    tgen = tp.TreeGenerator(0)        # reseeded per variant
+    variants = []
+    for preset, name, weight, needs_frond, translucency, t_color in TREE_SPECIES:
+        for _ in range(VARIANTS_PER_SPECIES):
+            vseed = int(rng.integers(0, 1_000_000))
+            tpar = tp.TreeParams()
+            tpar.seed = vseed
+            tp.apply_tree_preset(preset, tpar)
+            if preset != 1:            # Colonise species (whorl conifer is O(whorls), not iterations)
+                tpar.max_iterations = 140
+            tgen.reseed(vseed)
+            tgen.build_skeleton(tpar)
+            trunk_geo = tgen.make_trunk_geometry(tpar)
+            leaf_geo  = tgen.make_leaf_geometry(tpar)
+
+            bark_alb, bark_nrm = tp.make_bark_textures(192, vseed, tpar.bark_color)
+            trunk_mat = tp.MeshStandardMaterial()
+            trunk_mat.map          = bark_alb
+            trunk_mat.normal_map   = bark_nrm
+            trunk_mat.normal_scale = tp.Vector2(0.7, 0.7)
+            trunk_mat.roughness    = 0.88
+
+            # Conifer fronds want the elongated needle cutout; broadleaf species the
+            # round leaf-cluster atlas (mirrors vulkan_fjord.cpp's makeLeafTex).
+            leaf_tex = (tp.make_needle_frond_texture(224, vseed, tpar.leaf_color) if needs_frond
+                       else tp.make_leaf_texture(224, vseed, tpar.leaf_color))
+            leaf_mat = tp.MeshStandardMaterial()
+            leaf_mat.map                = leaf_tex
+            leaf_mat.alpha_test         = 0.5   # discard the transparent gaps → leafy silhouette
+            leaf_mat.roughness          = 0.88
+            leaf_mat.side               = tp.Side.Double
+            leaf_mat.vertex_colors      = True  # per-leaf tint variation baked into the geometry
+            # Foliage translucency: backlit canopy glow (Vulkan deferred only; no-op on GL).
+            leaf_mat.translucency       = translucency
+            leaf_mat.translucency_color = tp.Color(*t_color)
+
+            variants.append(dict(name=name, weight=weight, is_willow=(name == "willow"),
+                                 trunk_geo=trunk_geo, leaf_geo=leaf_geo,
+                                 trunk_mat=trunk_mat, leaf_mat=leaf_mat,
+                                 trunk_radius=tpar.trunk_radius))
+    print(f"[trees] built {len(variants)} variants ({len(TREE_SPECIES)} species x {VARIANTS_PER_SPECIES})")
+    return variants
+
+
+def scatter_trees(scene, gen, params, variants, n=TREE_COUNT, seed=0, world=None, pond=None):
+    """Scatter trees drawn from a pre-built variant pool (build_tree_variants).
+    When `world` is given, add a static box collider per trunk (a "tree stub")
+    so Spot bumps into the trunks; the leafy canopy stays non-colliding.
+    Returns the list of collider proxy meshes (keep them alive)."""
     rng  = np.random.default_rng(seed)
     half = params.world_size / 2.0 - 4.0
     proxies = []
 
-    bark_alb, _ = tp.make_bark_textures(128, seed, [0.34, 0.22, 0.12])
-    trunk_mat = tp.MeshStandardMaterial()
-    trunk_mat.map       = bark_alb
-    trunk_mat.roughness = 0.85
+    base_w      = np.array([v["weight"] for v in variants], np.float64)
+    willow_mask = np.array([v["is_willow"] for v in variants])
+    pond_cx, pond_cy = (pond[0], pond[1]) if pond is not None else (None, None)
 
-    leaf_mat = tp.MeshStandardMaterial()
-    leaf_mat.map           = tp.make_leaf_texture(256, seed, [0.18, 0.42, 0.14])  # RGBA leaf-cluster cutout
-    leaf_mat.alpha_test    = 0.5     # discard the transparent gaps → leafy silhouette, not solid cards
-    leaf_mat.roughness     = 0.9
-    leaf_mat.side          = tp.Side.Double
-    leaf_mat.vertex_colors = True    # per-leaf tint variation baked into the geometry
-
-    tpar = tp.TreeParams()
-    tp.apply_tree_preset(0, tpar)     # Oak baseline
-    tpar.max_iterations = 120         # cheaper for many trees
-    tpar.trunk_height   = 4.0
-    tpar.crown_radius_x = 2.5
-    tpar.crown_radius_z = 2.5
-    tpar.crown_height   = 3.0
-
-    tgen = tp.TreeGenerator(0)        # reseeded per tree
     placed = 0
     attempts = 0
     while placed < n and attempts < n * 15:
@@ -138,24 +186,28 @@ def scatter_trees(scene, gen, params, n=TREE_COUNT, seed=0, world=None, pond=Non
         hz = float(gen.height_at(px, py, params))
         if _in_pond(px, py, hz, pond):       # don't plant trees in open water
             continue
-        tree_seed = int(rng.integers(0, 100_000))
-        tgen.reseed(tree_seed)
-        tgen.build_skeleton(tpar)
-        trunk_geo = tgen.make_trunk_geometry(tpar)
-        leaf_geo  = tgen.make_leaf_geometry(tpar)
-        scale = float(rng.uniform(0.7, 1.3))
-        for geo, mat in ((trunk_geo, trunk_mat), (leaf_geo, leaf_mat)):
+
+        w = base_w
+        if pond_cx is not None and math.hypot(px - pond_cx, py - pond_cy) < WATER_BIAS_R:
+            w = np.where(willow_mask, base_w * 6.0, base_w)   # willows favour the water's edge
+        v = variants[int(rng.choice(len(variants), p=w / w.sum()))]
+
+        scale = float(rng.uniform(0.75, 1.3))
+        yaw   = float(rng.uniform(0, 2 * math.pi))
+        for geo, mat in ((v["trunk_geo"], v["trunk_mat"]), (v["leaf_geo"], v["leaf_mat"])):
             m = tp.Mesh(geo, mat)
-            m.rotation.x = math.pi / 2   # Y-up tree → Z-up world
+            m.rotation.y = yaw           # spin around the (still Y-up) trunk axis first...
+            m.rotation.x = math.pi / 2   # ...then stand it up: Y-up tree → Z-up world
             m.position.set(px, py, hz)
             m.scale.set(scale, scale, scale)
             m.cast_shadow = True
             scene.add(m)
         if world is not None:
             # Tall thin box collider on the lower trunk (covers Spot's height);
-            # the canopy above it is leaves → no collision.
-            tw  = 0.35 * scale
-            stub = tp.Mesh(tp.BoxGeometry(tw, tw, 2.5), trunk_mat)
+            # the canopy above it is leaves → no collision. Width tracks the
+            # species' actual trunk radius so spruces/oaks don't share one size.
+            tw   = 0.35 * scale * max(v["trunk_radius"] / 0.15, 0.6)
+            stub = tp.Mesh(tp.BoxGeometry(tw, tw, 2.5), v["trunk_mat"])
             stub.position.set(px, py, hz + 1.25)
             world.add_static(stub)
             proxies.append(stub)
@@ -243,35 +295,53 @@ def scatter_stones(scene, gen, params, n=35, seed=0, world=None, pond=None):
 
 # ── bushes (shrub-variant trees, like forest_demo) ────────────────────────────────
 def scatter_bushes(scene, gen, params, n=50, seed=0, pond=None):
+    """Short trunk + wide low crown shrubs. Each of a handful of prototypes gets
+    its own seed, crown shape/size, leaf colour and bark texture (mirrors the
+    tree variant pool) so the understory doesn't read as one shrub copy-pasted."""
     rng  = np.random.default_rng(seed + 3)
     half = params.world_size / 2.0 - 4.0
 
-    bark_alb, _ = tp.make_bark_textures(64, seed, [0.30, 0.22, 0.12])
-    trunk_mat = tp.MeshStandardMaterial(); trunk_mat.map = bark_alb; trunk_mat.roughness = 0.9
-    leaf_mat  = tp.MeshStandardMaterial()
-    leaf_mat.map           = tp.make_leaf_texture(256, seed + 5, [0.14, 0.36, 0.12])
-    leaf_mat.alpha_test    = 0.5
-    leaf_mat.roughness     = 0.9
-    leaf_mat.side          = tp.Side.Double
-    leaf_mat.vertex_colors = True
-
-    # A few reusable shrub variants (short trunk, wide low hemisphere crown).
+    N_VARIANTS = 6
     tgen = tp.TreeGenerator(0)
     variants = []
-    for s in (11, 22, 33):
+    for _ in range(N_VARIANTS):
+        s = int(rng.integers(0, 1_000_000))
         tpar = tp.TreeParams()
         tpar.seed = s
-        tpar.trunk_height = 0.45; tpar.trunk_radius = 0.06
-        tpar.crown_shape = tp.CrownShape.Hemisphere
-        tpar.crown_radius_x = 1.1; tpar.crown_radius_z = 1.1; tpar.crown_height = 1.2
-        tpar.attractor_count = 260; tpar.influence_distance = 2.0; tpar.kill_distance = 0.45
+        tpar.trunk_height = 0.35 + float(rng.uniform(0, 0.30))
+        tpar.trunk_radius = 0.05 + float(rng.uniform(0, 0.03))
+        tpar.crown_shape  = tp.CrownShape.Hemisphere if rng.uniform() < 0.6 else tp.CrownShape.Sphere
+        r = 0.85 + float(rng.uniform(0, 0.65))
+        tpar.crown_radius_x = r; tpar.crown_radius_z = r
+        tpar.crown_height   = r * (1.05 if tpar.crown_shape == tp.CrownShape.Hemisphere else 1.35)
+        tpar.attractor_count = 220 + int(rng.integers(0, 100))
+        tpar.influence_distance = 2.0; tpar.kill_distance = 0.45
         tpar.segment_length = 0.22; tpar.max_iterations = 130; tpar.randomness = 0.12
         tpar.radial_segments = 5
         tpar.leaf_style = tp.LeafStyle.CrossQuad
-        tpar.leaf_size = 0.45; tpar.leaf_density = 0.95
-        tpar.leaves_per_cluster = 5; tpar.leaf_spread = 0.35
+        tpar.leaf_size    = 0.32 + float(rng.uniform(0, 0.22))
+        tpar.leaf_density = 0.82 + float(rng.uniform(0, 0.16))
+        tpar.leaves_per_cluster = int(rng.integers(4, 7))
+        tpar.leaf_spread   = 0.28 + float(rng.uniform(0, 0.22))
+        hue = float(rng.uniform(-0.03, 0.06))       # per-bush leaf hue jitter (olive → fresh green)
+        tpar.leaf_color = [0.13 + hue * 0.6, 0.33 + hue, 0.11 + hue * 0.3]
+        tpar.bark_color = [0.30, 0.22, 0.12]
         tgen.reseed(s); tgen.build_skeleton(tpar)
-        variants.append((tgen.make_trunk_geometry(tpar), tgen.make_leaf_geometry(tpar)))
+        trunk_geo = tgen.make_trunk_geometry(tpar)
+        leaf_geo  = tgen.make_leaf_geometry(tpar)
+
+        bark_alb, _ = tp.make_bark_textures(64, s, tpar.bark_color)
+        trunk_mat = tp.MeshStandardMaterial(); trunk_mat.map = bark_alb; trunk_mat.roughness = 0.9
+
+        leaf_mat = tp.MeshStandardMaterial()
+        leaf_mat.map                = tp.make_leaf_texture(224, s, tpar.leaf_color)
+        leaf_mat.alpha_test         = 0.5
+        leaf_mat.roughness          = 0.9
+        leaf_mat.side               = tp.Side.Double
+        leaf_mat.vertex_colors      = True
+        leaf_mat.translucency       = 0.35   # backlit canopy glow (Vulkan deferred; no-op on GL)
+        leaf_mat.translucency_color = tp.Color(0.55, 0.85, 0.30)
+        variants.append((trunk_geo, leaf_geo, trunk_mat, leaf_mat))
 
     placed = attempts = 0
     while placed < n and attempts < n * 15:
@@ -282,17 +352,19 @@ def scatter_bushes(scene, gen, params, n=50, seed=0, pond=None):
         hz = float(gen.height_at(px, py, params))
         if _in_pond(px, py, hz, pond):       # keep bushes out of open water
             continue
-        trunk_geo, leaf_geo = variants[int(rng.integers(0, len(variants)))]
-        s  = 0.7 + float(rng.uniform()) * 0.7
+        trunk_geo, leaf_geo, trunk_mat, leaf_mat = variants[int(rng.integers(0, len(variants)))]
+        s   = 0.7 + float(rng.uniform()) * 0.7
+        yaw = float(rng.uniform(0, 2 * math.pi))
         for geo, mat in ((trunk_geo, trunk_mat), (leaf_geo, leaf_mat)):
             m = tp.Mesh(geo, mat)
+            m.rotation.y = yaw
             m.rotation.x = math.pi / 2     # Y-up → Z-up (like the trees)
             m.position.set(px, py, hz)
             m.scale.set(s, s, s)
             m.cast_shadow = True
             scene.add(m)
         placed += 1
-    print(f"[bushes] placed {placed}/{n}")
+    print(f"[bushes] placed {placed}/{n} ({len(variants)} variants)")
 
 
 # ── grass ────────────────────────────────────────────────────────────────────────
@@ -686,11 +758,13 @@ def main():
     pond_obj, pond_wl = add_pond(scene, gen, tparams)
     pond = (pond_obj.position.x, pond_obj.position.y, pond_wl) if pond_obj else None
 
+    print("[trees] building species variants ...")
+    tree_variants = build_tree_variants(args.seed)
     print("[trees] scattering ...")
     # Trees + stones get static colliders (Spot bumps trunks/boulders); bushes stay
     # soft (walk-through). Keep the proxy meshes alive for the whole run.
     phys_proxies = []
-    phys_proxies += scatter_trees(scene, gen, tparams, seed=args.seed, world=world, pond=pond)
+    phys_proxies += scatter_trees(scene, gen, tparams, tree_variants, seed=args.seed, world=world, pond=pond)
     scatter_bushes(scene, gen, tparams, seed=args.seed, pond=pond)
     phys_proxies += scatter_stones(scene, gen, tparams, seed=args.seed, world=world, pond=pond)
 
