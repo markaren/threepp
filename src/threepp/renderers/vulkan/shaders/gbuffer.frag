@@ -170,9 +170,61 @@ vec4 detailStochastic(int idx, vec2 duv, DetailLattice lt) {
 
 // A plain (non-stochastic) detail tap — same textureGrad footprint, no lattice.
 // Used for the non-dominant triplanar projections on cliffs, where the visible
-// cost of periodic tiling is far lower than on open ground (WS4).
+// cost of periodic tiling is far lower than on open ground.
 vec4 detailPlain(int idx, vec2 duv, vec2 g1, vec2 g2) {
     return textureGrad(gbufAlbedoMaps[nonuniformEXT(idx)], duv, g1, g2);
+}
+
+// One triplanar projection's detail contribution. Derivatives (g1/g2) and the
+// distance fade are PASSED IN so they're evaluated in non-divergent flow. axisU
+// / axisV are the world axes the texture's x/y map to for this projection; N is
+// the (already base-normal-mapped) surface normal the relief is anchored to.
+// `stochastic` selects the 3-tap variance-preserving blend (dominant axis) vs a
+// single plain tap (minor axes — cliffs hide the repeat).
+struct DetailContrib {
+    vec3 albedoOverlay;// multiplier (1 = inert)
+    vec3 normal;       // perturbed world normal (= N when inert)
+    float roughMul;    // roughness multiplier (1 = inert)
+};
+
+DetailContrib detailProject(vec2 duv, vec2 g1, vec2 g2, float fade,
+                            vec3 axisU, vec3 axisV, vec3 N,
+                            int albIdx, int nrmIdx,
+                            float strength, float nScale, float rStrength,
+                            bool stochastic) {
+    DetailContrib c;
+    c.albedoOverlay = vec3(1.0);
+    c.normal = N;
+    c.roughMul = 1.0;
+    if (fade <= 0.001) return c;
+
+    DetailLattice lt;
+    if (stochastic) lt = detailLatticeSetup(duv, g1, g2);
+
+    if (albIdx >= 0) {
+        const vec3 det = stochastic ? detailStochastic(albIdx, duv, lt).rgb
+                                    : detailPlain(albIdx, duv, g1, g2).rgb;
+        c.albedoOverlay = mix(vec3(1.0), det * 2.0, strength * fade);
+    }
+    if (nrmIdx >= 0) {
+        const vec4 dn = stochastic ? detailStochastic(nrmIdx, duv, lt)
+                                   : detailPlain(nrmIdx, duv, g1, g2);
+        // Tangent frame for THIS projection: T ← axisU on the surface, B ← axisV
+        // (both projected onto the tangent plane — near the projection's
+        // dominant axis they're already ~orthonormal).
+        vec3 T = axisU - N * dot(N, axisU);
+        vec3 B = axisV - N * dot(N, axisV);
+        const float tl = length(T), bl = length(B);
+        if (tl > 1e-4 && bl > 1e-4) {
+            T /= tl;
+            B /= bl;
+            const vec2 nxy = (dn.xy - 0.5) * 2.0 * nScale * fade;
+            const float nz = sqrt(max(1e-4, 1.0 - dot(nxy, nxy)));
+            c.normal = normalize(T * nxy.x + B * nxy.y + N * nz);
+        }
+        c.roughMul = mix(1.0, 2.0 * dn.a, rStrength * fade);
+    }
+    return c;
 }
 
 void main() {
@@ -189,6 +241,11 @@ void main() {
     // for them; done BEFORE the normal-map TBN so perturbation is relative to the
     // correctly-oriented surface.
     if (!gl_FrontFacing) N = -N;
+
+    // Geometric (pre-normal-map) normal — drives the detail triplanar weights
+    // below (the world-XZ detail projection stretches into vertical streaks on
+    // near-vertical faces; triplanar blends world-plane projections by |Ngeo|).
+    const vec3 Ngeo = N;
 
     // UV derivatives — used both for the LOD bias attachment and the normal-
     // map TBN construction below. Hoisted out of the normal-map branch
@@ -328,47 +385,66 @@ void main() {
     // clamp and the Toksvig fold).
     float detailRoughMul = 1.0;
     if (m.detailTexIndex >= 0 || m.detailNormalTexIndex >= 0) {
-        const vec2 duv  = vWorldPos.xz * m.detailRepeat;
-        // Derivatives at the quad-uniform (per-instance) level — the enclosing
-        // branch is flat per instance, so these are valid; the inner fade gate
-        // varies per pixel but textureGrad takes explicit grads, so its
-        // divergence is harmless.
-        const vec2 dgx  = dFdx(duv);
-        const vec2 dgy  = dFdy(duv);
-        const float fade = 1.0 - smoothstep(0.25, 0.75, length(fwidth(duv)));
-        if (fade > 0.001) {
-            const DetailLattice lt = detailLatticeSetup(duv, dgx, dgy);
-            // Detail albedo (LINEAR, 0.5-neutral → the ×2 overlay leaves the
-            // macro colour's mean intact).
-            if (m.detailTexIndex >= 0) {
-                const int di = clamp(m.detailTexIndex, 0, int(kMaxMaterialTextures) - 1);
-                const vec3 det = detailStochastic(di, duv, lt).rgb;
-                albedoSample *= mix(vec3(1.0), det * 2.0, m.detailStrength * fade);
-            }
-            // Detail normal + roughness. Shares the lattice; the tap's .xy is
-            // 0.5-centered (tangent deviation), .a is 0.5-neutral roughness.
-            if (m.detailNormalTexIndex >= 0) {
-                const int ni = clamp(m.detailNormalTexIndex, 0, int(kMaxMaterialTextures) - 1);
-                const vec4 dn = detailStochastic(ni, duv, lt);
-                // Tangent frame anchored to the world-XZ projection: T ← world
-                // +X projected onto the (already normal-mapped) surface, and
-                // B = cross(T, N) so it aligns with world +Z on flat ground —
-                // the detail map's green channel then maps to +Z. Perturb N
-                // AFTER the base normal map, scaled by detailNormalScale·fade
-                // (the same fade as the albedo layer, so relief retires with
-                // distance and can't shimmer far away).
-                vec3 T = vec3(1.0, 0.0, 0.0) - N * N.x;
-                const float tl = length(T);
-                if (tl > 1e-4) {
-                    T /= tl;
-                    const vec3 B = cross(T, N);
-                    const vec2 nxy = (dn.xy - 0.5) * 2.0 * m.detailNormalScale * fade;
-                    const float nz = sqrt(max(1e-4, 1.0 - dot(nxy, nxy)));
-                    N = normalize(T * nxy.x + B * nxy.y + N * nz);
-                }
-                // Roughness modulation (A 0.5-neutral). Applied at the rough map
-                // multiply below so it inherits the clamp + Toksvig fold.
-                detailRoughMul = mix(1.0, 2.0 * dn.a, m.detailRoughStrength * fade);
+        // TRIPLANAR. World-XZ anchoring stretches the detail field into vertical
+        // streaks on near-vertical faces; blend up to three world-plane
+        // projections weighted by |Ngeo|^k. k sharpens the blend so a typical
+        // ground pixel runs ONE projection (Y) at exactly the WS3 cost, a cliff
+        // runs ONE (X or Z), and only the transition band runs 2-3. The dominant
+        // axis keeps the 3-tap stochastic blend; minor axes degrade to a single
+        // plain tap (cliffs hide the repeat, so this is cost with no visible loss).
+        const int di = clamp(m.detailTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        const int ni = clamp(m.detailNormalTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        const int albIdx = m.detailTexIndex >= 0 ? di : -1;
+        const int nrmIdx = m.detailNormalTexIndex >= 0 ? ni : -1;
+
+        const float kTri = 7.0;
+        vec3 aw = pow(abs(Ngeo), vec3(kTri));
+        aw = max(aw - 0.08, vec3(0.0));// drop negligible axes
+        aw /= max(aw.x + aw.y + aw.z, 1e-4);
+        const float maxw = max(aw.x, max(aw.y, aw.z));
+
+        // Per-projection coords / derivatives / fade — computed unconditionally
+        // (cheap ALU, no texture cost) so the gated texture taps never evaluate
+        // dFdx in divergent flow. Y→xz, Z→xy, X→zy; fade is PER PROJECTION
+        // (derivatives differ per plane, so a stretched projection retires on
+        // its own).
+        const float rep = m.detailRepeat;
+        const vec2 duvY = vWorldPos.xz * rep; const vec2 gY1 = dFdx(duvY); const vec2 gY2 = dFdy(duvY);
+        const vec2 duvZ = vWorldPos.xy * rep; const vec2 gZ1 = dFdx(duvZ); const vec2 gZ2 = dFdy(duvZ);
+        const vec2 duvX = vWorldPos.zy * rep; const vec2 gX1 = dFdx(duvX); const vec2 gX2 = dFdy(duvX);
+        const float fadeY = 1.0 - smoothstep(0.25, 0.75, length(fwidth(duvY)));
+        const float fadeZ = 1.0 - smoothstep(0.25, 0.75, length(fwidth(duvZ)));
+        const float fadeX = 1.0 - smoothstep(0.25, 0.75, length(fwidth(duvX)));
+
+        vec3 ovAccum = vec3(0.0);
+        vec3 nAccum = vec3(0.0);
+        float rAccum = 0.0;
+        float wAccum = 0.0;// re-normalise over the projections that actually ran
+
+        if (aw.y > 0.001) {
+            const DetailContrib c = detailProject(duvY, gY1, gY2, fadeY, vec3(1, 0, 0), vec3(0, 0, 1), N,
+                                                  albIdx, nrmIdx, m.detailStrength, m.detailNormalScale,
+                                                  m.detailRoughStrength, aw.y >= maxw - 1e-6);
+            ovAccum += aw.y * c.albedoOverlay; nAccum += aw.y * c.normal; rAccum += aw.y * c.roughMul; wAccum += aw.y;
+        }
+        if (aw.z > 0.001) {
+            const DetailContrib c = detailProject(duvZ, gZ1, gZ2, fadeZ, vec3(1, 0, 0), vec3(0, 1, 0), N,
+                                                  albIdx, nrmIdx, m.detailStrength, m.detailNormalScale,
+                                                  m.detailRoughStrength, aw.z >= maxw - 1e-6);
+            ovAccum += aw.z * c.albedoOverlay; nAccum += aw.z * c.normal; rAccum += aw.z * c.roughMul; wAccum += aw.z;
+        }
+        if (aw.x > 0.001) {
+            const DetailContrib c = detailProject(duvX, gX1, gX2, fadeX, vec3(0, 0, 1), vec3(0, 1, 0), N,
+                                                  albIdx, nrmIdx, m.detailStrength, m.detailNormalScale,
+                                                  m.detailRoughStrength, aw.x >= maxw - 1e-6);
+            ovAccum += aw.x * c.albedoOverlay; nAccum += aw.x * c.normal; rAccum += aw.x * c.roughMul; wAccum += aw.x;
+        }
+        if (wAccum > 1e-4) {
+            const float iw = 1.0 / wAccum;
+            if (albIdx >= 0) albedoSample *= ovAccum * iw;
+            if (nrmIdx >= 0) {
+                N = normalize(nAccum);
+                detailRoughMul = rAccum * iw;
             }
         }
     }
