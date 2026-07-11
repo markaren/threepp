@@ -452,21 +452,23 @@ namespace {
         vegetation::TreeParams tp;
         vegetation::applyPreset(preset, tp);
         tp.seed = seed;
-        if (preset == 1) {// Norway spruce: short trunk, narrow crown almost to the ground
-            tp.trunkHeight = 2.0f;
+        if (preset == 1 && !cheapBlob) {// Norway spruce: whorled monopodial conifer
+            // preset 1 already selects BranchingMode::Whorl + LeafStyle::Frond;
+            // tune the silhouette for the fjord banks (tall, narrow, near-ground
+            // skirt of drooping frond branches).
+            tp.trunkHeight = 1.8f;
             tp.trunkRadius = 0.17f;
-            tp.crownShape = vegetation::CrownShape::Cone;
-            tp.crownRadiusX = tp.crownRadiusZ = 2.6f;
-            tp.crownHeight = 10.f;
-            tp.attractorCount = 700;
-            tp.influenceDistance = 3.5f;
-            tp.segmentLength = 0.45f;
-            tp.maxIterations = 220;
-            tp.tropism = -0.05f;
-            tp.leafSize = 0.85f;
-            tp.leavesPerCluster = 6;
-            tp.leafDensity = 0.97f;
-            tp.leafClumping = 0.25f;
+            tp.crownRadiusX = tp.crownRadiusZ = 2.7f;
+            tp.crownHeight = 11.f;
+            tp.whorlSpacing = 0.6f;
+            tp.branchesPerWhorl = 6;
+            tp.branchDroop = 0.44f;
+            tp.branchTipUpturn = 0.42f;
+            tp.crownProfileExponent = 1.4f;
+            tp.sideTwigDensity = 0.75f;
+            tp.leafSize = 0.95f;
+            tp.leafDensity = 1.0f;
+            tp.leafClumping = 0.0f;
             tp.leafColor = {0.15f, 0.33f, 0.11f};
         }
         if (preset == 2) {// birch — mute the pure-white preset bark
@@ -475,6 +477,19 @@ namespace {
             tp.leafClumping = 0.35f;
         }
         if (cheapBlob) {// far-bank silhouette trees: low-poly canopy puffs
+            // Keep the CHEAP space-colonisation path (whorl+frond would balloon
+            // node/card counts on the far bank); a simple cone of blobs is all a
+            // distant silhouette needs.
+            tp.branchingMode = vegetation::BranchingMode::Colonise;
+            tp.crownShape = vegetation::CrownShape::Cone;
+            tp.trunkHeight = 3.5f;
+            tp.crownRadiusX = tp.crownRadiusZ = 2.0f;
+            tp.crownHeight = 7.0f;
+            tp.influenceDistance = 3.5f;
+            tp.killDistance = 0.7f;
+            tp.segmentLength = 0.45f;
+            tp.maxIterations = 200;
+            tp.tropism = -0.04f;
             tp.leafStyle = vegetation::LeafStyle::Blob;
             tp.leavesPerCluster = 2;
             tp.leafSize = 1.15f;
@@ -500,6 +515,11 @@ namespace {
 
         v.leafMat = MeshStandardMaterial::create(
                 MeshStandardMaterial::Params{}.color(Color::white).roughness(0.85f).metalness(0.f));
+        // Foliage translucency: backlit canopies glow through instead of going
+        // flat-dark (Vulkan deferred). Tint slightly yellow-green — the colour of
+        // light that survives a leaf/needle. Cheap far blobs get a touch less.
+        v.leafMat->translucencyColor = Color(0.50f, 0.80f, 0.28f);
+        v.leafMat->translucency = cheapBlob ? 0.35f : 0.5f;
         if (cheapBlob) {
             // Slight brighten: the baked per-vertex canopy tint (0.6–1.1) multiplies this.
             // leafColor is an sRGB hint (TreeParams doc) — the card path bakes it into an
@@ -510,7 +530,11 @@ namespace {
                                        .convertSRGBToLinear();
             v.leafMat->vertexColors = true;// canopy tint gradient baked per-vertex
         } else {
-            v.leafMat->map = vegetation::makeLeafClusterTexture(256, seed, tp.leafColor);
+            // Conifer fronds use the elongated needle cutout; broadleaf the round
+            // leaf-cluster atlas.
+            v.leafMat->map = (tp.leafStyle == vegetation::LeafStyle::Frond)
+                    ? vegetation::makeNeedleFrondTexture(256, seed, tp.leafColor)
+                    : vegetation::makeLeafClusterTexture(256, seed, tp.leafColor);
             v.leafMat->alphaTest = 0.5f;
             v.leafMat->side = Side::Double;
             v.leafMat->vertexColors = true;
@@ -888,14 +912,19 @@ int main(int argc, char** argv) {
     // ── forest ──────────────────────────────────────────────────────────────
     {
         const auto tf0 = std::chrono::high_resolution_clock::now();
+        // More seeds per species → no two neighbouring trunks share a curve.
         std::vector<TreeVariant> nearVars{
-                makeTreeVariant(1, 301u, false),// pine
-                makeTreeVariant(1, 502u, false),// pine (alt)
+                makeTreeVariant(1, 301u, false),// spruce
+                makeTreeVariant(1, 502u, false),// spruce
+                makeTreeVariant(1, 877u, false),// spruce
+                makeTreeVariant(1, 913u, false),// spruce
                 makeTreeVariant(2, 404u, false),// birch accent
+                makeTreeVariant(2, 656u, false),// birch accent
         };
         std::vector<TreeVariant> farVars{
                 makeTreeVariant(1, 611u, true),
                 makeTreeVariant(1, 733u, true),
+                makeTreeVariant(1, 858u, true),
         };
 
         // Collect every valid site first, shuffle, then trim to the cap — a
