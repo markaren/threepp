@@ -348,12 +348,23 @@ namespace threepp {
                 return count == 0 ? 0 : (count - 1) * stride + elemSize;
             }
 
-            // Decode a KHR_meshopt_compression bufferView on first access and cache it.
+            // Meshopt compression on a bufferView: EXT_meshopt_compression is the
+            // ratified name; KHR_meshopt_compression is the earlier draft name
+            // still found in the wild. Accept both. Returns nullptr when absent.
+            static const json* meshoptExtension(const json& def) {
+                auto ext = def.find("extensions");
+                if (ext == def.end()) return nullptr;
+                if (auto e = ext->find("EXT_meshopt_compression"); e != ext->end()) return &*e;
+                if (auto e = ext->find("KHR_meshopt_compression"); e != ext->end()) return &*e;
+                return nullptr;
+            }
+
+            // Decode a meshopt-compressed bufferView on first access and cache it.
             const std::vector<uint8_t>& decodeMeshoptBV(int bvIdx) {
                 auto it = meshoptCache.find(bvIdx);
                 if (it != meshoptCache.end()) return it->second;
 
-                const auto& ext = gltf["bufferViews"][bvIdx]["extensions"]["KHR_meshopt_compression"];
+                const auto& ext = *meshoptExtension(gltf["bufferViews"][bvIdx]);
                 int bufIdx        = ext["buffer"].get<int>();
                 size_t byteOffset = ext.value("byteOffset", 0);
                 size_t byteLength = ext["byteLength"].get<size_t>();
@@ -415,9 +426,8 @@ namespace threepp {
                 int bvIdx = acc["bufferView"].get<int>();
                 const auto& bv = gltf["bufferViews"][bvIdx];
 
-                if (bv.contains("extensions") &&
-                    bv["extensions"].contains("KHR_meshopt_compression")) {
-                    size_t byteStride = bv["extensions"]["KHR_meshopt_compression"]["byteStride"].get<size_t>();
+                if (const json* mo = meshoptExtension(bv)) {
+                    size_t byteStride = (*mo)["byteStride"].get<size_t>();
                     const auto& decoded = decodeMeshoptBV(bvIdx);
                     if (accOff + accessorSpan(count, byteStride, elemSize) > decoded.size())
                         throw std::runtime_error("Accessor " + std::to_string(accessorIdx) +
