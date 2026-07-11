@@ -3828,6 +3828,8 @@ namespace threepp {
             d.detailNormalScale = 1.f;
             d.detailRoughStrength = 0.f;
             d._padDetail = 0.f;
+            d.translucency = 0.f;             // off by default; deferred sun/ambient translucency term is skipped when 0
+            d.translucencyColor[0] = d.translucencyColor[1] = d.translucencyColor[2] = 1.0f;
             static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
             std::copy(kIdent, kIdent+9, d.uvTransform);
             std::copy(kIdent, kIdent+9, d.uvTransformNormal);
@@ -3949,6 +3951,12 @@ namespace threepp {
                 d.specularColor[0]    = sp->specularColor.r;
                 d.specularColor[1]    = sp->specularColor.g;
                 d.specularColor[2]    = sp->specularColor.b;
+            }
+            if (auto* tl = dynamic_cast<MaterialWithTranslucency*>(mat.get())) {
+                d.translucency         = std::clamp(tl->translucency, 0.f, 1.f);
+                d.translucencyColor[0] = tl->translucencyColor.r;
+                d.translucencyColor[1] = tl->translucencyColor.g;
+                d.translucencyColor[2] = tl->translucencyColor.b;
             }
             if (auto* sh = dynamic_cast<MaterialWithSheen*>(mat.get())) {
                 d.sheenColor[0]  = sh->sheenColor.r;
