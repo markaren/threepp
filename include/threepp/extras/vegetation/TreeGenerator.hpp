@@ -50,6 +50,16 @@ namespace threepp::vegetation {
         Cluster = 1,  // several flat quads jittered around the tip
         CrossQuad = 2,// crossed quad pair (volumetric from any angle)
         Blob = 3,     // low-poly foliage puffs (spheres) — reads as a canopy untextured
+        Frond = 4,    // cards strung ALONG thin branch chains, laid in the branch
+                      // plane and following its droop — a layered "shelf" of
+                      // needles per branch (conifers). Use with a frond cutout
+                      // texture (makeNeedleFrondTexture) + BranchingMode::Whorl.
+    };
+
+    // ── Skeleton construction mode ───────────────────────────────────────
+    enum class BranchingMode {
+        Colonise = 0,// space colonisation (Runions 2007) — broadleaf crowns
+        Whorl = 1,   // monopodial trunk + whorled, drooping branches — conifers
     };
 
     // ── Configurator-facing knobs ────────────────────────────────────────
@@ -79,6 +89,40 @@ namespace threepp::vegetation {
         float radiusExponent = 2.2f;
         float minBranchRadius = 0.006f;
         int radialSegments = 6;
+
+        // ── Skeleton mode ────────────────────────────────────────────────
+        BranchingMode branchingMode = BranchingMode::Colonise;
+
+        // ── Whorl mode (conifers) — ignored unless branchingMode == Whorl ─
+        // A straight monopodial trunk carries rings ("whorls") of branches at
+        // regular height intervals; branch length follows the crown profile
+        // (long at the base → short at the apex) so the silhouette is conical.
+        float whorlSpacing = 0.65f;      // vertical gap between whorls (world units)
+        int branchesPerWhorl = 5;        // branches radiating from each whorl ring
+        float whorlJitter = 0.35f;       // 0..1 azimuth + spacing randomisation
+        float branchDroop = 0.38f;       // downward sag accumulated along a branch
+        float branchTipUpturn = 0.35f;   // spruce: the last segments turn back up
+        float crownProfileExponent = 1.3f;// >1 = slimmer spire, <1 = fuller cone
+        float sideTwigDensity = 0.6f;    // 0..1 second-order twigs per branch node
+        float branchLength = 0.f;        // base branch length; 0 → derive from crownRadiusX
+
+        // ── Trunk shape variation (both modes) ───────────────────────────
+        // Per-seed whole-tree lean + a multi-octave noise bend replace the old
+        // single sine so no two trunks share a curve; a slow frame twist spirals
+        // the bark ridges (per-seed handedness).
+        float trunkLean = 0.05f;         // max whole-tree lean (radians, random azimuth)
+        float trunkBend = 1.0f;          // multiplier on the bend-polyline amplitude
+        float trunkTwist = 0.5f;         // bark-ridge spiral rate (radians / world unit)
+
+        // ── Bark cross-section (both modes) ──────────────────────────────
+        // Non-circular tube profile (periodic in the angular coordinate so the
+        // j=0/j=R seam matches). Distinct per species: birch nearly smooth, oak
+        // gnarly, spruce lightly plated.
+        float barkBumpAmp = 0.10f;       // primary lobe amplitude (fraction of radius)
+        int barkBumpLobes = 3;           // primary lobe count
+        float barkBumpAmp2 = 0.05f;      // secondary (finer) lobe amplitude
+        int barkBumpLobes2 = 7;          // secondary lobe count
+        float rootFlareAsym = 0.5f;      // 0..1 buttress-lobe strength at the base
 
         // ── Leaves ───────────────────────────────────────────────────────
         LeafStyle leafStyle = LeafStyle::CrossQuad;
@@ -126,23 +170,27 @@ namespace threepp::vegetation {
         // nodes claim disjoint attractor subsets they each grow a child,
         // splitting the tree.
         void buildSkeleton(const TreeParams& tp) {
+            // Conifers use the explicit whorl builder; broadleaf crowns use space
+            // colonisation. Both fill the same nodes_ structure.
+            if (tp.branchingMode == BranchingMode::Whorl) {
+                buildWhorlSkeleton(tp);
+                return;
+            }
+
             std::mt19937 rng(tp.seed ? tp.seed : 1u);
             nodes_.clear();
 
             // Grow the trunk as a chain of nodes from origin to crown base.
-            // A gentle per-tree bend keeps it from reading as a ramrod-straight
-            // cylinder (the bend grows with height; base stays planted).
+            // The per-seed trunk curve (lean + multi-octave bend) keeps it from
+            // reading as a ramrod-straight cylinder; the base stays planted.
             const int trunkSegs = std::max(1, static_cast<int>(std::round(tp.trunkHeight / tp.segmentLength)));
             const float trunkStep = tp.trunkHeight / static_cast<float>(trunkSegs);
-            std::uniform_real_distribution<float> u11(-1.f, 1.f);
-            const float bendAng = (u11(rng) * 0.5f + 0.5f) * 6.28318530718f;
-            const float bendAmt = tp.trunkHeight * (0.04f + (u11(rng) * 0.5f + 0.5f) * 0.08f);
-            const float bdx = std::cos(bendAng), bdz = std::sin(bendAng);
+            makeTrunkShape(rng, tp, 0.f, tp.trunkHeight);
             for (int i = 0; i <= trunkSegs; ++i) {
                 detail::TreeNode n;
-                const float t = static_cast<float>(i) / static_cast<float>(trunkSegs);
-                const float off = bendAmt * std::sin(t * 1.57079633f);// 0 at base → bendAmt at top
-                n.position = {bdx * off, static_cast<float>(i) * trunkStep, bdz * off};
+                const float y = static_cast<float>(i) * trunkStep;
+                const Vector3 off = trunkShape_.offsetAt(y);
+                n.position = {off.x, y, off.z};
                 n.parent = i > 0 ? i - 1 : -1;
                 n.depth = i;
                 if (i > 0) nodes_[static_cast<size_t>(i - 1)].children.push_back(i);
@@ -293,6 +341,15 @@ namespace threepp::vegetation {
             std::vector<unsigned int> indices;
             unsigned int baseVert = 0;
 
+            // Tree vertical extent — drives the non-axisymmetric root flare below.
+            float treeMinY = std::numeric_limits<float>::max();
+            float treeMaxY = -std::numeric_limits<float>::max();
+            for (const auto& nd : nodes_) {
+                treeMinY = std::min(treeMinY, nd.position.y);
+                treeMaxY = std::max(treeMaxY, nd.position.y);
+            }
+            const float flareH = std::max(treeMaxY - treeMinY, 1e-3f) * 0.12f;
+
             for (const auto& chain : chains) {
                 const int len = static_cast<int>(chain.size());
 
@@ -333,6 +390,15 @@ namespace threepp::vegetation {
                             P.applyAxisAngle(axis, angle);
                             Q.applyAxisAngle(axis, angle);
                         }
+                        // Slow per-seed twist of the frame about the tangent, so
+                        // the bark ridges (and the cross-section lobes below)
+                        // spiral gently up the trunk instead of running dead
+                        // straight. Handedness/rate come from twistRate_ (seed).
+                        const float dArc = arcLen[static_cast<size_t>(i)] - arcLen[static_cast<size_t>(i - 1)];
+                        if (twistRate_ != 0.f && dArc > 0.f) {
+                            P.applyAxisAngle(tangent[static_cast<size_t>(i)], twistRate_ * dArc);
+                            Q.applyAxisAngle(tangent[static_cast<size_t>(i)], twistRate_ * dArc);
+                        }
                     }
 
                     const auto& nd = nodes_[static_cast<size_t>(chain[static_cast<size_t>(i)])];
@@ -341,9 +407,13 @@ namespace threepp::vegetation {
                     // consistent scale on trunk and twigs alike; material
                     // `repeat` controls the final tile density.
                     const float v = arcLen[static_cast<size_t>(i)];
-                    // Phase that twists the cross-section bumps up the chain so
-                    // the bark ridges run roughly vertically.
-                    const float hp = arcLen[static_cast<size_t>(i)] * 3.0f;
+                    // Non-axisymmetric root flare: near the very base, low-frequency
+                    // angular lobes swell into buttress roots that fade out with
+                    // height (flareF → 0 above flareH). Only ADDS radius (the
+                    // 0.5+0.5·sin term is ≥ 0), so it never pinches the trunk.
+                    const float aboveBase = nd.position.y - treeMinY;
+                    float flareF = std::clamp((flareH - aboveBase) / flareH, 0.f, 1.f);
+                    flareF *= flareF;
 
                     for (int j = 0; j <= R; ++j) {
                         const float a = static_cast<float>(j) / static_cast<float>(R) * 6.28318530718f;
@@ -351,10 +421,16 @@ namespace threepp::vegetation {
                         const float nx = P.x * ca + Q.x * sa;
                         const float ny = P.y * ca + Q.y * sa;
                         const float nz = P.z * ca + Q.z * sa;
-                        // Non-circular cross-section (periodic in `a` so the
-                        // seam at j=0/j=R matches): breaks the perfect cylinder.
-                        const float bump = 1.f + 0.10f * std::sin(3.f * a + hp) +
-                                           0.05f * std::sin(7.f * a - hp * 0.7f);
+                        // Species cross-section: two periodic-in-`a` lobe bands
+                        // (integer lobe counts keep the j=0/j=R seam matched) plus
+                        // the buttress flare. Amplitudes/lobe counts are per-species
+                        // (barkBumpAmp/Lobes…): birch nearly smooth, oak gnarly.
+                        const float bump =
+                                1.f
+                                + tp.barkBumpAmp  * std::sin(static_cast<float>(tp.barkBumpLobes)  * a + bumpPhase_)
+                                + tp.barkBumpAmp2 * std::sin(static_cast<float>(tp.barkBumpLobes2) * a - bumpPhase_ * 0.7f)
+                                + tp.rootFlareAsym * flareF * 0.6f
+                                        * (0.5f + 0.5f * std::sin(3.f * a + bumpPhase_ * 1.3f));
                         const float rr = r * bump;
                         positions.push_back(nd.position.x + nx * rr);
                         positions.push_back(nd.position.y + ny * rr);
@@ -529,8 +605,12 @@ namespace threepp::vegetation {
 
             for (size_t ni = 0; ni < nodes_.size(); ++ni) {
                 const auto& node = nodes_[ni];
-                const bool eligible = node.terminal ||
-                        (node.depth >= depthThresh && node.radius <= radiusThresh);
+                // Frond conifers carry foliage ALONG every thin branch node (not
+                // just tips / upper canopy), so the whole drooping branch reads as
+                // a needle shelf. Broadleaf styles keep the tip+upper-canopy gate.
+                const bool eligible = (tp.leafStyle == LeafStyle::Frond)
+                        ? (node.parent >= 0 && node.depth >= 1 && node.radius <= radiusThresh)
+                        : (node.terminal || (node.depth >= depthThresh && node.radius <= radiusThresh));
                 if (!eligible) continue;
 
                 // Spatial clumping: low-frequency noise carves whole regions of
@@ -545,8 +625,65 @@ namespace threepp::vegetation {
                 }
 
                 float prob = tp.leafDensity;
-                if (!node.terminal) prob *= 0.6f;
+                if (tp.leafStyle != LeafStyle::Frond && !node.terminal) prob *= 0.6f;
                 if (unit(rng) > prob) continue;
+
+                // ── Needle frond shelves (conifers) ───────────────────────
+                // A pair of cards lying in the BRANCH PLANE at this node — flat
+                // shelf + one rolled about the branch axis — so the branch reads
+                // as a layered spray of needles that FOLLOWS the droop. Same
+                // flicker discipline as CrossQuad: a shared up-biased normal and a
+                // per-card depth de-tie offset (the shelf cards are near-coplanar).
+                if (tp.leafStyle == LeafStyle::Frond) {
+                    Vector3 along{0.f, 1.f, 0.f};
+                    Vector3 parentPos = node.position;
+                    if (node.parent >= 0) {
+                        parentPos = nodes_[static_cast<size_t>(node.parent)].position;
+                        along.subVectors(node.position, parentPos);
+                        if (along.lengthSq() > 1e-8f) along.normalize();
+                        else along.set(0.f, 1.f, 0.f);
+                    }
+                    // Horizontal spread direction of the shelf (⟂ branch, ~level).
+                    Vector3 side;
+                    side.crossVectors(along, Vector3(0.f, 1.f, 0.f));
+                    if (side.lengthSq() < 1e-6f) side.set(1.f, 0.f, 0.f);
+                    side.normalize();
+                    // Shelf normal, biased up so the frond catches sky light rather
+                    // than going dark edge-on (deliberate look; see CrossQuad note).
+                    Vector3 nrm;
+                    nrm.crossVectors(side, along);
+                    if (nrm.lengthSq() < 1e-8f) nrm.set(0.f, 1.f, 0.f);
+                    nrm.normalize();
+                    Vector3 nShared;
+                    nShared.set(nrm.x * 0.4f, std::abs(nrm.y) * 0.4f + 1.f, nrm.z * 0.4f).normalize();
+
+                    // Clothe the WHOLE segment from the parent to this node with a
+                    // short row of overlapping frond blades, so a spruce branch
+                    // reads as a continuous dense needle shelf rather than a stick
+                    // with a tuft at each joint. Two blades per station (flat +
+                    // rolled about the branch axis), shared up-biased normal + a
+                    // per-card depth de-tie (near-coplanar cards flicker otherwise).
+                    const float rc = std::cos(0.96f), rs = std::sin(0.96f);
+                    Vector3 sideWide, sideRoll;
+                    sideWide.copy(side).multiplyScalar(1.9f);
+                    sideRoll.set(side.x * rc + nrm.x * rs,
+                                 side.y * rc + nrm.y * rs,
+                                 side.z * rc + nrm.z * rs).multiplyScalar(1.9f);
+                    constexpr int stations = 2;// along-segment blade rows
+                    for (int st = 0; st < stations; ++st) {
+                        const float f = (static_cast<float>(st) + 0.5f) / static_cast<float>(stations);
+                        Vector3 base;
+                        base.copy(parentPos).lerp(node.position, f);
+                        const float hs = tp.leafSize * 0.5f * sizeVar(rng);
+                        const Vector3 col = tintFor(base);
+                        const float depthSep = tp.leafSize * 0.08f * (unit(rng) - 0.5f);
+                        Vector3 posSep;
+                        posSep.copy(base).addScaledVector(nShared, depthSep);
+                        emitQuad(posSep, sideWide, along, nShared, hs, col);
+                        emitQuad(posSep, sideRoll, along, nShared, hs, col);
+                    }
+                    continue;
+                }
 
                 // ── Foliage puffs ─────────────────────────────────────────
                 if (tp.leafStyle == LeafStyle::Blob) {
@@ -715,6 +852,196 @@ namespace threepp::vegetation {
     private:
         unsigned int seed_ = 1337;
         std::vector<detail::TreeNode> nodes_;
+
+        // ── Per-tree trunk curve (workstream 2) ──────────────────────────
+        // A whole-tree lean (random azimuth) + a 3-octave sinusoidal "noise"
+        // bend, so every seed traces a different centreline. offsetAt() returns
+        // the XZ displacement of the trunk axis at a given height; the base stays
+        // planted (displacement → 0 as t → 0). Shared by both skeleton modes.
+        struct TrunkShape {
+            float leanX = 0.f, leanZ = 0.f; // lean displacement at the crown top
+            float amp = 0.f;                // bend amplitude (world units)
+            float ph[3] = {0, 0, 0};        // per-octave phase
+            float fr[3] = {2.1f, 4.7f, 9.3f};// per-octave frequency (in t)
+            float baseY = 0.f, spanY = 1.f; // height range this curve maps over
+
+            [[nodiscard]] Vector3 offsetAt(float y) const {
+                const float t = std::clamp((y - baseY) / std::max(spanY, 1e-3f), 0.f, 1.f);
+                float ox = leanX * t;
+                float oz = leanZ * t;
+                for (int o = 0; o < 3; ++o) {
+                    const float a = amp * std::pow(0.5f, static_cast<float>(o));
+                    ox += a * std::sin(t * fr[o] + ph[o]);
+                    oz += a * std::cos(t * fr[o] * 1.13f + ph[o] * 1.7f + 2.0f);
+                }
+                // Plant the base: fade the whole displacement out near the ground.
+                const float plant = std::sin(std::clamp(t, 0.f, 1.f) * 1.57079633f);
+                return {ox * plant, 0.f, oz * plant};
+            }
+        };
+        TrunkShape trunkShape_;
+        float twistRate_ = 0.f;// bark-ridge frame spiral (radians / world unit)
+        float bumpPhase_ = 0.f;// per-seed root-flare lobe phase
+
+        // Derive the per-tree trunk curve + twist from the seed.
+        void makeTrunkShape(std::mt19937& rng, const TreeParams& tp,
+                            float baseY, float spanY) {
+            std::uniform_real_distribution<float> u01(0.f, 1.f);
+            std::uniform_real_distribution<float> u11(-1.f, 1.f);
+            const float leanAz = u01(rng) * 6.28318530718f;
+            const float leanAmt = spanY * tp.trunkLean * (0.4f + 0.6f * u01(rng));
+            trunkShape_.leanX = std::cos(leanAz) * leanAmt;
+            trunkShape_.leanZ = std::sin(leanAz) * leanAmt;
+            trunkShape_.amp = spanY * 0.05f * tp.trunkBend * (0.5f + u01(rng));
+            for (int o = 0; o < 3; ++o) {
+                trunkShape_.ph[o] = u01(rng) * 6.28318530718f;
+                trunkShape_.fr[o] = (1.5f + 2.2f * static_cast<float>(o)) * (0.8f + 0.4f * u01(rng));
+            }
+            trunkShape_.baseY = baseY;
+            trunkShape_.spanY = spanY;
+            twistRate_ = tp.trunkTwist * u11(rng);// per-seed handedness + rate
+            bumpPhase_ = u01(rng) * 6.28318530718f;
+        }
+
+        // ── Whorl (conifer) skeleton ─────────────────────────────────────
+        // Emits into the SAME nodes_ structure as space colonisation, so
+        // makeTrunkGeometry / computeRadii / makeLeafGeometry work unchanged.
+        // Deterministic for a fixed seed.
+        void buildWhorlSkeleton(const TreeParams& tp) {
+            std::mt19937 rng(tp.seed ? tp.seed : 1u);
+            nodes_.clear();
+
+            const float H = tp.trunkHeight + tp.crownHeight;// total tree height
+            makeTrunkShape(rng, tp, 0.f, H);
+
+            std::uniform_real_distribution<float> u01(0.f, 1.f);
+            std::uniform_real_distribution<float> u11(-1.f, 1.f);
+
+            // 1) Monopodial trunk: one straight (curved) leader from the ground
+            //    to the apex, following the per-seed trunk curve.
+            const int trunkSegs = std::max(2, static_cast<int>(std::round(H / tp.segmentLength)));
+            const float trunkStep = H / static_cast<float>(trunkSegs);
+            std::vector<int> trunkIdx(static_cast<size_t>(trunkSegs + 1));
+            for (int i = 0; i <= trunkSegs; ++i) {
+                detail::TreeNode n;
+                const float y = static_cast<float>(i) * trunkStep;
+                const Vector3 off = trunkShape_.offsetAt(y);
+                n.position = {off.x, y, off.z};
+                n.parent = i > 0 ? trunkIdx[static_cast<size_t>(i - 1)] : -1;
+                n.depth = 0;// trunk stays depth 0 → radii/leaf gates treat it as trunk
+                const int idx = static_cast<int>(nodes_.size());
+                if (i > 0) nodes_[static_cast<size_t>(trunkIdx[static_cast<size_t>(i - 1)])].children.push_back(idx);
+                trunkIdx[static_cast<size_t>(i)] = idx;
+                nodes_.push_back(n);
+            }
+
+            // 2) Whorls of branches. Branches start above `trunkHeight` (the bare
+            //    bole) and run to near the apex. Length follows the crown profile:
+            //    long at the base, short at the top.
+            const float whorlStart = tp.trunkHeight;
+            const float whorlTop = H - tp.whorlSpacing * 0.5f;
+            const float baseLen = (tp.branchLength > 0.f) ? tp.branchLength
+                                                          : std::max(tp.crownRadiusX, tp.crownRadiusZ);
+            const float spacing = std::max(tp.whorlSpacing, tp.segmentLength * 0.5f);
+            const int nWhorls = std::max(1, static_cast<int>((whorlTop - whorlStart) / spacing));
+            const int perW = std::max(2, tp.branchesPerWhorl);
+
+            int whorlIdx = 0;
+            for (float wy = whorlStart; wy <= whorlTop + 1e-3f; wy += spacing, ++whorlIdx) {
+                // Nearest trunk node to attach this whorl to.
+                const int ti = std::min(trunkSegs,
+                        std::max(0, static_cast<int>(std::round(wy / trunkStep))));
+                const int parentTrunk = trunkIdx[static_cast<size_t>(ti)];
+                const Vector3 trunkPos = nodes_[static_cast<size_t>(parentTrunk)].position;
+
+                // Crown profile: 0 at the base whorl → 1 at the apex.
+                const float tW = std::clamp((wy - whorlStart) / std::max(whorlTop - whorlStart, 1e-3f), 0.f, 1.f);
+                const float lenScale = std::pow(1.f - tW, tp.crownProfileExponent);
+                const float branchLen = std::max(tp.segmentLength, baseLen * (0.25f + 0.9f * lenScale));
+
+                // Alternate the whorl's phase so successive rings interleave.
+                const float baseAz = static_cast<float>(whorlIdx) * 0.61803399f * 6.28318530718f;
+                for (int b = 0; b < perW; ++b) {
+                    const float az = baseAz + (static_cast<float>(b) / static_cast<float>(perW)) * 6.28318530718f
+                                   + u11(rng) * tp.whorlJitter * (6.28318530718f / static_cast<float>(perW));
+                    // A slight per-branch initial pitch: base whorls angle down a
+                    // touch, apex whorls angle up (young leader shoots).
+                    const float pitch0 = (-0.15f + 0.5f * tW) + u11(rng) * 0.08f;
+                    Vector3 dir{std::cos(az) * std::cos(pitch0), std::sin(pitch0), std::sin(az) * std::cos(pitch0)};
+                    if (dir.lengthSq() < 1e-8f) dir.set(std::cos(az), 0.f, std::sin(az));
+                    dir.normalize();
+                    growBranch(tp, rng, parentTrunk, trunkPos, dir, branchLen, 1, tW);
+                }
+            }
+
+            // Terminals + radii (identical bookkeeping to the colonise path).
+            for (auto& n : nodes_) {
+                n.terminal = n.children.empty();
+                if (n.terminal) n.radius = tp.minBranchRadius;
+            }
+            computeRadii(tp);
+        }
+
+        // Grow one drooping branch (a chain of nodes) outward from `startPos`,
+        // attaching its first node to `parentNode`. Recurses once for second-
+        // order side twigs. `order` = 1 primary branch, 2 side twig.
+        void growBranch(const TreeParams& tp, std::mt19937& rng, int parentNode,
+                        const Vector3& startPos, Vector3 dir, float length,
+                        int order, float crownT) {
+            std::uniform_real_distribution<float> u01(0.f, 1.f);
+            std::uniform_real_distribution<float> u11(-1.f, 1.f);
+            const int segs = std::max(1, static_cast<int>(std::round(length / tp.segmentLength)));
+            const float step = length / static_cast<float>(segs);
+            int prev = parentNode;
+            Vector3 pos = startPos;
+            const int depthBase = order;// primary=1, twig=2
+            for (int s = 0; s < segs; ++s) {
+                const float u = static_cast<float>(s + 1) / static_cast<float>(segs);// 0..1 along branch
+                // Gravity droop accumulates along the branch; the last ~30% turns
+                // the tip back up (spruce) via branchTipUpturn.
+                float droop = tp.branchDroop * step * (0.6f + 0.8f * u);
+                if (u > 0.7f) droop -= tp.branchTipUpturn * step * ((u - 0.7f) / 0.3f);
+                dir.y -= droop;
+                // A little horizontal wander so branches aren't dead straight.
+                dir.x += u11(rng) * tp.randomness * 0.5f;
+                dir.z += u11(rng) * tp.randomness * 0.5f;
+                if (dir.lengthSq() < 1e-8f) dir.set(0.f, -1.f, 0.f);
+                dir.normalize();
+
+                Vector3 next;
+                next.copy(pos).addScaledVector(dir, step);
+                detail::TreeNode n;
+                n.position = next;
+                n.parent = prev;
+                n.depth = depthBase + s;
+                const int idx = static_cast<int>(nodes_.size());
+                nodes_[static_cast<size_t>(prev)].children.push_back(idx);
+                nodes_.push_back(n);
+
+                // Second-order side twigs branch off primary branches in the
+                // branch plane, drooping — this is what fills a spruce branch into
+                // a layered frond shelf rather than a bare stick.
+                if (order == 1 && s > 0 && s < segs - 1 && tp.sideTwigDensity > 0.f &&
+                    u01(rng) < tp.sideTwigDensity) {
+                    // Perp to the branch, roughly horizontal, alternating sides.
+                    Vector3 side;
+                    side.crossVectors(dir, Vector3(0.f, 1.f, 0.f));
+                    if (side.lengthSq() < 1e-6f) side.set(1.f, 0.f, 0.f);
+                    side.normalize();
+                    const float sgn = (s & 1) ? 1.f : -1.f;
+                    Vector3 twigDir;
+                    twigDir.copy(dir).multiplyScalar(0.55f)
+                            .addScaledVector(side, sgn * (0.7f + 0.2f * u01(rng)));
+                    twigDir.y -= 0.1f;
+                    twigDir.normalize();
+                    const float twigLen = length * (0.30f + 0.25f * u01(rng)) * (1.f - crownT * 0.4f);
+                    if (twigLen > tp.segmentLength * 0.5f)
+                        growBranch(tp, rng, idx, next, twigDir, twigLen, 2, crownT);
+                }
+                prev = idx;
+                pos = next;
+            }
+        }
 
         // ── Scatter attraction points in the crown envelope ──────────────
         void scatterAttractors(std::mt19937& rng, const TreeParams& tp,
@@ -887,32 +1214,44 @@ namespace threepp::vegetation {
                 p.leafSpread = 0.6f;
                 p.barkColor = {0.30f, 0.22f, 0.15f};
                 p.leafColor = {0.24f, 0.44f, 0.13f};
+                // Oak: gnarly, deeply-ridged bark + strong buttress roots.
+                p.barkBumpAmp = 0.16f; p.barkBumpLobes = 5;
+                p.barkBumpAmp2 = 0.08f; p.barkBumpLobes2 = 11;
+                p.rootFlareAsym = 0.8f; p.trunkTwist = 0.35f;
                 break;
             }
-            case 1: {// Pine — tall conical conifer
-                p.trunkHeight = 5.0f;
-                p.trunkRadius = 0.10f;
+            case 1: {// Pine / spruce — monopodial conifer (whorled branches)
+                p.branchingMode = BranchingMode::Whorl;
+                p.trunkHeight = 1.6f;   // short bare bole; whorls start low
+                p.trunkRadius = 0.13f;
                 p.crownShape = CrownShape::Cone;
-                p.crownRadiusX = 2.0f;
-                p.crownRadiusZ = 2.0f;
-                p.crownHeight = 7.0f;
-                p.attractorCount = 600;
-                p.influenceDistance = 3.5f;
-                p.killDistance = 0.7f;
-                p.segmentLength = 0.45f;
-                p.maxIterations = 200;
+                p.crownRadiusX = 2.4f;
+                p.crownRadiusZ = 2.4f;
+                p.crownHeight = 8.0f;
+                p.segmentLength = 0.4f;
                 p.randomness = 0.05f;
-                p.tropism = -0.04f;
-                p.radiusExponent = 2.5f;
+                p.radiusExponent = 2.4f;
                 p.minBranchRadius = 0.004f;
                 p.radialSegments = 6;
-                p.leafStyle = LeafStyle::CrossQuad;
-                p.leafSize = 0.55f;
-                p.leafDensity = 0.95f;
-                p.leavesPerCluster = 6;
-                p.leafSpread = 0.4f;
+                // Whorl structure.
+                p.whorlSpacing = 0.62f;
+                p.branchesPerWhorl = 6;
+                p.whorlJitter = 0.35f;
+                p.branchDroop = 0.42f;
+                p.branchTipUpturn = 0.4f;
+                p.crownProfileExponent = 1.35f;
+                p.sideTwigDensity = 0.7f;
+                // Frond foliage strung along the drooping branches.
+                p.leafStyle = LeafStyle::Frond;
+                p.leafSize = 0.6f;
+                p.leafDensity = 0.9f;
+                p.leafClumping = 0.0f;
                 p.barkColor = {0.32f, 0.20f, 0.12f};
                 p.leafColor = {0.14f, 0.34f, 0.11f};
+                // Spruce bark: lightly plated, gentle spiral.
+                p.barkBumpAmp = 0.08f; p.barkBumpLobes = 4;
+                p.barkBumpAmp2 = 0.04f; p.barkBumpLobes2 = 9;
+                p.rootFlareAsym = 0.45f; p.trunkTwist = 0.5f;
                 break;
             }
             case 2: {// Birch — slender, upward branches
@@ -939,6 +1278,10 @@ namespace threepp::vegetation {
                 p.leafSpread = 0.5f;
                 p.barkColor = {0.85f, 0.82f, 0.78f};
                 p.leafColor = {0.38f, 0.52f, 0.18f};
+                // Birch: nearly smooth papery bark, faint spiral.
+                p.barkBumpAmp = 0.035f; p.barkBumpLobes = 3;
+                p.barkBumpAmp2 = 0.02f; p.barkBumpLobes2 = 7;
+                p.rootFlareAsym = 0.25f; p.trunkTwist = 0.25f;
                 break;
             }
             case 3: {// Willow — drooping branches

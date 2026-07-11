@@ -182,6 +182,90 @@ namespace threepp::vegetation {
         return tex;
     }
 
+    // ── Needle frond alpha cutout (conifers) ─────────────────────────────
+    //
+    // An elongated feather/pinnate frond: a central rachis running up the tile
+    // (v axis) with rows of angled needles down both sides, thinning toward the
+    // tip, on a transparent background. Dark blue-green, alpha-cutout. Use as
+    // `map` on the LeafStyle::Frond cards (alphaTest + Side::Double), where the
+    // card's long (v) axis is the branch direction and u spreads sideways — so
+    // the drawn rachis lands along the branch and the needles fan out in-plane.
+    inline std::shared_ptr<DataTexture> makeNeedleFrondTexture(
+            unsigned int size = 256,
+            unsigned int seed = 1337,
+            const std::array<float, 3>& baseColor = {0.11f, 0.29f, 0.10f}) {
+
+        auto tex = DataTexture::create(4, size, size);
+        auto& px = tex->image().data<unsigned char>();// zero → transparent
+
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<float> u01(0.f, 1.f);
+
+        const auto S = static_cast<float>(size);
+        // Rachis runs vertically at u≈0.5 from base (v=0.05) to tip (v=0.97).
+        const float rachisU = 0.5f;
+        const float vBase = 0.05f, vTip = 0.97f;
+        const float maxHW = 0.42f;// half-width of the frond at its widest
+
+        // Per-row phase so the serrated needle edge is irregular (not a comb).
+        std::array<float, 96> edgePhase{};
+        for (auto& e : edgePhase) e = u01(rng);
+
+        for (unsigned int y = 0; y < size; ++y) {
+            for (unsigned int x = 0; x < size; ++x) {
+                const float u = (static_cast<float>(x) + 0.5f) / S;
+                const float v = (static_cast<float>(y) + 0.5f) / S;
+                const float tn = (v - vBase) / (vTip - vBase);// 0 base .. 1 tip
+                if (tn < 0.f || tn > 1.f) continue;
+
+                // Lanceolate blade: widest a third up, tapering to a point at the
+                // tip and narrowing at the petiole → a full needle spray, not a
+                // few sparse lines.
+                const float profile = std::pow(std::sin(tn * 3.14159265f), 0.55f);
+                float hw = maxHW * profile;
+                // Needles angle toward the tip: shear the horizontal coordinate by
+                // height so the serrations sweep upward like real needles.
+                const float du = std::abs(u - rachisU);
+
+                // Serrated (needled) edge: modulate the half-width with a high-
+                // frequency ripple whose phase wanders per row → a feathered
+                // silhouette that alpha-cutouts into individual needle tips.
+                const int row = std::min<int>(static_cast<int>(edgePhase.size()) - 1,
+                                              static_cast<int>(tn * static_cast<float>(edgePhase.size() - 1)));
+                const float ripple = 0.72f + 0.28f * std::sin((v * 46.f) + edgePhase[static_cast<size_t>(row)] * 6.283f);
+                const float hwEdge = hw * ripple;
+                if (du > hwEdge) continue;
+
+                // Coverage with a soft ~1px edge.
+                const float aa = 1.5f / S;
+                float cov = std::clamp((hwEdge - du) / aa + 0.5f, 0.f, 1.f);
+
+                // Interior needle striations (darker grooves between needle rows)
+                // give the blade internal texture instead of a flat green slab.
+                const float groove = 0.80f + 0.20f * std::abs(std::sin((du * 120.f) + v * 30.f));
+                // Midrib slightly lighter; tip a touch warmer/brighter.
+                const float rib = std::exp(-du * du * 900.f) * 0.15f;
+                const float tipLift = 0.80f + 0.35f * tn;
+                const float shade = groove * tipLift;
+
+                const size_t idx = (static_cast<size_t>(y) * size + x) * 4;
+                px[idx + 0] = detail::toByte(baseColor[0] * shade + rib * 0.10f);
+                px[idx + 1] = detail::toByte(baseColor[1] * shade + rib * 0.12f);
+                px[idx + 2] = detail::toByte(baseColor[2] * shade * 0.95f);
+                px[idx + 3] = detail::toByte(cov);
+            }
+        }
+
+        tex->colorSpace = ColorSpace::sRGB;
+        tex->magFilter = Filter::Linear;
+        tex->minFilter = Filter::LinearMipmapLinear;
+        tex->generateMipmaps = true;
+        tex->wrapS = TextureWrapping::ClampToEdge;
+        tex->wrapT = TextureWrapping::ClampToEdge;
+        tex->needsUpdate();
+        return tex;
+    }
+
     // ── Bark albedo + normal map (tiling) ────────────────────────────────
     //
     // Vertically-furrowed bark.  Returns {albedo, normal}.  Both tile
