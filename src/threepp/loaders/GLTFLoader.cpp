@@ -5,9 +5,11 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -1771,6 +1773,33 @@ namespace threepp {
                     const auto& channels = animDef["channels"];
                     const auto& samplers = animDef["samplers"];
 
+                    // Blender's glTF exporter (export_force_sampling) samples
+                    // starting at frame 1, not frame 0, so every track's first
+                    // keyframe lands at 1/fps instead of 0 - a small dead zone
+                    // where AnimationAction::_updateTime's local clip time is
+                    // still "before the first keyframe". Interpolant::evaluate
+                    // correctly clamps there, but it can return the SAME clamped
+                    // sample for 2+ consecutive frames right after a Loop::Repeat
+                    // wrap (local time briefly revisits that zone), which makes
+                    // PropertyMixer::apply's change-detection (comparing the two
+                    // ping-ponged accumulator buffers) see "no change" and skip
+                    // writing the property that frame - visible as a pose glitch
+                    // whenever other code (e.g. a root-motion pin, an aim-tilt
+                    // premultiply) mutates that same bone between mixer updates.
+                    // Normalizing every track to start at t=0 removes the dead
+                    // zone entirely.
+                    float clipMinStart = std::numeric_limits<float>::infinity();
+                    for (const auto& channel : channels) {
+                        if (!channel.contains("sampler") || !channel.contains("target")) continue;
+                        int samplerIdx = channel.value("sampler", -1);
+                        if (samplerIdx < 0 || samplerIdx >= static_cast<int>(samplers.size())) continue;
+                        int inputAccIdx = samplers[samplerIdx].value("input", -1);
+                        if (inputAccIdx < 0) continue;
+                        const auto& t = cachedAccessor(inputAccIdx);
+                        if (!t.empty()) clipMinStart = std::min(clipMinStart, t[0]);
+                    }
+                    if (!std::isfinite(clipMinStart)) clipMinStart = 0.f;
+
                     std::vector<std::shared_ptr<KeyframeTrack>> tracks;
 
                     for (const auto& channel : channels) {
@@ -1798,13 +1827,19 @@ namespace threepp {
                         int outputAccIdx = samplerDef["output"].get<int>();
                         std::string interpolation = samplerDef.value("interpolation", "LINEAR");
 
-                        // Times are read-only here (const ref into the cache);
-                        // values are copied because CUBICSPLINE stripping and the
-                        // weights split below mutate them.
-                        const std::vector<float>& times = cachedAccessor(inputAccIdx);
+                        // Values are copied because CUBICSPLINE stripping and the
+                        // weights split below mutate them. Times are copied (off
+                        // the cache) too, so the clipMinStart shift below never
+                        // mutates the shared accessor cache.
+                        const std::vector<float>& rawTimes = cachedAccessor(inputAccIdx);
                         std::vector<float> values = cachedAccessor(outputAccIdx);
 
-                        if (times.empty()) continue;
+                        if (rawTimes.empty()) continue;
+
+                        std::vector<float> times = rawTimes;
+                        if (clipMinStart > 0.f) {
+                            for (auto& tt : times) tt -= clipMinStart;
+                        }
 
                         // CUBICSPLINE: strip in/out tangents, keep only the spline vertex (middle value)
                         if (interpolation == "CUBICSPLINE") {
