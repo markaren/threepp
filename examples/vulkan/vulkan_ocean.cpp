@@ -4,6 +4,7 @@
 #include "threepp/audio/WavFile.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/helpers/LidarWaveform.hpp"
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
@@ -89,7 +90,13 @@ namespace {
 
 }// namespace
 
-// Procedural archipelago ring (r 385–495 m): value-noise FBM height field with baked albedo/normal/roughness maps.
+// Procedural archipelago ring (r 385–495 m): value-noise FBM height field with
+// baked albedo + roughness maps. Sub-metre rock relief no longer lives in a
+// unique baked normal map — it is carried by the framework's world-XZ-anchored
+// tiled detail layer (MaterialWithDetailMap + terrain::makeDetailMaps), which
+// the Vulkan deferred G-buffer renders with stochastic tiling, distance fade
+// and gated triplanar on steep faces. The vertex grid + analytic normals still
+// carry everything ≥ ~0.6 m.
 namespace island {
 
     constexpr float kInnerR = 385.f;// boat waypoints reach ~320 m — keep clear water
@@ -179,32 +186,17 @@ namespace island {
         return n.normalize();
     }
 
-    // High-frequency rock relief for the baked normal map — layered creased
-    // slabs (λ ≈ 3 m and ≈ 1.3 m), value-noise grain (λ ≈ 1 m) and fine pepper
-    // (λ ≈ 0.5 m and ≈ 0.25 m): only the scales below what the vertex grid
-    // carries (the λ ≥ 3.5 m slabs live in heightAt). The finest octave only
-    // pays off at the doubled normal-map resolution + the tightened gradient
-    // step (`de`) bakeMaps now uses.
-    float detailHeight(float x, float z) {
-        const float r2 = 1.f - std::abs(2.f * fbm(x * 0.31f + 53.f, z * 0.31f + 17.f, 3) - 1.f);
-        const float r3 = 1.f - std::abs(2.f * fbm(x * 0.72f + 101.f, z * 0.72f + 61.f, 2) - 1.f);
-        const float g   = fbm(x * 0.9f + 9.f, z * 0.9f + 27.f, 2);
-        const float gf  = fbm(x * 1.9f + 33.f, z * 1.9f + 71.f, 2);
-        const float gff = fbm(x * 4.0f + 5.f, z * 4.0f + 53.f, 2);
-        return 0.50f * r2 * r2 + 0.22f * r3 * r3 + 0.10f * g + 0.05f * gf + 0.03f * gff;
-    }
-
     struct BakedMaps {
         std::shared_ptr<DataTexture> albedo;
-        std::shared_ptr<DataTexture> normal;
         std::shared_ptr<DataTexture> rough;
     };
 
-    // Bake albedo/normal/roughness in polar UV (u = angle, v = radius); rows run in parallel.
+    // Bake albedo + roughness in polar UV (u = angle, v = radius); rows run in
+    // parallel. The normal map is gone — cm-scale rock relief is now the
+    // framework detail layer (see build()).
     BakedMaps bakeMaps() {
-        const int W = 20480, H = 1024;
+        const int W = 10240, H = 512;
         std::vector<unsigned char> albPx(static_cast<size_t>(W) * H * 4);
-        std::vector<unsigned char> nrmPx(static_cast<size_t>(W) * H * 4);
         std::vector<unsigned char> rghPx(static_cast<size_t>(W) * H * 4);
         auto toByte = [](float v) {
             return static_cast<unsigned char>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
@@ -358,22 +350,6 @@ namespace island {
                 cg += (0.86f - cg) * fall;
                 cb += (0.92f - cb) * fall;
 
-                // detail normal: world-plane gradient of the relief field,
-                // projected onto the polar tangent frame (T = +u = angular,
-                // B = +v = radial — matches the shader's derivative TBN).
-                // Damped under vegetation: soil and moss smooth micro-relief.
-                // de ≈ the doubled radial texel spacing (~0.11 m) so the
-                // sub-0.5 m octaves of detailHeight resolve instead of being
-                // averaged out.
-                const float de = 0.12f;
-                const float canopy = std::max({grass, heather, forest});
-                const float damp = 0.8f * (1.f - 0.6f * canopy) * (1.f - 0.85f * snow);
-                const float gx = (detailHeight(wx + de, wz) - detailHeight(wx - de, wz)) / (2.f * de) * damp;
-                const float gz = (detailHeight(wx, wz + de) - detailHeight(wx, wz - de)) / (2.f * de) * damp;
-                const float st = -gx * sa + gz * ca;// slope along +u (angular)
-                const float sb = gx * ca + gz * sa; // slope along +v (radial)
-                const float inv = 1.f / std::sqrt(st * st + sb * sb + 1.f);
-
                 // roughness (.g multiplies material roughness): matte dry
                 // granite, matte vegetation, matte conifer canopy, water-
                 // slicked rock turns glossy, bright soft snow, glossy falls
@@ -389,10 +365,6 @@ namespace island {
                 albPx[i + 1] = toByte(cg);
                 albPx[i + 2] = toByte(cb);
                 albPx[i + 3] = 255;
-                nrmPx[i + 0] = toByte(-st * inv * 0.5f + 0.5f);
-                nrmPx[i + 1] = toByte(-sb * inv * 0.5f + 0.5f);
-                nrmPx[i + 2] = toByte(inv * 0.5f + 0.5f);
-                nrmPx[i + 3] = 255;
                 rghPx[i + 0] = 255;
                 rghPx[i + 1] = toByte(rough);
                 rghPx[i + 2] = 0;
@@ -411,7 +383,6 @@ namespace island {
             return tex;
         };
         return {makeTex(std::move(albPx), true),
-                makeTex(std::move(nrmPx), false),
                 makeTex(std::move(rghPx), false)};
     }
 
@@ -465,8 +436,36 @@ namespace island {
                                                         .metalness(0.f));
         const BakedMaps maps = bakeMaps();
         mat->map          = maps.albedo;
-        mat->normalMap    = maps.normal;
         mat->roughnessMap = maps.rough;
+
+        // Sub-metre granite relief: the framework's world-XZ-anchored tiled
+        // detail layer replaces the old unique baked normal map. One shared
+        // heightfield feeds a coherent detail albedo + tangent-normal/roughness
+        // pair; the Vulkan deferred G-buffer tiles it stochastically, fades it
+        // with distance (no far shimmer) and switches to triplanar on the ring's
+        // steep faces so cliffs get unstretched grain automatically. Tuned to
+        // the old bake's creased-slab + grain granite character: a ~1.7 m repeat
+        // carries the slab/ledge scale, normalStrength the craggy relief.
+        // Note vs the old bake: this layer is UNIFORM — it lacks the bespoke
+        // per-texel canopy/snow damping that softened micro-relief under
+        // vegetation and snow. detailNormalScale is trimmed slightly to keep
+        // forested/snow patches from reading over-crisp.
+        {
+            terrain::DetailMapOptions dopt;
+            dopt.dim = 256;
+            dopt.seed = 1717u;
+            dopt.albedoContrast = 0.34f;
+            dopt.chroma = 0.05f;
+            dopt.normalStrength = 2.4f;// craggier than the terrain default — bare granite
+            dopt.roughContrast = 0.5f;
+            const terrain::DetailMaps dm = terrain::makeDetailMaps(dopt);
+            mat->detailMap          = dm.albedo;
+            mat->detailNormalMap    = dm.normalRough;
+            mat->detailRepeat       = 0.6f;// one repeat per ≈1.67 m (slab/ledge scale)
+            mat->detailStrength     = 0.35f;// gentle albedo breakup; the bake carries the colour
+            mat->detailNormalScale  = 0.85f;// trimmed: no per-texel veg/snow damp anymore
+            mat->detailRoughStrength = 0.5f;
+        }
         auto mesh = Mesh::create(geo, mat);
         mesh->frustumCulled = false;// the ring surrounds the camera — always partly in view
         return mesh;
