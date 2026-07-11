@@ -635,6 +635,48 @@ namespace threepp {
                 }
             }
 
+            // Node indices reachable from a scene's roots (DFS through children),
+            // returned in ascending order. Only reachable nodes are built (and
+            // their meshes decoded); unreachable nodes are never part of the
+            // returned scene graph, so skipping them changes nothing observable
+            // — it just avoids decoding meshes that would be discarded. Guards
+            // against cycles and out-of-range indices in malformed files.
+            std::vector<int> collectReachable(const json& sceneDef) {
+                std::vector<int> order;
+                if (!sceneDef.contains("nodes")) return order;
+                const int numNodes = gltf.contains("nodes") ? static_cast<int>(gltf["nodes"].size()) : 0;
+                std::unordered_set<int> visited;
+                std::vector<int> stack = sceneDef["nodes"].get<std::vector<int>>();
+                while (!stack.empty()) {
+                    int i = stack.back();
+                    stack.pop_back();
+                    if (i < 0 || i >= numNodes) continue;
+                    if (!visited.insert(i).second) continue;
+                    const auto& nd = gltf["nodes"][i];
+                    if (nd.contains("children"))
+                        for (int c : nd["children"].get<std::vector<int>>())
+                            stack.push_back(c);
+                }
+                order.assign(visited.begin(), visited.end());
+                std::sort(order.begin(), order.end());
+                return order;
+            }
+
+            // Re-instantiate per-scene node objects so multiple scenes build
+            // independent graphs (a node referenced by two scenes must not be
+            // reparented/stolen from the first). Heavy, scene-independent caches
+            // (geometry / material / texture / image / variant data) persist and
+            // are shared across scenes; only the per-scene graph state resets.
+            // Skeletons are cleared because they bind to this scene's bone
+            // instances.
+            void resetSceneBuildState() {
+                nodeObjects.clear();
+                builtNodes.clear();
+                collapsedMeshNodes.clear();
+                skinCache.clear();
+                preCreateNodes();
+            }
+
             std::shared_ptr<Skeleton> loadSkin(int skinIdx) {
                 auto it = skinCache.find(skinIdx);
                 if (it != skinCache.end()) return it->second;
@@ -1518,16 +1560,20 @@ namespace threepp {
                 root->name = sceneDef.value("name", "Scene");
 
                 if (sceneDef.contains("nodes")) {
-                    int numNodes = gltf.contains("nodes") ? static_cast<int>(gltf["nodes"].size()) : 0;
+                    // Only nodes reachable from this scene's roots are built, so
+                    // meshes of unreachable nodes are never decoded. Ascending
+                    // order matches the original full 0..n iteration for the
+                    // reachable subset.
+                    const std::vector<int> reachable = collectReachable(sceneDef);
 
                     // Pass 1: collapse Group-wrapper-around-Mesh layers for
                     // every non-joint mesh node. Must run before buildNode's
                     // child-attach so parent nodes pick up the collapsed
                     // (Mesh) child, not the discarded Group wrapper.
-                    for (int i = 0; i < numNodes; ++i) tryCollapseMeshWrapper(i);
+                    for (int i : reachable) tryCollapseMeshWrapper(i);
 
                     // Pass 2: attach lights / joint-meshes / children.
-                    for (int i = 0; i < numNodes; ++i) buildNode(i);
+                    for (int i : reachable) buildNode(i);
 
                     for (int nodeIdx : sceneDef["nodes"].get<std::vector<int>>())
                         root->add(nodeObjects[nodeIdx]);
@@ -1588,6 +1634,12 @@ namespace threepp {
                 int numScenes = gltf.contains("scenes") ? static_cast<int>(gltf["scenes"].size()) : 0;
 
                 for (int i = 0; i < numScenes; ++i) {
+                    // Independent scenes: re-instantiate node objects for each
+                    // scene after the first so a node referenced by two scenes
+                    // isn't reparented (stolen) from the earlier scene. Scene 0
+                    // uses the initial preCreateNodes(); the single-scene path
+                    // therefore never resets and is byte-identical to before.
+                    if (numScenes > 1 && i > 0) resetSceneBuildState();
                     result.scenes.push_back(loadScene(i));
                 }
 
@@ -1678,6 +1730,12 @@ namespace threepp {
                 int numScenes = gltf.contains("scenes") ? static_cast<int>(gltf["scenes"].size()) : 0;
 
                 for (int i = 0; i < numScenes; ++i) {
+                    // Independent scenes: re-instantiate node objects for each
+                    // scene after the first so a node referenced by two scenes
+                    // isn't reparented (stolen) from the earlier scene. Scene 0
+                    // uses the initial preCreateNodes(); the single-scene path
+                    // therefore never resets and is byte-identical to before.
+                    if (numScenes > 1 && i > 0) resetSceneBuildState();
                     result.scenes.push_back(loadScene(i));
                 }
 
