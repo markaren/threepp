@@ -27,6 +27,12 @@ namespace threepp_py {
                 .value("Cluster",   LeafStyle::Cluster)
                 .value("CrossQuad", LeafStyle::CrossQuad)
                 .value("Blob",      LeafStyle::Blob)
+                .value("Frond",     LeafStyle::Frond)
+                .export_values();
+
+        py::enum_<BranchingMode>(m, "BranchingMode")
+                .value("Colonise", BranchingMode::Colonise)
+                .value("Whorl",    BranchingMode::Whorl)
                 .export_values();
 
         py::class_<TreeParams>(m, "TreeParams")
@@ -54,6 +60,23 @@ namespace threepp_py {
                 .def_readwrite("leaves_per_cluster", &TreeParams::leavesPerCluster)
                 .def_readwrite("leaf_spread",        &TreeParams::leafSpread)
                 .def_readwrite("leaf_clumping",      &TreeParams::leafClumping)
+                .def_readwrite("branching_mode",         &TreeParams::branchingMode)
+                .def_readwrite("whorl_spacing",          &TreeParams::whorlSpacing)
+                .def_readwrite("branches_per_whorl",     &TreeParams::branchesPerWhorl)
+                .def_readwrite("whorl_jitter",           &TreeParams::whorlJitter)
+                .def_readwrite("branch_droop",           &TreeParams::branchDroop)
+                .def_readwrite("branch_tip_upturn",      &TreeParams::branchTipUpturn)
+                .def_readwrite("crown_profile_exponent", &TreeParams::crownProfileExponent)
+                .def_readwrite("side_twig_density",      &TreeParams::sideTwigDensity)
+                .def_readwrite("branch_length",          &TreeParams::branchLength)
+                .def_readwrite("trunk_lean",             &TreeParams::trunkLean)
+                .def_readwrite("trunk_bend",             &TreeParams::trunkBend)
+                .def_readwrite("trunk_twist",            &TreeParams::trunkTwist)
+                .def_readwrite("bark_bump_amp",          &TreeParams::barkBumpAmp)
+                .def_readwrite("bark_bump_lobes",        &TreeParams::barkBumpLobes)
+                .def_readwrite("bark_bump_amp2",         &TreeParams::barkBumpAmp2)
+                .def_readwrite("bark_bump_lobes2",       &TreeParams::barkBumpLobes2)
+                .def_readwrite("root_flare_asym",        &TreeParams::rootFlareAsym)
                 .def_property("bark_color",
                         [](const TreeParams& p) {
                             return std::vector<float>(p.barkColor.begin(), p.barkColor.end());
@@ -97,11 +120,11 @@ namespace threepp_py {
                          return self.createLeafGeometry(tp);
                      }, py::arg("params"));
 
-        // apply_preset(0..3, params) — Oak / Pine / Birch / Willow
+        // apply_preset(0..3, params) — Oak / Pine(Spruce, whorl conifer) / Birch / Willow
         m.def("apply_tree_preset", [](int preset, TreeParams& p) {
                   applyPreset(preset, p);
               }, py::arg("preset"), py::arg("params"),
-              "Apply species preset: 0=Oak, 1=Pine, 2=Birch, 3=Willow.");
+              "Apply species preset: 0=Oak, 1=Pine/Spruce (whorl conifer, Frond leaves), 2=Birch, 3=Willow.");
 
         // ── Procedural textures ──────────────────────────────────────────
 
@@ -116,6 +139,19 @@ namespace threepp_py {
               py::arg("size") = 256u, py::arg("seed") = 1337u,
               py::arg("base_color") = std::vector<float>{0.26f, 0.45f, 0.14f},
               "RGBA leaf-cluster alpha-cutout DataTexture. Use mat.alpha_test = 0.5.");
+
+        m.def("make_needle_frond_texture",
+              [](unsigned int size, unsigned int seed, const std::vector<float>& color) -> std::shared_ptr<Texture> {
+                  std::array<float, 3> c = {color.size() > 0 ? color[0] : 0.11f,
+                                            color.size() > 1 ? color[1] : 0.29f,
+                                            color.size() > 2 ? color[2] : 0.10f};
+                  py::gil_scoped_release release;
+                  return makeNeedleFrondTexture(size, seed, c);
+              },
+              py::arg("size") = 256u, py::arg("seed") = 1337u,
+              py::arg("base_color") = std::vector<float>{0.11f, 0.29f, 0.10f},
+              "RGBA conifer needle-frond alpha-cutout DataTexture. Pair with LeafStyle.Frond "
+              "+ BranchingMode.Whorl. Use mat.alpha_test = 0.5.");
 
         m.def("make_bark_textures",
               [](unsigned int size, unsigned int seed, const std::vector<float>& color)

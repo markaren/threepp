@@ -136,6 +136,8 @@ namespace threepp_py {
                 .def_readwrite("metalness", &MeshStandardMaterial::metalness)
                 .def_readwrite("emissive", &MeshStandardMaterial::emissive)
                 .def_readwrite("emissive_intensity", &MeshStandardMaterial::emissiveIntensity)
+                .def_readwrite("translucency", &MeshStandardMaterial::translucency)
+                .def_readwrite("translucency_color", &MeshStandardMaterial::translucencyColor)
                 .def_readwrite("flat_shading", &MeshStandardMaterial::flatShading)
                 .def_readwrite("wireframe", &MeshStandardMaterial::wireframe)
                 .def_readwrite("wireframe_linewidth", &MeshStandardMaterial::wireframeLinewidth)
