@@ -456,20 +456,24 @@ namespace {
             // preset 1 already selects BranchingMode::Whorl + LeafStyle::Frond;
             // tune the silhouette for the fjord banks (tall, narrow, near-ground
             // skirt of drooping frond branches).
+            // Slim serrated silhouette: height ≈ 12.8 vs width ≈ 3.8 (≥3:1),
+            // whorl shelves separated enough to read as distinct layers with
+            // sky gaps between them, and a pointed apex (profile → 0 at the
+            // top whorl + bare leader above it).
             tp.trunkHeight = 1.8f;
             tp.trunkRadius = 0.17f;
-            tp.crownRadiusX = tp.crownRadiusZ = 2.7f;
+            tp.crownRadiusX = tp.crownRadiusZ = 1.9f;
             tp.crownHeight = 11.f;
-            tp.whorlSpacing = 0.6f;
-            tp.branchesPerWhorl = 6;
+            tp.whorlSpacing = 0.85f;
+            tp.branchesPerWhorl = 5;
             tp.branchDroop = 0.44f;
             tp.branchTipUpturn = 0.42f;
-            tp.crownProfileExponent = 1.4f;
-            tp.sideTwigDensity = 0.75f;
-            tp.leafSize = 0.95f;
-            tp.leafDensity = 1.0f;
+            tp.crownProfileExponent = 1.25f;
+            tp.sideTwigDensity = 0.6f;
+            tp.leafSize = 0.75f;
+            tp.leafDensity = 0.92f;
             tp.leafClumping = 0.0f;
-            tp.leafColor = {0.15f, 0.33f, 0.11f};
+            tp.leafColor = {0.13f, 0.34f, 0.10f};
         }
         if (preset == 2) {// birch — mute the pure-white preset bark
             tp.barkColor = {0.72f, 0.71f, 0.67f};

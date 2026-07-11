@@ -661,14 +661,17 @@ namespace threepp::vegetation {
                     // short row of overlapping frond blades, so a spruce branch
                     // reads as a continuous dense needle shelf rather than a stick
                     // with a tuft at each joint. Two blades per station (flat +
-                    // rolled about the branch axis), shared up-biased normal + a
-                    // per-card depth de-tie (near-coplanar cards flicker otherwise).
-                    const float rc = std::cos(0.96f), rs = std::sin(0.96f);
+                    // slightly rolled about the branch axis), shared up-biased
+                    // normal + a per-card depth de-tie (near-coplanar cards flicker
+                    // otherwise). The roll is kept SHALLOW (~30°): with a steep
+                    // roll the blades fuzz vertically, whorl shelves merge into a
+                    // solid fur column and the serrated silhouette is lost.
+                    const float rc = std::cos(0.55f), rs = std::sin(0.55f);
                     Vector3 sideWide, sideRoll;
-                    sideWide.copy(side).multiplyScalar(1.9f);
+                    sideWide.copy(side).multiplyScalar(1.7f);
                     sideRoll.set(side.x * rc + nrm.x * rs,
                                  side.y * rc + nrm.y * rs,
-                                 side.z * rc + nrm.z * rs).multiplyScalar(1.9f);
+                                 side.z * rc + nrm.z * rs).multiplyScalar(1.7f);
                     constexpr int stations = 2;// along-segment blade rows
                     for (int st = 0; st < stations; ++st) {
                         const float f = (static_cast<float>(st) + 0.5f) / static_cast<float>(stations);
@@ -936,14 +939,16 @@ namespace threepp::vegetation {
             }
 
             // 2) Whorls of branches. Branches start above `trunkHeight` (the bare
-            //    bole) and run to near the apex. Length follows the crown profile:
-            //    long at the base, short at the top.
+            //    bole) and stop BELOW a bare leader shoot at the very top — a
+            //    spruce tapers to a pointed apex, so the crown profile must reach
+            //    ~zero at the top whorl (no length floor) and the topmost stretch
+            //    of trunk stays branch-free except for tiny stubs.
             const float whorlStart = tp.trunkHeight;
-            const float whorlTop = H - tp.whorlSpacing * 0.5f;
+            const float leaderH = std::clamp(H * 0.07f, 0.5f, 1.0f);// bare apex leader
+            const float whorlTop = H - leaderH;
             const float baseLen = (tp.branchLength > 0.f) ? tp.branchLength
                                                           : std::max(tp.crownRadiusX, tp.crownRadiusZ);
             const float spacing = std::max(tp.whorlSpacing, tp.segmentLength * 0.5f);
-            const int nWhorls = std::max(1, static_cast<int>((whorlTop - whorlStart) / spacing));
             const int perW = std::max(2, tp.branchesPerWhorl);
 
             int whorlIdx = 0;
@@ -954,10 +959,14 @@ namespace threepp::vegetation {
                 const int parentTrunk = trunkIdx[static_cast<size_t>(ti)];
                 const Vector3 trunkPos = nodes_[static_cast<size_t>(parentTrunk)].position;
 
-                // Crown profile: 0 at the base whorl → 1 at the apex.
+                // Crown profile: full length at the base whorl → ~0 at the apex.
+                // The floor is a tiny stub (fraction of baseLen, NOT clamped up to
+                // a usable branch), so the last whorls serrate into the pointed
+                // leader instead of capping the tree with a rounded tuft.
                 const float tW = std::clamp((wy - whorlStart) / std::max(whorlTop - whorlStart, 1e-3f), 0.f, 1.f);
                 const float lenScale = std::pow(1.f - tW, tp.crownProfileExponent);
-                const float branchLen = std::max(tp.segmentLength, baseLen * (0.25f + 0.9f * lenScale));
+                const float branchLen = baseLen * (0.04f + 0.96f * lenScale);
+                if (branchLen < tp.segmentLength * 0.4f) continue;// too short even for a stub
 
                 // Alternate the whorl's phase so successive rings interleave.
                 const float baseAz = static_cast<float>(whorlIdx) * 0.61803399f * 6.28318530718f;

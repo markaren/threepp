@@ -248,9 +248,12 @@ namespace threepp::vegetation {
                 const float tipLift = 0.80f + 0.35f * tn;
                 const float shade = groove * tipLift;
 
+                // Bias the needle mass GREEN: red pulled down, green pushed up, so
+                // shadowed/unlit fronds stay green-dark rather than drifting
+                // bark-brown (near-silhouette trees read as craggy rock otherwise).
                 const size_t idx = (static_cast<size_t>(y) * size + x) * 4;
-                px[idx + 0] = detail::toByte(baseColor[0] * shade + rib * 0.10f);
-                px[idx + 1] = detail::toByte(baseColor[1] * shade + rib * 0.12f);
+                px[idx + 0] = detail::toByte(baseColor[0] * shade * 0.85f + rib * 0.08f);
+                px[idx + 1] = detail::toByte(baseColor[1] * shade * 1.12f + rib * 0.12f);
                 px[idx + 2] = detail::toByte(baseColor[2] * shade * 0.95f);
                 px[idx + 3] = detail::toByte(cov);
             }
