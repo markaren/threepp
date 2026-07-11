@@ -189,6 +189,19 @@ namespace threepp {
             : detailRepeat(detailRepeat), detailStrength(detailStrength) {}
     };
 
+    // Thin-leaf / foliage two-sided subsurface. Light reaching the BACK of a thin
+    // card is partially transmitted to the front, so backlit canopies GLOW rather
+    // than going flat-dark. Consumed by the Vulkan deferred renderer only: a
+    // raster-primary sun term (wrap back-light + view-dependent forward scatter)
+    // plus a small back-normal ambient term. The GL renderer and every ray-hit
+    // shading path (probe GI, reflections, lidar) ignore it. translucency == 0 →
+    // no effect at all (bit-exact for existing content).
+    struct MaterialWithTranslucency: virtual Material {
+
+        float translucency = 0.f;         // 0..1 transmission strength (0 = off)
+        Color translucencyColor{1, 1, 1}; // tint applied to the transmitted light
+    };
+
     struct MaterialWithMatCap: virtual Material {
 
         std::shared_ptr<Texture> matcap;

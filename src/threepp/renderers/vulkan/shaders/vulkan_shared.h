@@ -115,12 +115,19 @@ namespace threepp::vulkan_pt {
         float detailNormalScale;  // tangent xy perturbation scale
         float detailRoughStrength;// 0..1 roughness modulation strength
         float _padDetail;
+        // Foliage translucency / two-sided subsurface (MaterialWithTranslucency):
+        // strength 0..1 + tint. Raster primary visibility only — deferred_shade
+        // adds a wrap back-light + forward-scatter sun term plus a small back-N
+        // ambient term; ray-hit shading (probe GI, reflections, lidar) skips it.
+        // translucency == 0 → bit-exact no-op for all existing content.
+        float translucencyColor[3];
+        float translucency;
     };
 
     // Catches silent layout drift: if any field is added/removed/reordered
     // above, the size changes and this fires. Update the GLSL `MaterialDesc`
     // mirror below to match before bumping the expected size.
-    static_assert(sizeof(MaterialDesc) == 496,
+    static_assert(sizeof(MaterialDesc) == 512,
                   "MaterialDesc size changed — update the GLSL mirror in this file too.");
 }
 
@@ -177,6 +184,8 @@ struct MaterialDesc {
     float detailNormalScale;   // tangent xy perturbation scale
     float detailRoughStrength; // 0..1 roughness modulation strength
     float _padDetail;
+    vec3  translucencyColor;// foliage two-sided subsurface tint
+    float translucency;     // 0 = off (raster primary shading only)
 };
 
 #endif  // __cplusplus

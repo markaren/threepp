@@ -43,6 +43,14 @@ const float TWO_PI     = 6.28318530717959;
 // rescale floors at 1e-3, so geometry within ~100 units of origin is unchanged.
 float SHADOW_EPS = 1e-3;
 
+// Foliage translucency (MaterialWithTranslucency) tuning. The direct term is a
+// wrapped back-light plus a view-dependent forward-scatter lobe; the ambient
+// term samples env irradiance at -N. Everything is gated behind translucency>0
+// (deferred_shade only, raster-primary hits) → zero cost/change when off.
+const float kTransScatterPower  = 4.0; // forward-scatter lobe tightness
+const float kTransScatterWeight = 0.5; // forward-scatter strength vs back-wrap
+const float kTransAmbient       = 0.4; // back-face env fill strength
+
 layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
@@ -854,6 +862,44 @@ void main() {
                                   /*addEmissive=*/((pc.flags & 8u) == 0u),// ReSTIR on → emissive via main()/diffInd; off → coherent emissiveNEE here
                                   /*cheapHit=*/false);// primary: exhaustive lights + full NEE
     gSkipAnalyticDirect = false;// reflection/GI/glass hits below keep inline lights
+
+    // ── Foliage translucency (MaterialWithTranslucency) — RASTER PRIMARY ONLY ──
+    // Thin leaf cards transmit the light that reaches their BACK face, so a
+    // backlit canopy GLOWS instead of going flat-dark. Per directional (sun)
+    // light: a wrapped back-diffuse (peaks with the sun straight behind the leaf)
+    // plus a view-dependent forward-scatter halo (looking toward the sun THROUGH
+    // the leaf), gated by the SUN'S OWN shadow — plus a small env fill at -N for
+    // shaded interiors. Added straight into `lit` (a smooth, low-frequency term
+    // that needs no shadow-channel denoise). The demod shadow split
+    // (analyticDirectSplit) can't supply this visibility: it only sums the
+    // FRONT-lit hemisphere (dot(N,L) > 0) and returns visEst = 1 for exactly the
+    // backlit pixels translucency targets, so a shadowed backlit leaf would glow
+    // wrongly. One cheap sun shadow ray per translucent pixel is therefore the
+    // minimal correct cost — and it is paid ONLY where translucency > 0, so every
+    // existing opaque material is byte-for-byte unchanged (no new rays, no term).
+    // Ray-hit shading (reflections / GI / lidar / probes) never reaches main(), so
+    // those paths are untouched, matching the detail-layer precedent.
+    if (pm.translucency > 0.0) {
+        const vec3  tCol  = albedo * pm.translucencyColor;
+        const vec3  tOrig = worldPos + N * SHADOW_EPS;
+        vec3        tSum  = vec3(0.0);
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+            const vec3  L    = normalize(lights.dirLights[i].direction);
+            const float ndl  = dot(N, L);
+            const float back = max(-ndl, 0.0);// sun behind the card
+            const float fwd  = pow(max(dot(V, -L), 0.0), kTransScatterPower) * kTransScatterWeight;
+            const float w    = back + fwd;
+            if (w <= 0.0) continue;
+            const float vis = shadowsOn
+                    ? sunShadowVis(tOrig, L, pc.sunTanHalfAngle, /*cheapHit=*/true)
+                    : 1.0;
+            tSum += lights.dirLights[i].color * (w * vis);
+        }
+        // Back-face env fill: sky/env irradiance reaching the shaded underside so
+        // canopy interiors are dim, not dead black. Cheap env LOD tap (no rays).
+        const vec3 backEnv = sampleEnvLod(-N, maxLod);
+        lit += pm.translucency * tCol * (tSum + backEnv * kTransAmbient);
+    }
 
     // Sharp surfaces trace the exact mirror ray; glossy surfaces GGX-importance-
     // sample the reflection lobe so the reflection BLURS with roughness and

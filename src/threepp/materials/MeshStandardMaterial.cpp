@@ -116,6 +116,9 @@ void MeshStandardMaterial::copyInto(Material& material) const {
     m->detailRepeat = detailRepeat;
     m->detailStrength = detailStrength;
 
+    m->translucency = translucency;
+    m->translucencyColor.copy(translucencyColor);
+
     m->emissive.copy(emissive);
     m->emissiveMap = emissiveMap;
     m->emissiveIntensity = emissiveIntensity;
