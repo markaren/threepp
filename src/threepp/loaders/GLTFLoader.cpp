@@ -91,6 +91,24 @@ namespace threepp {
             return out;
         }
 
+        // Read an already-open binary stream into a byte vector in one shot,
+        // sizing the buffer from the file length instead of growing it a
+        // character at a time (as std::istreambuf_iterator does). Falls back to
+        // the iterator form if the size can't be determined (e.g. a pipe).
+        std::vector<uint8_t> readAllBytes(std::ifstream& f, const fs::path& p) {
+            std::error_code ec;
+            auto sz = fs::file_size(p, ec);
+            std::vector<uint8_t> out;
+            if (!ec) {
+                out.resize(static_cast<size_t>(sz));
+                f.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(sz));
+                out.resize(static_cast<size_t>(f.gcount()));
+            } else {
+                out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+            }
+            return out;
+        }
+
         std::vector<uint8_t> base64Decode(const std::string& encoded) {
             std::vector<uint8_t> out;
             out.reserve(encoded.size() * 3 / 4);
@@ -316,7 +334,7 @@ namespace threepp {
                     fs::path p = basePath / percentDecode(uri);
                     std::ifstream f(p, std::ios::binary);
                     if (!f) throw std::runtime_error("Cannot open buffer file: " + p.string());
-                    buffers[idx].assign(std::istreambuf_iterator<char>(f), {});
+                    buffers[idx] = readAllBytes(f, p);
                 }
                 return buffers[idx];
             }
@@ -490,10 +508,16 @@ namespace threepp {
                 std::vector<float> out(count * nc, 0.f);
 
                 if (ptr) {
-                    for (size_t i = 0; i < count; ++i) {
-                        const uint8_t* row = ptr + i * stride;
-                        for (int j = 0; j < nc; ++j)
-                            out[i * nc + j] = decodeComponentFloat(row + j * compSize, ct, normalized);
+                    if (ct == COMP_FLOAT && stride == static_cast<size_t>(nc) * 4) {
+                        // Tightly packed FLOAT data (the common case) — a single
+                        // bulk copy. getAccessor validated the span fits.
+                        std::memcpy(out.data(), ptr, count * nc * sizeof(float));
+                    } else {
+                        for (size_t i = 0; i < count; ++i) {
+                            const uint8_t* row = ptr + i * stride;
+                            for (int j = 0; j < nc; ++j)
+                                out[i * nc + j] = decodeComponentFloat(row + j * compSize, ct, normalized);
+                        }
                     }
                 }
 
@@ -520,8 +544,13 @@ namespace threepp {
                 std::vector<uint32_t> out(count, 0u);
 
                 if (ptr) {
-                    for (size_t i = 0; i < count; ++i)
-                        out[i] = decodeIndex(ptr + i * stride, ct);
+                    if (ct == COMP_UNSIGNED_INT && stride == 4) {
+                        // Tightly packed uint32 indices — bulk copy.
+                        std::memcpy(out.data(), ptr, count * sizeof(uint32_t));
+                    } else {
+                        for (size_t i = 0; i < count; ++i)
+                            out[i] = decodeIndex(ptr + i * stride, ct);
+                    }
                 }
 
                 const auto& acc = gltf["accessors"][accessorIdx];
@@ -738,7 +767,7 @@ namespace threepp {
                         fs::path p = basePath / percentDecode(uri);
                         std::ifstream f(p, std::ios::binary);
                         if (!f) throw std::runtime_error("Cannot open image: " + p.string());
-                        raw.assign(std::istreambuf_iterator<char>(f), {});
+                        raw = readAllBytes(f, p);
                     }
                 } else {
                     throw std::runtime_error("Image " + std::to_string(imageIdx) + " has no source");
@@ -1211,9 +1240,8 @@ namespace threepp {
                 const auto& meshDef = gltf["meshes"][meshIdx];
                 const auto& primitives = meshDef["primitives"];
 
-                // Multiple primitives → Group
-                auto group = Group::create();
-                group->name = meshDef.value("name", "");
+                const std::string meshName = meshDef.value("name", "");
+                std::vector<std::shared_ptr<Mesh>> meshes;
 
                 int primIdx = 0;
                 for (const auto& prim : primitives) {
@@ -1295,24 +1323,23 @@ namespace threepp {
                         }
                     }
 
-                    group->add(mesh);
+                    meshes.push_back(mesh);
                     ++primIdx;
                 }
 
-                // If only one primitive and not skinned, unwrap the group
-                if (group->children.size() == 1 && !hasSkin) {
-                    auto child = group->children[0];
-                    child->name = group->name;
-                    auto cloned = child->clone();
-                    cloned->userData = child->userData;// Object3D::copy() doesn't copy userData
-                    // Object3D::copy() doesn't copy morphTargetInfluences either
-                    if (auto* childMesh = child->as<Mesh>()) {
-                        if (auto* clonedMesh = cloned->as<Mesh>()) {
-                            clonedMesh->morphTargetInfluences() = childMesh->morphTargetInfluences();
-                        }
-                    }
-                    return cloned;
+                // Single non-skinned primitive → return the Mesh directly (named
+                // after the mesh), skipping a redundant Group wrapper + clone (the
+                // old path cloned only because it built the Group first). Skinned
+                // meshes stay wrapped in a Group so buildMeshObjForNode can bind
+                // each SkinnedMesh child to the skeleton.
+                if (meshes.size() == 1 && !hasSkin) {
+                    meshes[0]->name = meshName;
+                    return meshes[0];
                 }
+
+                auto group = Group::create();
+                group->name = meshName;
+                for (auto& m : meshes) group->add(m);
                 return group;
             }
 
@@ -1609,13 +1636,10 @@ namespace threepp {
             //  Entry points
             // -----------------------------------------------------------------------
 
-            GLTFResult parseGLTF(const std::string& jsonText) {
-                gltf = json::parse(jsonText);
-
-                // Pre-allocate buffer slots
-                int numBuffers = gltf.contains("buffers") ? static_cast<int>(gltf["buffers"].size()) : 0;
-                buffers.resize(numBuffers);
-
+            // Shared driver: assumes `gltf` is parsed and `buffers` is sized.
+            // Both entry points funnel here so the scene/animation/variant
+            // assembly lives in one place.
+            GLTFResult buildResult() {
                 // Parse top-level KHR_materials_variants names
                 if (gltf.contains("extensions") &&
                     gltf["extensions"].contains("KHR_materials_variants")) {
@@ -1656,6 +1680,13 @@ namespace threepp {
                 }
                 resolveVariants(result);
                 return result;
+            }
+
+            GLTFResult parseGLTF(const std::string& jsonText) {
+                gltf = json::parse(jsonText);
+                int numBuffers = gltf.contains("buffers") ? static_cast<int>(gltf["buffers"].size()) : 0;
+                buffers.resize(numBuffers);
+                return buildResult();
             }
 
             GLTFResult parseGLB(const std::vector<uint8_t>& data) {
@@ -1711,47 +1742,7 @@ namespace threepp {
                 gltf = json::parse(jsonText);
                 int numBuffers = gltf.contains("buffers") ? static_cast<int>(gltf["buffers"].size()) : 0;
                 if (static_cast<int>(buffers.size()) < numBuffers) buffers.resize(numBuffers);
-
-                // Parse top-level KHR_materials_variants names
-                if (gltf.contains("extensions") &&
-                    gltf["extensions"].contains("KHR_materials_variants")) {
-                    const auto& ext = gltf["extensions"]["KHR_materials_variants"];
-                    if (ext.contains("variants")) {
-                        for (const auto& v : ext["variants"])
-                            variantNames.push_back(v.value("name", ""));
-                    }
-                }
-
-                gatherJoints();
-                preCreateNodes();
-
-                GLTFResult result;
-                int defaultScene = gltf.value("scene", 0);
-                int numScenes = gltf.contains("scenes") ? static_cast<int>(gltf["scenes"].size()) : 0;
-
-                for (int i = 0; i < numScenes; ++i) {
-                    // Independent scenes: re-instantiate node objects for each
-                    // scene after the first so a node referenced by two scenes
-                    // isn't reparented (stolen) from the earlier scene. Scene 0
-                    // uses the initial preCreateNodes(); the single-scene path
-                    // therefore never resets and is byte-identical to before.
-                    if (numScenes > 1 && i > 0) resetSceneBuildState();
-                    result.scenes.push_back(loadScene(i));
-                }
-
-                if (!result.scenes.empty()) {
-                    int si = (defaultScene >= 0 && defaultScene < numScenes) ? defaultScene : 0;
-                    result.scene = result.scenes[si];
-                } else {
-                    result.scene = Group::create();
-                }
-
-                result.animations = loadAnimations();
-                for (auto& [_, proxy] : matAnimProxies) {
-                    if (proxy && result.scene) result.scene->add(proxy);
-                }
-                resolveVariants(result);
-                return result;
+                return buildResult();
             }
 
             // -----------------------------------------------------------------------
@@ -1762,6 +1753,17 @@ namespace threepp {
                 if (!gltf.contains("animations")) return {};
 
                 std::vector<std::shared_ptr<AnimationClip>> clips;
+
+                // Memoize decoded float accessors: animation channels frequently
+                // share a single input (time) accessor across many samplers, so
+                // decoding it once avoids repeated buffer walks. References into
+                // an unordered_map stay valid across later insertions.
+                std::unordered_map<int, std::vector<float>> accCache;
+                auto cachedAccessor = [&](int accIdx) -> const std::vector<float>& {
+                    auto it = accCache.find(accIdx);
+                    if (it != accCache.end()) return it->second;
+                    return accCache.emplace(accIdx, readFloats(accIdx)).first->second;
+                };
 
                 for (size_t animIdx = 0; animIdx < gltf["animations"].size(); ++animIdx) {
                     const auto& animDef = gltf["animations"][animIdx];
@@ -1800,8 +1802,11 @@ namespace threepp {
                         int outputAccIdx = samplerDef["output"].get<int>();
                         std::string interpolation = samplerDef.value("interpolation", "LINEAR");
 
-                        auto times = readFloats(inputAccIdx);
-                        auto values = readFloats(outputAccIdx);
+                        // Times are read-only here (const ref into the cache);
+                        // values are copied because CUBICSPLINE stripping and the
+                        // weights split below mutate them.
+                        const std::vector<float>& times = cachedAccessor(inputAccIdx);
+                        std::vector<float> values = cachedAccessor(outputAccIdx);
 
                         if (times.empty()) continue;
 
@@ -1999,7 +2004,7 @@ namespace threepp {
         try {
             std::ifstream f(path, std::ios::binary);
             if (!f) throw std::runtime_error("Cannot open file: " + path.string());
-            std::vector<uint8_t> data(std::istreambuf_iterator<char>(f), {});
+            std::vector<uint8_t> data = readAllBytes(f, path);
 
             GLTFParser parser;
             parser.basePath = path.parent_path();
