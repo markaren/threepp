@@ -259,11 +259,6 @@ namespace threepp {
             std::map<std::pair<int, int>, std::shared_ptr<Texture>> textureCache;
             std::unordered_map<int, std::shared_ptr<Material>> materialCache;
 
-            // Decoded image cache, keyed by glTF image index. Avoids re-running
-            // the (expensive) stb_image decode when one image backs several
-            // textures or several colour-space variants. Shared, immutable.
-            std::unordered_map<int, std::shared_ptr<Image>> imageCache;
-
             // Decoded-geometry cache, keyed by (meshIdx, primIdx, hasSkin).
             // loadMesh is invoked once per referencing node; without this the
             // same primitive is fully re-decoded for every node. Cached
@@ -777,19 +772,6 @@ namespace threepp {
                 return loader.load(raw, 4, false);
             }
 
-            // Decode an image once and cache the (shared, immutable) result by
-            // image index, so multiple textures / colour-space variants that
-            // reference the same source don't re-run the stb_image decode.
-            std::shared_ptr<Image> loadImageDataCached(int imageIdx) {
-                if (auto it = imageCache.find(imageIdx); it != imageCache.end())
-                    return it->second;
-                auto img = loadImageData(imageIdx);
-                if (!img) return nullptr;
-                auto sp = std::make_shared<Image>(std::move(*img));
-                imageCache[imageIdx] = sp;
-                return sp;
-            }
-
             std::shared_ptr<Texture> loadTexture(int texIdx, ColorSpace cs = ColorSpace::sRGB) {
                 const std::pair<int, int> key{texIdx, static_cast<int>(cs)};
                 if (auto it = textureCache.find(key); it != textureCache.end())
@@ -799,14 +781,16 @@ namespace threepp {
                 int imageIdx = texDef.value("source", -1);
                 if (imageIdx < 0) return nullptr;
 
-                auto image = loadImageDataCached(imageIdx);
+                auto image = loadImageData(imageIdx);
                 if (!image) return nullptr;
 
-                // Copy the shared decoded image into the texture (colour-space
-                // tag differs per variant, so pixel storage can't be shared —
-                // the cache above still avoids re-decoding, and this variant is
-                // built at most once).
-                auto tex = Texture::create(std::vector<Image>{*image});
+                // Move the decoded pixels straight into the texture — no copy and
+                // no lingering decode buffer. The (texIdx, colorSpace) texture
+                // cache above means each variant is built exactly once, so the
+                // rare second colour-space role of one texture re-decodes rather
+                // than retaining every decoded image for the whole load (which
+                // would inflate peak memory on texture-heavy scenes).
+                auto tex = Texture::create(std::vector<Image>{std::move(*image)});
                 tex->colorSpace = cs;
                 tex->needsUpdate();
 
