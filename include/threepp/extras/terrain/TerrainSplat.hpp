@@ -84,8 +84,28 @@ namespace threepp::terrain {
 
         // Baked ambient occlusion: darken concave folds (gullies) a touch — real
         // ground has occlusion where surfaces cup. 0 = off.
-        float aoStrength = 0.f;// multiplies concave curvature
-        float aoMax = 0.30f;   // max darkening fraction
+        //
+        // AO uses its OWN concavity measure (aoConcavity below), separate from
+        // the layers' curvatureN: the layer biases want a saturating "is this a
+        // ridge or a hollow" signal, but a saturating response cannot tell a
+        // broad gully from a 2 m erosion channel — with it, every droplet
+        // drainage line and noise pit darkens identically and the terrain
+        // stipples into dot fields and parallel streaks. The AO measure instead
+        //   (a) requires concavity at BOTH the local scale (curvEps) and a
+        //       larger scale (aoEps): a flat pixel beside a cliff (concave only
+        //       through the remote wall inside the footprint), a Laplacian
+        //       ringing shoulder at a slope break, and a noise pit all fail one
+        //       of the two and are gated off;
+        //   (b) takes the WEAKER of the two magnitudes at a LOW gain
+        //       (aoCurvScale, far from tanh saturation) through an aoLo..aoHi
+        //       deadband — narrow channels register weakly at aoEps and fall in
+        //       the deadband, broad gullies pass and darken.
+        float aoStrength = 0.f; // multiplies the gated concavity
+        float aoMax = 0.30f;    // max darkening fraction
+        float aoEps = 0.f;      // metres; 0 → 3 × curvEps
+        float aoCurvScale = 8.f;// LOW gain (cf. curvScale) — must not saturate
+        float aoLo = 0.25f;     // deadband: no darkening below this response
+        float aoHi = 0.80f;     // full response above this
 
         // ── Macro variation (WS2): low-frequency world-anchored tone drift ────
         // Two octaves of value noise at ~80-300 m wavelength drive a luminance
@@ -136,9 +156,11 @@ namespace threepp::terrain {
             acc[1] *= inv;
             acc[2] *= inv;
 
-            // Baked AO in concave folds.
+            // Baked AO in concave folds — dual-scale gated, deadbanded (see the
+            // aoStrength field comment for why this is NOT curvN).
             if (aoStrength > 0.f) {
-                const float ao = 1.f - std::clamp(std::max(0.f, curvN) * aoStrength, 0.f, aoMax);
+                const float cc = aoConcavity(x, z);
+                const float ao = 1.f - std::clamp(cc * aoStrength, 0.f, aoMax);
                 acc[0] *= ao;
                 acc[1] *= ao;
                 acc[2] *= ao;
@@ -188,13 +210,50 @@ namespace threepp::terrain {
     private:
         // Normalised curvature at (x,z): tanh(Laplacian · scale). Fixed eps so
         // adjacent LODs agree. <0 convex (ridge), >0 concave (hollow).
+        //
+        // MULTI-SCALE SIGN AGREEMENT: a single-scale Laplacian is a band-pass —
+        // it responds to EVERYTHING near its epsilon wavelength. Height detail
+        // at that scale (erosion droplet pits, provider noise octaves) makes
+        // every bump alternate concave/convex and stipples the AO into a dot
+        // field; and any sharp slope break (groove, terrace edge, cliff top)
+        // RINGS — a concave centre flanked by convex shoulders at ±e (and vice
+        // versa), so every drainage channel renders as parallel companion
+        // lines. Real landform concavity (a gully) is concave across scales;
+        // the artifacts are not. So: take the Laplacian at e AND 2e, keep the
+        // smaller magnitude when the signs agree, zero otherwise. Pits and
+        // ringing shoulders flip sign (or collapse) at 2e and are gated off;
+        // wide gullies pass at both scales and keep their full response.
+        [[nodiscard]] float lapAt(float x, float z, float hc, float e) const {
+            return (height(x + e, z) + height(x - e, z) +
+                    height(x, z + e) + height(x, z - e) - 4.f * hc) / (e * e);
+        }
+
         [[nodiscard]] float curvatureN(float x, float z) const {
             if (!height) return 0.f;
-            const float e = curvEps;
             const float hc = height(x, z);
-            const float lap = height(x + e, z) + height(x - e, z) +
-                              height(x, z + e) + height(x, z - e) - 4.f * hc;
-            return std::tanh((lap / (e * e)) * curvScale);
+            const float l1 = lapAt(x, z, hc, curvEps);
+            const float l2 = lapAt(x, z, hc, curvEps * 2.f);
+            float m = 0.f;
+            if (l1 > 0.f && l2 > 0.f) m = std::min(l1, l2);
+            else if (l1 < 0.f && l2 < 0.f) m = std::max(l1, l2);
+            return std::tanh(m * curvScale);
+        }
+
+        // Gated AO concavity in [0,1] — see the aoStrength field comment.
+        // Requires concavity at BOTH curvEps (local — gates off flat-beside-
+        // cliff pixels and ringing shoulders) and aoEps (broad — gates off
+        // pits and narrow channels), then deadbands the weaker magnitude at
+        // low gain so only genuinely broad concavity darkens.
+        [[nodiscard]] float aoConcavity(float x, float z) const {
+            if (!height) return 0.f;
+            const float hc = height(x, z);
+            const float lLocal = lapAt(x, z, hc, curvEps);
+            if (lLocal <= 0.f) return 0.f;
+            const float eBig = aoEps > 0.f ? aoEps : curvEps * 3.f;
+            const float lBroad = lapAt(x, z, hc, eBig);
+            if (lBroad <= 0.f) return 0.f;
+            const float r = std::tanh(std::min(lLocal, lBroad) * aoCurvScale);
+            return smoothstep(aoLo, aoHi, r);
         }
 
         static float smoothstep(float e0, float e1, float x) {
