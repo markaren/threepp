@@ -175,6 +175,16 @@ namespace threepp {
         float detailRepeat;  // repeats per world meter (XZ-anchored)
         float detailStrength;// 0..1 modulation strength
 
+        // Optional detail NORMAL + ROUGHNESS layer, sharing the same world-XZ
+        // stochastic projection as detailMap (Vulkan deferred G-buffer only).
+        // RGBA, LINEAR: RGB = tangent-space normal (0.5 = flat), A = roughness
+        // modulation (0.5 = neutral, shader applies roughness *= mix(1, 2*A,
+        // detailRoughStrength*fade)). Both terms fade with distance like the
+        // albedo layer, so they never shimmer far away. Inert when null.
+        std::shared_ptr<Texture> detailNormalMap;
+        float detailNormalScale = 1.f;   // tangent-space xy perturbation scale
+        float detailRoughStrength = 0.6f;// 0..1 roughness modulation strength
+
         MaterialWithDetailMap(float detailRepeat, float detailStrength)
             : detailRepeat(detailRepeat), detailStrength(detailStrength) {}
     };

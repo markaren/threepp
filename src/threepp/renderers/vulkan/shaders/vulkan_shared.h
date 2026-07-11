@@ -109,13 +109,18 @@ namespace threepp::vulkan_pt {
         int32_t detailTexIndex;
         float detailRepeat;  // repeats per world meter (worldPos.xz anchored)
         float detailStrength;// 0..1
+        // Detail NORMAL + ROUGHNESS layer (shares detailTexIndex's world-XZ
+        // stochastic projection). -1 = none. Raster G-buffer only.
+        int32_t detailNormalTexIndex;
+        float detailNormalScale;  // tangent xy perturbation scale
+        float detailRoughStrength;// 0..1 roughness modulation strength
         float _padDetail;
     };
 
     // Catches silent layout drift: if any field is added/removed/reordered
     // above, the size changes and this fires. Update the GLSL `MaterialDesc`
     // mirror below to match before bumping the expected size.
-    static_assert(sizeof(MaterialDesc) == 484,
+    static_assert(sizeof(MaterialDesc) == 496,
                   "MaterialDesc size changed — update the GLSL mirror in this file too.");
 }
 
@@ -168,6 +173,9 @@ struct MaterialDesc {
     int   detailTexIndex;// tiled world-anchored detail albedo; -1 = none
     float detailRepeat;  // repeats per world meter (worldPos.xz anchored)
     float detailStrength;// 0..1
+    int   detailNormalTexIndex;// detail normal+roughness; -1 = none
+    float detailNormalScale;   // tangent xy perturbation scale
+    float detailRoughStrength; // 0..1 roughness modulation strength
     float _padDetail;
 };
 

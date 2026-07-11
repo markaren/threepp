@@ -1431,6 +1431,9 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                             if (auto tex = detailTexOf(*m)) {
                                 md.detailTexIndex = ensureMaterialTexture(tex);
                             }
+                            if (auto tex = detailNormalTexOf(*m)) {
+                                md.detailNormalTexIndex = ensureMaterialTexture(tex);
+                            }
                             matDescsCached_[i] = md;
                         }
                         for (auto& d : matDescsDirty_) d = true;
@@ -1938,6 +1941,9 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     }
                     if (auto tex = detailTexOf(*m)) {
                         md.detailTexIndex = ensureMaterialTexture(tex);
+                    }
+                    if (auto tex = detailNormalTexOf(*m)) {
+                        md.detailNormalTexIndex = ensureMaterialTexture(tex);
                     }
                     matDescMemo.emplace(matKey, md);
                 }

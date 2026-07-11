@@ -14,6 +14,7 @@
 //
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
 #include "threepp/extras/terrain/TerrainSplat.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
@@ -257,9 +258,10 @@ int main(int argc, char** argv) {
     float sceneScale = 1.f;     // debug: scale world/amplitude/feature (precision A/B)
     float ovSunAz = -1, ovSunEl = -1;// debug: override sun azimuth/elevation
 
-    // Headless capture: --shot <name.png> [--frames N] [--preset P] [--seed S]
-    // [--topdown]. Renders a settled frame (TAA/auto-exposure converge) then
-    // writes PROJECT_FOLDER/aaa_caps/<name> and exits. Windowed run otherwise.
+    // Headless capture: --shot <name.png> [--frames N] [--preset P]
+    // [--topdown] [--closeup]. Renders a settled frame (TAA/auto-exposure
+    // converge) then writes PROJECT_FOLDER/aaa_caps/<name> and exits.
+    bool closeUp = false;// low camera near a rock face (inspect detail relief)
     std::string shotPath;
     int shotFrames = 140;
     for (int i = 1; i < argc; ++i) {
@@ -269,6 +271,7 @@ int main(int argc, char** argv) {
         else if (a == "--preset" && i + 1 < argc) startPreset = std::atoi(argv[++i]);
         else if (a == "--topdown") topDown = true;
         else if (a == "--noerode") noErode = true;
+        else if (a == "--closeup") closeUp = true;
     }
 
     Canvas canvas("Vulkan PT - Mountains", {{"vsync", false}});
@@ -347,6 +350,18 @@ int main(int argc, char** argv) {
     terrainTex->minFilter = Filter::Linear;
     terrainMat->map = terrainTex;
     terrainMat->color = Color::white;// albedo comes from the map now
+    // Cm-scale tiled detail (Vulkan deferred only): albedo breakup + normal
+    // relief + roughness, world-XZ anchored and distance-faded. The per-vertex
+    // splat is ~sub-metre/texel — mush up close; this sharpens the near ground.
+    {
+        const terrain::DetailMaps dm = terrain::makeDetailMaps({});
+        terrainMat->detailMap = dm.albedo;
+        terrainMat->detailNormalMap = dm.normalRough;
+        terrainMat->detailRepeat = 0.5f;// one repeat per 2 m
+        terrainMat->detailStrength = 0.5f;
+        terrainMat->detailNormalScale = 1.2f;
+        terrainMat->detailRoughStrength = 0.5f;
+    }
     terrainMat->needsUpdate();
     int builtTexDim = gen.dim();
     scene.add(terrain);
@@ -392,6 +407,10 @@ int main(int argc, char** argv) {
     if (topDown) {// overhead — reveals the drainage network on the surface
         camera.position.set(0.f, params.worldSize * 1.3f, 0.1f);
         controls.target.set(0.f, 0.f, 0.f);
+    }
+    if (closeUp) {// low, near a mid-slope face — inspect detail relief / roughness
+        camera.position.set(params.worldSize * 0.18f, params.amplitude * 0.42f, params.worldSize * 0.18f);
+        controls.target.set(0.f, params.amplitude * 0.30f, 0.f);
     }
     controls.update();
 

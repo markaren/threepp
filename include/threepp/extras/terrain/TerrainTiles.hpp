@@ -179,6 +179,15 @@ namespace threepp::terrain {
         std::shared_ptr<Texture> detailMap;
         float detailRepeat = 0.8f;  // repeats per world meter
         float detailStrength = 1.f; // 0..1 modulation strength
+
+        // Optional detail NORMAL + ROUGHNESS map, sharing detailRepeat's world-XZ
+        // projection (Vulkan deferred renderer only). RGBA LINEAR: RGB =
+        // tangent-space normal (0.5 = flat), A = roughness modulation (0.5 =
+        // neutral). Gives near ground relief lighting + roughness breakup; both
+        // fade with distance so they never shimmer far away.
+        std::shared_ptr<Texture> detailNormalMap;
+        float detailNormalScale = 1.f;   // tangent xy perturbation scale
+        float detailRoughStrength = 0.6f;// 0..1 roughness modulation strength
     };
 
     class TileTerrain : public Group {
@@ -484,6 +493,11 @@ namespace threepp::terrain {
                 mat->detailMap = o_.detailMap;
                 mat->detailRepeat = o_.detailRepeat;
                 mat->detailStrength = o_.detailStrength;
+            }
+            if (o_.detailNormalMap) {
+                mat->detailNormalMap = o_.detailNormalMap;
+                mat->detailNormalScale = o_.detailNormalScale;
+                mat->detailRoughStrength = o_.detailRoughStrength;
             }
 
             n.mesh = Mesh::create(geo, mat);

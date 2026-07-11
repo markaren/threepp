@@ -120,6 +120,61 @@ float alphaHash(vec2 fragXY, vec2 jitter) {
     return float(h) / 4294967296.0;
 }
 
+// ── Detail-layer stochastic tiling (Deliot & Heitz 2019) ─────────────────────
+// Triangle-lattice weights + per-lattice-point hash offsets, computed ONCE per
+// projection and shared by the detail ALBEDO and detail NORMAL/ROUGHNESS taps
+// (and, under triplanar, once per active axis). `duv` is the world-anchored
+// projected coordinate; g1/g2 are its screen derivatives, PASSED IN so they are
+// evaluated in non-divergent (quad-uniform) control flow.
+struct DetailLattice {
+    vec2 v1, v2, v3;
+    vec3 w;
+    vec2 g1, g2;
+};
+
+DetailLattice detailLatticeSetup(vec2 duv, vec2 g1, vec2 g2) {
+    DetailLattice lt;
+    const mat2 kSkew = mat2(1.0, 0.0, -0.57735027, 1.15470054);
+    const vec2 skewed = kSkew * (duv * 1.154700538);
+    const vec2 baseId = floor(skewed);
+    vec3 bary = vec3(fract(skewed), 0.0);
+    bary.z = 1.0 - bary.x - bary.y;
+    if (bary.z > 0.0) {
+        lt.w = vec3(bary.z, bary.y, bary.x);
+        lt.v1 = baseId; lt.v2 = baseId + vec2(0, 1); lt.v3 = baseId + vec2(1, 0);
+    } else {
+        lt.w = vec3(-bary.z, 1.0 - bary.y, 1.0 - bary.x);
+        lt.v1 = baseId + vec2(1, 1); lt.v2 = baseId + vec2(1, 0); lt.v3 = baseId + vec2(0, 1);
+    }
+    lt.g1 = g1;
+    lt.g2 = g2;
+    return lt;
+}
+
+// Per-lattice-point random UV offset (any fract-noise hash works — the offsets
+// only need to decorrelate the three taps).
+#define DETAIL_HASH(p) fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453)
+
+// Variance-preserving 3-tap blend around the 0.5 neutral (dividing the summed
+// deviations by sqrt(Σw²) keeps contrast exact — the texture is 0.5-centered by
+// construction). textureGrad with the un-offset uv derivatives keeps mip
+// selection continuous across lattice borders. Returns rgba: callers use .rgb
+// (albedo), or .xy + .a (normal deviation + roughness modulation).
+vec4 detailStochastic(int idx, vec2 duv, DetailLattice lt) {
+    const vec4 d1 = textureGrad(gbufAlbedoMaps[nonuniformEXT(idx)], duv + DETAIL_HASH(lt.v1), lt.g1, lt.g2);
+    const vec4 d2 = textureGrad(gbufAlbedoMaps[nonuniformEXT(idx)], duv + DETAIL_HASH(lt.v2), lt.g1, lt.g2);
+    const vec4 d3 = textureGrad(gbufAlbedoMaps[nonuniformEXT(idx)], duv + DETAIL_HASH(lt.v3), lt.g1, lt.g2);
+    return vec4(0.5) + ((d1 - 0.5) * lt.w.x + (d2 - 0.5) * lt.w.y + (d3 - 0.5) * lt.w.z)
+                       * inversesqrt(max(dot(lt.w, lt.w), 1e-6));
+}
+
+// A plain (non-stochastic) detail tap — same textureGrad footprint, no lattice.
+// Used for the non-dominant triplanar projections on cliffs, where the visible
+// cost of periodic tiling is far lower than on open ground (WS4).
+vec4 detailPlain(int idx, vec2 duv, vec2 g1, vec2 g2) {
+    return textureGrad(gbufAlbedoMaps[nonuniformEXT(idx)], duv, g1, g2);
+}
+
 void main() {
     vec3 N = normalize(vWorldNormal);
 
@@ -268,35 +323,53 @@ void main() {
     // texture is 0.5-centered by construction, so no histogram transform is
     // needed. textureGrad with the UNoffset uv's derivatives keeps mip
     // selection continuous across lattice borders.
-    if (m.detailTexIndex >= 0) {
-        const int  di   = clamp(m.detailTexIndex, 0, int(kMaxMaterialTextures) - 1);
+    // Detail ROUGHNESS multiplier (1 = inert). Set in the detail block below,
+    // consumed at the roughness-map multiply further down (before the 0.04
+    // clamp and the Toksvig fold).
+    float detailRoughMul = 1.0;
+    if (m.detailTexIndex >= 0 || m.detailNormalTexIndex >= 0) {
         const vec2 duv  = vWorldPos.xz * m.detailRepeat;
+        // Derivatives at the quad-uniform (per-instance) level — the enclosing
+        // branch is flat per instance, so these are valid; the inner fade gate
+        // varies per pixel but textureGrad takes explicit grads, so its
+        // divergence is harmless.
+        const vec2 dgx  = dFdx(duv);
+        const vec2 dgy  = dFdy(duv);
         const float fade = 1.0 - smoothstep(0.25, 0.75, length(fwidth(duv)));
         if (fade > 0.001) {
-            // Triangle lattice (~1.15 lattice cells per texture repeat).
-            const mat2 kSkew = mat2(1.0, 0.0, -0.57735027, 1.15470054);
-            const vec2 skewed = kSkew * (duv * 1.154700538);
-            const vec2 baseId = floor(skewed);
-            vec3 bary = vec3(fract(skewed), 0.0);
-            bary.z = 1.0 - bary.x - bary.y;
-            vec2 v1, v2, v3; vec3 w;
-            if (bary.z > 0.0) {
-                w = vec3(bary.z, bary.y, bary.x);
-                v1 = baseId; v2 = baseId + vec2(0, 1); v3 = baseId + vec2(1, 0);
-            } else {
-                w = vec3(-bary.z, 1.0 - bary.y, 1.0 - bary.x);
-                v1 = baseId + vec2(1, 1); v2 = baseId + vec2(1, 0); v3 = baseId + vec2(0, 1);
+            const DetailLattice lt = detailLatticeSetup(duv, dgx, dgy);
+            // Detail albedo (LINEAR, 0.5-neutral → the ×2 overlay leaves the
+            // macro colour's mean intact).
+            if (m.detailTexIndex >= 0) {
+                const int di = clamp(m.detailTexIndex, 0, int(kMaxMaterialTextures) - 1);
+                const vec3 det = detailStochastic(di, duv, lt).rgb;
+                albedoSample *= mix(vec3(1.0), det * 2.0, m.detailStrength * fade);
             }
-            // Per-lattice-point random UV offset (any fract-noise hash works —
-            // the offsets only need to decorrelate the three taps).
-            #define DETAIL_HASH(p) fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453)
-            const vec2 g1 = dFdx(duv), g2 = dFdy(duv);
-            const vec3 d1 = textureGrad(gbufAlbedoMaps[nonuniformEXT(di)], duv + DETAIL_HASH(v1), g1, g2).rgb;
-            const vec3 d2 = textureGrad(gbufAlbedoMaps[nonuniformEXT(di)], duv + DETAIL_HASH(v2), g1, g2).rgb;
-            const vec3 d3 = textureGrad(gbufAlbedoMaps[nonuniformEXT(di)], duv + DETAIL_HASH(v3), g1, g2).rgb;
-            const vec3 det = 0.5 + ((d1 - 0.5) * w.x + (d2 - 0.5) * w.y + (d3 - 0.5) * w.z)
-                                           * inversesqrt(max(dot(w, w), 1e-6));
-            albedoSample *= mix(vec3(1.0), det * 2.0, m.detailStrength * fade);
+            // Detail normal + roughness. Shares the lattice; the tap's .xy is
+            // 0.5-centered (tangent deviation), .a is 0.5-neutral roughness.
+            if (m.detailNormalTexIndex >= 0) {
+                const int ni = clamp(m.detailNormalTexIndex, 0, int(kMaxMaterialTextures) - 1);
+                const vec4 dn = detailStochastic(ni, duv, lt);
+                // Tangent frame anchored to the world-XZ projection: T ← world
+                // +X projected onto the (already normal-mapped) surface, and
+                // B = cross(T, N) so it aligns with world +Z on flat ground —
+                // the detail map's green channel then maps to +Z. Perturb N
+                // AFTER the base normal map, scaled by detailNormalScale·fade
+                // (the same fade as the albedo layer, so relief retires with
+                // distance and can't shimmer far away).
+                vec3 T = vec3(1.0, 0.0, 0.0) - N * N.x;
+                const float tl = length(T);
+                if (tl > 1e-4) {
+                    T /= tl;
+                    const vec3 B = cross(T, N);
+                    const vec2 nxy = (dn.xy - 0.5) * 2.0 * m.detailNormalScale * fade;
+                    const float nz = sqrt(max(1e-4, 1.0 - dot(nxy, nxy)));
+                    N = normalize(T * nxy.x + B * nxy.y + N * nz);
+                }
+                // Roughness modulation (A 0.5-neutral). Applied at the rough map
+                // multiply below so it inherits the clamp + Toksvig fold.
+                detailRoughMul = mix(1.0, 2.0 * dn.a, m.detailRoughStrength * fade);
+            }
         }
     }
     // Per-vertex color (material.vertexColors): vColor is white when the mesh
@@ -325,6 +398,9 @@ void main() {
             const int i = clamp(m.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
             metalness *= texture(gbufAlbedoMaps[nonuniformEXT(i)], uvRoughMetal).b;
         }
+        // World-anchored detail roughness breakup (MaterialWithDetailMap detail
+        // normal map's alpha). Fades with distance like the detail normal/albedo.
+        roughness *= detailRoughMul;
         roughness = clamp(roughness, 0.04, 1.0);
         metalness = clamp(metalness, 0.0,  1.0);
 

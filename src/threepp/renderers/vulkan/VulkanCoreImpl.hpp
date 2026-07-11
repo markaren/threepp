@@ -3824,6 +3824,9 @@ namespace threepp {
             d.detailTexIndex = -1;
             d.detailRepeat = 0.f;
             d.detailStrength = 0.f;
+            d.detailNormalTexIndex = -1;
+            d.detailNormalScale = 1.f;
+            d.detailRoughStrength = 0.f;
             d._padDetail = 0.f;
             static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
             std::copy(kIdent, kIdent+9, d.uvTransform);
@@ -3936,8 +3939,10 @@ namespace threepp {
             if (auto* dm = dynamic_cast<MaterialWithDetailMap*>(mat.get())) {
                 // texIndex stays -1 here; the texture-index fill sites bind it
                 // (detailTexOf gates on detailMap && strength > 0).
-                d.detailRepeat   = dm->detailRepeat;
-                d.detailStrength = std::clamp(dm->detailStrength, 0.f, 1.f);
+                d.detailRepeat        = dm->detailRepeat;
+                d.detailStrength      = std::clamp(dm->detailStrength, 0.f, 1.f);
+                d.detailNormalScale   = dm->detailNormalScale;
+                d.detailRoughStrength = std::clamp(dm->detailRoughStrength, 0.f, 1.f);
             }
             if (auto* sp = dynamic_cast<MaterialWithPbrSpecular*>(mat.get())) {
                 d.specularIntensity   = sp->specularIntensity;
@@ -4001,6 +4006,20 @@ namespace threepp {
             if (!mat) return nullptr;
             if (auto* dm = dynamic_cast<MaterialWithDetailMap*>(mat.get())) {
                 if (dm->detailMap && dm->detailStrength > 0.f) return dm->detailMap;
+            }
+            return nullptr;
+        }
+
+        // Detail NORMAL + ROUGHNESS map (MaterialWithDetailMap). Independent of
+        // the detail albedo: a terrain can carry relief/roughness breakup with
+        // no albedo layer, or vice-versa. Gated on the map plus a nonzero
+        // strength on either the normal or the roughness term.
+        static std::shared_ptr<Texture> detailNormalTexOf(const Mesh& m) {
+            auto mat = m.material();
+            if (!mat) return nullptr;
+            if (auto* dm = dynamic_cast<MaterialWithDetailMap*>(mat.get())) {
+                if (dm->detailNormalMap && (dm->detailNormalScale > 0.f || dm->detailRoughStrength > 0.f))
+                    return dm->detailNormalMap;
             }
             return nullptr;
         }
