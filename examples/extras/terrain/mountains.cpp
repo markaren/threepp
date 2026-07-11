@@ -15,6 +15,7 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
+#include "threepp/extras/terrain/TerrainSplat.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -133,9 +134,118 @@ namespace {
         }
     };
 
+    // Build data-driven splat rules from the configurator params. The ImGui
+    // sliders drive `params`; this maps them onto ordered SplatLayers (grass →
+    // scree → rock → snow) plus curvature response and macro variation. Heights
+    // are in world metres (evaluate's `h`, the layer windows, and the curvature
+    // height fn all share that unit); slope is 0 flat .. 1 vertical.
+    terrain::SplatRules makeMountainRules(const TerrainParams& p, const std::vector<float>& field, int dim) {
+        using namespace terrain;
+        const float amp = p.amplitude;
+        const float cellWorld = p.worldSize / static_cast<float>(std::max(dim - 1, 1));
+
+        SplatRules r;
+        // Curvature height field: the eroded [0,1] field scaled to metres,
+        // wrapped in a HeightGrid so curvature reads the SAME surface the mesh
+        // shows (gullies, ridges). Fixed eps → LOD-agnostic (mountains is a
+        // single mesh, but keeps the helper honest for tiled users).
+        std::vector<float> hm(field.size());
+        for (size_t i = 0; i < field.size(); ++i) hm[i] = field[i] * amp;
+        HeightGrid grid(std::move(hm), dim, p.worldSize);
+        r.height = [grid = std::move(grid)](float x, float z) { return grid.sampleBilinear(x, z); };
+        r.curvEps = std::max(cellWorld * 1.5f, 2.5f);
+        r.curvScale = 60.f;
+        r.aoStrength = 0.45f;// gentle occlusion in concave folds
+        r.aoMax = std::clamp(p.aoMax, 0.f, 0.6f);
+
+        const float snowH = p.snowLine * amp;
+        const float e = std::max(p.bandEdge, 0.02f);
+
+        SplatLayer grass;
+        grass.color = p.grassColor;
+        grass.slopeLo = 0.f;
+        grass.slopeHi = p.slopeGrassMax;
+        grass.slopeFeather = e;
+        grass.heightHi = snowH;
+        grass.heightFeather = amp * 0.05f;
+        grass.concaveBias = 0.25f;// grass/soil catches in hollows
+        grass.noiseAmpSlope = 0.03f;
+
+        SplatLayer scree;
+        scree.color = p.screeColor;
+        scree.slopeLo = p.slopeGrassMax;
+        scree.slopeHi = p.slopeRockMin;
+        scree.slopeFeather = e;
+        scree.concaveBias = 0.9f;// talus/scree collects in gullies & benches
+        scree.noiseAmpSlope = 0.03f;
+
+        SplatLayer rock;
+        rock.color = p.rockColor;
+        rock.slopeLo = p.slopeRockMin;
+        rock.slopeHi = 1.f;
+        rock.slopeFeather = 0.08f;
+        rock.convexBias = 0.8f;// bare rock on convex ridge crests
+        rock.weightFloor = 0.02f;// fallback so no texel resolves to grey
+
+        SplatLayer snow;
+        snow.color = p.snowColor;
+        snow.slopeLo = 0.f;
+        snow.slopeHi = p.snowSlopeMax;
+        snow.slopeFeather = 0.1f;
+        snow.heightLo = snowH;
+        snow.heightFeather = amp * 0.05f;
+        snow.noiseAmpHeight = p.snowNoiseAmp * amp;// noisy snowline
+        snow.noiseFreq = 0.06f;
+
+        r.layers = {grass, scree, rock, snow};
+        return r;
+    }
+
+    // Bake the slope/curvature/altitude splat into an sRGB RGBA8 albedo image
+    // (dim×dim, one texel per mesh vertex). Replaces TerrainGenerator's built-in
+    // bakeSplatColors with the reusable, curvature-aware SplatRules helper.
+    std::vector<unsigned char> bakeMountainSplat(const TerrainGenerator& gen, const TerrainParams& p) {
+        const int dim = gen.dim();
+        std::vector<unsigned char> out(static_cast<size_t>(std::max(dim, 1)) * std::max(dim, 1) * 4, 255u);
+        const auto& field = gen.getField();
+        if (dim < 2 || static_cast<size_t>(dim) * dim != field.size()) return out;
+
+        const terrain::SplatRules rules = makeMountainRules(p, field, dim);
+        const float amp = p.amplitude;
+        const float cellWorld = p.worldSize / static_cast<float>(dim - 1);
+        const float half = p.worldSize * 0.5f;
+        const auto at = [dim](int x, int y) { return static_cast<size_t>(y) * dim + x; };
+
+        std::vector<int> rows(static_cast<size_t>(dim));
+        std::iota(rows.begin(), rows.end(), 0);
+        parallelForEach(rows.begin(), rows.end(), [&](int z) {
+            const float wz = -half + static_cast<float>(z) * cellWorld;
+            for (int x = 0; x < dim; ++x) {
+                const float wx = -half + static_cast<float>(x) * cellWorld;
+                const int xm = std::max(x - 1, 0), xp = std::min(x + 1, dim - 1);
+                const int zm = std::max(z - 1, 0), zp = std::min(z + 1, dim - 1);
+                const float hC = field[at(x, z)];
+                const float dHdx = (field[at(xp, z)] - field[at(xm, z)]) * amp / (2.f * cellWorld);
+                const float dHdz = (field[at(x, zp)] - field[at(x, zm)]) * amp / (2.f * cellWorld);
+                const float ny = 1.f / std::sqrt(dHdx * dHdx + dHdz * dHdz + 1.f);
+                const float slope = 1.f - ny;
+                const terrain::Rgb col = rules.evaluate(wx, wz, hC * amp, slope);
+
+                // Z-flip: the albedo map's rows run opposite to world Z vs the
+                // PlaneGeometry UV v-axis (matches TerrainGenerator::bakeSplatColors).
+                const size_t o = at(x, dim - 1 - z) * 4;
+                out[o + 0] = static_cast<unsigned char>(std::clamp(col[0], 0.f, 1.f) * 255.f + 0.5f);
+                out[o + 1] = static_cast<unsigned char>(std::clamp(col[1], 0.f, 1.f) * 255.f + 0.5f);
+                out[o + 2] = static_cast<unsigned char>(std::clamp(col[2], 0.f, 1.f) * 255.f + 0.5f);
+                out[o + 3] = 255u;
+            }
+        });
+        return out;
+    }
+
 }// namespace
 
-int main() {
+int main(int argc, char** argv) {
 
     bool stress = false;// re-roll repeatedly to exercise the runtime regen / BLAS-rebuild path
     bool rerollOnce = false;// single in-place re-roll at frame 20, then settle (motion-vector test)
@@ -147,8 +257,26 @@ int main() {
     float sceneScale = 1.f;     // debug: scale world/amplitude/feature (precision A/B)
     float ovSunAz = -1, ovSunEl = -1;// debug: override sun azimuth/elevation
 
+    // Headless capture: --shot <name.png> [--frames N] [--preset P] [--seed S]
+    // [--topdown]. Renders a settled frame (TAA/auto-exposure converge) then
+    // writes PROJECT_FOLDER/aaa_caps/<name> and exits. Windowed run otherwise.
+    std::string shotPath;
+    int shotFrames = 140;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (a == "--preset" && i + 1 < argc) startPreset = std::atoi(argv[++i]);
+        else if (a == "--topdown") topDown = true;
+        else if (a == "--noerode") noErode = true;
+    }
+
     Canvas canvas("Vulkan PT - Mountains", {{"vsync", false}});
-    auto renderer = createRenderer(canvas);
+    // Headless capture forces the Vulkan deferred renderer (the detail
+    // normal/roughness + triplanar layer is Vulkan-only); interactive runs keep
+    // the renderer-select menu.
+    auto renderer = shotPath.empty() ? createRenderer(canvas)
+                                     : createRenderer(canvas, GraphicsAPI::Vulkan);
     renderer->toneMapping = ToneMapping::ACESFilmic;
     renderer->toneMappingExposure = 1.0f;
 
@@ -211,7 +339,7 @@ int main() {
     // Slope/altitude/snow splat baked into an sRGB albedo map — one texel per
     // mesh vertex, so the PlaneGeometry UVs map it 1:1. Re-baked whenever the
     // field or the texturing params change (see rebakeColors below).
-    auto terrainTex = DataTexture::create(ImageData{gen.bakeSplatColors(params)},
+    auto terrainTex = DataTexture::create(ImageData{bakeMountainSplat(gen, params)},
                                           static_cast<unsigned int>(gen.dim()),
                                           static_cast<unsigned int>(gen.dim()));
     terrainTex->colorSpace = ColorSpace::sRGB;
@@ -225,10 +353,10 @@ int main() {
 
     auto rebakeColors = [&] {
         if (gen.dim() == builtTexDim) {
-            terrainTex->setData(ImageData{gen.bakeSplatColors(params)});
+            terrainTex->setData(ImageData{bakeMountainSplat(gen, params)});
             terrainTex->needsUpdate();
         } else {// resolution changed → new texture dimensions
-            terrainTex = DataTexture::create(ImageData{gen.bakeSplatColors(params)},
+            terrainTex = DataTexture::create(ImageData{bakeMountainSplat(gen, params)},
                                              static_cast<unsigned int>(gen.dim()),
                                              static_cast<unsigned int>(gen.dim()));
             terrainTex->colorSpace = ColorSpace::sRGB;
@@ -541,8 +669,18 @@ int main() {
 
         renderer->render(scene, camera);
 
-        ui.render();
-
+        if (!shotPath.empty()) {
+            static int shotFrame = 0;
+            if (++shotFrame >= shotFrames) {
+                const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
+                std::filesystem::create_directories(path.parent_path());
+                renderer->writeFramebuffer(path);
+                std::cout << "wrote " << path.string() << " (" << fps << " fps)" << std::endl;
+                std::exit(0);
+            }
+        } else {
+            ui.render();
+        }
     });
 
     return 0;
