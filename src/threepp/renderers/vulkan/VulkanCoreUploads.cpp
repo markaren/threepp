@@ -417,10 +417,35 @@ namespace threepp {
         // size in clip space (2/width) must use the resolution the deferred
         // shade + the raster gbuffer actually run at, not the swapchain extent.
         const VkExtent2D ext = renderExtent();
-        const uint32_t phaseCount = jitterPhaseCount_(ext, ctx->swapchainExtent());
-        const uint32_t hi = (haltonFrame_ % phaseCount) + 1u;
-        const float jx = halton_(hi, 2) - 0.5f;
-        const float jy = halton_(hi, 3) - 0.5f;
+        uint32_t phaseCount = jitterPhaseCount_(ext, ctx->swapchainExtent());
+        float jx, jy;
+#if defined(THREEPP_WITH_FSR)
+        // When FSR is the active upscaler, drive the jitter from FSR's own
+        // sequence (its phase count tracks the render/display ratio). The raster
+        // and deferred cameras both read the same haltonFrame_ index this frame,
+        // so overriding both keeps their sub-pixel offset identical — and matches
+        // the dispatch jitterOffset (VulkanCoreRecord). Also stash the sub-pixel
+        // offset + camera near/far/vertical-FOV for the dispatch (no camera there).
+        if (fsrActive_ && fsr_) {
+            phaseCount = static_cast<uint32_t>(
+                    fsr_->jitterPhaseCount(ext.width, ctx->swapchainExtent().width));
+            if (phaseCount == 0u) phaseCount = 1u;
+            fsr_->jitterOffset(static_cast<int>(haltonFrame_ % phaseCount),
+                               static_cast<int>(phaseCount), jx, jy);
+            fsrJitterX_ = jx;
+            fsrJitterY_ = jy;
+            if (auto* pcam = dynamic_cast<PerspectiveCamera*>(&camera)) {
+                fsrCamNear_ = pcam->nearPlane;
+                fsrCamFar_  = pcam->farPlane;
+                fsrCamFovY_ = pcam->fov * 3.14159265f / 180.f;// vertical FOV, radians
+            }
+        } else
+#endif
+        {
+            const uint32_t hi = (haltonFrame_ % phaseCount) + 1u;
+            jx = halton_(hi, 2) - 0.5f;
+            jy = halton_(hi, 3) - 0.5f;
+        }
         // MSAA G-buffer rasterizes UNJITTERED (see uploadRasterCameraUbo) —
         // this UBO's jitter must match or every consumer reconstructing
         // with cam.jitter (deferred_shade worldPos, hybrid V) lands
@@ -521,10 +546,35 @@ namespace threepp {
         // Phase count scales with the upscale ratio (FSR2-style) so the
         // sequence covers the output grid when renderScale < 1; matches
         // updateCameraUbo's value this frame (same extents → same count).
-        const uint32_t phaseCount = jitterPhaseCount_(ext, ctx->swapchainExtent());
-        const uint32_t hi = (haltonFrame_ % phaseCount) + 1u;
-        const float jx = halton_(hi, 2) - 0.5f;
-        const float jy = halton_(hi, 3) - 0.5f;
+        uint32_t phaseCount = jitterPhaseCount_(ext, ctx->swapchainExtent());
+        float jx, jy;
+#if defined(THREEPP_WITH_FSR)
+        // When FSR is the active upscaler, drive the jitter from FSR's own
+        // sequence (its phase count tracks the render/display ratio). The raster
+        // and deferred cameras both read the same haltonFrame_ index this frame,
+        // so overriding both keeps their sub-pixel offset identical — and matches
+        // the dispatch jitterOffset (VulkanCoreRecord). Also stash the sub-pixel
+        // offset + camera near/far/vertical-FOV for the dispatch (no camera there).
+        if (fsrActive_ && fsr_) {
+            phaseCount = static_cast<uint32_t>(
+                    fsr_->jitterPhaseCount(ext.width, ctx->swapchainExtent().width));
+            if (phaseCount == 0u) phaseCount = 1u;
+            fsr_->jitterOffset(static_cast<int>(haltonFrame_ % phaseCount),
+                               static_cast<int>(phaseCount), jx, jy);
+            fsrJitterX_ = jx;
+            fsrJitterY_ = jy;
+            if (auto* pcam = dynamic_cast<PerspectiveCamera*>(&camera)) {
+                fsrCamNear_ = pcam->nearPlane;
+                fsrCamFar_  = pcam->farPlane;
+                fsrCamFovY_ = pcam->fov * 3.14159265f / 180.f;// vertical FOV, radians
+            }
+        } else
+#endif
+        {
+            const uint32_t hi = (haltonFrame_ % phaseCount) + 1u;
+            jx = halton_(hi, 2) - 0.5f;
+            jy = halton_(hi, 3) - 0.5f;
+        }
         // Map sub-pixel offset to clip-space: one pixel spans 2/width of
         // NDC (NDC ∈ [-1, +1]), so a 1-pixel jitter is 2/width in clip x.
         //

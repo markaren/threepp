@@ -43,9 +43,13 @@ void VulkanRendererCore::CoreImpl::rewriteBloomDescriptors() {
             // toggle turns off (no churn) — see ensureHdrMblurImages /
             // resizeHdrOutput's own idempotency for why repeat calls here
             // are cheap.
-            if (taaHdrInput_) {
+            // The FSR upscaler path (fsrActive_) reuses the HDR-mode
+            // PostComposite tonemap + recordPostFinalize, so it needs hdrOut_
+            // allocated too — but not the motion-blur HDR intermediate (FSR runs
+            // no McGuire blur). taaHdrInput_ needs both.
+            if (taaHdrInput_ || fsrActiveForHdrPlumbing()) {
                 const VkExtent2D outExt = ctx->swapchainExtent();
-                taa_->ensureHdrMblurImages(outExt.width, outExt.height);
+                if (taaHdrInput_) taa_->ensureHdrMblurImages(outExt.width, outExt.height);
                 post_->resizeHdrOutput(outExt.width, outExt.height);
             }
             std::array<VkImageView, kFramesInFlight> sceneViews{};
@@ -69,7 +73,11 @@ void VulkanRendererCore::CoreImpl::rewriteBloomDescriptors() {
                 // before ensureHdrMblurImages has actually run for it (e.g.
                 // taaHdrInput_ is still false — the view is unused by the
                 // shader in that case anyway, but must stay non-null).
-                hdrSceneViews[f] = (motionBlurAmount_ > 0.f && taa_->hdrMblurImagesValid())
+                // FSR writes its upscaled output into the history write slot (it
+                // runs no McGuire motion blur), so force that selection when FSR
+                // is active regardless of setMotionBlur / the mblur intermediate.
+                hdrSceneViews[f] = (motionBlurAmount_ > 0.f && taa_->hdrMblurImagesValid()
+                                    && !fsrActiveForHdrPlumbing())
                         ? taa_->mblurHdrView(f)
                         : taa_->historyView(vulkan::TaaResolve::writeSlotFor(f));
             }

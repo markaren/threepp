@@ -14,6 +14,9 @@
 #include "OverlayPass.hpp"
 #include "VulkanFrameTypes.hpp"
 #include "TaaResolve.hpp"
+#if defined(THREEPP_WITH_FSR)
+#include "FsrUpscaler.hpp"
+#endif
 #include "AutoExposure.hpp"
 #include "GbufResolve.hpp"
 #include "BloomPass.hpp"
@@ -1955,6 +1958,35 @@ namespace threepp {
         // External deps (raster gbuffer views, swapchain views) are passed
         // in at descriptor-write time.
         std::unique_ptr<vulkan::TaaResolve> taa_;
+#if defined(THREEPP_WITH_FSR)
+        // AMD FidelityFX FSR 3.1 upscaler. When its context creates successfully
+        // (Windows only) it REPLACES the TAA temporal resolve — see the
+        // fsrActive_ branch in VulkanCoreRecord.cpp. FSR writes its upscaled
+        // linear-HDR output into TaaResolve's history write slot, so PostComposite
+        // tonemaps it via the same HDR-input path (setTaaHdrInput) with no
+        // descriptor rewrite. On create failure fsrActive_ stays false and the
+        // TAA path runs unchanged. See FsrUpscaler.{hpp,cpp}.
+        std::unique_ptr<vulkan::FsrUpscaler> fsr_;
+        bool   fsrActive_    = false;// true once the FSR context created
+        bool   fsrResetNext_ = true; // force FSR history reset on the next dispatch
+        double fsrPrevTimeSec_ = -1.0;// for FSR frameTimeDelta (ms)
+        // Camera params stashed at raster-camera-upload time (no camera at the
+        // record site) — FSR needs near/far/vertical-FOV for depth reconstruction.
+        float  fsrCamNear_ = 0.1f, fsrCamFar_ = 1000.f, fsrCamFovY_ = 1.0f;
+        // The sub-pixel [-0.5,0.5] jitter applied to the projection this frame,
+        // sourced from FSR's own sequence so the dispatch jitterOffset matches.
+        float  fsrJitterX_ = 0.f, fsrJitterY_ = 0.f;
+#endif
+        // True when the FSR upscaler is active — always compiled (returns false
+        // without THREEPP_WITH_FSR) so the shared descriptor/record code can gate
+        // the HDR-mode plumbing FSR reuses without scattering #ifs.
+        [[nodiscard]] bool fsrActiveForHdrPlumbing() const {
+#if defined(THREEPP_WITH_FSR)
+            return fsrActive_;
+#else
+            return false;
+#endif
+        }
         // HDR bloom pyramid — the shade/resolve writes linear HDR into
         // bloom_->sceneHdr (the shared set's binding 1); bloom_ builds the
         // Jimenez progressive pyramid from it. bloomIntensity_ == 0 skips
@@ -2318,6 +2350,18 @@ namespace threepp {
                 taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
+#if defined(THREEPP_WITH_FSR)
+            // FSR upscaler context at the display (swapchain) extent. FSR stores
+            // the display extent at create time but takes the render extent per
+            // dispatch, so a renderScale change needs no recreation — only a
+            // swapchain/display resize does (handled in reallocateRenderExtentResources).
+            // On success FSR replaces the TAA resolve; on failure the TAA path
+            // runs unchanged.
+            fsr_ = std::make_unique<vulkan::FsrUpscaler>(*ctx);
+            fsrActive_ = fsr_->create(ctx->swapchainExtent().width,
+                                      ctx->swapchainExtent().height);
+            fsrResetNext_ = true;
+#endif
             // HDR bloom pyramid. sceneHdr lives at the deferred render
             // extent (it is the shared set's binding 1 target); the bloom
             // pyramid levels are half that and below.
@@ -2637,6 +2681,11 @@ namespace threepp {
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
             destroyBuffer(ctx->allocator(), dummyUvBuffer_);
 
+#if defined(THREEPP_WITH_FSR)
+            // Destroy the ffx-api context while the Vulkan device is still alive
+            // (before taa_/ctx unwind). No-op if FSR never created.
+            fsr_.reset();
+#endif
             // TAA resolve subsystem owns its pipeline/layout/sampler/images.
             taa_.reset();
         }

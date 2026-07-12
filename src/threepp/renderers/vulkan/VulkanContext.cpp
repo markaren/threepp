@@ -392,6 +392,29 @@ namespace threepp::vulkan {
 #endif
         }
 
+#if defined(THREEPP_WITH_FSR)
+        // AMD FidelityFX FSR 3.1's VK backend loads vkGetBufferMemoryRequirements2KHR
+        // (and the image variant) by their KHR-SUFFIXED names via vkGetDeviceProcAddr.
+        // On a core-1.1+ device those return NULL unless VK_KHR_get_memory_requirements2
+        // is explicitly enabled, and the backend then calls the null pointer during
+        // resource creation → an access-violation crash (execution at 0x0) deep inside
+        // ffxCreateContext (FidelityFX-SDK issue #73). Enable it (+ dedicated
+        // allocation, which the backend also probes) when the device advertises it —
+        // Cauldron, the FFX sample framework, enables the same set.
+        {
+            const auto avail = deviceExtensions(physicalDevice_);
+            auto has = [&](const char* n) {
+                for (const auto& e : avail)
+                    if (std::strcmp(e.extensionName, n) == 0) return true;
+                return false;
+            };
+            if (has(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME))
+                extensions.push_back(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME);
+            if (has(VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME))
+                extensions.push_back(VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME);
+        }
+#endif
+
         // Required core 1.2 / 1.3 features (BDA, dynamic rendering, sync2).
         VkPhysicalDeviceVulkan13Features f13{};
         f13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
@@ -475,6 +498,44 @@ namespace threepp::vulkan {
         } else {
             features2.pNext = &f12;
         }
+
+#if defined(THREEPP_WITH_FSR)
+        // ── AMD FidelityFX FSR 3.1 device features ──────────────────────────
+        // The FSR VK backend selects FP16 shader permutations when the device
+        // advertises 16-bit float support, and its shaders use subgroup-size
+        // control. Those SPIR-V capabilities must be ENABLED on the logical
+        // device, or the backend creates pipelines using capabilities the device
+        // never enabled and crashes (a null-path deref) inside ffxCreateContext.
+        // All of these are core 1.1/1.2/1.3 feature bits — no extra device
+        // extensions — and enabling them is inert for threepp's own shaders
+        // (which don't use them). Query support first so vkCreateDevice never
+        // fails on a GPU that lacks a bit; enable only the supported subset.
+        VkPhysicalDeviceVulkan13Features supF13{};
+        supF13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        VkPhysicalDeviceVulkan12Features supF12{};
+        supF12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        supF12.pNext = &supF13;
+        VkPhysicalDeviceVulkan11Features supF11{};
+        supF11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        supF11.pNext = &supF12;
+        VkPhysicalDeviceFeatures2 sup2{};
+        sup2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        sup2.pNext = &supF11;
+        vkGetPhysicalDeviceFeatures2(physicalDevice_, &sup2);
+
+        // 16-bit storage (Vulkan 1.1) — threepp has no VkPhysicalDeviceVulkan11Features
+        // yet, so add one and prepend it to the chain (doesn't disturb the tail).
+        VkPhysicalDeviceVulkan11Features fsrF11{};
+        fsrF11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        fsrF11.storageBuffer16BitAccess           = supF11.storageBuffer16BitAccess;
+        fsrF11.uniformAndStorageBuffer16BitAccess = supF11.uniformAndStorageBuffer16BitAccess;
+        f12.shaderFloat16              = supF12.shaderFloat16;              // FP16 shader path
+        f13.subgroupSizeControl        = supF13.subgroupSizeControl;        // required subgroup size
+        f13.computeFullSubgroups       = supF13.computeFullSubgroups;
+        features2.features.shaderInt16 = sup2.features.shaderInt16;
+        fsrF11.pNext    = features2.pNext;
+        features2.pNext = &fsrF11;
+#endif
 
         VkDeviceCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
