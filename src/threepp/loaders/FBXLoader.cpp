@@ -92,15 +92,21 @@ namespace threepp {
             }
 
             auto geometry = BufferGeometry::create();
+            // Capture whether the FBX supplied normals BEFORE moving normData
+            // out. FloatBufferAttribute::create now genuinely moves its rvalue
+            // argument, so re-reading normData.empty() afterwards would always
+            // be true and spuriously recompute (flat) normals, discarding the
+            // asset's authored smooth normals.
+            const bool hadNormals = !normData.empty();
             geometry->setAttribute("position",
                     FloatBufferAttribute::create(std::move(posData), 3));
-            if (!normData.empty())
+            if (hadNormals)
                 geometry->setAttribute("normal",
                         FloatBufferAttribute::create(std::move(normData), 3));
             if (!uvData.empty())
                 geometry->setAttribute("uv",
                         FloatBufferAttribute::create(std::move(uvData), 2));
-            if (normData.empty())
+            if (!hadNormals)
                 geometry->computeVertexNormals();
 
             return geometry;
