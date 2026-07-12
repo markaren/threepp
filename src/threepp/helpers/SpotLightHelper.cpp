@@ -71,7 +71,7 @@ void SpotLightHelper::update() {
 
     if (this->color) {
 
-        this->materialAs<MaterialWithColor>()->color.copy(*this->color);
+        this->cone->materialAs<MaterialWithColor>()->color.copy(*this->color);
 
     } else {
 

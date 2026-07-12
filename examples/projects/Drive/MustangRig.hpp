@@ -45,6 +45,12 @@ namespace drive {
 
     class MustangRig {
     public:
+        // Object3D layer the glass is tagged onto. On Vulkan the demo passes this
+        // to renderer.setOverlayLayer() so the windows draw as a post-shade tint
+        // over the full-quality image instead of re-tracing the scene behind them.
+        // Harmless on GL/WebGPU (the camera still renders layer 0 as normal).
+        static constexpr unsigned kOverlayLayer = 1;
+
         // Real-world geometry read off the loaded model, in the model's own space.
         struct Measurements {
             Vector3 chassisCenter;   // point that should map to the chassis actor origin
@@ -173,9 +179,16 @@ namespace drive {
                     if (isHeadlampMat(mat->name)) headlampMats_.push_back(mat);
                 }
                 if (isHeadlightLens(mesh.name)) {
-                    Vector3 p;
-                    mesh.getWorldPosition(p);
-                    headlightLensWorld_.push_back(p);
+                    // Use the mesh's world BBOX CENTRE, not getWorldPosition():
+                    // the body meshes carry baked geometry under identity nodes,
+                    // so getWorldPosition() returns the model origin for every one
+                    // of them — which would stack both headlights at the chassis
+                    // centre. The bbox centre is the actual lamp location.
+                    Box3 b;
+                    b.setFromObject(mesh);
+                    Vector3 c;
+                    b.getCenter(c);
+                    headlightLensWorld_.push_back(c);
                 }
             });
 
@@ -202,6 +215,13 @@ namespace drive {
             for (auto* m : headlampMats_) setEmissive(m, on ? 5.f : 0.4f);
         }
         [[nodiscard]] bool headlightsOn() const { return headlightsOn_; }
+
+        // The two headlight spots (may contain nulls if the model had no lens
+        // meshes). Exposed so the demo can attach SpotLightHelpers to inspect
+        // the beam placement / angle.
+        [[nodiscard]] const std::array<std::shared_ptr<SpotLight>, 2>& headlights() const {
+            return headlights_;
+        }
 
         // Update visuals from the vehicle. turnSignal is accepted for API parity
         // with CarRig; this model has no dedicated indicator geometry.
@@ -249,18 +269,24 @@ namespace drive {
             return best;
         }
 
-        // ── Headlights: a spot per lens, aimed forward (+Z) and slightly down ────
+        // ── Headlights: a spot per lens, aimed DOWN at the road ahead ────────────
         void buildHeadlights() {
             if (headlightLensWorld_.empty()) return;
+            // Road surface in chassis-local Y (a touch below the wheel contact so
+            // the beam clearly rakes the tarmac rather than the horizon).
+            const float roadY = meas_.wheelCenterYRel - meas_.wheelRadius - 0.05f;
             const size_t n = std::min<size_t>(2, headlightLensWorld_.size());
             for (size_t i = 0; i < n; ++i) {
                 Vector3 local = headlightLensWorld_[i].clone().sub(meas_.chassisCenter);
+                // Narrower cone (a real low-beam is tight); aim it at a point on
+                // the road ~9 m ahead so the whole cone lands on the tarmac
+                // instead of half of it spilling into the sky.
                 auto sl = SpotLight::create(Color(0xfff2d8), 0.f, 70.f,
-                                            math::degToRad(32.f), 0.45f, 0.4f);
+                                            math::degToRad(24.f), 0.35f, 0.4f);
                 sl->position.copy(local);
                 sl->castShadow = false;
                 auto tgt = Object3D::create();
-                tgt->position.set(local.x, local.y - 0.6f, local.z + 12.f);
+                tgt->position.set(local.x, roadY, local.z + 9.f);
                 root_->add(tgt);
                 sl->setTarget(*tgt);
                 root_->add(sl);
@@ -268,25 +294,39 @@ namespace drive {
             }
         }
 
-        // Screen-space transmission (MeshPhysicalMaterial::transmission) forces the
-        // GL renderer's transmission pass — a full-scene re-render into a 2048²
-        // target that the glass then resamples. It's expensive and its look is
-        // driver/backend dependent (washed-out, "weird" foliage through the glass
-        // on some GL drivers). For a car you look through every frame, a plain
-        // tinted transparent glass is more robust and renders identically on GL,
-        // WebGPU and Vulkan. Convert any transmissive material to that.
-        static void tameGlass(Mesh& mesh) {
+        // The car windows import as refractive glass (transmission, ior 1.5).
+        // Every renderer's see-through path has a problem with them:
+        //   • Vulkan's deferred glass BSDF sprays the bright HDRI sun into
+        //     per-facet dots on the big flat panels, and everything seen through
+        //     it is a RE-TRACED ray — lower detail and mis-coloured (the RT path
+        //     drops the grass's vertex colours) vs. the primary raster view.
+        //   • GL's transmission pass washed the view out.
+        // The robust cross-backend answer is to NOT treat them as refractive
+        // glass at all: render a plain transparent tint. On GL/WebGPU that is a
+        // normal alpha blend over the already-shaded opaque scene (full detail,
+        // correct colour). On Vulkan a plain transparent still hits the deferred
+        // blend/re-trace, so we ALSO tag the windows onto the overlay layer
+        // (kOverlayLayer): the renderer then draws them post-shade as a flat
+        // tint composited over the full-quality image, depth-tested against the
+        // G-buffer (so the dashboard still occludes them) — no re-trace, no dots.
+        static bool tameGlass(Mesh& mesh) {
+            bool glass = false;
             for (const auto& m : mesh.materials()) {
                 auto* pm = dynamic_cast<MeshPhysicalMaterial*>(m.get());
                 if (!pm || pm->transmission <= 0.f) continue;
                 pm->transmission = 0.f;
                 pm->transparent = true;
-                // Keep a light tint (windshields import as a near-black glass at
-                // low opacity); clamp so it stays see-through but visible.
-                pm->opacity = std::clamp(pm->opacity, 0.15f, 0.6f);
-                pm->depthWrite = false;// transparent glass shouldn't occlude itself
+                pm->opacity = 0.16f;                    // subtle tint strength
+                pm->color = Color(0.58f, 0.70f, 0.84f); // cool glass tint
+                pm->roughness = 0.15f;
+                pm->metalness = 0.f;
+                pm->side = Side::Front;                 // one blend, not front+back
+                pm->depthWrite = false;
                 pm->needsUpdate();
+                glass = true;
             }
+            if (glass) mesh.layers.enable(kOverlayLayer);
+            return glass;
         }
 
         void applyBrake(bool on) {

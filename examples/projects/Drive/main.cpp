@@ -16,7 +16,9 @@
 //   Q / E      shift down / up (manual)
 //   Z / C      left / right indicator  L       headlights
 //   H          horn                    F       day / night
-//   V          driver view             Backspace  respawn
+//   V          driver view             G       headlight helpers
+//   Backspace  respawn
+//   Mouse      left-drag orbits the camera around the car, wheel zooms
 
 #include "threepp/threepp.hpp"
 
@@ -29,6 +31,7 @@
 #include "threepp/extras/vegetation/GrassField.hpp"
 #include "threepp/extras/vegetation/TreeGenerator.hpp"
 #include "threepp/extras/vegetation/TreeTextures.hpp"
+#include "threepp/helpers/SpotLightHelper.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/textures/DataTexture.hpp"
@@ -202,6 +205,10 @@ int main(int argc, char** argv) {
     if (vk) {
         vulkanBackend = true;
         vk->setRenderScale(0.8f);
+        // Draw the car glass (tagged to this layer in MustangRig) as a post-shade
+        // overlay tint rather than re-tracing the scene behind it — keeps the
+        // through-window view at full detail and correct colour on the deferred path.
+        vk->setOverlayLayer(static_cast<int>(drive::MustangRig::kOverlayLayer));
     }
 #endif
 
@@ -446,6 +453,19 @@ int main(int argc, char** argv) {
     auto carRig = std::make_unique<drive::MustangRig>(carModel, carMeas);
     scene->add(carRig->root());
     world.bind(*carRig->root(), *vehicle.chassisActor());
+
+    // Headlight debug helpers: a wireframe cone per SpotLight showing its
+    // position, aim and beam angle. Toggle with G (starts visible so the beam
+    // config is obvious). Rendered as line segments — best seen on GL/WebGPU.
+    std::vector<std::shared_ptr<SpotLightHelper>> headlightHelpers;
+    bool showHeadlightHelpers = false;
+    for (const auto& hl : carRig->headlights()) {
+        if (!hl) continue;
+        auto helper = SpotLightHelper::create(*hl, Color::yellow);
+        helper->visible = showHeadlightHelpers;
+        scene->add(helper);
+        headlightHelpers.push_back(helper);
+    }
 
     // Driver POV camera, parented to the car body — seated in the cabin, a bit
     // off-centre and above the chassis origin, looking forward over the hood.
@@ -716,6 +736,10 @@ int main(int argc, char** argv) {
             case Key::C: turnSignal = (turnSignal == 1) ? 0 : 1; break;
             case Key::V: driverView = !driverView; break;
             case Key::F: night = !night; break;
+            case Key::G:
+                showHeadlightHelpers = !showHeadlightHelpers;
+                for (auto& h : headlightHelpers) h->visible = showHeadlightHelpers;
+                break;
             case Key::BACKSPACE: respawn = true; break;
             default: break;
         }
@@ -743,6 +767,7 @@ int main(int argc, char** argv) {
         ImGui::Text("R Drive/Rev  N neutral  SPACE handbrake");
         ImGui::Text("T auto/manual  Q/E shift  L lights");
         ImGui::Text("Z/C blinkers  H horn  F day/night  V POV");
+        ImGui::Text("G headlight helpers  |  drag: orbit  wheel: zoom");
         ImGui::Separator();
         ImGui::Text("FPS   : %.0f", fps);
         ImGui::Text("Speed : %.0f km/h", std::abs(vehicle.forwardSpeed()) * 3.6f);
@@ -772,8 +797,43 @@ int main(int argc, char** argv) {
         renderer->setSize(size);
     });
 
-    // ── Chase camera state ──────────────────────────────────────────────────
+    // ── Chase / orbit camera ──────────────────────────────────────────────────
+    // Left-drag orbits yaw/pitch around the car, mouse wheel zooms; the position
+    // is smoothed so it still reads as a chase cam. yaw=0 sits directly behind,
+    // matching the previous fixed (0, 4.2, -11) offset. Mirrors physx_vehicle.
     Vector3 camPos{0, 6, -12}, camTarget{0, 1, 0};
+    constexpr float defaultPitch = 0.36f;// atan(4.2 / 11)
+    constexpr float defaultDist = 11.77f;// hypot(4.2, 11)
+    float orbitYaw = 0.f, orbitPitch = defaultPitch, orbitDist = defaultDist;
+    bool orbiting = false;
+    Vector2 lastMousePos;
+
+    struct OrbitMouse: MouseListener {
+        float &yaw, &pitch, &dist;
+        bool& dragging;
+        Vector2& lastPos;
+        OrbitMouse(float& y, float& p, float& d, bool& dr, Vector2& lp)
+            : yaw(y), pitch(p), dist(d), dragging(dr), lastPos(lp) {}
+        void onMouseDown(int button, const Vector2& pos) override {
+            if (ImGui::GetIO().WantCaptureMouse) return;
+            if (button == 0) { dragging = true; lastPos = pos; }
+        }
+        void onMouseUp(int button, const Vector2&) override {
+            if (button == 0) dragging = false;
+        }
+        void onMouseMove(const Vector2& pos) override {
+            if (!dragging) return;
+            const Vector2 d = pos - lastPos;
+            lastPos = pos;
+            yaw -= d.x * 0.01f;
+            pitch = std::clamp(pitch + d.y * 0.01f, 0.05f, 1.4f);
+        }
+        void onMouseWheel(const Vector2& delta) override {
+            if (ImGui::GetIO().WantCaptureMouse) return;
+            dist = std::clamp(dist - delta.y, 3.f, 40.f);
+        }
+    } orbitMouse(orbitYaw, orbitPitch, orbitDist, orbiting, lastMousePos);
+    canvas.addMouseListener(orbitMouse);
 
     bool prevNight = false;
     auto applyDayNight = [&] {
@@ -863,9 +923,16 @@ int main(int argc, char** argv) {
         // Chase / POV camera.
         carRig->root()->updateMatrixWorld();
         const Matrix4& chassisMat = *carRig->root()->matrixWorld;
-        Vector3 desiredCam(0.f, 4.2f, -11.f);
+        for (auto& h : headlightHelpers)
+            if (h->visible) h->update();
+        // Orbit position in chassis-local space (yaw about Y, pitch up, dist out),
+        // then transformed to world so it tracks the car.
+        const float cosP = std::cos(orbitPitch);
+        Vector3 desiredCam(orbitDist * std::sin(orbitYaw) * cosP,
+                           orbitDist * std::sin(orbitPitch),
+                           -orbitDist * std::cos(orbitYaw) * cosP);
         desiredCam.applyMatrix4(chassisMat);
-        Vector3 desiredTarget(0.f, 1.2f, 3.f);
+        Vector3 desiredTarget(0.f, 1.1f, 1.5f);
         desiredTarget.applyMatrix4(chassisMat);
         const float lerp = std::min(1.f, dt * 5.f);
         camPos.lerp(desiredCam, lerp);
