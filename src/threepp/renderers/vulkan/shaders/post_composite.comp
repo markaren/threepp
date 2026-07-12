@@ -195,12 +195,18 @@ void main() {
                       : texelFetch(sceneHdrTex, px, 0).rgb;// 1:1 with output — exact texel
 
     const float intensity = uintBitsToFloat(pc.bloomIntensityBits);
-    if (!hdr && intensity > 0.0) {
+    if (intensity > 0.0) {
         // Additive bloom: the bloom buffer is a soft-knee bright-pass (only
         // highlights survive the threshold in bloom_down), so adding it leaves
         // darks/mid-tones crisp and makes bright areas glow. Intensity can be
         // pushed well past 1 without the global haze a thresholdless mix gives.
         // Bloom upsampled from half res via bilinear.
+        //
+        // Normally skipped in HDR mode (the TAA resolve folds bloom in, and the
+        // caller passes intensity <= 0). The FSR upscaler path does NOT fold
+        // bloom in — it passes a non-zero intensity here so bloom is added onto
+        // the upscaled HDR at display res (the bloom pyramid is render-extent
+        // half-res; bilinear UV sampling handles the resolution difference).
         const vec3 bloom = texture(bloomTex, uv).rgb;
         color += bloom * intensity;
     }

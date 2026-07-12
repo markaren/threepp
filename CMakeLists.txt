@@ -16,6 +16,14 @@ option(THREEPP_WITH_PYTHON "Build the pybind11 Python bindings (threepp module)"
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 option(THREEPP_WITH_WGPU "Build with WebGPU backend (via wgpu-native)" OFF)
 option(THREEPP_WITH_VULKAN "Build with Vulkan backend (requires Vulkan SDK)" OFF)
+# AMD FidelityFX FSR 3.1 temporal upscaler for the Vulkan backend. Windows-only:
+# the FidelityFX SDK bundles a Windows shader compiler + builds a Vulkan backend
+# with MSVC. When OFF (or off-Windows) the renderer uses its built-in TAA
+# temporal upsampler (taa_resolve.comp) instead — FSR is a compile-time swap of
+# that one pass, with a runtime fallback to TAA if FSR context creation fails.
+cmake_dependent_option(THREEPP_WITH_FSR
+    "Build with AMD FidelityFX FSR 3.1 upscaler (Windows, Vulkan)"
+    OFF "THREEPP_WITH_VULKAN AND WIN32" OFF)
 cmake_dependent_option(THREEPP_WGPU_GLSL_COMPAT
     "Enable GLSL->SPIR-V translation for ShaderMaterial on the Wgpu backend (requires glslang)"
     ON "THREEPP_WITH_WGPU" OFF)

@@ -666,6 +666,13 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/GrassWindPipeline.cpp"
             "threepp/renderers/vulkan/water/OceanFFT.cpp"
     )
+    # AMD FidelityFX FSR 3.1 upscaler — compiled in only when enabled (it
+    # includes the ffx-api headers). Replaces the built-in TAA upsampler at
+    # runtime when the FSR context creates successfully; see FsrUpscaler.{hpp,cpp}.
+    if (THREEPP_WITH_FSR)
+        list(APPEND privateHeaders "threepp/renderers/vulkan/FsrUpscaler.hpp")
+        list(APPEND sources        "threepp/renderers/vulkan/FsrUpscaler.cpp")
+    endif ()
 endif ()
 
 # BCn / DXT software decode for compressed-texture upload in the Vulkan
@@ -887,6 +894,35 @@ if (THREEPP_WITH_VULKAN)
         endif ()
         target_include_directories(threepp PRIVATE "${VMA_INCLUDE_DIR}")
         message(STATUS "VMA: ${VMA_INCLUDE_DIR}")
+    endif ()
+
+    # AMD FidelityFX FSR 3.1 upscaler (Windows-only, gated on THREEPP_WITH_FSR).
+    # Fetches the SDK and links the prebuilt signed Vulkan ffx-api runtime; the
+    # DLL ships every backend + precompiled shader, so there is no shader-build
+    # step. The DLL is copied next to executables (as wgpu_native.dll is).
+    if (THREEPP_WITH_FSR)
+        include(${PROJECT_SOURCE_DIR}/cmake/FetchFidelityFX.cmake)
+        target_include_directories(threepp PRIVATE "${FFX_INCLUDE_DIR}")
+        # NB: the ffx-api entry points are resolved at runtime via LoadLibrary +
+        # GetProcAddress (ffxLoadFunctions), NOT the import library — ffx_api.h
+        # hard-codes __declspec(dllexport) for consumers, so linking + calling
+        # directly produces a null forwarder (crash at address 0). Only the DLL
+        # (copied below) is needed at runtime; the .lib is intentionally unused.
+        target_compile_definitions(threepp PRIVATE THREEPP_WITH_FSR=1)
+
+        if (WIN32 AND FFX_DLL)
+            if (CMAKE_CONFIGURATION_TYPES)
+                set(_ffx_dll_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>")
+            else ()
+                set(_ffx_dll_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+            endif ()
+            add_custom_command(TARGET threepp POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${FFX_DLL}"
+                    "${_ffx_dll_dest}/amd_fidelityfx_vk.dll"
+                COMMENT "Copying amd_fidelityfx_vk.dll to output directory"
+            )
+        endif ()
     endif ()
 
     include(${PROJECT_SOURCE_DIR}/cmake/CompileVulkanShaders.cmake)
@@ -1135,6 +1171,14 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/motion_blur.comp"
         kMotionBlurCompSpv
         _motion_blur_spv_h)
+    # FSR reactive-mask generator (G-buffer IDs flags -> R8). Only needed when
+    # building with FSR; FsrUpscaler.cpp (the only consumer) is FSR-gated too.
+    if (THREEPP_WITH_FSR)
+        compile_vulkan_shader(threepp
+            "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/fsr_reactive.comp"
+            kFsrReactiveCompSpv
+            _fsr_reactive_spv_h)
+    endif ()
     # Hybrid raster overlay: wireframe + Line/LineSegments draw on top of
     # the post-TAA swapchain image. Depth-tested against the G-buffer's
     # depth attachment so overlays are correctly occluded by path-traced

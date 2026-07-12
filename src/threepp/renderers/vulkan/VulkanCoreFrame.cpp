@@ -140,6 +140,9 @@ void VulkanRendererCore::CoreImpl::resetAccumulation() {
             sampleIndex = 0;
             prevCameraValid = false;
             prevWorldMats.clear();
+#if defined(THREEPP_WITH_FSR)
+            fsrResetNext_ = true;// FSR treats the next dispatch as a camera cut
+#endif
             if (frameState_ != FrameState::Idle) {
                 pendingAccumulationReset_ = true;
                 return;
@@ -272,6 +275,24 @@ void VulkanRendererCore::CoreImpl::reallocateRenderExtentResources() {
                 taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
+#if defined(THREEPP_WITH_FSR)
+            // FSR stores the display (swapchain) extent at create time; a
+            // renderScale change alters only the per-dispatch renderSize, so
+            // recreate the context ONLY when the display extent actually changed
+            // (this funnel is shared by swapchain-recreate and renderScale/MSAA).
+            // The upscale output target — TaaResolve's history slot — was just
+            // reallocated above. Runs BEFORE rewriteBloomDescriptors so the
+            // widened HDR-plumbing gate (fsrActiveForHdrPlumbing) sees the fresh
+            // state. Reset FSR history on any (re)create.
+            if (fsr_) {
+                const VkExtent2D disp = ctx->swapchainExtent();
+                if (!fsrActive_ || fsr_->displayWidth() != disp.width ||
+                    fsr_->displayHeight() != disp.height) {
+                    fsrActive_    = fsr_->create(disp.width, disp.height);
+                    fsrResetNext_ = true;
+                }
+            }
+#endif
             bloom_->createImages(renderExtent().width, renderExtent().height);
             onAfterBloomCreateImages();
             // TAA descriptor sets are persistent (pool lives inside TaaResolve);
