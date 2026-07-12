@@ -13,6 +13,7 @@ add_example(NAME "urdf_loader_simple" LINK_IMGUI)
 add_example(NAME "gltf_loader")
 add_example(NAME "gltf_material_variants" LINK_IMGUI)
 add_example(NAME "collada_loader")
+add_example(NAME "collada_compare" LINK_ASSIMP)
 add_example(NAME "svg_loader" LINK_IMGUI)
 
 if (THREEPP_WITH_USD)

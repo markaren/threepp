@@ -26,6 +26,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <charconv>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <sstream>
@@ -35,19 +38,63 @@ using namespace threepp;
 
 namespace {
 
-    std::vector<float> parseFloatArray(const std::string& text) {
+    // Bulk parsers for whitespace-separated numeric XML arrays. COLLADA files
+    // carry arrays with hundreds of thousands of entries, so these avoid the
+    // istringstream-per-array overhead. reserveHint typically comes from the
+    // element's count attribute; 0 means unknown.
+
+    std::vector<float> parseFloatArray(const std::string& text, size_t reserveHint = 0) {
         std::vector<float> result;
-        std::istringstream ss(text);
-        float val;
-        while (ss >> val) result.push_back(val);
+        result.reserve(reserveHint);
+        const char* p = text.c_str();
+        const char* const end = p + text.size();
+        while (p != end) {
+            if (std::isspace(static_cast<unsigned char>(*p))) {
+                ++p;
+                continue;
+            }
+#if defined(__cpp_lib_to_chars)
+            float val{};
+            if (const auto [next, ec] = std::from_chars(p, end, val); ec == std::errc{} && next != p) {
+                result.push_back(val);
+                p = next;
+                continue;
+            }
+#else
+            // libc++ without float from_chars: strtof stops at the string's
+            // terminating null, so reading from within c_str() is safe.
+            char* next = nullptr;
+            const float val = std::strtof(p, &next);
+            if (next != p) {
+                result.push_back(val);
+                p = next;
+                continue;
+            }
+#endif
+            // skip malformed token
+            while (p != end && !std::isspace(static_cast<unsigned char>(*p))) ++p;
+        }
         return result;
     }
 
-    std::vector<int> parseIntArray(const std::string& text) {
+    std::vector<int> parseIntArray(const std::string& text, size_t reserveHint = 0) {
         std::vector<int> result;
-        std::istringstream ss(text);
-        int val;
-        while (ss >> val) result.push_back(val);
+        result.reserve(reserveHint);
+        const char* p = text.c_str();
+        const char* const end = p + text.size();
+        while (p != end) {
+            if (std::isspace(static_cast<unsigned char>(*p))) {
+                ++p;
+                continue;
+            }
+            int val{};
+            if (const auto [next, ec] = std::from_chars(p, end, val); ec == std::errc{} && next != p) {
+                result.push_back(val);
+                p = next;
+                continue;
+            }
+            while (p != end && !std::isspace(static_cast<unsigned char>(*p))) ++p;
+        }
         return result;
     }
 
@@ -59,6 +106,7 @@ namespace {
     struct Source {
         std::vector<float> data;
         int stride{3};
+        int offset{0};// accessor offset into data
     };
 
     struct Input {
@@ -79,7 +127,8 @@ namespace {
     };
 
     struct GeometryData {
-        std::string name;
+        std::string id;
+        std::string name;// name attribute; falls back to id when absent
         std::unordered_map<std::string, Source> sources;
         // <vertices id="..."> maps to a source id (POSITION semantic)
         std::unordered_map<std::string, std::string> verticesMap;
@@ -122,14 +171,13 @@ namespace {
 
             const auto technique = source.child("technique_common");
             const auto accessor = technique ? technique.child("accessor") : pugi::xml_node{};
-            int stride = 3;
-            if (accessor) {
-                stride = accessor.attribute("stride").as_int(3);
-            }
 
             Source src;
-            src.data = parseFloatArray(floatArray.child_value());
-            src.stride = stride;
+            if (accessor) {
+                src.stride = accessor.attribute("stride").as_int(3);
+                src.offset = accessor.attribute("offset").as_int(0);
+            }
+            src.data = parseFloatArray(floatArray.child_value(), floatArray.attribute("count").as_uint(0));
             geo.sources[id] = std::move(src);
         }
     }
@@ -174,7 +222,8 @@ namespace {
             p.count = tri.attribute("count").as_int(0);
             p.inputs = parseInputs(tri);
             p.maxOffset = maxOffset(p.inputs);
-            p.p = parseIntArray(tri.child("p").child_value());
+            p.p = parseIntArray(tri.child("p").child_value(),
+                                static_cast<size_t>(p.count) * 3 * (p.maxOffset + 1));
             geo.primitives.push_back(std::move(p));
         }
 
@@ -186,8 +235,9 @@ namespace {
             p.count = poly.attribute("count").as_int(0);
             p.inputs = parseInputs(poly);
             p.maxOffset = maxOffset(p.inputs);
-            p.vcount = parseIntArray(poly.child("vcount").child_value());
-            p.p = parseIntArray(poly.child("p").child_value());
+            p.vcount = parseIntArray(poly.child("vcount").child_value(), p.count);
+            p.p = parseIntArray(poly.child("p").child_value(),
+                                static_cast<size_t>(p.count) * 4 * (p.maxOffset + 1));
             geo.primitives.push_back(std::move(p));
         }
 
@@ -197,7 +247,9 @@ namespace {
 
     GeometryData parseGeometry(const pugi::xml_node& geomNode) {
         GeometryData geo;
+        geo.id = geomNode.attribute("id").value();
         geo.name = geomNode.attribute("name").value();
+        if (geo.name.empty()) geo.name = geo.id;
 
         const auto meshNode = geomNode.child("mesh");
         if (!meshNode) return geo;
@@ -249,8 +301,11 @@ namespace {
         size_t vCursor = 0;
         for (size_t vi = 0; vi < numVerts; ++vi) {
             const int n = sd.vcount[vi];
-            std::vector<std::pair<int, float>> influences;
-            influences.reserve(n);
+
+            // Keep the 4 strongest influences via sorted insertion — no per-vertex
+            // allocation or full sort.
+            std::array<int, 4> ji{0, 0, 0, 0};
+            std::array<float, 4> jw{0.f, 0.f, 0.f, 0.f};
             for (int k = 0; k < n; ++k) {
                 const size_t base = (vCursor + k) * sd.inputStride;
                 if (base + sd.inputStride > sd.v.size()) break;
@@ -259,45 +314,55 @@ namespace {
                 const float w = (weightIdx >= 0 && weightIdx < static_cast<int>(sd.weightValues.size()))
                                         ? sd.weightValues[weightIdx]
                                         : 0.f;
-                influences.emplace_back(jointIdx, w);
+                for (int s = 0; s < 4; ++s) {
+                    if (w > jw[s]) {
+                        for (int m = 3; m > s; --m) {
+                            jw[m] = jw[m - 1];
+                            ji[m] = ji[m - 1];
+                        }
+                        jw[s] = w;
+                        ji[s] = jointIdx;
+                        break;
+                    }
+                }
             }
             vCursor += n;
 
-            std::sort(influences.begin(), influences.end(),
-                      [](const auto& a, const auto& b) { return a.second > b.second; });
-            while (influences.size() < 4) influences.emplace_back(0, 0.f);
-            influences.resize(4);
-
-            float sum = 0.f;
-            for (const auto& p : influences) sum += p.second;
-            if (sum > 0.f) {
-                for (auto& p : influences) p.second /= sum;
-            }
-
+            const float sum = jw[0] + jw[1] + jw[2] + jw[3];
+            const float invSum = sum > 0.f ? 1.f / sum : 0.f;
             for (int k = 0; k < 4; ++k) {
-                sd.jointIndices[vi][k] = static_cast<float>(influences[k].first);
-                sd.jointWeights[vi][k] = influences[k].second;
+                sd.jointIndices[vi][k] = static_cast<float>(ji[k]);
+                sd.jointWeights[vi][k] = jw[k] * invSum;
             }
         }
     }
 
-    std::shared_ptr<BufferGeometry> buildGeometry(const GeometryData& geo, const std::string& materialSymbol,
-                                                  const SkinData* skin = nullptr) {
-        // Find the primitive matching the material symbol (or first one)
-        const Primitive* prim = nullptr;
-        for (const auto& p : geo.primitives) {
-            if (p.material == materialSymbol || prim == nullptr) {
-                prim = &p;
-                if (p.material == materialSymbol) break;
-            }
-        }
-        if (!prim) return nullptr;
+    // Key of one output vertex: the (position, normal, uv) source-index tuple a
+    // face corner references. Corners sharing a tuple share one indexed vertex.
+    struct VertexKey {
+        int pos{-1};
+        int normal{-1};
+        int uv{-1};
 
+        bool operator==(const VertexKey&) const = default;
+    };
+
+    struct VertexKeyHash {
+        size_t operator()(const VertexKey& k) const {
+            size_t h = std::hash<int>{}(k.pos);
+            h ^= std::hash<int>{}(k.normal) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<int>{}(k.uv) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
+
+    std::shared_ptr<BufferGeometry> buildGeometry(const GeometryData& geo, const Primitive& prim,
+                                                  const SkinData* skin = nullptr) {
         // Find inputs
         const Input* posInput = nullptr;
         const Input* normalInput = nullptr;
         const Input* uvInput = nullptr;
-        for (const auto& inp : prim->inputs) {
+        for (const auto& inp : prim.inputs) {
             if (inp.semantic == "VERTEX") posInput = &inp;
             else if (inp.semantic == "NORMAL")
                 normalInput = &inp;
@@ -311,63 +376,90 @@ namespace {
 
         if (!posSource) return nullptr;
 
-        int stride = prim->maxOffset + 1;
+        const int stride = prim.maxOffset + 1;
+        // Corners available in the (possibly malformed/truncated) <p> stream.
+        const size_t maxCorners = stride > 0 ? prim.p.size() / stride : 0;
 
         std::vector<float> positions;
         std::vector<float> normals;
         std::vector<float> uvs;
         std::vector<float> skinIndices;
         std::vector<float> skinWeights;
+        std::vector<unsigned int> index;
+        std::unordered_map<VertexKey, unsigned int, VertexKeyHash> remap;
+        index.reserve(maxCorners);
+        remap.reserve(maxCorners);
 
-        auto addVertex = [&](int idx) {
-            int vertexIdx = 0;
-            if (posInput) {
-                vertexIdx = prim->p[idx * stride + posInput->offset];
-                int base = vertexIdx * posSource->stride;
-                positions.push_back(posSource->data[base]);
-                positions.push_back(posSource->data[base + 1]);
-                positions.push_back(posSource->data[base + 2]);
+        // Copy `n` floats from an accessor position, zero-filling when the source
+        // index is out of range (malformed input must not read out of bounds).
+        auto fetch = [](const Source& src, int idx, float* out, int n) {
+            const size_t base = static_cast<size_t>(src.offset) + static_cast<size_t>(idx) * src.stride;
+            if (idx < 0 || base + n > src.data.size()) {
+                std::fill_n(out, n, 0.f);
+                return;
             }
-            if (normalSource && normalInput) {
-                int base = prim->p[idx * stride + normalInput->offset] * normalSource->stride;
-                normals.push_back(normalSource->data[base]);
-                normals.push_back(normalSource->data[base + 1]);
-                normals.push_back(normalSource->data[base + 2]);
-            }
-            if (uvSource && uvInput) {
-                int base = prim->p[idx * stride + uvInput->offset] * uvSource->stride;
-                uvs.push_back(uvSource->data[base]);
-                uvs.push_back(uvSource->data[base + 1]);
-            }
-            if (skin && posInput && vertexIdx < static_cast<int>(skin->jointIndices.size())) {
-                const auto& ji = skin->jointIndices[vertexIdx];
-                const auto& jw = skin->jointWeights[vertexIdx];
-                skinIndices.insert(skinIndices.end(), ji.begin(), ji.end());
-                skinWeights.insert(skinWeights.end(), jw.begin(), jw.end());
-            } else if (skin) {
-                skinIndices.insert(skinIndices.end(), {0.f, 0.f, 0.f, 0.f});
-                skinWeights.insert(skinWeights.end(), {0.f, 0.f, 0.f, 0.f});
-            }
+            std::copy_n(src.data.begin() + base, n, out);
         };
 
-        if (prim->type == "triangles") {
-            int vertexCount = prim->count * 3;
-            for (int i = 0; i < vertexCount; i++) {
-                addVertex(i);
+        auto addCorner = [&](size_t corner) {
+            const size_t pBase = corner * stride;
+
+            VertexKey key;
+            key.pos = prim.p[pBase + posInput->offset];
+            if (normalSource && normalInput) key.normal = prim.p[pBase + normalInput->offset];
+            if (uvSource && uvInput) key.uv = prim.p[pBase + uvInput->offset];
+
+            const auto [it, inserted] = remap.try_emplace(key, static_cast<unsigned int>(positions.size() / 3));
+            if (inserted) {
+                float buf[3];
+                fetch(*posSource, key.pos, buf, 3);
+                positions.insert(positions.end(), buf, buf + 3);
+                if (normalSource && normalInput) {
+                    fetch(*normalSource, key.normal, buf, 3);
+                    normals.insert(normals.end(), buf, buf + 3);
+                }
+                if (uvSource && uvInput) {
+                    fetch(*uvSource, key.uv, buf, 2);
+                    uvs.insert(uvs.end(), buf, buf + 2);
+                }
+                if (skin) {
+                    if (key.pos >= 0 && key.pos < static_cast<int>(skin->jointIndices.size())) {
+                        const auto& ji = skin->jointIndices[key.pos];
+                        const auto& jw = skin->jointWeights[key.pos];
+                        skinIndices.insert(skinIndices.end(), ji.begin(), ji.end());
+                        skinWeights.insert(skinWeights.end(), jw.begin(), jw.end());
+                    } else {
+                        skinIndices.insert(skinIndices.end(), {0.f, 0.f, 0.f, 0.f});
+                        skinWeights.insert(skinWeights.end(), {0.f, 0.f, 0.f, 0.f});
+                    }
+                }
             }
-        } else if (prim->type == "polylist") {
-            int vi = 0;// vertex index into p
-            for (int polyIdx = 0; polyIdx < prim->count; polyIdx++) {
-                int vc = prim->vcount.empty() ? 3 : prim->vcount[polyIdx];
+            index.push_back(it->second);
+        };
+
+        if (prim.type == "triangles") {
+            size_t vertexCount = std::min(static_cast<size_t>(prim.count) * 3, maxCorners);
+            vertexCount -= vertexCount % 3;// only whole triangles
+            for (size_t i = 0; i < vertexCount; i++) {
+                addCorner(i);
+            }
+        } else if (prim.type == "polylist") {
+            size_t vi = 0;// corner index into p
+            for (int polyIdx = 0; polyIdx < prim.count; polyIdx++) {
+                const int vc = prim.vcount.empty() ? 3
+                                                   : (polyIdx < static_cast<int>(prim.vcount.size()) ? prim.vcount[polyIdx] : 0);
+                if (vc <= 0 || vi + vc > maxCorners) break;// truncated/malformed
                 // Fan triangulation from vertex 0
                 for (int t = 1; t < vc - 1; t++) {
-                    addVertex(vi);
-                    addVertex(vi + t);
-                    addVertex(vi + t + 1);
+                    addCorner(vi);
+                    addCorner(vi + t);
+                    addCorner(vi + t + 1);
                 }
                 vi += vc;
             }
         }
+
+        if (positions.empty()) return nullptr;
 
         // Bake bind-shape matrix into positions/normals so bindMatrix on the
         // SkinnedMesh can be identity (matches three.js GLTFLoader convention)
@@ -393,6 +485,7 @@ namespace {
         }
 
         auto geometry = std::make_shared<BufferGeometry>();
+        geometry->setIndex(std::move(index));
         geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
         if (!normals.empty()) {
             geometry->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
@@ -564,7 +657,7 @@ namespace {
             }
 
             if (const auto fa = src.child("float_array")) {
-                s.floats = parseFloatArray(fa.child_value());
+                s.floats = parseFloatArray(fa.child_value(), fa.attribute("count").as_uint(0));
             } else if (const auto na = src.child("Name_array")) {
                 s.names = parseNameArray(na.child_value());
             }
@@ -753,7 +846,7 @@ struct ColladaLoader::Impl {
             for (const auto& src : skin.children("source")) {
                 const std::string sid = src.attribute("id").value();
                 if (const auto fa = src.child("float_array")) {
-                    floatSources[sid] = parseFloatArray(fa.child_value());
+                    floatSources[sid] = parseFloatArray(fa.child_value(), fa.attribute("count").as_uint(0));
                 } else if (const auto na = src.child("Name_array")) {
                     nameSources[sid] = parseNameArray(na.child_value());
                 }
@@ -803,7 +896,7 @@ struct ColladaLoader::Impl {
                 if (const auto it = floatSources.find(weightSrcId); it != floatSources.end()) {
                     sd.weightValues = it->second;
                 }
-                if (const auto vc = vw.child("vcount")) sd.vcount = parseIntArray(vc.child_value());
+                if (const auto vc = vw.child("vcount")) sd.vcount = parseIntArray(vc.child_value(), vw.attribute("count").as_uint(0));
                 if (const auto vv = vw.child("v")) sd.v = parseIntArray(vv.child_value());
             }
 
@@ -843,25 +936,38 @@ struct ColladaLoader::Impl {
 
         TextureLoader texLoader;
 
-        // Helper: resolve effect + texture -> Material
+        // Helper: resolve effect + texture -> Material. Instances referencing the
+        // same material id share one Material (textures are deduped by texLoader).
+        std::unordered_map<std::string, std::shared_ptr<Material>> materialCache;
         auto loadMaterial = [&](const std::string& matId) -> std::shared_ptr<Material> {
+            if (const auto it = materialCache.find(matId); it != materialCache.end()) {
+                return it->second;
+            }
+            std::shared_ptr<Material> mat;
             const std::string effectId = materialToEffect.contains(matId) ? materialToEffect.at(matId) : "";
             if (effectId.empty() || !effects.contains(effectId)) {
-                return MeshPhongMaterial::create();
-            }
-            const EffectData& effect = effects.at(effectId);
-            auto mat = buildMaterial(effect);
-            if (!effect.diffuseTextureId.empty() && images.contains(effect.diffuseTextureId)) {
-                auto tex = texLoader.load(images.at(effect.diffuseTextureId));
-                if (tex) {
-                    tex->wrapS = effect.wrapS;
-                    tex->wrapT = effect.wrapT;
-                    tex->needsUpdate();
-                    mat->map = tex;
+                mat = MeshPhongMaterial::create();
+            } else {
+                const EffectData& effect = effects.at(effectId);
+                auto phong = buildMaterial(effect);
+                if (!effect.diffuseTextureId.empty() && images.contains(effect.diffuseTextureId)) {
+                    auto tex = texLoader.load(images.at(effect.diffuseTextureId));
+                    if (tex) {
+                        tex->wrapS = effect.wrapS;
+                        tex->wrapT = effect.wrapT;
+                        tex->needsUpdate();
+                        phong->map = tex;
+                    }
                 }
+                mat = phong;
             }
+            materialCache[matId] = mat;
             return mat;
         };
+
+        // Repeated <instance_geometry>/<instance_controller> of the same source
+        // share one BufferGeometry instead of re-expanding the index streams.
+        std::unordered_map<std::string, std::shared_ptr<BufferGeometry>> geometryCache;
 
         // Build scene
         auto sceneGroup = Group::create();
@@ -951,8 +1057,17 @@ struct ColladaLoader::Impl {
                 }
 
                 // Create a mesh per primitive
-                for (const auto& prim : geodata.primitives) {
-                    auto geom = buildGeometry(geodata, prim.material);
+                for (size_t pi = 0; pi < geodata.primitives.size(); ++pi) {
+                    const auto& prim = geodata.primitives[pi];
+
+                    const std::string geoKey = geomId + "/" + std::to_string(pi);
+                    std::shared_ptr<BufferGeometry> geom;
+                    if (const auto it = geometryCache.find(geoKey); it != geometryCache.end()) {
+                        geom = it->second;
+                    } else {
+                        geom = buildGeometry(geodata, prim);
+                        geometryCache[geoKey] = geom;
+                    }
                     if (!geom) continue;
 
                     const std::string matId = symbolToMaterialId.contains(prim.material) ? symbolToMaterialId.at(prim.material) : prim.material;
@@ -983,8 +1098,17 @@ struct ColladaLoader::Impl {
                     }
                 }
 
-                for (const auto& prim : geodata.primitives) {
-                    auto geom = buildGeometry(geodata, prim.material, skinPtr);
+                for (size_t pi = 0; pi < geodata.primitives.size(); ++pi) {
+                    const auto& prim = geodata.primitives[pi];
+
+                    const std::string geoKey = ctrlId + "@" + geomId + "/" + std::to_string(pi);
+                    std::shared_ptr<BufferGeometry> geom;
+                    if (const auto it = geometryCache.find(geoKey); it != geometryCache.end()) {
+                        geom = it->second;
+                    } else {
+                        geom = buildGeometry(geodata, prim, skinPtr);
+                        geometryCache[geoKey] = geom;
+                    }
                     if (!geom) continue;
 
                     const std::string matId = symbolToMaterialId.contains(prim.material) ? symbolToMaterialId.at(prim.material) : prim.material;

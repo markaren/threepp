@@ -11,6 +11,7 @@
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
 #include "pugixml.hpp"
@@ -22,6 +23,7 @@
 #include <list>
 #include <map>
 #include <set>
+#include <unordered_map>
 
 
 using namespace threepp;
@@ -56,20 +58,21 @@ namespace {
     }
 
     std::shared_ptr<Material> getMaterial(const pugi::xml_node& node) {
-        const auto color = node.child("color");
-        const auto diffuse = color.attribute("rgba").value();
-        const auto diffuseArray = utils::split(diffuse, ' ');
-
         const auto mtl = MeshStandardMaterial::create();
-        mtl->color.setRGB(
-                utils::parseFloat(diffuseArray[0]),
-                utils::parseFloat(diffuseArray[1]),
-                utils::parseFloat(diffuseArray[2]));
 
-        const float alpha = utils::parseFloat(diffuseArray[3]);
-        if (alpha < 1) {
+        // A <material> may be a named reference with no inline <color> (e.g.
+        // <material name="grey"/>), and rgba may hold fewer than 4 components or
+        // runs of whitespace between them.
+        std::vector<float> rgba;
+        for (const auto& tok : utils::split(node.child("color").attribute("rgba").value(), ' ')) {
+            if (!tok.empty()) rgba.push_back(utils::parseFloat(tok));
+        }
+        if (rgba.size() < 4) return mtl;
+
+        mtl->color.setRGB(rgba[0], rgba[1], rgba[2]);
+        if (rgba[3] < 1) {
             mtl->transparent = true;
-            mtl->opacity = alpha;
+            mtl->opacity = rgba[3];
         }
 
         return mtl;
@@ -109,6 +112,47 @@ namespace {
                 .parent = node.child("parent").attribute("link").value(),
                 .child = node.child("child").attribute("link").value()};
     }
+
+    // Robot models reference the same mesh file from <visual> and <collision>
+    // (and across repeated links); load each file once per parse and hand out
+    // clones that share geometry/materials, so per-use origin/scale stay
+    // independent while the expensive parse/decode happens once.
+    class CachingLoader final: public Loader<Group> {
+
+    public:
+        explicit CachingLoader(Loader<Group>* inner): inner_(inner) {}
+
+        std::shared_ptr<Group> load(const std::filesystem::path& path) override {
+            if (!inner_) return nullptr;
+
+            std::error_code ec;
+            const auto canonical = std::filesystem::weakly_canonical(path, ec);
+            const std::string key = (ec ? path : canonical).string();
+
+            if (const auto it = cache_.find(key); it != cache_.end()) {
+                return it->second->clone<Group>();
+            }
+
+            auto loaded = inner_->load(path);
+            if (!loaded) return nullptr;
+
+            // clone() shares geometry/materials but has no SkinnedMesh overload and
+            // drops animations — hand such (rare for robot links) models out
+            // uncached rather than degrade them.
+            bool cloneable = loaded->animations.empty();
+            if (cloneable) {
+                loaded->traverseType<SkinnedMesh>([&cloneable](SkinnedMesh&) { cloneable = false; });
+            }
+            if (!cloneable) return loaded;
+
+            cache_[key] = loaded;
+            return loaded->clone<Group>();
+        }
+
+    private:
+        Loader<Group>* inner_;
+        std::unordered_map<std::string, std::shared_ptr<Group>> cache_;
+    };
 
     std::filesystem::path findPackageRoot(const std::filesystem::path& start) {
         for (auto path = start; path != path.parent_path(); path = path.parent_path()) {
@@ -393,21 +437,24 @@ struct URDFLoader::Impl {
         if (!doc.load_file(path.string().c_str())) return {};
 
         const std::string ext = utils::toLower(path.extension().string());
+        CachingLoader cachingLoader(loader.get());
         if (ext == ".xacro" || xacro::Processor::needsProcessing(doc)) {
             xacro::Processor proc(path.parent_path(), xacroArgs);
             pugi::xml_document processed;
             proc.process(doc, processed);
             const auto robotNode = processed.child("robot");
-            return robotNode ? buildArticulationDesc(robotNode, path, loader.get(), loadVisuals) : URDFArticulationDesc{};
+            return robotNode ? buildArticulationDesc(robotNode, path, &cachingLoader, loadVisuals) : URDFArticulationDesc{};
         }
         const auto robotNode = doc.child("robot");
-        return robotNode ? buildArticulationDesc(robotNode, path, loader.get(), loadVisuals) : URDFArticulationDesc{};
+        return robotNode ? buildArticulationDesc(robotNode, path, &cachingLoader, loadVisuals) : URDFArticulationDesc{};
     }
 
     std::shared_ptr<Robot> loadFromXml(const pugi::xml_document& doc, const std::filesystem::path& path) {
 
         const auto root = doc.child("robot");
         if (!root) return nullptr;
+
+        CachingLoader cachingLoader(loader.get());
 
         auto robot = std::make_shared<Robot>();
         robot->name = root.attribute("name").as_string("robot");
@@ -425,11 +472,13 @@ struct URDFLoader::Impl {
                     applyRotation(group, parseTupleString(origin.attribute("rpy").value()));
                 }
 
-                if (auto visualObject = parseGeometryNode(path, loader.get(), visual.child("geometry"))) {
+                if (auto visualObject = parseGeometryNode(path, &cachingLoader, visual.child("geometry"))) {
                     group->add(visualObject);
                 }
 
-                if (const auto material = visual.child("material")) {
+                // Only override the mesh's own materials when the URDF supplies an
+                // inline color; a bare named reference keeps the loaded appearance.
+                if (const auto material = visual.child("material"); material && material.child("color")) {
 
                     const auto mtl = getMaterial(material);
 
@@ -454,7 +503,7 @@ struct URDFLoader::Impl {
                 material->wireframe = true;
                 material->color = Color::white;
 
-                if (auto colliderObject = parseGeometryNode(path, loader.get(), collider.child("geometry"))) {
+                if (auto colliderObject = parseGeometryNode(path, &cachingLoader, collider.child("geometry"))) {
                     group->add(colliderObject);
 
                     colliderObject->traverseType<Mesh>([material](Mesh& mesh) {
