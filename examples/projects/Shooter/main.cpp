@@ -1510,6 +1510,11 @@ int main(int argc, char** argv) {
     canvas.animate([&] {
         float dt = clock.getDelta();
         if (dt > 0.05f) dt = 0.05f;// clamp big hitches
+        // Deterministic capture: a fixed timestep pins the physics-driven player
+        // to the SAME pose/position at a given --frames N across runs, so shadow/
+        // TAA A/B captures compare identical geometry (wall-clock dt otherwise
+        // drifts the pose run-to-run and muddies the diff).
+        if (!shotPath.empty()) dt = 1.f / 60.f;
 
         // --- read player body pose ---
         const PxTransform pt = playerBody->getGlobalPose();

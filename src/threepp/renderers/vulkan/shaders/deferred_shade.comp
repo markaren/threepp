@@ -51,6 +51,11 @@ const float kTransScatterPower  = 4.0; // forward-scatter lobe tightness
 const float kTransScatterWeight = 0.5; // forward-scatter strength vs back-wrap
 const float kTransAmbient       = 0.4; // back-face env fill strength
 
+// Shadow-ratio history floor when the σ-step cut fires on a moving-caster edge.
+// Low enough to track the sweeping shadow (~half the old smudge), high enough
+// that no single 1-2 ray (binary) sample dominates → no salt-and-pepper dust.
+const float kShadowStepFloor    = 5.0;
+
 layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
@@ -1515,21 +1520,36 @@ void main() {
             const float trend    = sValid ? mix(sPrev.w, dev, 0.34) : 0.0;
             const float trendCut = smoothstep(0.10, 0.30, abs(trend));
             // VARIANCE-GATED INSTANT CUT — the trend antilag above needs 2-3
-            // frames to charge and still leaves a cap-4 EMA, which reads as a
+            // frames to charge and still leaves a cap-4..8 EMA, which reads as a
             // dark smudge dragging ~10 frames behind a character's shadow
             // sweeping across a floor (tps_shooter hero trail). The history
             // already stores E[R²] (.y), so measure this frame's deviation in
             // sigmas of the SETTLED history: a converged lit or umbra pixel has
             // σ≈0, so the first frame the occluder's edge arrives (|dev|≈1) is
-            // a >4σ event and the history is cut to ~1 frame THAT frame — the
-            // shadow tracks its caster with no charge-up lag. A static
-            // penumbra keeps σ≈0.5 (1-2 ray Bernoulli noise), so per-frame
-            // noise sits at ≤2σ and the long clean history is untouched (the
-            // 0.08 σ-floor also absorbs fp16 quantisation of E[R²]−E[R]²).
+            // a >4σ event and the history is cut SHORT that frame — the shadow
+            // tracks its caster with no charge-up lag. A static penumbra keeps
+            // σ≈0.5 (1-2 ray Bernoulli noise), so per-frame noise sits at ≤2σ
+            // and the long clean history is untouched (the 0.08 σ-floor also
+            // absorbs fp16 quantisation of E[R²]−E[R]²).
+            //
+            // The cut floors at kShadowStepFloor frames, NOT 1: a ground pixel
+            // the moving shadow just reached was a converged-LIT pixel, so the
+            // adaptive-ray tier gave it 1 ray/frame (a BINARY visEst∈{0,1}).
+            // Cutting to histLen=1 makes sAcc = that lone binary sample at full
+            // weight → salt-and-pepper "dusting" on the sweeping edge. Flooring
+            // at ~5 keeps every incoming 1-2 ray sample at ≤1/5 weight, so the
+            // edge CONVERGES over a few frames (smooth) instead of snapping to a
+            // single noisy sample — still ~half the old smudge's lag, and only
+            // where the σ-step actually fires.
             const float sSigma   = sqrt(max(sPrev.y - sPrev.x * sPrev.x, 0.0)) + 0.08;
             const float stepCut  = sValid ? smoothstep(2.0, 4.0, abs(dev) / sSigma) : 0.0;
             const float sCapMot  = mix(32.0, 8.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc)));
-            const float sCap     = mix(mix(sCapMot, 4.0, trendCut), 1.0, stepCut);
+            // Compose the trend + step reductions as a MIN so neither can raise
+            // the cap above the other (a nested mix could: mix(4, floor, step)
+            // rises to `floor` when floor>4). Both collapse to sCapMot when idle.
+            const float sCapTrend = mix(sCapMot, 4.0, trendCut);
+            const float sCapStep  = mix(sCapMot, kShadowStepFloor, stepCut);
+            const float sCap      = min(sCapTrend, sCapStep);
             const float sHist    = sValid ? min(sPrev.z + 1.0, sCap) : 1.0;
             const float sAcc     = sValid ? mix(sPrev.x, visEst, 1.0 / sHist) : visEst;
             const float sSq      = sValid ? mix(sPrev.y, visEst * visEst, 1.0 / sHist) : visEst * visEst;
