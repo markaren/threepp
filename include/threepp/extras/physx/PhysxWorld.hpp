@@ -86,6 +86,17 @@ namespace threepp {
             Vector3 gravity{0, -9.81f, 0};
             float fixedTimestep = 1.f / 60.f;
             int maxSubSteps = 4;
+            // Low-pass the dt handed to step() before it drives the fixed-timestep
+            // accumulator. Bound visuals are INTERPOLATED by the leftover
+            // accumulator fraction, so the few-ms of frame-clock jitter that
+            // survives even under vsync turns into per-frame position jitter —
+            // felt as rubber-banding, worst on fast bodies (a chase-cammed
+            // vehicle). Smoothing the dt keeps the substep cadence — and thus the
+            // interpolated pose — steady. A CONSTANT dt is a no-op (its running
+            // average is itself), so fixed-step and deterministic callers are
+            // byte-unchanged; genuine hitches (> 100 ms) bypass so the sim still
+            // catches up. Set false for exact, unfiltered dt integration.
+            bool smoothTimestep = true;
             unsigned numThreads = 2;
             // Enable GPU dynamics. Required for soft bodies (PxDeformableVolume),
             // particle systems, and GPU broadphase. Switches the scene to the TGS
@@ -256,6 +267,13 @@ namespace threepp {
         // Soft bodies are NOT interpolated — their GPU positions only get pulled
         // when at least one substep ran this call.
         void step(float dt) {
+            // Delta-time smoothing (see Settings::smoothTimestep). Lazy-init to the
+            // first dt so a constant timestep is an exact no-op; skip genuine
+            // hitches so they neither pollute the average nor stall the catch-up.
+            if (settings_.smoothTimestep && dt > 0.f && dt < 0.1f) {
+                dtEma_ = (dtEma_ <= 0.f) ? dt : dtEma_ * 0.85f + dt * 0.15f;
+                dt = dtEma_;
+            }
             accumulator_ += dt;
             int steps = 0;
             while (accumulator_ >= settings_.fixedTimestep && steps < settings_.maxSubSteps) {
@@ -769,6 +787,7 @@ namespace threepp {
         std::unordered_map<std::string, CookCacheEntry> cookCache_;
         std::vector<std::unique_ptr<SoftBody>> softBodies_;
         float accumulator_ = 0.f;
+        float dtEma_ = 0.f;// smoothed timestep (see Settings::smoothTimestep); 0 = uninitialised
 
         std::vector<ObjBinding> objBindings_;
         std::vector<InstBinding> instBindings_;

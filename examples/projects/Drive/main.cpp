@@ -864,7 +864,7 @@ int main(int argc, char** argv) {
     Clock clock;
     float grassTime = 0.f;
     canvas.animate([&] {
-        const float dt = clock.getDelta();
+        const float dt = clock.getDelta();// PhysxWorld smooths this for its own step
 
         // Advance the GrassField wind clock (GL/WGPU only; null on Vulkan).
         grassTime += dt;
