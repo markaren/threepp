@@ -29,9 +29,12 @@
 #ifndef THREEPP_VULKAN_FSR_UPSCALER_HPP
 #define THREEPP_VULKAN_FSR_UPSCALER_HPP
 
+#include "threepp/renderers/vulkan/VulkanResources.hpp"
+
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <vector>
 
 namespace threepp::vulkan {
 
@@ -40,7 +43,7 @@ namespace threepp::vulkan {
     class FsrUpscaler {
 
     public:
-        explicit FsrUpscaler(VulkanContext& ctx);
+        FsrUpscaler(VulkanContext& ctx, uint32_t framesInFlight);
         ~FsrUpscaler();
         FsrUpscaler(const FsrUpscaler&) = delete;
         FsrUpscaler& operator=(const FsrUpscaler&) = delete;
@@ -109,6 +112,19 @@ namespace threepp::vulkan {
 
             bool  sharpen = false;  // FSR's built-in RCAS (left off — the
             float sharpness = 0.f;  // renderer keeps its own display RCAS)
+
+            // Reactive mask (opt-in). When `reactive` is true, recordDispatch
+            // first generates an R8 reactive mask from the G-buffer IDs flags
+            // (fsr_reactive.comp: deformer/anim surfaces) and feeds it to FSR so
+            // those pixels trust history less (less ghosting). `frame` picks the
+            // per-frame-in-flight reactive image + descriptor set; `idsView` is
+            // this frame's raster G-buffer IDs view (SHADER_READ_ONLY layout,
+            // sampled as usampler2D). reactiveValue is the strength for flagged
+            // pixels (0..1). No-op if the reactive images weren't allocated.
+            uint32_t      frame        = 0;
+            VkImageView   idsView      = VK_NULL_HANDLE;
+            bool          reactive     = false;
+            float         reactiveValue = 0.6f;
         };
 
         // Record the FSR upscale into in.cmd. No-op if !valid(). See the layout
@@ -117,8 +133,28 @@ namespace threepp::vulkan {
 
     private:
         VulkanContext& ctx_;
+        uint32_t framesInFlight_ = 0;
         void*    context_ = nullptr;// ffxContext (opaque; kept ffx-type-free here)
         uint32_t displayW_ = 0, displayH_ = 0;
+
+        // ── Reactive-mask generator (fsr_reactive.comp) ──────────────────────
+        // R8 mask per frame-in-flight at DISPLAY (== maxRenderSize) extent; the
+        // compute writes only the render-extent sub-region each frame. Pipeline
+        // built once in the ctor; images (re)allocated in create(). Descriptor
+        // sets are updated inline per frame (per-fif, gated by the frame fence,
+        // so never in-flight). No initial layout transition — recordDispatch
+        // does UNDEFINED→GENERAL each frame (the mask is fully regenerated).
+        std::vector<Image2D>  reactive_;
+        VkSampler             idsSampler_       = VK_NULL_HANDLE;// NEAREST (uint texelFetch)
+        VkDescriptorSetLayout reactiveDsLayout_ = VK_NULL_HANDLE;
+        VkPipelineLayout      reactivePipeLayout_ = VK_NULL_HANDLE;
+        VkPipeline            reactivePipe_     = VK_NULL_HANDLE;
+        VkDescriptorPool      reactivePool_     = VK_NULL_HANDLE;
+        std::vector<VkDescriptorSet> reactiveSets_;// [framesInFlight]
+
+        void createReactivePipeline();
+        void createReactiveImages(uint32_t width, uint32_t height);
+        void destroyReactiveImages();
     };
 
 }// namespace threepp::vulkan

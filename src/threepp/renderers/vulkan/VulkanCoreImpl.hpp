@@ -2385,7 +2385,7 @@ namespace threepp {
             // swapchain/display resize does (handled in reallocateRenderExtentResources).
             // On success FSR replaces the TAA resolve; on failure the TAA path
             // runs unchanged.
-            fsr_ = std::make_unique<vulkan::FsrUpscaler>(*ctx);
+            fsr_ = std::make_unique<vulkan::FsrUpscaler>(*ctx, kFramesInFlight);
             fsrActive_ = fsr_->create(ctx->swapchainExtent().width,
                                       ctx->swapchainExtent().height);
             fsrResetNext_ = true;

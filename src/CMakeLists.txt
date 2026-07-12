@@ -1171,6 +1171,14 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/motion_blur.comp"
         kMotionBlurCompSpv
         _motion_blur_spv_h)
+    # FSR reactive-mask generator (G-buffer IDs flags -> R8). Only needed when
+    # building with FSR; FsrUpscaler.cpp (the only consumer) is FSR-gated too.
+    if (THREEPP_WITH_FSR)
+        compile_vulkan_shader(threepp
+            "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/fsr_reactive.comp"
+            kFsrReactiveCompSpv
+            _fsr_reactive_spv_h)
+    endif ()
     # Hybrid raster overlay: wireframe + Line/LineSegments draw on top of
     # the post-TAA swapchain image. Depth-tested against the G-buffer's
     # depth attachment so overlays are correctly occluded by path-traced

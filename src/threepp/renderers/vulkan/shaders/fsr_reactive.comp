@@ -1,0 +1,36 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+
+// FSR reactive-mask generator. FSR's temporal upscaler trusts history less on
+// pixels flagged reactive, which kills ghosting on surfaces whose shaded
+// appearance changes in ways motion vectors can't express — persistent
+// deformers (skinned/displaced/soft-body) and animated textures. threepp
+// already carries that exact signal in the G-buffer IDs .z flag word, so this
+// pass just reads it and writes an R8 mask at render resolution for the FSR
+// dispatch's `reactive` input (FsrUpscaler.cpp).
+//
+// Transparency/particles are NOT covered here on purpose: the deferred renderer
+// composites them in the overlay pass AFTER FSR, so they never enter the
+// upscaled image and can't ghost through it.
+
+#include "instance_flags.glsl"// ifShadingReactivity + the flag bits (vulkan_shared.h)
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform usampler2D gbufIds;// rgba16ui, .z = flags
+// R8_UNORM reactive out. No format qualifier (shaderStorageImageWriteWithoutFormat
+// is enabled at device creation) so the store matches the bound view's format.
+layout(set = 0, binding = 1) uniform writeonly image2D outReactive;
+
+layout(push_constant) uniform Pc {
+    uint  width;
+    uint  height;
+    float value;// reactive strength for flagged pixels (0..1)
+} pc;
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
+    const uint flags = texelFetch(gbufIds, px, 0).z;
+    imageStore(outReactive, px, vec4(ifShadingReactivity(flags) * pc.value, 0.0, 0.0, 0.0));
+}

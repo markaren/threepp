@@ -1,6 +1,9 @@
 #include "threepp/renderers/vulkan/FsrUpscaler.hpp"
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
+#include "threepp/renderers/vulkan/shaders/fsr_reactive.comp.spv.h"
+
+#include <vector>
 
 #include <ffx_api/ffx_api.h>
 #include <ffx_api/ffx_upscale.h>
@@ -119,9 +122,22 @@ namespace threepp::vulkan {
 
     }// namespace
 
-    FsrUpscaler::FsrUpscaler(VulkanContext& ctx) : ctx_(ctx) {}
+    FsrUpscaler::FsrUpscaler(VulkanContext& ctx, uint32_t framesInFlight)
+        : ctx_(ctx), framesInFlight_(framesInFlight) {
+        reactive_.resize(framesInFlight_);
+        reactiveSets_.resize(framesInFlight_);
+        createReactivePipeline();
+    }
 
-    FsrUpscaler::~FsrUpscaler() { destroy(); }
+    FsrUpscaler::~FsrUpscaler() {
+        destroy();// frees the ffx context + reactive images (device still alive)
+        VkDevice d = ctx_.device();
+        if (reactivePipe_)       vkDestroyPipeline(d, reactivePipe_, nullptr);
+        if (reactivePipeLayout_) vkDestroyPipelineLayout(d, reactivePipeLayout_, nullptr);
+        if (reactiveDsLayout_)   vkDestroyDescriptorSetLayout(d, reactiveDsLayout_, nullptr);
+        if (reactivePool_)       vkDestroyDescriptorPool(d, reactivePool_, nullptr);
+        if (idsSampler_)         vkDestroySampler(d, idsSampler_, nullptr);
+    }
 
     bool FsrUpscaler::create(uint32_t displayWidth, uint32_t displayHeight) {
         destroy();
@@ -167,6 +183,9 @@ namespace threepp::vulkan {
         context_  = context;
         displayW_ = displayWidth;
         displayH_ = displayHeight;
+        // Reactive mask scratch at the DISPLAY (== maxRenderSize) extent — the
+        // compute writes only the render sub-region each frame.
+        createReactiveImages(displayWidth, displayHeight);
         std::fprintf(stderr, "[threepp] FSR 3.1 upscaler active (%ux%u display).\n",
                      displayWidth, displayHeight);
         return true;
@@ -178,6 +197,7 @@ namespace threepp::vulkan {
             if (g_ffx.DestroyContext) g_ffx.DestroyContext(&c, nullptr);
             context_ = nullptr;
         }
+        destroyReactiveImages();
         displayW_ = displayH_ = 0;
     }
 
@@ -210,6 +230,47 @@ namespace threepp::vulkan {
     void FsrUpscaler::recordDispatch(const DispatchInputs& in) {
         if (!context_) return;
 
+        // ── Reactive mask (opt-in) ───────────────────────────────────────────
+        // Generate an R8 reactive mask from the G-buffer IDs flags and hand it to
+        // FSR so deformer/animated surfaces trust history less (less ghosting).
+        // Per-frame-in-flight image + set; the set is safe to update here because
+        // this fif slot's fence was already waited this frame (never in-flight).
+        VkImage reactiveImg = VK_NULL_HANDLE;
+        if (in.reactive && reactivePipe_ && in.idsView != VK_NULL_HANDLE &&
+            in.frame < reactive_.size() && reactive_[in.frame].view != VK_NULL_HANDLE) {
+            reactiveImg = reactive_[in.frame].image;
+
+            VkDescriptorImageInfo idsI{};
+            idsI.sampler     = idsSampler_;
+            idsI.imageView   = in.idsView;
+            idsI.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkDescriptorImageInfo reI{};
+            reI.imageView    = reactive_[in.frame].view;
+            reI.imageLayout  = VK_IMAGE_LAYOUT_GENERAL;
+            VkWriteDescriptorSet w[2]{};
+            w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[0].dstSet = reactiveSets_[in.frame]; w[0].dstBinding = 0; w[0].descriptorCount = 1;
+            w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[0].pImageInfo = &idsI;
+            w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[1].dstSet = reactiveSets_[in.frame]; w[1].dstBinding = 1; w[1].descriptorCount = 1;
+            w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w[1].pImageInfo = &reI;
+            vkUpdateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
+
+            // Regenerated in full every frame → UNDEFINED old layout (discard).
+            transition(in.cmd, reactiveImg, VK_IMAGE_LAYOUT_UNDEFINED,
+                       VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_ASPECT_COLOR_BIT);
+            vkCmdBindPipeline(in.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, reactivePipe_);
+            vkCmdBindDescriptorSets(in.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    reactivePipeLayout_, 0, 1, &reactiveSets_[in.frame], 0, nullptr);
+            struct { uint32_t w, h; float v; } pc{in.renderWidth, in.renderHeight, in.reactiveValue};
+            vkCmdPushConstants(in.cmd, reactivePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(pc), &pc);
+            vkCmdDispatch(in.cmd, (in.renderWidth + 7u) / 8u, (in.renderHeight + 7u) / 8u, 1u);
+            // Compute write (GENERAL) → FSR read (SHADER_READ; declared COMPUTE_READ).
+            transition(in.cmd, reactiveImg, VK_IMAGE_LAYOUT_GENERAL,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+        }
+
         // Borrow the inputs into the layout the ffx backend expects for a
         // read state (SHADER_READ_ONLY_OPTIMAL). Motion is already there.
         transition(in.cmd, in.colorImage, in.colorLayout,
@@ -233,10 +294,14 @@ namespace threepp::vulkan {
         d.motionVectors = wrapImage(in.motionImage, in.motionFormat,
                                     in.renderWidth,  in.renderHeight, false,
                                     FFX_API_RESOURCE_STATE_COMPUTE_READ);
-        // Auto-exposure: no exposure texture. No reactive / T&C masks (deferred).
+        // Auto-exposure: no exposure texture. Reactive mask fed when generated
+        // above (else a null resource = "no reactive"); no T&C mask (transparents
+        // composite after FSR, so there's nothing to feed here).
         d.exposure      = wrapImage(VK_NULL_HANDLE, VK_FORMAT_UNDEFINED, 0, 0, false,
                                     FFX_API_RESOURCE_STATE_COMPUTE_READ);
-        d.reactive      = wrapImage(VK_NULL_HANDLE, VK_FORMAT_UNDEFINED, 0, 0, false,
+        d.reactive      = wrapImage(reactiveImg,
+                                    reactiveImg ? VK_FORMAT_R8_UNORM : VK_FORMAT_UNDEFINED,
+                                    in.renderWidth, in.renderHeight, false,
                                     FFX_API_RESOURCE_STATE_COMPUTE_READ);
         d.transparencyAndComposition = wrapImage(VK_NULL_HANDLE, VK_FORMAT_UNDEFINED, 0, 0, false,
                                     FFX_API_RESOURCE_STATE_COMPUTE_READ);
@@ -276,6 +341,112 @@ namespace threepp::vulkan {
         // The output is left in GENERAL with the upscale's writes; the caller
         // barriers it before PostComposite reads it (threepp's existing pattern
         // for the resolve → post-composite hand-off).
+    }
+
+    void FsrUpscaler::createReactivePipeline() {
+        VkDevice d = ctx_.device();
+
+        // NEAREST sampler for the uint IDs (texelFetch ignores filtering, but a
+        // combined-image-sampler binding still needs a sampler object).
+        VkSamplerCreateInfo sci{};
+        sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.magFilter    = VK_FILTER_NEAREST;
+        sci.minFilter    = VK_FILTER_NEAREST;
+        sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        check(vkCreateSampler(d, &sci, nullptr, &idsSampler_), "vkCreateSampler(fsr.reactive.ids)");
+
+        // 0: gbuf IDs (usampler2D), 1: reactive R8 (storage).
+        VkDescriptorSetLayoutBinding b[2]{};
+        b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        b[1].binding = 1; b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = 2; dlci.pBindings = b;
+        check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &reactiveDsLayout_),
+              "vkCreateDescriptorSetLayout(fsr.reactive)");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT; pcr.offset = 0; pcr.size = 12;// w,h,value
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount = 1; plci.pSetLayouts = &reactiveDsLayout_;
+        plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pcr;
+        check(vkCreatePipelineLayout(d, &plci, nullptr, &reactivePipeLayout_),
+              "vkCreatePipelineLayout(fsr.reactive)");
+
+        VkShaderModuleCreateInfo smci{};
+        smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smci.codeSize = sizeof(kFsrReactiveCompSpv); smci.pCode = kFsrReactiveCompSpv;
+        VkShaderModule mod = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(d, &smci, nullptr, &mod), "vkCreateShaderModule(fsr.reactive)");
+        VkPipelineShaderStageCreateInfo stage{};
+        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT; stage.module = mod; stage.pName = "main";
+        VkComputePipelineCreateInfo cpci{};
+        cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cpci.stage = stage; cpci.layout = reactivePipeLayout_;
+        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci, nullptr, &reactivePipe_),
+              "vkCreateComputePipelines(fsr.reactive)");
+        vkDestroyShaderModule(d, mod, nullptr);
+
+        VkDescriptorPoolSize ps[2]{};
+        ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[0].descriptorCount = framesInFlight_;
+        ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          ps[1].descriptorCount = framesInFlight_;
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets = framesInFlight_; dpci.poolSizeCount = 2; dpci.pPoolSizes = ps;
+        check(vkCreateDescriptorPool(d, &dpci, nullptr, &reactivePool_),
+              "vkCreateDescriptorPool(fsr.reactive)");
+        std::vector<VkDescriptorSetLayout> layouts(framesInFlight_, reactiveDsLayout_);
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = reactivePool_; ai.descriptorSetCount = framesInFlight_;
+        ai.pSetLayouts = layouts.data();
+        check(vkAllocateDescriptorSets(d, &ai, reactiveSets_.data()),
+              "vkAllocateDescriptorSets(fsr.reactive)");
+    }
+
+    void FsrUpscaler::createReactiveImages(uint32_t width, uint32_t height) {
+        destroyReactiveImages();
+        VkDevice d = ctx_.device();
+        for (auto& img : reactive_) {
+            img.width = width; img.height = height; img.format = VK_FORMAT_R8_UNORM;
+            VkImageCreateInfo ici{};
+            ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType     = VK_IMAGE_TYPE_2D;
+            ici.format        = VK_FORMAT_R8_UNORM;
+            ici.extent        = {width, height, 1};
+            ici.mipLevels     = 1;
+            ici.arrayLayers   = 1;
+            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;// recordDispatch does UNDEFINED→GENERAL
+            VmaAllocationCreateInfo aci{};
+            aci.usage = VMA_MEMORY_USAGE_AUTO;
+            check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &img.image, &img.alloc, nullptr),
+                  "vmaCreateImage(fsr.reactive)");
+            VkImageViewCreateInfo vci{};
+            vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vci.image    = img.image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format   = VK_FORMAT_R8_UNORM;
+            vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vci.subresourceRange.levelCount = 1;
+            vci.subresourceRange.layerCount = 1;
+            check(vkCreateImageView(d, &vci, nullptr, &img.view), "vkCreateImageView(fsr.reactive)");
+        }
+    }
+
+    void FsrUpscaler::destroyReactiveImages() {
+        VkDevice d = ctx_.device();
+        for (auto& img : reactive_) destroyImage2D(ctx_.allocator(), d, img);
     }
 
 }// namespace threepp::vulkan

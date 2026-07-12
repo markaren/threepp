@@ -1052,6 +1052,13 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                 fin.reset        = fsrResetNext_;
                 fin.sharpen      = false;// the renderer keeps its own display RCAS
                 fin.sharpness    = 0.f;
+                // Reactive mask: generated inside recordDispatch from the current
+                // frame's G-buffer IDs flags (deformer/animated surfaces → less
+                // ghosting). idsView is the same attachment PostComposite/TAA read.
+                fin.frame         = currentFrame;
+                fin.idsView       = rasterGbufs[currentFrame].ids.view;
+                fin.reactive      = true;
+                fin.reactiveValue = 0.6f;
 
                 gpuTimings_->begin(cb, TP_TAA, currentFrame);
                 fsr_->recordDispatch(fin);
