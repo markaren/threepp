@@ -46,7 +46,8 @@ int main(int argc, char** argv) {
     int   shotFrames = 240;
     float shotZoom   = 1.f; // <1 = closer (distance scales with it)
     bool  shotFront  = false;// view head-on along the model's thinnest axis (test walls/panels)
-    bool  bare       = false;// skip the demo floor + skeleton helper (tiny/odd-scale models)
+    bool nonDefaultModelPath = false;
+
     std::string shotAxis;    // explicit --front axis: x, -x, z, -z
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) {
@@ -61,10 +62,7 @@ int main(int argc, char** argv) {
             shotZoom = static_cast<float>(std::atof(argv[++i]));
             continue;
         }
-        if (std::strcmp(argv[i], "--bare") == 0) {
-            bare = true;
-            continue;
-        }
+
         if (std::strcmp(argv[i], "--front") == 0) {
             shotFront = true;
             // optional axis token: x, -x, z, -z (default: thinnest bbox axis)
@@ -73,12 +71,14 @@ int main(int argc, char** argv) {
             }
             continue;
         }
+
         std::filesystem::path arg = argv[i];
         if (std::filesystem::exists(arg) && std::filesystem::is_regular_file(arg)) {
             auto ext = arg.extension().string();
             std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return std::tolower(c); });
             if (ext == ".gltf" || ext == ".glb") {
                 modelPath = arg.string();
+                nonDefaultModelPath = true;
             } else {
                 std::cerr << "Ignoring argument (not a .gltf/.glb file): " << arg << "\n";
             }
@@ -103,6 +103,31 @@ int main(int argc, char** argv) {
 
     scene->add(result->scene);
 
+    // Scale the camera frustum and default framing to the loaded model's
+    // bounding box so near/far clipping and camera distance stay sane
+    // whether the model is centimeter- or building-scale.
+    Box3 bbox;
+    bbox.setFromObject(*result->scene);
+    Vector3 modelCenter, modelSize;
+    bbox.getCenter(modelCenter);
+    bbox.getSize(modelSize);
+    const float modelMaxDim = std::max({modelSize.x, modelSize.y, modelSize.z, 0.01f});
+
+    camera->nearPlane = std::max(0.001f, modelMaxDim * 0.005f);
+    camera->farPlane = modelMaxDim * 100.f;
+    camera->updateProjectionMatrix();
+
+    controls.target.copy(modelCenter);
+    if (nonDefaultModelPath) {
+        // The default Soldier scene keeps its hand-tuned (0, 2, -4) framing;
+        // custom models get framed from their own bounding box instead.
+        camera->position.set(modelCenter.x + 0.55f * modelMaxDim,
+                              modelCenter.y + 0.30f * modelMaxDim,
+                              modelCenter.z + 0.55f * modelMaxDim);
+        camera->lookAt(modelCenter);
+    }
+    controls.update();
+
     std::unique_ptr<AnimationMixer> mixer;
     if (!result->animations.empty()) {
         std::cout << "Loaded " << result->animations.size() << " animation clip(s)." << std::endl;
@@ -110,7 +135,7 @@ int main(int argc, char** argv) {
         mixer->clipAction(result->animations.front())->play();
     }
 
-    if (!bare) {
+    if (!nonDefaultModelPath) {
         auto skeletonHelper = SkeletonHelper::create(*result->scene);
         skeletonHelper->materialAs<LineBasicMaterial>()->linewidth = 2;
         scene->add(skeletonHelper);
@@ -126,33 +151,27 @@ int main(int argc, char** argv) {
     if (capturing) {
         // Frame the MODEL (not the whole scene — the helper floor would widen
         // the bounds) from a low oblique view.
-        Box3 bbox;
-        bbox.setFromObject(*result->scene);
-        Vector3 center, size;
-        bbox.getCenter(center);
-        bbox.getSize(size);
-        const float maxDim = std::max({size.x, size.y, size.z, 0.01f});
-        const float d = maxDim * shotZoom;
+        const float d = modelMaxDim * shotZoom;
         if (shotFront) {
             // Head-on along the thinnest bbox axis (a wall/panel's facing),
             // or the explicitly requested axis.
-            Vector3 dir = (size.z <= size.x) ? Vector3(0, 0, 1) : Vector3(1, 0, 0);
+            Vector3 dir = (modelSize.z <= modelSize.x) ? Vector3(0, 0, 1) : Vector3(1, 0, 0);
             if (shotAxis == "x") dir.set(1, 0, 0);
             else if (shotAxis == "-x") dir.set(-1, 0, 0);
             else if (shotAxis == "z") dir.set(0, 0, 1);
             else if (shotAxis == "-z") dir.set(0, 0, -1);
-            camera->position.copy(center).addScaledVector(dir, 0.9f * d);
-            camera->lookAt(center);
+            camera->position.copy(modelCenter).addScaledVector(dir, 0.9f * d);
+            camera->lookAt(modelCenter);
             std::cout << "[shot] axis=" << (shotAxis.empty() ? "auto" : shotAxis)
-                      << " center=(" << center.x << "," << center.y << "," << center.z
-                      << ") size=(" << size.x << "," << size.y << "," << size.z
+                      << " center=(" << modelCenter.x << "," << modelCenter.y << "," << modelCenter.z
+                      << ") size=(" << modelSize.x << "," << modelSize.y << "," << modelSize.z
                       << ") cam=(" << camera->position.x << "," << camera->position.y
                       << "," << camera->position.z << ")\n";
         } else {
-            camera->position.set(center.x + 0.55f * d,
-                                 center.y + 0.30f * d,
-                                 center.z + 0.55f * d);
-            camera->lookAt(Vector3(center.x, center.y + 0.05f * d, center.z));
+            camera->position.set(modelCenter.x + 0.55f * d,
+                                 modelCenter.y + 0.30f * d,
+                                 modelCenter.z + 0.55f * d);
+            camera->lookAt(Vector3(modelCenter.x, modelCenter.y + 0.05f * d, modelCenter.z));
         }
         camera->updateMatrixWorld();
     }
