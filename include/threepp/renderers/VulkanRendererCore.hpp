@@ -183,6 +183,16 @@ namespace threepp {
         void setRenderScale(float scale);
         [[nodiscard]] float renderScale() const;
 
+        // ── AMD FidelityFX FSR 3.1 upscaler runtime toggle ───────────────
+        // Only meaningful when built with -DTHREEPP_WITH_FSR (Windows/Vulkan) and
+        // the FSR context created (fsrAvailable() == true); otherwise this is a
+        // no-op and the built-in TAA temporal upsampler always runs. Frame-to-frame
+        // switchable (no device idle) — flipping resets the temporal history so the
+        // switched-to path doesn't inherit the other's accumulation. Default on.
+        void setFsr(bool enabled);
+        [[nodiscard]] bool fsr() const;          // FSR is the active upscaler now
+        [[nodiscard]] bool fsrAvailable() const; // compiled in + context created
+
         // Deferred SVGF denoiser toggle (the ray-queried AO/GI + shadow
         // channels). Default on.
         void setDenoise(bool enabled);

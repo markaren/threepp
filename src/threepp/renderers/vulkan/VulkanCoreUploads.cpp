@@ -426,7 +426,7 @@ namespace threepp {
         // so overriding both keeps their sub-pixel offset identical — and matches
         // the dispatch jitterOffset (VulkanCoreRecord). Also stash the sub-pixel
         // offset + camera near/far/vertical-FOV for the dispatch (no camera there).
-        if (fsrActive_ && fsr_) {
+        if (useFsr() && fsr_) {
             phaseCount = static_cast<uint32_t>(
                     fsr_->jitterPhaseCount(ext.width, ctx->swapchainExtent().width));
             if (phaseCount == 0u) phaseCount = 1u;
@@ -455,7 +455,11 @@ namespace threepp {
         // so a STATIC scene fires spurious +/- events every frame (the "event
         // view flickers with no motion" bug). A physical DVS never sees TAA
         // jitter. Must match uploadRasterCameraUbo's identical gate.
-        const bool rasterJitterOn = gbufMsaaSamples_ <= 1 && !eventCamEnabled_;
+        // FSR requires jitter to reconstruct — force it on whenever FSR is the
+        // active upscaler (even under MSAA, which otherwise rasterizes unjittered),
+        // so the dispatch jitterOffset matches what was rendered. Event camera
+        // still wins (a real DVS never sees jitter). Must match uploadRasterCameraUbo.
+        const bool rasterJitterOn = !eventCamEnabled_ && (useFsr() || gbufMsaaSamples_ <= 1);
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
         data[32] = jClipX;
@@ -555,7 +559,7 @@ namespace threepp {
         // so overriding both keeps their sub-pixel offset identical — and matches
         // the dispatch jitterOffset (VulkanCoreRecord). Also stash the sub-pixel
         // offset + camera near/far/vertical-FOV for the dispatch (no camera there).
-        if (fsrActive_ && fsr_) {
+        if (useFsr() && fsr_) {
             phaseCount = static_cast<uint32_t>(
                     fsr_->jitterPhaseCount(ext.width, ctx->swapchainExtent().width));
             if (phaseCount == 0u) phaseCount = 1u;
@@ -613,8 +617,12 @@ namespace threepp {
         // events every frame — the DVS "flickers with no motion". A real
         // event camera sees no jitter; transform/camera motion still flows
         // through motionMat, so genuine motion events are unaffected.
+        // useFsr() forces jitter on: FSR needs it to reconstruct, even under MSAA
+        // (which otherwise rasterizes unjittered), so the dispatch jitterOffset
+        // matches the render. Event camera still wins (a real DVS sees no jitter).
         const bool rasterJitterOn =
-                kRasterJitterEnabled && gbufMsaaSamples_ <= 1 && !eventCamEnabled_;
+                kRasterJitterEnabled && !eventCamEnabled_ &&
+                (useFsr() || gbufMsaaSamples_ <= 1);
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
 

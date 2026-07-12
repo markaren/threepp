@@ -1003,7 +1003,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                     regionRenderExt_.height == ptExt.height &&
                     regionSwapExt_.width == ext.width &&
                     regionSwapExt_.height == ext.height;
-            if (fsrActive_ && fsr_ && fsr_->valid() && fsrFullFrame) {
+            if (useFsr() && fsr_ && fsr_->valid() && fsrFullFrame) {
                 bloom_->recordPyramid(cb, currentFrame,
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       bloomIntensity_, bloomThreshold_, bloomClamp_);

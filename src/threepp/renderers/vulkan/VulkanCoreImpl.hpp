@@ -1976,15 +1976,43 @@ namespace threepp {
         // The sub-pixel [-0.5,0.5] jitter applied to the projection this frame,
         // sourced from FSR's own sequence so the dispatch jitterOffset matches.
         float  fsrJitterX_ = 0.f, fsrJitterY_ = 0.f;
+        // Runtime on/off (setFsr), distinct from fsrActive_ (compiled + context
+        // created). Default on so a THREEPP_WITH_FSR build uses FSR by default.
+        bool   fsrEnabled_ = true;
 #endif
-        // True when the FSR upscaler is active — always compiled (returns false
-        // without THREEPP_WITH_FSR) so the shared descriptor/record code can gate
-        // the HDR-mode plumbing FSR reuses without scattering #ifs.
+        // FSR compiled in AND its context created (available). Gates the HDR-mode
+        // plumbing FSR reuses — hdrOut_ stays allocated regardless of the runtime
+        // toggle, so setFsr never needs a descriptor rewrite. Always compiled
+        // (false without THREEPP_WITH_FSR) to keep #ifs out of the shared code.
         [[nodiscard]] bool fsrActiveForHdrPlumbing() const {
 #if defined(THREEPP_WITH_FSR)
             return fsrActive_;
 #else
             return false;
+#endif
+        }
+        // FSR is the ACTIVE upscaler this frame: available AND runtime-enabled.
+        // Drives the record branch and the jitter source (FSR needs jitter, so it
+        // also forces the projection jitter on — see uploadRasterCameraUbo).
+        [[nodiscard]] bool useFsr() const {
+#if defined(THREEPP_WITH_FSR)
+            return fsrActive_ && fsrEnabled_;
+#else
+            return false;
+#endif
+        }
+        // Runtime FSR on/off. No reallocation — the FSR and TAA paths both keep
+        // their resources, so this is frame-to-frame switchable. Resets the
+        // temporal history so the switched-to path doesn't inherit the other's
+        // accumulation (FSR re-primes via fsrResetNext_).
+        void setFsr(bool enabled) {
+#if defined(THREEPP_WITH_FSR)
+            if (fsrEnabled_ == enabled) return;
+            fsrEnabled_ = enabled;
+            if (taa_) taa_->invalidateHistory();
+            fsrResetNext_ = true;
+#else
+            (void) enabled;
 #endif
         }
         // HDR bloom pyramid — the shade/resolve writes linear HDR into
