@@ -1,12 +1,13 @@
 // Procedural driving demo.
 //
-// A car designed from the ground up (CarRig.hpp — primitives, visible coil-over
-// shock absorbers, working lights) on the full PxVehicle2 engine-drive stack
-// (PhysxVehicleEngineDrive — engine + clutch + gearbox + autobox + differential),
-// driving a procedurally generated world: rolling terrain (TerrainGenerator) cut
-// through by a point-to-point road (RoadGenerator), lined with an instanced
-// forest, grass and wildflowers. Backend-flexible via createRenderer; looks best
-// on the Vulkan path tracer (aerial haze + real headlight cones at night).
+// An imported glTF car (MustangRig.hpp — a 1967 Ford Mustang Shelby GT500,
+// measured at load and dropped onto its own wheels) on the full PxVehicle2
+// engine-drive stack (PhysxVehicleEngineDrive — engine + clutch + gearbox +
+// autobox + differential), driving a procedurally generated world: rolling
+// terrain (TerrainGenerator) cut through by a point-to-point road
+// (RoadGenerator), lined with an instanced forest, grass and wildflowers.
+// Backend-flexible via createRenderer; looks best on the Vulkan path tracer
+// (aerial haze + real headlight cones at night). Swap cars with `--model <glb>`.
 //
 // Controls:
 //   W / S      throttle / brake        A / D   steer
@@ -28,11 +29,12 @@
 #include "threepp/extras/vegetation/GrassField.hpp"
 #include "threepp/extras/vegetation/TreeGenerator.hpp"
 #include "threepp/extras/vegetation/TreeTextures.hpp"
+#include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
-#include "CarRig.hpp"
 #include "DriveSounds.hpp"
+#include "MustangRig.hpp"
 
 #ifdef THREEPP_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -179,10 +181,14 @@ int main(int argc, char** argv) {
     std::string shotPath;
     int shotFrames = 200;
     bool shotNight = false;
+    bool shotPov = false;
+
+    std::string modelPath = std::string(DATA_FOLDER) + "/models/gltf/ford_mustang_1967/1967_ford_mustang_shelby_cobra_gt500.glb";
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--night") == 0) shotNight = true;
+        else if (std::strcmp(argv[i], "--pov") == 0) shotPov = true;
     }
     const bool capturing = !shotPath.empty();
     int shotFrame = 0;
@@ -248,9 +254,6 @@ int main(int argc, char** argv) {
         sun->shadow->bias = -0.0005f;
     }
     scene->add(sun);
-
-    auto ambient = AmbientLight::create(Color::white, 0.25f);
-    if (!vulkanBackend) scene->add(ambient);
 
     // ── Physics ───────────────────────────────────────────────────────────
     PhysxWorld world;
@@ -382,17 +385,54 @@ int main(int argc, char** argv) {
     scene->add(roadMesh);
     world.addStaticTrimesh(*roadGeo);
 
+    // ── Car model (imported glTF) ─────────────────────────────────────────────
+    // Load the car and read its real geometry so the vehicle collider and
+    // suspension are sized to the actual shell (no numbers baked against a
+    // particular model).
+    GLTFLoader gltf;
+    auto carModelResult = gltf.load(modelPath);
+    if (!carModelResult || !carModelResult->scene) {
+        std::cerr << "Failed to load car model: " << modelPath << "\n";
+        return 1;
+    }
+    auto carModel = carModelResult->scene;
+
+    // Models arrive in wildly different units (this GT500 exports ~100x too small,
+    // a 5 cm toy). Normalise to a realistic car length so the physics vehicle —
+    // and everything tuned against it (engine, mass, terrain) — stays in meters.
+    {
+        carModel->updateMatrixWorld(true);
+        Box3 mb;
+        mb.setFromObject(*carModel);
+        Vector3 sz;
+        mb.getSize(sz);
+        constexpr float targetLength = 4.6f;// meters — a '67 Shelby GT500 fastback
+        const float carLength = std::max({sz.x, sz.z, 1e-6f});
+        carModel->scale.multiplyScalar(targetLength / carLength);
+        carModel->updateMatrixWorld(true);
+    }
+
+    const auto carMeas = drive::MustangRig::measure(*carModel);
+    std::cout << "[car] " << (carMeas.valid ? "measured" : "FALLBACK")
+              << " chassis WxHxL=" << carMeas.chassisWidth << "x" << carMeas.chassisHeight
+              << "x" << carMeas.chassisLength << "  wheelR=" << carMeas.wheelRadius
+              << "  track=" << carMeas.trackWidth << "  wheelbase=" << carMeas.wheelbase
+              << "  wheelYRel=" << carMeas.wheelCenterYRel << "\n";
+
     // ── Vehicle (engine drive) ──────────────────────────────────────────────
     PhysxVehicleEngineDrive::Settings vs;
-    vs.chassisWidth = 1.9f;
-    vs.chassisHeight = 1.3f;
-    vs.chassisLength = 4.4f;
-    vs.wheelRadius = 0.36f;
-    vs.wheelHalfWidth = 0.16f;
-    vs.trackWidth = 1.66f;
-    vs.wheelbase = 2.7f;
-    vs.suspensionAttachmentY = -0.35f;
-    vs.suspensionTravelDist = 0.32f;
+    // Collider a touch inside the visible shell so it doesn't snag on scenery.
+    vs.chassisWidth = carMeas.chassisWidth * 0.92f;
+    vs.chassisHeight = carMeas.chassisHeight * 0.85f;
+    vs.chassisLength = carMeas.chassisLength * 0.96f;
+    vs.wheelRadius = carMeas.wheelRadius;
+    vs.wheelHalfWidth = carMeas.wheelHalfWidth;
+    vs.trackWidth = carMeas.trackWidth;
+    vs.wheelbase = carMeas.wheelbase;
+    vs.suspensionTravelDist = 0.16f;// firmer than the box car: a sports coupe
+    // Rest jounce sits roughly mid-travel; place the attachment so the wheels
+    // settle at the model's own axle height under the arches.
+    vs.suspensionAttachmentY = carMeas.wheelCenterYRel + vs.suspensionTravelDist * 0.5f;
     {
         const Vector3 startP = roadGen.startPoint();
         Vector3 fwd = roadGen.startForward();
@@ -403,23 +443,14 @@ int main(int argc, char** argv) {
     }
     PhysxVehicleEngineDrive vehicle(world, vs);
 
-    drive::CarRig::Config carCfg;
-    carCfg.bodyWidth = vs.chassisWidth;
-    carCfg.bodyHeight = vs.chassisHeight;
-    carCfg.bodyLength = vs.chassisLength;
-    carCfg.wheelRadius = vs.wheelRadius;
-    carCfg.wheelHalfWidth = vs.wheelHalfWidth;
-    carCfg.trackWidth = vs.trackWidth;
-    carCfg.wheelbase = vs.wheelbase;
-    carCfg.suspensionAttachmentY = vs.suspensionAttachmentY;
-    carCfg.suspensionTravelDist = vs.suspensionTravelDist;
-    auto carRig = std::make_unique<drive::CarRig>(carCfg);
+    auto carRig = std::make_unique<drive::MustangRig>(carModel, carMeas);
     scene->add(carRig->root());
     world.bind(*carRig->root(), *vehicle.chassisActor());
 
-    // Driver POV camera, parented to the car body.
+    // Driver POV camera, parented to the car body — seated in the cabin, a bit
+    // off-centre and above the chassis origin, looking forward over the hood.
     auto povCamera = PerspectiveCamera::create(72.f, canvas.aspect(), 0.05f, 2000.f);
-    povCamera->position.set(0.34f, 0.55f, -0.15f);
+    povCamera->position.set(0.35f, 0.40f, -0.20f);
     povCamera->rotation.y = math::PI;// car forward is +Z; flip to look ahead
     carRig->root()->add(povCamera);
 
@@ -648,7 +679,7 @@ int main(int argc, char** argv) {
     // ── Input state ─────────────────────────────────────────────────────────
     bool throttleDown = false, brakeDown = false, handbrakeDown = false;
     bool steerLeftDown = false, steerRightDown = false;
-    bool hornDown = false, driverView = false, respawn = false, night = shotNight;
+    bool hornDown = false, driverView = shotPov, respawn = false, night = shotNight;
     int turnSignal = 0;// -1 left, 0 none, +1 right
 
     auto keyToggle = [&](Key key, bool down) {
@@ -749,7 +780,6 @@ int main(int argc, char** argv) {
         if (night) {
             sun->intensity = 0.18f;
             sun->color = Color(0.5f, 0.6f, 0.85f);
-            if (ambient) ambient->intensity = 0.05f;
             scene->background = nightFog;
             if (nightEnv) scene->environment = nightEnv;
             if (scene->fog) std::get<Fog>(*scene->fog) = Fog(nightFog, terr.worldSize * 0.18f, terr.worldSize * 0.7f);
@@ -761,7 +791,6 @@ int main(int argc, char** argv) {
         } else {
             sun->intensity = 2.8f;
             sun->color = Color(1.0f, 0.97f, 0.90f);
-            if (ambient) ambient->intensity = 0.25f;
             if (hdr) scene->background = hdr; else scene->background = dayFog;
             if (hdr) scene->environment = hdr;
             if (scene->fog) std::get<Fog>(*scene->fog) = Fog(dayFog, terr.worldSize * 0.3f, terr.worldSize * 0.95f);
