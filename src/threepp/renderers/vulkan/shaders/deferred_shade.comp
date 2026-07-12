@@ -938,7 +938,17 @@ void main() {
     // ratio to the unoccluded env irradiance is a smooth, converged local
     // sky-visibility proxy: 1 outdoors (term unchanged), → 0 deep inside an
     // enclosure (the leak dies; the probe-fed gather carries the real light).
-    if (opaqueRefl && reflBlend < 1.0) {
+    // SHEEN surfaces take this env term too: they're excluded from the traced
+    // reflection channel (opaqueRefl, denoiser-channel ownership) but their
+    // inline shade (shadeDiffuseDirect + IBL sheen lobe) carries NO base-lobe
+    // specular env — a METALLIC sheen fabric (glTF sofa "Fringe": default
+    // metallicFactor 1, rough 0.8) has zero diffuse, so it rendered near-black.
+    // This add is inline (no channel conflict); transmission keeps its own path.
+    // Sheen has no traced band at ANY roughness, so it takes the env term at
+    // FULL weight (env-mip gloss stands in for the missing mirror ray);
+    // opaqueRefl keeps the usual rough remainder (1 − reflBlend).
+    const float envSpecW = opaqueRefl ? (1.0 - reflBlend) : 1.0;
+    if (pm.transmission <= 0.0 && envSpecW > 0.0) {
         float envSpecVis = 1.0;
         if (probeGrid.enabled > 0.5) {
             // Pure measured ratio — NO validity-confidence floor. A conf-mix
@@ -948,11 +958,24 @@ void main() {
             // model had fixed. The starved-neighbourhood concern belongs to
             // the glass retrace fill (probeHitFill), not this term.
             const vec3  LUMW   = vec3(0.2126, 0.7152, 0.0722);
-            const float actE   = dot(probeIrradiance(worldPos, N), LUMW) * (1.0 / PI);
+            float conf;
+            const float actE   = dot(probeIrradianceConf(worldPos, N, conf), LUMW) * (1.0 / PI);
             const float unoccE = dot(sampleEnvLod(N, maxLod), LUMW);
             envSpecVis = clamp(actE / max(unoccE, 1e-5), 0.0, 1.0);
+            // …EXCEPT when the neighbourhood measured NOTHING (conf → 0: every
+            // trilinear probe invalid — inside geometry — or fully crushed).
+            // probeIrradiance then returns black meaning "unmeasured", and the
+            // raw ratio read that as "fully occluded": on ≥0.7-rough METALS
+            // (diffuse ≡ 0, this env split-sum is their ENTIRE shade) it
+            // painted probe-cell-sized black squares on models thinner than a
+            // grid cell (glTF AnisotropyStrengthTest / SheenWoodLeatherSofa /
+            // RecursiveSkeletons). The steep gate keeps the interior ratio
+            // untouched — a wall with ANY valid, visible probe has conf well
+            // above 0.1 — and only bails to unoccluded env where nothing
+            // measured at all (there the ratio is noise, not signal).
+            envSpecVis = mix(1.0, envSpecVis, smoothstep(0.0, 0.1, conf));
         }
-        lit += sampleEnvLod(R, roughness * maxLod) * (F0 * ab.x + ab.y) * (1.0 - reflBlend) * envSpecVis;
+        lit += sampleEnvLod(R, roughness * maxLod) * (F0 * ab.x + ab.y) * envSpecW * envSpecVis;
     }
     // ── Emitter-specular ESTIMATOR SPLIT by lobe width ──────────────────────
     // specNEET: 0 = near-mirror (the BRDF ray owns emitter spec — tight lobe hits
