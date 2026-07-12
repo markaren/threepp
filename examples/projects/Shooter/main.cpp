@@ -92,11 +92,20 @@ int main(int argc, char** argv) {
 
     // Headless capture (dev): tps_shooter --shot <name.png> [--frames N] —
     // renders N frames from spawn, saves via writeFramebuffer, exits.
+    // Extra artifact-repro switches: --run (hold W → moving-player captures),
+    // --noblur (motion blur off, isolates TAA/temporal ghosting), --pair
+    // (also save frame N+1 as b_<name> for a frame-to-frame flicker diff).
     std::string shotPath;
     int shotFrames = 180, shotFrame = 0;
+    bool shotAutoRun = false;// --run: hold W during the capture (moving-player artifacts)
+    bool shotNoBlur = false; // --noblur: disable motion blur (isolate TAA ghosting)
+    bool shotPair = false;   // --pair: also write frame N+1 as b_<name> (temporal-flicker diff)
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (std::string(argv[i]) == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (std::string(argv[i]) == "--run") shotAutoRun = true;
+        else if (std::string(argv[i]) == "--noblur") shotNoBlur = true;
+        else if (std::string(argv[i]) == "--pair") shotPair = true;
     }
 
 #ifndef __APPLE__
@@ -117,7 +126,7 @@ int main(int argc, char** argv) {
     renderer->toneMappingExposure = 1.0f;
 
     if (auto pt = dynamic_cast<VulkanRenderer*>(renderer.get())) {
-        pt->setMotionBlur(0.4f);
+        pt->setMotionBlur(shotNoBlur ? 0.f : 0.4f);
     }
 
     // Pointer-lock mouse-look: cursor hidden + grabbed while playing (raw,
@@ -1519,7 +1528,7 @@ int main(int argc, char** argv) {
             if (grounded) {
                 const Vector3 F(std::sin(camYaw), 0, std::cos(camYaw));
                 const Vector3 R(-std::cos(camYaw), 0, std::sin(camYaw));// screen-right = cross(F, up)
-                float fwd = (canvas.isKeyDown(Key::W) ? 1.f : 0.f) - (canvas.isKeyDown(Key::S) ? 1.f : 0.f);
+                float fwd = ((canvas.isKeyDown(Key::W) || shotAutoRun) ? 1.f : 0.f) - (canvas.isKeyDown(Key::S) ? 1.f : 0.f);
                 float str = (canvas.isKeyDown(Key::D) ? 1.f : 0.f) - (canvas.isKeyDown(Key::A) ? 1.f : 0.f);
                 inFwd = fwd;
                 inStr = str;
@@ -2091,10 +2100,11 @@ int main(int argc, char** argv) {
         renderer->render(*ui, *uiCam);
 
         if (!shotPath.empty() && ++shotFrame >= shotFrames) {
-            const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
+            const bool second = shotFrame > shotFrames;// --pair second write (frame N+1)
+            const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / (second ? "b_" + shotPath : shotPath);
             if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get())) vk->writeFramebuffer(path);
             std::cout << "wrote " << path.string() << std::endl;
-            std::exit(0);
+            if (!shotPair || second) std::exit(0);
         }
     });
 }

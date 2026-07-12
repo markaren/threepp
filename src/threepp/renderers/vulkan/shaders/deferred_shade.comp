@@ -1514,8 +1514,22 @@ void main() {
             const float dev      = visEst - sPrev.x;
             const float trend    = sValid ? mix(sPrev.w, dev, 0.34) : 0.0;
             const float trendCut = smoothstep(0.10, 0.30, abs(trend));
+            // VARIANCE-GATED INSTANT CUT — the trend antilag above needs 2-3
+            // frames to charge and still leaves a cap-4 EMA, which reads as a
+            // dark smudge dragging ~10 frames behind a character's shadow
+            // sweeping across a floor (tps_shooter hero trail). The history
+            // already stores E[R²] (.y), so measure this frame's deviation in
+            // sigmas of the SETTLED history: a converged lit or umbra pixel has
+            // σ≈0, so the first frame the occluder's edge arrives (|dev|≈1) is
+            // a >4σ event and the history is cut to ~1 frame THAT frame — the
+            // shadow tracks its caster with no charge-up lag. A static
+            // penumbra keeps σ≈0.5 (1-2 ray Bernoulli noise), so per-frame
+            // noise sits at ≤2σ and the long clean history is untouched (the
+            // 0.08 σ-floor also absorbs fp16 quantisation of E[R²]−E[R]²).
+            const float sSigma   = sqrt(max(sPrev.y - sPrev.x * sPrev.x, 0.0)) + 0.08;
+            const float stepCut  = sValid ? smoothstep(2.0, 4.0, abs(dev) / sSigma) : 0.0;
             const float sCapMot  = mix(32.0, 8.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc)));
-            const float sCap     = mix(sCapMot, 4.0, trendCut);
+            const float sCap     = mix(mix(sCapMot, 4.0, trendCut), 1.0, stepCut);
             const float sHist    = sValid ? min(sPrev.z + 1.0, sCap) : 1.0;
             const float sAcc     = sValid ? mix(sPrev.x, visEst, 1.0 / sHist) : visEst;
             const float sSq      = sValid ? mix(sPrev.y, visEst * visEst, 1.0 / sHist) : visEst * visEst;
