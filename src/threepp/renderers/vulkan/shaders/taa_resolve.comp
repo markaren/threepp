@@ -292,47 +292,7 @@ void main() {
 
     // Reproject prev frame via gbuffer motion vec. Motion is in GL-NDC delta
     // (Y-up); convert UV → GL-NDC → add motion → back to screen UV.
-    //
-    // CLOSEST-VELOCITY DILATION (Karis 2014 / FSR2): reproject with the motion
-    // of the FRONT-MOST surface in the 3×3, not the centre pixel's own. At a
-    // silhouette under jitter the centre alternates between the object and the
-    // background it reveals, so centre-motion reprojection alternates between
-    // two different history spots and the edge never accumulates — moving
-    // characters kept visibly stair-stepped edges (tps_shooter hero). Keying
-    // every 3×3 tap on the front-most depth makes all edge pixels reproject
-    // coherently along the object's motion: the anti-aliased edge history
-    // follows the silhouette, and the pixels it vacates tap background history
-    // instead of dragging object colour (less trail for the clip to clean).
-    // Depth key: motion .b = the texel's surface prev NDC depth (reversed-Z,
-    // larger = closer; sky clears to 0 so geometry always wins over sky).
-    // Interior pixels 1px from a closer neighbour tap slightly-wrong history;
-    // the variance clip bounds that exactly as it bounded the old centre tap.
-    vec2 motionGL;
-    float dilatedMotionPx;// max |motion| over the 3×3 — feeds the gates below
-    {
-        const vec2 inTexel = 1.0 / vec2(textureSize(gbufMotionTex, 0));
-        const vec3 center = texture(gbufMotionTex, uvIn).rgb;// .rg motion, .b depth key
-        vec3 closest = center;
-        dilatedMotionPx = length(center.rg * 0.5 * vec2(pc.width, pc.height));
-        for (int dy = -1; dy <= 1; ++dy)
-            for (int dx = -1; dx <= 1; ++dx) {
-                if (dx == 0 && dy == 0) continue;
-                const vec3 mv = texture(gbufMotionTex, uvIn + vec2(dx, dy) * inTexel).rgb;
-                dilatedMotionPx = max(dilatedMotionPx,
-                                      length(mv.rg * 0.5 * vec2(pc.width, pc.height)));
-                if (mv.b > closest.b) closest = mv;
-            }
-        // Engage the dilation only in proportion to the RELATIVE motion between
-        // the front-most tap and the centre's own. When they agree (static view,
-        // camera-only motion, object interiors) this is exactly the old centre
-        // tap — measured on tps_shooter, unconditional dilation made the ground
-        // ring around an idle-swaying character reproject along the sub-pixel
-        // sway and its converged history churned (idle-rim flicker ×2.5). With
-        // real relative motion (a character running over ground) the blend goes
-        // fully to the front surface's motion and the edge history tracks it.
-        const float relPx = length((closest.rg - center.rg) * 0.5 * vec2(pc.width, pc.height));
-        motionGL = mix(center.rg, closest.rg, smoothstep(0.25, 1.0, relPx));
-    }
+    vec2 motionGL = texture(gbufMotionTex, uvIn).rg;
     const vec2 currNDC  = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
     // SKY MOTION RECONSTRUCTION. Sky rasterizes no geometry, so its motion
     // stays at the 0 clear — correct under TRANSLATION (sky is at infinity)
@@ -411,12 +371,26 @@ void main() {
     }
 
     // Motion in pixels — used by the clip-rate gate below AND the velocity
-    // alpha. motionGL is the (relative-motion-gated) closest-front motion from
-    // the reprojection block: identical to the pixel's own motion wherever the
-    // neighbourhood agrees, the front surface's motion at a genuinely moving
-    // silhouette — so the rate gate keys on the motion of the SURFACE whose
-    // history this pixel is actually carrying.
-    const float motionLen = length(motionGL * 0.5 * vec2(pc.width, pc.height));
+    // alpha. NDC motion is in [-2, 2] across the screen.
+    const vec2 motionPx = motionGL * 0.5 * vec2(pc.width, pc.height);
+    const float motionLen = length(motionPx);
+
+    // DILATED motion: max |motion| over the 3×3 input neighbourhood. A pixel
+    // an object edge just vacated reads ZERO motion itself when the revealed
+    // background writes none (sky has no geometry) — but the edge that left
+    // it is still adjacent and carries real motion vectors. Dilation gives
+    // the vacated pixel that motion context; a truly static neighbourhood
+    // (camera + scene still) stays at zero.
+    float dilatedMotionPx = motionLen;
+    {
+        const vec2 inTexel = 1.0 / vec2(textureSize(gbufMotionTex, 0));
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                const vec2 mv = texture(gbufMotionTex, uvIn + vec2(dx, dy) * inTexel).rg;
+                dilatedMotionPx = max(dilatedMotionPx,
+                                      length(mv * 0.5 * vec2(pc.width, pc.height)));
+            }
+    }
 
     // DEPTH-BASED DISOCCLUSION (FSR2 / deferred_shade idea). The current
     // surface's OWN previous NDC depth (motion .b) vs what the prev depth
@@ -530,7 +504,7 @@ void main() {
 
     // Velocity-scaled alpha: faster-moving pixels weight current more,
     // making ghost trails decay quicker. Static/slow keeps strong AA via
-    // history (motionLen computed above the clip block).
+    // history (motionPx computed above the clip block).
     // Velocity bump is keyed on DILATED motion (max over the 3×3), not the
     // pixel's own motion: a trailing-edge pixel the object just vacated reads
     // ~0 own-motion (the revealed background is static) yet must still shed its

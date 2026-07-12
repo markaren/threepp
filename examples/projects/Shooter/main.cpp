@@ -100,12 +100,14 @@ int main(int argc, char** argv) {
     bool shotAutoRun = false;// --run: hold W during the capture (moving-player artifacts)
     bool shotNoBlur = false; // --noblur: disable motion blur (isolate TAA ghosting)
     bool shotPair = false;   // --pair: also write frame N+1 as b_<name> (temporal-flicker diff)
+    bool shotSpin = false;   // --spin: steadily yaw the camera (repro mouse-look edge artifacts)
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (std::string(argv[i]) == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (std::string(argv[i]) == "--run") shotAutoRun = true;
         else if (std::string(argv[i]) == "--noblur") shotNoBlur = true;
         else if (std::string(argv[i]) == "--pair") shotPair = true;
+        else if (std::string(argv[i]) == "--spin") shotSpin = true;
     }
 
 #ifndef __APPLE__
@@ -1515,6 +1517,11 @@ int main(int argc, char** argv) {
         // TAA A/B captures compare identical geometry (wall-clock dt otherwise
         // drifts the pose run-to-run and muddies the diff).
         if (!shotPath.empty()) dt = 1.f / 60.f;
+        // --spin: steady camera yaw so headless captures carry the whole-scene
+        // rotational motion that interactive mouse-look produces (parallax at
+        // every object silhouette → the condition that exposes TAA edge
+        // doubling; the auto-follow camera alone barely rotates).
+        if (shotSpin) camYaw += 1.5f * dt;
 
         // --- read player body pose ---
         const PxTransform pt = playerBody->getGlobalPose();
