@@ -477,6 +477,19 @@ namespace threepp_py {
                 .def_property("render_scale",
                               [](PyVulkanRenderer& r) { return r.native().renderScale(); },
                               [](PyVulkanRenderer& r, float s) { r.native().setRenderScale(s); })
+                // AMD FidelityFX FSR 3.1 temporal upscaler. Available only in a
+                // build with -DTHREEPP_WITH_FSR=ON (Windows/Vulkan) that ships
+                // amd_fidelityfx_vk.dll next to the module — see fsr_available.
+                // Setting it while unavailable is a no-op (the built-in TAA
+                // upscaler runs); the getter reflects whether FSR is the active
+                // upscaler. Frame-to-frame switchable (resets temporal history).
+                .def_property("fsr",
+                              [](PyVulkanRenderer& r) { return r.native().fsr(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setFsr(v); },
+                              "AMD FSR 3.1 upscaler on/off (no-op / False if unavailable — see fsr_available).")
+                .def_property_readonly("fsr_available",
+                              [](PyVulkanRenderer& r) { return r.native().fsrAvailable(); },
+                              "True when FSR was compiled in and its context created on this GPU.")
                 // HDR bloom (added in linear HDR before the tone-map curve).
                 .def_property("bloom_intensity",
                               [](PyVulkanRenderer& r) { return r.native().bloomIntensity(); },

@@ -60,6 +60,20 @@ if (THREEPP_WITH_VULKAN)
     target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_VULKAN THREEPP_WITH_VULKAN)
 endif ()
 
+# AMD FidelityFX FSR runtime DLL. threepp's FsrUpscaler loads amd_fidelityfx_vk.dll
+# by resolving the path of the module it is compiled into (here, threepp_py.pyd) —
+# a .pyd can't rely on the default DLL search finding a sibling — so stage the DLL
+# next to the module. FFX_DLL is set by cmake/FetchFidelityFX.cmake when the threepp
+# lib was configured with -DTHREEPP_WITH_FSR=ON. The setFsr/fsr_available bindings
+# are unconditional (they're no-ops when the lib was built without FSR), so no extra
+# define is needed here. (A Vulkan+FSR WHEEL would also need an install() rule to
+# pack the DLL + its MIT LICENSE; the distributed wheel is GL-only today.)
+if (THREEPP_WITH_FSR AND WIN32 AND FFX_DLL)
+    add_custom_command(TARGET threepp_py POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${FFX_DLL}" $<TARGET_FILE_DIR:threepp_py>)
+    message(STATUS "threepp_py: FSR runtime DLL staged next to the module")
+endif ()
+
 if (THREEPP_WITH_AUDIO)
     target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_AUDIO)
 endif ()

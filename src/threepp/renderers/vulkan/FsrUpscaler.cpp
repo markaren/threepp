@@ -25,6 +25,7 @@
 #include <ffx_api/ffx_api_loader.h>
 
 #include <cstdio>
+#include <string>
 
 namespace threepp::vulkan {
 
@@ -38,9 +39,29 @@ namespace threepp::vulkan {
         bool ensureFfxLoaded() {
             if (g_ffxTriedLoad) return g_ffx.CreateContext != nullptr;
             g_ffxTriedLoad = true;
-            // The DLL is copied next to the executable (CMake POST_BUILD), so the
-            // default search order (exe dir first) finds it.
-            HMODULE m = LoadLibraryA("amd_fidelityfx_vk.dll");
+            // Load the DLL from the directory of the module that contains THIS code
+            // — the .exe for a C++ build, or threepp_py.pyd under the Python
+            // bindings. A .pyd's runtime LoadLibrary does NOT search its own
+            // directory (Python 3.8+ DLL rules), so a bare name fails there even
+            // with the DLL sitting next to the module; resolving the full path
+            // works in both cases. Falls back to the default search order.
+            HMODULE m = nullptr;
+            {
+                HMODULE self = nullptr;
+                if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       reinterpret_cast<LPCSTR>(&ensureFfxLoaded), &self) && self) {
+                    char path[MAX_PATH];
+                    const DWORD n = GetModuleFileNameA(self, path, MAX_PATH);
+                    if (n > 0 && n < MAX_PATH) {
+                        std::string p(path, n);
+                        const auto slash = p.find_last_of("\\/");
+                        if (slash != std::string::npos)
+                            m = LoadLibraryA((p.substr(0, slash + 1) + "amd_fidelityfx_vk.dll").c_str());
+                    }
+                }
+            }
+            if (!m) m = LoadLibraryA("amd_fidelityfx_vk.dll");// default search order
             if (!m) {
                 std::fprintf(stderr,
                              "[threepp] FSR: LoadLibrary(amd_fidelityfx_vk.dll) failed "
