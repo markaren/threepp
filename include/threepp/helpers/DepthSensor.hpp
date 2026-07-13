@@ -1,5 +1,5 @@
-#ifndef THREEPP_LIDAR_HPP
-#define THREEPP_LIDAR_HPP
+#ifndef THREEPP_DEPTH_SENSOR_HPP
+#define THREEPP_DEPTH_SENSOR_HPP
 
 #include "CameraHelper.hpp"
 #include "threepp/cameras/OrthographicCamera.hpp"
@@ -93,4 +93,4 @@ namespace threepp {
 
 }// namespace threepp
 
-#endif//THREEPP_LIDAR_HPP
+#endif//THREEPP_DEPTH_SENSOR_HPP
