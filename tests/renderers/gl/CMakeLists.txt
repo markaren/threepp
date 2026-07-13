@@ -1,2 +1,3 @@
 
 add_test_executable(GLRenderLists_test)
+add_test_executable(GLUniforms_test)

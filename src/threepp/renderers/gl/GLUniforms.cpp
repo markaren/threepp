@@ -174,7 +174,7 @@ namespace {
             float y = value[1];
 
             ensureCapacity(cache, 2);
-            if (cache[0] != x || cache[1] != y) {
+            if (uniformCacheDiffers(cache, {x, y})) {
 
                 glUniform2f(addr, x, y);
 
@@ -200,7 +200,7 @@ namespace {
             float z = value[2];
 
             ensureCapacity(cache, 3);
-            if (cache[0] != x || cache[1] != y || cache[2] != z) {
+            if (uniformCacheDiffers(cache, {x, y, z})) {
 
                 glUniform3f(addr, x, y, z);
 
@@ -230,7 +230,7 @@ namespace {
             float w = value[3];
 
             ensureCapacity(cache, 4);
-            if (cache[0] != x || (cache[1] != y && cache[2] != z) || cache[3] != w) {
+            if (uniformCacheDiffers(cache, {x, y, z, w})) {
 
                 glUniform4f(addr, x, y, z, w);
 
