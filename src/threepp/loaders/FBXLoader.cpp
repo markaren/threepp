@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -152,8 +153,14 @@ namespace threepp {
         }
 
         bool isSupportedImageFormat(const std::filesystem::path& p) {
-            const auto ext = p.extension().string();
-            // stb_image supports these; DDS and other GPU-compressed formats are not supported.
+            auto ext = p.extension().string();
+            // FBX/DCC exports may store texture names with any-case extensions
+            // (Albedo.PNG, Normal.DDS). Lower-case before matching so they aren't
+            // rejected here, before the (already case-insensitive) TextureLoader
+            // ever sees them.
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            // stb_image handles most of these; ".dds" is routed to DDSLoader downstream.
             for (const auto* e : {".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".hdr", ".pic", ".pnm", ".dds"})
                 if (ext == e) return true;
             return false;
@@ -200,11 +207,11 @@ namespace threepp {
         // time. Here we gather every UNIQUE texture path up front and decode them
         // across a small thread pool INTO the (now thread-safe) TextureLoader
         // cache, so the subsequent serial buildMaterial() pass only hits warm
-        // entries. Correctness: each unique path is decoded exactly once, with the
-        // colour space of its FIRST reference in mesh/slot order — identical to
-        // what the serial, path-keyed cache would have produced. Decode touches no
-        // GPU/GLFW state (uploads are deferred to first render), so it is safe off
-        // the main thread.
+        // entries. Correctness: each unique (path, colour-space) pair is decoded
+        // exactly once and cached under a key that includes the colour space, so a
+        // texture reused as both an sRGB colour map and a linear data map yields
+        // the correct interpretation for each. Decode touches no GPU/GLFW state
+        // (uploads are deferred to first render), so it is safe off the main thread.
         void warmTextureCacheParallel(const ofbx::IScene* scene,
                                       const std::filesystem::path& baseDir,
                                       TextureLoader& texLoader) {
@@ -216,7 +223,11 @@ namespace threepp {
                 if (!slot) return;
                 auto p = resolveTexturePath(slot, baseDir);
                 if (p.empty() || !isSupportedImageFormat(p)) return;
-                if (seen.insert(p.string()).second) jobs.push_back({std::move(p), cs});
+                // Key on (path, colour-space) so the same file used as both an
+                // sRGB and a linear map is warmed once per interpretation — matching
+                // the composite key TextureLoader now caches under.
+                const auto key = p.string() + '|' + std::to_string(static_cast<int>(cs));
+                if (seen.insert(key).second) jobs.push_back({std::move(p), cs});
             };
 
             const int meshCount = scene->getMeshCount();
@@ -476,10 +487,19 @@ namespace threepp {
             std::cerr << "[FBXLoader] Cannot open: " << path << std::endl;
             return nullptr;
         }
-        const auto fileSize = file.tellg();
+        const std::streamoff fileSize = file.tellg();
+        if (fileSize <= 0) {
+            std::cerr << "[FBXLoader] Empty or unreadable file: " << path << std::endl;
+            return nullptr;
+        }
         file.seekg(0);
         std::vector<ofbx::u8> data(static_cast<size_t>(fileSize));
-        file.read(reinterpret_cast<char*>(data.data()), fileSize);
+        file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(fileSize));
+        if (file.gcount() != static_cast<std::streamsize>(fileSize)) {
+            std::cerr << "[FBXLoader] Short read (" << file.gcount() << " of "
+                      << fileSize << " bytes): " << path << std::endl;
+            return nullptr;
+        }
         file.close();
 
         ofbx::IScene* scene = ofbx::load(

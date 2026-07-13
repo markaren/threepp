@@ -22,6 +22,14 @@ namespace {
         return std::regex_match(path, reg);
     }
 
+    // Cache key. The same source image can legitimately be loaded in different
+    // roles — sRGB base colour vs. linear data map (normal/ORM), flipped vs. not
+    // — and those are DIFFERENT textures. Keying on the name alone let the first
+    // load win and handed later callers the wrong colour-space/flip.
+    std::string cacheKey(const std::string& name, ColorSpace colorSpace, bool flipY) {
+        return name + '|' + std::to_string(static_cast<int>(colorSpace)) + (flipY ? "|1" : "|0");
+    }
+
 }// namespace
 
 struct TextureLoader::Impl {
@@ -55,9 +63,10 @@ struct TextureLoader::Impl {
 
     std::shared_ptr<Texture> load(const std::filesystem::path& path, ColorSpace colorSpace, bool flipY) {
 
+        const std::string key = cacheKey(path.string(), colorSpace, flipY);
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (auto cachedTexture = checkCache(path.string())) {
+            if (auto cachedTexture = checkCache(key)) {
                 return cachedTexture;
             }
         }
@@ -90,22 +99,23 @@ struct TextureLoader::Impl {
         if (!texture) return nullptr;
 
         std::lock_guard<std::mutex> lock(mutex_);
-        // Re-check under the lock: another thread may have decoded the same path
+        // Re-check under the lock: another thread may have decoded the same key
         // while we were decoding — prefer its cached instance so a shared path
         // yields ONE Texture (one GPU upload) instead of one per racing thread.
-        if (auto cachedTexture = checkCache(path.string())) {
+        if (auto cachedTexture = checkCache(key)) {
             return cachedTexture;
         }
-        if (useCache_) cache_[path.string()] = texture;
+        if (useCache_) cache_[key] = texture;
         return texture;
     }
 
     std::shared_ptr<Texture> loadFromMemory(const std::string& name, const std::vector<unsigned char>& data,
                                             ColorSpace colorSpace, bool flipY) {
 
+        const std::string key = cacheKey(name, colorSpace, flipY);
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (auto cachedTexture = checkCache(name)) {
+            if (auto cachedTexture = checkCache(key)) {
                 return cachedTexture;
             }
         }
@@ -121,10 +131,10 @@ struct TextureLoader::Impl {
         texture->needsUpdate();
 
         std::lock_guard<std::mutex> lock(mutex_);
-        if (auto cachedTexture = checkCache(name)) {
+        if (auto cachedTexture = checkCache(key)) {
             return cachedTexture;
         }
-        if (useCache_) cache_[name] = texture;
+        if (useCache_) cache_[key] = texture;
         return texture;
     }
 };
