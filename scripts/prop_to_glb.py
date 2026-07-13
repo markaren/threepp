@@ -25,6 +25,21 @@ def log(*a):
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 
+# Blender 5.0 regression: io_scene_fbx still does `lamp.cycles.cast_shadow = ...`
+# during light import, but Cycles dropped that property in 5.0, so any FBX with
+# lights aborts the whole import with AttributeError. The CyclesLightSettings
+# type isn't exposed via bpy.types in headless sessions, so reach it through a
+# throwaway light instance and register a dummy prop to absorb the write (we
+# don't use the value — this is a static-mesh export).
+try:
+    _probe = bpy.data.lights.new(name="_cast_shadow_shim", type='POINT')
+    _cls = type(_probe.cycles)
+    if not hasattr(_cls, "cast_shadow"):
+        _cls.cast_shadow = bpy.props.BoolProperty(default=True)
+    bpy.data.lights.remove(_probe)
+except Exception as e:
+    log("cycles cast_shadow shim", e)
+
 ext = os.path.splitext(src)[1].lower()
 log("import", ext, src)
 if ext == ".dae":
