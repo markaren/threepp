@@ -310,7 +310,7 @@ int main(int argc, char** argv) {
     const float kVmYaw = math::PI;
     {
         GLTFLoader loader;
-        const std::string akPath = std::string(DATA_FOLDER) + "/models/gltf/ak12/ak12_animated.glb";
+        const std::string akPath = std::string(DATA_FOLDER) + "/models/gltf/ak-12animated/ak-12animated.glb";
         if (auto res = loader.load(akPath)) {
             vmModel = res->scene;
             vmModel->traverseType<Mesh>([](Mesh& m) {
