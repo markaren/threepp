@@ -18,9 +18,11 @@ layout(push_constant) uniform Pc {
 } pc;
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec4 outMask;// coverage for overlay_aa (see overlay.frag)
 
 void main() {
     vec2 d = gl_PointCoord - vec2(0.5);
     if (dot(d, d) > 0.25) discard;
     outColor = vec4(pc.color.rgb * vColor, 1.0);
+    outMask  = vec4(1.0);
 }

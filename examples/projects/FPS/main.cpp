@@ -1339,8 +1339,10 @@ int main(int argc, char** argv) {
             std::cout << "frame " << shotFrame << " " << dt * 1000.f << " ms"
                       << " ammo=" << ammo << (reloading ? " RELOAD" : "")
                       << " casings=" << casings.size()
-                      << " decals=" << std::count_if(decals.begin(), decals.end(), [](const auto& d) { return d.target != nullptr; })
-                      << std::endl;
+                      << " decals=" << std::count_if(decals.begin(), decals.end(), [](const auto& d) { return d.target != nullptr; });
+            if (auto* vk = dynamic_cast<VulkanRendererCore*>(renderer.get()))
+                std::cout << " overlayMs=" << vk->lastFrameTimings().overlayMs;
+            std::cout << std::endl;
         }
         if (dt > 0.05f) dt = 0.05f;
         if (!shotPath.empty()) dt = 1.f / 60.f;// deterministic captures

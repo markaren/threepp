@@ -1228,6 +1228,17 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay.frag"
         kOverlayFragSpv
         _overlay_frag_spv_h)
+    # Masked overlay edge-AA: FXAA-style blend applied only where the
+    # overlay wrote coverage (vector SVG/UI/line edges) — the TAA'd scene
+    # is untouched. Gated on Canvas antialiasing > 1.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_aa.vert"
+        kOverlayAaVertSpv
+        _overlay_aa_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_aa.frag"
+        kOverlayAaFragSpv
+        _overlay_aa_frag_spv_h)
     # Overlay depth prepass — writes unjittered depth so the wireframe
     # overlay's depth test compares like-with-like (the main G-buffer
     # depth is jittered for TAA).

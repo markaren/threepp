@@ -1362,12 +1362,48 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                     dOv.pImageMemoryBarriers = &toColor;
                     vkCmdPipelineBarrier2(cb, &dOv);
 
-                    VkRenderingAttachmentInfo colorAtt{};
+                    // Edge-AA coverage mask (attachment 1) — cleared each frame,
+                    // written by the overlay pipelines, consumed by the masked
+                    // FXAA pass below when Canvas antialiasing is on. The mask
+                    // must be bound regardless (the pipelines declare it).
+                    ensureOverlayAaImages(ext);
+                    {
+                        VkImageMemoryBarrier2 maskToCa{};
+                        maskToCa.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                        // WAR vs the previous frame's AA fragment read; contents
+                        // discarded (UNDEFINED) since loadOp clears.
+                        maskToCa.srcStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                        maskToCa.srcAccessMask = 0;
+                        maskToCa.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                        maskToCa.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                        maskToCa.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                        maskToCa.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                        maskToCa.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        maskToCa.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        maskToCa.image = overlayAaMask_.image;
+                        maskToCa.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                        maskToCa.subresourceRange.levelCount = 1;
+                        maskToCa.subresourceRange.layerCount = 1;
+                        VkDependencyInfo dM{};
+                        dM.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                        dM.imageMemoryBarrierCount = 1;
+                        dM.pImageMemoryBarriers = &maskToCa;
+                        vkCmdPipelineBarrier2(cb, &dM);
+                    }
+
+                    VkRenderingAttachmentInfo colorAtts[2]{};
+                    VkRenderingAttachmentInfo& colorAtt = colorAtts[0];
                     colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
                     colorAtt.imageView   = ctx->swapchainImageViews()[imageIndex];
                     colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                     colorAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
                     colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+                    colorAtts[1].sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    colorAtts[1].imageView   = overlayAaMask_.view;
+                    colorAtts[1].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    colorAtts[1].loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                    colorAtts[1].storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+                    colorAtts[1].clearValue.color = {{0.f, 0.f, 0.f, 0.f}};
 
                     // Read-only depth from the overlay depth prepass. Was
                     // transitioned to DEPTH_STENCIL_READ_ONLY_OPTIMAL at the
@@ -1386,8 +1422,8 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                     ri.renderArea.offset = {0, 0};
                     ri.renderArea.extent = ext;
                     ri.layerCount = 1;
-                    ri.colorAttachmentCount = 1;
-                    ri.pColorAttachments = &colorAtt;
+                    ri.colorAttachmentCount = 2;
+                    ri.pColorAttachments = colorAtts;
                     ri.pDepthAttachment = &depthAtt;
                     vkCmdBeginRendering(cb, &ri);
 
@@ -1856,6 +1892,120 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                     }
 
                     vkCmdEndRendering(cb);
+
+                    // ── Masked overlay edge-AA ──────────────────────────────
+                    // Only when the user asked for AA (Canvas antialiasing).
+                    // Copy the post-overlay swapchain (a pass can't sample its
+                    // own target), then FXAA-blend the masked pixels in place
+                    // via a fullscreen triangle that discards everywhere else.
+                    if (canvas.samples() > 1 && overlayAaPipeline_ != VK_NULL_HANDLE) {
+                        VkImageMemoryBarrier2 pre[3]{};
+                        // swapchain: attachment write → transfer read
+                        pre[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                        pre[0].srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                        pre[0].srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                        pre[0].dstStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                        pre[0].dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                        pre[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                        pre[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                        pre[0].image = img;
+                        // scratch: discard old contents → transfer dst (WAR vs
+                        // the previous frame's fragment sample)
+                        pre[1] = pre[0];
+                        pre[1].srcStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                        pre[1].srcAccessMask = 0;
+                        pre[1].dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                        pre[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                        pre[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                        pre[1].image = overlayAaScratch_.image;
+                        // mask: attachment write → fragment sample
+                        pre[2] = pre[0];
+                        pre[2].srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                        pre[2].srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                        pre[2].dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                        pre[2].dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                        pre[2].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                        pre[2].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        pre[2].image = overlayAaMask_.image;
+                        for (auto& b : pre) {
+                            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                            b.subresourceRange.levelCount = 1;
+                            b.subresourceRange.layerCount = 1;
+                        }
+                        VkDependencyInfo dPre{};
+                        dPre.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                        dPre.imageMemoryBarrierCount = 3;
+                        dPre.pImageMemoryBarriers = pre;
+                        vkCmdPipelineBarrier2(cb, &dPre);
+
+                        VkImageCopy region{};
+                        region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                        region.srcSubresource.layerCount = 1;
+                        region.dstSubresource = region.srcSubresource;
+                        region.extent = {ext.width, ext.height, 1};
+                        vkCmdCopyImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                       overlayAaScratch_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       1, &region);
+
+                        VkImageMemoryBarrier2 post[2]{};
+                        // scratch: transfer write → fragment sample
+                        post[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                        post[0].srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                        post[0].srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                        post[0].dstStageMask  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                        post[0].dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                        post[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                        post[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        post[0].image = overlayAaScratch_.image;
+                        // swapchain: transfer read → attachment write again
+                        post[1] = post[0];
+                        post[1].srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                        post[1].srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                        post[1].dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                        post[1].dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                        post[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                        post[1].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                        post[1].image = img;
+                        for (auto& b : post) {
+                            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                            b.subresourceRange.levelCount = 1;
+                            b.subresourceRange.layerCount = 1;
+                        }
+                        VkDependencyInfo dPost{};
+                        dPost.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                        dPost.imageMemoryBarrierCount = 2;
+                        dPost.pImageMemoryBarriers = post;
+                        vkCmdPipelineBarrier2(cb, &dPost);
+
+                        VkRenderingAttachmentInfo aaAtt{};
+                        aaAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                        aaAtt.imageView   = ctx->swapchainImageViews()[imageIndex];
+                        aaAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                        aaAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+                        aaAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+                        VkRenderingInfo aaRi{};
+                        aaRi.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                        aaRi.renderArea.offset = {0, 0};
+                        aaRi.renderArea.extent = ext;
+                        aaRi.layerCount = 1;
+                        aaRi.colorAttachmentCount = 1;
+                        aaRi.pColorAttachments = &aaAtt;
+                        vkCmdBeginRendering(cb, &aaRi);
+                        VkViewport vpAa{0.f, 0.f, float(ext.width), float(ext.height), 0.f, 1.f};
+                        vkCmdSetViewport(cb, 0, 1, &vpAa);
+                        VkRect2D scAa{{0, 0}, ext};
+                        vkCmdSetScissor(cb, 0, 1, &scAa);
+                        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayAaPipeline_);
+                        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                overlayAaPipelineLayout_, 0, 1, &overlayAaSet_, 0, nullptr);
+                        vkCmdDraw(cb, 3, 1, 0, 0);
+                        vkCmdEndRendering(cb);
+                    }
 
                     // Swapchain back to GENERAL so the downstream blocks
                     // (ImGui overlay or the direct present-src transition)

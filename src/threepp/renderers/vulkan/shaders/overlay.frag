@@ -14,6 +14,9 @@ layout(push_constant) uniform Pc {
 } pc;
 
 layout(location = 0) out vec4 outColor;
+// Coverage mask (R8 attachment 1) — marks pixels the vector overlay
+// touched so overlay_aa.frag can edge-smooth ONLY those (see overlay_aa).
+layout(location = 1) out vec4 outMask;
 
 vec3 linearToSRGB(vec3 x) {
     const vec3 cutoff = vec3(lessThan(x, vec3(0.0031308)));
@@ -24,4 +27,5 @@ vec3 linearToSRGB(vec3 x) {
 
 void main() {
     outColor = vec4(linearToSRGB(pc.color.rgb), pc.color.a);
+    outMask  = vec4(1.0);
 }

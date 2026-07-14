@@ -5,6 +5,8 @@
 #include "threepp/renderers/vulkan/shaders/gbuffer_indirect.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_aa.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_aa.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_depth.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_depth.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.vert.spv.h"
@@ -1316,14 +1318,20 @@ void VulkanRendererCore::CoreImpl::createOverlayPipeline() {
             ds.depthWriteEnable = VK_FALSE;
             ds.depthCompareOp   = VK_COMPARE_OP_GREATER_OR_EQUAL;// reverse-Z (overlay vs unjitDepth)
 
-            VkPipelineColorBlendAttachmentState cbas{};
-            cbas.blendEnable    = VK_FALSE;
-            cbas.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                  VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            // Attachment 0 = swapchain color; attachment 1 = the overlay
+            // edge-AA coverage mask (R8, no blending — any touch writes 1).
+            // Every pipeline used inside the overlay render-pass instance
+            // must declare both attachments (dynamic-rendering rule).
+            VkPipelineColorBlendAttachmentState cbas[2]{};
+            cbas[0].blendEnable    = VK_FALSE;
+            cbas[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            cbas[1].blendEnable    = VK_FALSE;
+            cbas[1].colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
             VkPipelineColorBlendStateCreateInfo cb{};
             cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-            cb.attachmentCount = 1;
-            cb.pAttachments    = &cbas;
+            cb.attachmentCount = 2;
+            cb.pAttachments    = cbas;
 
             VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT,
                                            VK_DYNAMIC_STATE_SCISSOR};
@@ -1350,14 +1358,15 @@ void VulkanRendererCore::CoreImpl::createOverlayPipeline() {
                   "vkCreatePipelineLayout(overlay)");
 
             // Dynamic rendering: declare formats up-front via
-            // VkPipelineRenderingCreateInfo. Color = swapchain, depth =
-            // D32_SFLOAT (matches rasterGbufs.unjitDepth which the overlay
-            // pass binds as a read-only depth attachment).
-            const VkFormat colorFmt = ctx->swapchainFormat();
+            // VkPipelineRenderingCreateInfo. Color 0 = swapchain, color 1 =
+            // the edge-AA coverage mask, depth = D32_SFLOAT (matches
+            // rasterGbufs.unjitDepth which the overlay pass binds as a
+            // read-only depth attachment).
+            const VkFormat overlayFmts[2] = {ctx->swapchainFormat(), VK_FORMAT_R8_UNORM};
             VkPipelineRenderingCreateInfo prci{};
             prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-            prci.colorAttachmentCount    = 1;
-            prci.pColorAttachmentFormats = &colorFmt;
+            prci.colorAttachmentCount    = 2;
+            prci.pColorAttachmentFormats = overlayFmts;
             prci.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT;
 
             VkGraphicsPipelineCreateInfo gpci{};
@@ -1411,20 +1420,21 @@ void VulkanRendererCore::CoreImpl::createOverlayPipeline() {
             // overlays may show out-of-order alpha. For typical gizmo /
             // single-transparent-mesh use this is acceptable; documented as
             // a Stage-2 limitation.
-            VkPipelineColorBlendAttachmentState cbasBlend{};
-            cbasBlend.blendEnable         = VK_TRUE;
-            cbasBlend.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-            cbasBlend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            cbasBlend.colorBlendOp        = VK_BLEND_OP_ADD;
-            cbasBlend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            cbasBlend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            cbasBlend.alphaBlendOp        = VK_BLEND_OP_ADD;
-            cbasBlend.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            VkPipelineColorBlendAttachmentState cbasBlend[2]{};
+            cbasBlend[0].blendEnable         = VK_TRUE;
+            cbasBlend[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            cbasBlend[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasBlend[0].colorBlendOp        = VK_BLEND_OP_ADD;
+            cbasBlend[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasBlend[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasBlend[0].alphaBlendOp        = VK_BLEND_OP_ADD;
+            cbasBlend[0].colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            cbasBlend[1] = cbas[1];// mask: unblended, any touch writes 1
             VkPipelineColorBlendStateCreateInfo cbBlend{};
             cbBlend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-            cbBlend.attachmentCount = 1;
-            cbBlend.pAttachments    = &cbasBlend;
+            cbBlend.attachmentCount = 2;
+            cbBlend.pAttachments    = cbasBlend;
             VkGraphicsPipelineCreateInfo gpciBasicTr = gpciBasic;
             gpciBasicTr.pColorBlendState = &cbBlend;
             check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciBasicTr, nullptr,
@@ -1702,6 +1712,138 @@ void VulkanRendererCore::CoreImpl::createOverlayPipeline() {
                 vkDestroyShaderModule(ctx->device(), dvert, nullptr);
                 vkDestroyShaderModule(ctx->device(), dfrag, nullptr);
             }
+
+            // ── Masked overlay edge-AA pipeline ─────────────────────────────
+            // Fullscreen triangle onto the swapchain (loadOp LOAD), sampling
+            // the post-overlay swapchain copy + the coverage mask; fragments
+            // outside the dilated mask discard, so only vector-overlay edges
+            // are touched. See the overlayAa* member docs.
+            {
+                VkDescriptorSetLayoutBinding aaBinds[2]{};
+                for (uint32_t i = 0; i < 2; ++i) {
+                    aaBinds[i].binding         = i;
+                    aaBinds[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    aaBinds[i].descriptorCount = 1;
+                    aaBinds[i].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+                }
+                VkDescriptorSetLayoutCreateInfo aaDslci{};
+                aaDslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+                aaDslci.bindingCount = 2;
+                aaDslci.pBindings    = aaBinds;
+                check(vkCreateDescriptorSetLayout(ctx->device(), &aaDslci, nullptr, &overlayAaSetLayout_),
+                      "vkCreateDescriptorSetLayout(overlayAa)");
+
+                VkDescriptorPoolSize aaPs{};
+                aaPs.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                aaPs.descriptorCount = 2;
+                VkDescriptorPoolCreateInfo aaDpci{};
+                aaDpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+                aaDpci.maxSets       = 1;
+                aaDpci.poolSizeCount = 1;
+                aaDpci.pPoolSizes    = &aaPs;
+                check(vkCreateDescriptorPool(ctx->device(), &aaDpci, nullptr, &overlayAaPool_),
+                      "vkCreateDescriptorPool(overlayAa)");
+                VkDescriptorSetAllocateInfo aaDsai{};
+                aaDsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                aaDsai.descriptorPool     = overlayAaPool_;
+                aaDsai.descriptorSetCount = 1;
+                aaDsai.pSetLayouts        = &overlayAaSetLayout_;
+                check(vkAllocateDescriptorSets(ctx->device(), &aaDsai, &overlayAaSet_),
+                      "vkAllocateDescriptorSets(overlayAa)");
+
+                VkPipelineLayoutCreateInfo aaPlci{};
+                aaPlci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+                aaPlci.setLayoutCount = 1;
+                aaPlci.pSetLayouts    = &overlayAaSetLayout_;
+                check(vkCreatePipelineLayout(ctx->device(), &aaPlci, nullptr, &overlayAaPipelineLayout_),
+                      "vkCreatePipelineLayout(overlayAa)");
+
+                VkShaderModuleCreateInfo avsmci{};
+                avsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                avsmci.codeSize = sizeof(kOverlayAaVertSpv);
+                avsmci.pCode    = kOverlayAaVertSpv;
+                VkShaderModule avert = VK_NULL_HANDLE;
+                check(vkCreateShaderModule(ctx->device(), &avsmci, nullptr, &avert),
+                      "vkCreateShaderModule(overlay_aa.vert)");
+                VkShaderModuleCreateInfo afsmci{};
+                afsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                afsmci.codeSize = sizeof(kOverlayAaFragSpv);
+                afsmci.pCode    = kOverlayAaFragSpv;
+                VkShaderModule afrag = VK_NULL_HANDLE;
+                check(vkCreateShaderModule(ctx->device(), &afsmci, nullptr, &afrag),
+                      "vkCreateShaderModule(overlay_aa.frag)");
+
+                VkPipelineShaderStageCreateInfo aStages[2]{};
+                aStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                aStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+                aStages[0].module = avert;
+                aStages[0].pName  = "main";
+                aStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                aStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+                aStages[1].module = afrag;
+                aStages[1].pName  = "main";
+
+                VkPipelineVertexInputStateCreateInfo avi{};
+                avi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+                VkPipelineInputAssemblyStateCreateInfo aia{};
+                aia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+                aia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+                VkPipelineViewportStateCreateInfo avp{};
+                avp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+                avp.viewportCount = 1;
+                avp.scissorCount  = 1;
+                VkPipelineRasterizationStateCreateInfo ars{};
+                ars.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+                ars.polygonMode = VK_POLYGON_MODE_FILL;
+                ars.cullMode    = VK_CULL_MODE_NONE;
+                ars.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+                ars.lineWidth   = 1.0f;
+                VkPipelineMultisampleStateCreateInfo ams{};
+                ams.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+                ams.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+                VkPipelineDepthStencilStateCreateInfo ads{};// no depth attachment
+                ads.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+                VkPipelineColorBlendAttachmentState acbas{};
+                acbas.blendEnable    = VK_FALSE;
+                acbas.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+                VkPipelineColorBlendStateCreateInfo acb{};
+                acb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+                acb.attachmentCount = 1;
+                acb.pAttachments    = &acbas;
+                VkDynamicState adyns[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+                VkPipelineDynamicStateCreateInfo adyn{};
+                adyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+                adyn.dynamicStateCount = 2;
+                adyn.pDynamicStates    = adyns;
+
+                const VkFormat aaColorFmt = ctx->swapchainFormat();
+                VkPipelineRenderingCreateInfo aprci{};
+                aprci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+                aprci.colorAttachmentCount    = 1;
+                aprci.pColorAttachmentFormats = &aaColorFmt;
+
+                VkGraphicsPipelineCreateInfo agpci{};
+                agpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+                agpci.pNext               = &aprci;
+                agpci.stageCount          = 2;
+                agpci.pStages             = aStages;
+                agpci.pVertexInputState   = &avi;
+                agpci.pInputAssemblyState = &aia;
+                agpci.pViewportState      = &avp;
+                agpci.pRasterizationState = &ars;
+                agpci.pMultisampleState   = &ams;
+                agpci.pDepthStencilState  = &ads;
+                agpci.pColorBlendState    = &acb;
+                agpci.pDynamicState       = &adyn;
+                agpci.layout              = overlayAaPipelineLayout_;
+                check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &agpci, nullptr,
+                                                &overlayAaPipeline_),
+                      "vkCreateGraphicsPipelines(overlayAa)");
+
+                vkDestroyShaderModule(ctx->device(), avert, nullptr);
+                vkDestroyShaderModule(ctx->device(), afrag, nullptr);
+            }
         }
 
 void VulkanRendererCore::CoreImpl::createParticlePipeline() {
@@ -1816,11 +1958,16 @@ void VulkanRendererCore::CoreImpl::createParticlePipeline() {
             dyn.dynamicStateCount = 2;
             dyn.pDynamicStates    = dynStates;
 
-            const VkFormat colorFmt = ctx->swapchainFormat();
+            // Drawn inside the overlay render-pass instance, which now carries
+            // the edge-AA coverage mask as attachment 1 — every pipeline in
+            // that instance must declare both attachments. Particles are soft
+            // billboards that don't want edge-AA, so attachment 1's write
+            // mask is 0 (declared, never written).
+            const VkFormat particleFmts[2] = {ctx->swapchainFormat(), VK_FORMAT_R8_UNORM};
             VkPipelineRenderingCreateInfo prci{};
             prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-            prci.colorAttachmentCount    = 1;
-            prci.pColorAttachmentFormats = &colorFmt;
+            prci.colorAttachmentCount    = 2;
+            prci.pColorAttachmentFormats = particleFmts;
             prci.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT;
 
             // ── Normal variant: non-premultiplied alpha, depth-tested ──────────
@@ -1832,20 +1979,22 @@ void VulkanRendererCore::CoreImpl::createParticlePipeline() {
             dsNormal.depthWriteEnable = VK_FALSE;
             dsNormal.depthCompareOp   = VK_COMPARE_OP_GREATER_OR_EQUAL;
 
-            VkPipelineColorBlendAttachmentState cbasAlpha{};
-            cbasAlpha.blendEnable         = VK_TRUE;
-            cbasAlpha.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-            cbasAlpha.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            cbasAlpha.colorBlendOp        = VK_BLEND_OP_ADD;
-            cbasAlpha.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            cbasAlpha.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            cbasAlpha.alphaBlendOp        = VK_BLEND_OP_ADD;
-            cbasAlpha.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            VkPipelineColorBlendAttachmentState cbasAlpha[2]{};
+            cbasAlpha[0].blendEnable         = VK_TRUE;
+            cbasAlpha[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            cbasAlpha[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasAlpha[0].colorBlendOp        = VK_BLEND_OP_ADD;
+            cbasAlpha[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasAlpha[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasAlpha[0].alphaBlendOp        = VK_BLEND_OP_ADD;
+            cbasAlpha[0].colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            cbasAlpha[1].blendEnable    = VK_FALSE;
+            cbasAlpha[1].colorWriteMask = 0;// mask attachment: declared, never written
             VkPipelineColorBlendStateCreateInfo cbAlpha{};
             cbAlpha.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-            cbAlpha.attachmentCount = 1;
-            cbAlpha.pAttachments    = &cbasAlpha;
+            cbAlpha.attachmentCount = 2;
+            cbAlpha.pAttachments    = cbasAlpha;
 
             VkGraphicsPipelineCreateInfo gpci{};
             gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -1870,12 +2019,12 @@ void VulkanRendererCore::CoreImpl::createParticlePipeline() {
             // (fireball / firework draw over the scene).
             VkPipelineDepthStencilStateCreateInfo dsAdd = dsNormal;
             dsAdd.depthTestEnable = VK_FALSE;
-            VkPipelineColorBlendAttachmentState cbasAdd = cbasAlpha;
-            cbasAdd.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-            cbasAdd.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            cbasAdd.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            VkPipelineColorBlendAttachmentState cbasAdd[2] = {cbasAlpha[0], cbasAlpha[1]};
+            cbasAdd[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasAdd[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasAdd[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             VkPipelineColorBlendStateCreateInfo cbAdd = cbAlpha;
-            cbAdd.pAttachments = &cbasAdd;
+            cbAdd.pAttachments = cbasAdd;
             VkGraphicsPipelineCreateInfo gpciAdd = gpci;
             gpciAdd.pDepthStencilState = &dsAdd;
             gpciAdd.pColorBlendState   = &cbAdd;
@@ -1981,20 +2130,25 @@ void VulkanRendererCore::CoreImpl::createSpriteWorldPipeline() {
             ds.depthWriteEnable = VK_FALSE;
             ds.depthCompareOp   = VK_COMPARE_OP_GREATER_OR_EQUAL;// reverse-Z
 
-            VkPipelineColorBlendAttachmentState cbas{};
-            cbas.blendEnable         = VK_TRUE;
-            cbas.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-            cbas.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            cbas.colorBlendOp        = VK_BLEND_OP_ADD;
-            cbas.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            cbas.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            cbas.alphaBlendOp        = VK_BLEND_OP_ADD;
-            cbas.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            // Same render-pass instance as the overlay → must declare the
+            // edge-AA mask attachment (write-masked off; glyph atlases carry
+            // their own AA from the rasterizer).
+            VkPipelineColorBlendAttachmentState cbas[2]{};
+            cbas[0].blendEnable         = VK_TRUE;
+            cbas[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            cbas[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbas[0].colorBlendOp        = VK_BLEND_OP_ADD;
+            cbas[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbas[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbas[0].alphaBlendOp        = VK_BLEND_OP_ADD;
+            cbas[0].colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            cbas[1].blendEnable    = VK_FALSE;
+            cbas[1].colorWriteMask = 0;
             VkPipelineColorBlendStateCreateInfo cb{};
             cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-            cb.attachmentCount = 1;
-            cb.pAttachments    = &cbas;
+            cb.attachmentCount = 2;
+            cb.pAttachments    = cbas;
 
             VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
             VkPipelineDynamicStateCreateInfo dyn{};
@@ -2002,11 +2156,11 @@ void VulkanRendererCore::CoreImpl::createSpriteWorldPipeline() {
             dyn.dynamicStateCount = 2;
             dyn.pDynamicStates    = dynStates;
 
-            const VkFormat colorFmt = ctx->swapchainFormat();
+            const VkFormat spriteFmts[2] = {ctx->swapchainFormat(), VK_FORMAT_R8_UNORM};
             VkPipelineRenderingCreateInfo prci{};
             prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-            prci.colorAttachmentCount    = 1;
-            prci.pColorAttachmentFormats = &colorFmt;
+            prci.colorAttachmentCount    = 2;
+            prci.pColorAttachmentFormats = spriteFmts;
             prci.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT;
 
             VkGraphicsPipelineCreateInfo gpci{};

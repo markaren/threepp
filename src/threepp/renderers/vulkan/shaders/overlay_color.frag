@@ -12,7 +12,9 @@ layout(push_constant) uniform Pc {
 } pc;
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec4 outMask;// coverage for overlay_aa (see overlay.frag)
 
 void main() {
     outColor = vec4(pc.color.rgb * vColor, pc.color.w);
+    outMask  = vec4(1.0);
 }
