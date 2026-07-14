@@ -2203,6 +2203,17 @@ namespace threepp {
             dlssResetNext_ = true;
 #if defined(THREEPP_WITH_FSR)
             fsrResetNext_ = true;// path hand-off re-primes whichever runs next
+            // FSR was skipped at init while DLSS held the upscaler slot. If DLSS
+            // is being turned off, create the FSR context now so the frame hands
+            // off to FSR rather than plain TAA. dlssActive_ is still true here, so
+            // fsrActiveForHdrPlumbing() was already satisfied and hdrOut_ is
+            // allocated — no descriptor rewrite is needed.
+            if (!enabled && fsrEnabled_ && !fsr_) {
+                fsr_ = std::make_unique<vulkan::FsrUpscaler>(*ctx, kFramesInFlight);
+                fsrActive_ = fsr_->create(ctx->swapchainExtent().width,
+                                          ctx->swapchainExtent().height);
+                fsrResetNext_ = true;
+            }
 #endif
 #else
             (void) enabled;
@@ -2606,23 +2617,14 @@ namespace threepp {
                 taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
-#if defined(THREEPP_WITH_FSR)
-            // FSR upscaler context at the display (swapchain) extent. FSR stores
-            // the display extent at create time but takes the render extent per
-            // dispatch, so a renderScale change needs no recreation — only a
-            // swapchain/display resize does (handled in reallocateRenderExtentResources).
-            // On success FSR replaces the TAA resolve; on failure the TAA path
-            // runs unchanged.
-            fsr_ = std::make_unique<vulkan::FsrUpscaler>(*ctx, kFramesInFlight);
-            fsrActive_ = fsr_->create(ctx->swapchainExtent().width,
-                                      ctx->swapchainExtent().height);
-            fsrResetNext_ = true;
-#endif
 #if defined(THREEPP_WITH_DLSS)
-            // DLSS feature at the display extent (outranks FSR when both create).
-            // NGX feature creation records GPU init work — one-shot submit+wait.
-            // On NGX failure (non-RTX GPU / old driver) dlssActive_ stays false
-            // and the FSR/TAA fallback runs.
+            // DLSS feature at the display extent. Created BEFORE FSR because DLSS
+            // OUTRANKS it (useFsr() requires !useDlss()): an FSR context built
+            // alongside an active DLSS feature could never dispatch, so we skip it
+            // below and save its context (~60 MB committed here). NGX feature
+            // creation records GPU init work — one-shot submit+wait. On NGX
+            // failure (non-RTX GPU / old driver) dlssActive_ stays false and the
+            // FSR/TAA fallback runs.
             dlss_ = std::make_unique<vulkan::DlssUpscaler>(*ctx, kFramesInFlight);
             {
                 VkCommandBuffer initCb = beginOneShot();
@@ -2634,6 +2636,26 @@ namespace threepp {
                 endAndSubmitOneShot(initCb, "DLSS feature create");
             }
             dlssResetNext_ = true;
+#endif
+#if defined(THREEPP_WITH_FSR)
+            // FSR upscaler context at the display (swapchain) extent. FSR stores
+            // the display extent at create time but takes the render extent per
+            // dispatch, so a renderScale change needs no recreation — only a
+            // swapchain/display resize does (handled in reallocateRenderExtentResources).
+            // On success FSR replaces the TAA resolve; on failure the TAA path
+            // runs unchanged. Skipped entirely when DLSS already claimed the
+            // upscaler slot (it could never dispatch); if DLSS is disabled at
+            // runtime, setDlss(false) creates the FSR context on demand.
+            bool dlssClaimedUpscaler = false;
+#if defined(THREEPP_WITH_DLSS)
+            dlssClaimedUpscaler = dlssActive_;
+#endif
+            if (!dlssClaimedUpscaler) {
+                fsr_ = std::make_unique<vulkan::FsrUpscaler>(*ctx, kFramesInFlight);
+                fsrActive_ = fsr_->create(ctx->swapchainExtent().width,
+                                          ctx->swapchainExtent().height);
+                fsrResetNext_ = true;
+            }
 #endif
             // HDR bloom pyramid. sceneHdr lives at the deferred render
             // extent (it is the shared set's binding 1 target); the bloom
@@ -2687,6 +2709,48 @@ namespace threepp {
                     // (no per-swap vkDeviceWaitIdle). Stamped with the frame
                     // being recorded when OverlayPass::record runs.
                     [this](Image2D&& img) { retire(std::move(img)); });
+
+            // Optional one-shot fixed-footprint dump. Everything constructed above
+            // is scene-independent, so this is the renderer's baseline cost — the
+            // number to watch as new features add persistent targets. Enable with
+            // THREEPP_VK_MEMDUMP=1 (or call dumpMemoryStats() from app code).
+            if (const char* e = std::getenv("THREEPP_VK_MEMDUMP"); e && *e && *e != '0') {
+                dumpMemoryStats("post-init");
+            }
+        }
+
+        // Print a VMA memory-usage summary to stderr: the allocator's reserved-vs-
+        // live block totals and per-heap usage/budget. Cheap; for manual/debug use
+        // (there is otherwise no memory introspection in the renderer). Reflects
+        // all VMA allocations — G-buffer, history, denoiser scratch, upscalers,
+        // and any scene AS/geometry live at the call site.
+        void dumpMemoryStats(const char* tag = "") const {
+            if (!ctx || ctx->allocator() == VK_NULL_HANDLE) return;
+            const VkPhysicalDeviceMemoryProperties* mp = nullptr;
+            vmaGetMemoryProperties(ctx->allocator(), &mp);
+            VmaBudget budgets[VK_MAX_MEMORY_HEAPS] = {};
+            vmaGetHeapBudgets(ctx->allocator(), budgets);
+            VmaTotalStatistics stats{};
+            vmaCalculateStatistics(ctx->allocator(), &stats);
+            constexpr double MB = 1024.0 * 1024.0;
+            std::fprintf(stderr,
+                         "[threepp][vk-mem] %s: reserved %.1f MB in %u blocks, "
+                         "live %.1f MB in %u allocations\n",
+                         tag,
+                         stats.total.statistics.blockBytes / MB,
+                         stats.total.statistics.blockCount,
+                         stats.total.statistics.allocationBytes / MB,
+                         stats.total.statistics.allocationCount);
+            const uint32_t heaps = mp ? mp->memoryHeapCount : 0u;
+            for (uint32_t i = 0; i < heaps; ++i) {
+                const bool devLocal =
+                        (mp->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
+                std::fprintf(stderr,
+                             "[threepp][vk-mem]   heap %u%s: usage %.1f MB / budget %.1f MB\n",
+                             i, devLocal ? " (device-local)" : "",
+                             budgets[i].usage / MB, budgets[i].budget / MB);
+            }
+            std::fflush(stderr);
         }
 
         ~CoreImpl() {
