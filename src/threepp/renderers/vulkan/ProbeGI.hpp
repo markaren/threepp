@@ -74,7 +74,9 @@ namespace threepp::vulkan {
             uint32_t        materialTexCount = 0;
             const VkBuffer* emissiveTriBuf = nullptr;// [framesInFlight] EmTri[]
         };
-        void rewriteDescriptors(const DescriptorWriteInputs& in);
+        // onlyFrame >= 0 rewrites just that frame-in-flight slot's set (kept in
+        // lockstep with DeferredShade's per-FIF refresh); < 0 rewrites all slots.
+        void rewriteDescriptors(const DescriptorWriteInputs& in, int onlyFrame = -1);
 
         // Rebind just the emissive-triangle buffer for one frame (the per-frame
         // buffer grows) — mirrors DeferredShade::rewriteEmissive.

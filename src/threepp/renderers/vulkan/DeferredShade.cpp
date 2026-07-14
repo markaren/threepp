@@ -303,8 +303,13 @@ namespace threepp::vulkan {
               "vkAllocateDescriptorSets(deferred)");
     }
 
-    void DeferredShade::rewriteDescriptors(const DescriptorWriteInputs& in) {
+    void DeferredShade::rewriteDescriptors(const DescriptorWriteInputs& in, int onlyFrame) {
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
+            // Per-FIF refresh: skip every slot but the requested one. The "prev"
+            // bindings below still read the OTHER slot's views (stable image
+            // handles) — only THIS slot's descriptor SET is written, which is
+            // safe because its fence has signaled.
+            if (onlyFrame >= 0 && f != static_cast<uint32_t>(onlyFrame)) continue;
             VkDescriptorBufferInfo camInfo{};
             camInfo.buffer = in.cameraUbo[f];
             camInfo.offset = 0;

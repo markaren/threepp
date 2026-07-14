@@ -119,24 +119,30 @@ void VulkanRendererCore::CoreImpl::refreshDirtyMaterialTextures() {
                 if (sp && sp->version() != kv.second.version) { any = true; break; }
             }
             if (!any) return;
-            // Prior in-flight frames may still sample these images; drain first.
-            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (material texture refresh)");
+            // No device drain: prior in-flight frames may still sample the OLD
+            // images, so we RETIRE them (they stay alive until their referencing
+            // frames provably complete — VulkanRetireQueue.hpp) and swap the
+            // freshly-built image into the same bindless slot. Was a
+            // vkDeviceWaitIdle stall on every live DataTexture edit.
             for (auto& kv : textureCache) {
                 const auto sp = kv.second.ref.lock();
                 if (!sp || sp->version() == kv.second.version) continue;
                 if (kv.second.slot >= materialTextures.size()) continue;
                 Image2D rebuilt = buildMaterialImage2D(kv.first);
                 if (!rebuilt.view) continue;// keep the old image on failure
-                destroyImage2D(ctx->allocator(), ctx->device(), materialTextures[kv.second.slot]);
+                retire(std::move(materialTextures[kv.second.slot]));
                 materialTextures[kv.second.slot] = rebuilt;// same slot index, new view
                 kv.second.version = sp->version();
             }
             // The bindless material array is referenced by the deferred-compute
-            // set (binding 11), rewritten here; the gbuffer raster set (binding
-            // 3) is refreshed lazily by invalidating its per-frame validity
-            // flag. Both must see the new image views or the (deferred) gbuffer
-            // keeps sampling the freed view.
-            rewriteDeferredDescriptors();
+            // set (binding 11) and the gbuffer raster set (binding 3). Neither
+            // can be rewritten in place while in flight (no update-after-bind on
+            // this device), so DEFER both: mark all FIF deferred sets dirty (the
+            // frame-begin path rewrites only the current, fence-idle slot), and
+            // invalidate the per-frame raster-set validity so binding 3 re-writes
+            // on each slot's next uploadRasterCameraUbo. Both are already
+            // per-frame-lazy, so the new views land the frame each slot renders.
+            deferredDescDirty_.fill(true);
             rasterMatTexValid_.fill(0);
         }
 
@@ -423,8 +429,10 @@ bool VulkanRendererCore::CoreImpl::refreshEnvTextureFromScene(Object3D& scene) {
                     const Color& c = sc->background.color();
                     if (envIsBgColor && envBgColor.r == c.r && envBgColor.g == c.g && envBgColor.b == c.b)
                         return false;
-                    vkDeviceWaitIdle(ctx->device());
-                    destroyImage2D(ctx->allocator(), ctx->device(), envImage);
+                    // Retire the old env image (in-flight frames' descriptor
+                    // sets may still sample it); the sole caller
+                    // (beginDeferredFrame) drains + flushes + rewrites right after.
+                    retire(std::move(envImage));
                     const float px[4] = {c.r, c.g, c.b, 1.f};
                     envImage = createSampledImage2D(
                             1, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
@@ -441,8 +449,7 @@ bool VulkanRendererCore::CoreImpl::refreshEnvTextureFromScene(Object3D& scene) {
                     return true;
                 }
                 if (envIsDefault) return false;
-                vkDeviceWaitIdle(ctx->device());
-                destroyImage2D(ctx->allocator(), ctx->device(), envImage);
+                retire(std::move(envImage));// caller drains + flushes + rewrites
                 createDefaultEnvImage();
                 envIsBgColor = false;
                 envSun_ = {};
@@ -467,8 +474,7 @@ bool VulkanRendererCore::CoreImpl::refreshEnvTextureFromScene(Object3D& scene) {
                 return false;
             }
 
-            vkDeviceWaitIdle(ctx->device());
-            destroyImage2D(ctx->allocator(), ctx->device(), envImage);
+            retire(std::move(envImage));// caller drains + flushes + rewrites
 
             // GGX-prefilter the env into a mip chain so the closest_hit
             // shader can sample at a roughness-derived LOD instead of the cheap

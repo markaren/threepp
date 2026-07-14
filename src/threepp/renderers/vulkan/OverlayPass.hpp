@@ -52,7 +52,14 @@ namespace threepp::vulkan {
                 VkSamplerAddressMode addrV,
                 const char* debugName)>;
 
-        OverlayPass(VulkanContext& ctx, uint32_t framesInFlight, SampledImageCreator uploadFn);
+        // Hands a stale sprite-atlas Image2D back to the renderer's frame-serial
+        // retire queue instead of a per-swap vkDeviceWaitIdle. The lambda
+        // captures CoreImpl and forwards to CoreImpl::retire. Optional: if unset,
+        // ensureSpriteAtlasTexture falls back to drain+destroy.
+        using RetireImageFn = std::function<void(Image2D&&)>;
+
+        OverlayPass(VulkanContext& ctx, uint32_t framesInFlight, SampledImageCreator uploadFn,
+                    RetireImageFn retireFn = {});
         ~OverlayPass();
         OverlayPass(const OverlayPass&)            = delete;
         OverlayPass& operator=(const OverlayPass&) = delete;
@@ -107,6 +114,7 @@ namespace threepp::vulkan {
         VulkanContext&      ctx_;
         uint32_t            framesInFlight_;
         SampledImageCreator uploadFn_;
+        RetireImageFn       retireFn_;
 
         static constexpr uint32_t kMaxSpritesPerFrame = 64;
 

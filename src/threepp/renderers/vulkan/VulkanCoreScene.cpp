@@ -1456,8 +1456,24 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
             // Tear down anything in-flight references the old AS / scene-desc
             // buffers via a descriptor set. vkDeviceWaitIdle is the simplest
             // safe choice here; rebuilds are rare so the stall is acceptable.
+            //
+            // NOTE (retire-queue migration): this drain was deliberately LEFT as
+            // a full device wait. Unlike the per-resource swaps that moved to the
+            // frame-serial retire queue (material/env textures, particle + sprite
+            // caches), the structural teardown below frees EIGHT heterogeneous
+            // resource classes as one unit — raw VkImageView + vmaDestroyImage
+            // pairs (scratchA/foamImage), Win32 external buffers, descriptor-set
+            // pool frees, and the bindless texture-SLOT reclamation
+            // (freeTextureSlots / retiredTextureSlots_) which may REUSE a freed
+            // slot within this same rebuild. The retire queue models only
+            // Buffer/Image2D/AS, and the drain can't be partially lifted, so a
+            // drain-free rebuild needs deeper restructuring. Kept as waitIdle.
             if (sceneBuilt_) {
                 vkDeviceWaitIdle(ctx->device());
+                // Device idle ⇒ reclaim anything the frame-serial queue is
+                // holding (e.g. material textures retired earlier this frame)
+                // rather than carry it across the rebuild. Safe: fully drained.
+                flushRetireQueue();
                 if (tlas) {
                     ctx->rt().destroyAccelerationStructure(ctx->device(), tlas, nullptr);
                     tlas = VK_NULL_HANDLE;

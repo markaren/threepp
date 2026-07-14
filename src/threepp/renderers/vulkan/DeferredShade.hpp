@@ -144,7 +144,12 @@ namespace threepp::vulkan {
             // transmittance, per FIF, regenerated each frame.
             const VkImageView* cloudShadow = nullptr;// [framesInFlight] r8 512²
         };
-        void rewriteDescriptors(const DescriptorWriteInputs& in);
+        // onlyFrame >= 0 rewrites just that frame-in-flight slot's set (the
+        // caller has fence-proven that slot is idle — used by the per-FIF
+        // deferred-descriptor refresh that replaced material-texture-swap
+        // vkDeviceWaitIdle stalls). onlyFrame < 0 rewrites every slot (legal
+        // only after a device drain: scene build, resize).
+        void rewriteDescriptors(const DescriptorWriteInputs& in, int onlyFrame = -1);
 
         // Rebind just the emissive-triangle buffer (binding 12) for one frame —
         // the emissive buffer grows in the per-frame path, so call this when it

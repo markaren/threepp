@@ -122,13 +122,22 @@ void VulkanRendererCore::CoreImpl::rewriteBloomDescriptors() {
 
         }
 
-void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors() {
+void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors(int onlyFrame) {
+            // onlyFrame >= 0: rewrite only that FIF slot's sets (fence-proven
+            // idle at frame start — the per-FIF deferred refresh that replaced
+            // the material-texture-swap vkDeviceWaitIdle). onlyFrame < 0:
+            // rewrite all slots (device-drained call sites: scene build, resize).
             // Needs a built TLAS (binding 8) + material buffer (binding 9). Both
             // come from the scene build; before then there's nothing to bind and
             // the deferred pass can't dispatch anyway. ensureSceneBuilt calls
             // this right after the TLAS build, so the first valid write lands
-            // before the first deferred dispatch.
+            // before the first deferred dispatch. (Don't clear the dirty flag on
+            // this early-out: the pending refresh still owes a write once the
+            // scene builds — the all-slots rewrite there will satisfy it.)
             if (!deferredShade_ || tlas == VK_NULL_HANDLE) return;
+            // Satisfied slots are no longer dirty.
+            if (onlyFrame < 0) deferredDescDirty_.fill(false);
+            else               deferredDescDirty_[onlyFrame] = false;
             std::array<VkBuffer, kFramesInFlight>    camBufs{};
             std::array<VkBuffer, kFramesInFlight>    lightBufs{};
             std::array<VkBuffer, kFramesInFlight>    matBufs{};
@@ -303,7 +312,7 @@ void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors() {
             in.gbufIdsMS        = idsMSViews.data();
             in.gbufAlbedoMS     = albedoMSViews.data();
             in.gbufUvMS         = uvMSViews.data();
-            deferredShade_->rewriteDescriptors(in);
+            deferredShade_->rewriteDescriptors(in, onlyFrame);
             // The probe UPDATE pass consumes the same scene inputs (TLAS,
             // lights, env, material/geometry/emissive buffers) — keep its set
             // in lockstep with the deferred one.
@@ -318,7 +327,7 @@ void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors() {
                 pin.materialTex      = matTexInfos.data();
                 pin.materialTexCount = kMaxMaterialTextures;
                 pin.emissiveTriBuf   = emBufs.data();
-                probeGI_->rewriteDescriptors(pin);
+                probeGI_->rewriteDescriptors(pin, onlyFrame);
             }
         }
 

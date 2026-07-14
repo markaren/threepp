@@ -256,6 +256,14 @@ void VulkanRendererCore::CoreImpl::scanLidar(const std::vector<LidarBeam>& beams
         }
 
 void VulkanRendererCore::CoreImpl::reallocateRenderExtentResources() {
+            // Every caller (setRenderScale, setGbufMsaa, the beginDeferredFrame
+            // pending-realloc path, recreateSwapchain) has already device-idled
+            // before reaching here, so the whole device is quiescent — reclaim
+            // any queued retire-queue resources now rather than let them ride
+            // across the realloc (they'd drain in later frames anyway, but a
+            // known-idle point is the natural place, and it keeps the queue from
+            // growing unbounded if the app spams resizes). Safe: device idle.
+            flushRetireQueue();
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             createReservoirImages();// reallocates the reservoir images + clears them
@@ -348,6 +356,11 @@ void VulkanRendererCore::CoreImpl::beginCommandRecording(VkCommandBuffer cb) {
 bool VulkanRendererCore::CoreImpl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+            // Fence signaled ⇒ frame (frameSerial_ - kFramesInFlight) is
+            // GPU-complete (this slot's previous occupant). Reclaim every
+            // resource retired by that frame or earlier before touching this
+            // slot's buffers/descriptors. See VulkanRetireQueue.hpp.
+            drainRetireQueue();
             // Fence has signaled → the previous render that wrote into this
             // frame's query pool has retired. Read it now, before we reset
             // the pool and re-record. Result is stored in gpuTimings_ for
@@ -432,12 +445,26 @@ bool VulkanRendererCore::CoreImpl::beginDeferredFrame(Object3D& scene, Camera& c
                 }
             }
             if (refreshEnvTextureFromScene(scene)) {
-                rewriteDeferredDescriptors();
-                // Env is a primary radiance source — can't reproject, so wipe
-                // the ReSTIR DI reservoir history so the next frame cold-starts
-                // instead of reusing samples lit by the old environment.
+                // Env is a primary radiance source — can't reproject, so this
+                // path already wipes the ReSTIR DI reservoir history (a
+                // vkDeviceWaitIdle + clearGbufImages) to cold-start next frame.
+                // Drain FIRST so the all-slots descriptor rewrite lands while the
+                // device is idle (both FIF sets safe to touch), and flush the
+                // retire queue (refreshEnvTextureFromScene retired the old env
+                // images) now that nothing references them.
                 vkDeviceWaitIdle(ctx->device());
+                flushRetireQueue();
+                rewriteDeferredDescriptors();
                 clearGbufImages();
+            }
+
+            // Per-FIF deferred-descriptor refresh: a material texture swapped in
+            // place (refreshDirtyMaterialTextures) marked all FIF sets dirty.
+            // This slot's fence signaled at the top of the frame, so rewrite ONLY
+            // its set now — the other slot refreshes when its frame comes around.
+            // No-op if the env path above already did an all-slots rewrite.
+            if (deferredDescDirty_[currentFrame]) {
+                rewriteDeferredDescriptors(static_cast<int>(currentFrame));
             }
 
             vkResetFences(d, 1, &inFlight[currentFrame]);
@@ -504,6 +531,9 @@ bool VulkanRendererCore::CoreImpl::beginDeferredFrame(Object3D& scene, Camera& c
 bool VulkanRendererCore::CoreImpl::beginFrameOrthoOnly() {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+            // Same retire reclaim as beginDeferredFrame (the ortho-only frame
+            // path shares the fence ring). See VulkanRetireQueue.hpp.
+            drainRetireQueue();
             gpuTimings_->readBack(currentFrame, pendingCpuEnsureSceneMs_);
 
             uint32_t imageIndex = 0;
@@ -655,6 +685,11 @@ void VulkanRendererCore::CoreImpl::endFrame() {
             // toward biased noise. 16M ≈ 75 hours at 60 fps, no longer reachable.
             if (sampleIndex < (1u << 24)) ++sampleIndex;
 
+            // Advance serial + slot together, only on a SUBMITTED frame. A
+            // failed acquire returns before endFrame(), so serial never runs
+            // ahead of slot — keeping the retire queue's serial↔slot fence
+            // invariant exact (VulkanRetireQueue.hpp).
+            ++frameSerial_;
             currentFrame  = (currentFrame + 1) % kFramesInFlight;
             frameState_   = FrameState::Idle;
         }

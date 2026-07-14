@@ -5,6 +5,7 @@
 
 #include "VulkanContext.hpp"
 #include "VulkanResources.hpp"
+#include "VulkanRetireQueue.hpp"
 #include "EnvPrefilter.hpp"
 #include "EventCameraDetector.hpp"
 #include "LidarScanner.hpp"
@@ -688,6 +689,17 @@ namespace threepp {
         std::array<Buffer, kFramesInFlight> materialDescsBuffers{};
         std::vector<MaterialDesc> matDescsCached_;
         std::array<bool, kFramesInFlight> matDescsDirty_{};
+
+        // Per-FIF deferred-descriptor refresh flag. Set (all slots) when a
+        // material texture is swapped in place (refreshDirtyMaterialTextures) or
+        // an env texture is swapped: the new image view must be rebound in the
+        // deferred/probe descriptor sets, but those sets can't be updated while
+        // in flight (no descriptorBindingUpdateAfterBind on this device). Same
+        // idiom as geomDescsDirty_/matDescsDirty_: the frame-begin path rewrites
+        // ONLY the current slot's set once its fence has signaled, so no device
+        // stall. In-flight frames sample the retired old view for ≤1 more frame
+        // (it stays alive in the retire queue) — correct behavior.
+        std::array<bool, kFramesInFlight> deferredDescDirty_{};
 
         // Scene lights mirrored to a per-frame UBO. Scalar block layout means
         // the C++ structs map directly (no std140 vec3→vec4 padding).
@@ -2276,6 +2288,41 @@ namespace threepp {
         uint32_t currentFrame = 0;
         bool needsResize = false;
 
+        // ── Frame-serial deferred-deletion (retire) queue ────────────────────
+        // Replaces staleness-triggered vkDeviceWaitIdle stalls (runtime texture
+        // / material / particle / sprite swaps, AS rebuilds). See
+        // VulkanRetireQueue.hpp for the full fence-invariant derivation.
+        //
+        // frameSerial_ = serial of the frame CURRENTLY being recorded. Advanced
+        // once per SUBMITTED frame in endFrame() (in lockstep with currentFrame,
+        // so a failed acquire that skips endFrame never desyncs serial↔slot).
+        // Any retire()/retireAS() during a frame stamps frameSerial_; the drain
+        // at frame start reclaims resources stamped kFramesInFlight+ frames ago.
+        uint64_t frameSerial_ = 0;
+        vulkan::RetireQueue retireQueue_;
+
+        // Hand a resource to the retire queue, stamped with this frame's serial.
+        void retire(Buffer&& b)   { retireQueue_.retire(std::move(b), frameSerial_); }
+        void retire(Image2D&& i)  { retireQueue_.retire(std::move(i), frameSerial_); }
+        void retireAS(VkAccelerationStructureKHR as) { retireQueue_.retireAS(as, frameSerial_); }
+        // Frame-start reclaim: destroys everything whose referencing frame has
+        // provably completed (fence waited). Call right after the
+        // vkWaitForFences(inFlight[currentFrame]) at each frame-begin path.
+        void drainRetireQueue() { retireQueue_.drain(*ctx, frameSerial_, kFramesInFlight); }
+        // Post-vkDeviceWaitIdle flush: whole device idle ⇒ destroy all queued
+        // resources now, or they leak at device destroy. Call after EVERY
+        // remaining vkDeviceWaitIdle that precedes resource destruction.
+        void flushRetireQueue() { retireQueue_.flushAll(*ctx); }
+        // Retire (rather than inline-destroy) a particle geometry record's
+        // buffers on an in-flight topology change. Mirrors destroyParticleGeomRec.
+        void retireParticleGeomRec(ParticleGeomRec& rec) {
+            retire(std::move(rec.position));
+            retire(std::move(rec.normal));
+            retire(std::move(rec.uv));
+            retire(std::move(rec.color));
+            retire(std::move(rec.index));
+        }
+
         // ImGui (or any post-render overlay) hook. When set, the swapchain
         // image is transitioned GENERAL → COLOR_ATTACHMENT_OPTIMAL after the
         // deferred-shaded frame, a dynamic render pass is opened with
@@ -2434,7 +2481,11 @@ namespace threepp {
                            const char* name) {
                         return createSampledImage2D(w, h, fmt, pix, sz,
                                                    filter, addrU, addrV, name);
-                    });
+                    },
+                    // Retire stale sprite atlases through the frame-serial queue
+                    // (no per-swap vkDeviceWaitIdle). Stamped with the frame
+                    // being recorded when OverlayPass::record runs.
+                    [this](Image2D&& img) { retire(std::move(img)); });
         }
 
         ~CoreImpl() {
@@ -2467,6 +2518,10 @@ namespace threepp {
                 frameState_ = FrameState::Idle;
             }
             vkDeviceWaitIdle(d);
+            // Device idle ⇒ nothing references retired resources. Destroy them
+            // now or they leak at device destroy (VUID-vkDestroyDevice-device-
+            // 05137 — the class of bug that bit lineGeomCache_ below).
+            flushRetireQueue();
 
             for (auto s : imageAvailable) if (s) vkDestroySemaphore(d, s, nullptr);
             for (auto s : renderFinished) if (s) vkDestroySemaphore(d, s, nullptr);
@@ -4772,8 +4827,11 @@ namespace threepp {
                 const bool stale = rec.version != curVersion ||
                                    rec.width != w || rec.height != h;
                 if (!stale) return &rec.image;
-                vkDeviceWaitIdle(ctx->device());
-                destroyImage2D(ctx->allocator(), ctx->device(), rec.image);
+                // Retire the old image instead of a full device drain: in-flight
+                // frames may still sample it (particle descriptors are allocated
+                // per-frame from reset pools, so there's no descriptor-set hazard
+                // — image lifetime is the only concern). VulkanRetireQueue.hpp.
+                retire(std::move(rec.image));
                 particleTexCache_.erase(it);
             }
 
@@ -4867,8 +4925,9 @@ namespace threepp {
                     return &rec;
                 }
                 // Topology change / recycled address — rebuild from scratch.
-                vkDeviceWaitIdle(ctx->device());
-                destroyParticleGeomRec(rec);
+                // Retire the old buffers (in-flight frames may still draw from
+                // them) instead of a full device drain. VulkanRetireQueue.hpp.
+                retireParticleGeomRec(rec);
                 particleGeomCache_.erase(it);
             }
 
@@ -5347,7 +5406,7 @@ namespace threepp {
         // depth / ids) and writes bloom_->sceneHdr. Call after the raster
         // gbuffer or sceneHdr is reallocated (resize) and after the env image
         // is rebuilt. The UBO buffers are stable; rewriting them is harmless.
-        void rewriteDeferredDescriptors();
+        void rewriteDeferredDescriptors(int onlyFrame = -1);
 
         // Fit the probe grid to the scene's world AABB (called when probe GI
         // is enabled and the scene structure changed). Walks the canonical

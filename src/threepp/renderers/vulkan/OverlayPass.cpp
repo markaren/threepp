@@ -35,8 +35,9 @@ namespace threepp::vulkan {
 // ─────────────────────────────────────────────────────────────────────────────
 
 OverlayPass::OverlayPass(VulkanContext& ctx, uint32_t framesInFlight,
-                         SampledImageCreator uploadFn)
-    : ctx_(ctx), framesInFlight_(framesInFlight), uploadFn_(std::move(uploadFn)) {
+                         SampledImageCreator uploadFn, RetireImageFn retireFn)
+    : ctx_(ctx), framesInFlight_(framesInFlight), uploadFn_(std::move(uploadFn)),
+      retireFn_(std::move(retireFn)) {
     spriteDescPools_.resize(framesInFlight_, VK_NULL_HANDLE);
 }
 
@@ -542,9 +543,18 @@ OverlayPass::ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp) {
                            rec.textureVersion != curVersion ||
                            rec.width != w || rec.height != h;
         if (!stale) return &rec;
-        // Stale — destroy and re-upload.
-        vkDeviceWaitIdle(ctx_.device());
-        destroyImage2D(ctx_.allocator(), ctx_.device(), rec.image);
+        // Stale (e.g. a TextSprite re-rasterized — ammo counters etc., the
+        // hottest UI churn path). Retire the old atlas image to the renderer's
+        // frame-serial queue rather than draining the whole device: sprite
+        // descriptor sets are allocated per-frame from reset pools, so the only
+        // hazard is the image being sampled by an in-flight frame, which the
+        // retire delay covers. Fallback drains only if no callback was wired.
+        if (retireFn_) {
+            retireFn_(std::move(rec.image));
+        } else {
+            vkDeviceWaitIdle(ctx_.device());
+            destroyImage2D(ctx_.allocator(), ctx_.device(), rec.image);
+        }
         spriteAtlasCache_.erase(it);
     }
 

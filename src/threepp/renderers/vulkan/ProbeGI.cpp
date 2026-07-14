@@ -161,8 +161,9 @@ namespace threepp::vulkan {
               "vkAllocateDescriptorSets(probeGI)");
     }
 
-    void ProbeGI::rewriteDescriptors(const DescriptorWriteInputs& in) {
+    void ProbeGI::rewriteDescriptors(const DescriptorWriteInputs& in, int onlyFrame) {
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
+            if (onlyFrame >= 0 && f != static_cast<uint32_t>(onlyFrame)) continue;
             VkDescriptorBufferInfo gridInfo{};
             gridInfo.buffer = gridUbos_[f].handle;
             gridInfo.range  = VK_WHOLE_SIZE;
