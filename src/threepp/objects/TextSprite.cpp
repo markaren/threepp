@@ -12,6 +12,7 @@ struct TextSprite::Impl {
     Color color_;
     float worldScale_{};
     std::string text_{"empty"};
+    bool rasterized_ = false;// "empty" above is a placeholder, not an atlas
 
     Impl(TextSprite* that, Font font, std::optional<float> worldScale)
         : worldScale_(worldScale.value_or(1.f)), that(that), font_(std::move(font)) {
@@ -25,7 +26,13 @@ struct TextSprite::Impl {
 
     void setText(const std::string& text) {
 
+        // Re-rasterizing is expensive for the renderer as well (the glyph
+        // atlas is re-uploaded whenever the texture version bumps), so skip
+        // when the content hasn't changed. HUDs tend to call setText with
+        // the same string every frame.
+        if (text == text_ && rasterized_) return;
         this->text_ = text;
+        rasterized_ = true;
 
         auto image = createText(text);
         imgAspect_ = static_cast<float>(image.width()) / static_cast<float>(image.height());
