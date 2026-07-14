@@ -50,8 +50,13 @@ namespace {
     constexpr int kW = 384, kH = 256;
     constexpr int kFrames = 200;     // static camera → TAA/denoiser/accumulator converge
     constexpr double kMinPsnr = 40.0;// PSNR gate (measured same-GPU floor ≈ 61 dB)
-    constexpr int kMaxDelta = 32;    // per-channel gate — catches firefly/hot-pixel
-                                     // regressions PSNR can miss (run-to-run maxD ≤ 1)
+    constexpr int kMaxDelta = 32;    // default per-channel gate — catches firefly/hot-pixel
+                                     // regressions PSNR can miss (glass/metal run-to-run maxD ≤ 10).
+                                     // Overridable per scene (see GoldenScene::maxDelta): the
+                                     // emissive-only room drives ReSTIR DI at its noisiest, with a
+                                     // measured run-to-run per-channel floor of ~70 on a few pixels
+                                     // (hot% ~0.03), so a tight maxD flakes there. Its aggregate
+                                     // PSNR stays ~51 dB and is the real regression signal.
     constexpr int kSkipCode = 42;    // CTest SKIP_RETURN_CODE (no Vulkan/RT GPU)
 
     // Raw-RGB PPM I/O — what readRGBPixels gives us, byte-exact both ways.
@@ -79,6 +84,7 @@ namespace {
     struct GoldenScene {
         std::string name;
         std::function<void(Scene&, PerspectiveCamera&, const std::shared_ptr<Texture>&)> build;
+        int maxDelta = kMaxDelta;// per-scene hot-pixel gate; default unless noisier
     };
 
 }// namespace
@@ -180,7 +186,8 @@ int main(int argc, char** argv) {
                  s.add(cube);
                  cam.position.set(2.0f, 1.5f, 2.4f);
                  cam.lookAt(Vector3(0.f, 0.6f, 0.f));
-             }},
+             },
+             /*maxDelta=*/96},// ReSTIR DI floor ~70 here; gate above it (PSNR is the real signal)
     };
 
     const fs::path goldenDir = fs::path(PROJECT_FOLDER) / "tests" / "renderers" / "golden";
@@ -201,8 +208,8 @@ int main(int argc, char** argv) {
         if (update)
             std::printf("updated %zu references in %s\n", scenes.size(), goldenDir.string().c_str());
         else
-            std::printf("golden: %d/%zu failed, %d missing (gate: PSNR>=%.0f dB, maxD<=%d)\n",
-                        failures, scenes.size(), missing, kMinPsnr, kMaxDelta);
+            std::printf("golden: %d/%zu failed, %d missing (gate: PSNR>=%.0f dB, maxD per-scene)\n",
+                        failures, scenes.size(), missing, kMinPsnr);
         std::exit((update || (failures == 0 && missing == 0)) ? 0 : 1);
     };
 
@@ -230,9 +237,9 @@ int main(int argc, char** argv) {
                 ++missing;
             } else {
                 const capture::DiffResult d = capture::imageDiff(px, golden);
-                const bool pass = d.psnr >= kMinPsnr && d.maxD <= kMaxDelta;
-                std::printf("[%s] PSNR=%5.1f dB  maxD=%3d  hot=%6.3f%%  ->  %s\n",
-                            gs.name.c_str(), d.psnr, d.maxD, d.hotPct, pass ? "PASS" : "FAIL");
+                const bool pass = d.psnr >= kMinPsnr && d.maxD <= gs.maxDelta;
+                std::printf("[%s] PSNR=%5.1f dB  maxD=%3d (<=%d)  hot=%6.3f%%  ->  %s\n",
+                            gs.name.c_str(), d.psnr, d.maxD, gs.maxDelta, d.hotPct, pass ? "PASS" : "FAIL");
                 if (!pass) ++failures;
             }
         }
