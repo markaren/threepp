@@ -109,9 +109,15 @@ bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, o
     }
     return valid;
 }
-vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool hold) {
+// hitT: first-bounce reflected-content distance for THIS frame's sample —
+// > 0 = geometry hit at that distance, 0 = env miss (radiance already
+// lobe-filtered via missLod), < 0 = unknown (SSR/glass) → the denoiser falls
+// back to the conservative full-width gloss blur. EMA'd into aux .w so the
+// denoiser's footprint doesn't flicker with per-frame lobe samples.
+vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool hold, float hitT) {
     const float curLum = dot(cur.rgb, vec3(0.2126, 0.7152, 0.0722));
     const float rough  = abs(cur.a);// .a < 0 = glass marker (frost gr) — same policy
+    const float hitEnc = hitT < 0.0 ? -1.0 : min(hitT, 1e4);// rgba16f-safe
     vec2 pUv; float histCap;
     bool valid = reflReproject(uv, N, rough, viewDist, pUv, histCap);
     const vec4 prevR = valid ? texture(reflectPrevTex, pUv) : vec4(0.0);
@@ -122,14 +128,14 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
         // channel's giSkip pattern. Freezing histLen keeps the blend alpha tied
         // to the number of REAL samples, so the running mean stays unbiased at
         // half rate.
-        const vec3 pa = texture(reflAuxPrevTex, pUv).xyz;
-        imageStore(reflAuxWrite, px, vec4(clamp(pa.x, 1.0, histCap), pa.y, pa.z, 0.0));
+        const vec4 pa = texture(reflAuxPrevTex, pUv);
+        imageStore(reflAuxWrite, px, vec4(clamp(pa.x, 1.0, histCap), pa.y, pa.z, pa.w));
         return vec4(prevR.rgb, cur.a);
     }
-    float histLen, moment, trend;
+    float histLen, moment, trend, hitW;
     vec3  accum;
     if (valid) {
-        const vec3  pa = texture(reflAuxPrevTex, pUv).xyz;
+        const vec4  pa = texture(reflAuxPrevTex, pUv);
         // CONTENT-CHANGE ANTILAG — fixes "glass/mirror reflections never update
         // under a static camera". The static-512 cap freezes the running mean:
         // CONTENT motion (an object sliding behind glass, or moving in a mirror
@@ -155,10 +161,16 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
         const float a = 1.0 / histLen;
         accum   = mix(prevR.rgb, cur.rgb, a);
         moment  = mix(pa.y, curLum * curLum, a);
+        // Hit-distance EMA (floor 0.25: content distance changes matter within a
+        // few frames — a slow 1/512 blend would size the gloss blur from stale
+        // geometry). Unknown current sample (< 0) carries the history through.
+        hitW    = hitEnc < 0.0 ? pa.w
+                                : (pa.w < 0.0 ? hitEnc : mix(pa.w, hitEnc, max(a, 0.25)));
     } else {
         histLen = 1.0; accum = cur.rgb; moment = curLum * curLum; trend = 0.0;
+        hitW    = hitEnc;
     }
-    imageStore(reflAuxWrite, px, vec4(histLen, moment, trend, 0.0));
+    imageStore(reflAuxWrite, px, vec4(histLen, moment, trend, hitW));
     return vec4(accum, cur.a);
 }
 

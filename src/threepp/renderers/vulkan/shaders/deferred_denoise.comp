@@ -234,7 +234,8 @@ void main() {
         // The fixed-width blur could only ever be one of those (pretty OR stable); this is
         // both. History resets to 1 on camera motion / disocclusion (view-dependent reflection
         // can't reproject), so motion blurs wide (clean) and a held view sharpens back.
-        const vec2  aux         = imageLoad(reflAuxImage, px).xy;
+        const vec4  auxV        = imageLoad(reflAuxImage, px);
+        const vec2  aux         = auxV.xy;
         const float histLen     = aux.x;
         const float convT       = clamp((histLen - 1.0) / 15.0, 0.0, 1.0);// 0 fresh → 1 at 16 frames
         // RESIDUAL-SHIMMER term (the variance the aux .y was plumbed for): aux.y is
@@ -255,7 +256,29 @@ void main() {
         // (narrowing made low-rough surfaces mirror-sharp instead of glossy).
         // Convergence-narrowing only makes sense where stochastic lobe samples
         // actually accumulate (roughness ≥ 0.25).
-        const float detT        = isGlass ? 1.0 : (1.0 - smoothstep(0.20, 0.30, rough));
+        //
+        // ...but ONLY for GEOMETRY hits, and only at their projected lobe
+        // footprint. Two cases the flat rough·16 width got wrong (the chess
+        // gold ring "dark/flat" + the FlightHelmet plaque "unreadable"):
+        //  • env MISS (aux .w == 0): the trace already returned the environment
+        //    at roughness-matched LOD (missLod) — the correctly lobe-filtered
+        //    value. The extra screen-space blur DOUBLE-blurred it, wiping the
+        //    per-pixel normal-map detail (engraved text) that the pre-filtered
+        //    env had preserved. No gloss blur needed: the miss radiance IS the
+        //    gloss.
+        //  • NEAR geometry hit (aux .w small vs view distance): the lobe's
+        //    footprint on content just in front of the surface is tiny — a
+        //    polished ring reflecting a piece millimetres away is SHARP. Scale
+        //    the blur by hitDist/(hitDist+viewDist), the projected-footprint
+        //    ratio; distant reflected geometry keeps today's full gloss blur.
+        // Unknown distance (aux .w < 0: SSR hits, glass, pre-fix history) keeps
+        // the conservative full width.
+        const float hitW        = auxV.w;
+        const float viewDistC   = length(Pc - camPos);
+        const float footGeom    = hitW < 0.0 ? 1.0
+                                             : (hitW <= 1e-3 ? 0.0
+                                                             : clamp(hitW / (hitW + viewDistC), 0.0, 1.0));
+        const float detT        = isGlass ? 1.0 : (1.0 - smoothstep(0.20, 0.30, rough)) * footGeom;
         // Blur width = max of noiseT (ACTUAL residual per-sample variance) and detT
         // (the deterministic-mirror→gloss blur). The old extra term `1.0 - convT`
         // widened the blur whenever temporal history was SHORT — a proxy for "the
@@ -310,8 +333,21 @@ void main() {
             const vec3  Pq = worldFromDepth(q, texelFetch(gbufDepthTex, q, 0).x);
             const float wz = exp(-abs(dot(Pq - Pc, Nc)) * planeScale);
             const float ws = exp(-float(t * t) * inv2s2);
-            const float w  = wn * wz * ws;
-            sum  += (vert ? imageLoad(atrousB, q).rgb : imageLoad(reflectImage, q).rgb) * w;
+            const vec4  tap = vert ? imageLoad(atrousB, q) : imageLoad(reflectImage, q);
+            // MATERIAL edge stop. The ID + normal stops can't see a material
+            // boundary INSIDE one instance on a smooth surface — a gold band
+            // inset in a marble cylinder shares the instance id AND the exact
+            // cylindrical normal field, so the loose rough-metal normal stop
+            // (exp→3) let the wide kernel average the bright gold-tinted
+            // reflection with the dark marble one: muddy, darkened trim (the
+            // chess-set "gold ring goes dark/flat" report). Gate on metalness
+            // (G-buffer albedo .a) + roughness (reflect .a, carried through the
+            // H pass) difference: same-material neighbourhoods are unaffected
+            // (w≈1), a metal↔dielectric boundary is a hard stop (exp(-8)≈0).
+            const float mq   = texelFetch(gbufAlbedoTex, q, 0).a;
+            const float wmat = exp(-abs(mq - metalness) * 8.0 - abs(abs(tap.a) - rough) * 4.0);
+            const float w  = wn * wz * ws * wmat;
+            sum  += tap.rgb * w;
             wsum += w;
         }
         vec3 blurred = wsum > 0.0 ? sum / wsum : cR.rgb;

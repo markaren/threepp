@@ -141,6 +141,14 @@ vec3 sampleGGXReflectionFib(vec3 V, vec3 N, float roughness, int s, int count) {
 // keep the env fill: a world-scale probe grid cannot resolve a glass-covered
 // cavity (watch dial, goggles, vitrines — probes there sit inside the case)
 // and "seen through clear glass" sees the same sky the glass surface sees.
+// First-bounce hit distance of the last traceRadiance call, for the reflection
+// denoiser's gloss-blur footprint (carried in reflAux .w): -1 = no committed
+// hit (pure env miss — the radiance is ALREADY lobe-filtered via missLod, so
+// the spatial gloss blur must not double-blur it), > 0 = distance to the first
+// shaded geometry hit (the mirror ray returns it sharp; the spatial blur IS
+// the gloss there, sized by this distance's projected footprint).
+float gTraceHitT = -1.0;
+
 vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits, bool probeHitFill) {
     const int REFL_MAX_BOUNCES = 3;
     vec3  radiance   = vec3(0.0);
@@ -148,6 +156,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     vec3  o          = origin;
     vec3  d          = dir;
     float curMissLod = missLod;
+    gTraceHitT = -1.0;
 
     for (int b = 0; b < REFL_MAX_BOUNCES; ++b) {
         rayQueryEXT rq;
@@ -210,6 +219,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const vec3 hEmissive = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hitUv,
                                       hm.emissive * hm.emissiveIntensity);
         const vec3 hitP = o + d * tHit;
+        // First shaded (non-cutout, non-transparent) hit = the visible reflected
+        // content; its distance sizes the denoiser's gloss-blur footprint.
+        if (gTraceHitT < 0.0) gTraceHitT = length(hitP - origin);
         // Reflected-hit diffuse fill. PROBE-GI mode: the probe field IS the
         // occlusion-correct local irradiance (÷π for the diffInd convention) —
         // the crude env+ambient fill leaked full sky onto reflected interior
