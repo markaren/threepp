@@ -2013,6 +2013,9 @@ namespace threepp {
         // Runtime on/off (setDlss), distinct from dlssActive_. Default on so a
         // THREEPP_WITH_DLSS build uses DLSS by default.
         bool   dlssEnabled_ = true;
+        // Self-heal budget for sticky NGX evaluate failures (renderFrame);
+        // replenished by the display-resize recreate funnel.
+        uint32_t dlssHealTries_ = 0;
 #endif
         // An external upscaler (FSR/DLSS) compiled in AND created (available).
         // Gates the HDR-mode plumbing both reuse — hdrOut_ stays allocated

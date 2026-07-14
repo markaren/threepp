@@ -100,6 +100,7 @@ int main(int argc, char** argv) {
     int optLod = -1;       // --lod 0|1: automatic mesh LOD (shading-error triage)
     int optDlss = -1;      // --dlss 0|1: DLSS upscaler (0 falls back to FSR/TAA)
     int optFsr = -1;       // --fsr 0|1: FSR upscaler (--dlss 0 --fsr 0 = built-in TAA)
+    int optDenoise = -1;   // --denoise 0|1: deferred SVGF denoiser (raw 1-spp when 0)
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -132,6 +133,7 @@ int main(int argc, char** argv) {
         else if (a == "--lod" && i + 1 < argc) optLod = std::atoi(argv[++i]);
         else if (a == "--dlss" && i + 1 < argc) optDlss = std::atoi(argv[++i]);
         else if (a == "--fsr" && i + 1 < argc) optFsr = std::atoi(argv[++i]);
+        else if (a == "--denoise" && i + 1 < argc) optDenoise = std::atoi(argv[++i]);
     }
     if (!fs::exists(modelFolder) || !fs::is_directory(modelFolder)) {
         std::cerr << "Invalid folder path: " << fs::absolute(modelFolder) << std::endl;
@@ -165,6 +167,7 @@ int main(int argc, char** argv) {
     if (optLod >= 0) renderer.setAutoLod(optLod != 0);
     if (optDlss >= 0) renderer.setDlss(optDlss != 0);
     if (optFsr >= 0) renderer.setFsr(optFsr != 0);
+    if (optDenoise >= 0) renderer.setDenoise(optDenoise != 0);
     if (dofFocus > 0.f) {// thin-lens DoF: wide-open aperture, focus at S meters
         renderer.setCameraExposure(2.0f, 1.f / 125.f, 100.f);
         renderer.setFocusDistance(dofFocus);
@@ -285,6 +288,11 @@ int main(int argc, char** argv) {
         }
         if (ev.key == Key::LEFT || ev.key == Key::P) {
             loadModel((currentModel - 1 + static_cast<int>(models.size())) % static_cast<int>(models.size()));
+        }
+        if (ev.key == Key::C) {// dump the current pose as a --cam repro line
+            std::cout << "--cam " << camera.position.x << " " << camera.position.y << " "
+                      << camera.position.z << " " << controls.target.x << " "
+                      << controls.target.y << " " << controls.target.z << std::endl;
         }
     });
     canvas.addKeyListener(keyAdapter);

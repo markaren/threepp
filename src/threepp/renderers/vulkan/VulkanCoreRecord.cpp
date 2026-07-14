@@ -1003,7 +1003,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
             // motion → upscaled linear HDR into TaaResolve's history WRITE slot
             // (display extent) → PostComposite adds bloom + tonemaps at display
             // res → recordPostFinalize (RCAS) → swapchain. See DlssUpscaler.{hpp,cpp}.
-            if (useDlss() && dlss_ && dlss_->valid() && upscalerFullFrame) {
+            if (useDlss() && dlss_ && dlss_->valid() && !dlss_->failing() && upscalerFullFrame) {
                 bloom_->recordPyramid(cb, currentFrame,
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       bloomIntensity_, bloomThreshold_, bloomClamp_);
@@ -1051,6 +1051,14 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                 din.frameTimeDeltaMs = dlssDtMs;
                 din.preExposure  = preExp;
                 din.reset        = dlssResetNext_;
+                // Bias-current-color mask from the G-buffer IDs flags (deformer/
+                // wind-animated surfaces — grass — favor the current frame; their
+                // shader displacement isn't in the motion vectors, so history
+                // ghosts at their edges without this). Mirrors the FSR reactive path.
+                din.frame         = currentFrame;
+                din.idsView       = rasterGbufs[currentFrame].ids.view;
+                din.reactive      = true;
+                din.reactiveValue = 0.6f;
 
                 gpuTimings_->begin(cb, TP_TAA, currentFrame);
                 dlss_->recordDispatch(din);

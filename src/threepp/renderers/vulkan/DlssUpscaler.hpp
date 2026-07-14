@@ -31,6 +31,8 @@
 #ifndef THREEPP_VULKAN_DLSS_UPSCALER_HPP
 #define THREEPP_VULKAN_DLSS_UPSCALER_HPP
 
+#include "threepp/renderers/vulkan/VulkanResources.hpp"
+
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
@@ -124,11 +126,33 @@ namespace threepp::vulkan {
             float frameTimeDeltaMs = 16.6f;
             float preExposure = 1.f;// > 0; the pre-exposure baked into colour
             bool  reset = false;    // camera cut / history invalidation
+
+            // Bias-current-color mask (opt-in) — DLSS's equivalent of FSR's
+            // reactive mask, and it matters for the same content: deformer /
+            // wind-swept surfaces (grass!) whose motion vectors can't describe
+            // the shader displacement, so accumulated history GHOSTS at their
+            // edges. When `reactive` is true, recordDispatch generates an R8
+            // mask from the G-buffer IDs flags (fsr_reactive.comp — shared
+            // shader) and feeds it as pInBiasCurrentColorMask so those pixels
+            // favor the current frame. Same inputs as the FSR path: `frame`
+            // picks the per-fif mask image + set, `idsView` is this frame's
+            // raster G-buffer IDs view (SHADER_READ_ONLY, usampler2D).
+            uint32_t      frame         = 0;
+            VkImageView   idsView       = VK_NULL_HANDLE;
+            bool          reactive      = false;
+            float         reactiveValue = 0.6f;
         };
 
         // Record the DLSS evaluate into in.cmd. No-op if !valid(). See the
         // layout contract in the class header comment.
         void recordDispatch(const DispatchInputs& in);
+
+        // NGX evaluate has entered a sticky failure state (≥3 consecutive
+        // failures, e.g. 0xBAD00005 InvalidParameter after an extent transition
+        // the resize funnel didn't see). The record path falls back to FSR/TAA
+        // while this is true; the frame loop self-heals by recreating the
+        // feature (create() resets the counter).
+        [[nodiscard]] bool failing() const { return evalFails_ >= 3; }
 
     private:
         VulkanContext& ctx_;
@@ -138,6 +162,7 @@ namespace threepp::vulkan {
         NVSDK_NGX_Parameter* params_    = nullptr;// capability/eval parameter map
         NVSDK_NGX_Handle*    feature_   = nullptr;// the DLSS SR feature
         uint32_t displayW_ = 0, displayH_ = 0;
+        uint32_t evalFails_ = 0;// consecutive evaluate failures (see failing())
 
         // Module directory (wide) kept alive for NGX's PathListInfo.
         std::wstring modulePathW_;
@@ -145,6 +170,23 @@ namespace threepp::vulkan {
 
         bool ensureNgx();// lazy NGX init + capability check
         void shutdownNgx();
+
+        // ── Bias-mask generator (fsr_reactive.comp, shared with FSR) ─────────
+        // R8 mask per frame-in-flight at DISPLAY (== maxRenderSize) extent; the
+        // compute writes only the render-extent sub-region each frame. Pipeline
+        // built once in the ctor; images (re)allocated in create(). Same shape
+        // as FsrUpscaler's reactive generator.
+        std::vector<Image2D>  reactive_;
+        VkSampler             idsSampler_        = VK_NULL_HANDLE;// NEAREST (uint texelFetch)
+        VkDescriptorSetLayout reactiveDsLayout_  = VK_NULL_HANDLE;
+        VkPipelineLayout      reactivePipeLayout_ = VK_NULL_HANDLE;
+        VkPipeline            reactivePipe_      = VK_NULL_HANDLE;
+        VkDescriptorPool      reactivePool_      = VK_NULL_HANDLE;
+        std::vector<VkDescriptorSet> reactiveSets_;// [framesInFlight]
+
+        void createReactivePipeline();
+        void createReactiveImages(uint32_t width, uint32_t height);
+        void destroyReactiveImages();
     };
 
 }// namespace threepp::vulkan

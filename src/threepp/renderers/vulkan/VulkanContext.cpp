@@ -1,9 +1,5 @@
 #include "VulkanContext.hpp"
 
-#if defined(THREEPP_WITH_DLSS)
-#include "DlssUpscaler.hpp"// requiredDeviceExtensions (static NGX query)
-#endif
-
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
@@ -18,6 +14,13 @@
 #include <vector>
 
 namespace threepp::vulkan {
+
+#if defined(THREEPP_WITH_DLSS)
+    // Defined in DlssUpscaler.cpp (free function so this TU doesn't pull in
+    // DlssUpscaler.hpp → VulkanResources.hpp, whose check() helper collides
+    // with this file's local one).
+    std::vector<const char*> dlssRequiredDeviceExtensions();
+#endif
 
     namespace {
 
@@ -439,7 +442,7 @@ namespace threepp::vulkan {
                     if (std::strcmp(e, n) == 0) return true;
                 return false;
             };
-            for (const char* n : DlssUpscaler::requiredDeviceExtensions()) {
+            for (const char* n : dlssRequiredDeviceExtensions()) {
                 if (supported(n) && !alreadyEnabled(n)) extensions.push_back(n);
             }
         }

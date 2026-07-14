@@ -1207,9 +1207,10 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/motion_blur.comp"
         kMotionBlurCompSpv
         _motion_blur_spv_h)
-    # FSR reactive-mask generator (G-buffer IDs flags -> R8). Only needed when
-    # building with FSR; FsrUpscaler.cpp (the only consumer) is FSR-gated too.
-    if (THREEPP_WITH_FSR)
+    # FSR reactive-mask generator (G-buffer IDs flags -> R8). Shared by the
+    # DLSS path as its bias-current-color mask (same deformer-flag input), so
+    # compile it when either upscaler is enabled.
+    if (THREEPP_WITH_FSR OR THREEPP_WITH_DLSS)
         compile_vulkan_shader(threepp
             "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/fsr_reactive.comp"
             kFsrReactiveCompSpv

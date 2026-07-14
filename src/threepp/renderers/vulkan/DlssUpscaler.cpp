@@ -1,6 +1,7 @@
 
 #include "threepp/renderers/vulkan/DlssUpscaler.hpp"
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
+#include "threepp/renderers/vulkan/shaders/fsr_reactive.comp.spv.h"// shared bias-mask generator
 
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +21,12 @@
 #include <nvsdk_ngx_helpers_vk.h>
 
 namespace threepp::vulkan {
+
+    // Free-function alias for VulkanContext.cpp (which can't include this
+    // class's header — see the declaration there).
+    std::vector<const char*> dlssRequiredDeviceExtensions() {
+        return DlssUpscaler::requiredDeviceExtensions();
+    }
 
     namespace {
 
@@ -106,11 +113,21 @@ namespace threepp::vulkan {
     }// namespace
 
     DlssUpscaler::DlssUpscaler(VulkanContext& ctx, uint32_t framesInFlight)
-        : ctx_(ctx), framesInFlight_(framesInFlight) {}
+        : ctx_(ctx), framesInFlight_(framesInFlight) {
+        reactive_.resize(framesInFlight_);
+        reactiveSets_.resize(framesInFlight_);
+        createReactivePipeline();
+    }
 
     DlssUpscaler::~DlssUpscaler() {
         destroy();
         shutdownNgx();
+        VkDevice d = ctx_.device();
+        if (reactivePipe_)       vkDestroyPipeline(d, reactivePipe_, nullptr);
+        if (reactivePipeLayout_) vkDestroyPipelineLayout(d, reactivePipeLayout_, nullptr);
+        if (reactiveDsLayout_)   vkDestroyDescriptorSetLayout(d, reactiveDsLayout_, nullptr);
+        if (reactivePool_)       vkDestroyDescriptorPool(d, reactivePool_, nullptr);
+        if (idsSampler_)         vkDestroySampler(d, idsSampler_, nullptr);
     }
 
     std::vector<const char*> DlssUpscaler::requiredDeviceExtensions() {
@@ -234,6 +251,10 @@ namespace threepp::vulkan {
         }
         displayW_ = displayWidth;
         displayH_ = displayHeight;
+        evalFails_ = 0;// fresh feature — clear any sticky-failure state
+        // Bias-mask scratch at the DISPLAY (== maxRenderSize) extent — the
+        // compute writes only the render sub-region each frame.
+        createReactiveImages(displayWidth, displayHeight);
         std::fprintf(stderr, "[threepp] DLSS upscaler active (%ux%u display, quality mode %d).\n",
                      displayWidth, displayHeight, static_cast<int>(quality));
         return true;
@@ -244,11 +265,57 @@ namespace threepp::vulkan {
             NVSDK_NGX_VULKAN_ReleaseFeature(feature_);
             feature_ = nullptr;
         }
+        destroyReactiveImages();
         displayW_ = displayH_ = 0;
     }
 
     void DlssUpscaler::recordDispatch(const DispatchInputs& in) {
         if (!feature_ || !params_) return;
+
+        // ── Bias-current-color mask (opt-in) ─────────────────────────────────
+        // Generate an R8 mask from the G-buffer IDs flags and hand it to DLSS so
+        // deformer/wind-animated surfaces (grass) favor the current frame —
+        // their shader displacement isn't in the motion vectors, so history
+        // GHOSTS at their edges without this. Mirrors FsrUpscaler's reactive
+        // mask (same shader, same per-fif set update safety: this fif's fence
+        // was already waited this frame).
+        VkImage     maskImg  = VK_NULL_HANDLE;
+        VkImageView maskView = VK_NULL_HANDLE;
+        if (in.reactive && reactivePipe_ && in.idsView != VK_NULL_HANDLE &&
+            in.frame < reactive_.size() && reactive_[in.frame].view != VK_NULL_HANDLE) {
+            maskImg  = reactive_[in.frame].image;
+            maskView = reactive_[in.frame].view;
+
+            VkDescriptorImageInfo idsI{};
+            idsI.sampler     = idsSampler_;
+            idsI.imageView   = in.idsView;
+            idsI.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkDescriptorImageInfo reI{};
+            reI.imageView    = maskView;
+            reI.imageLayout  = VK_IMAGE_LAYOUT_GENERAL;
+            VkWriteDescriptorSet w[2]{};
+            w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[0].dstSet = reactiveSets_[in.frame]; w[0].dstBinding = 0; w[0].descriptorCount = 1;
+            w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[0].pImageInfo = &idsI;
+            w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[1].dstSet = reactiveSets_[in.frame]; w[1].dstBinding = 1; w[1].descriptorCount = 1;
+            w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w[1].pImageInfo = &reI;
+            vkUpdateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
+
+            // Regenerated in full every frame → UNDEFINED old layout (discard).
+            transition(in.cmd, maskImg, VK_IMAGE_LAYOUT_UNDEFINED,
+                       VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_ASPECT_COLOR_BIT);
+            vkCmdBindPipeline(in.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, reactivePipe_);
+            vkCmdBindDescriptorSets(in.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    reactivePipeLayout_, 0, 1, &reactiveSets_[in.frame], 0, nullptr);
+            struct { uint32_t w, h; float v; } pcm{in.renderWidth, in.renderHeight, in.reactiveValue};
+            vkCmdPushConstants(in.cmd, reactivePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(pcm), &pcm);
+            vkCmdDispatch(in.cmd, (in.renderWidth + 7u) / 8u, (in.renderHeight + 7u) / 8u, 1u);
+            // Compute write (GENERAL) → DLSS sampled read.
+            transition(in.cmd, maskImg, VK_IMAGE_LAYOUT_GENERAL,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+        }
 
         // Borrow the inputs into NGX's expected sampled-read layout. The output
         // (TAA history slot) already lives in GENERAL — NGX's UAV layout.
@@ -289,15 +356,33 @@ namespace threepp::vulkan {
         ev.InMVScaleY        = in.motionScaleY;
         ev.InPreExposure     = in.preExposure > 0.f ? in.preExposure : 1.f;
         ev.InFrameTimeDeltaInMsec = in.frameTimeDeltaMs > 0.f ? in.frameTimeDeltaMs : 16.6f;
+        NVSDK_NGX_Resource_VK mask;
+        if (maskImg != VK_NULL_HANDLE) {
+            mask = wrapView(maskView, maskImg, VK_FORMAT_R8_UNORM,
+                            in.renderWidth, in.renderHeight,
+                            VK_IMAGE_ASPECT_COLOR_BIT, false);
+            ev.pInBiasCurrentColorMask = &mask;
+        }
 
         const NVSDK_NGX_Result r = NGX_VULKAN_EVALUATE_DLSS_EXT(in.cmd, feature_, params_, &ev);
         if (NVSDK_NGX_FAILED(r)) {
-            static bool warned = false;
-            if (!warned) {
-                warned = true;
-                std::fprintf(stderr, "[threepp] DLSS: evaluate failed (0x%08x).\n",
-                             static_cast<unsigned>(r));
+            // Log the full dimension state on the FIRST failure of a streak —
+            // 0xBAD00005 (InvalidParameter) is almost always a size mismatch
+            // between the eval inputs and the created feature, and this line is
+            // the diagnosis. failing() trips after 3 consecutive failures; the
+            // frame loop then falls back to FSR/TAA and recreates the feature.
+            if (evalFails_ == 0) {
+                std::fprintf(stderr,
+                             "[threepp] DLSS: evaluate failed (0x%08x) — render %ux%u, "
+                             "display %ux%u, feature %ux%u; will self-heal after 3 failures.\n",
+                             static_cast<unsigned>(r),
+                             in.renderWidth, in.renderHeight,
+                             in.displayWidth, in.displayHeight,
+                             displayW_, displayH_);
             }
+            ++evalFails_;
+        } else {
+            evalFails_ = 0;
         }
 
         // Restore the borrowed inputs to their steady-state layouts. UNDEFINED
@@ -312,6 +397,112 @@ namespace threepp::vulkan {
         }
         // The output is left in GENERAL with the upscale's writes; the caller
         // barriers it before PostComposite reads it.
+    }
+
+    void DlssUpscaler::createReactivePipeline() {
+        VkDevice d = ctx_.device();
+
+        // NEAREST sampler for the uint IDs (texelFetch ignores filtering, but a
+        // combined-image-sampler binding still needs a sampler object).
+        VkSamplerCreateInfo sci{};
+        sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.magFilter    = VK_FILTER_NEAREST;
+        sci.minFilter    = VK_FILTER_NEAREST;
+        sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        check(vkCreateSampler(d, &sci, nullptr, &idsSampler_), "vkCreateSampler(dlss.mask.ids)");
+
+        // 0: gbuf IDs (usampler2D), 1: mask R8 (storage).
+        VkDescriptorSetLayoutBinding b[2]{};
+        b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        b[1].binding = 1; b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutCreateInfo dlci{};
+        dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dlci.bindingCount = 2; dlci.pBindings = b;
+        check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &reactiveDsLayout_),
+              "vkCreateDescriptorSetLayout(dlss.mask)");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT; pcr.offset = 0; pcr.size = 12;// w,h,value
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount = 1; plci.pSetLayouts = &reactiveDsLayout_;
+        plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pcr;
+        check(vkCreatePipelineLayout(d, &plci, nullptr, &reactivePipeLayout_),
+              "vkCreatePipelineLayout(dlss.mask)");
+
+        VkShaderModuleCreateInfo smci{};
+        smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smci.codeSize = sizeof(kFsrReactiveCompSpv); smci.pCode = kFsrReactiveCompSpv;
+        VkShaderModule mod = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(d, &smci, nullptr, &mod), "vkCreateShaderModule(dlss.mask)");
+        VkPipelineShaderStageCreateInfo stage{};
+        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT; stage.module = mod; stage.pName = "main";
+        VkComputePipelineCreateInfo cpci{};
+        cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cpci.stage = stage; cpci.layout = reactivePipeLayout_;
+        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpci, nullptr, &reactivePipe_),
+              "vkCreateComputePipelines(dlss.mask)");
+        vkDestroyShaderModule(d, mod, nullptr);
+
+        VkDescriptorPoolSize ps[2]{};
+        ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[0].descriptorCount = framesInFlight_;
+        ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          ps[1].descriptorCount = framesInFlight_;
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets = framesInFlight_; dpci.poolSizeCount = 2; dpci.pPoolSizes = ps;
+        check(vkCreateDescriptorPool(d, &dpci, nullptr, &reactivePool_),
+              "vkCreateDescriptorPool(dlss.mask)");
+        std::vector<VkDescriptorSetLayout> layouts(framesInFlight_, reactiveDsLayout_);
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = reactivePool_; ai.descriptorSetCount = framesInFlight_;
+        ai.pSetLayouts = layouts.data();
+        check(vkAllocateDescriptorSets(d, &ai, reactiveSets_.data()),
+              "vkAllocateDescriptorSets(dlss.mask)");
+    }
+
+    void DlssUpscaler::createReactiveImages(uint32_t width, uint32_t height) {
+        destroyReactiveImages();
+        VkDevice d = ctx_.device();
+        for (auto& img : reactive_) {
+            img.width = width; img.height = height; img.format = VK_FORMAT_R8_UNORM;
+            VkImageCreateInfo ici{};
+            ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType     = VK_IMAGE_TYPE_2D;
+            ici.format        = VK_FORMAT_R8_UNORM;
+            ici.extent        = {width, height, 1};
+            ici.mipLevels     = 1;
+            ici.arrayLayers   = 1;
+            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;// recordDispatch does UNDEFINED→GENERAL
+            VmaAllocationCreateInfo aci{};
+            aci.usage = VMA_MEMORY_USAGE_AUTO;
+            check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &img.image, &img.alloc, nullptr),
+                  "vmaCreateImage(dlss.mask)");
+            VkImageViewCreateInfo vci{};
+            vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vci.image    = img.image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format   = VK_FORMAT_R8_UNORM;
+            vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vci.subresourceRange.levelCount = 1;
+            vci.subresourceRange.layerCount = 1;
+            check(vkCreateImageView(d, &vci, nullptr, &img.view), "vkCreateImageView(dlss.mask)");
+        }
+    }
+
+    void DlssUpscaler::destroyReactiveImages() {
+        VkDevice d = ctx_.device();
+        for (auto& img : reactive_) destroyImage2D(ctx_.allocator(), d, img);
     }
 
 }// namespace threepp::vulkan
