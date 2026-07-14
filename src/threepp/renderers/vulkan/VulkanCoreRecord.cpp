@@ -986,6 +986,117 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
             const float effBloomIntensity =
                     bloomIntensity_ / static_cast<float>(std::max(bloom_->levels(), 1u));
 
+#if defined(THREEPP_WITH_DLSS) || defined(THREEPP_WITH_FSR)
+            // External upscalers (DLSS/FSR) run full-frame only — split-screen
+            // falls through to the TAA path, like the HDR-input order.
+            const bool upscalerFullFrame =
+                    regionDstX_ == 0 && regionDstY_ == 0 &&
+                    regionRenderExt_.width == ptExt.width &&
+                    regionRenderExt_.height == ptExt.height &&
+                    regionSwapExt_.width == ext.width &&
+                    regionSwapExt_.height == ext.height;
+#endif
+#if defined(THREEPP_WITH_DLSS)
+            // ── DLSS SUPER RESOLUTION PATH ─────────────────────────────────────
+            // Outranks FSR (useFsr() is false while DLSS runs). Identical seam:
+            // linear-HDR sceneHdr (render extent) + reversed-Z depth + NDC-delta
+            // motion → upscaled linear HDR into TaaResolve's history WRITE slot
+            // (display extent) → PostComposite adds bloom + tonemaps at display
+            // res → recordPostFinalize (RCAS) → swapchain. See DlssUpscaler.{hpp,cpp}.
+            if (useDlss() && dlss_ && dlss_->valid() && upscalerFullFrame) {
+                bloom_->recordPyramid(cb, currentFrame,
+                                      regionRenderExt_.width, regionRenderExt_.height,
+                                      bloomIntensity_, bloomThreshold_, bloomClamp_);
+
+                const uint32_t writeSlot = vulkan::TaaResolve::writeSlotFor(currentFrame);
+
+                // DLSS frameTimeDelta (ms) — own clock (the TAA dt isn't
+                // computed on this path).
+                float dlssDtMs = 16.6f;
+                {
+                    const double now = glfwGetTime();
+                    if (dlssPrevTimeSec_ >= 0.0) {
+                        const double dt = now - dlssPrevTimeSec_;
+                        if (dt > 0.0) dlssDtMs = static_cast<float>(dt * 1000.0);
+                    }
+                    dlssPrevTimeSec_ = now;
+                }
+
+                vulkan::DlssUpscaler::DispatchInputs din{};
+                din.cmd          = cb;
+                din.colorImage   = bloom_->sceneHdrImage(currentFrame);
+                din.colorView    = bloom_->sceneHdrView(currentFrame);
+                din.colorFormat  = VK_FORMAT_R16G16B16A16_SFLOAT;
+                din.colorLayout  = VK_IMAGE_LAYOUT_GENERAL;
+                din.depthImage   = rasterGbufs[currentFrame].depth.image;
+                din.depthView    = rasterGbufs[currentFrame].depth.view;
+                din.depthFormat  = VK_FORMAT_D32_SFLOAT;
+                din.depthLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                din.motionImage  = rasterGbufs[currentFrame].motion.image;
+                din.motionView   = rasterGbufs[currentFrame].motion.view;
+                din.motionFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+                din.motionLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                din.outputImage  = taa_->historyImage(writeSlot);
+                din.outputView   = taa_->historyView(writeSlot);
+                din.outputFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+                din.renderWidth  = regionRenderExt_.width;
+                din.renderHeight = regionRenderExt_.height;
+                din.displayWidth = regionSwapExt_.width;
+                din.displayHeight = regionSwapExt_.height;
+                din.jitterX      = dlssJitterX_;
+                din.jitterY      = dlssJitterY_;
+                // NDC-delta (GL Y-up) → render-pixel (texture Y-down): {0.5W, -0.5H}.
+                din.motionScaleX =  0.5f * static_cast<float>(regionRenderExt_.width);
+                din.motionScaleY = -0.5f * static_cast<float>(regionRenderExt_.height);
+                din.frameTimeDeltaMs = dlssDtMs;
+                din.preExposure  = preExp;
+                din.reset        = dlssResetNext_;
+
+                gpuTimings_->begin(cb, TP_TAA, currentFrame);
+                dlss_->recordDispatch(din);
+                gpuTimings_->end(cb, TP_TAA, currentFrame);
+                dlssResetNext_ = false;
+
+                // Make DLSS's UAV writes to the history slot visible to
+                // PostComposite's sampled read of the same slot (both compute).
+                {
+                    VkImageMemoryBarrier2 b{};
+                    b.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    b.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
+                    b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+                    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    b.image         = taa_->historyImage(writeSlot);
+                    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    b.subresourceRange.levelCount = 1;
+                    b.subresourceRange.layerCount = 1;
+                    VkDependencyInfo dep{};
+                    dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep.imageMemoryBarrierCount = 1;
+                    dep.pImageMemoryBarriers    = &b;
+                    vkCmdPipelineBarrier2(cb, &dep);
+                }
+
+                // Tonemap at DISPLAY res, reading the DLSS output (history slot
+                // via PostComposite's HDR-mode binding 6), ADDING bloom.
+                post_->recordDispatch(cb, currentFrame,
+                                      regionSwapExt_.width, regionSwapExt_.height,
+                                      static_cast<uint32_t>(toneMapping_),
+                                      exposureBits, preExpBits_, envIsBgColor,
+                                      effBloomIntensity,
+                                      regionRenderExt_.width, regionRenderExt_.height,
+                                      /*hdrMode=*/true);
+
+                // Finalize hdrOut_ → swapchain (display-referred RCAS or plain copy).
+                taa_->recordPostFinalize(cb, currentFrame, imageIndex,
+                                         regionSwapExt_.width, regionSwapExt_.height,
+                                         sharpenStrength_ > 0.0f, sharpenStrength_);
+            } else
+#endif
 #if defined(THREEPP_WITH_FSR)
             // ── FSR 3.1 UPSCALER PATH ──────────────────────────────────────────
             // Replaces the TAA temporal resolve when FSR is active. Full-frame
@@ -997,13 +1108,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
             // bloom + tonemaps at display res (FSR, unlike the TAA HDR path, does
             // NOT fold bloom in), and recordPostFinalize sends hdrOut_ to the
             // swapchain via RCAS/copy. See FsrUpscaler.{hpp,cpp}.
-            const bool fsrFullFrame =
-                    regionDstX_ == 0 && regionDstY_ == 0 &&
-                    regionRenderExt_.width == ptExt.width &&
-                    regionRenderExt_.height == ptExt.height &&
-                    regionSwapExt_.width == ext.width &&
-                    regionSwapExt_.height == ext.height;
-            if (useFsr() && fsr_ && fsr_->valid() && fsrFullFrame) {
+            if (useFsr() && fsr_ && fsr_->valid() && upscalerFullFrame) {
                 bloom_->recordPyramid(cb, currentFrame,
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       bloomIntensity_, bloomThreshold_, bloomClamp_);

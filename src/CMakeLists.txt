@@ -673,6 +673,13 @@ if (THREEPP_WITH_VULKAN)
         list(APPEND privateHeaders "threepp/renderers/vulkan/FsrUpscaler.hpp")
         list(APPEND sources        "threepp/renderers/vulkan/FsrUpscaler.cpp")
     endif ()
+    # NVIDIA DLSS Super Resolution — compiled in only when enabled (it includes
+    # the NGX headers). Replaces the built-in TAA upsampler (and outranks FSR)
+    # at runtime when the NGX feature creates successfully; see DlssUpscaler.{hpp,cpp}.
+    if (THREEPP_WITH_DLSS)
+        list(APPEND privateHeaders "threepp/renderers/vulkan/DlssUpscaler.hpp")
+        list(APPEND sources        "threepp/renderers/vulkan/DlssUpscaler.cpp")
+    endif ()
 endif ()
 
 # BCn / DXT software decode for compressed-texture upload in the Vulkan
@@ -921,6 +928,35 @@ if (THREEPP_WITH_VULKAN)
                     "${FFX_DLL}"
                     "${_ffx_dll_dest}/amd_fidelityfx_vk.dll"
                 COMMENT "Copying amd_fidelityfx_vk.dll to output directory"
+            )
+        endif ()
+    endif ()
+
+    # NVIDIA DLSS Super Resolution (Windows-only, gated on THREEPP_WITH_DLSS).
+    # Links the NGX static import lib (proper static linkage — no FFX-style
+    # dllexport trap) and copies the signed production nvngx_dlss.dll next to
+    # executables; the NGX runtime LoadLibrary's it at init (DlssUpscaler passes
+    # the module directory as an explicit NGX search path for the .pyd case).
+    if (THREEPP_WITH_DLSS)
+        include(${PROJECT_SOURCE_DIR}/cmake/FetchDLSS.cmake)
+        target_include_directories(threepp PRIVATE "${NGX_INCLUDE_DIR}")
+        target_compile_definitions(threepp PRIVATE THREEPP_WITH_DLSS=1)
+        # _d = dynamic CRT (/MD), matching threepp's default MSVC runtime;
+        # the _dbg variant pairs with /MDd in Debug configs.
+        target_link_libraries(threepp PRIVATE
+            "$<IF:$<CONFIG:Debug>,${NGX_LIBRARY_DBG},${NGX_LIBRARY_REL}>")
+
+        if (WIN32 AND NGX_DLSS_DLL)
+            if (CMAKE_CONFIGURATION_TYPES)
+                set(_ngx_dll_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>")
+            else ()
+                set(_ngx_dll_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+            endif ()
+            add_custom_command(TARGET threepp POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${NGX_DLSS_DLL}"
+                    "${_ngx_dll_dest}/nvngx_dlss.dll"
+                COMMENT "Copying nvngx_dlss.dll to output directory"
             )
         endif ()
     endif ()

@@ -301,6 +301,23 @@ void VulkanRendererCore::CoreImpl::reallocateRenderExtentResources() {
                 }
             }
 #endif
+#if defined(THREEPP_WITH_DLSS)
+            // Same display-extent-only recreate rule as FSR: the DLSS feature is
+            // created with maxRenderSize == display, so renderScale changes are
+            // covered by the per-dispatch render subrect.
+            if (dlss_) {
+                const VkExtent2D disp = ctx->swapchainExtent();
+                if (!dlssActive_ || dlss_->displayWidth() != disp.width ||
+                    dlss_->displayHeight() != disp.height) {
+                    VkCommandBuffer initCb = beginOneShot();
+                    dlssActive_ = dlss_->create(initCb, disp.width, disp.height,
+                                                renderExtent().width,
+                                                renderExtent().height);
+                    endAndSubmitOneShot(initCb, "DLSS feature recreate");
+                    dlssResetNext_ = true;
+                }
+            }
+#endif
             bloom_->createImages(renderExtent().width, renderExtent().height);
             onAfterBloomCreateImages();
             // TAA descriptor sets are persistent (pool lives inside TaaResolve);

@@ -1,5 +1,9 @@
 #include "VulkanContext.hpp"
 
+#if defined(THREEPP_WITH_DLSS)
+#include "DlssUpscaler.hpp"// requiredDeviceExtensions (static NGX query)
+#endif
+
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
@@ -412,6 +416,32 @@ namespace threepp::vulkan {
                 extensions.push_back(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME);
             if (has(VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME))
                 extensions.push_back(VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME);
+        }
+#endif
+
+#if defined(THREEPP_WITH_DLSS)
+        // NVIDIA NGX/DLSS device extensions (VK_NVX_binary_import,
+        // VK_NVX_image_view_handle, ...), queried from the NGX static lib —
+        // no NGX init needed. Enable only the subset the device actually
+        // supports and isn't already enabling: on non-NVIDIA hardware the NVX
+        // extensions are absent, DLSS feature creation later fails cleanly, and
+        // the FSR/TAA fallback runs. The instance extensions NGX asks for are
+        // core in Vulkan 1.3 (this renderer's instance version).
+        {
+            const auto avail = deviceExtensions(physicalDevice_);
+            auto supported = [&](const char* n) {
+                for (const auto& e : avail)
+                    if (std::strcmp(e.extensionName, n) == 0) return true;
+                return false;
+            };
+            auto alreadyEnabled = [&](const char* n) {
+                for (const char* e : extensions)
+                    if (std::strcmp(e, n) == 0) return true;
+                return false;
+            };
+            for (const char* n : DlssUpscaler::requiredDeviceExtensions()) {
+                if (supported(n) && !alreadyEnabled(n)) extensions.push_back(n);
+            }
         }
 #endif
 

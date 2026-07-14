@@ -1125,7 +1125,19 @@ namespace threepp {
     }
 
     bool VulkanRendererCore::fsrAvailable() const {
-        return core()->fsrActiveForHdrPlumbing();
+        return core()->fsrAvailable();
+    }
+
+    void VulkanRendererCore::setDlss(bool enabled) {
+        core()->setDlss(enabled);
+    }
+
+    bool VulkanRendererCore::dlss() const {
+        return core()->useDlss();
+    }
+
+    bool VulkanRendererCore::dlssAvailable() const {
+        return core()->dlssAvailable();
     }
 
     void VulkanRendererCore::setDenoise(bool enabled) {

@@ -446,6 +446,17 @@ namespace threepp {
             jx = halton_(hi, 2) - 0.5f;
             jy = halton_(hi, 3) - 0.5f;
         }
+#if defined(THREEPP_WITH_DLSS)
+        // DLSS consumes the built-in Halton sequence (jitterPhaseCount_'s
+        // FSR2-style scaling matches DLSS's recommended phase count); stash the
+        // sub-pixel offset for the dispatch (no camera at the record site).
+        // When DLSS is active useFsr() is false, so jx/jy came from the built-in
+        // branch above.
+        if (useDlss()) {
+            dlssJitterX_ = jx;
+            dlssJitterY_ = jy;
+        }
+#endif
         // MSAA G-buffer rasterizes UNJITTERED (see uploadRasterCameraUbo) —
         // this UBO's jitter must match or every consumer reconstructing
         // with cam.jitter (deferred_shade worldPos, hybrid V) lands
@@ -459,7 +470,8 @@ namespace threepp {
         // active upscaler (even under MSAA, which otherwise rasterizes unjittered),
         // so the dispatch jitterOffset matches what was rendered. Event camera
         // still wins (a real DVS never sees jitter). Must match uploadRasterCameraUbo.
-        const bool rasterJitterOn = !eventCamEnabled_ && (useFsr() || gbufMsaaSamples_ <= 1);
+        const bool rasterJitterOn = !eventCamEnabled_ &&
+                                    (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
         data[32] = jClipX;
@@ -579,6 +591,15 @@ namespace threepp {
             jx = halton_(hi, 2) - 0.5f;
             jy = halton_(hi, 3) - 0.5f;
         }
+#if defined(THREEPP_WITH_DLSS)
+        // DLSS consumes the built-in Halton sequence; stash the sub-pixel offset
+        // for the dispatch. Matches updateCameraUbo's identical stash (same
+        // haltonFrame_ this frame → same offset).
+        if (useDlss()) {
+            dlssJitterX_ = jx;
+            dlssJitterY_ = jy;
+        }
+#endif
         // Map sub-pixel offset to clip-space: one pixel spans 2/width of
         // NDC (NDC ∈ [-1, +1]), so a 1-pixel jitter is 2/width in clip x.
         //
@@ -617,12 +638,13 @@ namespace threepp {
         // events every frame — the DVS "flickers with no motion". A real
         // event camera sees no jitter; transform/camera motion still flows
         // through motionMat, so genuine motion events are unaffected.
-        // useFsr() forces jitter on: FSR needs it to reconstruct, even under MSAA
-        // (which otherwise rasterizes unjittered), so the dispatch jitterOffset
-        // matches the render. Event camera still wins (a real DVS sees no jitter).
+        // useFsr()/useDlss() force jitter on: both need it to reconstruct, even
+        // under MSAA (which otherwise rasterizes unjittered), so the dispatch
+        // jitterOffset matches the render. Event camera still wins (a real DVS
+        // sees no jitter).
         const bool rasterJitterOn =
                 kRasterJitterEnabled && !eventCamEnabled_ &&
-                (useFsr() || gbufMsaaSamples_ <= 1);
+                (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
 

@@ -193,6 +193,17 @@ namespace threepp {
         [[nodiscard]] bool fsr() const;          // FSR is the active upscaler now
         [[nodiscard]] bool fsrAvailable() const; // compiled in + context created
 
+        // ── NVIDIA DLSS Super Resolution runtime toggle ──────────────────
+        // Only meaningful when built with -DTHREEPP_WITH_DLSS (Windows/Vulkan)
+        // and the NGX feature created on an RTX GPU (dlssAvailable() == true);
+        // otherwise a no-op. DLSS OUTRANKS FSR when both are available and
+        // enabled; setDlss(false) hands the frame back to FSR (if on) or the
+        // built-in TAA. Frame-to-frame switchable — flipping resets the
+        // temporal history. Default on.
+        void setDlss(bool enabled);
+        [[nodiscard]] bool dlss() const;          // DLSS is the active upscaler now
+        [[nodiscard]] bool dlssAvailable() const; // compiled in + feature created
+
         // Deferred SVGF denoiser toggle (the ray-queried AO/GI + shadow
         // channels). Default on.
         void setDenoise(bool enabled);
