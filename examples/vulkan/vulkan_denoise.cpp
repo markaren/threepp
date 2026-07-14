@@ -222,7 +222,6 @@ int main(int argc, char** argv) {
 
     // ---- UI state ----
     bool denoiserOn   = renderer.denoise();
-    bool restirOn     = renderer.restirDIEnabled();
     bool rotating     = true;
     float rotSpeed    = 0.5f;
     float bloomInt    = renderer.bloomIntensity();
@@ -251,10 +250,6 @@ int main(int argc, char** argv) {
         if (ImGui::Checkbox("Denoiser", &denoiserOn)) {
             renderer.setDenoise(denoiserOn);
         }
-        if (ImGui::Checkbox("ReSTIR DI", &restirOn)) {
-            renderer.setRestirDIEnabled(restirOn);
-        }
-
 
         ImGui::Separator();
         ImGui::TextDisabled("AAA post");

@@ -1607,10 +1607,6 @@ int main(int argc, char** argv) {
         if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems))) {
             renderer.toneMapping = static_cast<ToneMapping>(toneMode);
         }
-        bool restirDI = renderer.restirDIEnabled();
-        if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
-            renderer.setRestirDIEnabled(restirDI);
-        }
 
         // Path-trace render scale: < 1 traces fewer pixels, then upscales.
         if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f")) {
