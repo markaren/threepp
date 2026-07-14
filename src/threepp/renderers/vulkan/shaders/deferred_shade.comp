@@ -996,6 +996,7 @@ void main() {
              * emissiveSpecNEE(worldPos, N, V, NdotV, F0, roughness, kS, shadowsOn);
     }
     vec3 reflOut = vec3(0.0);
+    float reflHitT = -1.0;// reflected-content distance (see the trace below)
     // CHECKERBOARD reflections (OPPOSITE parity to giSkip → an eligible pixel
     // traces exactly ONE indirect channel per frame): with ≥4 frames of usable
     // history, skip the whole traceRadiance chain and HOLD the accumulation.
@@ -1091,6 +1092,10 @@ void main() {
             r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
                               /*cheapHits=*/true,// reflection channel: blur+temporal absorb
                               /*probeHitFill=*/true);
+        // Reflected-content distance for the denoiser's gloss-blur footprint:
+        // env miss → 0 (already lobe-filtered via missLod — no extra blur),
+        // geometry hit → its distance, SSR → unknown (conservative full blur).
+        reflHitT = ssrHit ? -1.0 : max(gTraceHitT, 0.0);
         gReflEmitterScale = 1.0;
         // Roughness-aware reflection clamp (moving/deterministic path only). A glossy
         // surface integrates a bright point source — the sun, a sky-gap between trees —
@@ -1121,7 +1126,7 @@ void main() {
     } else if (demodIndirect) {
         // Denoise ON: temporally AA the sharp reflection, then hand it to the
         // roughness-blur denoise pass.
-        imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N, length(worldPos - camPos), reflSkip));
+        imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N, length(worldPos - camPos), reflSkip, reflHitT));
     } else {
         // Denoise OFF (or glass/sheen, where reflOut==0): inline sharp reflection.
         lit += reflOut;
@@ -1185,7 +1190,7 @@ void main() {
                     // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
                     // curved surface — refraction is far more normal-sensitive than
                     // reflection, so 1 ray aliases into blocky speckles without it.
-                    imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N, length(worldPos - camPos), /*hold=*/false));// glass: full rate (refraction aliases at half)
+                    imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N, length(worldPos - camPos), /*hold=*/false, /*hitT=*/-1.0));// glass: full rate (refraction aliases at half)
                     lit = lit * (1.0 - gt);
                 } else {
                     lit = mix(lit, glassCol, gt);// denoise off → inline (sharp, no frost)
