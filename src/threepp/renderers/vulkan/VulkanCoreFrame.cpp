@@ -301,6 +301,24 @@ void VulkanRendererCore::CoreImpl::reallocateRenderExtentResources() {
                 }
             }
 #endif
+#if defined(THREEPP_WITH_DLSS)
+            // Same display-extent-only recreate rule as FSR: the DLSS feature is
+            // created with maxRenderSize == display, so renderScale changes are
+            // covered by the per-dispatch render subrect.
+            if (dlss_) {
+                const VkExtent2D disp = ctx->swapchainExtent();
+                if (!dlssActive_ || dlss_->displayWidth() != disp.width ||
+                    dlss_->displayHeight() != disp.height) {
+                    VkCommandBuffer initCb = beginOneShot();
+                    dlssActive_ = dlss_->create(initCb, disp.width, disp.height,
+                                                renderExtent().width,
+                                                renderExtent().height);
+                    endAndSubmitOneShot(initCb, "DLSS feature recreate");
+                    dlssResetNext_ = true;
+                    dlssHealTries_ = 0;// fresh extents → fresh self-heal budget
+                }
+            }
+#endif
             bloom_->createImages(renderExtent().width, renderExtent().height);
             onAfterBloomCreateImages();
             // TAA descriptor sets are persistent (pool lives inside TaaResolve);
@@ -709,6 +727,34 @@ void VulkanRendererCore::CoreImpl::renderFrame(Object3D& scene, Camera& camera) 
                     overlayPass_->record(cmdBuffers[currentFrame], currentFrame, frameImageIndex_,
                                          scene, camera, /*screenSpaceOnly=*/false);
                 } else {
+#if defined(THREEPP_WITH_DLSS)
+                    // Self-heal a sticky NGX evaluate failure (0xBAD00005 after
+                    // an extent transition the resize funnel didn't observe):
+                    // do automatically what a manual window resize does —
+                    // recreate the feature at the CURRENT extents. Rare path,
+                    // so the idle is acceptable; bounded tries so a persistent
+                    // failure degrades to the FSR/TAA fallback instead of a
+                    // recreate/hitch loop (the resize funnel resets the budget).
+                    if (dlss_ && dlssActive_ && dlss_->failing()) {
+                        if (dlssHealTries_ < 3) {
+                            ++dlssHealTries_;
+                            vkDeviceWaitIdle(ctx->device());
+                            const VkExtent2D disp = ctx->swapchainExtent();
+                            VkCommandBuffer initCb = beginOneShot();
+                            dlssActive_ = dlss_->create(initCb, disp.width, disp.height,
+                                                        renderExtent().width,
+                                                        renderExtent().height);
+                            endAndSubmitOneShot(initCb, "DLSS feature self-heal recreate");
+                            dlssResetNext_ = true;
+                            if (taa_) taa_->invalidateHistory();
+                        } else {
+                            dlssActive_ = false;// give up until the next resize
+                            std::fprintf(stderr,
+                                         "[threepp] DLSS: persistent evaluate failure — "
+                                         "disabled until the next display resize (FSR/TAA fallback).\n");
+                        }
+                    }
+#endif
                     if (!beginDeferredFrame(scene, camera)) return;
                     frameState_ = FrameState::RecordingPostShade;
                 }

@@ -18,6 +18,9 @@
 #if defined(THREEPP_WITH_FSR)
 #include "FsrUpscaler.hpp"
 #endif
+#if defined(THREEPP_WITH_DLSS)
+#include "DlssUpscaler.hpp"
+#endif
 #include "AutoExposure.hpp"
 #include "GbufResolve.hpp"
 #include "BloomPass.hpp"
@@ -1992,23 +1995,75 @@ namespace threepp {
         // created). Default on so a THREEPP_WITH_FSR build uses FSR by default.
         bool   fsrEnabled_ = true;
 #endif
-        // FSR compiled in AND its context created (available). Gates the HDR-mode
-        // plumbing FSR reuses — hdrOut_ stays allocated regardless of the runtime
-        // toggle, so setFsr never needs a descriptor rewrite. Always compiled
-        // (false without THREEPP_WITH_FSR) to keep #ifs out of the shared code.
+#if defined(THREEPP_WITH_DLSS)
+        // NVIDIA DLSS Super Resolution. Same seam as FSR (replaces the TAA
+        // temporal resolve, writes into TaaResolve's history write slot) and
+        // OUTRANKS it: when both are available + enabled, DLSS runs — see the
+        // useDlss() branch in VulkanCoreRecord.cpp. On NGX init/feature-create
+        // failure (non-RTX GPU, old driver) dlssActive_ stays false and the
+        // FSR/TAA fallback runs unchanged. See DlssUpscaler.{hpp,cpp}.
+        std::unique_ptr<vulkan::DlssUpscaler> dlss_;
+        bool   dlssActive_    = false;// true once the NGX feature created
+        bool   dlssResetNext_ = true; // force DLSS history reset on the next dispatch
+        double dlssPrevTimeSec_ = -1.0;// for DLSS frameTimeDelta (ms)
+        // The sub-pixel [-0.5,0.5] jitter applied to the projection this frame
+        // (built-in Halton — DLSS's recommended sequence/phase count matches
+        // jitterPhaseCount_'s FSR2-style scaling).
+        float  dlssJitterX_ = 0.f, dlssJitterY_ = 0.f;
+        // Runtime on/off (setDlss), distinct from dlssActive_. Default on so a
+        // THREEPP_WITH_DLSS build uses DLSS by default.
+        bool   dlssEnabled_ = true;
+        // Self-heal budget for sticky NGX evaluate failures (renderFrame);
+        // replenished by the display-resize recreate funnel.
+        uint32_t dlssHealTries_ = 0;
+#endif
+        // An external upscaler (FSR/DLSS) compiled in AND created (available).
+        // Gates the HDR-mode plumbing both reuse — hdrOut_ stays allocated
+        // regardless of the runtime toggles, so setFsr/setDlss never need a
+        // descriptor rewrite. Always compiled (false without either option) to
+        // keep #ifs out of the shared code.
         [[nodiscard]] bool fsrActiveForHdrPlumbing() const {
+            bool active = false;
+#if defined(THREEPP_WITH_FSR)
+            active = active || fsrActive_;
+#endif
+#if defined(THREEPP_WITH_DLSS)
+            active = active || dlssActive_;
+#endif
+            return active;
+        }
+        // Per-upscaler availability (compiled in + context/feature created),
+        // independent of the runtime toggles — the public *Available() getters.
+        [[nodiscard]] bool fsrAvailable() const {
 #if defined(THREEPP_WITH_FSR)
             return fsrActive_;
 #else
             return false;
 #endif
         }
-        // FSR is the ACTIVE upscaler this frame: available AND runtime-enabled.
+        [[nodiscard]] bool dlssAvailable() const {
+#if defined(THREEPP_WITH_DLSS)
+            return dlssActive_;
+#else
+            return false;
+#endif
+        }
+        // DLSS is the ACTIVE upscaler this frame: available AND runtime-enabled.
+        // Outranks FSR (see useFsr) and forces the projection jitter on, like FSR.
+        [[nodiscard]] bool useDlss() const {
+#if defined(THREEPP_WITH_DLSS)
+            return dlssActive_ && dlssEnabled_;
+#else
+            return false;
+#endif
+        }
+        // FSR is the ACTIVE upscaler this frame: available AND runtime-enabled,
+        // and DLSS is not running (DLSS outranks FSR when both are on).
         // Drives the record branch and the jitter source (FSR needs jitter, so it
         // also forces the projection jitter on — see uploadRasterCameraUbo).
         [[nodiscard]] bool useFsr() const {
 #if defined(THREEPP_WITH_FSR)
-            return fsrActive_ && fsrEnabled_;
+            return fsrActive_ && fsrEnabled_ && !useDlss();
 #else
             return false;
 #endif
@@ -2023,6 +2078,24 @@ namespace threepp {
             fsrEnabled_ = enabled;
             if (taa_) taa_->invalidateHistory();
             fsrResetNext_ = true;
+#if defined(THREEPP_WITH_DLSS)
+            dlssResetNext_ = true;// path hand-off re-primes whichever runs next
+#endif
+#else
+            (void) enabled;
+#endif
+        }
+        // Runtime DLSS on/off, same switching semantics as setFsr. Turning DLSS
+        // off hands the frame to FSR (if available + enabled) or the TAA path.
+        void setDlss(bool enabled) {
+#if defined(THREEPP_WITH_DLSS)
+            if (dlssEnabled_ == enabled) return;
+            dlssEnabled_ = enabled;
+            if (taa_) taa_->invalidateHistory();
+            dlssResetNext_ = true;
+#if defined(THREEPP_WITH_FSR)
+            fsrResetNext_ = true;// path hand-off re-primes whichever runs next
+#endif
 #else
             (void) enabled;
 #endif
@@ -2437,6 +2510,23 @@ namespace threepp {
                                       ctx->swapchainExtent().height);
             fsrResetNext_ = true;
 #endif
+#if defined(THREEPP_WITH_DLSS)
+            // DLSS feature at the display extent (outranks FSR when both create).
+            // NGX feature creation records GPU init work — one-shot submit+wait.
+            // On NGX failure (non-RTX GPU / old driver) dlssActive_ stays false
+            // and the FSR/TAA fallback runs.
+            dlss_ = std::make_unique<vulkan::DlssUpscaler>(*ctx, kFramesInFlight);
+            {
+                VkCommandBuffer initCb = beginOneShot();
+                dlssActive_ = dlss_->create(initCb,
+                                            ctx->swapchainExtent().width,
+                                            ctx->swapchainExtent().height,
+                                            renderExtent().width,
+                                            renderExtent().height);
+                endAndSubmitOneShot(initCb, "DLSS feature create");
+            }
+            dlssResetNext_ = true;
+#endif
             // HDR bloom pyramid. sceneHdr lives at the deferred render
             // extent (it is the shared set's binding 1 target); the bloom
             // pyramid levels are half that and below.
@@ -2768,6 +2858,10 @@ namespace threepp {
             // Destroy the ffx-api context while the Vulkan device is still alive
             // (before taa_/ctx unwind). No-op if FSR never created.
             fsr_.reset();
+#endif
+#if defined(THREEPP_WITH_DLSS)
+            // Release the NGX feature + shut NGX down while the device is alive.
+            dlss_.reset();
 #endif
             // TAA resolve subsystem owns its pipeline/layout/sampler/images.
             taa_.reset();

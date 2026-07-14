@@ -114,6 +114,11 @@ int main(int argc, char** argv) {
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(6.0f);
     renderer.setRenderScale(1.0f);// full-res readback, no upscale variance
+    // Pin the golden gate to the deterministic FSR/TAA resolve: DLSS output
+    // shifts with every NGX model/DLL update (and across GPU generations), so
+    // references would go stale on driver updates. No-op when built without
+    // THREEPP_WITH_DLSS.
+    renderer.setDlss(false);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
     renderer.setClearColor(Color(0.f, 0.f, 0.f));

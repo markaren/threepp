@@ -24,6 +24,14 @@ option(THREEPP_WITH_VULKAN "Build with Vulkan backend (requires Vulkan SDK)" OFF
 cmake_dependent_option(THREEPP_WITH_FSR
     "Build with AMD FidelityFX FSR 3.1 upscaler (Windows, Vulkan)"
     OFF "THREEPP_WITH_VULKAN AND WIN32" OFF)
+# NVIDIA DLSS Super Resolution for the Vulkan backend (RTX GPUs; runtime no-op
+# elsewhere). Same compile-time-swap shape as FSR: replaces the TAA temporal
+# upsampler when the NGX feature creates successfully, with a runtime fallback
+# to FSR (if built + available) and then the built-in TAA. When both DLSS and
+# FSR are active, DLSS wins; setDlss(false) hands back to FSR.
+cmake_dependent_option(THREEPP_WITH_DLSS
+    "Build with NVIDIA DLSS Super Resolution upscaler (Windows, Vulkan, RTX)"
+    OFF "THREEPP_WITH_VULKAN AND WIN32" OFF)
 cmake_dependent_option(THREEPP_WGPU_GLSL_COMPAT
     "Enable GLSL->SPIR-V translation for ShaderMaterial on the Wgpu backend (requires glslang)"
     ON "THREEPP_WITH_WGPU" OFF)
