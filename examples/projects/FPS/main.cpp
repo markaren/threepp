@@ -119,14 +119,16 @@ constexpr float kEnemyHalf = kEnemyLen * 0.5f + kEnemyRadius;
 int main(int argc, char** argv) {
 
     // Headless capture (dev): fps_demo --shot <name.png> [--frames N] [--run]
-    // [--spin] [--api gl|vulkan]. Renders N fixed-dt frames and saves via
-    // writeFramebuffer (Vulkan backend), then exits.
+    // [--spin] [--api gl|vulkan] [--timing]. Renders N fixed-dt frames and
+    // saves via writeFramebuffer (Vulkan backend), then exits. --timing
+    // prints per-frame wall ms (stutter hunting; works windowed too).
     std::string shotPath;
     int shotFrames = 180, shotFrame = 0;
     bool shotAutoRun = false;
     bool shotSpin = false;
     bool shotFire = false;// hold LMB from frame 30 (muzzle flash / casings / decals repro)
     bool shotKill = false;// kill the nearest enemy at frame 220 + track the corpse (ragdoll repro)
+    bool timing = false; // print per-frame wall ms (stutter hunting)
     std::optional<GraphicsAPI> apiOverride;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -136,6 +138,7 @@ int main(int argc, char** argv) {
         else if (a == "--spin") shotSpin = true;
         else if (a == "--fire") shotFire = true;
         else if (a == "--killtest") shotKill = true;
+        else if (a == "--timing") timing = true;
         else if (a == "--api" && i + 1 < argc) {
             const std::string v = argv[++i];
             if (v == "gl") apiOverride = GraphicsAPI::OpenGL;
@@ -424,6 +427,24 @@ int main(int argc, char** argv) {
             MeshStandardMaterial::Params{}.color(0xd8b04e).roughness(0.35f).metalness(0.85f).envMapIntensity(0.7f));
     std::vector<Casing> casings;
     const size_t kMaxCasings = 30;
+    // Casing meshes are pooled: created once, kept in the scene, and recycled
+    // by moving them. Adding/removing a mesh changes the deferred renderer's
+    // entry list → full structural rebuild (device drain), and a mid-list
+    // removal also resets the TAA/GI accumulation — per-shot and per-expiry
+    // that reads as constant stutter. Parked casings sit far below the arena.
+    constexpr float kCasingParkY = -60.f;
+    std::vector<std::shared_ptr<Mesh>> casingFree;
+    for (size_t i = 0; i < kMaxCasings; ++i) {
+        auto cm = Mesh::create(casingGeo, casingMat);
+        cm->castShadow = true;
+        cm->position.set(0.f, kCasingParkY, 0.f);
+        scene->add(cm);
+        casingFree.push_back(cm);
+    }
+    auto parkCasing = [&](const std::shared_ptr<Mesh>& m) {
+        m->position.set(0.f, kCasingParkY, 0.f);
+        casingFree.push_back(m);
+    };
 
     // MeshStandardMaterial, not Phong: the Vulkan deferred renders Standard
     // materials only — a Phong decal simply never shows up there (GL is fine
@@ -440,7 +461,32 @@ int main(int argc, char** argv) {
     decalMat->depthWrite = false;
     decalMat->polygonOffset = true;
     decalMat->polygonOffsetFactor = -4.f;
-    std::vector<std::shared_ptr<Mesh>> decals;
+    // Decals are pooled like the casings (entry-list changes = deferred
+    // structural rebuild): kMaxDecals meshes with fixed-capacity geometries
+    // live in the scene from the start, and a stamp rewrites one geometry in
+    // place (degenerate-padded to the cap so the vertex count never changes →
+    // the renderer takes the BLAS-refit path, not the full rebuild). The
+    // verts are baked in WORLD space; riding a moving crate is done by
+    // keeping matrix = targetWorldNow * inverse(targetWorldAtStamp), updated
+    // per frame below (identity while the target holds still).
+    constexpr int kDecalVertCap = 600;// whole-triangle capacity per pooled decal
+    struct DecalSlot {
+        std::shared_ptr<Mesh> mesh;
+        Object3D* target = nullptr;
+        Matrix4 invStamp;
+    };
+    std::vector<DecalSlot> decals(kMaxDecals);
+    for (auto& d : decals) {
+        auto geo = BufferGeometry::create();
+        geo->setAttribute("position", FloatBufferAttribute::create(std::vector<float>(kDecalVertCap * 3, 0.f), 3));
+        geo->setAttribute("normal", FloatBufferAttribute::create(std::vector<float>(kDecalVertCap * 3, 0.f), 3));
+        geo->setAttribute("uv", FloatBufferAttribute::create(std::vector<float>(kDecalVertCap * 2, 0.f), 2));
+        d.mesh = Mesh::create(geo, decalMat);
+        d.mesh->matrixAutoUpdate = false;
+        d.mesh->frustumCulled = false;// bounds include the degenerate padding
+        scene->add(d.mesh);
+    }
+    int decalNext = 0;
     auto stampDecal = [&](Mesh* target, const Vector3& point, const Vector3& worldNormal) {
         if (!target) return;
         target->updateMatrixWorld();
@@ -452,20 +498,37 @@ int main(int argc, char** argv) {
         orientation.z = frand(0.f, math::PI * 2.f);
         const float s = frand(0.22f, 0.34f);
         auto geo = DecalGeometry::create(*target, point, orientation, Vector3(s, s, s));
-        auto decal = Mesh::create(geo, decalMat);
-        // DecalGeometry bakes WORLD-space verts; parent to the hit mesh with
-        // inverse(target world) so it rides moving crates.
-        Matrix4 inv;
-        inv.copy(*target->matrixWorld).invert();
-        decal->matrixAutoUpdate = false;
-        decal->matrix->copy(inv);
-        decal->matrixWorldNeedsUpdate = true;
-        target->add(decal);
-        decals.push_back(decal);
-        if (static_cast<int>(decals.size()) > kMaxDecals) {
-            decals.front()->removeFromParent();
-            decals.erase(decals.begin());
-        }
+        auto* srcPos = geo->getAttribute<float>("position");
+        auto* srcNrm = geo->getAttribute<float>("normal");
+        auto* srcUv = geo->getAttribute<float>("uv");
+        if (!srcPos || !srcNrm || !srcUv || srcPos->count() < 3) return;
+        // whole triangles only, truncated to the pool capacity
+        const int n = std::min(srcPos->count(), kDecalVertCap) / 3 * 3;
+
+        DecalSlot& d = decals[decalNext];
+        decalNext = (decalNext + 1) % kMaxDecals;
+        auto* dstPos = d.mesh->geometry()->getAttribute<float>("position");
+        auto* dstNrm = d.mesh->geometry()->getAttribute<float>("normal");
+        auto* dstUv = d.mesh->geometry()->getAttribute<float>("uv");
+        auto fill = [](const std::vector<float>& src, std::vector<float>& dst, int used, int stride) {
+            std::copy_n(src.begin(), used * stride, dst.begin());
+            // pad with the last real vertex → degenerate (never rasterized/hit)
+            for (size_t i = used * stride; i < dst.size(); ++i)
+                dst[i] = dst[i - stride];
+        };
+        fill(srcPos->array(), dstPos->array(), n, 3);
+        fill(srcNrm->array(), dstNrm->array(), n, 3);
+        fill(srcUv->array(), dstUv->array(), n, 2);
+        dstPos->needsUpdate();
+        dstNrm->needsUpdate();
+        dstUv->needsUpdate();
+        d.mesh->geometry()->boundingBox.reset();
+        d.mesh->geometry()->boundingSphere.reset();
+
+        d.target = target;
+        d.invStamp.copy(*target->matrixWorld).invert();
+        d.mesh->matrix->identity();// = targetWorld * invStamp at stamp time
+        d.mesh->matrixWorldNeedsUpdate = true;
     };
 
     // Both dust and blood use the same soft, feathered sprite (a hard-edged
@@ -528,7 +591,15 @@ int main(int argc, char** argv) {
             }
             auto slot = std::make_unique<EnemySlot>();
             slot->rig = Group::create();
-            slot->rig->visible = false;
+            // Pooled rigs stay VISIBLE and are parked below the arena when
+            // unused: toggling visibility adds/removes their skinned meshes
+            // from the deferred renderer's entry list, and each spawn then
+            // paid a structural rebuild + first-visibility texture/BLAS
+            // upload (measured ~240 ms) while each despawn also reset the
+            // TAA/GI accumulation. Parked this way, spawn/despawn is a pure
+            // transform change. Idle rigs don't tick their mixer, so the
+            // parked skeletons cost no skinning/BLAS work per frame.
+            slot->rig->position.set(0.f, kEnemyParkY, 0.f);
             scene->add(slot->rig);
             auto& model = res->scene;
             model->traverseType<Mesh>([](Mesh& m) {
@@ -609,7 +680,7 @@ int main(int argc, char** argv) {
                 const Vector3 lc = lb.getCenter();
                 slot->muzzleLocal.set(lc.x, lc.y, lb.max().z);
             }
-            slot->rifle->visible = false;
+            slot->rifle->position.set(0.f, kEnemyParkY, 0.f);// parked, like the rig
             scene->add(slot->rifle);
 
             // per-slot muzzle flash sprite (world-space, at the rifle tip)
@@ -651,8 +722,9 @@ int main(int argc, char** argv) {
         }
         if (e->proxy) scene->remove(*e->proxy);
         if (e->slot) {
-            e->slot->rig->visible = false;
-            e->slot->rifle->visible = false;
+            // park, don't hide — see the pool-creation comment
+            e->slot->rig->position.set(0.f, kEnemyParkY, 0.f);
+            e->slot->rifle->position.set(0.f, kEnemyParkY, 0.f);
             e->slot->flash->visible = false;
             e->slot->inUse = false;
             e->slot = nullptr;
@@ -691,8 +763,7 @@ int main(int argc, char** argv) {
         auto e = std::make_unique<Enemy>();
         e->slot = slot;
         slot->inUse = true;
-        slot->rig->visible = true;
-        slot->rifle->visible = true;
+        slot->rig->position.copy(at);// unparked; physics re-drives it each frame
         e->proxy = Mesh::create(enemyProxyGeo, MeshBasicMaterial::create());
         e->proxy->visible = false;
         e->proxy->position.copy(at);
@@ -739,7 +810,7 @@ int main(int argc, char** argv) {
         e->ragdoll.build(world, *e->slot->model, vel, (impulseDir + Vector3(0, 0.35f, 0)) * 42.f);
         for (auto& p : e->ragdoll.parts) ragdollActors.insert(p.body);
         // the rifle drops out of the hand as its own prop
-        if (e->slot->rifle->visible) {
+        if (!e->rifleBody) {
             e->slot->rifle->updateMatrixWorld(true);
             Vector3 rp, rs;
             Quaternion rq;
@@ -851,10 +922,13 @@ int main(int argc, char** argv) {
             right.applyQuaternion(camera->quaternion);
             up.applyQuaternion(camera->quaternion);
             fwd.applyQuaternion(camera->quaternion);
-            auto cm = Mesh::create(casingGeo, casingMat);
-            cm->castShadow = true;
+            if (casingFree.empty()) {// recycle the oldest airborne casing
+                parkCasing(casings.front().mesh);
+                casings.erase(casings.begin());
+            }
+            auto cm = casingFree.back();
+            casingFree.pop_back();
             cm->position.copy(ew);
-            scene->add(cm);
             Casing c;
             c.mesh = cm;
             c.vel = right * frand(1.1f, 1.8f) + up * frand(1.2f, 1.7f) + fwd * frand(-0.4f, -0.1f);
@@ -871,10 +945,6 @@ int main(int argc, char** argv) {
                                       PxHitFlags(PxHitFlag::eDEFAULT), fd) &&
                 gb.hasBlock) {
                 c.groundY = gb.block.position.y + 0.015f;
-            }
-            if (casings.size() >= kMaxCasings) {
-                scene->remove(*casings.front().mesh);
-                casings.erase(casings.begin());
             }
             casings.push_back(std::move(c));
         }
@@ -1178,7 +1248,7 @@ int main(int argc, char** argv) {
         }
         for (auto& e : enemies) removeEnemy(e.get());
         enemies.clear();
-        for (auto& c : casings) scene->remove(*c.mesh);
+        for (auto& c : casings) parkCasing(c.mesh);
         casings.clear();
         recoilKick = 0.f;
         recoilYaw = 0.f;
@@ -1264,6 +1334,14 @@ int main(int argc, char** argv) {
     Clock clock;
     canvas.animate([&] {
         float dt = clock.getDelta();
+        if (timing) {
+            // real wall time between animate() entries — spikes are stutters
+            std::cout << "frame " << shotFrame << " " << dt * 1000.f << " ms"
+                      << " ammo=" << ammo << (reloading ? " RELOAD" : "")
+                      << " casings=" << casings.size()
+                      << " decals=" << std::count_if(decals.begin(), decals.end(), [](const auto& d) { return d.target != nullptr; })
+                      << std::endl;
+        }
         if (dt > 0.05f) dt = 0.05f;
         if (!shotPath.empty()) dt = 1.f / 60.f;// deterministic captures
         if (shotSpin) camYaw += 1.2f * dt;
@@ -1644,7 +1722,7 @@ int main(int argc, char** argv) {
             auto& c = *it;
             c.ttl -= dt;
             if (c.ttl <= 0.f) {
-                scene->remove(*c.mesh);
+                parkCasing(c.mesh);
                 it = casings.erase(it);
                 continue;
             }
@@ -1665,6 +1743,13 @@ int main(int argc, char** argv) {
             dq.setFromAxisAngle(c.spinAxis, c.spinRate * dt);
             c.mesh->quaternion.premultiply(dq);
             ++it;
+        }
+
+        // --- decals ride the mesh they were stamped on ---
+        for (auto& d : decals) {
+            if (!d.target) continue;
+            d.mesh->matrix->copy(*d.target->matrixWorld).multiply(d.invStamp);
+            d.mesh->matrixWorldNeedsUpdate = true;
         }
 
         // --- impact particles ---

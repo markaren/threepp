@@ -46,6 +46,9 @@ constexpr int kEnemyDamage = 4;
 constexpr float kRegenDelay = 4.f;     // seconds without damage before regen kicks in
 constexpr float kRegenRate = 6.f;      // hp per second
 constexpr float kEnemyCharHeight = 1.75f;// SWAT skeleton span (m)
+// Unused pool rigs/rifles park here (kept visible: entry-list churn = deferred
+// renderer structural rebuild — see the pool-creation note in main.cpp).
+constexpr float kEnemyParkY = -80.f;
 // Enemies are a single capsule collider (no per-bone hitboxes), so a headshot
 // is approximated as any hit landing in the top slice of that capsule — the
 // head+neck region on a 1.75 m SWAT frame.
