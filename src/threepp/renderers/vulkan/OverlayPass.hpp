@@ -41,11 +41,15 @@ namespace threepp::vulkan {
 
     class OverlayPass {
     public:
-        // Callback type that wraps Impl::createSampledImage2D. Called from
-        // ensureSpriteAtlasTexture when a new or stale atlas needs to be
-        // uploaded; the lambda stored here captures Impl* and forwards to the
-        // shared helper so OverlayPass does not need beginOneShot/endOneShot.
+        // Callback type that wraps Impl::createSampledImage2DInFrame. Called
+        // from ensureSpriteAtlasTexture when a new or stale atlas needs to be
+        // uploaded: the upload is RECORDED into the frame's own command
+        // buffer (before the overlay's render-pass instance opens) instead of
+        // a one-shot submit — a mid-record one-shot's vkQueueWaitIdle drains
+        // every in-flight frame, which turned each HUD-text re-rasterization
+        // (ammo counters) into a 40-50 ms hitch.
         using SampledImageCreator = std::function<Image2D(
+                VkCommandBuffer cb,
                 uint32_t w, uint32_t h, VkFormat fmt,
                 const void* pixels, VkDeviceSize byteSize,
                 VkFilter filter,
@@ -108,7 +112,14 @@ namespace threepp::vulkan {
         void createOrthoPointPipeline();
 
         // Cache helpers — called from record() on each draw.
-        const SpriteAtlasRec* ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp);
+        // ensureSpriteAtlasTexture records any needed (re)upload into `cb`,
+        // so it must run OUTSIDE a render-pass instance. Pass
+        // cb == VK_NULL_HANDLE for a lookup-only call (inside the pass):
+        // cache hits return normally, anything needing an upload returns
+        // nullptr (record()'s pre-pass hoist has already uploaded every
+        // atlas in this frame's draw list, so that shouldn't happen).
+        const SpriteAtlasRec* ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp,
+                                                       VkCommandBuffer cb);
         const SpriteGeomRec*  ensureSpriteGeometryUploaded(const BufferGeometry* geom);
         const LineRec*        ensureLineGeometryUploaded(const BufferGeometry* geom);
 

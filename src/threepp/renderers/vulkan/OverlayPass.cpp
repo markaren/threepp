@@ -562,7 +562,8 @@ void OverlayPass::createSpriteOverlayPipeline() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const OverlayPass::SpriteAtlasRec*
-OverlayPass::ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp) {
+OverlayPass::ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp,
+                                      VkCommandBuffer cb) {
     if (!texSp) return nullptr;
     const Texture* tex = texSp.get();
     Image& img = const_cast<Texture*>(tex)->image();
@@ -579,6 +580,10 @@ OverlayPass::ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp) {
                            rec.textureVersion != curVersion ||
                            rec.width != w || rec.height != h;
         if (!stale) return &rec;
+        // Lookup-only mode (inside the render-pass instance): an upload
+        // can't be recorded here. record()'s pre-pass hoist has already
+        // ensured every atlas in this frame's draw list.
+        if (cb == VK_NULL_HANDLE) return nullptr;
         // Stale (e.g. a TextSprite re-rasterized — ammo counters etc., the
         // hottest UI churn path). Retire the old atlas image to the renderer's
         // frame-serial queue rather than draining the whole device: sprite
@@ -592,6 +597,8 @@ OverlayPass::ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp) {
             destroyImage2D(ctx_.allocator(), ctx_.device(), rec.image);
         }
         spriteAtlasCache_.erase(it);
+    } else if (cb == VK_NULL_HANDLE) {
+        return nullptr;// lookup-only, never uploaded
     }
 
     // TextSprite / Font::rasterize emits RGBA8. Other sprite atlases
@@ -634,6 +641,7 @@ OverlayPass::ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp) {
     std::snprintf(spriteName, sizeof(spriteName),
                   "spriteAtlas[%p]", static_cast<const void*>(tex));
     Image2D up = uploadFn_(
+            cb,
             w, h, fmt,
             rgba.data(), rgba.size(),
             VK_FILTER_LINEAR,
@@ -1026,6 +1034,14 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         draws.resize(kMaxSpritesPerFrame);
     }
 
+    // Hoist atlas (re)uploads OUT of the render-pass instance: they record
+    // transfer commands into this frame's cb (illegal inside
+    // vkCmdBeginRendering), and recording them here — instead of a one-shot
+    // submit + queue drain — is what keeps per-frame TextSprite
+    // re-rasterization (ammo counters, score) hitch-free. The draw loop
+    // below then calls ensureSpriteAtlasTexture in lookup-only mode.
+    for (const auto& d : draws) ensureSpriteAtlasTexture(d.atlas, cb);
+
     const VkExtent2D ext = ctx_.swapchainExtent();
 
     // Open a fresh dynamic render pass on the swapchain so we can
@@ -1166,7 +1182,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
                   "SpritePC must match push-constant layout");
 
     for (const auto& d : draws) {
-        const auto* atlas = ensureSpriteAtlasTexture(d.atlas);
+        const auto* atlas = ensureSpriteAtlasTexture(d.atlas, VK_NULL_HANDLE);// lookup-only (in-pass)
         if (!atlas) continue;
 
         // Per-sprite descriptor set bound to the atlas texture.

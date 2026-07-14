@@ -2671,14 +2671,17 @@ namespace threepp {
             gpuTimings_ = std::make_unique<vulkan::GpuTimings>(*ctx, kFramesInFlight);
             overlayPass_ = std::make_unique<vulkan::OverlayPass>(
                     *ctx, kFramesInFlight,
-                    [this](uint32_t w, uint32_t h, VkFormat fmt,
+                    // Atlas uploads are recorded into the frame's own cb (no
+                    // one-shot submit + queue drain — that stalled on every
+                    // in-flight frame each time a HUD TextSprite re-rasterized).
+                    [this](VkCommandBuffer cb, uint32_t w, uint32_t h, VkFormat fmt,
                            const void* pix, VkDeviceSize sz,
                            VkFilter filter,
                            VkSamplerAddressMode addrU,
                            VkSamplerAddressMode addrV,
                            const char* name) {
-                        return createSampledImage2D(w, h, fmt, pix, sz,
-                                                   filter, addrU, addrV, name);
+                        return createSampledImage2DInFrame(cb, w, h, fmt, pix, sz,
+                                                           filter, addrU, addrV, name);
                     },
                     // Retire stale sprite atlases through the frame-serial queue
                     // (no per-swap vkDeviceWaitIdle). Stamped with the frame
@@ -4777,11 +4780,61 @@ namespace threepp {
         // Allocate, transition, and upload an Image2D from a tightly-
         // packed CPU buffer. Pixel layout matches `format`. Caller owns the
         // returned Image2D and must call destroyImage2D() on shutdown.
+        // One-shot variant: submits + waits — the queue drain is fine at
+        // load time but a measurable hitch mid-frame.
         Image2D createSampledImage2D(uint32_t w, uint32_t h, VkFormat format,
                                      const void* pixels, VkDeviceSize byteSize,
                                      VkFilter filter, VkSamplerAddressMode addrU,
                                      VkSamplerAddressMode addrV,
                                      const char* debugName = nullptr) {
+            VkCommandBuffer cb = beginOneShot();
+            Buffer staging{};
+            Image2D out = buildSampledImage2D(cb, w, h, format, pixels, byteSize,
+                                              filter, addrU, addrV, debugName, staging);
+            endAndSubmitOneShot(cb);
+            // Deferred to the batch flush when a batch is open (staging is still
+            // referenced by the not-yet-submitted shared cb); immediate freeing
+            // otherwise. The image view/sampler are host-side and valid at
+            // once; only the pixel content lands when the batch submit runs,
+            // which happens before any shader samples it.
+            destroyBufferMaybeBatched(staging);
+            return out;
+        }
+
+        // In-frame variant: records the upload into the CALLER's command
+        // buffer (must be outside a render-pass instance) and retires the
+        // staging buffer through the frame-serial queue — no submit, no
+        // queue drain. A mid-record one-shot's vkQueueWaitIdle blocks on
+        // every in-flight frame (~2 frames of GPU time); HUD TextSprites
+        // re-rasterizing their atlas per ammo-counter change made that a
+        // 40-50 ms hitch on every shot. Same-queue execution order + the
+        // final SHADER_READ_ONLY barrier make samples in this and later
+        // frames safe without any host wait.
+        Image2D createSampledImage2DInFrame(VkCommandBuffer cb,
+                                            uint32_t w, uint32_t h, VkFormat format,
+                                            const void* pixels, VkDeviceSize byteSize,
+                                            VkFilter filter, VkSamplerAddressMode addrU,
+                                            VkSamplerAddressMode addrV,
+                                            const char* debugName = nullptr) {
+            Buffer staging{};
+            Image2D out = buildSampledImage2D(cb, w, h, format, pixels, byteSize,
+                                              filter, addrU, addrV, debugName, staging);
+            retire(std::move(staging));
+            return out;
+        }
+
+        // Shared body of the two variants above: image + view + sampler
+        // creation and the recorded upload (staging copy + mip-blit chain +
+        // final transition) into `cb`. `stagingOut` is still referenced by
+        // cb when this returns — the caller covers its lifetime (drain+free
+        // for the one-shot, frame-serial retire for the in-frame path).
+        Image2D buildSampledImage2D(VkCommandBuffer cb,
+                                    uint32_t w, uint32_t h, VkFormat format,
+                                    const void* pixels, VkDeviceSize byteSize,
+                                    VkFilter filter, VkSamplerAddressMode addrU,
+                                    VkSamplerAddressMode addrV,
+                                    const char* debugName,
+                                    Buffer& stagingOut) {
             Image2D out{};
             out.width  = w;
             out.height = h;
@@ -4816,15 +4869,13 @@ namespace threepp {
                   "vmaCreateImage(env)");
 
             // Staging buffer with the source pixels.
-            Buffer staging = createBuffer(
+            stagingOut = createBuffer(
                     ctx->allocator(), ctx->device(), byteSize,
                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
-            uploadHostVisible(ctx->allocator(), staging, pixels, byteSize);
-
-            VkCommandBuffer cb = beginOneShot();
+            uploadHostVisible(ctx->allocator(), stagingOut, pixels, byteSize);
 
             // Transition mip 0 → TRANSFER_DST for the buffer copy.
             VkImageMemoryBarrier toDst{};
@@ -4851,7 +4902,7 @@ namespace threepp {
             region.imageSubresource.mipLevel = 0;
             region.imageSubresource.layerCount = 1;
             region.imageExtent = {w, h, 1};
-            vkCmdCopyBufferToImage(cb, staging.handle, out.image,
+            vkCmdCopyBufferToImage(cb, stagingOut.handle, out.image,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
             if (mipLevels > 1u) {
@@ -4951,17 +5002,10 @@ namespace threepp {
                 toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
                 vkCmdPipelineBarrier(cb,
                                      VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                     VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                             VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                                      0, 0, nullptr, 0, nullptr, 1, &toRead);
             }
-
-            endAndSubmitOneShot(cb);
-            // Deferred to the batch flush when a batch is open (staging is still
-            // referenced by the not-yet-submitted shared cb); immediate freeing
-            // otherwise. The image view/sampler below are host-side and valid at
-            // once; only the pixel content lands when the batch submit runs,
-            // which happens before any shader samples it.
-            destroyBufferMaybeBatched(staging);
 
             VkImageViewCreateInfo vci{};
             vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
