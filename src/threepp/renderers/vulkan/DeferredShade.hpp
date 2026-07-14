@@ -289,6 +289,12 @@ namespace threepp::vulkan {
         VkDescriptorPool      descPool_     = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [framesInFlight]
 
+        // Pool sizes derived from the descriptor-set-layout bindings in
+        // createPipeline (summed per type × framesInFlight), consumed by
+        // createDescriptorPool. Deriving them from the single binding table
+        // means they can't desync from it — replaces the old hand-summed counts.
+        std::vector<VkDescriptorPoolSize> poolSizes_;
+
         void createPipeline();
         void createDescriptorPool();
     };

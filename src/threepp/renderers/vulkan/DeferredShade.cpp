@@ -12,6 +12,7 @@
 #include "threepp/renderers/vulkan/shaders/cloud_march.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/cloud_shadow.comp.spv.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 
@@ -158,6 +159,22 @@ namespace threepp::vulkan {
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
 
+        // Derive the descriptor-pool sizes straight from the bindings above:
+        // one entry per distinct type, summing descriptorCount × framesInFlight.
+        // The bindless array at b[11] contributes kMaxMaterialTextures on its
+        // own, so this reproduces the old hand-summed counts (uniform 6, sampler
+        // 32+bindless, storage-image 20, AS 1, storage-buffer 7) but can never
+        // fall out of step with the table as bindings are added.
+        poolSizes_.clear();
+        for (uint32_t i = 0; i < dlci.bindingCount; ++i) {
+            const VkDescriptorType t = b[i].descriptorType;
+            const uint32_t add = b[i].descriptorCount * framesInFlight_;
+            auto it = std::find_if(poolSizes_.begin(), poolSizes_.end(),
+                                   [t](const VkDescriptorPoolSize& s) { return s.type == t; });
+            if (it == poolSizes_.end()) poolSizes_.push_back({t, add});
+            else                        it->descriptorCount += add;
+        }
+
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.offset = 0;
@@ -272,23 +289,13 @@ namespace threepp::vulkan {
     }
 
     void DeferredShade::createDescriptorPool() {
-        VkDescriptorPoolSize sizes[5]{};
-        sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[0].descriptorCount = framesInFlight_ * 6;// camera + lights + fog + probe grid + raster camera (SSR) + cloud
-        sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (32 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + foam detail + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev + blueNoise + 5 gbuf MS + shadowVisPrev + froxelScatterPrev + froxelLut + HiZ + prevSceneHdr + cloudColorPrev + cloudColorCur + cloudAuxPrev + cloudAuxCur + cloudShadow
-        sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[2].descriptorCount = framesInFlight_ * 20;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + reflAux + 4 reservoir (pos/W × write/read) + shadowVis + directU + shadowAtrousA/B + froxelScatter + froxelLut + cloudColor + cloudAux + cloudShadow
-        sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-        sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
-        sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[4].descriptorCount = framesInFlight_ * 7;// material + geometry + emissive-tri + probe SH + probe depth + cluster grid/lights
-
+        // poolSizes_ was derived from the set-layout bindings in createPipeline
+        // (which runs first), so it always matches them exactly.
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = framesInFlight_;
-        dpci.poolSizeCount = 5;
-        dpci.pPoolSizes    = sizes;
+        dpci.poolSizeCount = static_cast<uint32_t>(poolSizes_.size());
+        dpci.pPoolSizes    = poolSizes_.data();
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
               "vkCreateDescriptorPool(deferred)");
 
