@@ -126,10 +126,29 @@ namespace {
 
 }// namespace
 
-int main() {
+int main(int argc, char** argv) {
+
+    // Headless capture (dev): svg_loader --shot <name.png> [--svg tiger.svg]
+    // [--frames N] [--api gl|vulkan]. Renders N frames and saves via
+    // writeFramebuffer, then exits (layering/parity checks).
+    std::string shotPath;
+    std::string shotSvg = "tiger.svg";
+    int shotFrames = 60, shotFrame = 0;
+    std::optional<GraphicsAPI> apiOverride;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+        else if (a == "--svg" && i + 1 < argc) shotSvg = argv[++i];
+        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (a == "--api" && i + 1 < argc) {
+            const std::string v = argv[++i];
+            if (v == "gl") apiOverride = GraphicsAPI::OpenGL;
+            else if (v == "vulkan" || v == "vk") apiOverride = GraphicsAPI::Vulkan;
+        }
+    }
 
     Canvas canvas("SVGLoader", {{"antialiasing", 4}});
-    auto renderer = createRenderer(canvas);
+    auto renderer = createRenderer(canvas, apiOverride);
     renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
@@ -174,7 +193,18 @@ int main() {
     canvas.animate([&] {
         renderer->render(*scene, *camera);
 
-        if (ui.newSelection()) {
+        if (!shotPath.empty()) {
+            if (!svg) {
+                svg = loadSvg(shotSvg);
+                bb.setFromObject(*svg);
+                scene->add(svg);
+            }
+            if (++shotFrame >= shotFrames) {
+                renderer->writeFramebuffer(shotPath);
+                std::cout << "wrote " << shotPath << std::endl;
+                std::exit(0);
+            }
+        } else if (ui.newSelection()) {
             if (svg) {
                 svg->removeFromParent();
             }
@@ -194,7 +224,7 @@ int main() {
 
         float dt = clock.getDelta();
 
-        if (svg->name == "OpenBridge_Heading") {
+        if (svg && svg->name == "OpenBridge_Heading") {
 
             auto cog = svg->getObjectByName("COG_2");
             rotateAround(*cog, {0, 0, 1}, center, -0.3f * dt);
@@ -206,6 +236,6 @@ int main() {
             rotateAround(*sp, {0, 0, 1}, center, 0.1f * dt);
         }
 
-        ui.render();
+        if (shotPath.empty()) ui.render();
     });
 }

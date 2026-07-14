@@ -12,6 +12,15 @@ uint32_t VulkanRendererCore::CoreImpl::snapMeshFlags(Mesh& m, const MaterialWith
             if (overlayLayer_ >= 0 &&
                 m.layers.isEnabled(static_cast<unsigned>(overlayLayer_))) fl |= kSnapOverlay;
             if (auto mat = m.material(); mat && mat->tetSkinning && mat->tetTexture) fl |= kSnapTet;
+            // Unlit transparent flat-color mesh → raster overlay routing (see
+            // kSnapUiBlend). Textured / vertex-colored basics stay traced —
+            // the overlay fill pipeline is flat-color push-constant only.
+            if (!(fl & kSnapWire)) {
+                if (auto mat = m.material()) {
+                    if (auto* mb = dynamic_cast<MeshBasicMaterial*>(mat.get());
+                        mb && mb->transparent && !mb->map && !mb->vertexColors) fl |= kSnapUiBlend;
+                }
+            }
             // ParticleSystem billboard mesh — detected by the unique material-name
             // marker (cheap: a length-mismatch reject for the empty-named common
             // case). Routed to the dedicated billboard pass and excluded from the
@@ -74,6 +83,8 @@ bool VulkanRendererCore::CoreImpl::sceneSnapshotMatches(Object3D& scene, Camera&
                                   o.layers.isEnabled(static_cast<unsigned>(overlayLayer_));
                 const bool tet = sn.mat && sn.mat->tetSkinning && sn.mat->tetTexture != nullptr;
                 const bool particle = sn.mat && sn.mat->name == kParticleMaterialName;
+                const bool uiBlend = !wire && sn.basic && sn.basic->transparent &&
+                                     !sn.basic->map && !sn.basic->vertexColors;
                 // sn.mat compared equal above, so it's alive and dereferenceable
                 // (nullptr ⇒ no material ⇒ treated as visible). [[#mat-visible]]
                 const bool matHidden = sn.mat && !sn.mat->visible;
@@ -81,6 +92,7 @@ bool VulkanRendererCore::CoreImpl::sceneSnapshotMatches(Object3D& scene, Camera&
                     over != ((sn.flags & kSnapOverlay) != 0u) ||
                     tet != ((sn.flags & kSnapTet) != 0u) ||
                     particle != ((sn.flags & kSnapParticle) != 0u) ||
+                    uiBlend != ((sn.flags & kSnapUiBlend) != 0u) ||
                     matHidden != ((sn.flags & kSnapMatHidden) != 0u)) {
                     ok = false;
                     return;
@@ -319,6 +331,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                 sn.geomB     = m->geometry().get();
                 sn.mat       = m->material().get();
                 sn.wf        = wf;
+                sn.basic     = dynamic_cast<const MeshBasicMaterial*>(sn.mat);
                 sn.instCount = inst ? static_cast<int32_t>(inst->count()) : -1;
                 sn.flags     = snapMeshFlags(*m, wf);
                 // material()->visible == false: record the full mesh node (so a
@@ -340,7 +353,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                 // own isParticle flag so the billboard pass claims them and the
                 // overlay-mesh loop skips them.
                 const bool isParticle = (sn.flags & kSnapParticle) != 0u;
-                const bool isOverlay = (sn.flags & (kSnapWire | kSnapOverlay | kSnapParticle)) != 0u;
+                const bool isOverlay = (sn.flags & (kSnapWire | kSnapOverlay | kSnapParticle | kSnapUiBlend)) != 0u;
                 // One-shot type probes: an N-instance InstancedMesh costs 3
                 // dynamic_casts total, not 3·N — and on snapshot-match frames
                 // none at all (the cached entry flags are reused). Consumed by

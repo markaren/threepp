@@ -1380,14 +1380,24 @@ void VulkanRendererCore::CoreImpl::createOverlayPipeline() {
 
             // Solid-fill variant for MeshBasicMaterial-style overlays. Same
             // shaders + state otherwise; only the rasterization mode flips
-            // to FILL and we cull back faces (no need to draw the inside of
-            // a closed convex overlay). Reuses the just-created shader
-            // modules → cheap second pipeline.
+            // to FILL. Cull mode is DYNAMIC so the draw loop can honour
+            // material.side — SVG/UI meshes are typically Side::Double and
+            // often mirrored (negative scale flips winding), which a static
+            // back-face cull silently deletes. Reuses the just-created
+            // shader modules → cheap second pipeline.
             VkPipelineRasterizationStateCreateInfo rsBasic = rs;
             rsBasic.polygonMode = VK_POLYGON_MODE_FILL;
-            rsBasic.cullMode    = VK_CULL_MODE_BACK_BIT;
+            rsBasic.cullMode    = VK_CULL_MODE_BACK_BIT;// overridden per draw (dynamic)
+            VkDynamicState dynFillStates[3] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                               VK_DYNAMIC_STATE_SCISSOR,
+                                               VK_DYNAMIC_STATE_CULL_MODE};
+            VkPipelineDynamicStateCreateInfo dynFill{};
+            dynFill.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dynFill.dynamicStateCount = 3;
+            dynFill.pDynamicStates    = dynFillStates;
             VkGraphicsPipelineCreateInfo gpciBasic = gpci;
             gpciBasic.pRasterizationState = &rsBasic;
+            gpciBasic.pDynamicState       = &dynFill;
             check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciBasic, nullptr,
                                             &overlayBasicPipeline),
                   "vkCreateGraphicsPipelines(overlayBasic)");

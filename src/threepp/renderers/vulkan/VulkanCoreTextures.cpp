@@ -425,8 +425,14 @@ bool VulkanRendererCore::CoreImpl::refreshEnvTextureFromScene(Object3D& scene) {
                 }
             }
             if (!tex) {
-                if (sc && sc->background.isColor()) {
-                    const Color& c = sc->background.color();
+                // No environment and no background texture: a background COLOR
+                // takes over, and with no background at all the renderer's
+                // clearColor is the background — GL parity (glClearColor shows
+                // wherever nothing is drawn). Default clearColor is black, so
+                // scenes that set neither look exactly as before.
+                if (sc) {
+                    const Color& c = sc->background.isColor() ? sc->background.color()
+                                                              : clearColor;
                     if (envIsBgColor && envBgColor.r == c.r && envBgColor.g == c.g && envBgColor.b == c.b)
                         return false;
                     // Retire the old env image (in-flight frames' descriptor

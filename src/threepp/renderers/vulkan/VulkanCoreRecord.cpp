@@ -1413,17 +1413,12 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                     // share a mode (most do).
                     VkPipeline curPipeline = VK_NULL_HANDLE;
 
-                    for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
-                        const auto& en = lastVisibleEntries_[i];
-                        if (!en.mesh || !en.isOverlay) continue;
-                        // Particle billboards are isOverlay but drawn by the
-                        // dedicated billboard loop below — their un-expanded
-                        // quads would render as zero-area triangles here.
-                        if (en.isParticle) continue;
+                    auto drawOverlayMesh = [&](const MeshEntry& en) {
                         Color color(1.f, 1.f, 1.f);
                         float opacity = 1.0f;
                         bool wireframe = false;
                         bool transparent = false;
+                        Side side = Side::Front;
                         if (auto* m = en.mesh->material().get()) {
                             if (auto* mc = dynamic_cast<MaterialWithColor*>(m)) {
                                 color = mc->color;
@@ -1433,6 +1428,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                             }
                             opacity     = m->opacity;
                             transparent = m->transparent;
+                            side        = m->side;
                         }
                         // Wireframe takes precedence — wireframe lines are
                         // typically opaque even when material.transparent
@@ -1445,9 +1441,20 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
                             curPipeline = want;
                         }
+                        if (!wireframe) {
+                            // Fill pipelines carry cull mode as dynamic state so
+                            // material.side is honoured — Side::Double (SVG/UI
+                            // layers, often mirrored by negative scale) must not
+                            // be back-face culled. Mirrors cacheCullFlags().
+                            const VkCullModeFlags cull =
+                                    side == Side::Front  ? VK_CULL_MODE_BACK_BIT
+                                    : side == Side::Back ? VK_CULL_MODE_FRONT_BIT
+                                                         : VK_CULL_MODE_NONE;
+                            vkCmdSetCullMode(cb, cull);
+                        }
 
                         const BlasRecord* rec = resolveBlasForEntry(en);
-                        if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
+                        if (!rec || rec->vertex.handle == VK_NULL_HANDLE) return;
 
                         Matrix4 model;
                         std::memcpy(model.elements.data(), en.worldMatrix.data(), 64);
@@ -1484,34 +1491,33 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                                 vkCmdDraw(cb, static_cast<uint32_t>(posAttr->count()), 1, 0, 0);
                             }
                         }
-                    }
+                    };
 
                     // ── Line / LineSegments / Points draws ─────────────────
-                    // Always-drawn (no isOverlay flag — these are inherently
-                    // overlay; they don't ray-trace). For each entry: ensure
-                    // geom upload, push MVP+color, switch topology pipeline.
-                    // When material.vertexColors is true AND the geometry has
-                    // a color attribute → bind the colored pipeline variant +
-                    // a second vertex binding at location 1.
+                    // For each entry: ensure geom upload, push MVP+color,
+                    // switch topology pipeline. When material.vertexColors is
+                    // true AND the geometry has a color attribute → bind the
+                    // colored pipeline variant + a second vertex binding at
+                    // location 1.
                     //
                     // Points entries (isPoints == true) always use the
                     // POINT_LIST pipeline; the push constant's color.w slot
                     // carries PointsMaterial::size instead of opacity.
-                    for (const auto& le : lastVisibleLines_) {
+                    auto drawOverlayLine = [&](const LineEntry& le) {
                         std::shared_ptr<BufferGeometry> geomPtr;
                         std::shared_ptr<Material>       matPtr;
                         if (le.isPoints) {
-                            if (!le.points) continue;
+                            if (!le.points) return;
                             geomPtr = le.points->geometry();
                             matPtr  = le.points->material();
                         } else {
-                            if (!le.line) continue;
+                            if (!le.line) return;
                             geomPtr = le.line->geometry();
                             matPtr  = le.line->material();
                         }
-                        if (!geomPtr) continue;
+                        if (!geomPtr) return;
                         const vulkan::LineRec* lrec = ensureLineGeometryUploaded(geomPtr.get());
-                        if (!lrec || lrec->vertex.handle == VK_NULL_HANDLE) continue;
+                        if (!lrec || lrec->vertex.handle == VK_NULL_HANDLE) return;
 
                         Color color(1.f, 1.f, 1.f);
                         float pcW           = 1.0f;// opacity for lines, point-size for points
@@ -1537,7 +1543,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                         if (le.isPoints) {
                             // Point pipeline always reads the color binding;
                             // skip the draw if the geometry has none.
-                            if (lrec->color.handle == VK_NULL_HANDLE) continue;
+                            if (lrec->color.handle == VK_NULL_HANDLE) return;
                             want = overlayPointListPipeline;
                         } else if (useVertexColors) {
                             want = le.isSegments ? overlayLineListColoredPipeline
@@ -1598,6 +1604,63 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                                     static_cast<uint32_t>(std::max(0, drawRange.count)));
                             if (cnt > 0) vkCmdDraw(cb, cnt, 1, start, 0);
                         }
+                    };
+
+                    // ── Ordered dispatch (GL parity) ────────────────────────
+                    // Nothing here writes depth, so draw order IS composite
+                    // order. Mirror GLRenderer: opaque overlays first (in
+                    // traversal order), then transparent ones back-to-front by
+                    // view-space depth. The sort is STABLE, so exactly-coplanar
+                    // transparent meshes — layered SVG fills — keep their scene
+                    // traversal order, i.e. SVG paint order. (Previously lines
+                    // always drew after meshes, putting grids/gizmos on top of
+                    // transparent panes GL sorts behind them.)
+                    struct OverlayItem {
+                        bool  isLine;
+                        size_t idx;
+                        bool  transparent;
+                        float viewZ;// camera-space z (negative in front; smaller = farther)
+                    };
+                    std::vector<OverlayItem> overlayItems;
+                    overlayItems.reserve(lastVisibleLines_.size() + 16);
+                    Matrix4 viewUnjitM;
+                    std::memcpy(viewUnjitM.elements.data(), currViewUnjit_.data(), 64);
+                    const auto& ve = viewUnjitM.elements;
+                    auto viewZOf = [&](const std::array<float, 16>& world) {
+                        return ve[2] * world[12] + ve[6] * world[13] +
+                               ve[10] * world[14] + ve[14];
+                    };
+                    for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
+                        const auto& en = lastVisibleEntries_[i];
+                        if (!en.mesh || !en.isOverlay) continue;
+                        // Particle billboards are isOverlay but drawn by the
+                        // dedicated billboard loop below — their un-expanded
+                        // quads would render as zero-area triangles here.
+                        if (en.isParticle) continue;
+                        bool tr = false;
+                        if (auto* m = en.mesh->material().get()) {
+                            // Wireframe draws opaque regardless (see drawOverlayMesh).
+                            auto* mw = dynamic_cast<MaterialWithWireframe*>(m);
+                            tr = m->transparent && !(mw && mw->wireframe);
+                        }
+                        overlayItems.push_back({false, i, tr, viewZOf(en.worldMatrix)});
+                    }
+                    for (size_t i = 0; i < lastVisibleLines_.size(); ++i) {
+                        const auto& le = lastVisibleLines_[i];
+                        const Material* m = le.isPoints
+                                                    ? (le.points ? le.points->material().get() : nullptr)
+                                                    : (le.line ? le.line->material().get() : nullptr);
+                        overlayItems.push_back({true, i, m && m->transparent, viewZOf(le.worldMatrix)});
+                    }
+                    std::stable_sort(overlayItems.begin(), overlayItems.end(),
+                                     [](const OverlayItem& a, const OverlayItem& b) {
+                                         if (a.transparent != b.transparent) return !a.transparent;
+                                         if (!a.transparent) return false;// opaque: keep traversal order
+                                         return a.viewZ < b.viewZ;         // transparent: back-to-front
+                                     });
+                    for (const auto& it : overlayItems) {
+                        if (it.isLine) drawOverlayLine(lastVisibleLines_[it.idx]);
+                        else           drawOverlayMesh(lastVisibleEntries_[it.idx]);
                     }
 
                     // ── Particle billboards ────────────────────────────────

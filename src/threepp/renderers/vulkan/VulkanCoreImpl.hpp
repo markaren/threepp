@@ -1093,6 +1093,7 @@ namespace threepp {
             BufferGeometry* geomB = nullptr;          // typed view of geom (attributesVersion reads)
             const Material* mat = nullptr;            // mesh material
             const MaterialWithWireframe* wf = nullptr;// cached cast of mat (same object ⇒ still valid)
+            const MeshBasicMaterial* basic = nullptr; // cached cast of mat (kSnapUiBlend replay reads)
             int32_t instCount = -1;                   // InstancedMesh count; -1 = plain Mesh
             uint32_t flags = 0;                       // kind(2b) | attr/wire/overlay/tet bits
             // BufferGeometry::attributesVersion() at record time. Unchanged ⇒
@@ -1121,6 +1122,13 @@ namespace threepp {
         // the camera-driven level selection on it — three.js/GLRenderer
         // parity (projectObject calls lod.update(camera) as it projects).
         static constexpr uint32_t kSnapLod        = 512u;
+        // Unlit transparent flat-color mesh (layered SVGs, in-scene UI
+        // panels): folded into isOverlay so it renders through the raster
+        // overlay pass, which draws in traversal order — i.e. paint order.
+        // The traced blend path can neither sort overlapping transparent
+        // surfaces nor tie-break exactly-coplanar layers (equal ray t), so
+        // GL-parity layering is only reachable by rasterizing in order.
+        static constexpr uint32_t kSnapUiBlend    = 1024u;
         std::vector<SnapNode> sceneSnapshot_;
 
         // Classification-routing flags for a mesh — shared by the snapshot
