@@ -89,10 +89,18 @@ namespace threepp::vulkan {
         uint32_t       width_ = 0, height_ = 0;
 
         // Pyramid: level l is (width >> (l+1)) × (height >> (l+1)) — level 0
-        // is half res (what the composite samples), the deepest ~1/64. The
-        // upsample accumulates IN PLACE into these images (read+write), so no
-        // second chain is needed.
-        static constexpr uint32_t kMaxLevels = 6;
+        // is half res (what the composite samples). The upsample accumulates
+        // IN PLACE into these images (read+write), so no second chain is needed.
+        //
+        // levels_ is derived from the extent (see resize): the chain grows until
+        // the smaller dimension drops below 8 px. kMaxLevels only bounds the
+        // preallocated array/pool capacity — it must be >= the deepest chain any
+        // supported resolution needs, or bloom is silently TRUNCATED there,
+        // shrinking the widest tap's screen coverage (a 4K source blooms less
+        // broadly than a 1080p one). Levels wanted: 1080p→7, 4K→8, 8K→9. Only
+        // `levels_` images are ever created, so a generous cap costs a handful
+        // of unused descriptor-set slots, not memory/images.
+        static constexpr uint32_t kMaxLevels = 9;
         uint32_t levels_ = 0;// actual count for the current extent
         std::vector<Image2D> sceneHdr_;// [framesInFlight] full res rgba16f
         std::vector<Image2D> pyr_;     // [framesInFlight × kMaxLevels], [f*kMaxLevels+l]
