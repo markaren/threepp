@@ -461,74 +461,49 @@ int main(int argc, char** argv) {
     decalMat->depthWrite = false;
     decalMat->polygonOffset = true;
     decalMat->polygonOffsetFactor = -4.f;
-    // Decals are pooled like the casings (entry-list changes = deferred
-    // structural rebuild): kMaxDecals meshes with fixed-capacity geometries
-    // live in the scene from the start, and a stamp rewrites one geometry in
-    // place (degenerate-padded to the cap so the vertex count never changes →
-    // the renderer takes the BLAS-refit path, not the full rebuild). The
-    // verts are baked in WORLD space; riding a moving crate is done by
-    // keeping matrix = targetWorldNow * inverse(targetWorldAtStamp), updated
-    // per frame below (identity while the target holds still).
-    constexpr int kDecalVertCap = 600;// whole-triangle capacity per pooled decal
+    // Decals are a fixed-count InstancedMesh of oriented quads. Earlier
+    // iterations added/removed decal meshes (deferred structural rebuild per
+    // stamp) or rewrote a pooled geometry in place (BLAS-refit device drain
+    // on the stamp frame + prevVertex-resync drain the frame after — a pair
+    // of ~33 ms hitches per shot on Vulkan). Instance-matrix edits are
+    // transform-only: the renderer re-reads them every frame with no drain.
+    // A quad doesn't conform to corners like DecalGeometry, but bullet
+    // scorch marks land on flat floor/wall/crate faces — lifted ~4 mm along
+    // the hit normal to avoid z-fighting in both raster and RT.
+    auto decalGeo = PlaneGeometry::create(1.f, 1.f);
+    auto decals = InstancedMesh::create(decalGeo, decalMat, kMaxDecals);
+    decals->frustumCulled = false;// instances are scattered; cull per-frame is meaningless
     struct DecalSlot {
-        std::shared_ptr<Mesh> mesh;
-        Object3D* target = nullptr;
-        Matrix4 invStamp;
+        Object3D* target = nullptr;// stamped-on mesh (decals ride moving crates)
+        Matrix4 local;             // instance matrix in target-local space
     };
-    std::vector<DecalSlot> decals(kMaxDecals);
-    for (auto& d : decals) {
-        auto geo = BufferGeometry::create();
-        geo->setAttribute("position", FloatBufferAttribute::create(std::vector<float>(kDecalVertCap * 3, 0.f), 3));
-        geo->setAttribute("normal", FloatBufferAttribute::create(std::vector<float>(kDecalVertCap * 3, 0.f), 3));
-        geo->setAttribute("uv", FloatBufferAttribute::create(std::vector<float>(kDecalVertCap * 2, 0.f), 2));
-        d.mesh = Mesh::create(geo, decalMat);
-        d.mesh->matrixAutoUpdate = false;
-        d.mesh->frustumCulled = false;// bounds include the degenerate padding
-        scene->add(d.mesh);
+    std::vector<DecalSlot> decalSlots(kMaxDecals);
+    {
+        Matrix4 park;
+        park.setPosition(0.f, -70.f, 0.f);// below the arena until stamped
+        for (int i = 0; i < kMaxDecals; ++i) decals->setMatrixAt(i, park);
+        decals->instanceMatrix()->needsUpdate();
     }
+    scene->add(decals);
     int decalNext = 0;
     auto stampDecal = [&](Mesh* target, const Vector3& point, const Vector3& worldNormal) {
         if (!target) return;
         target->updateMatrixWorld();
-        Matrix4 helper;
-        helper.setPosition(point);
-        helper.lookAt(point, point + worldNormal, Vector3::Z());
-        Euler orientation;
-        orientation.setFromRotationMatrix(helper);
-        orientation.z = frand(0.f, math::PI * 2.f);
+        Quaternion q;
+        q.setFromUnitVectors(Vector3(0, 0, 1), worldNormal);// quad faces +Z
+        Quaternion roll;
+        roll.setFromAxisAngle(Vector3(0, 0, 1), frand(0.f, math::PI * 2.f));
+        q.multiply(roll);
         const float s = frand(0.22f, 0.34f);
-        auto geo = DecalGeometry::create(*target, point, orientation, Vector3(s, s, s));
-        auto* srcPos = geo->getAttribute<float>("position");
-        auto* srcNrm = geo->getAttribute<float>("normal");
-        auto* srcUv = geo->getAttribute<float>("uv");
-        if (!srcPos || !srcNrm || !srcUv || srcPos->count() < 3) return;
-        // whole triangles only, truncated to the pool capacity
-        const int n = std::min(srcPos->count(), kDecalVertCap) / 3 * 3;
+        Matrix4 m;
+        m.compose(point + worldNormal * 0.004f, q, Vector3(s, s, 1.f));
 
-        DecalSlot& d = decals[decalNext];
-        decalNext = (decalNext + 1) % kMaxDecals;
-        auto* dstPos = d.mesh->geometry()->getAttribute<float>("position");
-        auto* dstNrm = d.mesh->geometry()->getAttribute<float>("normal");
-        auto* dstUv = d.mesh->geometry()->getAttribute<float>("uv");
-        auto fill = [](const std::vector<float>& src, std::vector<float>& dst, int used, int stride) {
-            std::copy_n(src.begin(), used * stride, dst.begin());
-            // pad with the last real vertex → degenerate (never rasterized/hit)
-            for (size_t i = used * stride; i < dst.size(); ++i)
-                dst[i] = dst[i - stride];
-        };
-        fill(srcPos->array(), dstPos->array(), n, 3);
-        fill(srcNrm->array(), dstNrm->array(), n, 3);
-        fill(srcUv->array(), dstUv->array(), n, 2);
-        dstPos->needsUpdate();
-        dstNrm->needsUpdate();
-        dstUv->needsUpdate();
-        d.mesh->geometry()->boundingBox.reset();
-        d.mesh->geometry()->boundingSphere.reset();
-
+        DecalSlot& d = decalSlots[decalNext];
         d.target = target;
-        d.invStamp.copy(*target->matrixWorld).invert();
-        d.mesh->matrix->identity();// = targetWorld * invStamp at stamp time
-        d.mesh->matrixWorldNeedsUpdate = true;
+        d.local.copy(*target->matrixWorld).invert().multiply(m);
+        decals->setMatrixAt(decalNext, m);
+        decals->instanceMatrix()->needsUpdate();
+        decalNext = (decalNext + 1) % kMaxDecals;
     };
 
     // Both dust and blood use the same soft, feathered sprite (a hard-edged
@@ -1339,7 +1314,7 @@ int main(int argc, char** argv) {
             std::cout << "frame " << shotFrame << " " << dt * 1000.f << " ms"
                       << " ammo=" << ammo << (reloading ? " RELOAD" : "")
                       << " casings=" << casings.size()
-                      << " decals=" << std::count_if(decals.begin(), decals.end(), [](const auto& d) { return d.target != nullptr; });
+                      << " decals=" << std::count_if(decalSlots.begin(), decalSlots.end(), [](const auto& d) { return d.target != nullptr; });
             if (auto* vk = dynamic_cast<VulkanRendererCore*>(renderer.get()))
                 std::cout << " overlayMs=" << vk->lastFrameTimings().overlayMs;
             std::cout << std::endl;
@@ -1748,10 +1723,17 @@ int main(int argc, char** argv) {
         }
 
         // --- decals ride the mesh they were stamped on ---
-        for (auto& d : decals) {
-            if (!d.target) continue;
-            d.mesh->matrix->copy(*d.target->matrixWorld).multiply(d.invStamp);
-            d.mesh->matrixWorldNeedsUpdate = true;
+        {
+            bool anyDecal = false;
+            for (int i = 0; i < kMaxDecals; ++i) {
+                const auto& d = decalSlots[i];
+                if (!d.target) continue;
+                Matrix4 w;
+                w.multiplyMatrices(*d.target->matrixWorld, d.local);
+                decals->setMatrixAt(i, w);
+                anyDecal = true;
+            }
+            if (anyDecal) decals->instanceMatrix()->needsUpdate();
         }
 
         // --- impact particles ---
