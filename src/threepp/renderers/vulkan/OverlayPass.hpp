@@ -37,6 +37,7 @@ namespace threepp {
 namespace threepp::vulkan {
 
     class VulkanContext;
+    struct OverlayRecordScratch;// per-record draw lists, reused across frames
 
     class OverlayPass {
     public:
@@ -115,6 +116,10 @@ namespace threepp::vulkan {
         uint32_t            framesInFlight_;
         SampledImageCreator uploadFn_;
         RetireImageFn       retireFn_;
+
+        // Draw lists gathered each record() call. Held here (not local vectors)
+        // so their heap storage is reused frame to frame instead of realloc'd.
+        std::unique_ptr<OverlayRecordScratch> scratch_;
 
         static constexpr uint32_t kMaxSpritesPerFrame = 64;
 

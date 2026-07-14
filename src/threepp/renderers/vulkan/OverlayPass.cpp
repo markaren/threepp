@@ -30,6 +30,42 @@
 
 namespace threepp::vulkan {
 
+// Draw lists gathered per record() call. Kept in one owned struct (reached via
+// OverlayPass::scratch_) so the four vectors' heap storage is cleared and
+// refilled each frame instead of allocated and freed. Nested so the types stay
+// file-local without namespace-scope name collisions.
+struct OverlayRecordScratch {
+    struct SpriteDraw {
+        Sprite* sprite = nullptr;
+        std::shared_ptr<Texture> atlas;
+        float color[4]{1.f, 1.f, 1.f, 1.f};
+        float rotation = 0.f;
+        Matrix4 effWorld;
+    };
+    struct OrthoLineDraw {
+        Line* line = nullptr;
+        bool  isSegments = false;
+        Matrix4 world;
+    };
+    struct OrthoMeshDraw {
+        Mesh*   mesh = nullptr;
+        Matrix4 world;
+        Color   color{1.f, 1.f, 1.f};
+        float   opacity = 1.f;
+        bool    transparent = false;
+    };
+    struct OrthoPointDraw {
+        Points* points = nullptr;
+        Matrix4 world;
+        Color   color{1.f, 1.f, 1.f};
+        float   size = 3.f;
+    };
+    std::vector<SpriteDraw>     sprites;
+    std::vector<OrthoLineDraw>  lines;
+    std::vector<OrthoMeshDraw>  meshes;
+    std::vector<OrthoPointDraw> points;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Construction / destruction
 // ─────────────────────────────────────────────────────────────────────────────
@@ -37,7 +73,7 @@ namespace threepp::vulkan {
 OverlayPass::OverlayPass(VulkanContext& ctx, uint32_t framesInFlight,
                          SampledImageCreator uploadFn, RetireImageFn retireFn)
     : ctx_(ctx), framesInFlight_(framesInFlight), uploadFn_(std::move(uploadFn)),
-      retireFn_(std::move(retireFn)) {
+      retireFn_(std::move(retireFn)), scratch_(std::make_unique<OverlayRecordScratch>()) {
     spriteDescPools_.resize(framesInFlight_, VK_NULL_HANDLE);
 }
 
@@ -818,6 +854,13 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     scene.updateMatrixWorld(true);
     camera.updateMatrixWorld(true);
 
+    // Draw-list types live on the reused scratch (see OverlayRecordScratch);
+    // alias them so the collection code below reads unchanged.
+    using SpriteDraw    = OverlayRecordScratch::SpriteDraw;
+    using OrthoLineDraw = OverlayRecordScratch::OrthoLineDraw;
+    using OrthoMeshDraw = OverlayRecordScratch::OrthoMeshDraw;
+    using OrthoPointDraw = OverlayRecordScratch::OrthoPointDraw;
+
     // Advance the overlay-frame clock and evict line/mesh geometry
     // buffers untouched for longer than the in-flight window. Overlays
     // that rebuild transient geometry every frame (e.g. a detection
@@ -855,14 +898,8 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     // instead of using sp->matrixWorld (which carries the user's
     // 3D placement, irrelevant in screen-space mode).
     const VkExtent2D extEarly = ctx_.swapchainExtent();
-    struct SpriteDraw {
-        Sprite* sprite = nullptr;
-        std::shared_ptr<Texture> atlas;
-        float color[4]{1.f,1.f,1.f,1.f};
-        float rotation = 0.f;
-        Matrix4 effWorld;
-    };
-    std::vector<SpriteDraw> draws;
+    auto& draws = scratch_->sprites;
+    draws.clear();
     scene.traverseVisible([&](Object3D& o) {
         auto* sp = dynamic_cast<Sprite*>(&o);
         if (!sp) return;
@@ -915,12 +952,8 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     // correctly by the 3D hybrid overlay, so collecting them here would
     // double-draw them through the internal screen-space camera at wrong
     // positions.
-    struct OrthoLineDraw {
-        Line* line = nullptr;
-        bool  isSegments = false;
-        Matrix4 world;
-    };
-    std::vector<OrthoLineDraw> lineDraws;
+    auto& lineDraws = scratch_->lines;
+    lineDraws.clear();
     if (!screenSpaceOnly) {
         scene.traverseVisible([&](Object3D& o) {
             auto* ln = dynamic_cast<Line*>(&o);
@@ -940,14 +973,8 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     // e.g. SVG ShapeGeometry HUD art). Same gating as lines: only the
     // explicit ortho/HUD render, never the perspective screen-space
     // auto-pass (which would wrongly flatten the rendered 3D scene's meshes).
-    struct OrthoMeshDraw {
-        Mesh*   mesh = nullptr;
-        Matrix4 world;
-        Color   color{1.f, 1.f, 1.f};
-        float   opacity = 1.f;
-        bool    transparent = false;
-    };
-    std::vector<OrthoMeshDraw> meshDraws;
+    auto& meshDraws = scratch_->meshes;
+    meshDraws.clear();
     if (!screenSpaceOnly) {
         scene.traverseVisible([&](Object3D& o) {
             auto* m = dynamic_cast<Mesh*>(&o);
@@ -971,13 +998,8 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     // per-vertex "color" attribute — the point pipeline always reads binding 1.
     // Same ortho/HUD gating as lines/meshes (never the perspective
     // screen-space auto-pass).
-    struct OrthoPointDraw {
-        Points* points = nullptr;
-        Matrix4 world;
-        Color   color{1.f, 1.f, 1.f};
-        float   size = 3.f;
-    };
-    std::vector<OrthoPointDraw> pointDraws;
+    auto& pointDraws = scratch_->points;
+    pointDraws.clear();
     if (!screenSpaceOnly) {
         scene.traverseVisible([&](Object3D& o) {
             auto* p = dynamic_cast<Points*>(&o);
