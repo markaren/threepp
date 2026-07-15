@@ -219,18 +219,51 @@ namespace threepp::vulkan {
                 const double dl = std::sqrt(dAcc[0] * dAcc[0] + dAcc[1] * dAcc[1] + dAcc[2] * dAcc[2]);
                 if (omega > 0.0 && !disc.empty() && dl > 1e-12 &&
                     (E[0] + E[1] + E[2]) > 1e-4) {
-                    for (int k = 0; k < 3; ++k) {
-                        outSun->dir[k]    = static_cast<float>(dAcc[k] / dl);
-                        outSun->colorE[k] = static_cast<float>(E[k]);
-                    }
-                    outSun->angularRadiusDeg = std::clamp(
-                            std::sqrt(static_cast<float>(omega) / kPi) / kDeg2Rad, 0.05f, 10.f);
                     clamped.assign(pixels, pixels + 4 * n);
                     for (const uint32_t idx : disc) {
                         clamped[4 * static_cast<size_t>(idx) + 0] = f[0];
                         clamped[4 * static_cast<size_t>(idx) + 1] = f[1];
                         clamped[4 * static_cast<size_t>(idx) + 2] = f[2];
                     }
+                    // CIRCUMSOLAR-HALO CAP. The disc replacement above deliberately
+                    // leaves the sub-threshold halo in the env, but on a bright HDRI
+                    // that halo still sits hundreds of × above the mean sky — and the
+                    // Monte-Carlo GGX prefilter (finite samples/texel) renders such
+                    // texels into the mips as isolated HOT TEXELS. Every glossy env
+                    // lookup then bilinearly magnifies them into soft SQUARE blobs
+                    // scattered around the sun (the water sun-glitter "blocky
+                    // fireflies", present on every backend because they are baked
+                    // into the mip DATA). Soft-cap the prefilter SOURCE at 64× mean
+                    // luminance — bright clouds/sky bands sit at 10–50× (see the
+                    // detection comment above) and survive untouched — and fold the
+                    // removed energy into the analytic sun (it is circumsolar
+                    // radiance; direction-weighting keeps the aggregate direction
+                    // honest), so total illumination is conserved. Mip 0 keeps the
+                    // original pixels either way: backgrounds and true mirrors still
+                    // see the real sun and halo.
+                    const float capL = 64.f * meanL;
+                    for (size_t i = 0; i < n; ++i) {
+                        float* p = clamped.data() + 4 * i;
+                        const float L = texelLum(p);
+                        if (L <= capL) continue;
+                        float d[3], dO;
+                        texelDir(static_cast<uint32_t>(i % w), static_cast<uint32_t>(i / w), w, h, d, &dO);
+                        const float s = capL / L;
+                        const float ex[3] = {p[0] * (1.f - s), p[1] * (1.f - s), p[2] * (1.f - s)};
+                        const float exL = texelLum(ex);
+                        for (int k = 0; k < 3; ++k) {
+                            E[k]    += static_cast<double>(ex[k]) * dO;
+                            dAcc[k] += static_cast<double>(d[k]) * exL * dO;
+                        }
+                        for (int k = 0; k < 3; ++k) p[k] *= s;
+                    }
+                    const double dl2 = std::sqrt(dAcc[0] * dAcc[0] + dAcc[1] * dAcc[1] + dAcc[2] * dAcc[2]);
+                    for (int k = 0; k < 3; ++k) {
+                        outSun->dir[k]    = static_cast<float>(dAcc[k] / (dl2 > 1e-12 ? dl2 : 1.0));
+                        outSun->colorE[k] = static_cast<float>(E[k]);
+                    }
+                    outSun->angularRadiusDeg = std::clamp(
+                            std::sqrt(static_cast<float>(omega) / kPi) / kDeg2Rad, 0.05f, 10.f);
                     outSun->found = true;
                     sunFound      = true;
                 }

@@ -640,6 +640,9 @@ void main() {
     // geometry can't resolve, via an oceanFineHeight central-difference gradient.
     // Gated on thin-shell + an active ocean (dummy tex + tile size 0 otherwise),
     // so it's a no-op for every non-ocean surface. Must run before N is used.
+    // Removed sub-pixel FFT-chop slope variance, banked into the water roughness
+    // below (declared out here so it survives the block's scope).
+    float fineKernelSq = 0.0;
     if (pm.thinWalled != 0 && pc.oceanFineTileSize > 0.0) {
         // The FFT DisplacedMesh's gbuffer normal comes out INVERTED (pointing down
         // into the water) → NdotV≈0 → Fresnel pinned at ~1 → the ocean read as a
@@ -656,7 +659,47 @@ void main() {
         const float hD = textureLod(oceanFineHeight, uvW + vec2(0.0, -depsUV), 0.0).r * invTile;
         const float hU = textureLod(oceanFineHeight, uvW + vec2(0.0,  depsUV), 0.0).r * invTile;
         const vec2  grad = vec2(hR - hL, hU - hD) / (2.0 * eps);
-        N = normalize(N + 0.5 * vec3(-grad.x, 0.0, -grad.y));
+        // ── Distance filtering (LEAN-style specular AA for water) ──────────────
+        // oceanFineHeight is a single-mip texture (no prefilter), sampled here at
+        // a FIXED world-space eps regardless of distance. At the altitudes this
+        // water is viewed from (100 m – 2 km up) the fine cascade's metre-and-
+        // below wave detail sits far below the pixel footprint, so point-sampling
+        // its slope and shading a razor-sharp GGX lobe against it decorrelates the
+        // sun glint into a pure-noise speckle field. Fix: FADE the chop out of N
+        // as the pixel footprint outgrows the ~2·eps slope baseline, and BANK the
+        // removed slope variance into the water roughness (fineKernelSq) so the
+        // glint broadens into a coherent glitter sheen instead of aliasing. Near
+        // water (small footprint) keeps its full crisp sparkle.
+        const float pixWorld = length(worldPos - camPos) * 2.0 * cam.projInverse[1][1]
+                             / max(float(pc.height), 1.0);            // world m / pixel (FOV+res correct)
+        // The central-difference `tilt` measures wave slope at the ~2·eps (≈0.44 m)
+        // scale; once the pixel footprint outgrows that, the slope it samples is
+        // sub-pixel and must move from GEOMETRY (a razor-glinted N) into ROUGHNESS
+        // (a broadened glitter lobe), or the sun highlight aliases to speckle. The
+        // old fade completed at 12·eps (≈2.6 m/px) — but the demo views this ocean
+        // from 100 m–2 km up, where much of the water sits at 0.3–1.5 m/px: the
+        // chop stayed in N, razor-glinted, = the reported per-pixel noise. Complete
+        // the hand-off by ~5·eps so mid-distance water converts to sheen.
+        const float subPix   = smoothstep(0.5 * eps, 1.5 * eps, pixWorld);// 0 near → 1 sub-pixel
+        const vec3  tilt     = 0.5 * vec3(-grad.x, 0.0, -grad.y);
+        N = normalize(N + (1.0 - subPix) * tilt);
+        // σ_slope² ≈ 2·roughness²; move the faded-out tilt's variance into roughness
+        // so shadeWater's glint + reflection lobe broaden as the chop leaves N.
+        fineKernelSq = 2.0 * dot(tilt, tilt) * subPix;
+        // FOOTPRINT FLOOR. The fine-cascade slope alone is tiny for a calm sea
+        // (Phillips amplitude ∝ windSpeed⁴ → a 4 m/s coastal sea has a millimetric
+        // fine cascade), so banking only IT leaves effRough ≈ the base 0.03 and the
+        // razor sun lobe still glints the RASTERISED mesh normal — the coarse FFT
+        // vertex grid (here ~25 m verts over a 9.6 km tile) displaced by cascades
+        // 0/1, itself sub-pixel at 100 m–2 km and aliasing to the reported speckle.
+        // The fine-cascade fade can't touch that geometry normal, so floor the
+        // banked variance on the pixel FOOTPRINT: distant water always carries a
+        // broad-enough lobe to integrate the unresolved wave-normal distribution
+        // into a coherent glitter sheen. Near water (footprint ≤ ~0.25 m/px) floors
+        // at ~0 and keeps its crisp near-mirror sparkle. Independent of wave energy,
+        // so it holds for a glassy calm sea and a choppy one alike.
+        const float footRough = 0.45 * smoothstep(0.25, 4.0, pixWorld);
+        fineKernelSq = min(max(fineKernelSq, footRough * footRough), 0.25);
     }
 
     // ── OCEAN water surface only: analytic deep-water shade (Fresnel reflect ⊕
@@ -675,7 +718,7 @@ void main() {
         // with shadeMode==1 at all.
         if (pc.shadeMode == 1u) return;
         vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
-                               shadowsOn, maxLod, pc.frame, seed);
+                               shadowsOn, maxLod, pc.frame, seed, fineKernelSq);
         // Coverage weighting as in the main path — water-dominant edge pixels
         // reserve geoMinW for dispatch B and blend their own sky minority;
         // the volumetric in-scatter is per-pixel and stays at full weight.
@@ -1309,37 +1352,44 @@ void main() {
             // orientation-agnostically. Single-sided geometry keeps the
             // signed test (a wall's two faces ARE different surfaces).
             const bool dsided = ifDoubleSided(giFlagsZ);
+            // JOINT normal+depth neighbourhood test. The depth check is the
+            // primary disocclusion (a view-Z jump = a different surface — kills
+            // the object-trail "dust" a normal test alone leaves), but sampled
+            // at a SINGLE texel it alternates valid/invalid with the sub-pixel
+            // jitter at every DEPTH EDGE (road-ribbon edges over their cut
+            // bench, silhouettes, grazing relief): the reproject rounds onto
+            // the neighbouring surface every other frame, resetting the GI
+            // history → permanent 1-spp edge flicker on ALL backends (measured
+            // p99 26/255 at a static converged camera; the exact mechanism of
+            // the "everything shakes" reports). So ask the same question the
+            // normal test already asks, jointly, over the 3×3: was THIS
+            // surface (normal AND my own prev view-Z) anywhere in the
+            // reprojected neighbourhood last frame? A truly vacated pixel has
+            // no matching texel → still resets; a jitter-rounded edge finds
+            // its surface one texel over → history survives.
+            const float surfD = texture(gbufMotionTex, uv).b;// this surface's prev NDC depth
+            const vec4  svh   = cam.projInverse * vec4(prevNDC, surfD, 1.0);
+            const float svz   = svh.z / svh.w;
             bool found = false;
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
-                    const vec3 pn = texelFetch(gbufNormalPrevTex, clamp(ip + ivec2(dx, dy), ivec2(0), mx), 0).xyz * 2.0 - 1.0;
+                    const ivec2 tp = clamp(ip + ivec2(dx, dy), ivec2(0), mx);
+                    const vec3 pn = texelFetch(gbufNormalPrevTex, tp, 0).xyz * 2.0 - 1.0;
                     float nd = dot(N, normalize(pn));
                     if (dsided) nd = abs(nd);
-                    if (nd > 0.7) found = true;// ~45° — loose: the surface-aware DEPTH
-                                               // check is the primary disocclusion now, so this
-                                               // just rejects gross flips without false-resetting
-                                               // a deforming skinned surface (bending joints)
+                    if (nd <= 0.0) continue;// reject only GROSS (>90°) flips: a 45°
+                                            // threshold false-reset every frame on
+                                            // sloped/detail-normal terrain (jittered
+                                            // shading normal aliases past 45°) →
+                                            // distant-terrain boil. >0 still catches
+                                            // a wall's opposite face; depth (below)
+                                            // does the real surface discrimination.
+                    const float bufD = texelFetch(gbufDepthPrevTex, tp, 0).x;
+                    const vec4  bvh  = cam.projInverse * vec4(prevNDC, bufD, 1.0);
+                    if (abs(svz - bvh.z / bvh.w) <= 0.1 * max(abs(svz), 1e-3)) found = true;
                 }
             }
             valid = found;
-        }
-        // DEPTH-DISCONTINUITY disocclusion: even when the prev NORMAL matches (a
-        // moving object's top vs the floor it reveals share the +Y normal — common
-        // in top-down views), a view-Z jump means a DIFFERENT surface → reset. This
-        // is what kills the object-trail "dust" the normal test alone leaves behind.
-        if (valid) {
-            // Surface's OWN prev depth (gbuffer motion .b) vs the prev depth BUFFER
-            // at the reprojected spot. Equal → the reproject landed on THIS surface's
-            // past location (same surface, even if it moved/deformed — e.g. a skinned
-            // vertex) → keep the history; differ → a different surface was there
-            // (real disocclusion / object trail) → reset. NOT curr-vs-prev depth,
-            // which wrongly resets anything that moves in depth → dust on animation.
-            const float surfD = texture(gbufMotionTex, uv).b;        // this surface's prev NDC depth
-            const float bufD  = texture(gbufDepthPrevTex, prevUv).x; // prev depth buffer at the reproject
-            const vec4  svh = cam.projInverse * vec4(prevNDC, surfD, 1.0);
-            const vec4  bvh = cam.projInverse * vec4(prevNDC, bufD, 1.0);
-            const float svz = svh.z / svh.w;
-            if (abs(svz - bvh.z / bvh.w) > 0.1 * max(abs(svz), 1e-3)) valid = false;
         }
         // Checkerboard carry: prefer the reprojected history; if this skip-
         // frame pixel's reproject fails (rare gate mismatch), carry the

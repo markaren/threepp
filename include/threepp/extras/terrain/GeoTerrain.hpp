@@ -17,9 +17,9 @@
 //
 //   albedo — a Norwegian-tuned terrain::SplatRules (wetland-dark near sea level,
 //     valley grass/heath on gentle low ground, exposed rock/scree on steep
-//     slopes, snow up high with a feathered line; macro variation + gentle AO),
-//     then tinted toward a gravel verge tone by corridorWeight so the ground
-//     under/beside the ribbon reads as roadside.
+//     slopes, snow up high with a feathered line; macro variation + gentle AO).
+//     No roadside tint: a corridor-wide swath reads as a phantom road wherever
+//     roads run close (hairpins, dual carriageways) — the ribbon is the road.
 //
 // Both callbacks are pure and thread-safe (HeightGrid + RoadNetwork queries are
 // read-only; the SplatRules is captured by value): safe for TileTerrain's async
@@ -56,15 +56,6 @@ namespace threepp::terrain {
         float grassHeightMax = 700.f;
         float snowHeightMin = 1200.f;
         float snowFeather = 90.f;
-
-        // Roadside: tint the ground toward this gravel/verge tone by corridorWeight,
-        // then (at high corridorWeight) push the tint target from gravel toward
-        // `asphaltTone` so any far-LOD terrain that peeks through the pavement reads
-        // as road rather than green. asphaltTone matches the ribbon's baked asphalt
-        // (RoadGenerator asphaltColor, brightened for the ~1-spp grain average).
-        std::array<float, 3> gravelTone = {0.30f, 0.28f, 0.24f};
-        std::array<float, 3> asphaltTone = {0.11f, 0.11f, 0.115f};
-        float roadsideTint = 0.85f;// max blend toward the roadside target at corridor centre
     };
 
     namespace detail {
@@ -277,9 +268,6 @@ namespace threepp::terrain {
         const SplatRules rules = makeNorwegianSplat(pack, o);
         const float amp = o.detailAmplitude;
         const float freq = o.detailFreq;
-        const std::array<float, 3> gravel = o.gravelTone;
-        const std::array<float, 3> asphalt = o.asphaltTone;
-        const float tintMax = o.roadsideTint;
 
         TerrainProvider prov;
 
@@ -301,23 +289,15 @@ namespace threepp::terrain {
             return base + relief * (1.f - cw) * shore * shore * (3.f - 2.f * shore);
         };
 
-        // Albedo: Norwegian splat, tinted toward a roadside target inside the
-        // corridor. The target ramps from gravel (verge, cw≈0.3) to true asphalt
-        // (pavement, cw≈0.9) so residual far-LOD peek-through under the ribbon
-        // reads as road, not green.
-        prov.albedo = [rules, &network, gravel, asphalt, tintMax](float x, float z, float h, float slope, float* rgb) {
+        // Albedo: pure Norwegian splat. No roadside tint — a corridor-wide darkened
+        // swath reads as a phantom second road wherever roads run close or stack
+        // (hairpins, dual carriageways). The carve bench provides the visual cut;
+        // the ribbon itself is the only road-coloured thing in the scene.
+        prov.albedo = [rules](float x, float z, float h, float slope, float* rgb) {
             const Rgb c = rules.evaluate(x, z, h, slope);
-            const float cw = network.corridorWeight(x, z);
-            // Roadside target: gravel → asphalt as we approach the paved band.
-            const float sA = std::clamp((cw - 0.3f) / 0.6f, 0.f, 1.f);
-            const float asphaltMix = sA * sA * (3.f - 2.f * sA);// smoothstep(0.3,0.9,cw)
-            const float tx = gravel[0] + (asphalt[0] - gravel[0]) * asphaltMix;
-            const float ty = gravel[1] + (asphalt[1] - gravel[1]) * asphaltMix;
-            const float tz = gravel[2] + (asphalt[2] - gravel[2]) * asphaltMix;
-            const float t = std::clamp(cw * tintMax, 0.f, 1.f);
-            rgb[0] = c[0] + (tx - c[0]) * t;
-            rgb[1] = c[1] + (ty - c[1]) * t;
-            rgb[2] = c[2] + (tz - c[2]) * t;
+            rgb[0] = c[0];
+            rgb[1] = c[1];
+            rgb[2] = c[2];
         };
 
         return prov;

@@ -29,10 +29,16 @@
 #include "threepp/extras/terrain/TerrainTiles.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/objects/Ocean.hpp"
+#include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/VulkanRendererCore.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -87,6 +93,9 @@ int main(int argc, char** argv) {
     // ── args ──────────────────────────────────────────────────────────────────
     std::string packArg;
     std::string shotPath;
+    std::string seqPrefix;// --shotseq <prefix>: dump a numbered frame sequence
+    int seqStart = 130;   // first frame index dumped
+    int seqStep = 1;      // dump every Nth frame
     int shotFrames = 160;
     bool haveCam = false;
     Vector3 camPosArg, camTargetArg;
@@ -95,6 +104,9 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+        else if (a == "--shotseq" && i + 1 < argc) seqPrefix = argv[++i];
+        else if (a == "--seqstart" && i + 1 < argc) seqStart = std::atoi(argv[++i]);
+        else if (a == "--seqstep" && i + 1 < argc) seqStep = std::atoi(argv[++i]);
         else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (a == "--no-road-bias") noRoadBias = true;
         else if (a == "--road-profile" && i + 1 < argc) profilePath = argv[++i];
@@ -124,7 +136,7 @@ int main(int argc, char** argv) {
         if (const char* env = std::getenv("THREEPP_REGION_PACK")) packArg = env;
     }
     if (packArg.empty()) {
-        packArg = (std::filesystem::path(PROJECT_FOLDER) / "geodata" / "aalesund").string();
+        packArg = (std::filesystem::path(PROJECT_FOLDER) / "geodata" / "trollstigen").string();
     }
 
     // ── load the pack ──────────────────────────────────────────────────────────
@@ -236,13 +248,56 @@ int main(int argc, char** argv) {
     }
 
     // ── renderer ────────────────────────────────────────────────────────────────
+    const bool headless = !shotPath.empty() || !seqPrefix.empty();
     Canvas canvas("threepp - NORWAY TERRAIN", {{"vsync", false}});
     // Headless capture forces the Vulkan deferred renderer (detail-map layer is
     // Vulkan-only); interactive runs keep the renderer-select menu.
-    auto renderer = shotPath.empty() ? createRenderer(canvas)
-                                     : createRenderer(canvas, GraphicsAPI::Vulkan);
+    auto renderer = headless ? createRenderer(canvas, GraphicsAPI::Vulkan)
+                             : createRenderer(canvas);
     renderer->toneMapping = ToneMapping::ACESFilmic;
     renderer->toneMappingExposure = 1.0f;
+
+    // ── instrumentation / A-B knobs (env-driven, so one build sweeps configs) ──
+    // NT_DLSS=0/NT_FSR=0 → disable that upscaler; both off = built-in TAA only.
+    // NT_DENOISE=0 → deferred SVGF denoiser off (also THREEPP_DENOISE=0).
+    // NT_FIREFLY=<v> → setFireflyClamp (0 = no clamp). NT_DEBUGVIEW=<n> → G-buffer
+    // blit (1 normal, 2 motion, 3 ids, 4 albedo, 5 depth). NT_RENDERSCALE=<v>.
+    // NT_SUNRADIUS=<deg> → setSunAngularRadius. NT_SEA_ROUGH / NT_SEA_METAL /
+    // NT_NO_SEA / NT_SUN_ALIGN affect the demo scene (below).
+    auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
+    const auto envF = [](const char* k, float def) {
+        const char* e = std::getenv(k);
+        return e ? std::strtof(e, nullptr) : def;
+    };
+    const auto envSet = [](const char* k) { const char* e = std::getenv(k); return e && e[0] != '\0'; };
+    if (vk) {
+        // DEFAULT: 2× G-buffer MSAA, no upscaler. With MSAA the raster runs
+        // UNJITTERED — measured on this scene: the jittered TAA/DLSS paths leave
+        // the final image trembling with the 8-phase Halton pattern (global
+        // ±0.9 px shifts at a STATIC camera; frame-diff mean 3.2/255, p99 26 at
+        // every high-contrast edge — "the roads shake"), while MSAA2-unjittered
+        // is rock-solid (mean 0.28, p99 1.7, shift exactly 0) at the same fps
+        // (53.6 vs 54.2). Terrain/roads are matte + mip/aniso-filtered, so the
+        // loss of temporal AA doesn't bite here. NT_DLSS=1 / NT_MSAA=1 restore
+        // the jittered path for A/B.
+        vk->setGbufferMsaa(2);
+        vk->setDlss(false);
+        vk->setFsr(false);
+        if (envSet("NT_DLSS")) vk->setDlss(std::getenv("NT_DLSS")[0] != '0');
+        if (envSet("NT_FSR")) vk->setFsr(std::getenv("NT_FSR")[0] != '0');
+        if (envSet("NT_DENOISE")) vk->setDenoise(std::getenv("NT_DENOISE")[0] != '0');
+        if (envSet("NT_FIREFLY")) vk->setFireflyClamp(envF("NT_FIREFLY", 30.f));
+        if (envSet("NT_DEBUGVIEW")) vk->setHybridDebugView(std::atoi(std::getenv("NT_DEBUGVIEW")));
+        if (envSet("NT_RENDERSCALE")) vk->setRenderScale(envF("NT_RENDERSCALE", 1.f));
+        if (envSet("NT_SUNRADIUS")) vk->setSunAngularRadius(envF("NT_SUNRADIUS", 0.5f));
+        if (envSet("NT_MSAA")) {
+            vk->setGbufferMsaa(static_cast<uint32_t>(std::atoi(std::getenv("NT_MSAA"))));
+            std::cout << "[norway] gbufferMsaa = " << vk->gbufferMsaa() << "\n";
+        }
+        if (envSet("NT_AO")) vk->setDeferredAO(std::getenv("NT_AO")[0] != '0');
+        if (envSet("NT_PROBEGI")) vk->setProbeGI(std::getenv("NT_PROBEGI")[0] != '0');
+        if (envSet("NT_SSR")) vk->setSsrReflections(std::getenv("NT_SSR")[0] != '0');
+    }
 
     Scene scene;
     RGBELoader rgbe;
@@ -262,26 +317,59 @@ int main(int argc, char** argv) {
     auto roads = network.buildMeshes();
     scene.add(roads);
 
-    // Sea plane on low / coastal packs.
-    if (reg.heightMin < 1.0f) {
-        auto seaMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
-                                                           .color(Color(0.045f, 0.09f, 0.13f))
-                                                           .roughness(0.15f)
-                                                           .metalness(0.f));
-        auto sea = Mesh::create(PlaneGeometry::create(reg.worldSize * 1.2f, reg.worldSize * 1.2f), seaMat);
-        sea->rotation.x = -math::PI / 2.f;
+    // Sea on low / coastal packs. A huge FLAT MeshStandardMaterial plane
+    // (roughness ~0.15, metalness 0) drives the deferred renderer's STOCHASTIC
+    // opaque-reflection channel — whose SVGF/ReBLUR temporal reproject can't hold
+    // a stable history on a single vast smooth quad under sub-pixel TAA/DLSS
+    // jitter: the reproject validity + motion magnitude alternate frame-to-frame,
+    // so the reflection denoiser boils and the whole plane flickers (Bug B
+    // symptoms 2/3). The engine's Ocean wears a TRANSMISSIVE MeshPhysicalMaterial,
+    // which the deferred shader routes to the INLINE water-reflection path (no
+    // stochastic reflection accumulator → stable), and its FFT relief also breaks
+    // up the single-quad grazing-precision problem. NT_FLAT_SEA keeps the old
+    // plane for A/B.
+    const bool coastal = reg.heightMin < 1.0f && !envSet("NT_NO_SEA");
+    if (coastal) {
+        std::shared_ptr<Object3D> seaObj;
+        if (envSet("NT_FLAT_SEA")) {
+            auto seaMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                               .color(Color(0.045f, 0.09f, 0.13f))
+                                                               .roughness(envF("NT_SEA_ROUGH", 0.15f))
+                                                               .metalness(envF("NT_SEA_METAL", 0.f)));
+            auto sea = Mesh::create(PlaneGeometry::create(reg.worldSize * 1.2f, reg.worldSize * 1.2f), seaMat);
+            sea->rotation.x = -math::PI / 2.f;
+            seaObj = sea;
+        } else {
+            Ocean::Options oo;
+            oo.size = reg.worldSize * 1.2f;
+            oo.resolution = 384;
+            oo.windSpeed = envF("NT_SEA_WIND", 4.0f);// calm coastal water
+            oo.windTheta = 215.f * kDeg2Rad;         // swell rolling in from the SW (the sun heading)
+            oo.choppiness = 0.45f;
+            oo.tileSize1 = 90.f;
+            oo.tileSize2 = 7.f;
+            oo.fftSize = 512;// half the default — a big calm sea needs less spectral detail; recovers FPS
+            auto ocean = Ocean::create(oo);
+            if (auto* wm = ocean->material()->as<MeshPhysicalMaterial>()) {
+                wm->attenuationColor = Color(0.045f, 0.13f, 0.16f);// dark Nordic fjord water
+                wm->attenuationDistance = 1.9f;
+            }
+            seaObj = ocean;
+        }
         // Slightly ABOVE the DTM's flat sea sheet (water reads as seaLevel exactly,
         // and the provider suppresses relief noise there) so the seabed never dithers
         // through; real land starts well above this.
-        sea->position.y = reg.seaLevel + 0.15f;
-        sea->name = "sea";
-        scene.add(sea);
+        seaObj->position.y = reg.seaLevel + 0.15f;
+        seaObj->name = "sea";
+        scene.add(seaObj);
     }
 
     // Directional sun (raking, ~SW) + HDRI ambient.
     auto sun = DirectionalLight::create(Color(1.0f, 0.96f, 0.88f), 2.8f);
     {
-        const float az = 215.f * kDeg2Rad, el = 34.f * kDeg2Rad;
+        // NT_SUN_AZ / NT_SUN_EL override the analytic sun direction (for aligning
+        // it to the HDRI's baked sun disk — A/B of Bug B symptom 1).
+        const float az = envF("NT_SUN_AZ", 215.f) * kDeg2Rad, el = envF("NT_SUN_EL", 34.f) * kDeg2Rad;
         sun->position.set(std::cos(el) * std::sin(az), std::sin(el), std::cos(el) * std::cos(az));
         sun->position.multiplyScalar(std::max(reg.worldSize, 2000.f));
     }
@@ -322,6 +410,7 @@ int main(int argc, char** argv) {
     int frame = 0;
     float fpsAccum = 0.f, fps = 0.f;
     int fpsFrames = 0;
+    bool sunAligned = false;
     canvas.animate([&] {
         const float dt = clock.getDelta();
         fpsAccum += dt;
@@ -331,9 +420,66 @@ int main(int argc, char** argv) {
             fpsFrames = 0;
         }
 
+        // Bug B symptom 1: the sea reflects the HDRI's OWN baked sun disk (kept in
+        // the env's low mips) via env specular. With the analytic sun on a hardcoded
+        // heading that disagreed with the HDRI, the water showed a sun reflection
+        // unrelated to the scene's lighting. Re-aim the analytic sun at the HDRI's
+        // MEASURED sun direction once the renderer has prefiltered the env
+        // (envSunFound), so the analytic highlight and the reflected env sun are ONE
+        // coherent sun. COASTAL packs only: on mountain packs (no sea) the hardcoded
+        // raking heading is a deliberate artistic choice and the HDRI sun would push
+        // the valley into shadow. NT_SUN_AZ/EL (if set) keep the manual override.
+        if (!sunAligned && coastal && vk && vk->envSunFound() &&
+            !envSet("NT_SUN_AZ") && !envSet("NT_SUN_EL")) {
+            const Vector3 d = vk->envSunDirection();// unit vector TOWARD the sun
+            if (d.length() > 0.5f) {
+                sun->position.copy(d);
+                sun->position.multiplyScalar(std::max(reg.worldSize, 2000.f));
+                std::cout << "[norway] sun aligned to env: dir (" << d.x << ", " << d.y
+                          << ", " << d.z << ")\n" << std::flush;
+            }
+            sunAligned = true;
+        }
+
         controls.update();
-        tiles->update(camera.position);
+        // NT_FREEZE_TILES: stop LOD updates once the sequence starts, so a
+        // frame-diff measures PURE upscaler/shading shake with geometry frozen
+        // (the road-corridor refineBias otherwise keeps baking/swapping tiles).
+        const bool freezeTiles = envSet("NT_FREEZE_TILES") && !seqPrefix.empty() && frame >= seqStart;
+        // NT_ORBIT=<deg/frame>: slow orbital drift around the --cam target — the
+        // moving-camera repro (tile swaps under motion) for shake measurement.
+        if (haveCam && envSet("NT_ORBIT")) {
+            const float w = envF("NT_ORBIT", 0.05f) * kDeg2Rad * static_cast<float>(frame);
+            const Vector3 off = camPosArg - camTargetArg;
+            camera.position.set(camTargetArg.x + off.x * std::cos(w) - off.z * std::sin(w),
+                                camPosArg.y,
+                                camTargetArg.z + off.x * std::sin(w) + off.z * std::cos(w));
+            camera.lookAt(camTargetArg);
+        }
+        if (!freezeTiles) tiles->update(camera.position);
         renderer->render(scene, camera);
+
+        // Frame-sequence dump (Bug A shake / Bug B flicker metrics). Numbered
+        // PNGs from a STATIC camera; tile count logged per dumped frame so
+        // split/merge oscillation is visible in the log, not just the pixels.
+        if (!seqPrefix.empty()) {
+            ++frame;
+            if (frame >= seqStart && ((frame - seqStart) % seqStep) == 0) {
+                const int n = (frame - seqStart) / seqStep;
+                char name[64];
+                std::snprintf(name, sizeof(name), "%s_%03d.png", seqPrefix.c_str(), n);
+                const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / "ntseq" / name;
+                std::filesystem::create_directories(path.parent_path());
+                renderer->writeFramebuffer(path);
+                std::cout << "seq " << n << " frame " << frame << " tiles "
+                          << tiles->activeTiles() << " baking " << tiles->pendingBakes();
+                if (vk) std::cout << " gbufResolveMs " << vk->lastFrameTimings().gbufResolveMs
+                                  << " shadeBMs " << vk->lastFrameTimings().shadeBMs;
+                std::cout << std::endl;
+                if (n + 1 >= shotFrames) std::exit(0);
+            }
+            return;
+        }
 
         if (!shotPath.empty() && ++frame >= shotFrames) {
             const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;

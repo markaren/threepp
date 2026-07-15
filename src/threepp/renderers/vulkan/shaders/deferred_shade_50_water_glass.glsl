@@ -12,12 +12,27 @@
 // • foam     = a diffuse whitewater layer where the Tessendorf Jacobian folded
 //              the surface (ocean only; gated on the per-vertex foam attribute).
 // N must already carry the FFT fine-cascade perturbation (applied in main()).
+// slopeVarSq: the sub-pixel FFT-chop slope variance that main() FADED OUT of N
+// (the LEAN/Toksvig "banked" term). At the altitudes this ocean is viewed from
+// (100 m – 2 km) the fine cascade's metre-scale wave slope sits below the pixel
+// footprint; keeping it in N and glinting a razor GGX lobe against it aliases the
+// sun highlight into a per-pixel speckle field. Folding that removed variance
+// into the specular roughness broadens every glint into a coherent glitter sheen
+// instead — the missing half of the water spec-AA (the fade alone left the glint
+// razor-sharp). σ_slope² adds to α² (≈roughness²) for a GGX lobe.
 vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
-                bool doShadows, float maxLod, uint frame, inout uint seed) {
+                bool doShadows, float maxLod, uint frame, inout uint seed,
+                float slopeVarSq) {
     const float NdotV = max(dot(N, V), 1e-4);
     const float ior   = max(pm.ior, 1.0);
     const float r0    = pow((1.0 - ior) / (1.0 + ior), 2.0);
     const float F     = r0 + (1.0 - r0) * pow(1.0 - NdotV, 5.0);
+
+    // Effective specular roughness = base water roughness ⊕ the sub-pixel chop
+    // variance banked out of N (LEAN spec-AA). Distant water fattens its lobe →
+    // the sun glint reads as a soft coherent sheen; near water (slopeVarSq→0)
+    // keeps its crisp near-mirror sparkle.
+    const float effRough = sqrt(pm.roughness * pm.roughness + slopeVarSq);
 
     // Reflected sky + scene. The reflection ray points up/out (away from the
     // water), so it escapes to the sky or hits scene geometry cleanly. Env
@@ -25,8 +40,13 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // small bright moon) otherwise reflect off the chop-perturbed normals as
     // per-pixel white speckle; smooth day skies are visually unchanged.
     const vec3 R = reflect(-V, N);
+    // Env-miss reflection blur widens with the banked chop variance: distant
+    // sub-pixel wave facets reflect a point-feature sky (sun disc / bright cloud
+    // edge) as per-pixel speckle unless the reflection is filtered by the same
+    // footprint the glint is. Floor at 0.12 (the near-water sheen).
+    const float reflLod = max(0.12, effRough) * maxLod;
     const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod,
-                                            0.12 * maxLod, seed, /*cheapHits=*/true,// water: blur+temporal absorb
+                                            reflLod, seed, /*cheapHits=*/true,// water: blur+temporal absorb
                                             /*probeHitFill=*/true);
 
     // Transmission: ANALYTIC deep-water body — deliberately NOT a refraction
@@ -70,7 +90,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // HDRI). The clearcoat layer (pm.clearcoat) adds a 2nd tighter lobe. This is the
     // bulk of the dull→epic difference, added here via analytic light NEE.
     {
-        const float specRough = max(pm.roughness, 0.03);
+        const float specRough = max(effRough, 0.03);
         const float kG        = (specRough + 1.0) * (specRough + 1.0) / 8.0;
         const float ccRough   = clamp(pm.clearcoatRoughness, 0.03, 0.3);
         const vec3  sunOrig   = P + N * SHADOW_EPS;

@@ -303,7 +303,15 @@ int main(int argc, char** argv) {
                               : createRenderer(canvas);
 #ifdef THREEPP_WITH_VULKAN
     if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get())) {
-        vk->setRenderScale(0.85f);
+        // 2× G-buffer MSAA, no upscaler, native scale. With MSAA the raster runs
+        // UNJITTERED — the jittered TAA/DLSS paths tremble the whole image with
+        // the 8-phase Halton pattern (roads/edges visibly shake; measured ±0.9 px
+        // global shifts at a static camera), MSAA2-unjittered is rock-solid at
+        // the same fps. See norway_terrain.cpp for the measurements.
+        vk->setGbufferMsaa(2);
+        vk->setDlss(false);
+        vk->setFsr(false);
+        vk->setRenderScale(1.0f);
         // Draw the Mustang's glass (tagged to this layer in MustangRig) as a
         // post-shade tint over the full-quality image instead of re-tracing the
         // scene behind it on the deferred path (headless capture forces Vulkan).
