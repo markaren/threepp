@@ -30,12 +30,10 @@ int main(int argc, char** argv) {
                   {{"vsync", false}});
 
     VulkanRenderer renderer(canvas);
-    renderer.outputColorSpace = ColorSpace::sRGB;
     renderer.toneMapping = ToneMapping::Neutral;
-    renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(8.f);
     renderer.setRenderScale(0.75);
-    renderer.setGbufferMsaa(2);
+    // renderer.setGbufferMsaa(2);
     renderer.setOcclusionCulling(true);
 
 

@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -56,6 +57,18 @@ namespace threepp::terrain {
         float grassHeightMax = 700.f;
         float snowHeightMin = 1200.f;
         float snowFeather = 90.f;
+
+        // BAKED-ROAD paint (the "terrain IS the road" pipeline — pair with
+        // carveRoads bakeSurface + RoadNetwork::buildBridgeMeshes): mix asphalt
+        // into the splat over the PAVED band only (RoadNetwork::pavedWeight —
+        // narrow feather, so stacked hairpins never merge into a phantom swath).
+        // A painted road is tile TEXTURE: mip/aniso filtering integrates it as
+        // it recedes, so distant roads fade smoothly instead of shimmering the
+        // way a sub-pixel ribbon's raster coverage does. Off by default —
+        // legacy callers keep the ribbon-is-the-road look unchanged.
+        bool paintRoads = false;
+        float roadEdgeFeather = 0.8f;                       // paint feather past the pavement edge (m)
+        std::array<float, 3> roadColor = {0.075f, 0.075f, 0.08f};// sRGB asphalt
     };
 
     namespace detail {
@@ -118,6 +131,16 @@ namespace threepp::terrain {
                                 // Sized to swallow worst-case bicubic (Catmull-Rom)
                                 // overshoot next to carve walls (~0.1 m measured at
                                 // Trollstigen's stacked hairpins) with margin.
+        // BAKE mode (the "terrain IS the road" pipeline, used with
+        // GeoTerrainOptions::paintRoads + RoadNetwork::buildBridgeMeshes):
+        // instead of benching the terrain BELOW a ribbon, SET the paved band to
+        // the exact road surface — cut AND fill, dead flat across the pavement —
+        // feathered back to natural ground (embankments where the road runs
+        // above grade, exactly like a real roadbed). No clearance drop: with no
+        // ribbon to z-fight, the surface itself is the road. Bridge-classified
+        // segments never carve (the deck spans; ground below stays natural) and
+        // excluded segments (tunnels/ferries) never carve at all.
+        bool bakeSurface = false;
     };
 
     inline void carveRoads(HeightGrid& grid, const road::RoadNetwork& net,
@@ -148,8 +171,12 @@ namespace threepp::terrain {
         std::vector<float> innerR(n, 0.f); // nearest winner's full-cut lateral reach
         std::vector<float> hardCap(n, std::numeric_limits<float>::max());
 
-        net.forEachSegment([&](float ax, float az, float ha, float bx, float bz, float hb,
-                               float pavedHalf, float /*corridorHalf*/) {
+        net.forEachSegmentFlagged([&](float ax, float az, float ha, float bx, float bz, float hb,
+                                      float pavedHalf, float /*corridorHalf*/, std::uint8_t flags) {
+            // Bridge decks span the ground (never carve it); excluded roads
+            // (tunnels/ferries) don't exist on the surface. Flags are always 0
+            // in legacy (non-profile) mode — behaviour unchanged there.
+            if (flags != 0) return;
             const float reach = pavedHalf + o.inflate + o.feather;
             const float hardReach = pavedHalf + hardGuard;
             const int ix0 = std::max(0, static_cast<int>(std::floor((std::min(ax, bx) - reach + half) / step)));
@@ -168,7 +195,15 @@ namespace threepp::terrain {
                     const float d = std::sqrt(dx * dx + dz * dz);
                     if (d >= reach) continue;
                     const size_t idx = static_cast<size_t>(iz) * dim + ix;
-                    const float ceil = ha + (hb - ha) * t + road::RoadNetwork::kSurfaceRaise - o.clearance;
+                    // Bake mode: the terrain roadbed sits at the CONFORMED GRADE
+                    // (no raise, no clearance drop) — the distance-culled near
+                    // ribbons (buildGroundChunkMeshes) float kSurfaceRaise above
+                    // it, so both can coexist without z-fighting; where the
+                    // ribbons are culled the painted bed alone is the road.
+                    const float ceil = o.bakeSurface
+                                               ? ha + (hb - ha) * t
+                                               : ha + (hb - ha) * t +
+                                                         road::RoadNetwork::kSurfaceRaise - o.clearance;
                     if (d < hardReach) hardCap[idx] = std::min(hardCap[idx], ceil);
                     if (d >= bestD[idx]) continue;
                     bestD[idx] = d;
@@ -183,13 +218,22 @@ namespace threepp::terrain {
             return t * t * (3.f - 2.f * t);
         };
         for (size_t i = 0; i < n; ++i) {
-            if (bestD[i] != std::numeric_limits<float>::max() && h[i] > allowed[i]) {
+            if (bestD[i] != std::numeric_limits<float>::max() &&
+                (o.bakeSurface || h[i] > allowed[i])) {
                 const float w = (bestD[i] <= innerR[i])
                                         ? 1.f
                                         : 1.f - sstep(innerR[i], innerR[i] + o.feather, bestD[i]);
-                h[i] += (allowed[i] - h[i]) * w;// bench cut, feathered to natural
+                // Legacy: bench cut only (h > allowed), feathered to natural.
+                // Bake: cut AND fill — the paved band lands EXACTLY on the road
+                // surface (flat across, graded along), the feather builds the
+                // embankment/cut slope back to natural ground.
+                h[i] += (allowed[i] - h[i]) * w;
             }
-            if (h[i] > hardCap[i]) h[i] = hardCap[i];// under-pavement guarantee
+            // Under-pavement guarantee (stacked hairpins). In bake mode a cell
+            // INSIDE its winning road's paved band must keep that exact surface
+            // — the other leg's cap would gouge a pit into this leg's roadway.
+            if (h[i] > hardCap[i] && !(o.bakeSurface && bestD[i] <= innerR[i]))
+                h[i] = hardCap[i];
         }
     }
 
@@ -289,16 +333,31 @@ namespace threepp::terrain {
             return base + relief * (1.f - cw) * shore * shore * (3.f - 2.f * shore);
         };
 
-        // Albedo: pure Norwegian splat. No roadside tint — a corridor-wide darkened
-        // swath reads as a phantom second road wherever roads run close or stack
-        // (hairpins, dual carriageways). The carve bench provides the visual cut;
-        // the ribbon itself is the only road-coloured thing in the scene.
-        prov.albedo = [rules](float x, float z, float h, float slope, float* rgb) {
-            const Rgb c = rules.evaluate(x, z, h, slope);
-            rgb[0] = c[0];
-            rgb[1] = c[1];
-            rgb[2] = c[2];
-        };
+        // Albedo: Norwegian splat, plus (paintRoads) asphalt over the paved band.
+        // The paint uses pavedWeight — pavement + a NARROW edge feather, never
+        // the shoulder corridor: a corridor-wide darkened swath reads as a
+        // phantom second road wherever roads run close or stack (hairpins, dual
+        // carriageways). Legacy (paintRoads=false): pure splat, the ribbon is
+        // the only road-coloured thing in the scene.
+        if (o.paintRoads) {
+            const float edgeFeather = o.roadEdgeFeather;
+            const std::array<float, 3> roadCol = o.roadColor;
+            prov.albedo = [rules, &network, edgeFeather, roadCol](float x, float z, float h,
+                                                                  float slope, float* rgb) {
+                const Rgb c = rules.evaluate(x, z, h, slope);
+                const float w = network.pavedWeight(x, z, edgeFeather);
+                rgb[0] = c[0] + (roadCol[0] - c[0]) * w;
+                rgb[1] = c[1] + (roadCol[1] - c[1]) * w;
+                rgb[2] = c[2] + (roadCol[2] - c[2]) * w;
+            };
+        } else {
+            prov.albedo = [rules](float x, float z, float h, float slope, float* rgb) {
+                const Rgb c = rules.evaluate(x, z, h, slope);
+                rgb[0] = c[0];
+                rgb[1] = c[1];
+                rgb[2] = c[2];
+            };
+        }
 
         return prov;
     }

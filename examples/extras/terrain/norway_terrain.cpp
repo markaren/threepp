@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
         if (const char* env = std::getenv("THREEPP_REGION_PACK")) packArg = env;
     }
     if (packArg.empty()) {
-        packArg = (std::filesystem::path(PROJECT_FOLDER) / "geodata" / "trollstigen").string();
+        packArg = (std::filesystem::path(PROJECT_FOLDER) / "geodata" / "aalesund").string();
     }
 
     // ── load the pack ──────────────────────────────────────────────────────────
@@ -168,19 +168,36 @@ int main(int argc, char** argv) {
         specs.push_back(std::move(s));
     }
     road::RoadNetwork network(std::move(specs));
-    // Conform roads to the RAW DEM height first (roads must meet real ground),
-    // THEN carve the road cut into the grid: every DEM cell near a road is
-    // clamped below the conformed ribbon surface, so the provider is a pure
-    // bicubic of the carved grid — C1 everywhere, no runtime corridor warp, and
-    // no sub-quad features for a tile split to pop in ("humps").
-    network.conformTo([&pack](float x, float z) { return pack.grid.sampleBicubic(x, z); });
-    terrain::carveRoads(pack.grid, network);
+    // BAKED-ROAD pipeline. Conform roads to the RAW DEM height first (roads
+    // must meet real ground) with the elevation PROFILE enabled: the pack's
+    // NVDB point heights classify every span — data height well above ground
+    // (or ground = water) ⇒ BRIDGE deck that spans the vertical U instead of
+    // draping into it; data height well below ground ⇒ TUNNEL, excluded; long
+    // water runs that never clear the water ⇒ ferry legs, excluded (a road is
+    // never submerged). THEN bake the roadbed into the grid: the paved band is
+    // SET to the exact road surface (cut AND fill, dead flat across), so the
+    // provider is a pure bicubic of the carved grid and the terrain itself IS
+    // the road — the visual comes from the albedo paint (paintRoads below),
+    // which is mip-filtered tile texture and therefore cannot coverage-shimmer
+    // at distance the way 1 px ribbon geometry does. Only bridge decks remain
+    // ribbon meshes (buildBridgeMeshes below).
+    road::RoadProfileOptions rpo;
+    rpo.enabled = true;
+    rpo.seaLevel = reg.seaLevel;
+    network.conformTo([&pack](float x, float z) { return pack.grid.sampleBicubic(x, z); }, 14, rpo);
+    terrain::RoadCarveOptions rco;
+    rco.bakeSurface = true;
+    terrain::carveRoads(pack.grid, network, rco);
 
     // ── provider + tiles ───────────────────────────────────────────────────────
     terrain::GeoTerrainOptions gopt;
     gopt.snowHeightMin = std::max(reg.heightMax - 350.f, 900.f);// scene-relative snowline
     gopt.grassHeightMax = std::clamp(reg.heightMin + 0.45f * (reg.heightMax - reg.heightMin), 200.f, 900.f);
     gopt.wetlandBand = 6.f;
+    gopt.paintRoads = true;// terrain IS the road (see the conformTo comment above)
+    // Near-tile splat texels are ~0.6-1.3 m; a feather below the texel size
+    // can't anti-alias the paint edge and reads as a staircase up close.
+    gopt.roadEdgeFeather = 1.2f;
     const terrain::TerrainProvider prov = terrain::makeGeoProvider(pack, network, gopt);
 
     reportRoadConformance(pack, network);
@@ -227,7 +244,15 @@ int main(int argc, char** argv) {
     tileOpts.tileRes = 96;
     tileOpts.splitFactor = 1.2f;
     tileOpts.mergeFactor = 1.7f;
+    // Splat texel density. NOTE (measured 2026-07-15, aalesund static-cam
+    // frame-diff A/B): 2 vs 4 texels/quad is flicker-IDENTICAL to three
+    // decimals — the distant-tile shimmer is NOT albedo texture aliasing
+    // (material textures get full mip chains + trilinear/aniso on the Vulkan
+    // path regardless of the texture's own minFilter). 4× only quadruples
+    // bake time. NT_SPLAT_TPQ overrides for A/B.
     tileOpts.splatTexelsPerQuad = 2;
+    if (const char* tpq = std::getenv("NT_SPLAT_TPQ"); tpq && tpq[0] != '\0')
+        tileOpts.splatTexelsPerQuad = std::atoi(tpq);
     tileOpts.asyncBake = true;
     // Road-aware LOD: subdivide road-corridor tiles ~2.2× sooner/deeper so the
     // ribbon stays crisp at mid distance (terrain interp error shrinks with tile
@@ -280,9 +305,9 @@ int main(int argc, char** argv) {
         // (53.6 vs 54.2). Terrain/roads are matte + mip/aniso-filtered, so the
         // loss of temporal AA doesn't bite here. NT_DLSS=1 / NT_MSAA=1 restore
         // the jittered path for A/B.
-        vk->setGbufferMsaa(2);
-        vk->setDlss(false);
-        vk->setFsr(false);
+        // vk->setGbufferMsaa(2);
+        // vk->setDlss(false);
+        // vk->setFsr(false);
         if (envSet("NT_DLSS")) vk->setDlss(std::getenv("NT_DLSS")[0] != '0');
         if (envSet("NT_FSR")) vk->setFsr(std::getenv("NT_FSR")[0] != '0');
         if (envSet("NT_DENOISE")) vk->setDenoise(std::getenv("NT_DENOISE")[0] != '0');
@@ -313,9 +338,33 @@ int main(int argc, char** argv) {
     tiles->name = "norway_terrain";
     scene.add(tiles);
 
-    // Road ribbons.
-    auto roads = network.buildMeshes();
-    scene.add(roads);
+    // Roads are BAKED into the terrain (carve + paint above); bridge decks are
+    // always ribbon geometry. NEAR-DETAIL HYBRID: on-ground ribbon CHUNKS
+    // (baked asphalt texture, crisp edges, lane markings — "stand-on" quality
+    // the ~1 m painted splat texels cannot hold) are distance-culled per frame
+    // below: within NT_ROAD_RIBBON_DIST the ribbon renders kSurfaceRaise above
+    // the baked bed; beyond it the chunk vanishes and the painted bed alone is
+    // the road — mip-filtered texture, so no sub-pixel coverage shimmer.
+    // NT_RIBBON_ROADS=1 restores the legacy full-ribbon look for A/B.
+    std::vector<std::pair<Object3D*, Vector3>> roadChunkCenters;// chunk + bounding center
+    std::vector<float> roadChunkRadii;
+    if (envSet("NT_RIBBON_ROADS")) {
+        scene.add(network.buildMeshes());
+    } else {
+        scene.add(network.buildBridgeMeshes());
+        auto chunks = network.buildGroundChunkMeshes();
+        for (auto* child : chunks->children) {
+            auto* mesh = child->as<Mesh>();
+            if (!mesh) continue;
+            auto geo = mesh->geometry();
+            geo->computeBoundingSphere();
+            roadChunkCenters.emplace_back(child, geo->boundingSphere->center);
+            roadChunkRadii.push_back(geo->boundingSphere->radius);
+        }
+        std::cout << "[norway] road ribbon chunks: " << roadChunkCenters.size() << "\n" << std::flush;
+        scene.add(chunks);
+    }
+    const float ribbonDist = envF("NT_ROAD_RIBBON_DIST", 600.f);// 6 m road ≈ 5 px here
 
     // Sea on low / coastal packs. A huge FLAT MeshStandardMaterial plane
     // (roughness ~0.15, metalness 0) drives the deferred renderer's STOCHASTIC
@@ -442,10 +491,38 @@ int main(int argc, char** argv) {
         }
 
         controls.update();
+
+        // Near-detail ribbon chunks: visible within ribbonDist of the camera
+        // (10% hysteresis so a boundary chunk doesn't flip every frame). Beyond
+        // it the baked+painted roadbed alone carries the road.
+        for (size_t ci = 0; ci < roadChunkCenters.size(); ++ci) {
+            auto* obj = roadChunkCenters[ci].first;
+            const float d = camera.position.distanceTo(roadChunkCenters[ci].second) -
+                            roadChunkRadii[ci];
+            if (obj->visible) {
+                if (d > ribbonDist * 1.1f) obj->visible = false;
+            } else if (d < ribbonDist) {
+                obj->visible = true;
+            }
+        }
+
         // NT_FREEZE_TILES: stop LOD updates once the sequence starts, so a
         // frame-diff measures PURE upscaler/shading shake with geometry frozen
         // (the road-corridor refineBias otherwise keeps baking/swapping tiles).
         const bool freezeTiles = envSet("NT_FREEZE_TILES") && !seqPrefix.empty() && frame >= seqStart;
+        // NT_ZOOM_CYCLE="x,z": headless repro of the interactive "zoom in on a
+        // flickering area, zoom back out — flicker gone" observation. Frames
+        // 150-350 feed tiles->update() a position AT the target (tiles refine
+        // there exactly as if the camera flew in), then it returns to the real
+        // camera (tiles merge back per the split/merge hysteresis). Camera and
+        // rendering never move — only the LOD driver — so a --shotseq at 600
+        // isolates what the tile reload changed.
+        Vector3 lodPos = camera.position;
+        if (const char* zc = std::getenv("NT_ZOOM_CYCLE"); zc && frame >= 150 && frame < 350) {
+            float zx = 0.f, zz = 0.f;
+            if (std::sscanf(zc, "%f,%f", &zx, &zz) == 2)
+                lodPos.set(zx, tiles->heightAt(zx, zz) + 30.f, zz);
+        }
         // NT_ORBIT=<deg/frame>: slow orbital drift around the --cam target — the
         // moving-camera repro (tile swaps under motion) for shake measurement.
         if (haveCam && envSet("NT_ORBIT")) {
@@ -456,7 +533,7 @@ int main(int argc, char** argv) {
                                 camTargetArg.z + off.x * std::sin(w) + off.z * std::cos(w));
             camera.lookAt(camTargetArg);
         }
-        if (!freezeTiles) tiles->update(camera.position);
+        if (!freezeTiles) tiles->update(lodPos);
         renderer->render(scene, camera);
 
         // Frame-sequence dump (Bug A shake / Bug B flicker metrics). Numbered

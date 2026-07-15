@@ -106,6 +106,32 @@ namespace threepp::road {
             conformed_ = true;
         }
 
+        // Conform to EXPLICIT per-centerline-sample elevations (same 1-2-1 grade
+        // smoothing as conformTo). Caller supplies exactly one target height per
+        // centerlineSamples() entry — RoadNetwork's elevation-profile mode uses
+        // this so bridge decks / ground spans get their classified heights
+        // directly instead of a (x,z)-pure ground function having to re-derive
+        // which regime each sample is in.
+        void conformToHeights(const std::vector<float>& heights, int smoothingPasses = 12) {
+            const size_t n = samples_.size();
+            if (n == 0 || heights.size() != n) return;
+            for (size_t i = 0; i < n; ++i) samples_[i].height = heights[i];
+
+            std::vector<float> tmp(n);
+            for (int pass = 0; pass < std::max(smoothingPasses, 0); ++pass) {
+                tmp[0] = samples_[0].height;
+                tmp[n - 1] = samples_[n - 1].height;
+                for (size_t i = 1; i + 1 < n; ++i) {
+                    tmp[i] = 0.25f * samples_[i - 1].height +
+                             0.5f * samples_[i].height +
+                             0.25f * samples_[i + 1].height;
+                }
+                for (size_t i = 0; i < n; ++i) samples_[i].height = tmp[i];
+            }
+
+            conformed_ = true;
+        }
+
         // ── geometry of the corridor ─────────────────────────────────────────
         [[nodiscard]] float pavedHalfWidth() const {
             return params_.laneWidth * static_cast<float>(std::max(params_.laneCount, 1)) * 0.5f;

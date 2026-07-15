@@ -58,7 +58,43 @@ namespace threepp::road {
         std::string id;
         std::string category;// "E" | "R" | "F" | "K" | "P" | "S"
         float width = 6.f;   // total carriageway width (m)
-        std::vector<Vector3> points;// centerline (world XZ; Y ignored — conformTo sets it)
+        // Centerline (world XZ). Y: ignored by the legacy drape (conformTo sets
+        // it from the ground), but when RoadProfileOptions.enabled the point Y
+        // is the PACK's true road elevation and drives the bridge/tunnel
+        // classification (a road whose data height spans a ravine/fjord must
+        // NOT be draped down into the vertical U the ground makes there).
+        std::vector<Vector3> points;
+    };
+
+    // Elevation-profile handling for conformTo (all opt-in; default = the
+    // legacy pure drape, byte-identical behaviour for existing callers).
+    //
+    // The rules, in plain terms:
+    //   • a road whose DATA height runs well ABOVE the ground (or whose ground
+    //     is water) is a BRIDGE there — the deck follows the data height and
+    //     spans the vertical U instead of draping down into it;
+    //   • a road whose data height runs well BELOW the ground is a TUNNEL —
+    //     excluded outright (the road ends at the portal and reappears on the
+    //     far side; there is nothing to render in between);
+    //   • a road is never submerged: over water the deck is clamped to at
+    //     least seaLevel + deckMin. A long water run whose data height never
+    //     clears the water (a ferry leg, or garbage elevations) is excluded —
+    //     rendering it would draw a road lying ON the sea.
+    struct RoadProfileOptions {
+        bool  enabled = false;  // false = legacy drape (flags stay clear)
+        float seaLevel = 0.f;   // the pack's water-sheet elevation (m)
+        float waterEps = 0.05f; // ground <= seaLevel+eps counts as water
+        float bridgeThresh = 3.f;// packY - ground above this => bridge span
+        float tunnelThresh = 3.f;// ground - packY above this => tunnel (excluded)
+        float deckMin = 1.2f;    // minimum deck height above the water (m)
+        float ferryMinLen = 60.f;// water run longer than this with packY never
+                                 // clearing deckMin => ferry/garbage => excluded
+        float minSpanLen = 30.f; // bridge runs shorter than this demote to ground
+                                 // (culvert/causeway — carve fills it like a real
+                                 // roadbed; a stub deck ribbon would be exactly
+                                 // the floating-shard artifact class)
+        float maxDataLift = 60.f;// packY more than this above ground = garbage
+                                 // elevation data, NOT a viaduct — treat as ground
     };
 
     class RoadNetwork {
@@ -103,9 +139,29 @@ namespace threepp::road {
         // Drape every road onto the ground function (typically the raw terrain
         // grid height), then snapshot conformed centerlines into the immutable
         // segment soup the thread-safe queries use. Call once before the queries.
-        void conformTo(const std::function<float(float, float)>& groundFn, int smoothingPasses = 14) {
-            for (auto& r : roads_) r.gen->conformTo(groundFn, smoothingPasses);
+        //
+        // With profile.enabled, the drape becomes elevation-aware (see
+        // RoadProfileOptions): where the spec's data height says the road spans
+        // a ravine or water, the generator drapes onto max(ground, data height)
+        // — the 1-2-1 grade smoothing then rounds the deck into its approaches —
+        // and every dense segment is classified bridge / tunnel-excluded /
+        // ferry-excluded, which the terrain queries, carveRoads and the mesh
+        // builders consume via the Seg flags.
+        void conformTo(const std::function<float(float, float)>& groundFn, int smoothingPasses = 14,
+                       const RoadProfileOptions& profile = {}) {
+            if (!profile.enabled) {
+                for (auto& r : roads_) r.gen->conformTo(groundFn, smoothingPasses);
+                snapshotHeights();
+                conformed_ = true;
+                return;
+            }
+            // Classify FIRST (on the raw ground + the spec's data heights), then
+            // conform each road to explicit per-sample target elevations — so a
+            // span the classification demotes (blip, garbage data) is draped at
+            // GROUND, never left carrying a lifted deck height it no longer owns.
+            for (auto& r : roads_) conformRoadProfiled(r, groundFn, smoothingPasses, profile);
             snapshotHeights();
+            foldSegFlags();
             conformed_ = true;
         }
 
@@ -120,6 +176,7 @@ namespace threepp::road {
             float bestH = terrainH;
             float bestTrench = 0.f;// trench profile [0..1] of the winning segment
             forEachNearbySegment(x, z, [&](const Seg& s) {
+                if (s.flags) return;// bridge deck spans / excluded roads don't shape the ground
                 float t;
                 const float d = distToSegment(x, z, s, t);
                 const float corridorHalf = s.corridorHalf;
@@ -151,6 +208,7 @@ namespace threepp::road {
             float bestD = std::numeric_limits<float>::max();
             float bestH = fallback;
             forEachNearbySegment(x, z, [&](const Seg& s) {
+                if (s.flags & kSegExcluded) return;// tunnels/ferries have no surface
                 float t;
                 const float d = distToSegment(x, z, s, t);
                 if (d < bestD) {
@@ -195,12 +253,35 @@ namespace threepp::road {
         [[nodiscard]] float corridorWeight(float x, float z) const {
             float best = 0.f;
             forEachNearbySegment(x, z, [&](const Seg& s) {
+                if (s.flags) return;// no corridor under bridge decks / excluded roads
                 float t;
                 const float d = distToSegment(x, z, s, t);
                 float w;
                 if (d <= s.pavedHalf) w = 1.f;
                 else if (d >= s.corridorHalf) w = 0.f;
                 else w = smoothstep(s.corridorHalf, s.pavedHalf, d);
+                best = std::max(best, w);
+            });
+            return best;
+        }
+
+        // 1.0 on the PAVED band, feathered to 0 over `edgeFeather` metres just
+        // beyond the pavement edge, 0 elsewhere — the albedo-paint query for
+        // baked roads (terrain::makeGeoProvider paintRoads). Narrower than
+        // corridorWeight on purpose: painting the whole shoulder corridor reads
+        // as a phantom second road wherever roads run close (hairpins, dual
+        // carriageways). Bridge/excluded segments never paint — there is no
+        // road ON THE GROUND there. Thread-safe / read-only after conformTo().
+        [[nodiscard]] float pavedWeight(float x, float z, float edgeFeather = 0.8f) const {
+            float best = 0.f;
+            forEachNearbySegment(x, z, [&](const Seg& s) {
+                if (s.flags) return;
+                float t;
+                const float d = distToSegment(x, z, s, t);
+                float w;
+                if (d <= s.pavedHalf) w = 1.f;
+                else if (d >= s.pavedHalf + edgeFeather) w = 0.f;
+                else w = smoothstep(s.pavedHalf + edgeFeather, s.pavedHalf, d);
                 best = std::max(best, w);
             });
             return best;
@@ -239,6 +320,99 @@ namespace threepp::road {
                 // chain simplifies it into flickering slivers, so pin it off.
                 mesh->autoLod = false;
                 group->add(mesh);
+            }
+            return group;
+        }
+
+        // Ribbon meshes for BRIDGE SPANS only (profile mode — see
+        // RoadProfileOptions). Every maximal run of bridge-classified centerline
+        // samples becomes one deck ribbon, extended a couple of samples onto
+        // ground at each end so the deck meets the baked road flush. Roads fully
+        // on ground produce NOTHING here: with carveRoads(bakeSurface) + the
+        // provider's albedo paint the terrain itself is the road — mip-filtered
+        // texture instead of sub-pixel ribbon geometry, which is what kills the
+        // distant road shimmer (a 1 px jittered ribbon flips raster coverage
+        // every frame; a baked texel does not). Call after conformTo() with
+        // profile.enabled; returns an empty group in legacy mode.
+        [[nodiscard]] std::shared_ptr<Group> buildBridgeMeshes(int texWidth = 128, int texHeight = 256) const {
+            auto group = Group::create();
+            group->name = "road_bridges";
+            for (const auto& r : roads_) {
+                const auto& cl = r.gen->centerlineSamples();
+                const auto& f = r.sampleFlags;
+                if (f.size() != cl.size()) continue;// legacy mode — no classification ran
+                size_t i = 0;
+                int span = 0;
+                while (i < cl.size()) {
+                    if (f[i] != kSegBridge) { ++i; continue; }
+                    size_t j = i;
+                    while (j < cl.size() && f[j] == kSegBridge) ++j;
+                    // Two-sample abutment overlap onto ground at both ends.
+                    const size_t lo = (i >= 2) ? i - 2 : 0;
+                    const size_t hi = std::min(cl.size(), j + 2);
+                    std::vector<Vector3> deck(cl.begin() + static_cast<std::ptrdiff_t>(lo),
+                                              cl.begin() + static_cast<std::ptrdiff_t>(hi));
+                    i = j;
+                    if (deck.size() < 2) continue;
+                    if (auto mesh = buildRibbonPiece(r, deck, "bridge", span, texWidth, texHeight)) {
+                        group->add(mesh);
+                        ++span;
+                    }
+                }
+            }
+            return group;
+        }
+
+        // Ribbon meshes for the ON-GROUND runs, CHUNKED (~chunkLen metres each)
+        // so a caller can distance-cull them per frame: near the camera the
+        // ribbon supplies stand-on detail (crisp geometric edges, baked lane
+        // markings — everything the painted terrain's ~1 m splat texels cannot
+        // hold), and beyond the cull distance it vanishes and the baked+painted
+        // roadbed underneath carries the visual, which is mip-filtered texture
+        // and therefore cannot coverage-shimmer the way a sub-pixel ribbon
+        // does. Pair with carveRoads(bakeSurface): the baked bed sits at the
+        // conformed grade, the ribbon kSurfaceRaise above it — no z-fight.
+        // Default chunk length is a multiple of RoadParams::textureTileLength
+        // (12 m) so the dash phase stays roughly continuous across seams.
+        // Bridge/excluded samples never chunk (buildBridgeMeshes owns decks).
+        // In legacy (non-profile) mode every sample counts as ground.
+        [[nodiscard]] std::shared_ptr<Group> buildGroundChunkMeshes(float chunkLen = 240.f,
+                                                                    int texWidth = 128,
+                                                                    int texHeight = 256) const {
+            auto group = Group::create();
+            group->name = "road_chunks";
+            for (const auto& r : roads_) {
+                const auto& cl = r.gen->centerlineSamples();
+                const auto& f = r.sampleFlags;
+                const bool flagged = f.size() == cl.size();
+                int piece = 0;
+                size_t i = 0;
+                while (i < cl.size()) {
+                    if (flagged && f[i] != 0) { ++i; continue; }
+                    // Ground run [i, j).
+                    size_t j = i;
+                    while (j < cl.size() && (!flagged || f[j] == 0)) ++j;
+                    // Slice the run into ~chunkLen pieces, sharing the boundary
+                    // sample so consecutive chunks meet without a gap.
+                    size_t s = i;
+                    while (s + 1 < j) {
+                        size_t e = s + 1;
+                        float len = 0.f;
+                        while (e + 1 < j && len < chunkLen) {
+                            const float dx = cl[e].x - cl[e - 1].x, dz = cl[e].z - cl[e - 1].z;
+                            len += std::sqrt(dx * dx + dz * dz);
+                            ++e;
+                        }
+                        std::vector<Vector3> pts(cl.begin() + static_cast<std::ptrdiff_t>(s),
+                                                 cl.begin() + static_cast<std::ptrdiff_t>(e + 1));
+                        if (auto mesh = buildRibbonPiece(r, pts, "roadchunk", piece, texWidth, texHeight)) {
+                            group->add(mesh);
+                            ++piece;
+                        }
+                        s = e;
+                    }
+                    i = j;
+                }
             }
             return group;
         }
@@ -283,6 +457,17 @@ namespace threepp::road {
                 f(s.ax, s.az, s.ha, s.bx, s.bz, s.hb, s.pavedHalf, s.corridorHalf);
         }
 
+        // Same visit with the profile-classification flags appended:
+        //   f(ax, az, ha, bx, bz, hb, pavedHalf, corridorHalf, flags)
+        // flags: kSegBridge / kSegExcluded, always 0 in legacy (non-profile)
+        // mode. carveRoads uses this so bridge decks never carve the ground
+        // beneath them and excluded roads never carve at all.
+        template<class F>
+        void forEachSegmentFlagged(F&& f) const {
+            for (const auto& s : segs_)
+                f(s.ax, s.az, s.ha, s.bx, s.bz, s.hb, s.pavedHalf, s.corridorHalf, s.flags);
+        }
+
         // Dense conformed centerline polyline (world coords, y = conformed grade)
         // of the longest road — for a demo to auto-steer a car ALONG the road
         // (pure-pursuit). Ordered start→end so a progress index can follow it
@@ -311,6 +496,9 @@ namespace threepp::road {
             RoadSpec spec;
             std::unique_ptr<RoadGenerator> gen;
             float pavedHalf = 0.f, corridorHalf = 0.f;
+            // Per dense-centerline-sample classification (kSegBridge/kSegExcluded),
+            // filled by classifySegments in profile mode; empty in legacy mode.
+            std::vector<std::uint8_t> sampleFlags;
         };
 
         // ── immutable segment soup (thread-safe query backing) ───────────────
@@ -318,7 +506,15 @@ namespace threepp::road {
             float ax = 0.f, az = 0.f, bx = 0.f, bz = 0.f;// endpoints (XZ)
             float ha = 0.f, hb = 0.f;                    // conformed heights (set by snapshotHeights)
             float pavedHalf = 0.f, corridorHalf = 0.f;   // per-road widths
+            std::uint8_t flags = 0;                      // kBridge / kExcluded (profile mode only)
         };
+
+    public:
+        // Seg classification flags (set by conformTo when profile.enabled).
+        static constexpr std::uint8_t kSegBridge = 1;  // deck span — no terrain flatten/carve/paint
+        static constexpr std::uint8_t kSegExcluded = 2;// tunnel / ferry / garbage — not rendered at all
+
+    private:
 
         // Map the RoadParams for a spec: laneWidth = width/2 with laneCount 2 so
         // the paved band == width; verge + tessellation scale with category.
@@ -415,6 +611,205 @@ namespace threepp::road {
             const auto it = grid_.find(packKey(cellOf(x), cellOf(z)));
             if (it == grid_.end()) return;
             for (int idx : it->second) f(segs_[static_cast<size_t>(idx)]);
+        }
+
+        // One ribbon sub-mesh over `pts` (a slice of a road's conformed dense
+        // centerline, y = final grade): sub-generator draped onto the slice's
+        // own profile + the same material/texture recipe as buildMeshes.
+        // Shared by buildBridgeMeshes (deck spans) and buildGroundChunkMeshes
+        // (distance-culled near-detail chunks). Returns nullptr on degenerate
+        // geometry.
+        [[nodiscard]] std::shared_ptr<Mesh> buildRibbonPiece(const Road& r,
+                                                             const std::vector<Vector3>& pts,
+                                                             const char* namePrefix, int idx,
+                                                             int texWidth, int texHeight) const {
+            if (pts.size() < 2) return nullptr;
+            RoadParams p = paramsFor(r.spec);
+            p.samplesPerSegment = 2;// slice points are already dense
+            RoadGenerator gen(pts, p);
+            // "Ground" for the piece is its own profile — light smoothing keeps
+            // a deck taut instead of re-draping it into the ravine/water it
+            // exists to cross, and is a near-no-op for ground chunks (their
+            // heights are already the smoothed conformed grade).
+            gen.conformTo([&pts](float x, float z) {
+                return polylineHeightAt(pts, x, z);
+            }, 2);
+            auto geo = gen.buildSurface();
+            if (!geo->getAttribute<float>("position") ||
+                geo->getAttribute<float>("position")->count() == 0)
+                return nullptr;
+
+            auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                            .color(Color::white)
+                                                            .roughness(0.95f)
+                                                            .metalness(0.f));
+            auto tex = DataTexture::create(
+                    ImageData{gen.bakeSurfaceTexture(texWidth, texHeight)},
+                    static_cast<unsigned int>(texWidth), static_cast<unsigned int>(texHeight));
+            tex->colorSpace = ColorSpace::sRGB;
+            tex->magFilter = Filter::Linear;
+            tex->minFilter = Filter::LinearMipmapLinear;
+            tex->wrapS = TextureWrapping::ClampToEdge;
+            tex->wrapT = TextureWrapping::Repeat;
+            mat->map = tex;
+
+            auto mesh = Mesh::create(geo, mat);
+            mesh->name = std::string(namePrefix) + "_" +
+                         (r.spec.id.empty() ? std::string("?") : r.spec.id) +
+                         "_" + std::to_string(idx);
+            mesh->receiveShadow = true;
+            mesh->autoLod = false;// thin strip — LOD would sliver it (see buildMeshes)
+            return mesh;
+        }
+
+        // Interpolated polyline height at the nearest XZ point on `pts`.
+        // O(points) — used only at load time (conform/classification/bridges).
+        static float polylineHeightAt(const std::vector<Vector3>& pts, float x, float z) {
+            float bestD = std::numeric_limits<float>::max();
+            float bestY = 0.f;
+            for (size_t k = 1; k < pts.size(); ++k) {
+                const Vector3& a = pts[k - 1];
+                const Vector3& b = pts[k];
+                const float abx = b.x - a.x, abz = b.z - a.z;
+                const float lsq = abx * abx + abz * abz;
+                float t = (lsq > 1e-12f) ? ((x - a.x) * abx + (z - a.z) * abz) / lsq : 0.f;
+                t = std::clamp(t, 0.f, 1.f);
+                const float dx = x - (a.x + t * abx), dz = z - (a.z + t * abz);
+                const float d = dx * dx + dz * dz;
+                if (d < bestD) {
+                    bestD = d;
+                    bestY = a.y + (b.y - a.y) * t;
+                }
+            }
+            return bestY;
+        }
+        // Data height (spec point Y — the pack's true road elevation) at (x,z).
+        static float specHeightAt(const RoadSpec& s, float x, float z) {
+            return polylineHeightAt(s.points, x, z);
+        }
+
+        // Profile-mode classify + conform for one road (see RoadProfileOptions).
+        // Per dense centerline sample: bridge where the data height spans
+        // plausibly above the ground or the ground is water; tunnel-excluded
+        // where the data height runs well below the ground; ferry-excluded for
+        // long water runs whose data height never clears the deck minimum;
+        // short bridge runs and implausible (garbage) data lifts demote back to
+        // ground. Every sample then gets an explicit TARGET elevation for its
+        // final role — deck height for spans, raw ground for everything else —
+        // and the road conforms to those targets (conformToHeights), so demoted
+        // spans never carry a stale lift. Sample flags are kept on the Road
+        // (for buildBridgeMeshes); foldSegFlags() mirrors them onto the Seg
+        // soup for the terrain queries + carveRoads.
+        void conformRoadProfiled(Road& r, const std::function<float(float, float)>& groundFn,
+                                 int smoothingPasses, const RoadProfileOptions& po) {
+            const auto& cl = r.gen->centerlineSamples();
+            const size_t n = cl.size();
+            std::vector<std::uint8_t> f(n, 0);
+            std::vector<float> ground(n), dataY(n);
+            for (size_t i = 0; i < n; ++i) {
+                ground[i] = groundFn(cl[i].x, cl[i].z);
+                dataY[i] = specHeightAt(r.spec, cl[i].x, cl[i].z);
+                const bool water = ground[i] <= po.seaLevel + po.waterEps;
+                const float lift = dataY[i] - ground[i];
+                // A plausible lift is a span; an implausible one is garbage
+                // elevation data and stays on the ground. Water always spans
+                // (a road is never submerged) — ferry runs are culled below.
+                if ((lift > po.bridgeThresh && lift <= po.maxDataLift) || water) f[i] |= kSegBridge;
+                // Tunnel wins outright — including SUBSEA tunnels, whose data
+                // height runs far below the water sheet.
+                if (ground[i] - dataY[i] > po.tunnelThresh) f[i] = kSegExcluded;
+            }
+            const auto runLen = [&cl](size_t i, size_t j) {
+                float len = 0.f;
+                for (size_t k = i + 1; k < j; ++k) {
+                    const float dx = cl[k].x - cl[k - 1].x, dz = cl[k].z - cl[k - 1].z;
+                    len += std::sqrt(dx * dx + dz * dz);
+                }
+                return len;
+            };
+            // Ferry / tunnel-flat / garbage: a long water crossing is a REAL
+            // bridge only if its data heights are ELEVATED along the span (a
+            // deck arches over the water) — judged by the run's MEDIAN data
+            // height against the bridge threshold. A ferry leg or a flattened
+            // subsea-tunnel polyline runs at quay/portal height (median ≈ sea
+            // even when an endpoint pokes a few metres up), and rendering it
+            // would lay a road ON the sea — exclude the run outright.
+            for (size_t i = 0; i < n;) {
+                if (ground[i] > po.seaLevel + po.waterEps) { ++i; continue; }
+                size_t j = i;
+                while (j < n && ground[j] <= po.seaLevel + po.waterEps) ++j;
+                if (runLen(i, j) > po.ferryMinLen) {
+                    std::vector<float> med(dataY.begin() + static_cast<std::ptrdiff_t>(i),
+                                           dataY.begin() + static_cast<std::ptrdiff_t>(j));
+                    std::nth_element(med.begin(), med.begin() + static_cast<std::ptrdiff_t>(med.size() / 2),
+                                     med.end());
+                    if (med[med.size() / 2] < po.seaLevel + po.bridgeThresh)
+                        for (size_t k = i; k < j; ++k) f[k] = kSegExcluded;
+                }
+                i = j;
+            }
+            // Demote short bridge runs (shore blips where the centerline grazes
+            // a water cell, culvert-scale stream hops, single-point data noise).
+            // ON LAND the carve fills them as a causeway — how a real roadbed
+            // crosses a dip. OVER WATER a demoted blip must be EXCLUDED, never
+            // ground: a "ground" stub standing on the open sea is exactly the
+            // floating-shard artifact class this feature exists to kill.
+            for (size_t i = 0; i < n;) {
+                if (f[i] != kSegBridge) { ++i; continue; }
+                size_t j = i;
+                while (j < n && f[j] == kSegBridge) ++j;
+                if (runLen(i, j) < po.minSpanLen)
+                    for (size_t k = i; k < j; ++k)
+                        f[k] = (ground[k] <= po.seaLevel + po.waterEps)
+                                       ? kSegExcluded
+                                       : static_cast<std::uint8_t>(f[k] & ~kSegBridge);
+                i = j;
+            }
+            // Absorb short keep-islands flanked by exclusion: the fjord DTM has
+            // skerries/shoals that split a ferry crossing into fragments — a
+            // few samples of "land" (or a sub-minSpan bridge) in the middle of
+            // an excluded crossing is data noise, not a road you can stand on.
+            for (size_t i = 0; i < n;) {
+                if (f[i] == kSegExcluded) { ++i; continue; }
+                size_t j = i;
+                while (j < n && f[j] != kSegExcluded) ++j;
+                const bool flankedL = (i == 0) || f[i - 1] == kSegExcluded;
+                const bool flankedR = (j == n) || f[j] == kSegExcluded;
+                // Interior islands only — a run touching the polyline START and
+                // END is the whole road, never absorbed.
+                const bool interior = !(i == 0 && j == n);
+                if (interior && flankedL && flankedR && runLen(i, j) < po.minSpanLen)
+                    for (size_t k = i; k < j; ++k) f[k] = kSegExcluded;
+                i = j;
+            }
+            // Explicit target elevation per sample for its FINAL role. Demoted
+            // water blips still hold the deck minimum (a causeway pad, never a
+            // submerged roadbed); everything else on ground drapes the ground.
+            std::vector<float> target(n);
+            for (size_t i = 0; i < n; ++i) {
+                const bool water = ground[i] <= po.seaLevel + po.waterEps;
+                if (f[i] & kSegBridge)
+                    target[i] = std::max(dataY[i], po.seaLevel + po.deckMin);
+                else
+                    target[i] = water ? po.seaLevel + po.deckMin : ground[i];
+            }
+            r.gen->conformToHeights(target, smoothingPasses);
+            r.sampleFlags = std::move(f);
+        }
+
+        // Mirror the per-sample classification onto the segment soup (exclusion
+        // dominates). Ordering matches snapshotHeights/buildXZGeometry.
+        void foldSegFlags() {
+            size_t si = 0;
+            for (const auto& r : roads_) {
+                const auto& f = r.sampleFlags;
+                for (size_t k = 1; k < f.size(); ++k, ++si) {
+                    if (si >= segs_.size()) return;// defensive (shouldn't happen)
+                    const std::uint8_t u = static_cast<std::uint8_t>(f[k - 1] | f[k]);
+                    segs_[si].flags = (u & kSegExcluded) ? kSegExcluded
+                                                         : static_cast<std::uint8_t>(u & kSegBridge);
+                }
+            }
         }
 
         // Point-to-segment distance in XZ; writes the clamped projection param t
