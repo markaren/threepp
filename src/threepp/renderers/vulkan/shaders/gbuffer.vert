@@ -18,11 +18,11 @@ layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 currVPunjittered;// for motion-vec; must match prev's projection family
     mat4 prevVP;          // previous-frame view-proj, unjittered
     vec4 jitter;          // .xy = jitter offset in clip-space (sub-texel), .zw = 1/resolution
-    vec4 prevJitter;      // .xy = previous frame's jitter offset; gbuffer.frag adds
-                          // (prev - curr) to the unjittered motion vec so TAA reproject
-                          // hits the correct rasterized prev pixel (not its unjittered
-                          // ideal). Without this, sub-pixel wander = visible shake on
-                          // moving objects.
+    vec4 prevJitter;      // .xy = previous frame's jitter offset. NOTE: the motion vec
+                          // stays JITTER-FREE (gbuffer.frag writes clean prevNDC−currNDC;
+                          // a (prev−curr) delta was tested there and rejected). Kept for
+                          // the deferred shade's hybrid reproject tap correction; .z
+                          // smuggles the normal-map Toksvig toggle.
 } cam;
 
 // motionMat[i] = prev_world_i * inverse(current_world_i). Apply to a

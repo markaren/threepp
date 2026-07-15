@@ -204,6 +204,20 @@ namespace threepp {
         [[nodiscard]] bool dlss() const;          // DLSS is the active upscaler now
         [[nodiscard]] bool dlssAvailable() const; // compiled in + feature created
 
+        // Material-texture anisotropic filtering. Default AUTO (0): 16× when
+        // the raster is UNJITTERED (setGbufferMsaa>1 without an upscaler,
+        // event camera) — sharpness has no temporal cost there — and
+        // ISOTROPIC trilinear whenever the raster is JITTERED (built-in TAA,
+        // DLSS, FSR). Rationale: anisotropic filtering re-sharpens
+        // grazing-angle textures back to pixel frequency, which no temporal
+        // resolve can hold still — measured as the dominant carrier of the
+        // "whole scene shimmers at a distance" residual on terrain- and
+        // Bistro-class content; isotropic LOD selection prefilters it into
+        // stability (a mild grazing-angle softness trade). Pass 1..16 to
+        // force a fixed level in every mode; 0 restores AUTO. Runtime-safe.
+        void setTextureAnisotropy(float aniso);
+        [[nodiscard]] float textureAnisotropy() const;// the override; 0 = auto
+
         // Deferred SVGF denoiser toggle (the ray-queried AO/GI + shadow
         // channels). Default on.
         void setDenoise(bool enabled);

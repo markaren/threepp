@@ -330,9 +330,17 @@ namespace threepp::vulkan {
                                     in.displayWidth, in.displayHeight, true,
                                     FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        // Jitter offset is the negated sub-pixel projection jitter (FSR reference
-        // convention). Motion is NDC-delta → render-pixel via {0.5W, -0.5H}.
-        d.jitterOffset       = {-in.jitterX, -in.jitterY};
+        // Jitter offset — FSR's convention is the IMAGE-CONTENT shift in y-DOWN
+        // pixel space: its reference application is a clip-space translation of
+        // (+2jx/W, −2jy/H), which moves content by (+jx, +jy) pixels. threepp
+        // applies the same raw (jx, jy) as m02/m12 += 2j/extent in GL y-UP clip
+        // space, which moves content by (−jx, +jy) pixels — so the conversion
+        // is per-axis, NOT a plain negation. The old {-jx, -jy} had X right and
+        // Y flipped: FSR mis-anchored every frame's samples by 2·jy vertically,
+        // which surfaced as the 8-phase vertical tremble ("shaking") on the FSR
+        // path. Same seam as the motion vectors, which already do the y-flip
+        // via motionScaleY = -0.5H.
+        d.jitterOffset       = {-in.jitterX, +in.jitterY};
         d.motionVectorScale  = {in.motionScaleX, in.motionScaleY};
         d.renderSize         = {in.renderWidth,  in.renderHeight};
         d.upscaleSize        = {in.displayWidth, in.displayHeight};

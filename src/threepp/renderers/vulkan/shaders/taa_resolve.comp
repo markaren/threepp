@@ -112,6 +112,11 @@ layout(push_constant) uniform Pc {
     // prevVPunjit · currVPunjit⁻¹ — maps current CLIP at the far plane
     // (reversed-Z: z = 0) to previous clip. Supplies SKY pixels their true
     // rotation-induced motion. std430: mat4 aligns to offset 32.
+    // SMUGGLED: column 2 rows 0/1 ([2].xy) carry this frame's Halton jitter
+    // in RENDER TEXELS for the current-sample jitter cancellation (see main).
+    // Legal because the matrix is only ever applied to vec4(ndc, 0, 1) —
+    // column 2 multiplies z = 0 and is inert. The 128-byte push-constant
+    // budget (cross-vendor guaranteed minimum) is otherwise full.
     mat4  skyReproj;
     // Split-screen: full (physical) texture sizes for UV normalisation, each
     // packed as (w | h<<16) — same convention as dstOffset — to fit the two
@@ -156,22 +161,27 @@ vec3 decompand(vec3 c) {
 // physIn/physOut are packed (w | h<<16) — see the Pc block comment.
 uvec2 unpackDims(uint packed) { return uvec2(packed & 0xFFFFu, packed >> 16u); }
 
-// Catmull-Rom history reconstruction (5-tap, bilinear-fused).
-// Single-bilinear sampling of history smears under camera translation
-// (every frame's prevUv lands at a sub-pixel position → bilinear blurs
-// history by ~0.5 px → blur compounds across frames with α=0.1 →
-// visible smear, worst on close objects where screen-space velocity per
-// camera unit is highest). Catmull-Rom is a sharper reconstruction
-// filter: a separable cubic, evaluated as 5 bilinear taps (Jorge
-// Jimenez / Inside the renderer trick — drop the 4 corner weights,
-// since they're small). The neighborhood AABB clamp below catches any
-// slight overshoot. Sampler stays LINEAR — required for the 4 sub-taps
+// Catmull-Rom resample (5-tap, bilinear-fused). Two users:
+//  · history reconstruction at the reprojected position — single-bilinear
+//    sampling of history smears under camera translation (every frame's
+//    prevUv lands at a sub-pixel position → bilinear blurs history by
+//    ~0.5 px → blur compounds across frames with α=0.1 → visible smear,
+//    worst on close objects where screen-space velocity per camera unit is
+//    highest);
+//  · CURRENT-frame jitter cancellation (see main) — the raster renders with
+//    a jittered projection, so reconstructing the scene at the output
+//    pixel's UNJITTERED center is a sub-texel resample every frame; a plain
+//    bilinear there would both blur and (worse) let the composed output
+//    translate with the jitter.
+// Catmull-Rom is a sharp separable cubic, evaluated as 5 bilinear taps
+// (Jorge Jimenez / Inside the renderer trick — drop the 4 corner weights,
+// since they're small). The neighborhood AABB clamp / dering clamp catches
+// any slight overshoot. Sampler stays LINEAR — required for the 4 sub-taps
 // fused into each fetch.
-// `uv` is in PHYSICAL history-texture space (the caller scales the region-UV by
+// `uv` is in PHYSICAL texture space (the caller scales the region-UV by
 // region/phys). texSize is the full texture size so the 5 fused-bilinear taps
 // land on the correct texels.
-vec3 sampleHistoryCR(vec2 uv) {
-    const vec2 texSize = vec2(unpackDims(pc.physOut));
+vec3 sampleCR(sampler2D tex, vec2 uv, vec2 texSize) {
     const vec2 samplePos = uv * texSize;
     const vec2 texPos1 = floor(samplePos - 0.5) + 0.5;
     const vec2 f = samplePos - texPos1;
@@ -190,17 +200,20 @@ vec3 sampleHistoryCR(vec2 uv) {
 
     // Cross of 5 fused-bilinear fetches (top, left, center, right, bottom).
     vec3 result = vec3(0.0);
-    result += texture(taaHistoryReadTex, vec2(texPos12.x, texPos0.y )).rgb * (w12.x * w0.y );
-    result += texture(taaHistoryReadTex, vec2(texPos0.x,  texPos12.y)).rgb * (w0.x  * w12.y);
-    result += texture(taaHistoryReadTex, vec2(texPos12.x, texPos12.y)).rgb * (w12.x * w12.y);
-    result += texture(taaHistoryReadTex, vec2(texPos3.x,  texPos12.y)).rgb * (w3.x  * w12.y);
-    result += texture(taaHistoryReadTex, vec2(texPos12.x, texPos3.y )).rgb * (w12.x * w3.y );
+    result += texture(tex, vec2(texPos12.x, texPos0.y )).rgb * (w12.x * w0.y );
+    result += texture(tex, vec2(texPos0.x,  texPos12.y)).rgb * (w0.x  * w12.y);
+    result += texture(tex, vec2(texPos12.x, texPos12.y)).rgb * (w12.x * w12.y);
+    result += texture(tex, vec2(texPos3.x,  texPos12.y)).rgb * (w3.x  * w12.y);
+    result += texture(tex, vec2(texPos12.x, texPos3.y )).rgb * (w12.x * w3.y );
     return max(result, vec3(0.0));// Catmull-Rom can ring slightly negative on hard edges.
 }
+vec3 sampleHistoryCR(vec2 uv) {
+    return sampleCR(taaHistoryReadTex, uv, vec2(unpackDims(pc.physOut)));
+}
 
-// Spatial FXAA (FXAA3 "console" variant) on the LDR input. This is the deferred
-// path's anti-aliasing now that camera jitter is off (jitter+TAA flickered). It
-// edge-detects via luma and blends along the edge — stable, no temporal shimmer.
+// Spatial FXAA (FXAA3 "console" variant) on the LDR input. Unused by main()
+// today (jittered TAA / unjittered MSAA are the shipping AA modes) — kept for
+// the non-temporal fallback path.
 vec3 fxaa(sampler2D tex, vec2 uv, vec2 rcpFrame) {
     const vec3 L = vec3(0.299, 0.587, 0.114);
     const vec3 rgbM = texture(tex, uv).rgb;
@@ -274,25 +287,40 @@ void main() {
 
     const bool hdr = isHdrMode();
 
-    // Current sample. LDR mode: raw (jittered) post-tonemap input. HDR mode
-    // (setTaaHdrInput): the linear-HDR scene + additive bloom — the same
-    // add PostComposite used to do BEFORE tone mapping, done here instead
-    // since the resolve now runs before PostComposite. Temporal accumulation
-    // over the Halton jitter sequence is the anti-aliasing (TSR) either way.
-    vec3 currLinear = texture(taaInputTex, uvIn).rgb;
-    if (hdr) {
-        currLinear = texture(sceneHdrTex, uvIn).rgb;
-        if (pc.bloomIntensity > 0.0) currLinear += texture(bloomTex, uv).rgb * pc.bloomIntensity;
-    }
-    // `curr` is the WORKING-space sample every gate/blend below operates on:
-    // companded (bounded, LDR-like) in HDR mode, the raw LDR sample
-    // otherwise — matches the m1/m2 neighbourhood stats, which are companded
-    // the same way. Decompanded back to true linear only at the final store.
-    const vec3 curr = hdr ? compand(currLinear) : currLinear;
+    // ── JITTER CANCELLATION ─────────────────────────────────────────────────
+    // The raster renders with a Halton-jittered projection (m02/m12 +=
+    // 2·j/extent in GL clip space), which translates the rendered CONTENT by
+    // (-jx, +jy) texels in y-down texture space (same convention the deferred
+    // shade's `pixelNDC + cam.jitter.xy` reconstruction is built on). Without
+    // compensation here, the current sample — and with it the composed output
+    // — TRANSLATES with the 8-phase jitter pattern: the systemic "everything
+    // shakes" (measured ±0.9 px global shift, period 8, on every jittered
+    // path). Anchor this pass at UNJITTERED pixel centers instead: every
+    // current-frame read (color, motion, ids, depth, stats box) samples where
+    // this output pixel's unjittered content actually landed in the jittered
+    // input. History reprojection needs NO extra term — motion vectors are
+    // jitter-free and the history itself is unjittered-anchored from here on.
+    //
+    // The jitter (in RENDER TEXELS) rides in skyReproj's dead z-column: the
+    // matrix is only ever applied to vec4(ndc, 0, 1), so column 2 multiplies
+    // z = 0 and is inert — see TaaResolve::recordResolve. (0,0) whenever the
+    // raster is unjittered (MSAA mode, event camera) — every path below then
+    // collapses to the exact pre-fix arithmetic.
+    const vec2 jitTex   = vec2(pc.skyReproj[2].x, pc.skyReproj[2].y);
+    const bool jittered = any(notEqual(jitTex, vec2(0.0)));
+    // Clamp half a texel inside the pane so the sub-texel offset can't read
+    // beyond the region at the borders.
+    const vec2 uvInJ = jittered
+            ? clamp(uvIn + vec2(-jitTex.x, jitTex.y) / physInSz,
+                    vec2(0.5) / physInSz,
+                    (vec2(float(pc.inWidth), float(pc.inHeight)) - 0.5) / physInSz)
+            : uvIn;
 
     // Reproject prev frame via gbuffer motion vec. Motion is in GL-NDC delta
-    // (Y-up); convert UV → GL-NDC → add motion → back to screen UV.
-    vec2 motionGL = texture(gbufMotionTex, uvIn).rg;
+    // (Y-up); convert UV → GL-NDC → add motion → back to screen UV. Sampled
+    // at the unjittered position (NEAREST sampler → snaps to the closest
+    // surface sample to this output pixel's true center).
+    vec2 motionGL = texture(gbufMotionTex, uvInJ).rg;
     const vec2 currNDC  = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
     // SKY MOTION RECONSTRUCTION. Sky rasterizes no geometry, so its motion
     // stays at the 0 clear — correct under TRANSLATION (sky is at infinity)
@@ -316,7 +344,7 @@ void main() {
     // Mesh-ID rejection + skinned-mesh detection. Read both at once.
     //   ids.x = instanceCustomIndex+1 (0 = sky/miss)
     //   ids.z = per-instance flags (layout: vulkan_shared.h)
-    const uvec4 currIds = texture(gbufIdsCurrTex, uvIn);
+    const uvec4 currIds = texture(gbufIdsCurrTex, uvInJ);
     const uvec4 prevIds = reprojValid
             ? texture(gbufIdsPrevTex, prevUv * inScale)
             : uvec4(0u);
@@ -348,8 +376,15 @@ void main() {
     // gives the same bounded-neighbourhood guarantee for unbounded linear
     // input (a sun-spec/emissive texel maps to <1 instead of blowing up σ).
     const ivec2 inSz = ivec2(int(pc.inWidth), int(pc.inHeight));
-    const ivec2 ipx  = clamp(ivec2(uv * vec2(inSz)), ivec2(0), inSz - 1);
+    // Centre the box on the UNJITTERED sample position (uvInJ == uvIn when
+    // unjittered → identical to the old `uv * inSz` texel).
+    const ivec2 ipx  = clamp(ivec2(uvInJ * physInSz), ivec2(0), inSz - 1);
     vec3 m1 = vec3(0.0), m2 = vec3(0.0);
+    // Working-space min/max of the same 3×3 — dering clamp for the Catmull-
+    // Rom current-sample resample below (FSR2-style: a sharp cubic can
+    // overshoot at hard edges; its footprint is a superset of this box, so
+    // clamping to the box bounds kills the ring without softening).
+    vec3 minS = vec3(1e30), maxS = vec3(-1e30);
     float cnt = 0.0;
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
@@ -365,10 +400,48 @@ void main() {
                     s += texture(bloomTex, (vec2(q) + 0.5) / vec2(inSz)).rgb * pc.bloomIntensity;
                 s = compand(s);
             }
+            minS = min(minS, s); maxS = max(maxS, s);
             const vec3 c = RGB_to_YCoCg(s);
             m1 += c; m2 += c * c; cnt += 1.0;
         }
     }
+
+    // Current sample, anchored at this output pixel's UNJITTERED center.
+    // LDR mode: post-tonemap input. HDR mode (setTaaHdrInput): the linear-HDR
+    // scene + additive bloom — the same add PostComposite used to do BEFORE
+    // tone mapping, done here instead since the resolve now runs before
+    // PostComposite. Temporal accumulation over the Halton jitter sequence is
+    // the anti-aliasing (TSR) either way.
+    // Jittered raster: Catmull-Rom resample at the unjittered position
+    // (uvInJ), deringed against the 3×3 working-space box — this is the
+    // jitter cancellation that stops the composed output translating with
+    // the jitter pattern. Unjittered raster (MSAA mode / event camera):
+    // plain center read, bit-identical to the pre-fix path.
+    vec3 currLinear;
+    if (jittered) {
+        // (No ternary — opaque sampler types can't be ternary operands.)
+        if (hdr) currLinear = sampleCR(sceneHdrTex, uvInJ, physInSz);
+        else     currLinear = sampleCR(taaInputTex, uvInJ, physInSz);
+        if (hdr && pc.bloomIntensity > 0.0) {
+            // Bloom rides the same jittered content — shift its region-UV by
+            // the same texel offset (negligible for the blurred pyramid, but
+            // keeps every current-frame term on one anchor).
+            const vec2 bloomUvJ = uv + vec2(-jitTex.x, jitTex.y) / vec2(inSz);
+            currLinear += texture(bloomTex, bloomUvJ).rgb * pc.bloomIntensity;
+        }
+    } else {
+        currLinear = texture(taaInputTex, uvIn).rgb;
+        if (hdr) {
+            currLinear = texture(sceneHdrTex, uvIn).rgb;
+            if (pc.bloomIntensity > 0.0) currLinear += texture(bloomTex, uv).rgb * pc.bloomIntensity;
+        }
+    }
+    // `curr` is the WORKING-space sample every gate/blend below operates on:
+    // companded (bounded, LDR-like) in HDR mode, the raw LDR sample
+    // otherwise — matches the m1/m2 neighbourhood stats, which are companded
+    // the same way. Decompanded back to true linear only at the final store.
+    vec3 curr = hdr ? compand(currLinear) : currLinear;
+    if (jittered) curr = clamp(curr, minS, maxS);// dering (no-op when unjittered)
 
     // Motion in pixels — used by the clip-rate gate below AND the velocity
     // alpha. NDC motion is in [-2, 2] across the screen.
@@ -386,7 +459,7 @@ void main() {
         const vec2 inTexel = 1.0 / vec2(textureSize(gbufMotionTex, 0));
         for (int dy = -1; dy <= 1; ++dy)
             for (int dx = -1; dx <= 1; ++dx) {
-                const vec2 mv = texture(gbufMotionTex, uvIn + vec2(dx, dy) * inTexel).rg;
+                const vec2 mv = texture(gbufMotionTex, uvInJ + vec2(dx, dy) * inTexel).rg;
                 dilatedMotionPx = max(dilatedMotionPx,
                                       length(mv * 0.5 * vec2(pc.width, pc.height)));
             }
@@ -407,7 +480,7 @@ void main() {
     // is genuinely moving. depthLin all-zero ⇒ disabled (no camera params).
     float depthDisocc = 0.0;
     if (reprojValid && (pc.depthLin.z != 0.0 || pc.depthLin.w != 0.0)) {
-        const float surfD = texture(gbufMotionTex, uvIn).b;               // this surface's prev NDC depth
+        const float surfD = texture(gbufMotionTex, uvInJ).b;              // this surface's prev NDC depth
         const float bufD  = texture(gbufDepthPrevTex, prevUv * inScale).x;// prev depth buffer at reproject
         const float svz   = linZ(surfD);
         const bool  mismatch = abs(svz - linZ(bufD)) > 0.1 * max(abs(svz), 1e-3);

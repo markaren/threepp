@@ -771,7 +771,9 @@ namespace threepp::vulkan {
                                    float mblurShutter,
                                    bool hdrMode,
                                    float bloomIntensity,
-                                   float exposureRatio) {
+                                   float exposureRatio,
+                                   float jitterTexX,
+                                   float jitterTexY) {
         // Physical (full texture) sizes default to the region sizes → scale 1.
         if (physInW == 0)  physInW  = inWidth;
         if (physInH == 0)  physInH  = inHeight;
@@ -859,6 +861,14 @@ namespace threepp::vulkan {
         const uint32_t packedDst = (dstX & 0xFFFFu) | (dstY << 16);
         std::memcpy(&pc[7], &packedDst, 4);// offset 28: swapchain write offset
         std::memcpy(&pc[8], skyReproj, 64);// offset 32: mat4
+        // Smuggle this frame's jitter (RENDER TEXELS) into the mat4's dead
+        // z-column (column-major: col 2 rows 0/1 = pc[16]/pc[17]). The shader
+        // only ever applies skyReproj to vec4(ndc, 0, 1), so column 2
+        // multiplies z = 0 and is inert — see the header-comment contract.
+        // Patched ONLY in this resolve's copy; the tilemax/mblur push blocks
+        // below keep the caller's untouched matrix.
+        pc[16] = jitterTexX;
+        pc[17] = jitterTexY;
         const uint32_t packedPhysIn  = (physInW  & 0xFFFFu) | (physInH  << 16);
         const uint32_t packedPhysOut = (physOutW & 0xFFFFu) | (physOutH << 16);
         std::memcpy(&pc[24], &packedPhysIn,  4);// offset 96

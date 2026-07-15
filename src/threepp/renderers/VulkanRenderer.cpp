@@ -952,6 +952,7 @@ namespace threepp {
         auto& impl = *core();
         if (enabled == impl.eventCamEnabled_) return;
         impl.eventCamEnabled_ = enabled;
+        impl.markMaterialSamplerDirty();// jitter gate flips → sampler policy flips
         if (enabled) {
             if (!impl.eventCam_) {
                 impl.eventCam_ = std::make_unique<vulkan::EventCameraDetector>(*impl.ctx);
@@ -1138,6 +1139,14 @@ namespace threepp {
 
     bool VulkanRendererCore::dlssAvailable() const {
         return core()->dlssAvailable();
+    }
+
+    void VulkanRendererCore::setTextureAnisotropy(float aniso) {
+        core()->setTextureAnisotropy(aniso);
+    }
+
+    float VulkanRendererCore::textureAnisotropy() const {
+        return core()->textureAnisoOverride_;
     }
 
     void VulkanRendererCore::setDenoise(bool enabled) {

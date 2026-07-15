@@ -96,17 +96,38 @@ namespace threepp::vulkan {
                                                           width, height, readWrite);
         }
 
-        // Jitter sign: DLSS takes the projection jitter AS APPLIED (un-negated) —
-        // the opposite of the FSR dispatch convention on this same seam. Measured
-        // on the ABeautifulGame static 16-frame sequence: un-negated is 2.3× more
-        // temporally stable on the model crop (0.159 vs 0.368 mean |Δ|); negated
-        // mis-reprojects every frame. THREEPP_DLSS_JITTER_SIGN=neg flips it back
-        // for debugging.
-        float jitterSign() {
-            static const float s = [] {
-                const char* v = std::getenv("THREEPP_DLSS_JITTER_SIGN");
-                return (v && std::strcmp(v, "neg") == 0) ? -1.f : 1.f;
-            }();
+        // Jitter signs, PER AXIS: (−jx, +jy) — the IMAGE-CONTENT shift in
+        // y-DOWN pixel space, the SAME convention FSR takes on this seam.
+        // threepp applies the raw Halton (jx, jy) as m02/m12 += 2j/extent in
+        // GL y-UP clip space, which shifts content by (−jx, +jy) pixels: the
+        // GL-clip → pixel-space conversion is per-axis, NOT a scalar sign, so
+        // the old scalar could never be right. The earlier "un-negated
+        // (+,+) is 2.3× more stable than negated (−,−)" measurement compared
+        // the only two options a scalar allows — BOTH have exactly one axis
+        // wrong; the residual mis-anchor was the 8-phase tremble on the DLSS
+        // path ("DLSS shakes like the TAA"). Full 2×2 matrix, measured
+        // 2026-07-15 (norway_terrain static phase-correlation, max |global
+        // shift| px x/y): (+,+) 0.072/0.019 · (+,−) 0.077/0.050 · (−,−)
+        // 0.019/0.061 · (−,+) 0.014/0.019 ← only (−,+) passes the < 0.05 px
+        // acceptance on both axes. Same seam as the motion vectors, which
+        // already y-flip via motionScaleY = -0.5H.
+        // Debug overrides: THREEPP_DLSS_JITTER_SIGN_X / _Y = "neg"/"pos"
+        // force an axis; legacy THREEPP_DLSS_JITTER_SIGN=neg flips BOTH
+        // defaults.
+        float axisSign(const char* env, float dflt) {
+            const char* v = std::getenv(env);
+            if (v && std::strcmp(v, "neg") == 0) return -1.f;
+            if (v && std::strcmp(v, "pos") == 0) return 1.f;
+            const char* legacy = std::getenv("THREEPP_DLSS_JITTER_SIGN");
+            if (legacy && std::strcmp(legacy, "neg") == 0) return -dflt;
+            return dflt;
+        }
+        float jitterSignX() {
+            static const float s = axisSign("THREEPP_DLSS_JITTER_SIGN_X", -1.f);
+            return s;
+        }
+        float jitterSignY() {
+            static const float s = axisSign("THREEPP_DLSS_JITTER_SIGN_Y", 1.f);
             return s;
         }
 
@@ -347,9 +368,8 @@ namespace threepp::vulkan {
         ev.Feature.InSharpness = 0.f;// the renderer keeps its own display RCAS
         ev.pInDepth          = &depth;
         ev.pInMotionVectors  = &motion;
-        const float s        = jitterSign();
-        ev.InJitterOffsetX   = s * in.jitterX;
-        ev.InJitterOffsetY   = s * in.jitterY;
+        ev.InJitterOffsetX   = jitterSignX() * in.jitterX;
+        ev.InJitterOffsetY   = jitterSignY() * in.jitterY;
         ev.InRenderSubrectDimensions = {in.renderWidth, in.renderHeight};
         ev.InReset           = in.reset ? 1 : 0;
         ev.InMVScaleX        = in.motionScaleX;

@@ -938,7 +938,27 @@ namespace threepp {
         // device drain. The structural-rebuild prune (post-drain) destroys
         // these and returns the slots to freeTextureSlots.
         std::vector<uint32_t> retiredTextureSlots_;
-        VkSampler textureSampler_ = VK_NULL_HANDLE;
+        // The two policy samplers every material-texture binding chooses
+        // between (fillMaterialTextureInfos → materialSampler()): 16× aniso
+        // when the raster is UNJITTERED (sharpness has no temporal cost), and
+        // isotropic-trilinear when the raster is JITTERED (TAA/DLSS/FSR) —
+        // anisotropic filtering re-sharpens grazing-angle textures back to
+        // pixel frequency, which no temporal resolve can hold still; measured
+        // as the dominant carrier of the "whole scene shimmers at a distance"
+        // residual on terrain/Bistro-class content. NOTE: the per-image
+        // samplers buildSampledImage2D creates are NOT bound for material
+        // textures — this pair is.
+        VkSampler textureSampler_ = VK_NULL_HANDLE;   // 16× aniso (unjittered raster)
+        VkSampler textureSamplerIso_ = VK_NULL_HANDLE;// isotropic (jittered raster)
+        // setTextureAnisotropy override: 0 = AUTO (the policy above), 1..16
+        // forces that level. Values other than 1/16 use a lazily-created
+        // custom sampler; a replaced custom is PARKED (in-flight frames and
+        // bound descriptor sets may still reference it; samplers are tiny)
+        // and destroyed at teardown.
+        float textureAnisoOverride_ = 0.f;
+        VkSampler textureSamplerCustom_ = VK_NULL_HANDLE;
+        float textureSamplerCustomAniso_ = 0.f;
+        std::vector<VkSampler> parkedSamplers_;
 
         // ReSTIR DI reservoir ping-pong storage, consumed by the deferred
         // shade's next-event estimation (DeferredShade reservoirPos/W). Two
@@ -2028,11 +2048,12 @@ namespace threepp {
             float currVPunjittered[16];
             float prevVP[16];
             float jitter[4];          // .xy = clip-space sub-texel offset, .zw = 1/resolution
-            float prevJitter[4];      // .xy = previous frame's jitter; gbuffer.frag adds
-                                      // (prev - curr) to the unjittered motion vec so TAA
-                                      // reproject lands on the prev rasterized pixel rather
-                                      // than its unjittered ideal — fixes per-frame wander
-                                      // that manifests as shake on moving objects.
+            float prevJitter[4];      // .xy = previous frame's jitter. NOTE: gbuffer.frag's
+                                      // motion vec is JITTER-FREE (clean prevNDC − currNDC
+                                      // from the unjittered VPs — a (prev−curr) jitter delta
+                                      // was tested and rejected there); .xy is kept for the
+                                      // deferred shade's hybrid reproject tap correction.
+                                      // .z smuggles the normal-map Toksvig toggle.
         };
         std::array<Buffer, kFramesInFlight> rasterCameraUbos{};
         bool  rasterPrevVPValid_ = false;
@@ -2050,6 +2071,14 @@ namespace threepp {
         // uploadRasterCameraUbo from the inverse reverse-Z projection. Zero
         // until the first real frame ⇒ shader leaves the depth gate disabled.
         std::array<float, 4> taaDepthLin_{};
+        // This frame's Halton jitter in RENDER TEXELS for the TAA resolve's
+        // current-sample jitter cancellation (taa_resolve re-anchors every
+        // current-frame read at the unjittered pixel center — without it the
+        // composed output translates with the 8-phase jitter: the systemic
+        // "everything shakes"). {0, 0} whenever the raster renders unjittered
+        // (MSAA mode, event camera) — the resolve then runs bit-identical to
+        // its pre-cancellation arithmetic. Set in uploadRasterCameraUbo.
+        float taaJitterTexels_[2]{};
         float rasterPrevJitter_[2]{};
         bool  rasterPrevJitterValid_ = false;
         // Camera WORLD motion this frame (translation m, forward-rotation rad)
@@ -2185,6 +2214,7 @@ namespace threepp {
             if (fsrEnabled_ == enabled) return;
             fsrEnabled_ = enabled;
             if (taa_) taa_->invalidateHistory();
+            markMaterialSamplerDirty();// jitter gate flips → sampler policy flips
             fsrResetNext_ = true;
 #if defined(THREEPP_WITH_DLSS)
             dlssResetNext_ = true;// path hand-off re-primes whichever runs next
@@ -2200,6 +2230,7 @@ namespace threepp {
             if (dlssEnabled_ == enabled) return;
             dlssEnabled_ = enabled;
             if (taa_) taa_->invalidateHistory();
+            markMaterialSamplerDirty();// jitter gate flips → sampler policy flips
             dlssResetNext_ = true;
 #if defined(THREEPP_WITH_FSR)
             fsrResetNext_ = true;// path hand-off re-primes whichever runs next
@@ -2946,6 +2977,10 @@ namespace threepp {
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
             materialTextures.clear();
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
+            if (textureSamplerIso_) vkDestroySampler(d, textureSamplerIso_, nullptr);
+            if (textureSamplerCustom_) vkDestroySampler(d, textureSamplerCustom_, nullptr);
+            for (VkSampler s : parkedSamplers_) vkDestroySampler(d, s, nullptr);
+            parkedSamplers_.clear();
 
             // EnvPrefilter owns its pipeline / layout / pool / sampler.
             envPrefilter_.reset();
@@ -5978,16 +6013,40 @@ namespace threepp {
         // with the slot-0 white default. Reclaimed slots are detected via a
         // null view (Image2D is reset to {} on destroy).
         template <std::size_t N>
-        void fillMaterialTextureInfos(std::array<VkDescriptorImageInfo, N>& infos) const {
+        void fillMaterialTextureInfos(std::array<VkDescriptorImageInfo, N>& infos) {
             const VkImageView fallbackView = materialTextures[0].view;
-            const VkSampler   fallbackSampler = materialTextures[0].sampler;
+            // ONE policy sampler for every material texture (see the
+            // textureSampler_/textureSamplerIso_ member comment) — the
+            // per-image samplers are deliberately not bound here.
+            const VkSampler sampler = materialSampler();
             for (std::size_t i = 0; i < N; ++i) {
                 const bool hasSlot = i < materialTextures.size() && materialTextures[i].view;
-                infos[i].sampler     = hasSlot ? materialTextures[i].sampler : fallbackSampler;
-                infos[i].imageView   = hasSlot ? materialTextures[i].view    : fallbackView;
+                infos[i].sampler     = sampler;
+                infos[i].imageView   = hasSlot ? materialTextures[i].view : fallbackView;
                 infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             }
         }
+
+        // Raster jitter gate — MUST mirror uploadRasterCameraUbo's
+        // rasterJitterOn expression (the sampler policy keys off the same
+        // condition the projection jitter does).
+        [[nodiscard]] bool rasterJitterActive() const {
+            return !eventCamEnabled_ && (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
+        }
+        // The sampler the material-texture bindings use this frame: AUTO
+        // policy (aniso when unjittered, isotropic when jittered) unless
+        // setTextureAnisotropy forced a level. May lazily create the custom
+        // sampler for forced levels other than 1/16. Implemented in
+        // VulkanCoreTextures.cpp with the sampler creation code.
+        [[nodiscard]] VkSampler materialSampler();
+        // Invalidate every descriptor write that binds material textures so
+        // the next per-frame lazy rewrite picks up a sampler-policy change.
+        // Same (fence-idle-safe) pattern refreshDirtyMaterialTextures uses.
+        void markMaterialSamplerDirty() {
+            deferredDescDirty_.fill(true);
+            rasterMatTexValid_.fill(0);
+        }
+        void setTextureAnisotropy(float aniso);// 0 = auto; VulkanCoreTextures.cpp
 
         // Rebuild every resource sized to the deferred shade's render extent
         // — the gbuf / reservoir / GI ping-pongs, the denoiser + TAA images,

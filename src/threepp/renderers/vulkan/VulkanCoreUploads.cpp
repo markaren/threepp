@@ -647,6 +647,12 @@ namespace threepp {
                 (useFsr() || useDlss() || gbufMsaaSamples_ <= 1);
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
+        // Stash the raw texel-unit jitter for the TAA resolve's current-
+        // sample jitter cancellation (recordCommandBuffer passes it into
+        // recordResolve; see taaJitterTexels_'s member comment). Zero when
+        // unjittered so the resolve collapses to its exact pre-fix math.
+        taaJitterTexels_[0] = rasterJitterOn ? jx : 0.f;
+        taaJitterTexels_[1] = rasterJitterOn ? jy : 0.f;
 
         // Apply jitter by shifting the projection matrix's m02/m12 (the
         // entries that translate the projected NDC). For a column-major

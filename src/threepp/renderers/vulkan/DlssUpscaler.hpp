@@ -115,10 +115,13 @@ namespace threepp::vulkan {
             uint32_t renderWidth = 0, renderHeight = 0;
             uint32_t displayWidth = 0, displayHeight = 0;
 
-            // Sub-pixel jitter [-0.5,0.5] applied to the projection this frame.
-            // Passed to DLSS AS APPLIED (un-negated) — the OPPOSITE of the FSR
-            // dispatch convention on this seam; measured 2.3× more stable
-            // (see jitterSign() in the .cpp; THREEPP_DLSS_JITTER_SIGN=neg flips).
+            // Sub-pixel jitter [-0.5,0.5] applied to the projection this frame
+            // (raw Halton texel units, as fed to m02/m12 += 2j/extent). The
+            // dispatch converts PER AXIS to (−jitterX, +jitterY) — the image-
+            // content shift in y-down pixel space, same convention as FSR; a
+            // scalar sign can't express the GL-y-up clip → y-down pixel
+            // conversion (see jitterSignX/Y in the .cpp for the measured 2×2
+            // matrix; THREEPP_DLSS_JITTER_SIGN_X/_Y=neg|pos override per axis).
             float jitterX = 0.f, jitterY = 0.f;
             // NDC-delta → render-pixel conversion: {0.5*renderW, -0.5*renderH}.
             float motionScaleX = 0.f, motionScaleY = 0.f;

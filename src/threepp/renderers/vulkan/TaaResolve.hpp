@@ -142,6 +142,16 @@ namespace threepp::vulkan {
         // PostComposite instead). Motion blur (mblurShutter) still applies
         // here, on the linear HDR resolve — it's a per-pixel weighted
         // average of colour samples, domain-agnostic.
+        // `jitterTexX/Y` = this frame's Halton sub-pixel jitter in RENDER
+        // TEXELS (the raw jx/jy the raster projection was offset by — NOT
+        // clip units), or (0, 0) when the raster is unjittered (MSAA mode,
+        // event camera). The resolve uses it to re-anchor every current-
+        // frame read at the output pixel's UNJITTERED center — without this
+        // the composed output translates with the 8-phase jitter pattern
+        // (the systemic "everything shakes", measured ±0.9 px global shift).
+        // Rides in the push constants inside skyReproj's dead z-column (the
+        // matrix is only ever applied to vec4(ndc, 0, 1)) because the
+        // 128-byte push-constant budget is otherwise full.
         void recordResolve(VkCommandBuffer cb,
                            uint32_t frame,
                            uint32_t imageIndex,
@@ -164,7 +174,9 @@ namespace threepp::vulkan {
                            float mblurShutter = 0.f,
                            bool hdrMode = false,
                            float bloomIntensity = 0.f,
-                           float exposureRatio = 1.f);
+                           float exposureRatio = 1.f,
+                           float jitterTexX = 0.f,
+                           float jitterTexY = 0.f);
 
         // Denoise writes its output here when TAA is active (replaces the
         // direct-to-swapchain write of non-TAA mode).

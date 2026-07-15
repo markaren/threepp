@@ -37,11 +37,9 @@ void VulkanRendererCore::CoreImpl::createDefaultEnvImage() {
             envTextureIdUploaded = 0xFFFFFFFFu;
         }
 
-void VulkanRendererCore::CoreImpl::createTextureSampler() {
-            VkPhysicalDeviceProperties props{};
-            vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
-            const float maxAniso = std::min(16.0f, props.limits.maxSamplerAnisotropy);
-
+// Shared boilerplate for the material policy samplers: linear/trilinear,
+// REPEAT, aniso as requested (1 = isotropic).
+static VkSampler createMaterialSamplerWithAniso(VkDevice device, float aniso) {
             VkSamplerCreateInfo sci{};
             sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
             sci.magFilter = VK_FILTER_LINEAR;
@@ -50,15 +48,60 @@ void VulkanRendererCore::CoreImpl::createTextureSampler() {
             sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            sci.anisotropyEnable = VK_TRUE;
-            sci.maxAnisotropy = maxAniso;
+            sci.anisotropyEnable = aniso > 1.0f ? VK_TRUE : VK_FALSE;
+            sci.maxAnisotropy = std::max(aniso, 1.0f);
             sci.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
             sci.unnormalizedCoordinates = VK_FALSE;
             sci.compareEnable = VK_FALSE;
             sci.minLod = 0.0f;
             sci.maxLod = VK_LOD_CLAMP_NONE;
-            check(vkCreateSampler(ctx->device(), &sci, nullptr, &textureSampler_),
+            VkSampler out = VK_NULL_HANDLE;
+            check(vkCreateSampler(device, &sci, nullptr, &out),
                   "vkCreateSampler(material)");
+            return out;
+        }
+
+void VulkanRendererCore::CoreImpl::createTextureSampler() {
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
+            const float maxAniso = std::min(16.0f, props.limits.maxSamplerAnisotropy);
+            // The material-sampler policy PAIR (see the member comment):
+            // aniso for the unjittered raster, isotropic for the jittered one.
+            textureSampler_    = createMaterialSamplerWithAniso(ctx->device(), maxAniso);
+            textureSamplerIso_ = createMaterialSamplerWithAniso(ctx->device(), 1.0f);
+            // THREEPP_VK_ANISO=<n>: startup override (same semantics as
+            // setTextureAnisotropy — 0 = auto policy, 1..16 forces a level).
+            if (const char* a = std::getenv("THREEPP_VK_ANISO"); a && a[0] != '\0') {
+                textureAnisoOverride_ = std::clamp(std::strtof(a, nullptr), 0.0f, maxAniso);
+                std::cout << "textureAnisotropy override = " << textureAnisoOverride_ << "\n";
+            }
+        }
+
+VkSampler VulkanRendererCore::CoreImpl::materialSampler() {
+            // AUTO policy: sharp when the raster is unjittered, prefiltered
+            // (isotropic) when it is jittered — see the member comment for why.
+            const float want = (textureAnisoOverride_ >= 1.0f)
+                                       ? textureAnisoOverride_
+                                       : (rasterJitterActive() ? 1.0f : 16.0f);
+            if (want <= 1.0f) return textureSamplerIso_;
+            if (want >= 16.0f) return textureSampler_;
+            if (textureSamplerCustom_ != VK_NULL_HANDLE && textureSamplerCustomAniso_ == want)
+                return textureSamplerCustom_;
+            // Forced intermediate level: build it lazily; PARK the previous
+            // custom (in-flight frames / bound sets may still reference it —
+            // samplers are tiny, teardown reclaims them).
+            if (textureSamplerCustom_ != VK_NULL_HANDLE)
+                parkedSamplers_.push_back(textureSamplerCustom_);
+            textureSamplerCustom_ = createMaterialSamplerWithAniso(ctx->device(), want);
+            textureSamplerCustomAniso_ = want;
+            return textureSamplerCustom_;
+        }
+
+void VulkanRendererCore::CoreImpl::setTextureAnisotropy(float aniso) {
+            const float clamped = aniso <= 0.f ? 0.f : std::clamp(aniso, 1.0f, 16.0f);
+            if (clamped == textureAnisoOverride_) return;
+            textureAnisoOverride_ = clamped;
+            markMaterialSamplerDirty();
         }
 
 void VulkanRendererCore::CoreImpl::createDefaultMaterialTexture() {

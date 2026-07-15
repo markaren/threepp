@@ -1251,7 +1251,9 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                                     taaSkyReproj_.data(),
                                     static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
                                     ptExt.width, ptExt.height, ext.width, ext.height,
-                                    taaDepthLin_.data(), motionBlurAmount_);
+                                    taaDepthLin_.data(), motionBlurAmount_,
+                                    /*hdrMode=*/false, /*bloomIntensity=*/0.f, /*exposureRatio=*/1.f,
+                                    taaJitterTexels_[0], taaJitterTexels_[1]);
                 gpuTimings_->end(cb, TP_TAA, currentFrame);
             } else {
                 // ── HDR-INPUT ORDER (setTaaHdrInput) ────────────────────────────
@@ -1286,7 +1288,8 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                                     static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
                                     ptExt.width, ptExt.height, ext.width, ext.height,
                                     taaDepthLin_.data(), motionBlurAmount_,
-                                    /*hdrMode=*/true, effBloomIntensity, exposureRatio);
+                                    /*hdrMode=*/true, effBloomIntensity, exposureRatio,
+                                    taaJitterTexels_[0], taaJitterTexels_[1]);
                 gpuTimings_->end(cb, TP_TAA, currentFrame);
 
                 // PostComposite now runs at DISPLAY resolution, reading the
