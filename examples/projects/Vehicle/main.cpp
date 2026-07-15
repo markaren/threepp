@@ -20,6 +20,8 @@
 
 #include <PxPhysicsAPI.h>
 
+#include <cmath>
+
 using namespace threepp;
 using namespace ::physx;
 
@@ -438,7 +440,9 @@ int main() {
         desiredCam.applyMatrix4(chassisMat);
         Vector3 desiredTarget{0, 1.f, 2.f};
         desiredTarget.applyMatrix4(chassisMat);
-        const float lerp = std::min(1.f, dt * 5.f);
+        // Frame-rate-independent chase smoothing (fixed 1/k s time-constant); the
+        // linear min(1,dt·k) form jitters the view under variable dt.
+        const float lerp = 1.f - std::exp(-5.f * dt);
         camPos.lerp(desiredCam, lerp);
         camTarget.lerp(desiredTarget, lerp);
         camera->position.copy(camPos);

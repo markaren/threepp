@@ -87,16 +87,25 @@ namespace threepp {
             float fixedTimestep = 1.f / 60.f;
             int maxSubSteps = 4;
             // Low-pass the dt handed to step() before it drives the fixed-timestep
-            // accumulator. Bound visuals are INTERPOLATED by the leftover
-            // accumulator fraction, so the few-ms of frame-clock jitter that
-            // survives even under vsync turns into per-frame position jitter —
-            // felt as rubber-banding, worst on fast bodies (a chase-cammed
-            // vehicle). Smoothing the dt keeps the substep cadence — and thus the
-            // interpolated pose — steady. A CONSTANT dt is a no-op (its running
-            // average is itself), so fixed-step and deterministic callers are
-            // byte-unchanged; genuine hitches (> 100 ms) bypass so the sim still
-            // catches up. Set false for exact, unfiltered dt integration.
-            bool smoothTimestep = true;
+            // accumulator. DEFAULT OFF — measured to HURT smoothness on the real
+            // vsync path (see below).
+            //
+            // The interpolation in step() is textbook "fix your timestep" (Fiedler
+            // 2004): render lerp(prevSubstep, curSubstep, accumulator/dt). Fed the
+            // RAW frame dt, that renders the sim state at a CONSTANT latency behind
+            // wall-clock (~one fixed step), which is inherently smooth — per-frame dt
+            // jitter is exactly absorbed by the alpha. Low-passing dt breaks that:
+            // the accumulator then advances in a FICTIONAL (smoothed) timeline while
+            // the frame is displayed at real wall-clock time, so the shown pose no
+            // longer matches where the body should be at display time — the mapping
+            // wobbles = judder. Measured on a chase-cammed vehicle under FIFO vsync:
+            // enabling this smoothing raised per-frame along-track velocity JERK ~11x
+            // (mean 0.25 -> 2.8 m/s^2, max 4.6 -> 22) vs raw dt. A CONSTANT dt is a
+            // no-op either way, so fixed-step/deterministic callers are byte-unchanged.
+            // The accumulator's maxSubSteps guard already bounds hitch catch-up, so
+            // raw dt needs no low-pass to stay stable. Left as an opt-in only for
+            // callers that (unlike the interpolated bindings) sample raw poses.
+            bool smoothTimestep = false;
             unsigned numThreads = 2;
             // Enable GPU dynamics. Required for soft bodies (PxDeformableVolume),
             // particle systems, and GPU broadphase. Switches the scene to the TGS

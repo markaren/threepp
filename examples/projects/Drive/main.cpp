@@ -934,7 +934,10 @@ int main(int argc, char** argv) {
         desiredCam.applyMatrix4(chassisMat);
         Vector3 desiredTarget(0.f, 1.1f, 1.5f);
         desiredTarget.applyMatrix4(chassisMat);
-        const float lerp = std::min(1.f, dt * 5.f);
+        // Frame-rate-independent chase smoothing: 1-exp(-k·dt) holds a fixed 1/k s
+        // time-constant, unlike min(1,dt·k) whose lag drifts with the frame rate
+        // (and jitters the view under variable dt).
+        const float lerp = 1.f - std::exp(-5.f * dt);
         camPos.lerp(desiredCam, lerp);
         camTarget.lerp(desiredTarget, lerp);
         camera->position.copy(camPos);
