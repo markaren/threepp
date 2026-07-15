@@ -39,6 +39,12 @@ plans/
 examples/vulkan/scratch/*
 !examples/vulkan/scratch/README.md
 
+# Generated Norwegian region packs (large DEM heightfields + road/preview data,
+# ~64 MB per pack). Regenerated from live open data via scripts/geodata; only the
+# README that documents how is tracked.
+geodata/*
+!geodata/README.md
+
 # misc local helpers
 _build_aaa.bat
 build_py.bat

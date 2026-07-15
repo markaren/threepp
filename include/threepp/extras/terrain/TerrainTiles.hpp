@@ -158,6 +158,16 @@ namespace threepp::terrain {
         float splitFactor = 1.7f;
         float mergeFactor = 2.3f;
 
+        // Optional per-tile LOD refinement bias. Called with the tile CENTRE
+        // (cx,cz) and its half-size; return a multiplier >= 1 that scales BOTH
+        // the split and merge distances for that tile, so flagged tiles subdivide
+        // earlier and deeper (a road corridor kept sharp) while everything else
+        // keeps the exact default behaviour. Scaling both thresholds by the same
+        // factor preserves the split/merge dead band, so tiles don't flicker.
+        // Empty (default) = no bias, i.e. byte-identical to the un-hooked path.
+        // Invoked from the update() thread only (not the async bake workers).
+        std::function<float(float cx, float cz, float halfSize)> refineBias;
+
         int splatTexelsPerQuad = 2;// albedo texture texels per mesh quad
         float skirtDepth = 0.f;    // 0 → auto (4% of tile size)
 
@@ -261,15 +271,24 @@ namespace threepp::terrain {
             const float d = nodeDistance(n, cam);
             const bool hasKids = static_cast<bool>(n.kid[0]);
 
+            // Optional refinement bias: scale BOTH thresholds equally so the
+            // dead band (and thus hysteresis) is preserved. >= 1 => refine sooner.
+            const float bias = o_.refineBias
+                                       ? std::max(1.f, o_.refineBias(n.x0 + n.size * 0.5f,
+                                                                     n.z0 + n.size * 0.5f, n.size * 0.5f))
+                                       : 1.f;
+            const float splitRadius = bias * o_.splitFactor * n.size;
+            const float mergeRadius = bias * o_.mergeFactor * n.size;
+
             if (n.mesh && !hasKids) {// ACTIVE leaf
-                if (n.level < o_.maxDepth && d < o_.splitFactor * n.size) makeChildren(n);
+                if (n.level < o_.maxDepth && d < splitRadius) makeChildren(n);
                 else return;
             }
 
             if (n.mesh && n.kid[0]) {// SPLITTING
                 // Camera receded before the children landed — abandon (small
                 // margin over the split radius so boundary hover doesn't churn).
-                if (d > o_.splitFactor * n.size * 1.15f) {
+                if (d > splitRadius * 1.15f) {
                     abandonChildren(n);
                     return;
                 }
@@ -294,7 +313,7 @@ namespace threepp::terrain {
             for (auto& c : n.kid)
                 if (c->kid[0] || !c->mesh) childrenAreSimpleLeaves = false;
 
-            if (d > o_.mergeFactor * n.size && childrenAreSimpleLeaves) {
+            if (d > mergeRadius && childrenAreSimpleLeaves) {
                 if (swapsLeft_ > 0) {
                     requestBake(n);
                     if (n.bakeReady()) {
