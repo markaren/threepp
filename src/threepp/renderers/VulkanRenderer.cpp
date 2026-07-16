@@ -354,9 +354,10 @@ namespace threepp {
                 postDep.pMemoryBarriers    = &postBar;
                 vkCmdPipelineBarrier2(cb, &postDep);
             }
-            // Spatial denoise of the demodulated diffuse-indirect + recombine.
+            // Filter the demodulated lighting channels (GI SVGF + shadow ratio,
+            // reflection gloss reconstruction) and composite them into sceneHdr.
             // Barrier: the shade wrote sceneHdr + the indirect image (both
-            // GENERAL storage); the denoise reads the indirect 5×5 neighbourhood
+            // GENERAL storage); the filter reads the indirect 5×5 neighbourhood
             // and read-modify-writes sceneHdr — compute→compute RAW/WAR.
             if (denoiseEnabled_) {
                 VkMemoryBarrier2 denoiseBar{};
@@ -372,8 +373,8 @@ namespace threepp {
                 denoiseDep.pMemoryBarriers = &denoiseBar;
                 vkCmdPipelineBarrier2(cb, &denoiseDep);
                 gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
-                deferredShade_->recordDenoiseDispatch(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
-                                                      gbufMsaaSamples_, shadeBActive, preExpBits_);
+                deferredShade_->recordFilterAndComposite(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
+                                                         gbufMsaaSamples_, shadeBActive, preExpBits_);
                 gpuTimings_->end(cb, TP_Denoise, currentFrame);
             }
             // Auto-exposure: histogram over the final sceneHdr. sceneHdr writes

@@ -7,7 +7,7 @@
 // + descriptor pool + layout and exposes the dispatch primitive.
 //
 // Extracted from VulkanRenderer.cpp during the file split; mirrors the
-// PhotonCaustics / Denoiser / EnvPrefilter pattern.
+// TaaResolve / EnvPrefilter pattern.
 
 #ifndef THREEPP_VULKAN_SKINNING_PIPELINE_HPP
 #define THREEPP_VULKAN_SKINNING_PIPELINE_HPP

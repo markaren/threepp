@@ -1,0 +1,286 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "instance_flags.glsl"// per-instance flag accessors
+#include "deferred_filter_common.glsl"// shared G-buffer/sceneHdr/fog/pc + helpers
+
+// deferred_gi_filter.comp - SVGF variance-guided MULTI-PASS a-trous wavelet
+// filter of the demodulated diffuse GI + a co-filtered soft-shadow visibility
+// ratio, then a lighting COMPOSITE (recombine) into sceneHdr. Was channel 0 of
+// the former deferred_denoise.comp; the reflection half is now
+// deferred_refl_filter.comp, shared pieces in deferred_filter_common.glsl.
+//
+// Dispatched as N passes with WIDENING step (1,2,4,8): each pass is a 5x5
+// edge-stopping wavelet filter, so N passes reach +/-~30 px with only 25*N taps
+// - and they RE-APPLY the edge stops + RE-FILTER the variance each pass. That is
+// what cleans large disoccluded regions (the motion "cloud") and residual noise
+// (patchy shadows) WITHOUT softening real edges, which a single fixed-width pass
+// fundamentally cannot.
+//
+// Variance gating (the SVGF core): a per-pixel TEMPORAL variance
+//   var = E[L^2] - lum(accumulated GI)^2
+// (E[L^2] from the moments image; spatial 5x5 fallback when the history is too
+// short) scales a luminance edge stop wl = exp(-|dlum| / (4*sqrt(var) + eps)). A
+// STABLE edge has low temporal var -> tight wl -> preserved (crisp); FLICKERING
+// noise has high var -> loose wl -> blurred (clean). The variance is propagated +
+// filtered through the passes (sum(w^2*var) / (sum w)^2).
+//
+// Ping-pong (rgb=GI, a=variance) between two scratch images; the last pass
+// recombines blur(GI)*albedo + directU*Rtilde into sceneHdr (with fog extinction,
+// MSAA coverage weighting, and pre-exposure). The demodulated design means only
+// the low-frequency irradiance is touched - texture/direct lighting stay crisp.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// --- Channel-specific bindings (demodulated diffuse GI + soft-shadow ratio) ---
+layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;// accumulated GI (.rgb), histLen (.a); written by the SVGF history feedback
+layout(set = 0, binding = 20, r32f)    uniform readonly image2D momentsImage; // E[L²] (r32 — the square overflows fp16 at lum≈256)
+layout(set = 0, binding = 22, rgba16f) uniform image2D atrousA;            // ping-pong (rgb=GI, a=variance)
+layout(set = 0, binding = 23, rgba16f) uniform image2D atrousB;
+// ── Denoised direct-shadow channel ──────────────────────────────────────────
+// shadowVisImage: temporally-accumulated visibility RATIO from the shade pass
+// (.x=R, .y=E[R²], .z=histLen). The ratio plane rides the SAME à-trous passes
+// as the GI (shared normal/plane/wavelet weights — only the range stop is its
+// own, scaled by the ratio's temporal variance), ping-ponging through the two
+// rg16f scratches. The recombine adds directUImage × R̃: the exact unshadowed
+// analytic direct times the filtered [0,1] ratio — grain-free penumbras with
+// the color/BRDF untouched (Heitz et al. 2018 split).
+layout(set = 0, binding = 43, rgba16f) uniform image2D shadowVisImage;      // feedback rewrites .x
+layout(set = 0, binding = 45, rgba16f) uniform readonly image2D directUImage;
+layout(set = 0, binding = 46, rg16f)   uniform image2D shadowAtrousA;       // x=R, y=variance
+layout(set = 0, binding = 47, rg16f)   uniform image2D shadowAtrousB;
+
+// Source color (.rgb) + variance (.a). Pass 0 reads the raw GI (variance computed
+// separately at the center); later passes read the ping-pong (carrying variance).
+vec4 readSrc(ivec2 q) {
+    if (pc.srcMode == 1u) return imageLoad(atrousA, q);
+    if (pc.srcMode == 2u) return imageLoad(atrousB, q);
+    return vec4(imageLoad(indirectImage, q).rgb, 0.0);
+}
+
+// Shadow-ratio source (x=R, y=variance) — mirrors readSrc's ping-pong exactly.
+vec2 readSrcShadow(ivec2 q) {
+    if (pc.srcMode == 1u) return imageLoad(shadowAtrousA, q).xy;
+    if (pc.srcMode == 2u) return imageLoad(shadowAtrousB, q).xy;
+    return vec2(imageLoad(shadowVisImage, q).x, 0.0);
+}
+
+// B3-spline à-trous kernel weights {3/8, 1/4, 1/16}.
+float atrousH(int i) { return i == 0 ? 0.375 : (i == 1 ? 0.25 : 0.0625); }
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
+    const ivec2 mx = ivec2(int(pc.width), int(pc.height)) - 1;
+
+    // Sky / unlit pixels carry no indirect. For scratch-target passes write 0 (so
+    // later passes read clean zeros); for the recombine pass leave sceneHdr alone.
+    const bool sky = texelFetch(gbufIdsTex, px, 0).x == 0u;
+    const vec4 nC  = texelFetch(gbufNormalTex, px, 0);
+    if (sky || nC.w < 0.0) {
+        if      (pc.dstMode == 0u) { imageStore(atrousA, px, vec4(0.0)); imageStore(shadowAtrousA, px, vec4(0.0)); }
+        else if (pc.dstMode == 1u) { imageStore(atrousB, px, vec4(0.0)); imageStore(shadowAtrousB, px, vec4(0.0)); }
+        return;
+    }
+
+    const vec3  Nc     = normalize(nC.xyz * 2.0 - 1.0);
+    const vec3  Pc     = worldFromDepth(px, texelFetch(gbufDepthTex, px, 0).x);
+    const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    const float planeScale = 1.0 / max(0.035 * length(Pc - camPos), 1e-3);
+    // Double-sided surface (ids flags bit 4): the raster flips N viewer-ward,
+    // so neighbouring texels of one cutout card can carry OPPOSITE normals —
+    // a signed pow-48 stop then refuses the card's own neighbours and the
+    // 1-spp GI noise survives unfiltered. ±N is the same surface there.
+    const bool dsided = ifDoubleSided(texelFetch(gbufIdsTex, px, 0).z);
+
+    vec4  cC   = readSrc(px);
+    float lumC = dot(cC.rgb, LUMA);
+
+    // DESPECKLE (sparse-outlier clamp) — pass 0 only, short history only.
+    // The variance-guided à-trous below treats a LONE dark/bright GI sample as a
+    // luminance EDGE and preserves it instead of blurring it: that is the AO speckle
+    // that pops during MOTION, when the temporal accumulator (which averages such
+    // outliers away over many frames on a held view) has collapsed to a short
+    // history. Pull the center toward its same-surface 3×3 neighbourhood (luminance
+    // mean ± σ, rgb rescaled to keep hue) BEFORE the blur, so an isolated dot is
+    // brought into range while a smooth AO gradient (center ≈ local mean) is
+    // untouched. Gated on histLen so a CONVERGED static pixel is byte-identical —
+    // this only acts where the dots actually appear.
+    if (pc.srcMode == 0u) {
+        const float hist0 = imageLoad(indirectImage, px).a;
+        if (hist0 < 8.0) {
+            const uint cid = texelFetch(gbufIdsTex, px, 0).x;
+            vec3 cs = vec3(0.0); float s = 0.0, s2 = 0.0, n = 0.0;
+            for (int dy = -3; dy <= 3; ++dy)
+            for (int dx = -3; dx <= 3; ++dx) {
+                const ivec2 q = clamp(px + ivec2(dx, dy), ivec2(0), mx);
+                if (texelFetch(gbufIdsTex, q, 0).x != cid) continue;// same surface only
+                const vec3  c = imageLoad(indirectImage, q).rgb;
+                cs += c; const float l = dot(c, LUMA); s += l; s2 += l * l; n += 1.0;
+            }
+            const vec3  mc = cs / max(n, 1.0);                     // neighbourhood mean colour
+            const float m  = s / max(n, 1.0);
+            const float sd = sqrt(max(s2 / max(n, 1.0) - m * m, 0.0));
+            // 1) clamp the lone outlier into range (kills isolated dark/bright sparks).
+            const float cl = clamp(lumC, max(m - sd, 0.0), m + sd + 1e-3);
+            if (lumC > 1e-4) cC.rgb *= cl / lumC;
+            // 2) during the SHORTEST histories (heavy motion) the whole 5×5 is 1-spp
+            // noisy, so the clamp's own reference is noisy — additionally BLEND toward
+            // the 5×5 mean (≈5× variance reduction). Strength fades to 0 by histLen=8,
+            // so a settled/static view is byte-identical. Purely spatial → no ghosting
+            // (unlike raising the temporal cap), trading a little AO contact detail
+            // only while actually moving — exactly where the speckle lived.
+            const float blend = clamp((8.0 - hist0) / 8.0, 0.0, 1.0) * 0.92;
+            cC.rgb = mix(cC.rgb, mc, blend);
+            lumC = dot(cC.rgb, LUMA);
+        }
+    }
+
+    // Center variance: pass 0 ESTIMATES it (temporal moment, or a 5×5 spatial
+    // fallback when the history is too short for a reliable moment); later passes
+    // read the propagated value carried in the ping-pong's .a.
+    float variance;
+    if (pc.srcMode == 0u) {
+        const float histLen = imageLoad(indirectImage, px).a;
+        if (histLen < 4.0) {
+            float s = 0.0, s2 = 0.0, n = 0.0;
+            for (int dy = -2; dy <= 2; ++dy)
+            for (int dx = -2; dx <= 2; ++dx) {
+                const ivec2 q = clamp(px + ivec2(dx, dy), ivec2(0), mx);
+                if (texelFetch(gbufIdsTex, q, 0).x == 0u) continue;
+                const float l = dot(imageLoad(indirectImage, q).rgb, LUMA);
+                s += l; s2 += l * l; n += 1.0;
+            }
+            const float m = s / max(n, 1.0);
+            variance = max(s2 / max(n, 1.0) - m * m, 0.0);
+        } else {
+            variance = max(imageLoad(momentsImage, px).r - lumC * lumC, 0.0);
+        }
+    } else {
+        variance = cC.a;
+    }
+    const float lumPhi = 4.0 * sqrt(max(variance, 0.0)) + 1e-3;// luminance edge-stop scale
+
+    // Shadow-ratio center + variance — same estimate structure as the GI's:
+    // temporal moment (E[R²]−R², accumulated by the shade pass) once the
+    // history is long enough, a 5×5 spatial fallback while fresh. The variance
+    // sizes the ratio's OWN range stop: a converged penumbra gradient has
+    // near-zero temporal variance → tight stop → the gradient is PRESERVED
+    // (contact shadows stay crisp); fresh/disoccluded or occluder-swept pixels
+    // have high variance → loose stop → the 1-2 ray noise blurs away.
+    vec2  cS = readSrcShadow(px);
+    float varS;
+    if (pc.srcMode == 0u) {
+        const vec4 sv = imageLoad(shadowVisImage, px);
+        if (sv.z < 4.0) {
+            float s = 0.0, s2 = 0.0, n = 0.0;
+            for (int dy = -2; dy <= 2; ++dy)
+            for (int dx = -2; dx <= 2; ++dx) {
+                const ivec2 q = clamp(px + ivec2(dx, dy), ivec2(0), mx);
+                if (texelFetch(gbufIdsTex, q, 0).x == 0u) continue;
+                const float v = imageLoad(shadowVisImage, q).x;
+                s += v; s2 += v * v; n += 1.0;
+            }
+            const float m = s / max(n, 1.0);
+            varS = max(s2 / max(n, 1.0) - m * m, 0.0);
+        } else {
+            varS = max(sv.y - sv.x * sv.x, 0.0);
+        }
+    } else {
+        varS = cS.y;
+    }
+    const float visPhi = 4.0 * sqrt(max(varS, 0.0)) + 1e-3;// ratio range-stop scale
+
+    const int st = int(max(pc.step, 1u));
+    vec3  sumC = vec3(0.0);
+    float sumW = 0.0;
+    float sumV = 0.0;
+    float sumS = 0.0, sumWS = 0.0, sumVS = 0.0;// shadow-ratio accumulators
+    for (int dy = -2; dy <= 2; ++dy)
+    for (int dx = -2; dx <= 2; ++dx) {
+        const ivec2 q = px + ivec2(dx, dy) * st;
+        if (q.x < 0 || q.y < 0 || q.x > mx.x || q.y > mx.y) continue;
+        if (texelFetch(gbufIdsTex, q, 0).x == 0u) continue;
+        const vec4 nq = texelFetch(gbufNormalTex, q, 0);
+        if (nq.w < 0.0) continue;
+        const vec3  Nq = normalize(nq.xyz * 2.0 - 1.0);
+        float ndq = dot(Nc, Nq);
+        if (dsided) ndq = abs(ndq);// ±N = same surface on double-sided cards
+        const float wn = pow(max(ndq, 0.0), 48.0);// normal edge stop (crisp at creases)
+        if (wn <= 0.0) continue;
+        const vec3  Pq = worldFromDepth(q, texelFetch(gbufDepthTex, q, 0).x);
+        const float wz = exp(-abs(dot(Pq - Pc, Nc)) * planeScale);// tangent-plane edge stop
+        const float hk = atrousH(abs(dx)) * atrousH(abs(dy));     // à-trous wavelet weight
+        // Center tap uses the despeckled cC (readSrc would re-read the raw outlier).
+        const vec4  sq = (dx == 0 && dy == 0) ? cC : readSrc(q);
+        const float lumQ = dot(sq.rgb, LUMA);
+        const float wl = exp(-abs(lumC - lumQ) / lumPhi);// variance-guided luminance edge stop
+        const float w  = wn * wz * hk * wl;
+        const float vq = (pc.srcMode == 0u) ? variance : sq.a;// per-pass variance to propagate
+        sumC += sq.rgb * w;
+        sumW += w;
+        sumV += w * w * vq;
+        // Shadow-ratio plane: shared geometric weights (wn/wz/hk), its own
+        // variance-guided range stop on R.
+        const vec2  sqS = (dx == 0 && dy == 0) ? cS : readSrcShadow(q);
+        const float wlS = exp(-abs(cS.x - sqS.x) / visPhi);
+        const float wS  = wn * wz * hk * wlS;
+        const float vqS = (pc.srcMode == 0u) ? varS : sqS.y;
+        sumS  += sqS.x * wS;
+        sumWS += wS;
+        sumVS += wS * wS * vqS;
+    }
+    const vec3  fC = sumW > 0.0 ? sumC / sumW : cC.rgb;
+    // Variance propagation: pass 0 stores the center estimate (no neighbour
+    // variance available); later passes carry the à-trous-filtered variance.
+    const float fV = (pc.srcMode == 0u) ? variance
+                   : (sumW > 0.0 ? sumV / (sumW * sumW) : variance);
+    const float fS  = sumWS > 0.0 ? sumS / sumWS : cS.x;
+    const float fVS = (pc.srcMode == 0u) ? varS
+                    : (sumWS > 0.0 ? sumVS / (sumWS * sumWS) : varS);
+
+    // SVGF HISTORY FEEDBACK: on the designated pass, write THIS pass's SOURCE (the
+    // first à-trous pass's already-filtered GI) back into the indirect image as the
+    // temporal history (preserving histLen in .a). Next frame's accumulation then
+    // blends against the FILTERED (clean) history instead of the raw 1-spp, so a
+    // freshly-disoccluded region converges in ~2 frames instead of fading over many
+    // — this is what removes the residual object-trail "dust" TAIL.
+    if (pc.feedback == 1u) {
+        const float hl = imageLoad(indirectImage, px).a;
+        imageStore(indirectImage, px, vec4(cC.rgb, hl));
+        // Same feedback for the shadow ratio: next frame's accumulation blends
+        // against the FILTERED (clean) R, so disocclusions converge in ~2
+        // frames instead of fading in — keeps .y/.z/.w (moment/history/trend).
+        const vec4 sv = imageLoad(shadowVisImage, px);
+        imageStore(shadowVisImage, px, vec4(cS.x, sv.yzw));
+    }
+
+    // Variance rides the rgba16f ping-pong's .a — cap it at fp16 max so a
+    // physically-hot moment (the r32f E[L²] carries values ≫ 65504) doesn't
+    // land as Inf in the carry. Loss-free in effect: lumPhi = 4·sqrt(var)
+    // only needs the magnitude's ORDER to loosen the edge stop, and
+    // sqrt(6.5e4) already means "blur everything".
+    const float fV16 = min(fV, 6.5e4);
+
+    if (pc.dstMode == 2u) {
+        // Recombine: sceneHdr += blur(indirect) · diffuseColor (matches
+        // shadeDiffuseDirect's albedo·(1-metalness)) + directU × R̃ (the
+        // denoised-shadow split: exact unshadowed analytic direct × the
+        // filtered visibility ratio). Only the demodulated irradiance and the
+        // bounded ratio were filtered, so albedo/texture detail stays crisp.
+        const vec4 am           = texelFetch(gbufAlbedoTex, px, 0);
+        const vec3 diffuseColor = am.rgb * (1.0 - am.a);
+        const vec3 dU           = imageLoad(directUImage, px).rgb;
+        const vec3 cur          = imageLoad(outImage, px).rgb;
+        imageStore(outImage, px, vec4(cur + (fC * diffuseColor + dU * clamp(fS, 0.0, 1.0))
+                                            * fogTransmittance(camPos, Pc) * recombineCoverage(px)
+                                            * uintBitsToFloat(pc.preExpBits), 1.0));
+    } else if (pc.dstMode == 0u) {
+        imageStore(atrousA, px, vec4(fC, fV16));
+        imageStore(shadowAtrousA, px, vec4(fS, fVS, 0.0, 0.0));
+    } else {
+        imageStore(atrousB, px, vec4(fC, fV16));
+        imageStore(shadowAtrousB, px, vec4(fS, fVS, 0.0, 0.0));
+    }
+}

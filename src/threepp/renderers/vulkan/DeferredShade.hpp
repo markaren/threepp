@@ -247,19 +247,26 @@ namespace threepp::vulkan {
         // compute→compute barrier after. Only dispatch when clouds are on.
         void recordCloudShadow(VkCommandBuffer cb, uint32_t frame, uint32_t frameCounter);
 
-        // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
-        // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor
-        // set); the caller inserts a compute→compute barrier between them.
+        // Filter the demodulated lighting channels and COMPOSITE them into
+        // sceneHdr. Two pipelines run back to back over the same descriptor set:
+        //   • giFilterPipe_   — SVGF variance-guided à-trous over the demodulated
+        //     diffuse GI (binding 16) + the co-filtered soft-shadow visibility
+        //     ratio, then recombine blur(GI)·albedo + directU×R̃ into sceneHdr.
+        //   • reflFilterPipe_ — separable roughness-guided gloss reconstruction
+        //     of the 1-mirror-ray reflection (binding 25), then recombine.
+        // Both recombines carry fog extinction, MSAA coverage weighting, and
+        // pre-exposure. Run AFTER recordDispatch (same descriptor set); the
+        // caller inserts a compute→compute barrier between them.
         // gbufMsaaSamples/shadeBActive mirror recordDispatch: the recombine
         // weights its GI/reflection adds by the geometry coverage at MSAA
         // complex pixels (must match how the shade pass split the weights).
         // preExpBits: the recombine's sceneHdr adds bake the same
         // pre-exposure the shade stored with (0x3F800000 = 1.0f = legacy).
-        void recordDenoiseDispatch(VkCommandBuffer cb, uint32_t frame,
-                                   uint32_t width, uint32_t height,
-                                   uint32_t gbufMsaaSamples = 1,
-                                   bool shadeBActive = false,
-                                   uint32_t preExpBits = 0x3F800000u);
+        void recordFilterAndComposite(VkCommandBuffer cb, uint32_t frame,
+                                      uint32_t width, uint32_t height,
+                                      uint32_t gbufMsaaSamples = 1,
+                                      bool shadeBActive = false,
+                                      uint32_t preExpBits = 0x3F800000u);
 
     private:
         VulkanContext& ctx_;
@@ -270,7 +277,8 @@ namespace threepp::vulkan {
         VkDescriptorSetLayout dsLayout_     = VK_NULL_HANDLE;
         VkPipelineLayout      pipeLayout_   = VK_NULL_HANDLE;
         VkPipeline            pipe_         = VK_NULL_HANDLE;
-        VkPipeline            denoisePipe_  = VK_NULL_HANDLE;// spatial denoise + recombine
+        VkPipeline            giFilterPipe_ = VK_NULL_HANDLE;// SVGF GI + shadow-ratio filter + recombine
+        VkPipeline            reflFilterPipe_ = VK_NULL_HANDLE;// reflection gloss reconstruction + recombine
         VkPipeline            clusterPipe_  = VK_NULL_HANDLE;// clustered light culling (cluster_build.comp)
         VkPipeline            froxelInjectPipe_    = VK_NULL_HANDLE;// froxel in-scatter (froxel_inject.comp)
         VkPipeline            froxelIntegratePipe_ = VK_NULL_HANDLE;// froxel LUT integrate (froxel_integrate.comp)

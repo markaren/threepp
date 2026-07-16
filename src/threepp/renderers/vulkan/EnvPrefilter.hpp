@@ -6,7 +6,7 @@
 // are allocated per-mip each upload (pool is reset between uploads).
 //
 // Extracted from VulkanRenderer.cpp during the file split; mirrors the
-// PhotonCaustics / TaaResolve / Denoiser pattern.
+// TaaResolve / SkinningPipeline pattern.
 
 #ifndef THREEPP_VULKAN_ENV_PREFILTER_HPP
 #define THREEPP_VULKAN_ENV_PREFILTER_HPP

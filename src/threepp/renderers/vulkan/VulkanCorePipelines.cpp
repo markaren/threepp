@@ -419,7 +419,7 @@ void VulkanRendererCore::CoreImpl::createRasterGbufImages(uint32_t w, uint32_t h
                                                      VK_IMAGE_ASPECT_COLOR_BIT, N("indirect"));
                 // SVGF second-moment accumulator E[L²] (single channel). Same
                 // STORAGE+SAMPLED + ping-pong as indirect: deferred_shade reproject-
-                // accumulates it, deferred_denoise reads it for the per-pixel
+                // accumulates it, deferred_gi_filter reads it for the per-pixel
                 // temporal variance that guides the à-trous (crisp where stable,
                 // blurred where noisy). R32 (not R16): E[L²] SQUARES the un-pre-
                 // exposed indirect luminance, so fp16 overflows to Inf once

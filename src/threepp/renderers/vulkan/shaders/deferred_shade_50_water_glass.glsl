@@ -341,7 +341,7 @@ const float kGlassMaxRough = 0.14;// Clamps the primary refraction lobe to
                               // renders polished at primary, but it stays GLASS.
 const int   kGlassSamples = 1;// ONE sharp Fresnel reflect+refract sample → NO discrete-microfacet ghost
                               // copies. The frost (roughness blur) is applied afterwards by the reflection
-                              // denoise (deferred_denoise channel 1), exactly like opaque reflections.
+                              // filter (deferred_refl_filter.comp), exactly like opaque reflections.
 
 // Effective glass shading/blur roughness — used by shadeGlass AND the demod
 // recombine below; both must agree or the denoise blur mismatches the lobe.

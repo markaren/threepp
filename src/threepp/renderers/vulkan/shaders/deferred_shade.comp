@@ -139,8 +139,8 @@ layout(set = 0, binding = 34) uniform sampler2D foamDetailTex;
 layout(set = 0, binding = 35) uniform sampler2D blueNoiseTex;
 layout(set = 0, binding = 15) uniform sampler2D gbufUvTex;     // .rg = primary surface UV (emissive-map sample)
 // Demodulated diffuse-indirect irradiance (gatherEnv AO/GI, PRE-albedo). Written
-// here, spatially denoised + recombined by deferred_denoise.comp. vec4(0) where
-// the indirect is kept inline (sky/unlit/water/glass/sheen) so the denoise adds
+// here, spatially filtered + recombined by deferred_gi_filter.comp. vec4(0) where
+// the indirect is kept inline (sky/unlit/water/glass/sheen) so the filter adds
 // nothing there.
 // Write-target for THIS frame's accumulated demod GI (the denoise reads it; NEXT
 // frame reads it as the reproject history via binding 17).
@@ -222,7 +222,7 @@ layout(set = 0, binding = 42) uniform sampler2DMS  gbufUvMS;
 // stochastic estimate of the luminance-weighted visibility ratio
 //   R = Σ lum(c_i)·V_i / Σ lum(c_i)   ∈ [0,1]
 // accumulated temporally here (shadowVisImage, reprojected like the GI) and
-// à-trous-filtered by deferred_denoise, whose recombine adds U × R̃. R is
+// à-trous-filtered by deferred_gi_filter, whose recombine adds U × R̃. R is
 // bounded and firefly-free — ideal denoiser food — so the penumbra converges
 // smooth instead of the static-dither grain the old always-inline path had,
 // and point/spot lights gain radius-driven soft shadows at the same flat cost.
@@ -872,7 +872,7 @@ void main() {
     // ── Denoised direct-shadow channel (demod path only) ─────────────────────
     // Split the analytic direct into the exact unshadowed sum U (directUImage)
     // and a 1-2 ray visibility-ratio estimate (accumulated below, filtered +
-    // recombined as U × R̃ by deferred_denoise). The inline path (denoise off,
+    // recombined as U × R̃ by deferred_gi_filter). The inline path (denoise off,
     // glass/sheen, dispatch B) keeps the old fully-inline shadowed loops.
     const bool shadowChannel = demodIndirect && shadowsOn;
     vec3  directU = vec3(0.0);
@@ -955,10 +955,10 @@ void main() {
     const float reflBlend = 1.0 - smoothstep(0.55, 0.70, roughness);
     // ONE SHARP MIRROR RAY → the reflection buffer (binding 25). A single ray has
     // NO discrete-GGX ghost copies (the doubled/tripled-object artifact the
-    // 8-sample spiral produced) and no per-sample noise. The reflection denoise
-    // (deferred_denoise channel 1) then BLURS this by roughness — the spatial blur
+    // 8-sample spiral produced) and no per-sample noise. The reflection filter
+    // (deferred_refl_filter.comp) then BLURS this by roughness — the spatial blur
     // IS the gloss — and recombines. Pre-weighted by the spec BRDF × reflBlend so
-    // the denoise just blurs + adds. Glass/sheen reflect inline below (excluded).
+    // the filter just blurs + adds. Glass/sheen reflect inline below (excluded).
     const bool opaqueRefl = (pm.transmission <= 0.0) && (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
     // Rough remainder (1 − reflBlend): split-sum env specular off the GGX PMREM.
     // No visibility term (the standard split-sum caveat) — the traced band keeps
@@ -1470,8 +1470,8 @@ void main() {
             //   2) VALUE-range consistency — geometry alone can't separate "same
             //      floor, different shadow state" (a penumbra boundary on a flat
             //      surface has NO depth/normal discontinuity to key off). The
-            //      spatial à-trous denoise below (deferred_denoise.comp ~line
-            //      499: `wlS = exp(-abs(cS.x - sqS.x) / visPhi)`) already range-
+            //      spatial à-trous filter below (deferred_gi_filter.comp:
+            //      `wlS = exp(-abs(cS.x - sqS.x) / visPhi)`) already range-
             //      stops this exact ratio signal by its own temporal variance —
             //      reused here verbatim (same exp/variance-scale form). The
             //      reference for "what value should this pixel's history be" is
@@ -1509,7 +1509,7 @@ void main() {
                 const vec4  nearV   = texelFetch(shadowVisPrevTex, nearTp, 0);
                 const float nearVar = max(nearV.y - nearV.x * nearV.x, 0.0);
                 // Tight floor (measured: a looser 4x-of-variance floor matching
-                // deferred_denoise.comp's own visPhi scale left a residual bleed —
+                // deferred_gi_filter.comp's own visPhi scale left a residual bleed —
                 // this is a TEMPORAL accumulator, where a small per-frame leak
                 // compounds every frame instead of being re-filtered from a clean
                 // source each time like the spatial à-trous is, so it needs a much
@@ -1533,7 +1533,7 @@ void main() {
                         if (abs(svz - bvh.z / bvh.w) > 0.1 * max(abs(svz), 1e-3)) continue;// same depth-plane gate as the GI
                         const vec4  tapV = texelFetch(shadowVisPrevTex, tp, 0);
                         // Value-range stop vs the nearest tap (see comment above);
-                        // same exp/variance form as deferred_denoise.comp's wlS.
+                        // same exp/variance form as deferred_gi_filter.comp's wlS.
                         const float wl = exp(-abs(nearV.x - tapV.x) / nearPhi);
                         const float w  = bw * wl;
                         if (w <= 1e-5) continue;

@@ -1049,10 +1049,19 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_shade.comp"
         kDeferredShadeCompSpv
         _deferred_shade_spv_h)
+    # Demodulated-lighting filter + composite stages (formerly the two channels
+    # of deferred_denoise.comp; shared pieces in deferred_filter_common.glsl,
+    # picked up automatically by compile_vulkan_shader's *.glsl DEPENDS glob):
+    #   deferred_gi_filter   — SVGF GI + soft-shadow ratio filter, recombine.
+    #   deferred_refl_filter — reflection gloss reconstruction, recombine.
     compile_vulkan_shader(threepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_denoise.comp"
-        kDeferredDenoiseCompSpv
-        _deferred_denoise_spv_h)
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_gi_filter.comp"
+        kDeferredGiFilterCompSpv
+        _deferred_gi_filter_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_refl_filter.comp"
+        kDeferredReflFilterCompSpv
+        _deferred_refl_filter_spv_h)
     # Clustered light culling (deferred): per-cell light index lists consumed
     # by deferred_shade's analytic direct split. See DeferredShade::recordClusterBuild.
     compile_vulkan_shader(threepp

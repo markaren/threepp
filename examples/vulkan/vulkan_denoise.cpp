@@ -1,15 +1,14 @@
-// Vulkan PT denoiser showcase — port of examples/wgpu/wgpu_denoise.cpp.
-// Rotating torus knot on a pedestal with three colored analytical lights, a
-// glass sphere, and a metal sphere. Demonstrates the denoiser, ReSTIR DI,
-// and the spec/diff split + demod (step 1.4c) on textured + transmissive
-// content under camera and object motion.
+// Deferred-renderer denoiser / ReSTIR DI showcase. Rotating torus knot on a
+// pedestal with three colored analytical lights, a glass sphere, and a metal
+// sphere. Demonstrates the deferred VulkanRenderer's SVGF-style filtering of
+// the demodulated ray-traced lighting channels (`setDenoise`), ReSTIR DI, and
+// the spec/diff split + demod on textured + transmissive content under camera
+// and object motion.
 //
-// Differences vs the WGPU example:
-//   • This is the deferred VulkanRenderer, which runs its own SVGF-style
-//     denoiser over the ray-traced lighting channels (`setDenoise`); settings
-//     live directly on the renderer.
-//   • It adds an AAA post stack (HDR bloom, RCAS sharpen, motion blur) the
-//     WGPU example doesn't have — surfaced below for completeness.
+// The deferred VulkanRenderer runs its filter + composite stage over the
+// ray-traced lighting channels (`setDenoise`); settings live directly on the
+// renderer. An AAA post stack (HDR bloom, RCAS sharpen, motion blur) rides on
+// top — surfaced below for completeness.
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"

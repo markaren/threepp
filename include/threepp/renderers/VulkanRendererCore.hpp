@@ -218,8 +218,18 @@ namespace threepp {
         void setTextureAnisotropy(float aniso);
         [[nodiscard]] float textureAnisotropy() const;// the override; 0 = auto
 
-        // Deferred SVGF denoiser toggle (the ray-queried AO/GI + shadow
-        // channels). Default on.
+        // Selects the demodulated filtered-lighting pipeline. Default ON.
+        //   ON  — the stochastic 1-spp GI is cleaned by an SVGF variance-guided
+        //         à-trous filter, direct shadows use a denoised soft-shadow
+        //         visibility ratio, and the traced reflection is turned into a
+        //         roughness-driven gloss by the reflection reconstruction pass.
+        //   OFF — the inline DETERMINISTIC path: deterministic AO/GI, inline
+        //         shadowed light loops, and SHARP mirror reflections (rough
+        //         metals lose their gloss). This toggle therefore changes MATERIAL
+        //         APPEARANCE, not just noise.
+        // Intended as an A/B discriminator between the two shading paths
+        // (equivalent to THREEPP_DENOISE=0), NOT a quality/perf dial. Probe GI
+        // requires it ON.
         void setDenoise(bool enabled);
         [[nodiscard]] bool denoise() const;
 

@@ -153,7 +153,7 @@ namespace threepp {
                 // cutout foliage the jittered coverage flips a pixel's normal
                 // SIGN frame to frame. The GI temporal reproject + SVGF normal
                 // edge-stop must treat ±N as the SAME surface there (flag
-                // consumed in deferred_shade.comp / deferred_denoise.comp) or
+                // consumed in deferred_shade.comp / deferred_gi_filter.comp) or
                 // the GI history cold-starts every frame — measured as 8× the
                 // frame-to-frame flicker on a procedural tree canopy.
                 if (sm && sm->side == Side::Double) flags |= kInstFlagDoubleSided;
