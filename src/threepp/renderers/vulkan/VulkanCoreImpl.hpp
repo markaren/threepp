@@ -913,12 +913,22 @@ namespace threepp {
         // into it via mdesc.albedoTexIndex. Slot 0 is a 1×1 white default so
         // materials without an albedo map can still bind a valid descriptor.
         // Cache key is Texture* — the same Texture across multiple meshes only
-        // uploads once. All material textures share textureSampler_ (linear,
-        // repeat); per-texture filter/wrap is a v2 concern.
+        // uploads once. All material textures share the policy samplers (see
+        // textureSampler_ below); the only per-texture sampler state honoured
+        // is ClampToEdge wrap (materialTexClampUV_) — per-texture FILTER and
+        // mirrored wrap remain a v2 concern.
         // kMaxMaterialTextures comes from the shared header (vulkan_shared.h,
         // included near the top of this file). Editing it there propagates to
         // every shader on the next clean rebuild.
         std::vector<Image2D> materialTextures;// owns image + view (sampler is shared)
+        // Slot-parallel to materialTextures: 1 = this texture asked for
+        // ClampToEdge on BOTH axes, so its binding uses the clamp variant of
+        // the policy sampler. REPEAT is wrong for edge-inclusive atlases —
+        // a terrain tile's splat bilinear/mip taps at uv 0/1 wrap around and
+        // blend in the OPPOSITE edge, painting a seam line along every tile
+        // border (metres wide at coarse mips). Maintained by
+        // ensureMaterialTexture; only read for slots with a live view.
+        std::vector<uint8_t> materialTexClampUV_;
         // Cache value: (weak_ptr liveness tag, bindless slot, uploaded version).
         // The weak_ptr lets ensureSceneBuilt prune entries when a Texture is
         // destroyed (so a future Texture* address-collision doesn't read stale
@@ -941,25 +951,30 @@ namespace threepp {
         // device drain. The structural-rebuild prune (post-drain) destroys
         // these and returns the slots to freeTextureSlots.
         std::vector<uint32_t> retiredTextureSlots_;
-        // The two policy samplers every material-texture binding chooses
-        // between (fillMaterialTextureInfos → materialSampler()): 16× aniso
-        // when the raster is UNJITTERED (sharpness has no temporal cost), and
+        // The policy samplers every material-texture binding chooses between
+        // (fillMaterialTextureInfos → materialSampler()): 16× aniso when the
+        // raster is UNJITTERED (sharpness has no temporal cost), and
         // isotropic-trilinear when the raster is JITTERED (TAA/DLSS/FSR) —
         // anisotropic filtering re-sharpens grazing-angle textures back to
         // pixel frequency, which no temporal resolve can hold still; measured
         // as the dominant carrier of the "whole scene shimmers at a distance"
-        // residual on terrain/Bistro-class content. NOTE: the per-image
-        // samplers buildSampledImage2D creates are NOT bound for material
-        // textures — this pair is.
-        VkSampler textureSampler_ = VK_NULL_HANDLE;   // 16× aniso (unjittered raster)
-        VkSampler textureSamplerIso_ = VK_NULL_HANDLE;// isotropic (jittered raster)
+        // residual on terrain/Bistro-class content. Each policy exists in a
+        // REPEAT and a CLAMP_TO_EDGE flavour — clamp-tagged textures
+        // (materialTexClampUV_) get the clamp twin, same filter policy.
+        // NOTE: the per-image samplers buildSampledImage2D creates are NOT
+        // bound for material textures — these are.
+        VkSampler textureSampler_ = VK_NULL_HANDLE;        // 16× aniso (unjittered raster)
+        VkSampler textureSamplerIso_ = VK_NULL_HANDLE;     // isotropic (jittered raster)
+        VkSampler textureSamplerClamp_ = VK_NULL_HANDLE;   // 16× aniso, clamp-to-edge
+        VkSampler textureSamplerIsoClamp_ = VK_NULL_HANDLE;// isotropic, clamp-to-edge
         // setTextureAnisotropy override: 0 = AUTO (the policy above), 1..16
         // forces that level. Values other than 1/16 use a lazily-created
         // custom sampler; a replaced custom is PARKED (in-flight frames and
         // bound descriptor sets may still reference it; samplers are tiny)
         // and destroyed at teardown.
         float textureAnisoOverride_ = 0.f;
-        VkSampler textureSamplerCustom_ = VK_NULL_HANDLE;
+        VkSampler textureSamplerCustom_ = VK_NULL_HANDLE;     // repeat flavour
+        VkSampler textureSamplerCustomClamp_ = VK_NULL_HANDLE;// clamp twin, same level
         float textureSamplerCustomAniso_ = 0.f;
         std::vector<VkSampler> parkedSamplers_;
 
@@ -2972,7 +2987,10 @@ namespace threepp {
             materialTextures.clear();
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
             if (textureSamplerIso_) vkDestroySampler(d, textureSamplerIso_, nullptr);
+            if (textureSamplerClamp_) vkDestroySampler(d, textureSamplerClamp_, nullptr);
+            if (textureSamplerIsoClamp_) vkDestroySampler(d, textureSamplerIsoClamp_, nullptr);
             if (textureSamplerCustom_) vkDestroySampler(d, textureSamplerCustom_, nullptr);
+            if (textureSamplerCustomClamp_) vkDestroySampler(d, textureSamplerCustomClamp_, nullptr);
             for (VkSampler s : parkedSamplers_) vkDestroySampler(d, s, nullptr);
             parkedSamplers_.clear();
 
@@ -6050,13 +6068,16 @@ namespace threepp {
         template <std::size_t N>
         void fillMaterialTextureInfos(std::array<VkDescriptorImageInfo, N>& infos) {
             const VkImageView fallbackView = materialTextures[0].view;
-            // ONE policy sampler for every material texture (see the
-            // textureSampler_/textureSamplerIso_ member comment) — the
-            // per-image samplers are deliberately not bound here.
-            const VkSampler sampler = materialSampler();
+            // The policy samplers (see the textureSampler_ member comment) —
+            // the per-image samplers are deliberately not bound here. Slots
+            // whose texture asked for ClampToEdge get the clamp flavour of
+            // the SAME filter policy (materialTexClampUV_).
+            const VkSampler samplerRepeat = materialSampler(false);
+            const VkSampler samplerClamp  = materialSampler(true);
             for (std::size_t i = 0; i < N; ++i) {
                 const bool hasSlot = i < materialTextures.size() && materialTextures[i].view;
-                infos[i].sampler     = sampler;
+                const bool clampUV = hasSlot && i < materialTexClampUV_.size() && materialTexClampUV_[i];
+                infos[i].sampler     = clampUV ? samplerClamp : samplerRepeat;
                 infos[i].imageView   = hasSlot ? materialTextures[i].view : fallbackView;
                 infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             }
@@ -6070,10 +6091,11 @@ namespace threepp {
         }
         // The sampler the material-texture bindings use this frame: AUTO
         // policy (aniso when unjittered, isotropic when jittered) unless
-        // setTextureAnisotropy forced a level. May lazily create the custom
-        // sampler for forced levels other than 1/16. Implemented in
+        // setTextureAnisotropy forced a level, in the REPEAT (default) or
+        // CLAMP_TO_EDGE wrap flavour. May lazily create the custom sampler
+        // pair for forced levels other than 1/16. Implemented in
         // VulkanCoreTextures.cpp with the sampler creation code.
-        [[nodiscard]] VkSampler materialSampler();
+        [[nodiscard]] VkSampler materialSampler(bool clampUV);
         // Invalidate every descriptor write that binds material textures so
         // the next per-frame lazy rewrite picks up a sampler-policy change.
         // Same (fence-idle-safe) pattern refreshDirtyMaterialTextures uses.

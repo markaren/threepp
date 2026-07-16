@@ -38,16 +38,17 @@ void VulkanRendererCore::CoreImpl::createDefaultEnvImage() {
         }
 
 // Shared boilerplate for the material policy samplers: linear/trilinear,
-// REPEAT, aniso as requested (1 = isotropic).
-static VkSampler createMaterialSamplerWithAniso(VkDevice device, float aniso) {
+// aniso as requested (1 = isotropic), REPEAT or CLAMP_TO_EDGE wrap.
+static VkSampler createMaterialSamplerWithAniso(VkDevice device, float aniso,
+                                                VkSamplerAddressMode addr = VK_SAMPLER_ADDRESS_MODE_REPEAT) {
             VkSamplerCreateInfo sci{};
             sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
             sci.magFilter = VK_FILTER_LINEAR;
             sci.minFilter = VK_FILTER_LINEAR;
             sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-            sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            sci.addressModeU = addr;
+            sci.addressModeV = addr;
+            sci.addressModeW = addr;
             sci.anisotropyEnable = aniso > 1.0f ? VK_TRUE : VK_FALSE;
             sci.maxAnisotropy = std::max(aniso, 1.0f);
             sci.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
@@ -65,10 +66,15 @@ void VulkanRendererCore::CoreImpl::createTextureSampler() {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
             const float maxAniso = std::min(16.0f, props.limits.maxSamplerAnisotropy);
-            // The material-sampler policy PAIR (see the member comment):
-            // aniso for the unjittered raster, isotropic for the jittered one.
+            // The material-sampler policy set (see the member comment):
+            // aniso for the unjittered raster, isotropic for the jittered
+            // one, each in a REPEAT and a CLAMP_TO_EDGE flavour.
             textureSampler_    = createMaterialSamplerWithAniso(ctx->device(), maxAniso);
             textureSamplerIso_ = createMaterialSamplerWithAniso(ctx->device(), 1.0f);
+            textureSamplerClamp_    = createMaterialSamplerWithAniso(ctx->device(), maxAniso,
+                                                                     VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+            textureSamplerIsoClamp_ = createMaterialSamplerWithAniso(ctx->device(), 1.0f,
+                                                                     VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
             // THREEPP_VK_ANISO=<n>: startup override (same semantics as
             // setTextureAnisotropy — 0 = auto policy, 1..16 forces a level).
             if (const char* a = std::getenv("THREEPP_VK_ANISO"); a && a[0] != '\0') {
@@ -77,24 +83,28 @@ void VulkanRendererCore::CoreImpl::createTextureSampler() {
             }
         }
 
-VkSampler VulkanRendererCore::CoreImpl::materialSampler() {
+VkSampler VulkanRendererCore::CoreImpl::materialSampler(bool clampUV) {
             // AUTO policy: sharp when the raster is unjittered, prefiltered
             // (isotropic) when it is jittered — see the member comment for why.
             const float want = (textureAnisoOverride_ >= 1.0f)
                                        ? textureAnisoOverride_
                                        : (rasterJitterActive() ? 1.0f : 16.0f);
-            if (want <= 1.0f) return textureSamplerIso_;
-            if (want >= 16.0f) return textureSampler_;
+            if (want <= 1.0f) return clampUV ? textureSamplerIsoClamp_ : textureSamplerIso_;
+            if (want >= 16.0f) return clampUV ? textureSamplerClamp_ : textureSampler_;
             if (textureSamplerCustom_ != VK_NULL_HANDLE && textureSamplerCustomAniso_ == want)
-                return textureSamplerCustom_;
-            // Forced intermediate level: build it lazily; PARK the previous
-            // custom (in-flight frames / bound sets may still reference it —
-            // samplers are tiny, teardown reclaims them).
+                return clampUV ? textureSamplerCustomClamp_ : textureSamplerCustom_;
+            // Forced intermediate level: build the wrap pair lazily; PARK the
+            // previous customs (in-flight frames / bound sets may still
+            // reference them — samplers are tiny, teardown reclaims them).
             if (textureSamplerCustom_ != VK_NULL_HANDLE)
                 parkedSamplers_.push_back(textureSamplerCustom_);
+            if (textureSamplerCustomClamp_ != VK_NULL_HANDLE)
+                parkedSamplers_.push_back(textureSamplerCustomClamp_);
             textureSamplerCustom_ = createMaterialSamplerWithAniso(ctx->device(), want);
+            textureSamplerCustomClamp_ = createMaterialSamplerWithAniso(
+                    ctx->device(), want, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
             textureSamplerCustomAniso_ = want;
-            return textureSamplerCustom_;
+            return clampUV ? textureSamplerCustomClamp_ : textureSamplerCustom_;
         }
 
 void VulkanRendererCore::CoreImpl::setTextureAnisotropy(float aniso) {
@@ -142,6 +152,13 @@ int32_t VulkanRendererCore::CoreImpl::ensureMaterialTexture(const std::shared_pt
             }
             Image2D out = buildMaterialImage2D(tex);
             if (!out.view) return -1;
+            // Clamp-to-edge on BOTH axes selects the clamp policy sampler for
+            // this slot (edge-inclusive atlases: terrain splats, UI sheets).
+            // Mixed / mirrored wraps keep the REPEAT policy sampler.
+            const uint8_t clampUV = (tex->wrapS == TextureWrapping::ClampToEdge &&
+                                     tex->wrapT == TextureWrapping::ClampToEdge)
+                                            ? 1u
+                                            : 0u;
             uint32_t slot;
             if (!freeTextureSlots.empty()) {
                 slot = freeTextureSlots.back();
@@ -151,6 +168,8 @@ int32_t VulkanRendererCore::CoreImpl::ensureMaterialTexture(const std::shared_pt
                 slot = static_cast<uint32_t>(materialTextures.size());
                 materialTextures.push_back(out);
             }
+            if (materialTexClampUV_.size() <= slot) materialTexClampUV_.resize(slot + 1, 0u);
+            materialTexClampUV_[slot] = clampUV;
             textureCache.emplace(tex, CachedTexture{std::weak_ptr<Texture>(texSp), slot, tex->version()});
             return static_cast<int32_t>(slot);
         }
@@ -175,6 +194,13 @@ void VulkanRendererCore::CoreImpl::refreshDirtyMaterialTextures() {
                 if (!rebuilt.view) continue;// keep the old image on failure
                 retire(std::move(materialTextures[kv.second.slot]));
                 materialTextures[kv.second.slot] = rebuilt;// same slot index, new view
+                if (materialTexClampUV_.size() <= kv.second.slot)
+                    materialTexClampUV_.resize(kv.second.slot + 1, 0u);
+                materialTexClampUV_[kv.second.slot] =
+                        (sp->wrapS == TextureWrapping::ClampToEdge &&
+                         sp->wrapT == TextureWrapping::ClampToEdge)
+                                ? 1u
+                                : 0u;
                 kv.second.version = sp->version();
             }
             // The bindless material array is referenced by the deferred-compute
