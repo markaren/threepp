@@ -54,16 +54,33 @@ float heightFogOpticalDepth(vec3 a, vec3 b) {
 }
 // Surface fog in heterogeneous mode: extinction from the froxel LUT (which
 // front-to-back-integrated the per-slice height-fog + near-cloud σ) up to
-// 512 m, continued with the closed-form height-fog integral beyond. In-scatter
-// is added SEPARATELY by the caller via froxelInscatter — this returns
-// extinction only (no double count). fuv = pixel UV, viewDist = surface distance.
+// 512 m, continued with the closed-form height-fog integral beyond, PLUS the
+// ambient/skylight in-scatter fade toward the haze. The froxel LUT (added
+// SEPARATELY by the caller via froxelInscatter) carries only the DIRECT-light
+// (sun shaft + point glow) in-scatter, so without the ambient term here the
+// mist never fades distant geometry TOWARD the haze the way homogeneous scene
+// fog does — the "far field looks fog-free" symptom. fuv = pixel UV,
+// viewDist = surface distance.
 vec3 applyHeteroSurfaceFog(vec3 col, vec2 fuv, float viewDist, vec3 ro, vec3 hit) {
     float T = froxelTransmittance(fuv, viewDist);
     if (viewDist > kFroxelZMax) {
+        // Extinction continues past the 512 m froxel far plane with the closed-
+        // form height-fog integral over the remainder (froxel near × analytic far).
         const vec3 seam = ro + (hit - ro) * (kFroxelZMax / max(viewDist, 1e-3));
         T *= exp(-heightFogOpticalDepth(seam, hit));
     }
-    return col * T;
+    // Ambient in-scatter = medium ALBEDO × an ambient-light estimate (env mean +
+    // scene ambient), the SAME closed form A·fogLight·(1−T) applySceneFog uses —
+    // but keyed on the hetero transmittance T (froxel near + analytic far), so it
+    // is exact over the WHOLE path with NO 512 m seam (T is one continuous
+    // quantity) and consistent with the surface extinction above. It is disjoint
+    // from the froxel's direct-light term (sun/point) → no double count. fogLight
+    // + albedo mirror applySceneFog AND the froxel injector's medium convention,
+    // so distant terrain and the fogged sky (applySkyFog) converge to ONE haze.
+    const vec3 fogLight  = lights.ambient
+                         + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    const vec3 medAlbedo = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
+    return col * T + medAlbedo * fogLight * (vec3(1.0) - T);
 }
 vec3 applySceneFog(vec3 col, vec3 ro, vec3 hit) {
     if (fog.enabled < 0.5) return col;
@@ -90,16 +107,46 @@ vec3 applySceneFog(vec3 col, vec3 ro, vec3 hit) {
 // the zenith — aerial perspective / a horizon haze band. Density drives overall
 // strength so thin fog barely tints the sky and thick fog closes it off. The
 // volumetric sun glow is added AFTER this, so it still blooms through the haze.
+// Closed-form height-fog optical depth of an INFINITE view ray from the camera
+// toward `dir` — the sky's aerial-perspective haze band (the surface path's
+// finite heightFogOpticalDepth taken to t→∞). World-Y profile, matching the
+// surface path so a distant valley wall and the sky behind it converge to the
+// SAME haze at the horizon. The ray geometry itself horizon-weights it (a short
+// column at the zenith → clear for thin mist; a long grazing column near the
+// horizon → closed). Near-horizontal / downward rays never leave the layer, so
+// the elevation is floored (else OD→∞).
+float heightFogSkyOpticalDepth(vec3 dir) {
+    if (clouds.hfDensity <= 0.0) return 0.0;
+    const float H    = max(clouds.hfFalloff, 1e-3);
+    const float hCam = cam.viewInverse[3].y - clouds.hfBaseY;// camera height above the base
+    const float m    = max(dir.y, 0.02);                     // elevation; floor the horizon
+    // ∫₀^∞ σ0·e^(−max(hCam+m·t,0)/H) dt. Above base: a pure decaying column;
+    // below base: a constant-σ0 slab (−hCam/m long) precedes the decaying part.
+    return (hCam >= 0.0) ? clouds.hfDensity * H / m * exp(-hCam / H)
+                         : clouds.hfDensity / m * (H - hCam);
+}
 vec3 applySkyFog(vec3 sky, vec3 dir) {
-    if (fog.enabled < 0.5) return sky;
-    const float sigma = max(dot(fog.sigmaT, vec3(1.0 / 3.0)), 0.0);
-    if (sigma <= 0.0) return sky;
-    const vec3  up       = (dot(fog.worldUp, fog.worldUp) > 1e-6) ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
-    const float elev     = clamp(dot(dir, up), 0.0, 1.0);                 // 0 horizon .. 1 zenith
-    const float band     = exp(-elev * 2.5);                              // haze concentrated near the horizon
-    const float strength = 1.0 - exp(-sigma * 45.0);                      // density → how much sky is obscured
-    const vec3  fogLight = lights.ambient + sampleEnvLod(up, float(max(pc.envMipCount, 1u) - 1u));
-    return mix(sky, fog.color * fogLight, band * strength);
+    const float sigmaHom = (fog.enabled > 0.5) ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), 0.0) : 0.0;
+    const bool  hetero   = clouds.hfDensity > 0.0;// height fog active
+    if (sigmaHom <= 0.0 && !hetero) return sky;
+    const vec3  up   = (dot(fog.worldUp, fog.worldUp) > 1e-6) ? normalize(fog.worldUp) : vec3(0.0, 1.0, 0.0);
+    const float elev = clamp(dot(dir, up), 0.0, 1.0);        // 0 horizon .. 1 zenith
+    // Sky transmittance from BOTH media — they compose multiplicatively (their
+    // optical depths add). HOMOGENEOUS: the original horizon-weighted heuristic
+    // band (kept byte-identical when height fog is off). HETEROGENEOUS height
+    // fog: the closed-form infinite-ray optical depth (itself horizon-weighted by
+    // the ray geometry). With height fog active but scene.fog absent/weak the sky
+    // would otherwise keep zero haze band and the fog "wall" never closes.
+    float T = 1.0;
+    if (sigmaHom > 0.0) {
+        const float band     = exp(-elev * 2.5);            // haze concentrated near the horizon
+        const float strength = 1.0 - exp(-sigmaHom * 45.0); // density → how much sky is obscured
+        T *= 1.0 - band * strength;
+    }
+    if (hetero) T *= exp(-heightFogSkyOpticalDepth(dir));
+    const vec3 fogLight = lights.ambient + sampleEnvLod(up, float(max(pc.envMipCount, 1u) - 1u));
+    const vec3 hazeCol  = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
+    return mix(sky, hazeCol * fogLight, 1.0 - T);
 }
 // ── Procedural star field (sky pixels) ───────────────────────────────────────
 // Hash-based stars evaluated in DIRECTION space — resolution-independent and
@@ -208,9 +255,15 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
 // (bit 4) so the per-step shadow-ray cost is opt-in; the per-pixel jittered
 // step offset relies on TAA to average into smooth shafts.
 vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
-    // Disabled in HETEROGENEOUS mode: the sun in-scatter moved into the froxel
-    // inject there (dense fog/cloud is low-frequency), so marching it per-pixel
-    // too would double-count.
+    // Disabled in HETEROGENEOUS mode: the SHADOWED sun in-scatter moved into the
+    // froxel inject there (0–512 m, 1 RT ray/froxel), so marching it per-pixel
+    // too would double-count. The > 512 m remainder gets NO directional sun term:
+    // applyHeteroSurfaceFog's far in-scatter is the ambient/env haze only. Folding
+    // an UNSHADOWED sun glow onto the far tail was considered (task 1's fogLight),
+    // but the froxel sun IS shadowed at the 512 m boundary, so an unshadowed far
+    // term would brighten distant shadowed valleys and step at the seam wherever a
+    // shadow crosses it — deferred to Phase 3 (shadowed far shafts). The far haze
+    // still carries the sun-lit SKY tone through the env term of fogLight.
     if (clouds.heteroActive > 0.5) return vec3(0.0);
     if (fog.enabled < 0.5 || (pc.flags & 16u) == 0u || lights.dirCount == 0u) return vec3(0.0);
     const float sigma = max(dot(fog.sigmaT, vec3(1.0 / 3.0)), 0.0);

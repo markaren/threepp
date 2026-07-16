@@ -794,8 +794,15 @@ namespace threepp {
             float anisotropy;    // HG g, clamped [-0.95, 0.95] by setFogAnisotropy
             float waterSurfaceY; // world-Y of the water surface; 1e30 = no limit
             float worldUp[3];    // world up axis (= camera.up) for sky aerial perspective
+            // Height-fog (setHeightFog) params, MIRRORED from GpuCloudUbo so the
+            // deferred FILTER recombines (deferred_filter_common.glsl, which binds
+            // only this fog UBO — not the CloudUbo) can carry the same hetero
+            // extinction the shade pass applies. 0 density = height fog off.
+            float hfDensity;     // height-fog σ_t at baseY
+            float hfBaseY;       // height-fog base world Y
+            float hfFalloff;     // height-fog exponential height scale (m)
         };
-        static_assert(sizeof(GpuFogUbo) == 48);
+        static_assert(sizeof(GpuFogUbo) == 60);
         std::array<Buffer, kFramesInFlight> fogUbos{};
         float    fogAnisotropy_ = 0.0f;
         float    fogWaterSurfaceY_ = 1e30f;

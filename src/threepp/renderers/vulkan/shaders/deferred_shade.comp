@@ -555,7 +555,12 @@ void main() {
         const vec3  wpU    = (cam.viewInverse * vec4(vhU.xyz / vhU.w, 1.0)).xyz;
         // Same coverage weighting as the main path: dominant fraction + the
         // sky minority blended here (dispatch B pays the geometry minority).
-        vec3 outU = applySceneFog(albedo, camPos, wpU) * domWeight;
+        // Surface fog matches the lit path's dispatch (hetero height fog vs
+        // homogeneous scene fog) so an unlit MeshBasicMaterial fades to the
+        // same haze as everything else — no crisp unlit island in the mist.
+        vec3 outU = ((clouds.heteroActive > 0.5)
+                   ? applyHeteroSurfaceFog(albedo, uv, length(wpU - camPos), camPos, wpU)
+                   : applySceneFog(albedo, camPos, wpU)) * domWeight;
         if (skyEdgeW > 0.0) outU += skyEdgeW * skyBackground(ndc);
         imageStore(outImage, px, vec4(outU * uintBitsToFloat(pc.preExpBits), 1.0));
         imageStore(indirectImage, px, vec4(0.0));

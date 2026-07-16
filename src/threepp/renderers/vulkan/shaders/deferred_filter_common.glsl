@@ -33,6 +33,13 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     vec3  color;
     float anisotropy;
     float waterSurfaceY;
+    vec3  worldUp;       // present in GpuFogUbo — declared to align the hf offsets
+    // Height-fog (setHeightFog) params — mirror GpuCloudUbo's hf* so the filter
+    // recombines carry the SAME hetero extinction the shade pass applies (the
+    // froxel LUT/CloudUbo are NOT bound here → the closed form below stands in).
+    float hfDensity;     // height-fog σ_t at baseY (0 = height fog off)
+    float hfBaseY;       // height-fog base world Y
+    float hfFalloff;     // height-fog exponential height scale (m)
 } fog;
 
 layout(push_constant) uniform Pc {
@@ -62,9 +69,35 @@ vec3 worldFromDepth(ivec2 q, float depth) {
     return (cam.viewInverse * vec4(vh.xyz / vh.w, 1.0)).xyz;
 }
 
-// Fog transmittance over the camera→surface leg, clipped to y < waterSurfaceY
-// (mirrors the shade pass's fogPathLength — keep in sync).
+// Closed-form exponential-height-fog optical depth along [a,b] — KEEP IN SYNC
+// with heightFogOpticalDepth in deferred_shade_60_fog_volumetrics.glsl. Ignores
+// the noise modulation (a smooth mean, exactly what a recombine extinction
+// wants). Zero when height fog is off.
+float heightFogOpticalDepth(vec3 a, vec3 b) {
+    if (fog.hfDensity <= 0.0) return 0.0;
+    const float H   = max(fog.hfFalloff, 1e-3);
+    const float ya  = a.y - fog.hfBaseY;
+    const float yb  = b.y - fog.hfBaseY;
+    const float len = distance(a, b);
+    const float dy  = yb - ya;
+    if (abs(dy) < 1e-3)
+        return fog.hfDensity * exp(-max(ya, 0.0) / H) * len;
+    return fog.hfDensity * H * len / dy * (exp(-max(ya, 0.0) / H) - exp(-max(yb, 0.0) / H));
+}
+
+// Fog transmittance over the camera→surface leg — the GI/reflection recombine
+// must carry the SAME extinction the shade pass applied to the base, or the
+// added radiance glows through the murk (the "fog missed ocean water" class of
+// bug). Mirror the shade pass's surface-fog dispatch EXACTLY:
+//   HETEROGENEOUS (height fog on) → applyHeteroSurfaceFog applies height-fog
+//     extinction ONLY (the homogeneous scene.fog is NOT applied in that branch),
+//     so match it with the whole-path closed form (no froxel LUT bound here —
+//     an accepted approximation of LUT+tail).
+//   HOMOGENEOUS → the original waterSurfaceY-clipped Beer-Lambert (byte-identical
+//     when height fog is off).
 vec3 fogTransmittance(vec3 a, vec3 b) {
+    if (fog.hfDensity > 0.0)
+        return exp(-vec3(heightFogOpticalDepth(a, b)));
     if (fog.enabled < 0.5) return vec3(1.0);
     float d = distance(a, b);
     if (fog.waterSurfaceY < 1e29) {

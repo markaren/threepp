@@ -1092,6 +1092,12 @@ namespace threepp {
         ubo.worldUp[0] = camera.up.x;
         ubo.worldUp[1] = camera.up.y;
         ubo.worldUp[2] = camera.up.z;
+        // Height-fog params, mirrored from the cloud UBO's hf* so the deferred
+        // FILTER recombines (which bind only this fog UBO) apply the SAME hetero
+        // extinction the shade pass does. 0 density = off → filter uses homogeneous.
+        ubo.hfDensity = heightFogEnabled_ ? heightFogDensity_ : 0.0f;
+        ubo.hfBaseY   = heightFogBaseY_;
+        ubo.hfFalloff = heightFogFalloff_;
 
         if (auto* sc = dynamic_cast<Scene*>(&scene); sc && sc->fog.has_value()) {
             float sigma = 0.f;
