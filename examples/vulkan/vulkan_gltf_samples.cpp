@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
     // settles + runs on the FINAL model. Repro harness for state that only
     // goes bad after several load/remove cycles.
     int browseK = 0, browseEvery = 40, browseFrame = 0;
-    int optProbe = -1, optSunExt = -1, optSsr = -1;
+    int optProbe = -1, optSunExt = -1;
     float optSunRad = -1.f;
     float orbitDeg = 0.f;// --orbit d: rotate the camera d° per frame during capture (motion-shake harness)
     bool shotAnim = false;// --anim: keep animations playing during capture
@@ -110,7 +110,6 @@ int main(int argc, char** argv) {
         else if (a == "--seq" && i + 1 < argc) seqN = std::atoi(argv[++i]);
         else if (a == "--browse" && i + 2 < argc) { browseK = std::atoi(argv[++i]); browseEvery = std::atoi(argv[++i]); }
         else if (a == "--probe" && i + 1 < argc) optProbe = std::atoi(argv[++i]);
-        else if (a == "--ssr" && i + 1 < argc) optSsr = std::atoi(argv[++i]);
         else if (a == "--sunext" && i + 1 < argc) optSunExt = std::atoi(argv[++i]);
         else if (a == "--sunrad" && i + 1 < argc) optSunRad = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--orbit" && i + 1 < argc) orbitDeg = static_cast<float>(std::atof(argv[++i]));
@@ -155,7 +154,6 @@ int main(int argc, char** argv) {
 
     VulkanRenderer renderer(canvas);
     if (optProbe >= 0) renderer.setProbeGI(optProbe != 0);
-    if (optSsr >= 0) renderer.setSsrReflections(optSsr != 0);
     if (optSunExt >= 0) renderer.setEnvSunExtraction(optSunExt != 0);
     if (volFogCli) renderer.setVolumetricFog(true);
     if (mblurCli > 0.f) renderer.setMotionBlur(mblurCli);

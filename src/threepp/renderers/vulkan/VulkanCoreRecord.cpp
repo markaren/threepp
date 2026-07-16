@@ -394,7 +394,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                     recordRasterGbufPassInternal(cb, currentFrame, occlA, occlFb,
                                                  occlMsaa,
                                                  occl_->phase1Buffer(), /*clear=*/true);
-                    occlHiz_->record(cb, currentFrame, /*reduceMin=*/true);
+                    occlHiz_->record(cb, currentFrame);
                     occl_->recordCullTest(cb, currentFrame, indirectTotalDraws_,
                                           occlHiz_->mips(), renderExtent());
                     recordRasterGbufPassInternal(cb, currentFrame, occlB, occlFb,
@@ -917,12 +917,12 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
             // Pre-exposure (physical camera mode; 1.0 otherwise — every
             // consumer's multiply/divide is then an exact no-op). The OTHER
             // frame-in-flight's stashed value is what last frame baked into
-            // ITS sceneHdr — the deferred SSR prev-frame fetch divides by it.
+            // ITS sceneHdr — the TAA history exposure compensation divides
+            // by it (and the exposure meter un-bakes this frame's).
             const float preExp     = preExposure();
             const float prevPreExp = preExpHist_[(currentFrame + 1u) % kFramesInFlight];
             preExpHist_[currentFrame] = preExp;
             std::memcpy(&preExpBits_, &preExp, sizeof(preExpBits_));
-            std::memcpy(&prevPreExpBits_, &prevPreExp, sizeof(prevPreExpBits_));
 
             // Dispatch the deferred shade compute (VulkanRenderer::Impl);
             // bloom + TAA below are shared.

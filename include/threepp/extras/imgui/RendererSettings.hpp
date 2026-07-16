@@ -339,9 +339,6 @@ private:
         bool restir = vk_->restirDIEnabled();
         if (ImGui::Checkbox("ReSTIR DI", &restir)) vk_->setRestirDIEnabled(restir);
 
-        bool ssr = vk_->ssrReflections();
-        if (ImGui::Checkbox("SSR-first reflections", &ssr)) vk_->setSsrReflections(ssr);
-
         float sunSoft = vk_->sunAngularRadius();
         if (ImGui::SliderFloat("Sun softness (deg)", &sunSoft, 0.f, 3.f, "%.2f")) {
             vk_->setSunAngularRadius(sunSoft);

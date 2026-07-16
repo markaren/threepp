@@ -607,15 +607,6 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r) { return r.native().deferredAO(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setDeferredAO(v); },
                               "Toggle ray-traced ambient occlusion / diffuse GI. Default on.")
-                // Hybrid SSR→RT reflections: HiZ screen-space march first, RT ray
-                // wherever the screen cannot answer. A perf fast path — never a
-                // quality authority (any doubtful hit falls back to the RT ray).
-                .def_property("ssr_reflections",
-                              [](PyVulkanRenderer& r) { return r.native().ssrReflections(); },
-                              [](PyVulkanRenderer& r, bool v) { r.native().setSsrReflections(v); },
-                              "Toggle hybrid SSR→RT reflections (screen-space fast path with "
-                              "RT fallback; quality-neutral). Default off — enable on scenes "
-                              "where RT reflection rays dominate the frame.")
                 // World-space irradiance probe grid (DDGI-lite): multi-bounce GI, and
                 // the switch from cosmetic to MEASURED ambient — enclosed interiors
                 // stop being "lit with no light" (ungated ambient/env-specular) and

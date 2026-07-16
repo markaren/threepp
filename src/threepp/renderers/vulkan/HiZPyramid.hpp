@@ -1,15 +1,9 @@
 // HiZPyramid — reverse-Z depth mip pyramid over a G-buffer depth view.
 //
-// R32F, full mip chain at the render extent, two reduce flavours selected
-// per record() call (see hiz_build.comp for the conservatism rules):
-//   MAX (closest)  — the deferred hybrid SSR walk (deferred_shade binding
-//                    55) skips whole cells the reflection ray provably
-//                    stays in front of: O(log n) screen traversal.
-//   MIN (farthest) — the two-phase occlusion culling test ("is everything
-//                    in this region provably closer than the box?"); this
-//                    instance is built MID-frame from the phase-1 depth.
-// One instance per use — the two consumers need different source moments,
-// so they never share a build.
+// R32F, full mip chain at the render extent, conservative MIN (farthest)
+// 2×2 reduce (see hiz_build.comp for the conservatism rules) — the
+// two-phase occlusion culling test ("is everything in this region provably
+// closer than the box?"); built MID-frame from the phase-1 depth.
 //
 // Follows the SkinningPipeline / ProbeGI house pattern: one class, own
 // pipeline + descriptor pool, record(cb, frame). resize() is idempotent and
@@ -52,9 +46,8 @@ namespace threepp::vulkan {
 
         // Build the full chain for this frame's depth. Records its own
         // layout/WAR leading barrier, per-mip reduce barriers and the
-        // trailing write→sampled-read barrier. reduceMin selects the
-        // flavour: false = closest/max (SSR), true = farthest/min (occlusion).
-        void record(VkCommandBuffer cb, uint32_t frame, bool reduceMin = false);
+        // trailing write→sampled-read barrier.
+        void record(VkCommandBuffer cb, uint32_t frame);
 
         [[nodiscard]] bool        valid()   const { return image_ != VK_NULL_HANDLE; }
         [[nodiscard]] VkImageView view()    const { return fullView_; }// all mips, sampled

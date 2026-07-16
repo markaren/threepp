@@ -86,8 +86,8 @@ bool hizVisible(vec3 bmin, vec3 bmax) {
         return false;// fully off-screen (the CPU frustum cull already caught most)
     if (zMax >= 1.0) return true;// pokes through the near plane
 
-    // NDC → pixel rect (GL-style y-up NDC ↔ y-down UV, same convention as
-    // the SSR walk), clamped to the screen.
+    // NDC → pixel rect (GL-style y-up NDC ↔ y-down UV, the house
+    // convention), clamped to the screen.
     const vec2 uvMin = clamp(vec2(ndcMin.x * 0.5 + 0.5, 0.5 - ndcMax.y * 0.5), 0.0, 1.0);
     const vec2 uvMax = clamp(vec2(ndcMax.x * 0.5 + 0.5, 0.5 - ndcMin.y * 0.5), 0.0, 1.0);
     const vec2 pxMin = uvMin * vec2(pc.hizSize);

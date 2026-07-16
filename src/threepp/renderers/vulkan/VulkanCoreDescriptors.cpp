@@ -292,20 +292,11 @@ void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors(int onlyFrame) {
             in.probeShBuf       = probeGI_->shBuffer();
             in.probeGridUbo     = probeGI_->gridUbos();
             in.probeDepthBuf    = probeGI_->depthBuffer();
-            // Hybrid SSR (bindings 55-57): (re)fit the HiZ pyramid to the
-            // current render extent + depth views (idempotent — this rewrite
-            // runs on exactly the resize/realloc events the pyramid must
-            // track), then hand its view/sampler + the raster camera UBOs
-            // (forward jittered VP) to the shade set.
+            // Raster camera UBOs (binding 57) — cloud_march.comp's temporal
+            // reprojection reads last frame's view-proj from them.
             std::array<VkBuffer, kFramesInFlight> rasterCamBufs{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f)
                 rasterCamBufs[f] = rasterCameraUbos[f].handle;
-            // msSamples stays 1: the SSR walk reads the RESOLVED depth even
-            // under MSAA (binding 3 gets the MS/dummy view purely to keep the
-            // descriptor valid).
-            hiz_->resize(renderExtent(), depthViews.data(), depthMSViews.data(), 1);
-            in.hizView          = hiz_->view();
-            in.hizSampler       = hiz_->sampler();
             in.rasterCamUbo     = rasterCamBufs.data();
             in.gbufNormalMS     = normalMSViews.data();
             in.gbufDepthMS      = depthMSViews.data();

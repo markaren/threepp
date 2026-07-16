@@ -64,12 +64,18 @@ namespace threepp::vulkan {
         lci.minFilter  = VK_FILTER_LINEAR;
         check(vkCreateSampler(d, &lci, nullptr, &lutSampler_), "vkCreateSampler(froxel LUT)");
 
-        VkDescriptorSetLayoutBinding b[67]{};// KEEP the bound == dlci.bindingCount (a lagging bound = stack smash)
-        auto set = [&](uint32_t i, VkDescriptorType t) {
-            b[i].binding = i;
-            b[i].descriptorType = t;
-            b[i].descriptorCount = 1;
-            b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutBinding b[65]{};// KEEP the bound >= #set() calls below (a lagging bound = stack smash)
+        // Dense cursor: array index and binding number diverge past the
+        // retired 55-56 slot (binding numbers stay stable for the shaders,
+        // the array carries no zero-init gap entries — those are invalid
+        // layout bindings, not padding).
+        uint32_t nb = 0;
+        auto set = [&](uint32_t binding, VkDescriptorType t) {
+            b[nb].binding = binding;
+            b[nb].descriptorType = t;
+            b[nb].descriptorCount = 1;
+            b[nb].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            ++nb;
         };
         set(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);          // camera
         set(1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);          // lights
@@ -83,7 +89,7 @@ namespace threepp::vulkan {
         set(9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);          // MaterialDesc[] (emissive + reflected material)
         set(10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // GeometryDesc[] (reflection-hit normals/UVs)
         set(11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // bindless material textures...
-        b[11].descriptorCount = kMaxMaterialTextures;       // ...fixed-size array (reflection-hit textures)
+        b[nb - 1].descriptorCount = kMaxMaterialTextures;   // ...fixed-size array (reflection-hit textures)
         set(12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // EmTri[] emissive triangles (area-light NEE)
         set(13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean FFT fine-cascade height (water chop)
         set(14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean world-space foam accumulator
@@ -136,9 +142,8 @@ namespace threepp::vulkan {
         set(52, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // froxel LUT (3D, integrate writes)
         set(53, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // froxel LUT (LINEAR — shade's trilinear sample)
         set(54, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // probe Chebyshev depth store
-        set(55, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // HiZ closest-depth pyramid (hybrid SSR)
-        set(56, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV sceneHdr (other fif — SSR colour source)
-        set(57, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // raster camera UBO (jittered VP for the SSR march)
+        // (55-56 retired — they carried the removed hybrid-SSR inputs.)
+        set(57, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // raster camera UBO (cloud_march.comp's prevVP temporal reproject)
         set(58, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // volumetric cloud-layer UBO (setClouds)
         // Half-res cloud march (cloud_march.comp writes 59/62, reads 60/63 as
         // prev-fif history; the shade reads 61 = cur-fif cloud color, LINEAR).
@@ -154,7 +159,7 @@ namespace threepp::vulkan {
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 67;
+        dlci.bindingCount = nb;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -178,7 +183,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.offset = 0;
-        pc.size = 84;// 21×u32 (…, clusterLightCount, shadeMode, preExpBits, prevPreExpBits)
+        pc.size = 80;// 20×u32 (…, clusterLightCount, shadeMode, preExpBits)
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount = 1;
@@ -486,18 +491,8 @@ namespace threepp::vulkan {
             probeDepthInfo.offset = 0;
             probeDepthInfo.range  = VK_WHOLE_SIZE;
 
-            // Hybrid SSR (bindings 55-57): HiZ pyramid (GENERAL — rebuilt by
-            // compute each frame), PREV sceneHdr (other fif, GENERAL storage
-            // image sampled through the LINEAR lutSampler_ — SSR hit UVs land
-            // between texels), and the raster camera UBO.
-            VkDescriptorImageInfo hizInfo{};
-            hizInfo.sampler     = in.hizSampler;
-            hizInfo.imageView   = in.hizView;
-            hizInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            VkDescriptorImageInfo prevSceneInfo{};
-            prevSceneInfo.sampler     = lutSampler_;
-            prevSceneInfo.imageView   = in.sceneHdr[pf];
-            prevSceneInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            // Raster camera UBO (binding 57) — cloud_march.comp reprojects
+            // against last frame's view-proj (rcam.prevVP).
             VkDescriptorBufferInfo rcamInfo{};
             rcamInfo.buffer = in.rasterCamUbo[f];
             rcamInfo.offset = 0;
@@ -604,7 +599,7 @@ namespace threepp::vulkan {
             froxelLutTexInfo.imageView   = in.froxelLut[f];
             froxelLutTexInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            VkWriteDescriptorSet w[67]{};
+            VkWriteDescriptorSet w[65]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -679,19 +674,19 @@ namespace threepp::vulkan {
             setw(52, 52, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &froxelLutInfo,         nullptr);
             setw(53, 53, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &froxelLutTexInfo,      nullptr);
             setw(54, 54, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &probeDepthInfo);
-            setw(55, 55, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &hizInfo,       nullptr);
-            setw(56, 56, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevSceneInfo, nullptr);
-            setw(57, 57, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &rcamInfo);
-            setw(58, 58, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &cloudInfo);
-            setw(59, 59, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudColorInfo,     nullptr);
-            setw(60, 60, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudColorPrevInfo, nullptr);
-            setw(61, 61, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudColorTexInfo,  nullptr);
-            setw(62, 62, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudAuxInfo,       nullptr);
-            setw(63, 63, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudAuxPrevInfo,   nullptr);
-            setw(64, 64, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudShadowInfo,    nullptr);
-            setw(65, 65, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudShadowTexInfo, nullptr);
-            setw(66, 66, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudAuxTexInfo,    nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 67, w, 0, nullptr);
+            // (bindings 55-56 retired with the hybrid SSR — write indices
+            // stay dense while binding numbers jump to 57.)
+            setw(55, 57, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &rcamInfo);
+            setw(56, 58, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &cloudInfo);
+            setw(57, 59, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudColorInfo,     nullptr);
+            setw(58, 60, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudColorPrevInfo, nullptr);
+            setw(59, 61, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudColorTexInfo,  nullptr);
+            setw(60, 62, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudAuxInfo,       nullptr);
+            setw(61, 63, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudAuxPrevInfo,   nullptr);
+            setw(62, 64, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudShadowInfo,    nullptr);
+            setw(63, 65, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudShadowTexInfo, nullptr);
+            setw(64, 66, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudAuxTexInfo,    nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 65, w, 0, nullptr);
         }
     }
 
@@ -723,8 +718,8 @@ namespace threepp::vulkan {
                                        float timeSec, float sunTanHalfAngle,
                                        uint32_t gbufMsaaSamples, uint32_t shadeMode,
                                        bool shadeBActive, uint32_t clusterLightCount,
-                                       bool froxelsActive, bool ssrActive,
-                                       uint32_t preExpBits, uint32_t prevPreExpBits,
+                                       bool froxelsActive,
+                                       uint32_t preExpBits,
                                        bool bgIsSolidColor) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -739,7 +734,7 @@ namespace threepp::vulkan {
                              | (restirDI ? 8u : 0u) | (volFog ? 16u : 0u) | (msaaCode << 5u)
                              | (shadeBActive ? 128u : 0u)
                              | (froxelsActive ? 256u : 0u)  // froxel LUT valid this frame
-                             | (ssrActive ? 512u : 0u)      // HiZ built → hybrid SSR fast path
+                             // (bit 9 / 512u retired with the hybrid SSR fast path)
                              | (bgIsSolidColor ? 1024u : 0u);// solid bg: sky store NOT pre-exposed
         uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits, starBits,
                 camDeltaBits, camRotBits, timeBits, sunTanBits;
@@ -754,12 +749,12 @@ namespace threepp::vulkan {
         std::memcpy(&camRotBits,    &camRotAngle,        sizeof(camRotBits));
         std::memcpy(&timeBits,      &timeSec,            sizeof(timeBits));
         std::memcpy(&sunTanBits,    &sunTanHalfAngle,    sizeof(sunTanBits));
-        const uint32_t pc[21] = {envMipCount, width, height, flags,
+        const uint32_t pc[20] = {envMipCount, width, height, flags,
                                  frameCounter, emissiveCount, emPowerBits, fireflyBits,
                                  oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits,
                                  starBits, camDeltaBits, camRotBits, timeBits,
                                  sunTanBits, clusterLightCount, shadeMode,
-                                 preExpBits, prevPreExpBits};
+                                 preExpBits};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
     }

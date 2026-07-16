@@ -16,10 +16,9 @@ namespace threepp::vulkan {
             int32_t dstW, dstH;
             int32_t srcW, srcH;
             uint32_t fromDepth;
-            uint32_t reduceMin;// 0 = max (closest, SSR), 1 = min (farthest, occlusion)
             uint32_t msSamples;// >1 = mip 0 reduces the raw MS depth attachment
         };
-        static_assert(sizeof(HiZPc) == 28, "hiz_build push-constant drift");
+        static_assert(sizeof(HiZPc) == 24, "hiz_build push-constant drift");
 
         uint32_t mipDim(uint32_t base, uint32_t level) {
             return std::max(base >> level, 1u);
@@ -29,7 +28,7 @@ namespace threepp::vulkan {
     HiZPyramid::HiZPyramid(VulkanContext& ctx, uint32_t framesInFlight)
         : ctx_(ctx), framesInFlight_(framesInFlight) {
         assert(framesInFlight_ <= 8);// cachedDepthViews_ bound
-        // NEAREST + unclamped LOD: the SSR walk texelFetches explicit mips.
+        // NEAREST + unclamped LOD: the occlusion cull texelFetches explicit mips.
         VkSamplerCreateInfo sci{};
         sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         sci.magFilter    = VK_FILTER_NEAREST;
@@ -240,7 +239,7 @@ namespace threepp::vulkan {
         }
     }
 
-    void HiZPyramid::record(VkCommandBuffer cb, uint32_t frame, bool reduceMin) {
+    void HiZPyramid::record(VkCommandBuffer cb, uint32_t frame) {
         if (!image_) return;
 
         // Leading barrier: fresh image → GENERAL; otherwise fence last
@@ -293,7 +292,6 @@ namespace threepp::vulkan {
             pc.srcW = static_cast<int32_t>(m == 0 ? extent_.width  : mipDim(extent_.width, m - 1));
             pc.srcH = static_cast<int32_t>(m == 0 ? extent_.height : mipDim(extent_.height, m - 1));
             pc.fromDepth = m == 0 ? 1u : 0u;
-            pc.reduceMin = reduceMin ? 1u : 0u;
             pc.msSamples = msSamples_;
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
             vkCmdDispatch(cb, (static_cast<uint32_t>(pc.dstW) + 7u) / 8u,

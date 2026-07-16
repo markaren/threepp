@@ -200,22 +200,9 @@ layout(set = 0, binding = 37, scalar) uniform ProbeGridUbo {
 // Octahedral depth store (Chebyshev visibility — see probe_common.glsl).
 layout(set = 0, binding = 54, scalar) readonly buffer ProbeDepthBuf { uint probeDepth[]; };
 
-// ── Hybrid SSR inputs (flags bit 9 — see ssrTraceHiZ) ──────────────────────
-// 55 = reverse-Z "closest depth" mip pyramid (HiZPyramid, rebuilt per frame),
-// 56 = LAST frame's pre-TAA linear-HDR sceneHdr (the other frame-in-flight,
-//      motion-reprojected at the hit — same cross-frame pattern as binding 17),
-// 57 = the raster camera UBO: the forward JITTERED view-proj the G-buffer was
-//      rasterized with, so a projected world point lands on the exact depth
-//      texel the raster wrote (layout matches gbuffer.vert's CameraUbo).
-layout(set = 0, binding = 55) uniform sampler2D hizTex;
-layout(set = 0, binding = 56) uniform sampler2D prevSceneTex;
-layout(set = 0, binding = 57) uniform RasterCamUbo {
-    mat4 currVPjittered;
-    mat4 currVPunjittered;
-    mat4 prevVP;
-    vec4 jitter;
-    vec4 prevJitter;
-} rcam;
+// (Bindings 55-56 retired — they carried the removed hybrid-SSR inputs.
+// Binding 57, the raster camera UBO, lives on for cloud_march.comp's
+// temporal reprojection — declared there, unused by this shader.)
 
 // ── MSAA per-sample edge shading (dispatch B, shadeMode==1 only) ───────────
 // Raw MS raster attachments — bound only when setGbufferMsaa(2|4) is active;
@@ -348,8 +335,6 @@ layout(push_constant) uniform Pc {
     uint  preExpBits;        // float-bits: pre-exposure baked into every outImage (sceneHdr) store —
                               // physical-camera mode keeps 100k-lux radiance inside fp16.
                               // 1.0 in legacy mode: an exact no-op multiply.
-    uint  prevPreExpBits;    // float-bits: the PREV frame's pre-exposure — the SSR prev-scene
-                              // fetch divides by it to recover UNexposed radiance.
 } pc;
 
 // DEPTH-AWARE 2×2 upsample of the half-res cloud layer at this full-res pixel.
@@ -1123,22 +1108,13 @@ void main() {
         // no amount of denoising should have to absorb. Mirror fallback matches
         // the bounce-continuation guard inside traceRadiance.
         if (dot(Rd, N) <= 0.0) Rd = R;
-        // Hybrid SSR fast path (flags bit 9): resolve the reflection from the
-        // HiZ pyramid + last frame's screen when the screen can answer,
-        // otherwise shoot the RT ray as before. Dispatch A only — B's edge-
-        // minority samples sit exactly where SSR is least trustworthy.
-        vec3 r;
-        bool ssrHit = false;
-        if ((pc.flags & 512u) != 0u && pc.shadeMode == 0u)
-            ssrHit = ssrTraceHiZ(shadowOrig, Rd, r);
-        if (!ssrHit)
-            r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
-                              /*cheapHits=*/true,// reflection channel: blur+temporal absorb
-                              /*probeHitFill=*/true);
+        vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
+                               /*cheapHits=*/true,// reflection channel: blur+temporal absorb
+                               /*probeHitFill=*/true);
         // Reflected-content distance for the denoiser's gloss-blur footprint:
         // env miss → 0 (already lobe-filtered via missLod — no extra blur),
-        // geometry hit → its distance, SSR → unknown (conservative full blur).
-        reflHitT = ssrHit ? -1.0 : max(gTraceHitT, 0.0);
+        // geometry hit → its distance.
+        reflHitT = max(gTraceHitT, 0.0);
         gReflEmitterScale = 1.0;
         // Roughness-aware reflection clamp (moving/deterministic path only). A glossy
         // surface integrates a bright point source — the sun, a sky-gap between trees —

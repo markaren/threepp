@@ -271,7 +271,7 @@ void main() {
         //    polished ring reflecting a piece millimetres away is SHARP. Scale
         //    the blur by hitDist/(hitDist+viewDist), the projected-footprint
         //    ratio; distant reflected geometry keeps today's full gloss blur.
-        // Unknown distance (aux .w < 0: SSR hits, glass, pre-fix history) keeps
+        // Unknown distance (aux .w < 0: glass, pre-fix history) keeps
         // the conservative full width.
         const float hitW        = auxV.w;
         const float viewDistC   = length(Pc - camPos);

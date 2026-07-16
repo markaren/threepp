@@ -3,22 +3,15 @@
 // HiZ depth pyramid — one dispatch per mip (HiZPyramid::record).
 //
 // Mip 0 copies the resolved reverse-Z G-buffer depth into R32F; every
-// further mip is a CONSERVATIVE 2×2 reduce, in one of two flavours:
+// further mip is a CONSERVATIVE 2×2 MIN reduce (per-cell FARTHEST surface):
+// what the occlusion-culling test needs ("is the whole scene in this region
+// provably closer than the box?"). The safe direction: a cell value BELOW
+// the true farthest only draws boxes that were actually hidden; one ABOVE
+// would cull visible geometry into holes.
 //
-//   reduceMin == 0 (MAX = per-cell CLOSEST surface, reverse-Z near = 1):
-//     what the SSR walk needs ("can the ray provably stay in front of
-//     everything in this cell?"). Conservatism must never lean the other
-//     way: a cell value ABOVE the true closest only costs extra refinement
-//     steps, one BELOW lets rays tunnel through geometry.
-//   reduceMin == 1 (MIN = per-cell FARTHEST surface): what occlusion
-//     culling needs ("is the whole scene in this region provably closer
-//     than the box?"). Here the safe direction flips: a cell value BELOW
-//     the true farthest only draws boxes that were actually hidden; one
-//     ABOVE would cull visible geometry into holes.
-//
-// Both flavours fold the odd-dimension leftovers (NPOT mips: floor-halving
+// The reduce folds odd-dimension leftovers (NPOT mips: floor-halving
 // orphans the last row/column) into the edge cells rather than dropping
-// them, and clamp reads instead of wrapping — over-conservative, never
+// them, and clamps reads instead of wrapping — over-conservative, never
 // wrong-sided.
 
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -35,12 +28,11 @@ layout(push_constant) uniform Pc {
     ivec2 dstSize;
     ivec2 srcSize;
     uint  fromDepth;// 1 = mip-0 copy from the depth buffer, 0 = 2×2 reduce
-    uint  reduceMin;// 0 = max (closest, SSR), 1 = min (farthest, occlusion)
     uint  msSamples;// >1 = mip 0 reads srcDepthMS, reducing across samples
 } pc;
 
 float reduceOp(float a, float b) {
-    return pc.reduceMin != 0u ? min(a, b) : max(a, b);
+    return min(a, b);
 }
 
 void main() {

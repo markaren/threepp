@@ -323,7 +323,6 @@ int main(int argc, char** argv) {
         }
         if (envSet("NT_AO")) vk->setDeferredAO(std::getenv("NT_AO")[0] != '0');
         if (envSet("NT_PROBEGI")) vk->setProbeGI(std::getenv("NT_PROBEGI")[0] != '0');
-        if (envSet("NT_SSR")) vk->setSsrReflections(std::getenv("NT_SSR")[0] != '0');
     }
 
     Scene scene;

@@ -100,13 +100,8 @@ namespace threepp::vulkan {
             VkBuffer           probeShBuf    = VK_NULL_HANDLE;// SH-L1 store
             const VkBuffer*    probeGridUbo  = nullptr;       // [framesInFlight]
             VkBuffer           probeDepthBuf = VK_NULL_HANDLE;// Chebyshev depth store
-            // Hybrid SSR (bindings 55-57): the HiZ closest-depth pyramid +
-            // its NEAREST/unclamped-LOD sampler (HiZPyramid), and the raster
-            // camera UBOs (forward jittered VP for the screen-space march).
-            // The prev-frame colour source is sceneHdr[other fif] — already
-            // provided above. All always valid; sampling gates on flags bit 9.
-            VkImageView        hizView      = VK_NULL_HANDLE;
-            VkSampler          hizSampler   = VK_NULL_HANDLE;
+            // Raster camera UBOs (binding 57, forward jittered VP + prevVP) —
+            // cloud_march.comp's temporal reprojection reads rcam.prevVP.
             const VkBuffer*    rasterCamUbo = nullptr;        // [framesInFlight]
             // MSAA raw raster attachments (bindings 38-42) — only meaningful
             // when setGbufferMsaa > 1; pass a 1x1 dummy MS view/sampler set
@@ -184,12 +179,9 @@ namespace threepp::vulkan {
         // clusterLightCount: # lights in the cluster buffer this frame — the
         // shade's analytic split reads its cell's list when > 0 (the caller
         // must have recorded recordClusterBuild + a compute barrier first).
-        // ssrActive: HiZ pyramid built this frame + setSsrReflections on —
-        // gates the shade's hybrid SSR fast path (flags bit 9).
-        // preExpBits/prevPreExpBits: float-bits of the pre-exposure to bake
-        // into every sceneHdr store (physical-camera mode; keeps 100k-lux
-        // radiance inside fp16) and the PREV frame's factor the SSR
-        // prev-scene fetch divides back out. 0x3F800000 = 1.0f = legacy.
+        // preExpBits: float-bits of the pre-exposure to bake into every
+        // sceneHdr store (physical-camera mode; keeps 100k-lux radiance
+        // inside fp16). 0x3F800000 = 1.0f = legacy.
         // bgIsSolidColor: the background is a DISPLAY-referred solid colour
         // (the composite bypass restores it verbatim) — the sky store skips
         // the pre-exposure so sky and geometry share one value domain
@@ -210,9 +202,7 @@ namespace threepp::vulkan {
                             bool shadeBActive = false,
                             uint32_t clusterLightCount = 0,
                             bool froxelsActive = false,
-                            bool ssrActive = false,
                             uint32_t preExpBits = 0x3F800000u,
-                            uint32_t prevPreExpBits = 0x3F800000u,
                             bool bgIsSolidColor = false);
 
         // Clustered light culling: one thread per cluster cell tests every

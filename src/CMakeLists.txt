@@ -1085,8 +1085,8 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/probe_update.comp"
         kProbeUpdateCompSpv
         _probe_update_spv_h)
-    # HiZ depth pyramid (hybrid SSR closest-reduce + occlusion-culling
-    # farthest-reduce) — see HiZPyramid.{hpp,cpp}.
+    # HiZ depth pyramid (occlusion-culling farthest-reduce) — see
+    # HiZPyramid.{hpp,cpp}.
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/hiz_build.comp"
         kHizBuildCompSpv

@@ -32,7 +32,7 @@ layout(push_constant) uniform Pc {
 } pc;
 
 // View-space distance from reversed-Z NDC depth — only the projection
-// inverse's z/w rows (same construction as the deferred SSR's ssrViewDepth).
+// inverse's z/w rows matter (xy jitter never feeds them).
 float viewDepth(float zNdc) {
     const float vz = cam.projInverse[2][2] * zNdc + cam.projInverse[3][2];
     const float vw = cam.projInverse[2][3] * zNdc + cam.projInverse[3][3];

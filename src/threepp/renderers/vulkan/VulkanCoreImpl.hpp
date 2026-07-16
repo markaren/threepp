@@ -223,16 +223,15 @@ namespace threepp {
             return 1.f / (1.2f * std::exp2(ev100));
         }
         // The factor already baked into this frame's sceneHdr stores (1.0 in
-        // legacy mode). Hoisted into preExpBits_/prevPreExpBits_ once per
-        // frame in recordCommandBuffer; preExpHist_ remembers each frame-in-
-        // flight's value so cross-frame sceneHdr consumers (deferred SSR's
-        // prev-frame fetch) can un-bake the OTHER slot's exposure.
+        // legacy mode). Hoisted into preExpBits_ once per frame in
+        // recordCommandBuffer; preExpHist_ remembers each frame-in-flight's
+        // value so cross-frame sceneHdr consumers (the exposure meter) can
+        // un-bake the right slot's exposure.
         [[nodiscard]] float preExposure() const {
             return physicalCamera_ ? currentExposure() : 1.f;
         }
         float    preExpHist_[kFramesInFlight] = {1.f, 1.f};
         uint32_t preExpBits_     = 0x3F800000u;// float bits of this frame's preExposure
-        uint32_t prevPreExpBits_ = 0x3F800000u;// float bits of the prev frame's preExposure
 
         // Analytic light intensities are photometric while enabled: dir = lux
         // (as-is), point = lumens (→ candela Φ/4π at upload), spot = lumens
@@ -2283,16 +2282,6 @@ namespace threepp {
         // deterministic Fibonacci 64-sample gather (clean + settles), no
         // per-frame flicker.
         bool  deferredAO_ = true;
-        // Hybrid SSR→RT reflections (VulkanRenderer::setSsrReflections). ON:
-        // the reflection channel resolves from the HiZ pyramid + last frame's
-        // screen wherever the screen can answer, RT rays fill the rest. OFF:
-        // every reflection ray is RT (the pyramid isn't even built).
-        // Default OFF — measured 2026-07-07 (box field / 600-instance field /
-        // Intel Sponza, RTX 4070): quality matches RT (goldens byte-near) but
-        // the march + pyramid cost ≈ the ray-query savings (Δ −0.1..−0.3 ms).
-        // Opt in per scene; candidates are huge monolithic BVHs with heavy
-        // per-hit shading where RT reflection rays dominate.
-        bool  deferredSsr_ = false;
         // Deferred volumetric spot-light beams (ray-marched single scattering in
         // deferred_shade.comp). σ = 0 disables (the march is skipped entirely).
         float deferredVolDensity_ = 0.f;
@@ -2319,14 +2308,9 @@ namespace threepp {
         std::unique_ptr<vulkan::ProbeGI> probeGI_;
         bool probeGIEnabled_  = true;
         bool probeGridDirty_  = true;
-        // HiZ closest-depth pyramid for the deferred hybrid SSR (bindings
-        // 55-57). Created alongside deferredShade_; (re)fitted to the render
-        // extent inside rewriteDeferredDescriptors; rebuilt every frame in
-        // recordSceneDispatch when SSR is on (deferredSsr_ above).
-        std::unique_ptr<vulkan::HiZPyramid> hiz_;
         // ── Two-phase GPU occlusion culling (setOcclusionCulling) ───────────
         // Phase 1 draws last frame's visible set; a FARTHEST-depth pyramid
-        // (occlHiz_, min-reduce — the SSR pyramid above is closest/max) is
+        // (occlHiz_, min-reduce) is
         // built mid-frame from that depth; the cull compute tests every
         // record's world AABB against it and phase 2 draws only the newly
         // visible (render passes A/B below — same framebuffer + pipelines,
@@ -2711,7 +2695,6 @@ namespace threepp {
             // deferredShade_ stays null if ray query is unavailable.
             if (ctx->rayQuerySupported()) {
                 deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
-                hiz_ = std::make_unique<vulkan::HiZPyramid>(*ctx, kFramesInFlight);
                 // Probe grid backs the deferred set's bindings 36/37 (dummy-
                 // free: real buffers from construction, sampling gated by the
                 // grid UBO's enable flag until setProbeGI(true)).
