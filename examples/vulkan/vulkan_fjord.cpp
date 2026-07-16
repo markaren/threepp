@@ -791,6 +791,19 @@ int main(int argc, char** argv) {
     // wind never freezes — the "no culling" baseline). The default builds the
     // same blades as a grid of GrassMesh tiles (cullable + distance-frozen).
     bool singleGrass = false;
+    // Froxel-unification scout: --mist [density] swaps the sun-shaft source —
+    // setHeightFog (smooth, tall falloff ≈ homogeneous near the water) engages
+    // the froxel sun in-scatter and disables the per-pixel homogeneous sun
+    // march. Same scene, same medium-ish: the A/B for "can froxels carry the
+    // fjord god rays" (they end at the 512 m froxel far plane; that truncation
+    // is exactly what this flag makes visible).
+    bool mistOn = false;
+    float mistDensity = 0.0012f;// ≈ the dawn FogExp2 peak below
+    float startFogScale = 1.f;  // --fogscale S: scales the homogeneous FogExp2 density
+                                // (matches --mist densities so the shaft A/B is fair)
+    bool noAutoExposure = false;// --noae: fixed exposure — the AE histogram meters the
+                                // fog's in-scatter and normalises it away, hiding
+                                // exactly the shafts the scout is trying to compare
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
@@ -799,12 +812,18 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--cycle") == 0 && i + 1 < argc) startCycle = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--fly") == 0) startFly = true;
         else if (std::strcmp(argv[i], "--single-grass") == 0) singleGrass = true;
+        else if (std::strcmp(argv[i], "--mist") == 0) {
+            mistOn = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') mistDensity = static_cast<float>(std::atof(argv[++i]));
+        }
+        else if (std::strcmp(argv[i], "--fogscale") == 0 && i + 1 < argc) startFogScale = static_cast<float>(std::atof(argv[++i]));
+        else if (std::strcmp(argv[i], "--noae") == 0) noAutoExposure = true;
     }
 
     Canvas canvas("threepp - FJORD (Vulkan deferred)", {{"vsync", false}});
     VulkanRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
-    renderer.setAutoExposure(true);
+    renderer.setAutoExposure(!noAutoExposure);
     // Cap the upper end well below the default +3 EV: the eye should NOT
     // re-expose midnight back to daylight — night must stay dark.
     renderer.setAutoExposureRange(-2.5f, 1.5f);
@@ -813,8 +832,22 @@ int main(int argc, char** argv) {
     renderer.setRenderScale(0.85f);
     renderer.setSunAngularRadius(0.6f);// soft RT sun shadows
     renderer.setVolumetricFog(true);   // god rays through the fjord walls
+    if (mistOn) {// froxel-scout mode: see the --mist comment at the arg parse
+        VulkanRenderer::HeightFogSettings hf;
+        hf.density = mistDensity;
+        hf.baseY = 0.f;
+        hf.falloff = 300.f;   // tall ≈ homogeneous over the shaft zone
+        hf.noiseAmount = 0.f; // smooth analytic — fair vs the homogeneous march
+        renderer.setHeightFog(hf);
+    }
     renderer.setFogAnisotropy(0.55f);
-    renderer.setFogWaterSurfaceY(0.f);
+    // Default: scene.fog is UNDERWATER murk only (the waterSurfaceY clip zeroes
+    // fog on any camera→surface leg above y=0 — see fogTransmittance). That is
+    // why the homogeneous sun march never showed AIR shafts in this demo: there
+    // was no air medium. --fogscale (the froxel-unification scout) lifts the
+    // clip so the scaled FogExp2 becomes air fog and the march has something
+    // to scatter in — the honest baseline for the froxel-sun A/B.
+    if (startFogScale == 1.f) renderer.setFogWaterSurfaceY(0.f);
     renderer.setBloomIntensity(0.05f);
 
     Scene scene;
@@ -1338,7 +1371,7 @@ int main(int argc, char** argv) {
     // ── state + UI ──────────────────────────────────────────────────────────
     float cycleSpeed = startCycle;// hours per second (0 = paused)
     float windSpeed = 4.5f;
-    float fogScale = 1.f;
+    float fogScale = startFogScale;
     bool cloudsOn = true;
     float cloudCover = 0.42f;
     float fps = 0.f, fpsAccum = 0.f;
