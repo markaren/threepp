@@ -5,7 +5,7 @@
 #include "kine/Kine.hpp"
 #include "kine/ik/CCDSolver.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/objects/TextSprite.hpp"
 
 using namespace threepp;
@@ -20,11 +20,13 @@ namespace {
         Vector3 pos;
         std::vector<KineLimit> limits;
         std::vector<float> values;
+        RendererSettings settings;
 
         explicit YoubotUI(const Canvas& canvas, Renderer& renderer, Kine& kine)
             : ImguiContext(canvas, renderer),
               limits(kine.limits()),
-              values(kine.meanAngles()) {
+              values(kine.meanAngles()),
+              settings(renderer) {
 
             pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(values));
         }
@@ -59,6 +61,8 @@ namespace {
             posMode = posMode || ImGui::IsItemEdited();
 
             jointMode = !posMode;
+
+            settings.drawCollapsed();
 
             ImGui::End();
         }

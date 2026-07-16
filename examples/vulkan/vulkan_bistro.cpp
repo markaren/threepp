@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/loaders/FBXLoader.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
@@ -72,75 +72,13 @@ int main(int argc, char** argv) {
     };
 
     // ---- UI ----
-    bool denoiserOn = renderer.denoise();
-    bool restdirOn = renderer.restirDIEnabled();
-    float renderScale = renderer.renderScale();
-    float sunSoftDeg = renderer.sunAngularRadius();
-    bool envSunOn = renderer.envSunExtraction();
-    // Tone-map dropdown state, initialized from the renderer's current setting so
-    // the label matches what's actually applied at startup. The selection maps
-    // straight to ToneMapping (index 2 -> Reinhard, etc.).
-    const char* tmNames[] = {"ACES Filmic", "Neutral (PBR)", "Reinhard", "Cineon", "Linear"};
-    const ToneMapping tmVals[] = {ToneMapping::ACESFilmic, ToneMapping::Neutral,
-                                  ToneMapping::Reinhard, ToneMapping::Cineon, ToneMapping::Linear};
-    int tmIdx = 0;
-    for (int i = 0; i < IM_ARRAYSIZE(tmVals); ++i)
-        if (tmVals[i] == renderer.toneMapping) { tmIdx = i; break; }
-    float fps = 0.f, fpsAccum = 0.f;
-    int fpsFrames = 0;
-
-
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0});
-        ImGui::SetNextWindowSize({300, 0});
-        ImGui::Begin("Bistro scene");
-        ImGui::Text("FPS: %.1f", fps);
-
-        ImGui::Separator();
-        ImGui::SliderFloat("Exposure", &renderer.toneMappingExposure, 0.1f, 2.0f);
-
-        // Tone-map selector. Reinhard is per-channel so it keeps saturated
-        // emitters (blue/green bulbs) coloured; ACES and Neutral desaturate very
-        // bright values toward white. Switchable live.
-        if (ImGui::Combo("Tone map", &tmIdx, tmNames, IM_ARRAYSIZE(tmNames))) {
-            renderer.toneMapping = tmVals[tmIdx];
-        }
-
-        if (ImGui::Checkbox("Denoiser", &denoiserOn)) {
-            renderer.setDenoise(denoiserOn);
-        }
-        if (ImGui::Checkbox("REsTDIR DI", &restdirOn)) {
-            renderer.setRestirDIEnabled(restdirOn);
-        }
-
-        if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f)) {
-            renderer.setRenderScale(renderScale);
-        }
-
-        // Sun-shadow softness (angular radius, deg). 0 = hard 1-ray shadow;
-        // the real sun is ~0.27°. Live-tunable to judge thin-occluder flicker.
-        if (ImGui::SliderFloat("Sun softness (deg)", &sunSoftDeg, 0.0f, 3.0f)) {
-            renderer.setSunAngularRadius(sunSoftDeg);
-        }
-
-        // HDRI sun → analytic light (kills the bright spec blobs in glossy /
-        // rough reflections). Toggling rebuilds the env PMREM next frame.
-        if (ImGui::Checkbox("Env sun extraction", &envSunOn)) {
-            renderer.setEnvSunExtraction(envSunOn);
-        }
-
+    // Generic renderer settings (exposure, tone map, upscaler, GI, ...) come
+    // from the shared panel; only the scene-specific button is added here.
+    RendererSettingsUi ui(canvas, renderer, [&] {
         if (ImGui::Button("Toggle bistro lights")) {
             toggleBistroLights();
         }
-
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+    }, "Bistro scene");
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
@@ -148,39 +86,10 @@ int main(int argc, char** argv) {
         camera.updateProjectionMatrix();
     });
 
-    Clock clock;
-
     canvas.animate([&] {
-        const float dt = clock.getDelta();
-        fpsAccum += dt;
-        ++fpsFrames;
-        if (fpsAccum >= 0.5f) {
-            fps = fpsFrames / fpsAccum;
-            fpsAccum = 0.f;
-            fpsFrames = 0;
-        }
-
         controls.update();
 
         renderer.render(scene, camera);
-        // auto t = renderer.lastFrameTimings();
-        // static int frames = 0;
-        // static double accum = 0.0;
-        // accum += t.cpuFrameMs;
-        // if (++frames >= 60) {
-        //     std::cout << std::fixed << std::setprecision(2)
-        //               << "frame " << t.cpuFrameMs << " ms"
-        //               << " | shade " << t.pathTraceMs
-        //               << " | denoise " << t.denoiseMs
-        //               << " | TAA " << t.taaMs
-        //               << " | gbuf " << t.rasterGbufMs
-        //               << " | overlay " << t.overlayMs
-        //               << " | cpu(scene " << t.cpuEnsureSceneMs
-        //               << ", record " << t.cpuRecordMs << ")"
-        //               << '\n';
-        //     frames = 0;
-        //     accum = 0.0;
-        // }
 
         ui.render();
     });

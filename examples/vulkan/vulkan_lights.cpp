@@ -4,7 +4,7 @@
 // mesh NEE path. AmbientLight contributes a uniform diffuse fill that the
 // user can toggle to see the shadow falloff with no fill.
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/geometries/TorusGeometry.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
@@ -176,30 +176,19 @@ int main() {
     float ambIntensity = 0.0f;
 
     // ── Shadow softness ─────────────────────────────────────────────────────
-    // Two knobs, different units:
-    //   • Sun angular radius (degrees): the directional light's disc size. The
-    //     deferred shadow ray is jittered within this cone, so thin occluders
-    //     cast a stable penumbra (the denoised shadow channel keeps it
-    //     grain-free). Real sun ≈ 0.27°; renderer default 0.5°.
-    //   • Point/Spot source radius (world units): a non-zero radius disc-samples
-    //     the shadow ray toward the light, giving sharp contact shadows that
-    //     widen into a penumbra with occluder distance. 0 = hard 1-ray shadow.
-    // (RectArea + emissive are already area-sampled, hence inherently soft.)
-    float sunAngleDeg = renderer.sunAngularRadius();
+    // Point/Spot source radius (world units): a non-zero radius disc-samples
+    // the shadow ray toward the light, giving sharp contact shadows that
+    // widen into a penumbra with occluder distance. 0 = hard 1-ray shadow.
+    // The directional light's disc size (sun angular radius) lives in the
+    // shared settings panel. (RectArea + emissive are already area-sampled,
+    // hence inherently soft.)
     float localRadius = 0.12f;
     pointLight->radius = localRadius;
     spotLight->radius = localRadius;
 
-    float fps = 0.f, fpsAccum = 0.f;
-    int fpsFrames = 0;
-
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0});
-        ImGui::SetNextWindowSize({340, 0});
-        ImGui::Begin("Vulkan PT - Lights");
-        ImGui::Text("FPS: %.1f", fps);
-        ImGui::Separator();
-
+    // Generic renderer settings (sun softness, ReSTIR, ...) come from the
+    // shared panel; the per-light widgets live in the extra lambda.
+    RendererSettingsUi ui(canvas, renderer, [&] {
         ImGui::TextWrapped("Five sections, each lit by a different light type:"
                            " directional, point, spot, rect-area, emissive mesh.");
         ImGui::Separator();
@@ -247,9 +236,6 @@ int main() {
 
         ImGui::Separator();
         ImGui::TextDisabled("Shadow softness");
-        // Directional (section 1): sun disc angular radius. 0 = hard shadow.
-        if (ImGui::SliderFloat("Sun angle (deg)", &sunAngleDeg, 0.0f, 5.0f, "%.2f"))
-            renderer.setSunAngularRadius(sunAngleDeg);
         // Point (section 2) + Spot (section 3): source radius in world units.
         // 0 = hard, larger = wider penumbra. RectArea/emissive are already soft.
         if (ImGui::SliderFloat("Point/Spot radius", &localRadius, 0.0f, 1.0f, "%.2f")) {
@@ -265,27 +251,8 @@ int main() {
                               "distance. 0 = single hard shadow ray.");
 
         ImGui::Separator();
-        bool restirDI = renderer.restirDIEnabled();
-        if (ImGui::Checkbox("ReSTIR DI", &restirDI))
-            renderer.setRestirDIEnabled(restirDI);
-
-        ImGui::SameLine();
-        ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Reservoir-resampled direct lighting at primary.\n"
-                              "Off = classic per-light NEE (one shadow ray\n"
-                              "per analytic light + emissive sample).");
-
-        ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+    }, "Vulkan PT - Lights");
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
@@ -293,16 +260,7 @@ int main() {
         camera.updateProjectionMatrix();
     });
 
-    Clock clock;
     canvas.animate([&] {
-        const float dt = clock.getDelta();
-        fpsAccum += dt;
-        ++fpsFrames;
-        if (fpsAccum >= 0.5f) {
-            fps = fpsFrames / fpsAccum;
-            fpsAccum = 0.f;
-            fpsFrames = 0;
-        }
         controls.update();
         renderer.render(scene, camera);
         ui.render();

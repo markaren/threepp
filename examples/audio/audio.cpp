@@ -2,7 +2,7 @@
 #include "threepp/threepp.hpp"
 
 #include "threepp/audio/Audio.hpp"
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include <array>
 
@@ -75,10 +75,7 @@ int main() {
     std::array<float, 3> audioPos{};
     bool play = audio.isPlaying();
     float volume = listener.getMasterVolume();
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230 * ui.dpiScale(), 0}, 0);
-        ImGui::Begin("Audio settings");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::SliderFloat("Volume", &volume, 0.f, 1.f);
         if (ImGui::IsItemEdited()) {
             listener.setMasterVolume(volume);
@@ -91,14 +88,7 @@ int main() {
         if (ImGui::IsItemEdited()) {
             audio.togglePlay();
         }
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Audio settings");
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();

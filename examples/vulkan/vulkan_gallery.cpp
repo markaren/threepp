@@ -7,7 +7,7 @@
 // which gives crisper soft shadows in this scene and is one of Vulkan PT's
 // ReSTIR DI candidate types.
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/lights/RectAreaLight.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
@@ -343,21 +343,12 @@ int main() {
 
     // ---- UI ----
     bool showWindow = true;
-    bool denoiseOn = renderer.denoise();
-    bool restirOn = renderer.restirDIEnabled();
     bool rectOn = true;
     float rectIntensity = rectLight->intensity;
-    float fps = 0.f, fpsAccum = 0.f;
-    int fpsFrames = 0;
 
-
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({});
-        ImGui::SetNextWindowSize({340, 0});
-        ImGui::Begin("Vulkan Path Tracer");
-        ImGui::Text("FPS: %.1f", fps);
-        ImGui::Separator();
-
+    // Generic renderer settings (denoiser, ReSTIR, ...) come from the shared
+    // panel; only the scene-specific widgets are added here.
+    RendererSettingsUi ui(canvas, renderer, [&] {
         if (ImGui::Checkbox("Window", &showWindow)) {
             windowGroup->visible = showWindow;
             solidWall->visible = !showWindow;
@@ -375,25 +366,8 @@ int main() {
         }
 
         ImGui::Separator();
-
-        ImGui::Separator();
-        if (ImGui::Checkbox("Denoiser", &denoiseOn)) {
-            renderer.setDenoise(denoiseOn);
-        }
-        if (ImGui::Checkbox("ReSTIR DI", &restirOn)) {
-            renderer.setRestirDIEnabled(restirOn);
-        }
-
-        ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+    }, "Vulkan Path Tracer");
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
@@ -401,16 +375,7 @@ int main() {
         camera.updateProjectionMatrix();
     });
 
-    Clock clock;
     canvas.animate([&] {
-        const float dt = clock.getDelta();
-        fpsAccum += dt;
-        ++fpsFrames;
-        if (fpsAccum >= 0.5f) {
-            fps = fpsFrames / fpsAccum;
-            fpsAccum = 0.f;
-            fpsFrames = 0;
-        }
         controls.update();
         renderer.render(scene, camera);
         ui.render();

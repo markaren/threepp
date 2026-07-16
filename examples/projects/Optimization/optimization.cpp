@@ -2,7 +2,7 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/threepp.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include <algorithm>
 
@@ -166,6 +166,7 @@ int main() {
 
 
     float searchSpeed = 0.7;
+    RendererSettings settings(*renderer);
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({0, 0}, 0);
@@ -190,6 +191,7 @@ int main() {
             }
             ImGui::EndCombo();
         }
+        settings.drawCollapsed();
         ImGui::End();
     });
 

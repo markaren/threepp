@@ -20,6 +20,7 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 
 namespace threepp {
 
@@ -84,6 +85,8 @@ namespace threepp {
         // uniform thin haze. `density` is the scattering coefficient σ (1/m; 0 =
         // off, no cost); `anisotropy` is the Henyey-Greenstein g.
         void setDeferredVolumetrics(float density, float anisotropy = 0.55f);
+        // {density, anisotropy} as last set.
+        [[nodiscard]] std::pair<float, float> deferredVolumetrics() const;
 
         // Volumetric DIRECTIONAL-light fog: ray-marches the camera→surface air
         // column, tracing an RT shadow ray toward each sun per step so trees and
@@ -142,6 +145,7 @@ namespace threepp {
         // Procedural star field on SKY pixels — hash-based points in direction
         // space, pixel-crisp at any resolution/FOV. 0 disables; ~1.0 = night sky.
         void setDeferredStarfield(float intensity);
+        [[nodiscard]] float deferredStarfield() const;
 
         // HDRI sun extraction. The environment map's dominant compact bright
         // source (the sun) is removed from the PMREM's glossy / rough mips at
@@ -195,6 +199,7 @@ namespace threepp {
         // EV per second for brightness adaptation (default 2.0).
         // Dilation (scene-darkens) is applied at 0.5× this speed.
         void setAutoExposureSpeed(float evPerSecond);
+        [[nodiscard]] float autoExposureSpeed() const;
 
         // Exposure clamp in EV relative to 1.0 (default -3 to +3 EV).
         // E.g. setAutoExposureRange(-2, 4) limits to 0.25× .. 16× exposure.

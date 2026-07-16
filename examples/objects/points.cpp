@@ -1,7 +1,7 @@
 
 #include "threepp/threepp.hpp"
 
-#include <threepp/extras/imgui/ImguiContext.hpp>
+#include <threepp/extras/imgui/RendererSettings.hpp>
 
 using namespace threepp;
 
@@ -57,11 +57,7 @@ int main() {
     const auto points = Points::create(geometry, material);
     scene->add(points);
 
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({});
-        ImGui::SetNextWindowSize({}, {});
-
-        ImGui::Begin("Settings");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         if (ImGui::SliderInt("Num points", &numParticles, minMaxParticles.first, minMaxParticles.second)) {
             auto& pos = geometry->getAttribute<float>("position")->array();
             for (int i = 0; i < numParticles; i += 3) {
@@ -77,8 +73,7 @@ int main() {
 
             geometry->getAttribute<float>("position")->needsUpdate();
         }
-        ImGui::End();
-    });
+    }, "Settings");
 
     Clock clock;
     canvas.animate([&] {

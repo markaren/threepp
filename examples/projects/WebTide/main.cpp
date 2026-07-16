@@ -22,7 +22,7 @@
 
 #include "threepp/renderers/wgpu/WgpuTexture.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include "BuoyantSampler.hpp"
 #include "DynamicSpectrum.hpp"
@@ -361,6 +361,7 @@ int main() {
     float elapsedSeconds = 60.0f;
     auto lastTime = std::chrono::high_resolution_clock::now();
 
+    RendererSettings settings(renderer);
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Once);
         ImGui::SetNextWindowSize({300, 0}, ImGuiCond_Once);
@@ -414,6 +415,8 @@ int main() {
             // The displaced surface itself is shown — grid animates with the waves.
             if (ImGui::Checkbox("Wireframe", &uWireframe)) { pushUniforms(); }
         }
+
+        settings.drawCollapsed();
 
         if (changed)    { pushUniforms(); pushSkyUniforms(); }
         if (sunChanged) updateSunDirection();

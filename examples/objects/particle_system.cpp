@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/objects/ParticleSystem.hpp"
 #include "threepp/threepp.hpp"
 
@@ -48,10 +48,7 @@ int main() {
             {"fireball", initFireball},
             {"firework", initFirework}};
 
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({0, 0}, 0);
-        ImGui::Begin("Make selection");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         if (ImGui::BeginCombo("Demos", demos[selectedIndex].first.c_str())) {
             for (int index = 0; index < demos.size(); ++index) {
                 const bool isSelected = (selectedIndex == index);
@@ -64,8 +61,7 @@ int main() {
             }
             ImGui::EndCombo();
         }
-        ImGui::End();
-    });
+    }, "Make selection");
 
 
     Clock clock;

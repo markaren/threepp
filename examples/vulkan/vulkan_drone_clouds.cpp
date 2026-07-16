@@ -15,7 +15,7 @@
 // the scene's DirectionalLight sun (Beer light-march + powder + dual-lobe HG
 // phase) composited over the HDR sky.  Phase A: sky-only compositing.
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
@@ -27,6 +27,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -225,26 +226,22 @@ int main(int argc, char** argv) {
     int fpsFrames = 0;
     float flightT = 0.f;
 
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0});
-        ImGui::SetNextWindowSize({330, 0});
-        ImGui::Begin("Volumetric Clouds");
-        ImGui::Text("FPS: %.1f", fps);
-        ImGui::Separator();
-        if (ImGui::Checkbox("Clouds (C)", &cloudsOn))
-            renderer.setClouds(cloudsOn ? std::optional{cloudCfg} : std::nullopt);
-        ImGui::Checkbox("Scripted flight (F)", &flightOn);
-        if (ImGui::SliderFloat("Coverage", &cloudCfg.coverage, 0.f, 1.f) ||
-            ImGui::SliderFloat("Density", &cloudCfg.density, 0.f, 3.f) ||
-            ImGui::SliderFloat("Base Y", &cloudCfg.bottomY, 100.f, 1500.f) ||
-            ImGui::SliderFloat("Top Y", &cloudCfg.topY, 200.f, 2500.f) ||
-            ImGui::SliderFloat("Evolve", &cloudCfg.evolveSpeed, 0.f, 4.f)) {
-            if (cloudsOn) renderer.setClouds(cloudCfg);
-        }
-        ImGui::Separator();
-        ImGui::TextDisabled("F: flight  C: clouds  H: height fog  drag: orbit");
-        ImGui::End();
-    });
+    // Generic renderer settings (clouds coverage/density/height live in the
+    // panel's Effects section) come from the shared panel; only the demo's
+    // hotkey-coupled toggles + the evolve-speed slider (not in the panel) stay
+    // here. Interactive runs only — capture frames stay UI-free.
+    std::unique_ptr<RendererSettingsUi> ui;
+    if (shotPath.empty()) {
+        ui = std::make_unique<RendererSettingsUi>(canvas, renderer, [&] {
+            if (ImGui::Checkbox("Clouds (C)", &cloudsOn))
+                renderer.setClouds(cloudsOn ? std::optional{cloudCfg} : std::nullopt);
+            ImGui::Checkbox("Scripted flight (F)", &flightOn);
+            if (ImGui::SliderFloat("Evolve", &cloudCfg.evolveSpeed, 0.f, 4.f)) {
+                if (cloudsOn) renderer.setClouds(cloudCfg);
+            }
+            ImGui::TextDisabled("F: flight  C: clouds  H: height fog  drag: orbit");
+        }, "Volumetric Clouds");
+    }
 
     KeyAdapter keyAdapter(KeyAdapter::KEY_PRESSED, [&](KeyEvent evt) {
         if (evt.key == Key::C) { cloudsOn = !cloudsOn; renderer.setClouds(cloudsOn ? std::optional{cloudCfg} : std::nullopt); }
@@ -252,11 +249,6 @@ int main(int argc, char** argv) {
         else if (evt.key == Key::F) { flightOn = !flightOn; controls.enabled = !flightOn; }
     });
     canvas.addKeyListener(keyAdapter);
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = [] { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
@@ -282,7 +274,7 @@ int main(int argc, char** argv) {
 
         renderer.render(scene, camera);
         if (shotPath.empty()) {
-            ui.render();
+            ui->render();
         } else if (++shotFrame >= shotFrames) {
             const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
             renderer.writeFramebuffer(path);

@@ -4,7 +4,7 @@
 // that re-generates the tree when parameters change.  Four species presets
 // (Oak, Pine, Birch, Willow) plus full manual control.
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/vegetation/TreeGenerator.hpp"
 #include "threepp/extras/vegetation/TreeTextures.hpp"
 #include "threepp/lights/AmbientLight.hpp"
@@ -136,8 +136,6 @@ int main() {
     // ── State ────────────────────────────────────────────────────────────
     int preset = 0;
     bool regenRequested = false;
-    float fps = 0.f, fpsAccum = 0.f;
-    int fpsFrames = 0;
     int crownShapeIdx = static_cast<int>(params.crownShape);
     int leafStyleIdx = static_cast<int>(params.leafStyle);
 
@@ -167,12 +165,10 @@ int main() {
     };
 
     // ── ImGui ────────────────────────────────────────────────────────────
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({320, 0}, ImGuiCond_FirstUseEver);
-        ImGui::Begin("Tree Configurator");
-
-        ImGui::Text("FPS: %.1f   nodes: %d", fps, gen.nodeCount());
+    // Generic renderer settings (tone map, shadows, ...) come from the shared
+    // panel; the tree parameters are the app-specific widgets below.
+    RendererSettingsUi ui(canvas, *renderer, [&] {
+        ImGui::Text("nodes: %d", gen.nodeCount());
         ImGui::Separator();
 
         // Preset.
@@ -274,30 +270,11 @@ int main() {
         if (ImGui::ColorEdit3("Leaf", params.leafColor.data())) { preset = 4; regenRequested = true; }
 
         if (ImGui::Button("Generate", ImVec2(-1, 0))) regenRequested = true;
-
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = [] { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+    }, "Tree Configurator");
 
     // ── Render loop ──────────────────────────────────────────────────────
-    Clock clock;
     canvas.animate([&] {
-        const float dt = clock.getDelta();
         controls.update();
-
-        // FPS counter.
-        fpsAccum += dt;
-        fpsFrames++;
-        if (fpsAccum >= 0.5f) {
-            fps = static_cast<float>(fpsFrames) / fpsAccum;
-            fpsAccum = 0.f;
-            fpsFrames = 0;
-        }
 
         if (regenRequested && !ImGui::IsAnyItemActive()) {
             regenerate();

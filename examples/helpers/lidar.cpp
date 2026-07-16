@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/helpers/AxesHelper.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/helpers/LidarSensor.hpp"
@@ -121,10 +121,7 @@ int main() {
     };
 
     bool senorDataOnly = false;
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({});
-        ImGui::SetNextWindowSize({});
-        ImGui::Begin("Settings");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::Checkbox("Show senor data only", &senorDataOnly);
         ImGui::SliderFloat("Range noise", &lidar->rangeNoise, 0.f, 0.1f);
 
@@ -139,15 +136,7 @@ int main() {
                 case 4: changeLidar(std::make_unique<LidarSensor>(LidarModel::OS0_128(), 512, 0.5f, 20.f)); break;
             }
         }
-
-        ImGui::End();
-    });
-
-    IOCapture capture;
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Settings");
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();

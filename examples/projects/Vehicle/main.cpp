@@ -6,7 +6,7 @@
 
 #include "threepp/threepp.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/physx/PhysxDebugRenderer.hpp"
 #include "threepp/extras/physx/PhysxVehicle.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
@@ -255,6 +255,7 @@ int main() {
     float steerCmd = 0.f, throttleCmd = 0.f, brakeCmd = 0.f;
 
     bool pathTrace = false;
+    RendererSettings rendererSettings(*renderer);
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         const float w = 280 * ui.dpiScale();
         ImGui::SetNextWindowPos({static_cast<float>(canvas.size().width()) - w, 0}, 0, {0, 0});
@@ -288,6 +289,8 @@ int main() {
         } else {
             ImGui::TextDisabled("Audio unavailable.");
         }
+        ImGui::Separator();
+        rendererSettings.drawCollapsed();
 
         ImGui::End();
     });

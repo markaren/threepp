@@ -1,4 +1,4 @@
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/loaders/SVGLoader.hpp"
 #include "threepp/threepp.hpp"
 
@@ -9,7 +9,8 @@ namespace {
     class MyUI: public ImguiContext {
 
     public:
-        explicit MyUI(const Canvas& canvas, Renderer& renderer): ImguiContext(canvas, renderer) {}
+        explicit MyUI(const Canvas& canvas, Renderer& renderer)
+            : ImguiContext(canvas, renderer), settings_(renderer) {}
 
         [[nodiscard]] bool newSelection() const {
             return lastSelectedIndex != selectedIndex;
@@ -39,10 +40,14 @@ namespace {
                 ImGui::EndCombo();
             }
 
+            ImGui::Separator();
+            settings_.drawCollapsed();
+
             ImGui::End();
         }
 
     private:
+        RendererSettings settings_;
         int lastSelectedIndex = -1;
         int selectedIndex = 0;
         std::vector<std::string> names{

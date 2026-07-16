@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/helpers/AxesHelper.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/objects/Points.hpp"
@@ -113,23 +113,12 @@ int main() {
 
     bool sensorOnly = false;
     bool withColors = false;
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({});
-        ImGui::SetNextWindowSize({});
-        ImGui::Begin("Settings");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::SliderFloat("Range noise", &lidar.rangeNoise, 0.f, 0.1f);
         ImGui::Checkbox("Show sensor helper", &helper->visible);
         ImGui::Checkbox("Sample colors", &withColors);
         ImGui::Checkbox("Show sensor data only", &sensorOnly);
-
-        ImGui::End();
-    });
-
-    IOCapture capture;
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Settings");
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();

@@ -10,7 +10,7 @@
 //   • Anisotropy slider sweeping the HG phase from backscatter (-) to
 //     forward-scatter (+) god rays.
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <string>
 
 using namespace threepp;
@@ -163,38 +164,29 @@ int main(int argc, char** argv) {
     float fogDensity = 0.08f;
     float fogColor[3] = {0.55f, 0.55f, 0.62f};
     float fogG = 0.6f;// HG anisotropy: forward-scattering god rays by default
-    float fps = 0.f, fpsAccum = 0.f;
-    int fpsFrames = 0;
 
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0});
-        ImGui::SetNextWindowSize({320, 0});
-        ImGui::Begin("Vulkan Deferred - Fog");
-        ImGui::Text("FPS: %.1f", fps);
-        ImGui::Separator();
+    // Fog widgets ride in the extra lambda; the generic renderer settings come
+    // from the shared panel. Interactive runs only — the headless capture path
+    // must not draw UI into the measured frames.
+    std::unique_ptr<RendererSettingsUi> ui;
+    if (shotPath.empty()) {
+        ui = std::make_unique<RendererSettingsUi>(canvas, renderer, [&] {
+            ImGui::TextWrapped("FogExp2 single-scattering volumetrics. Toggle off "
+                               "to compare. Anisotropy g sweeps the HG phase from "
+                               "backscatter (-) to forward god rays (+).");
+            ImGui::Separator();
 
-        ImGui::TextWrapped("FogExp2 single-scattering volumetrics. Toggle off "
-                           "to compare. Anisotropy g sweeps the HG phase from "
-                           "backscatter (-) to forward god rays (+).");
-        ImGui::Separator();
+            ImGui::Checkbox("Fog", &fogOn);
+            if (fogOn) {
+                ImGui::SliderFloat("Density", &fogDensity, 0.001f, 0.5f, "%.3f", ImGuiSliderFlags_Logarithmic);
+                ImGui::ColorEdit3("Color", fogColor);
+                ImGui::SliderFloat("Anisotropy g", &fogG, -0.9f, 0.9f, "%.2f");
+            }
 
-        ImGui::Checkbox("Fog", &fogOn);
-        if (fogOn) {
-            ImGui::SliderFloat("Density", &fogDensity, 0.001f, 0.5f, "%.3f", ImGuiSliderFlags_Logarithmic);
-            ImGui::ColorEdit3("Color", fogColor);
-            ImGui::SliderFloat("Anisotropy g", &fogG, -0.9f, 0.9f, "%.2f");
-        }
-
-        ImGui::Separator();
-        ImGui::TextDisabled("Drag = orbit, scroll = zoom");
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+            ImGui::Separator();
+            ImGui::TextDisabled("Drag = orbit, scroll = zoom");
+        }, "Vulkan Deferred - Fog");
+    }
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
@@ -202,17 +194,7 @@ int main(int argc, char** argv) {
         camera.updateProjectionMatrix();
     });
 
-    Clock clock;
     canvas.animate([&] {
-        const float dt = clock.getDelta();
-        fpsAccum += dt;
-        ++fpsFrames;
-        if (fpsAccum >= 0.5f) {
-            fps = fpsFrames / fpsAccum;
-            fpsAccum = 0.f;
-            fpsFrames = 0;
-        }
-
         controls.update();
 
         if (fogOn) {
@@ -224,7 +206,7 @@ int main(int argc, char** argv) {
 
         renderer.render(scene, camera);
         if (shotPath.empty()) {
-            ui.render();
+            ui->render();
         } else if (++shotFrame >= shotFrames) {
             const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
             renderer.writeFramebuffer(path);

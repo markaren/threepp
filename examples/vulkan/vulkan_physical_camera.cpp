@@ -13,7 +13,7 @@
 // AgX/ACES tone mapping and a lift-less saturation/contrast grade round
 // out the camera/display pipeline (PostComposite).
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/lights/HemisphereLight.hpp"
 #include "threepp/lights/PointLight.hpp"
@@ -97,7 +97,7 @@ int main() {
     renderer.setPhysicalCamera(true);
     float aperture = 16.f, shutterInv = 125.f, iso = 100.f;// sunny-16 daylight
     renderer.setCameraExposure(aperture, 1.f / shutterInv, iso);
-    renderer.setFocusDistance(8.f);// matches the UI default below
+    renderer.setFocusDistance(8.f);// initial DoF focus (tunable in the settings panel)
 
     PerspectiveCamera camera(45.f, canvas.aspect(), 0.1f, 200.f);
     camera.position.set(0.f, 2.6f, 8.5f);
@@ -106,16 +106,8 @@ int main() {
     controls.update();
 
     // ── UI state ─────────────────────────────────────────────────────────────
-    bool physCam = true, autoExp = false;
-    bool dofOn = false;
-    float focusDist = 8.f;
     float lensMm = 29.f;// ≈ 45° vertical FOV on the 24 mm full-frame sensor
-    float evComp = 0.f;
-    float wbTemp = 6500.f, wbTint = 0.f;
     float gradeSat = 1.f, gradeContrast = 1.f;
-    int tonemapIdx = 0;// ACES
-    const ToneMapping tonemaps[4] = {ToneMapping::ACESFilmic, ToneMapping::AgX,
-                                     ToneMapping::Neutral, ToneMapping::None};
 
     auto applyGrade = [&] {
         VulkanRendererCore::ColorGrade g;
@@ -146,46 +138,35 @@ int main() {
         applyExposure();
     };
 
-    float fps = 0.f, fpsAccum = 0.f;
-    int fpsFrames = 0;
-
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0});
-        ImGui::SetNextWindowSize({360, 0});
-        ImGui::Begin("Physical camera");
-        ImGui::Text("FPS: %.1f", fps);
-        ImGui::Separator();
-
+    // Generic camera/display controls (physical camera, aperture/shutter/ISO,
+    // EV comp, auto exposure, DoF, tone map, white balance) come from the
+    // shared panel's Camera + Display sections; only the presets, the lens
+    // (which also drives camera.fov) and the colour grade live here.
+    RendererSettingsUi ui(canvas, renderer, [&] {
         ImGui::TextWrapped("Lights are authored in real units (sun 100k lux, lamp "
                            "16k lm, display 2k nits); the camera exposes them.");
         if (ImGui::Button("Day (sunny 16)")) dayPreset();
         ImGui::SameLine();
         if (ImGui::Button("Night (f/2, 1/30, ISO 1600)")) nightPreset();
-        ImGui::Separator();
 
-        if (ImGui::Checkbox("Physical camera", &physCam))
-            renderer.setPhysicalCamera(physCam);
-        const float ev100 = std::log2(aperture * aperture * shutterInv * 100.f / iso) - evComp;
-        ImGui::SameLine();
-        ImGui::TextDisabled("EV100 %.1f", ev100);
-
-        bool expDirty = false;
-        expDirty |= ImGui::SliderFloat("Aperture (f/)", &aperture, 1.2f, 22.f, "f/%.1f",
-                                       ImGuiSliderFlags_Logarithmic);
-        expDirty |= ImGui::SliderFloat("Shutter (1/s)", &shutterInv, 8.f, 8000.f, "1/%.0f s",
-                                       ImGuiSliderFlags_Logarithmic);
-        expDirty |= ImGui::SliderFloat("ISO", &iso, 50.f, 12800.f, "%.0f",
-                                       ImGuiSliderFlags_Logarithmic);
-        if (expDirty) applyExposure();
-        if (ImGui::SliderFloat("EV comp", &evComp, -3.f, 3.f, "%+.1f EV"))
-            renderer.setExposureCompensation(evComp);
-        if (ImGui::Checkbox("Auto exposure (EV comp around base)", &autoExp))
-            renderer.setAutoExposure(autoExp);
+        // Live EV100 readout from the renderer's camera-exposure state, so it
+        // tracks edits made through the panel and the presets alike.
+        {
+            const auto ce = renderer.cameraExposure();
+            const float ev100 = std::log2(ce.aperture * ce.aperture / ce.shutterSeconds * 100.f / ce.iso) -
+                                renderer.exposureCompensation();
+            ImGui::TextDisabled("EV100 %.1f", ev100);
+        }
 
         ImGui::Separator();
-        ImGui::TextDisabled("Depth of field");
-        if (ImGui::Checkbox("Enable##dof", &dofOn))
-            renderer.setDepthOfField(dofOn);
+        // Focal length drives BOTH the framing (fov) and the CoC — the
+        // photographic control that makes depth of field readable. 12 mm =
+        // half the 24 mm full-frame sensor height.
+        if (ImGui::SliderFloat("Lens (mm)", &lensMm, 24.f, 135.f, "%.0f mm",
+                               ImGuiSliderFlags_Logarithmic)) {
+            camera.fov = 2.f * std::atan(12.f / lensMm) * 180.f / math::PI;
+            camera.updateProjectionMatrix();
+        }
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered())
@@ -196,42 +177,17 @@ int main() {
                               "85 mm f/2 the background melts. Opening\n"
                               "the aperture also brightens the exposure\n"
                               "(re-expose with EV comp / shutter / ISO,\n"
-                              "or enable auto exposure).");
-        // Focal length drives BOTH the framing (fov) and the CoC — the
-        // photographic control that makes depth of field readable. 12 mm =
-        // half the 24 mm full-frame sensor height.
-        if (ImGui::SliderFloat("Lens (mm)", &lensMm, 24.f, 135.f, "%.0f mm",
-                               ImGuiSliderFlags_Logarithmic)) {
-            camera.fov = 2.f * std::atan(12.f / lensMm) * 180.f / math::PI;
-            camera.updateProjectionMatrix();
-        }
-        if (ImGui::SliderFloat("Focus (m)", &focusDist, 0.5f, 40.f, "%.1f m",
-                               ImGuiSliderFlags_Logarithmic))
-            renderer.setFocusDistance(focusDist);
+                              "or enable auto exposure). Enable depth of\n"
+                              "field in the renderer settings below.");
 
         ImGui::Separator();
-        ImGui::TextDisabled("Display pipeline");
-        const char* tmNames[4] = {"ACES Filmic", "AgX", "Khronos Neutral", "None"};
-        if (ImGui::Combo("Tone map", &tonemapIdx, tmNames, 4))
-            renderer.toneMapping = tonemaps[tonemapIdx];
-        if (ImGui::SliderFloat("WB temp (K)", &wbTemp, 2500.f, 12000.f, "%.0f K",
-                               ImGuiSliderFlags_Logarithmic))
-            renderer.setWhiteBalance(wbTemp, wbTint);
-        if (ImGui::SliderFloat("WB tint", &wbTint, -1.f, 1.f, "%.2f"))
-            renderer.setWhiteBalance(wbTemp, wbTint);
+        ImGui::TextDisabled("Colour grade");
         if (ImGui::SliderFloat("Saturation", &gradeSat, 0.f, 2.f, "%.2f")) applyGrade();
         if (ImGui::SliderFloat("Contrast", &gradeContrast, 0.5f, 1.5f, "%.2f")) applyGrade();
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+    }, "Physical camera");
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
@@ -239,16 +195,7 @@ int main() {
         camera.updateProjectionMatrix();
     });
 
-    Clock clock;
     canvas.animate([&] {
-        const float dt = clock.getDelta();
-        fpsAccum += dt;
-        ++fpsFrames;
-        if (fpsAccum >= 0.5f) {
-            fps = fpsFrames / fpsAccum;
-            fpsAccum = 0.f;
-            fpsFrames = 0;
-        }
         controls.update();
         renderer.render(scene, camera);
         ui.render();

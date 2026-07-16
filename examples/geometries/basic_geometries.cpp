@@ -1,4 +1,4 @@
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -60,11 +60,7 @@ int main() {
 
     bool paramsChanged = false;
 
-    ImguiFunctionalContext ui(canvas, [&] {
-        ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
-        ImGui::SetNextWindowSize({340*ui.dpiScale(), 0}, ImGuiCond_Always);
-        ImGui::Begin("Geometry");
-
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         int typeIdx = static_cast<int>(currentType);
         if (ImGui::Combo("Type", &typeIdx, geomNames, 4)) {
             currentType = static_cast<GeomType>(typeIdx);
@@ -128,15 +124,7 @@ int main() {
             ImGui::SliderInt("heightSegments", reinterpret_cast<int*>(&planeParams.heightSegments), 1, 10);
             paramsChanged = paramsChanged || ImGui::IsItemEdited();
         }
-
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Geometry");
 
     Clock clock;
     canvas.animate([&] {

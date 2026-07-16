@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/math/ImprovedNoise.hpp"
 #include "threepp/textures/DataTexture3D.hpp"
@@ -98,11 +98,7 @@ int main() {
     int steps = 100;
     bool autoRotate = true;
 
-    ImguiFunctionalContext ui(canvas, [&] {
-        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Once);
-        ImGui::SetNextWindowSize({260, 0}, ImGuiCond_Once);
-        ImGui::Begin("Volume controls");
-
+    RendererSettingsUi ui(canvas, renderer, [&] {
         if (ImGui::SliderFloat("Threshold", &threshold, 0.0f, 1.0f))
             material->uniforms.at("threshold").setValue(threshold);
         if (ImGui::SliderFloat("Opacity", &opacity, 0.0f, 1.0f))
@@ -114,15 +110,7 @@ int main() {
 
         ImGui::Separator();
         ImGui::Checkbox("Auto-rotate", &autoRotate);
-
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Volume controls");
 
     Clock clock;
     canvas.animate([&] {

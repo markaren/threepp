@@ -22,7 +22,7 @@
 
 #include "threepp/threepp.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/physx/PhysxDebugRenderer.hpp"
 #include "threepp/extras/physx/PhysxVehicleEngineDrive.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
@@ -758,6 +758,7 @@ int main(int argc, char** argv) {
     float steerCmd = 0.f, throttleCmd = 0.f, brakeCmd = 0.f;
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
+    RendererSettings settings(*renderer);
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         const float w = 290 * ui.dpiScale();
         ImGui::SetNextWindowPos({static_cast<float>(canvas.size().width()) - w, 0}, 0, {0, 0});
@@ -786,6 +787,8 @@ int main(int argc, char** argv) {
             ImGui::Checkbox("Audio", &audioOn);
             ImGui::SliderFloat("Volume", &audioVol, 0.f, 1.f, "%.2f");
         }
+        ImGui::Separator();
+        settings.drawCollapsed();
         ImGui::End();
     });
 

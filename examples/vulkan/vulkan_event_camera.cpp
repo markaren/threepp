@@ -17,7 +17,7 @@
 // a frame of zero events — handy for spotting whether the detection
 // pipeline is alive.
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -241,10 +241,9 @@ int main() {
     });
 
     float smoothedFps = 0.f;
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0});
-        ImGui::SetNextWindowSize({380, 0});
-        ImGui::Begin("Vulkan PT - event camera (DVS)");
+    // App-specific sensor widgets ride in the extra lambda; the generic
+    // renderer settings (tone map, timings, ...) come from the shared panel.
+    RendererSettingsUi ui(canvas, renderer, [&] {
         ImGui::TextWrapped(
                 "Three pendulums swing in front of a striped wall. "
                 "A GPU compute pass detects per-pixel log-intensity "
@@ -283,7 +282,6 @@ int main() {
         }
         if (changed) renderer.setEventCameraParams(evParams);
         ImGui::Separator();
-        ImGui::Text("Frame rate:     %.0f Hz", static_cast<double>(smoothedFps));
         ImGui::Text("Readback cost:  %.2f ms", static_cast<double>(lastCaptureMs));
         ImGui::Text("Sensor res:     %u × %u",
                     static_cast<unsigned>(eventVizTex->image().width()),
@@ -306,33 +304,10 @@ int main() {
             ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f),
                                "OVERFLOW — events dropped this frame");
         }
-        // Per-stage timings — GPU values come from VkQueryPool, CPU
-        // values from std::chrono around the host hot path.
-        // cpuRecord covers record-start → vkEndCommandBuffer (so it
-        // INCLUDES the post-render() endFrame work: ImGui overlay record +
-        // present transition); cpuFrame is just render() wall time. They
-        // overlap by recordCommandBuffer; cpuRecord - (cpuFrame - cpuEnsureScene)
-        // ≈ endFrame's host-side cost.
-        const auto ft = renderer.lastFrameTimings();
-        ImGui::Separator();
-        ImGui::Text("GPU raster gbuf:   %.2f ms", static_cast<double>(ft.rasterGbufMs));
-        ImGui::Text("GPU path trace:    %.2f ms", static_cast<double>(ft.pathTraceMs));
-        ImGui::Text("GPU denoise:       %.2f ms", static_cast<double>(ft.denoiseMs));
-        ImGui::Text("GPU TAA:           %.2f ms", static_cast<double>(ft.taaMs));
-        ImGui::Text("CPU ensureScene:   %.2f ms", static_cast<double>(ft.cpuEnsureSceneMs));
-        ImGui::Text("CPU render():      %.2f ms", static_cast<double>(ft.cpuFrameMs));
-        ImGui::Text("CPU record→submit: %.2f ms", static_cast<double>(ft.cpuRecordMs));
-        const float endFrameMs = ft.cpuRecordMs - (ft.cpuFrameMs - ft.cpuEnsureSceneMs);
-        ImGui::Text("  ↳ endFrame:      %.2f ms", static_cast<double>(endFrameMs));
         ImGui::TextWrapped("Detection runs on GPU; only the visualisation "
                            "memcpy is host-side. 2-frame display latency "
                            "due to the readback ring.");
-        ImGui::End();
-    });
-
-    IOCapture capture;
-    capture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    canvas.setIOCapture(&capture);
+    }, "Vulkan PT - event camera (DVS)");
 
     Clock clock;
     auto frameTp = std::chrono::steady_clock::now();

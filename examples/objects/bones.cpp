@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/helpers/SkeletonHelper.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/threepp.hpp"
@@ -171,19 +171,9 @@ int main() {
     });
 
     bool animate{false};
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({0, 0}, 0);
-        ImGui::Begin("Options");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::Checkbox("animate", &animate);
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Options");
 
     Clock clock;
     canvas.animate([&] {

@@ -29,7 +29,7 @@
 // Everything uses only threepp + the standard library + dear imgui (already
 // vendored), so there are no new dependencies.
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/pointcloud/Icp.hpp"
 #include "threepp/extras/pointcloud/MarchingCubes.hpp"
 #include "threepp/extras/pointcloud/VoxelGrid.hpp"
@@ -612,10 +612,7 @@ int main(int argc, char** argv) {
     float drift = 0.f;
     float scanMs = 0.f;
     float slamMs = 0.f;
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({0, 0}, ImGuiCond_FirstUseEver);
-        ImGui::Begin("SLAM");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::Text("Left: ground truth   Right: reconstruction");
         ImGui::Text("Sensor: %s", isVulkan ? "path-traced (Vulkan)" : "raster (cube-face)");
         ImGui::Separator();
@@ -655,13 +652,7 @@ int main(int argc, char** argv) {
         ImGui::Text("Drift      : %.3f m", drift);
         ImGui::Text("Scan  : %.1f ms", scanMs);
         ImGui::Text("SLAM  : %.1f ms", slamMs);
-        ImGui::End();
-    });
-
-    IOCapture capture;
-    capture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    capture.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    canvas.setIOCapture(&capture);
+    }, "SLAM");
 
     canvas.onWindowResize([&](WindowSize size) {
         renderer->setSize(size);

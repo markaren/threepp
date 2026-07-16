@@ -11,7 +11,7 @@ using namespace threepp;
 using namespace kine;
 
 #include "kine/ik/CCDSolver.hpp"
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 
 struct CraneUI: ImguiContext {
 
@@ -22,11 +22,13 @@ struct CraneUI: ImguiContext {
     Vector3 pos;
     std::vector<KineLimit> limits;
     std::vector<float> values;
+    RendererSettings settings;
 
     explicit CraneUI(const Canvas& canvas, Renderer& renderer, Kine& kine)
         : ImguiContext(canvas,renderer),
           limits(kine.limits()),
-          values(kine.meanAngles()) {
+          values(kine.meanAngles()),
+          settings(renderer) {
 
         pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(values));
     }
@@ -58,6 +60,8 @@ struct CraneUI: ImguiContext {
         jointMode = !posMode;
 
         ImGui::Checkbox("controller", &enableController);
+
+        settings.drawCollapsed();
 
         ImGui::End();
     }

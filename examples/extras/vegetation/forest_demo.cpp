@@ -12,7 +12,7 @@
 // rejected on steep slopes.  Lit by an outdoor-sky HDR (IBL) + a shadow-casting
 // sun, with distance fog for depth.
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
 #include "threepp/extras/vegetation/TreeGenerator.hpp"
 #include "threepp/extras/vegetation/TreeTextures.hpp"
@@ -758,34 +758,15 @@ int main() {
     });
 
     // ── UI ───────────────────────────────────────────────────────────────
-    float fps = 0.f, fpsAccum = 0.f;
-    int fpsFrames = 0;
+    // Generic renderer settings (render scale, denoiser, frame timings, ...)
+    // come from the shared panel; only the forest knobs live here.
     bool regen = false;
     float windStrength = 0.18f;
     float foliageUpdateMs = 0.f;// CPU cost of rewriting grass/flower matrices
-    float uiRenderScale = 0.6f; // Vulkan render-scale (quadratic GPU lever)
-    bool uiDenoise = true;      // Vulkan denoiser
-    bool perfDirty = false;     // apply the above at the next frame top
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({320, 0}, ImGuiCond_FirstUseEver);
-        ImGui::Begin("Forest");
-        ImGui::Text("FPS: %.1f   trees: %d", fps, treeCount);
+    RendererSettingsUi ui(canvas, *renderer, [&] {
+        ImGui::Text("trees: %d", treeCount);
         ImGui::Text("grass path: %s", shaderGrass ? "GPU shader" : "CPU tilt");
         ImGui::Text("foliage CPU update: %.3f ms", foliageUpdateMs);
-#ifdef THREEPP_WITH_VULKAN
-        if (vk) {
-            const auto t = vk->lastFrameTimings();
-            ImGui::SeparatorText("Vulkan GPU (ms)");
-            ImGui::Text("pathTrace %.2f  rasterGbuf %.2f", t.pathTraceMs, t.rasterGbufMs);
-            ImGui::Text("overlay   %.2f  denoise    %.2f", t.overlayMs, t.denoiseMs);
-            ImGui::Text("taa       %.2f  frame(cpu) %.2f", t.taaMs, t.cpuFrameMs);
-            ImGui::Text("record(cpu) %.3f  ensureScene(cpu) %.3f", t.cpuRecordMs, t.cpuEnsureSceneMs);
-            ImGui::SeparatorText("Vulkan perf");
-            if (ImGui::SliderFloat("render scale", &uiRenderScale, 0.25f, 1.0f, "%.2f")) perfDirty = true;
-            if (ImGui::Checkbox("denoise", &uiDenoise)) perfDirty = true;
-        }
-#endif
         ImGui::Separator();
         ImGui::SliderFloat("Spacing", &spacing, 6.f, 24.f, "%.1f");
         ImGui::SliderFloat("Fill", &fillProb, 0.1f, 1.0f, "%.2f");
@@ -795,14 +776,7 @@ int main() {
         }
         ImGui::SeparatorText("Wind");
         ImGui::SliderFloat("Strength", &windStrength, 0.f, 0.5f, "%.2f");
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = [] { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+    }, "Forest");
 
     Clock clock;
     float tElapsed = 0.f;
@@ -812,14 +786,6 @@ int main() {
         const float dt = clock.getDelta();
         tElapsed += dt;
         controls.update();
-
-#ifdef THREEPP_WITH_VULKAN
-        if (vk && perfDirty) {// applied here (outside render) — setRenderScale waits idle
-            vk->setRenderScale(uiRenderScale);
-            vk->setDenoise(uiDenoise);
-            perfDirty = false;
-        }
-#endif
 
         const auto tFoliage0 = std::chrono::high_resolution_clock::now();
 
@@ -864,14 +830,6 @@ int main() {
             const auto tFoliage1 = std::chrono::high_resolution_clock::now();
             const float ms = std::chrono::duration<float, std::milli>(tFoliage1 - tFoliage0).count();
             foliageUpdateMs += (ms - foliageUpdateMs) * 0.1f;// smoothed
-        }
-
-        fpsAccum += dt;
-        fpsFrames++;
-        if (fpsAccum >= 0.5f) {
-            fps = static_cast<float>(fpsFrames) / fpsAccum;
-            fpsAccum = 0.f;
-            fpsFrames = 0;
         }
 
         if (regen && !ImGui::IsAnyItemActive()) {

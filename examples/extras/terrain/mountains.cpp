@@ -13,7 +13,7 @@
 // pass runs on demand via the Generate button. Presets bake fully eroded.
 //
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
 #include "threepp/extras/terrain/TerrainSplat.hpp"
@@ -435,12 +435,10 @@ int main(int argc, char** argv) {
     // expensive pass, ~1s, so it must not run on every slider release).
     auto markCustom = [&](bool changed) { if (changed) { preset = 4; regenRequested = true; } };
 
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({}, ImGuiCond_FirstUseEver);
-        ImGui::Begin("Mountain Configurator");
-
-        ImGui::Text("FPS: %.1f   verts: %d", fps,
+    // Generic renderer settings (tone map, exposure, upscaler, ...) come from
+    // the shared panel; the terrain configurator widgets are the extra lambda.
+    RendererSettingsUi ui(canvas, *renderer, [&] {
+        ImGui::Text("verts: %d",
                     terrain->geometry() && terrain->geometry()->getAttribute<float>("position")
                             ? terrain->geometry()->getAttribute<float>("position")->count()
                             : 0);
@@ -552,20 +550,18 @@ int main(int argc, char** argv) {
         recolorRequested |= ImGui::ColorEdit3("Scree", params.screeColor.data());
         recolorRequested |= ImGui::ColorEdit3("Snow", params.snowColor.data());
 
-        ImGui::SeparatorText("Sun & render");
+        ImGui::SeparatorText("Sun");
         ImGui::SliderFloat("Sun azimuth", &sunAzimuth, 0.f, 360.f, "%.0f");
         ImGui::SliderFloat("Sun elevation", &sunElevation, 1.f, 89.f, "%.0f");
         ImGui::SliderFloat("Sun intensity", &sun->intensity, 0.f, 8.f, "%.2f");
-        ImGui::SliderFloat("Exposure", &renderer->toneMappingExposure, 0.1f, 3.0f, "%.2f");
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
         ImGui::TextDisabled("Noise edits preview raw on release;");
         ImGui::TextDisabled("press Generate to erode.");
-        ImGui::End();
 
-        // File selector (modal, top-level — drawn after the panel). Confirms
-        // into fileDlg.result; save or load accordingly.
+        // File selector (modal). Confirms into fileDlg.result; save or load
+        // accordingly.
         if (fileDlg.draw("Terrain config")) {
             if (fileDlg.saveMode) {
                 if (saveConfig(fileDlg.result, params))
@@ -584,13 +580,7 @@ int main(int argc, char** argv) {
                 std::cerr << "[config] load failed: " << fileDlg.result << std::endl;
             }
         }
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+    }, "Mountain Configurator");
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer->setSize(ns);

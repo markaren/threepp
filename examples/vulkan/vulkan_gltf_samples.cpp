@@ -1,6 +1,6 @@
 
 #include "threepp/animation/AnimationMixer.hpp"
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 
 using namespace threepp;
 namespace fs = std::filesystem;
@@ -297,83 +298,48 @@ int main(int argc, char** argv) {
     });
     canvas.addKeyListener(keyAdapter);
 
-    float exposure = renderer.toneMappingExposure;
-    int toneMode = static_cast<int>(renderer.toneMapping);
     bool dirLight = sun->visible;
     bool fogOn = fogOnCli;
     float fogDensity = fogOnCli ? fogDensityCli : 0.05f;
     float fogColor[3] = {0.55f, 0.6f, 0.7f};
     float fogG = 0.5f;// HG anisotropy: moderately forward-scattering by default
-    float fps = 0.f, fpsAccum = 0.f;
-    int fpsFrames = 0;
 
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0});
-        ImGui::SetNextWindowSize({300, 0});
-        ImGui::Begin("Vulkan Deferred - GLTF Samples");
-        ImGui::Text("FPS: %.1f", fps);
+    // Generic renderer settings (exposure, tone map, denoiser, debug views,
+    // ...) come from the shared panel; only the scene-specific widgets live
+    // here. Interactive runs only — the headless capture paths must not draw
+    // UI into the measured frames.
+    std::unique_ptr<RendererSettingsUi> ui;
+    if (shotPath.empty()) {
+        ui = std::make_unique<RendererSettingsUi>(canvas, renderer, [&] {
+            ImGui::Text("Model: %s", currentModel >= 0 ? models[currentModel].name.c_str() : "none");
+            if (loadedModel && loadedModel->isLoading()) ImGui::Text("Loading...");
+            ImGui::Text("Left/Right arrows to browse");
 
-        ImGui::Separator();
-        ImGui::Text("Model: %s", currentModel >= 0 ? models[currentModel].name.c_str() : "none");
-        if (loadedModel && loadedModel->isLoading()) ImGui::Text("Loading...");
-        ImGui::Text("Left/Right arrows to browse");
-
-        // Raster G-buffer debug views. "Albedo" exercises the raster-first
-        // material attachment (linear base colour in rgb, metalness in alpha).
-        static int debugView = 0;
-        const char* dbgItems[] = {"Off", "Normal", "Motion", "InstanceID", "Albedo"};
-        if (ImGui::Combo("Debug view", &debugView, dbgItems, IM_ARRAYSIZE(dbgItems)))
-            renderer.setHybridDebugView(debugView);
-
-        if (ImGui::CollapsingHeader("Models")) {
-            for (int i = 0; i < static_cast<int>(models.size()); i++) {
-                const bool selected = (i == currentModel);
-                if (ImGui::Selectable(models[i].name.c_str(), selected)) {
-                    loadModel(i);
+            if (ImGui::CollapsingHeader("Models")) {
+                for (int i = 0; i < static_cast<int>(models.size()); i++) {
+                    const bool selected = (i == currentModel);
+                    if (ImGui::Selectable(models[i].name.c_str(), selected)) {
+                        loadModel(i);
+                    }
                 }
             }
-        }
 
-        ImGui::Separator();
+            ImGui::Separator();
 
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 2.0f))
-            renderer.toneMappingExposure = exposure;
+            if (ImGui::Checkbox("DirLight", &dirLight))
+                sun->visible = dirLight;
 
-        const char* toneItems[] = {"None", "Linear", "Reinhard", "Cineon", "ACESFilmic"};
-        if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems)))
-            renderer.toneMapping = static_cast<ToneMapping>(toneMode);
-
-        if (ImGui::Checkbox("DirLight", &dirLight))
-            sun->visible = dirLight;
-
-        bool denoise = renderer.denoise();
-        if (ImGui::Checkbox("Denoise", &denoise)) {
-            renderer.setDenoise(denoise);
-        }
-
-        bool restirDI = renderer.restirDIEnabled();
-        if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
-            renderer.setRestirDIEnabled(restirDI);
-        }
-
-        if (ImGui::CollapsingHeader("Fog (FogExp2 + HG)")) {
-            ImGui::Checkbox("Fog", &fogOn);
-            if (fogOn) {
-                ImGui::SliderFloat("Density", &fogDensity, 0.001f, 0.5f, "%.3f",
-                                   ImGuiSliderFlags_Logarithmic);
-                ImGui::ColorEdit3("Color", fogColor);
-                ImGui::SliderFloat("Anisotropy g", &fogG, -0.9f, 0.9f, "%.2f");
+            if (ImGui::CollapsingHeader("Fog (FogExp2 + HG)")) {
+                ImGui::Checkbox("Fog", &fogOn);
+                if (fogOn) {
+                    ImGui::SliderFloat("Density", &fogDensity, 0.001f, 0.5f, "%.3f",
+                                       ImGuiSliderFlags_Logarithmic);
+                    ImGui::ColorEdit3("Color", fogColor);
+                    ImGui::SliderFloat("Anisotropy g", &fogG, -0.9f, 0.9f, "%.2f");
+                }
             }
-        }
-
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+        }, "Vulkan Deferred - GLTF Samples");
+    }
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
@@ -402,13 +368,6 @@ int main(int argc, char** argv) {
             else scene.add(churnCube);
         }
         const float dt = clock.getDelta();
-        fpsAccum += dt;
-        ++fpsFrames;
-        if (fpsAccum >= 0.5f) {
-            fps = fpsFrames / fpsAccum;
-            fpsAccum = 0.f;
-            fpsFrames = 0;
-        }
 
         if (mixer) mixer->update(dt);
 
@@ -464,7 +423,7 @@ int main(int argc, char** argv) {
         renderer.render(scene, camera);
 
         if (shotPath.empty()) {
-            ui.render();
+            ui->render();
         } else if (modelReady && ++shotFrame >= shotFrames) {
             if (shotFrame == shotFrames) {
                 const auto d = renderer.envSunDirection();

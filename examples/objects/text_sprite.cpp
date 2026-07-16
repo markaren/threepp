@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
 
@@ -29,11 +29,7 @@ int main() {
     auto grid = AxesHelper::create(1);
     scene.add(grid);
 
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({});
-        ImGui::SetNextWindowSize({});
-
-        ImGui::Begin("Controls");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         //color
         if (ImGui::Button("Random color")) {
             text->setColor(Color().randomize());
@@ -81,9 +77,7 @@ int main() {
         if (ImGui::SliderFloat("Scale", &scale, 0.1f, 5.f)) {
             text->setWorldScale(scale);
         }
-
-        ImGui::End();
-    });
+    }, "Controls");
 
     canvas.onWindowResize([&](WindowSize newSize) {
         renderer->setSize(newSize);

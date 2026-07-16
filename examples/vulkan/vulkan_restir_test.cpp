@@ -16,7 +16,7 @@
 //   D  — toggle denoiser
 //   A  — toggle light animation
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/geometries/OctahedronGeometry.hpp"
 #include "threepp/geometries/TorusGeometry.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
@@ -385,7 +385,7 @@ int main() {
     renderer.toneMappingExposure = 1.0f;
 
     // Default-on ReSTIR DI so the demo opens showing the variance-reduction
-    // path. It is toggleable at runtime (R hotkey or the ImGui checkbox).
+    // path. It is toggleable at runtime (R hotkey or the settings panel).
     // Denoiser on by default for the "polished" look; off gives the raw signal
     // so the variance difference with DI on/off is clearly visible without the
     // atrous smoothing absorbing it.
@@ -425,47 +425,26 @@ int main() {
     controls.update();
 
     // ── State ──────────────────────────────────────────────────────────────────
-    bool restirDI = renderer.restirDIEnabled();
-    bool denoiserOn = renderer.denoise();
     bool animating = true;
-    float exposure = renderer.toneMappingExposure;
-    float fps = 0.f, fpsAccum = 0.f;
-    int fpsFrames = 0;
     float orbitTime = 0.f;
 
+    // Hotkeys toggle through the renderer getters so they stay in sync with
+    // edits made in the shared settings panel.
     KeyAdapter keys(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
-        if (ev.key == Key::R) {
-            restirDI = !restirDI;
-            renderer.setRestirDIEnabled(restirDI);
-        }
-        if (ev.key == Key::D) {
-            denoiserOn = !denoiserOn;
-            renderer.setDenoise(denoiserOn);
-        }
+        if (ev.key == Key::R) renderer.setRestirDIEnabled(!renderer.restirDIEnabled());
+        if (ev.key == Key::D) renderer.setDenoise(!renderer.denoise());
         if (ev.key == Key::A) { animating = !animating; }
     });
     canvas.addKeyListener(keys);
 
     // ── ImGui overlay ──────────────────────────────────────────────────────────
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({10, 10});
-        ImGui::SetNextWindowSize({290, 0});
-        ImGui::Begin("The Jewel Room");
-
-        ImGui::Text("FPS: %.1f", fps);
-        ImGui::Separator();
-
+    // Generic renderer settings (exposure, ReSTIR, denoiser, ...) come from
+    // the shared panel; only the scene-specific widgets are added here.
+    RendererSettingsUi ui(canvas, renderer, [&] {
         ImGui::TextDisabled("[R] ReSTIR DI");
         ImGui::TextDisabled("[A] animate  [D] denoise");
         ImGui::Separator();
 
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 4.f))
-            renderer.toneMappingExposure = exposure;
-
-        if (ImGui::Checkbox("ReSTIR DI (R)", &restirDI))
-            renderer.setRestirDIEnabled(restirDI);
-        if (ImGui::Checkbox("Denoiser (D)", &denoiserOn))
-            renderer.setDenoise(denoiserOn);
         ImGui::Checkbox("Animate (A)", &animating);
 
         ImGui::Separator();
@@ -475,14 +454,7 @@ int main() {
         ImGui::TextDisabled("  Piano black (clearcoat) / Emerald glass");
         ImGui::TextDisabled("  Chrome / Red velvet (sheen)");
         ImGui::TextDisabled("Centre: Sapphire glass");
-
-        ImGui::End();
-    });
-
-    IOCapture io;
-    io.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    io.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&io);
+    }, "The Jewel Room");
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
@@ -494,14 +466,6 @@ int main() {
     Clock clock;
     canvas.animate([&] {
         const float dt = clock.getDelta();
-
-        fpsAccum += dt;
-        ++fpsFrames;
-        if (fpsAccum >= 0.5f) {
-            fps = static_cast<float>(fpsFrames) / fpsAccum;
-            fpsAccum = 0.f;
-            fpsFrames = 0;
-        }
 
         // Animate orbiting emissive lights
         if (animating) {

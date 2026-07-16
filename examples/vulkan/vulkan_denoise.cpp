@@ -11,7 +11,7 @@
 //   • It adds an AAA post stack (HDR bloom, RCAS sharpen, motion blur) the
 //     WGPU example doesn't have — surfaced below for completeness.
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/SpotLight.hpp"
@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <string>
 
 using namespace threepp;
@@ -221,62 +222,21 @@ int main(int argc, char** argv) {
     controls.update();
 
     // ---- UI state ----
-    bool denoiserOn   = renderer.denoise();
-    bool rotating     = true;
-    float rotSpeed    = 0.5f;
-    float bloomInt    = renderer.bloomIntensity();
-    float bloomThresh = renderer.bloomThreshold();
-    float bloomClamp  = renderer.bloomClamp();
-    float sharpen     = renderer.sharpenStrength();
-    uint64_t frames   = 0;
-    float fps         = 0.f;
-    float fpsAccum    = 0.f;
-    int fpsFrames     = 0;
+    bool rotating  = true;
+    float rotSpeed = 0.5f;
 
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Once);
-        ImGui::SetNextWindowSize({320, 0}, ImGuiCond_Once);
-        ImGui::Begin("Vulkan PT - Denoiser");
-        ImGui::Text("FPS: %.1f", fps);
-        ImGui::Text("Frames: %llu", static_cast<unsigned long long>(frames));
-        ImGui::Separator();
-
-        ImGui::Checkbox("Rotate object", &rotating);
-        if (rotating) {
-            ImGui::SliderFloat("Speed", &rotSpeed, 0.0f, 3.0f);
-        }
-        ImGui::Separator();
-
-        if (ImGui::Checkbox("Denoiser", &denoiserOn)) {
-            renderer.setDenoise(denoiserOn);
-        }
-
-        ImGui::Separator();
-        ImGui::TextDisabled("AAA post");
-        if (ImGui::SliderFloat("Bloom intensity", &bloomInt, 0.0f, 1.5f))
-            renderer.setBloomIntensity(bloomInt);
-        if (ImGui::SliderFloat("Bloom threshold", &bloomThresh, 0.0f, 3.0f))
-            renderer.setBloomThreshold(bloomThresh);
-        if (ImGui::SliderFloat("Bloom clamp", &bloomClamp, 0.0f, 64.0f))
-            renderer.setBloomClamp(bloomClamp);
-        if (ImGui::SliderFloat("Sharpen (RCAS)", &sharpen, 0.0f, 0.8f))
-            renderer.setSharpenStrength(sharpen);
-        if (ImGui::SliderFloat("Motion blur (shutter)", &mblur, 0.0f, 1.0f))
-            renderer.setMotionBlur(mblur);
-
-        ImGui::Separator();
-        const auto t = renderer.lastFrameTimings();
-        ImGui::Text("GPU: PT %.2f ms  Denoise %.2f ms", t.pathTraceMs, t.denoiseMs);
-        ImGui::Text("     raster %.2f ms  TAA %.2f ms", t.rasterGbufMs, t.taaMs);
-
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent    = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent   = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+    // Runtime renderer settings (shared panel: denoiser, bloom, sharpen,
+    // motion blur, timings, ...). Interactive runs only — the headless capture
+    // path must not draw UI into the measured frames.
+    std::unique_ptr<RendererSettingsUi> ui;
+    if (shotPath.empty()) {
+        ui = std::make_unique<RendererSettingsUi>(canvas, renderer, [&] {
+            ImGui::Checkbox("Rotate object", &rotating);
+            if (rotating) {
+                ImGui::SliderFloat("Speed", &rotSpeed, 0.0f, 3.0f);
+            }
+        }, "Vulkan PT - Denoiser");
+    }
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
@@ -295,15 +255,6 @@ int main(int argc, char** argv) {
             hero->rotation.y += rotSpeed * dt;
         }
 
-        ++frames;
-        fpsAccum += dt;
-        ++fpsFrames;
-        if (fpsAccum >= 0.5f) {
-            fps = fpsFrames / fpsAccum;
-            fpsAccum = 0.f;
-            fpsFrames = 0;
-        }
-
         if (!shotPath.empty() && stepFrame >= 0 && shotFrame == stepFrame) {
             keyLight->radius  = stepRad;// --radstep: mid-run light edit (settle harness)
             fillLight->radius = stepRad;
@@ -312,7 +263,7 @@ int main(int argc, char** argv) {
         controls.update();
         renderer.render(scene, camera);
         if (shotPath.empty()) {
-            ui.render();
+            ui->render();
         } else if (++shotFrame >= shotFrames) {
             auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
             if (seqN > 0) {// --seqn: consecutive frames stem_000.png … (settle-churn metric)

@@ -26,7 +26,7 @@
 //     renderer re-uploads on a material->version() bump) — Vulkan has no
 //     markDirty() and needs none.
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -215,11 +215,10 @@ int main() {
         requestReset();
     };
 
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Once);
-        ImGui::SetNextWindowSize({390, 0}, ImGuiCond_Once);
-        ImGui::Begin("White Furnace - Env-Only");
-
+    // The Denoiser/ReSTIR toggles stay here (not the panel's copies) because
+    // they must requestReset() the measurement; the generic renderer settings
+    // ride along in the shared collapsed panel below them.
+    RendererSettingsUi ui(canvas, renderer, [&] {
         ImGui::Text("Frames accumulated: %d", accumFrames);
         if (!fresh) ImGui::Text("(measured @ frame %d, fg pixels=%d)", statsFrame, stats.samples);
         ImGui::Separator();
@@ -305,15 +304,7 @@ int main() {
         ImGui::TextDisabled("Interpretation");
         ImGui::TextDisabled("  mean != 1.0 -> BRDF/throughput bug");
         ImGui::TextDisabled("  (one-bounce; metals/glossy stress other lobes)");
-
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+    }, "White Furnace - Env-Only");
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);

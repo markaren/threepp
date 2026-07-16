@@ -1,6 +1,6 @@
 
 #include <iostream>
-#include <threepp/extras/imgui/ImguiContext.hpp>
+#include <threepp/extras/imgui/RendererSettings.hpp>
 #include <threepp/loaders/OBJLoader.hpp>
 #include <threepp/loaders/URDFLoader.hpp>
 #include <threepp/threepp.hpp>
@@ -48,12 +48,7 @@ int main() {
     bool showColliders{false};
 
     float angle = 0;
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({}, 0, {});
-        ImGui::SetNextWindowSize({0, 0}, 0);
-
-        ImGui::Begin("Settings");
-
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::Checkbox("Animate", &animate);
         if (ImGui::Checkbox("Show Colliders", &showColliders)) {
             robot->showColliders(showColliders);
@@ -63,15 +58,7 @@ int main() {
             robot->setJointValue(0, angle);
             animate = false;
         }
-
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Settings");
 
     canvas.onWindowResize([&](const WindowSize& sz) {
         camera->aspect = sz.aspect();

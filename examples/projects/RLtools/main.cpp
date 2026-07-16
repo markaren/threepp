@@ -13,7 +13,7 @@
 #include "RLPendulumTrainer.hpp"
 
 #include "threepp/canvas/Monitor.hpp"
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
 
@@ -255,6 +255,7 @@ int main() {
     long lastStepCount = 0;
     double spsTimer = 0.0;
 
+    RendererSettings settings(*renderer);
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         const auto vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos({vp->WorkPos.x + vp->WorkSize.x - 10, vp->WorkPos.y + 10}, ImGuiCond_Always, {1, 0});
@@ -302,6 +303,8 @@ int main() {
         }
         if (ImGui::Button("Skip to next run (view only)", {-1, 0})) nextEpisodeReq = true;
         ImGui::SliderInt("View speed", &simSpeed, 1, 8, "%dx");
+        ImGui::Separator();
+        settings.drawCollapsed();
 
         ImGui::End();
     });

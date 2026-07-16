@@ -3,7 +3,7 @@
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/threepp.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include <cmath>
 
@@ -75,6 +75,7 @@ int main() {
     renderer->localClippingEnabled = true;
 
     bool globalClipping = !renderer->clippingPlanes.empty();
+    RendererSettings settings(*renderer);
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230 * ui.dpiScale(), 0}, 0);
@@ -83,6 +84,8 @@ int main() {
         ImGui::Checkbox("Enabled", &renderer->localClippingEnabled);
         ImGui::Checkbox("Shadows", &material->clipShadows);
         ImGui::SliderFloat("Plane", &localPlane.constant, 0.3f, 1.25f);
+        ImGui::Separator();
+        settings.drawCollapsed();
         ImGui::End();
 
         ImGui::SetNextWindowPos({230*ui.dpiScale(), 0}, 0, {0, 0});

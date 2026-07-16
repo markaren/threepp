@@ -1,10 +1,8 @@
 
 #include "threepp/objects/LOD.hpp"
 #include "threepp/threepp.hpp"
-#include "utility/FPSCounter.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
-#include "threepp/objects/TextSprite.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include <cmath>
 
@@ -65,36 +63,13 @@ int main() {
 
     std::unordered_map<int, bool> colorMap;
 
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        float width = 230 * ui.dpiScale();
-        ImGui::SetNextWindowPos({float(canvas.size().width()) - width, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({width, 0}, 0);
-
-        ImGui::Begin("Settings");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::SliderInt("Amount", &amount, 2, maxAmount);
         if (ImGui::IsItemEdited()) {
             colorMap.clear();
             setupInstancedMesh(*mesh, amount);
         }
-
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
-
-    FontLoader fontLoader;
-    const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
-
-    auto handle = TextSprite::create(font, 20.f);
-    handle->setColor(Color::black);
-    handle->screenSpace = true;
-    handle->screenAnchor.set(0.f, 1.f);   // top-left
-    handle->position.set(5.f, -5.f, 0.f); // 5 px margin from top-left
-    scene->add(handle);
+    }, "Settings");
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -111,10 +86,7 @@ int main() {
     canvas.addMouseListener(l);
 
 
-    Clock clock;
-    FPSCounter counter;
     Raycaster raycaster;
-    long long it{0};
     canvas.animate([&] {
         raycaster.setFromCamera(mouse, *camera);
         const auto intersects = raycaster.intersectObject(*mesh);
@@ -126,11 +98,6 @@ int main() {
                 mesh->instanceColor()->needsUpdate();
                 colorMap[*instanceId] = true;
             }
-        }
-
-        counter.update(clock.getElapsedTime());
-        if (it++ % 60 == 0) {
-            handle->setText("FPS: " + std::to_string(counter.fps));
         }
 
         renderer->render(*scene, *camera);

@@ -6,7 +6,7 @@
 // landed on this branch — only its pixels reset accumulation; the static
 // walls keep converging.
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
@@ -199,17 +199,10 @@ int main() {
     controls.update();
 
     bool spin = true;
-    float renderScale = renderer.renderScale();
-    float fps = 0.f, fpsAccum = 0.f;
-    int fpsFrames = 0;
 
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0});
-        ImGui::SetNextWindowSize({320, 0});
-        ImGui::Begin("Vulkan PT - Showcase");
-        ImGui::Text("FPS: %.1f", fps);
-
-        ImGui::Separator();
+    // Generic renderer settings come from the shared panel; scene-specific
+    // widgets are appended below it.
+    RendererSettingsUi ui(canvas, renderer, [&] {
         ImGui::TextWrapped("Cornell-style stage: red/green walls bleed "
                            "colour onto neighbouring surfaces, ceiling panel "
                            "drives NEE, glass refracts via transmission, "
@@ -217,29 +210,9 @@ int main() {
                            "gating, and the three.js cutout exercises the "
                            "any-hit alpha test.");
         ImGui::Separator();
-
         ImGui::Checkbox("Animate torus knot", &spin);
-
-        bool restirDI = renderer.restirDIEnabled();
-        if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
-            renderer.setRestirDIEnabled(restirDI);
-        }
-
-        // Path-trace render scale: < 1 traces fewer pixels, then upscales.
-        if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f")) {
-            renderer.setRenderScale(renderScale);
-        }
-
-        ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+    }, "Vulkan - Showcase");
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
@@ -251,13 +224,6 @@ int main() {
     float t = 0.f;
     canvas.animate([&] {
         const float dt = clock.getDelta();
-        fpsAccum += dt;
-        ++fpsFrames;
-        if (fpsAccum >= 0.5f) {
-            fps = fpsFrames / fpsAccum;
-            fpsAccum = 0.f;
-            fpsFrames = 0;
-        }
 
         if (spin) {
             t += dt;

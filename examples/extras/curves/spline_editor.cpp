@@ -5,7 +5,7 @@
 #include <threepp/controls/OrbitControls.hpp>
 #include <threepp/controls/TransformControls.hpp>
 #include <threepp/extras/curves/CatmullRomCurve3.hpp>
-#include <threepp/extras/imgui/ImguiContext.hpp>
+#include <threepp/extras/imgui/RendererSettings.hpp>
 #include <threepp/threepp.hpp>
 
 #include <map>
@@ -177,6 +177,9 @@ int main() {
     canvas.addMouseListener(mouseListener);
 
 
+    // Editor mouse interaction is the app here, so keep the custom UI/input
+    // wiring and just embed the shared renderer-settings row in the window.
+    RendererSettings settings(*renderer);
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({0, 0}, 0);
@@ -200,6 +203,8 @@ int main() {
                 updateSplines();
             }
         }
+        ImGui::Separator();
+        settings.drawCollapsed();
         ImGui::End();
     });
 

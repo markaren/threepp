@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/LightShadow.hpp"
 #include "threepp/loaders/FontLoader.hpp"
 #include "threepp/objects/Text.hpp"
@@ -23,48 +23,6 @@ namespace {
             return fontPath / "truetype"  / fontName;
         }
     }
-
-    class MyUI: public ImguiContext {
-
-    public:
-        explicit MyUI(const Canvas& canvas, Renderer& renderer): ImguiContext(canvas, renderer) {}
-
-        [[nodiscard]] bool newSelection() const {
-            return lastSelectedIndex != selectedIndex;
-        }
-
-        [[nodiscard]] std::string selected() const {
-            return fonts[selectedIndex];
-        }
-
-    protected:
-        void onRender() override {
-
-            lastSelectedIndex = selectedIndex;
-
-            ImGui::SetNextWindowPos({}, 0, {});
-            ImGui::SetNextWindowSize({270, 0}, 0);
-
-            ImGui::Begin("Font");
-
-            if (ImGui::BeginCombo("Select Font", fonts[selectedIndex].c_str())) {
-                for (unsigned i = 0; i < fonts.size(); ++i) {
-                    const auto isSelected = (selectedIndex == i);
-                    if (ImGui::Selectable(fonts[i].c_str(), isSelected)) {
-                        selectedIndex = i;
-                    }
-                }
-                ImGui::EndCombo();
-            }
-
-            ImGui::End();
-        }
-
-    private:
-        int lastSelectedIndex = -1;
-        int selectedIndex = 4;
-
-    };
 
     auto createPlane() {
 
@@ -151,15 +109,30 @@ int main() {
     });
 
 
-    MyUI ui(canvas, *renderer);
+    // Font picker rides in the shared renderer-settings window (which also
+    // exposes tone map + shadow controls for the GL renderer).
+    int selectedIndex = 4;
+    int lastSelectedIndex = selectedIndex;
+    RendererSettingsUi ui(canvas, *renderer, [&] {
+        if (ImGui::BeginCombo("Select Font", fonts[selectedIndex].c_str())) {
+            for (unsigned i = 0; i < fonts.size(); ++i) {
+                const auto isSelected = (selectedIndex == i);
+                if (ImGui::Selectable(fonts[i].c_str(), isSelected)) {
+                    selectedIndex = i;
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }, "Font");
 
     canvas.animate([&] {
         renderer->render(*scene, *camera);
 
         ui.render();
 
-        if (ui.newSelection()) {
-            font = loader.load(getFontPath(std::string(ui.selected())));
+        if (lastSelectedIndex != selectedIndex) {
+            lastSelectedIndex = selectedIndex;
+            font = loader.load(getFontPath(fonts[selectedIndex]));
             if (font) {
                 textMesh3d->setText(displayText, ExtrudeTextGeometry::Options(*font, textSize, 1));
                 textMesh2d->setText(displayText, TextGeometry::Options(*font, textSize));

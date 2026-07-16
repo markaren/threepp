@@ -22,6 +22,7 @@
 
 #include "threepp/threepp.hpp"
 
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/road/RoadNetwork.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/GeoTerrain.hpp"
@@ -44,6 +45,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -455,6 +457,17 @@ int main(int argc, char** argv) {
         camera.updateProjectionMatrix();
     });
 
+    // Runtime renderer settings (shared panel). Interactive runs only — the
+    // headless capture paths must not draw UI into the measured frames.
+    std::unique_ptr<RendererSettingsUi> ui;
+    if (!headless) {
+        ui = std::make_unique<RendererSettingsUi>(canvas, *renderer, [&] {
+            ImGui::TextDisabled("tiles %d  baking %d",
+                                static_cast<int>(tiles->activeTiles()),
+                                static_cast<int>(tiles->pendingBakes()));
+        }, "Norway terrain");
+    }
+
     Clock clock;
     int frame = 0;
     float fpsAccum = 0.f, fps = 0.f;
@@ -535,6 +548,7 @@ int main(int argc, char** argv) {
         }
         if (!freezeTiles) tiles->update(lodPos);
         renderer->render(scene, camera);
+        if (ui) ui->render();
 
         // Frame-sequence dump (Bug A shake / Bug B flicker metrics). Numbered
         // PNGs from a STATIC camera; tile count logged per dumped frame so

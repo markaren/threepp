@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/threepp.hpp"
 
@@ -67,13 +67,8 @@ int main() {
     float thickness = glassMat->thickness;
     float attenuationDistance = glassMat->attenuationDistance;
     std::array<float, 3> attenuationColor = {1.f, 1.f, 1.f};
-    float exposure = renderer->toneMappingExposure;
 
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({250 * ui.dpiScale(), 0}, 0);
-        ImGui::Begin("Transmission");
-
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         if (ImGui::SliderFloat("Transmission", &transmission, 0.f, 1.f)) {
             glassMat->transmission = transmission;
             glassMat->needsUpdate();
@@ -102,17 +97,7 @@ int main() {
             glassMat->attenuationColor.setRGB(attenuationColor[0], attenuationColor[1], attenuationColor[2]);
             glassMat->needsUpdate();
         }
-        ImGui::Separator();
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 3.f)) {
-            renderer->toneMappingExposure = exposure;
-        }
-
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    canvas.setIOCapture(&capture);
+    }, "Transmission");
 
     OrbitControls controls(*camera, canvas);
 

@@ -31,7 +31,7 @@
 
 #include "threepp/threepp.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/physx/PhysxVehicleEngineDrive.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/road/RoadNetwork.hpp"
@@ -593,6 +593,7 @@ int main(int argc, char** argv) {
 
     // ── HUD ─────────────────────────────────────────────────────────────────────
     float steerCmd = 0.f, throttleCmd = 0.f, brakeCmd = 0.f, fps = 0.f;
+    RendererSettings settings(*renderer);
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         const float w = 260 * ui.dpiScale();
         ImGui::SetNextWindowPos({static_cast<float>(canvas.size().width()) - w, 0}, 0, {0, 0});
@@ -604,6 +605,8 @@ int main(int argc, char** argv) {
         ImGui::Text("FPS   : %.0f", fps);
         ImGui::Text("Speed : %.0f km/h", std::abs(vehicle.forwardSpeed()) * 3.6f);
         ImGui::Text("Gear  : %s  %.0f rpm", vehicle.gearLabel().c_str(), vehicle.engineRpm());
+        ImGui::Separator();
+        settings.drawCollapsed();
         ImGui::End();
     });
 

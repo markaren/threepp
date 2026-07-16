@@ -2,7 +2,7 @@
 #include "DCMotor.hpp"
 #include "utility/Regulator.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
 
@@ -141,11 +141,7 @@ int main() {
     });
 
     auto& params = controller.params();
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({}, 0, {});
-        ImGui::SetNextWindowSize({150*ui.dpiScale(), 0}, 0);
-        ImGui::Begin("Motor Controller");
-
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::Text("Target position");
         if (ImGui::SliderFloat("deg", &targetPosition, 0, 180)) {
             targetText->setText("Target position: " + std::to_string(targetPosition));
@@ -154,9 +150,7 @@ int main() {
         ImGui::SliderFloat("kp", &params.kp, 0.01f, 10.f);
         ImGui::SliderFloat("ti", &params.ti, 0.001f, 2.f);
         ImGui::SliderFloat("td", &params.td, 0.001f, 2.f);
-
-        ImGui::End();
-    });
+    }, "Motor Controller");
 
 
     Clock clock;

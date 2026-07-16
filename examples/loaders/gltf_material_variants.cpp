@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/threepp.hpp"
@@ -48,12 +48,7 @@ int main() {
     // -------------------------------------------------------------------------
     //  ImGui panel
     // -------------------------------------------------------------------------
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
-        ImGui::SetNextWindowSize({220 * ui.dpiScale(), 0}, ImGuiCond_Always);
-        ImGui::Begin("Material Variants", nullptr,
-                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
-
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         if (variants.empty()) {
             ImGui::TextDisabled("No variants in this file.");
         } else {
@@ -85,14 +80,7 @@ int main() {
                 if (isSelected) ImGui::PopStyleColor();
             }
         }
-
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    capture.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    canvas.setIOCapture(&capture);
+    }, "Material Variants");
 
     canvas.onWindowResize([&](WindowSize size) {
         renderer->setSize(size);

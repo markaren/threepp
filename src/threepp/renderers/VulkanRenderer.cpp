@@ -1296,6 +1296,10 @@ namespace threepp {
         core()->camIso_      = std::max(iso, 1.f);
     }
 
+    VulkanRendererCore::CameraExposure VulkanRendererCore::cameraExposure() const {
+        return {core()->camAperture_, core()->camShutter_, core()->camIso_};
+    }
+
     void VulkanRendererCore::setExposureCompensation(float ev) {
         core()->camEvComp_ = std::clamp(ev, -20.f, 20.f);
     }
@@ -1343,7 +1347,13 @@ namespace threepp {
     }
 
     void VulkanRendererCore::setWhiteBalance(float temperatureK, float tint) {
+        core()->wbTemperatureK_ = temperatureK;
+        core()->wbTint_ = tint;
         if (core()->post_) core()->post_->setWhiteBalance(temperatureK, tint);
+    }
+
+    std::pair<float, float> VulkanRendererCore::whiteBalance() const {
+        return {core()->wbTemperatureK_, core()->wbTint_};
     }
 
     void VulkanRendererCore::setColorGrade(const ColorGrade& grade) {
@@ -1382,6 +1392,10 @@ namespace threepp {
     void VulkanRenderer::setDeferredVolumetrics(float density, float anisotropy) {
         pimpl_->deferredVolDensity_ = std::max(density, 0.f);
         pimpl_->deferredVolAniso_   = std::clamp(anisotropy, -0.95f, 0.95f);
+    }
+
+    std::pair<float, float> VulkanRenderer::deferredVolumetrics() const {
+        return {pimpl_->deferredVolDensity_, pimpl_->deferredVolAniso_};
     }
 
     void VulkanRenderer::setVolumetricFog(bool enabled) {
@@ -1469,6 +1483,10 @@ namespace threepp {
         pimpl_->deferredStarIntensity_ = std::max(intensity, 0.f);
     }
 
+    float VulkanRenderer::deferredStarfield() const {
+        return pimpl_->deferredStarIntensity_;
+    }
+
     void VulkanRenderer::setEnvSunPolicy(EnvSunPolicy policy) {
         if (pimpl_->envSunPolicy_ == policy) return;
         const bool wasOff = pimpl_->envSunPolicy_ == EnvSunPolicy::Off;
@@ -1522,6 +1540,10 @@ namespace threepp {
     void VulkanRenderer::setAutoExposureSpeed(float evPerSecond) {
         pimpl_->autoExpSpeed_ = std::max(evPerSecond, 0.01f);
         if (pimpl_->autoExposure_) pimpl_->autoExposure_->adaptSpeed = pimpl_->autoExpSpeed_;
+    }
+
+    float VulkanRenderer::autoExposureSpeed() const {
+        return pimpl_->autoExpSpeed_;
     }
 
     void VulkanRenderer::setAutoExposureRange(float minEV, float maxEV) {

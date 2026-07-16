@@ -4,7 +4,7 @@
 #include "threepp/objects/Sky.hpp"
 #include "threepp/threepp.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include <cmath>
 
 using namespace threepp;
@@ -87,10 +87,7 @@ int main() {
         renderer->setSize(size);
     });
 
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({0, 0}, 0);
-        ImGui::Begin("Controls");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::SliderFloat("turbidity", &shaderUniforms.at("turbidity").value<float>(), 0, 20);
         ImGui::SliderFloat("rayleigh", &shaderUniforms.at("rayleigh").value<float>(), 0, 4);
         ImGui::SliderFloat("mieCoefficient", &shaderUniforms.at("mieCoefficient").value<float>(), 0, 0.1);
@@ -101,14 +98,7 @@ int main() {
         if (ImGui::SliderFloat("azimuth", &azimuth, -180, 180)) {
             computeSunPosition();
         }
-        ImGui::End();
-    });
-
-    IOCapture capture;
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Controls");
 
     Clock clock;
     auto& timeUniform = water->materialAs<ShaderMaterial>()->uniforms.at("time");

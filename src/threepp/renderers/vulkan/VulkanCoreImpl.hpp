@@ -212,6 +212,10 @@ namespace threepp {
         float camShutter_     = 1.f / 125.f;// seconds
         float camIso_         = 100.f;
         float camEvComp_      = 0.f;// EV compensation (+1 doubles brightness)
+        // Raw white-balance inputs (PostComposite only keeps the derived
+        // Bradford matrix) so whiteBalance() can report them back.
+        float wbTemperatureK_ = 6500.f;
+        float wbTint_         = 0.f;
         [[nodiscard]] float physicalExposure() const {
             const float ev100 = std::log2(camAperture_ * camAperture_ / camShutter_ *
                                           100.f / camIso_) -

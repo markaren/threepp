@@ -2,7 +2,7 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/threepp.hpp"
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -197,11 +197,7 @@ int main() {
 
     changeFunction(functions.begin()->first);
 
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({0, 0}, 0);
-
-        ImGui::Begin("Lut");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         if (ImGui::BeginCombo("Functions", selectedFunction.c_str())) {
             for (const auto& name : functions | std::views::keys) {
                 if (ImGui::Selectable(name.c_str())) {
@@ -211,17 +207,7 @@ int main() {
             }
             ImGui::EndCombo();
         }
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    capture.preventScrollEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Lut");
 
     canvas.onKeyPressed([&](KeyEvent evt) {
         std::optional<size_t> key;

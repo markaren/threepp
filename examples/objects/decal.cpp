@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include <threepp/core/Raycaster.hpp>
 #include <threepp/geometries/DecalGeometry.hpp>
 #include <threepp/loaders/ModelLoader.hpp>
@@ -65,25 +65,6 @@ namespace {
         }
     };
 
-    struct MyGui: ImguiContext {
-
-        bool clear = false;
-
-        explicit MyGui(const Canvas& canvas, Renderer& renderer): ImguiContext(canvas, renderer) {}
-
-    protected:
-        void onRender() override {
-
-            ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-            ImGui::SetNextWindowSize({100, 0}, 0);
-
-            ImGui::Begin("Options");
-            ImGui::Checkbox("Clear", &clear);
-
-            ImGui::End();
-        }
-    };
-
     void addLights(Scene& scene) {
 
         const auto light = AmbientLight::create(0x443333, 0.8f);
@@ -143,14 +124,11 @@ int main() {
         renderer->setSize(size);
     });
 
-    MyGui ui(canvas, *renderer);
+    bool clear = false;
+    RendererSettingsUi ui(canvas, *renderer, [&] {
+        ImGui::Checkbox("Clear", &clear);
+    }, "Options");
     std::vector<Mesh*> decals;
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
 
     Matrix4 mouseHelper;
     Vector3 position;
@@ -195,12 +173,12 @@ int main() {
 
         renderer->render(*scene, *camera);
 
-        if (ui.clear) {
+        if (clear) {
             for (auto decal : decals) {
                 decal->removeFromParent();
             }
             decals.clear();
-            ui.clear = false;
+            clear = false;
         }
         ui.render();
     });

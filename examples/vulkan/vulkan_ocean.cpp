@@ -3,7 +3,7 @@
 #include "threepp/audio/Audio.hpp"
 #include "threepp/audio/WavFile.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/helpers/LidarWaveform.hpp"
@@ -1412,9 +1412,6 @@ int main(int argc, char** argv) {
         }
     };
     applyClouds();
-    float exposure  = renderer.toneMappingExposure;
-    int   toneMode  = static_cast<int>(renderer.toneMapping);
-    float renderScale = renderer.renderScale();
     float fps = 0.f, fpsAccum = 0.f;
     int   fpsFrames = 0;
 
@@ -1527,6 +1524,10 @@ int main(int argc, char** argv) {
     int   lidarWaveBeamIdx = 0;
     std::vector<float> lidarWaveform;
 
+    // Generic renderer settings (exposure, tone map, render scale, ...) come
+    // from the shared collapsed panel at the bottom of the main window.
+    RendererSettings settings(renderer);
+
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
         ImGui::SetNextWindowSize({340, 0});
@@ -1584,7 +1585,6 @@ int main(int argc, char** argv) {
         ImGui::TextUnformatted("Night & lighthouse");
         if (ImGui::Checkbox("Night mode", &night)) {
             applyMode();
-            exposure = renderer.toneMappingExposure;
         }
         if (night) {
             ImGui::SliderFloat("Beam speed (rad/s)", &beamSpeed, 0.f, 2.f, "%.2f");
@@ -1599,18 +1599,6 @@ int main(int argc, char** argv) {
             ImGui::SliderFloat("Volume##audio", &audioVol, 0.f, 1.f, "%.2f");
         } else {
             ImGui::TextDisabled("Audio unavailable.");
-        }
-        ImGui::Separator();
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f, "%.2f"))
-            renderer.toneMappingExposure = exposure;
-        const char* toneItems[] = {"None", "Linear", "Reinhard", "Cineon", "ACESFilmic"};
-        if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems))) {
-            renderer.toneMapping = static_cast<ToneMapping>(toneMode);
-        }
-
-        // Path-trace render scale: < 1 traces fewer pixels, then upscales.
-        if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f")) {
-            renderer.setRenderScale(renderScale);
         }
         ImGui::Separator();
 
@@ -1690,6 +1678,9 @@ int main(int argc, char** argv) {
                 }
             }
         }
+
+        ImGui::Separator();
+        settings.drawCollapsed();
         ImGui::End();
 
         // ── Radar HUD ─────────────────────────────────────────────────────

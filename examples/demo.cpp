@@ -1,59 +1,13 @@
 
 #include "threepp/canvas/Monitor.hpp"
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
 
+#include <array>
+
 using namespace threepp;
 
-
-struct MyGui final: ImguiContext {
-
-    bool colorChanged = false;
-
-    explicit MyGui(const Canvas& canvas, Renderer& renderer, const MeshBasicMaterial& m)
-        : ImguiContext(canvas, renderer) {
-        colorBuf_[0] = m.color.r;
-        colorBuf_[1] = m.color.g;
-        colorBuf_[2] = m.color.b;
-        colorBuf_[3] = m.opacity;
-    }
-
-    void onRender() override {
-
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({0, 0}, 0);
-        ImGui::Begin("Plane transform");
-        ImGui::SliderFloat3("position", posBuf_.data(), -5.f, 5.f);
-        ImGui::SliderFloat3("rotation", eulerBuf_.data(), -180.f, 180.f);
-        ImGui::ColorEdit4("Color", colorBuf_.data());
-        colorChanged = ImGui::IsItemEdited();
-
-        ImGui::End();
-    }
-
-    const Vector3& position() {
-        pos_.fromArray(posBuf_);
-        return pos_;
-    }
-
-    const Euler& rotation() {
-        euler_.set(math::DEG2RAD * eulerBuf_[0], math::DEG2RAD * eulerBuf_[1], math::DEG2RAD * eulerBuf_[2]);
-        return euler_;
-    }
-
-    [[nodiscard]] const std::array<float, 4>& color() const {
-        return colorBuf_;
-    }
-
-private:
-    Vector3 pos_;
-    Euler euler_;
-
-    std::array<float, 3> posBuf_{};
-    std::array<float, 3> eulerBuf_{};
-    std::array<float, 4> colorBuf_{0, 0, 0, 1};
-};
 
 auto createBox() {
 
@@ -153,7 +107,20 @@ int main() {
         renderer->setSize(size);
     });
 
-    MyGui ui(canvas, *renderer, *planeMaterial);
+    // Plane-transform widgets ride in the shared renderer-settings window;
+    // the panel dispatches on the runtime-selected renderer (GL/WGPU/Vulkan)
+    // and falls back to tone-map-only controls otherwise.
+    std::array<float, 3> posBuf{};
+    std::array<float, 3> eulerBuf{};
+    std::array<float, 4> colorBuf{planeMaterial->color.r, planeMaterial->color.g,
+                                  planeMaterial->color.b, planeMaterial->opacity};
+    bool colorChanged = false;
+    RendererSettingsUi ui(canvas, *renderer, [&] {
+        ImGui::SliderFloat3("position", posBuf.data(), -5.f, 5.f);
+        ImGui::SliderFloat3("rotation", eulerBuf.data(), -180.f, 180.f);
+        ImGui::ColorEdit4("Color", colorBuf.data());
+        colorChanged = ImGui::IsItemEdited();
+    }, "Plane transform");
 
 
     Clock clock;
@@ -167,14 +134,13 @@ int main() {
         renderer->render(*scene, *camera);
         ui.render();
 
-        plane->position.copy(ui.position());
-        plane->rotation.copy(ui.rotation());
+        plane->position.set(posBuf[0], posBuf[1], posBuf[2]);
+        plane->rotation.set(math::DEG2RAD * eulerBuf[0], math::DEG2RAD * eulerBuf[1], math::DEG2RAD * eulerBuf[2]);
 
-        if (ui.colorChanged) {
-            const auto& c = ui.color();
-            planeMaterial->color.fromArray(c);
-            planeMaterial->opacity = c[3];
-            planeMaterial->transparent = c[3] != 1;
+        if (colorChanged) {
+            planeMaterial->color.fromArray(colorBuf);
+            planeMaterial->opacity = colorBuf[3];
+            planeMaterial->transparent = colorBuf[3] != 1;
         }
     });
 }

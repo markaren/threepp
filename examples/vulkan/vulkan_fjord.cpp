@@ -28,7 +28,7 @@
 // Controls:  drag = orbit   scroll = zoom   C = cinematic camera   SPACE = play/pause time
 // Headless:  vulkan_fjord --shot out.png [--frames N] [--time H] [--cam 0..3] [--cycle H_per_s]
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
@@ -57,6 +57,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <numeric>
 #include <random>
 #include <string>
@@ -1340,74 +1341,44 @@ int main(int argc, char** argv) {
     float fogScale = 1.f;
     bool cloudsOn = true;
     float cloudCover = 0.42f;
-    float uiRenderScale = 0.85f;
-    bool perfDirty = false;
-    bool volumetrics = true;
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({340, 0}, ImGuiCond_FirstUseEver);
-        ImGui::Begin("FJORD");
-        ImGui::Text("FPS %.1f", fps);
-        {
-            const auto t = renderer.lastFrameTimings();
-            ImGui::TextDisabled("gbuf %.2f shade %.2f denoise %.2f taa %.2f",
-                                t.rasterGbufMs, t.shadeBMs, t.denoiseMs, t.taaMs);
+    // Generic renderer settings (render scale, auto LOD, frame timings, ...)
+    // come from the shared panel; the demo-specific weather/time widgets live
+    // in the extra lambda. Interactive runs only — the headless capture path
+    // must not draw UI into the measured frames.
+    std::unique_ptr<RendererSettingsUi> ui;
+    if (shotPath.empty()) {
+        ui = std::make_unique<RendererSettingsUi>(canvas, renderer, [&] {
             ImGui::TextDisabled("terrain tiles %d (baking %d)", tiles->activeTiles(), tiles->pendingBakes());
-            // Auto-LOD engagement: entries drawing a simplified level vs full
-            // detail. The win is geometry-bound phases (flight through the
-            // fjord — press C); near-field orbits keep everything at L0 by
-            // design (sub-pixel error threshold), so gbuf ms + this line are
-            // where the effect is visible, not necessarily headline FPS.
-            const auto al = renderer.autoLodStats();
-            ImGui::TextDisabled("lod L0 %u | simplified %u (chains %u, %.0f MB)",
-                                al.entriesPerLevel[0],
-                                al.entriesPerLevel[1] + al.entriesPerLevel[2] + al.entriesPerLevel[3] +
-                                        al.entriesPerLevel[4] + al.entriesPerLevel[5],
-                                al.chainsReady,
-                                static_cast<double>(al.indexBytes + al.blasBytes) / (1024.0 * 1024.0));
-        }
-        ImGui::SeparatorText("Time of day");
-        ImGui::SliderFloat("hour", &timeOfDay, 0.f, 24.f, "%.2f");
-        ImGui::SliderFloat("speed (h/s)", &cycleSpeed, 0.f, 1.5f, "%.3f", ImGuiSliderFlags_Logarithmic);
-        if (ImGui::Button("dawn")) timeOfDay = 6.1f;
-        ImGui::SameLine();
-        if (ImGui::Button("noon")) timeOfDay = 12.5f;
-        ImGui::SameLine();
-        if (ImGui::Button("golden")) timeOfDay = 17.6f;
-        ImGui::SameLine();
-        if (ImGui::Button("night")) timeOfDay = 23.6f;
-        ImGui::SeparatorText("Weather");
-        ImGui::SliderFloat("wind (m/s)", &windSpeed, 0.5f, 12.f, "%.1f");
-        ImGui::SliderFloat("haze", &fogScale, 0.f, 4.f, "%.2f");
-        ImGui::Checkbox("volumetric god rays", &volumetrics);
-        ImGui::Checkbox("clouds", &cloudsOn);
-        if (cloudsOn) {
+            ImGui::SeparatorText("Time of day");
+            ImGui::SliderFloat("hour", &timeOfDay, 0.f, 24.f, "%.2f");
+            ImGui::SliderFloat("speed (h/s)", &cycleSpeed, 0.f, 1.5f, "%.3f", ImGuiSliderFlags_Logarithmic);
+            if (ImGui::Button("dawn")) timeOfDay = 6.1f;
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(-90.f);
-            ImGui::SliderFloat("coverage", &cloudCover, 0.f, 1.f, "%.2f");
-        }
-        ImGui::SeparatorText("Camera / perf");
-        ImGui::Checkbox("cinematic flight (C)", &cinematic);
-        if (ImGui::SliderFloat("render scale", &uiRenderScale, 0.4f, 1.f, "%.2f")) perfDirty = true;
-        {
-            bool lodOn = renderer.autoLod();
-            if (ImGui::Checkbox("auto LOD", &lodOn)) renderer.setAutoLod(lodOn);
-        }
-        ImGui::TextDisabled("drag=orbit scroll=zoom SPACE=pause");
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
-    ioCapture.preventKeyboardEvent = [] { return ImGui::GetIO().WantCaptureKeyboard; };
-    canvas.setIOCapture(&ioCapture);
+            if (ImGui::Button("noon")) timeOfDay = 12.5f;
+            ImGui::SameLine();
+            if (ImGui::Button("golden")) timeOfDay = 17.6f;
+            ImGui::SameLine();
+            if (ImGui::Button("night")) timeOfDay = 23.6f;
+            ImGui::SeparatorText("Weather");
+            ImGui::SliderFloat("wind (m/s)", &windSpeed, 0.5f, 12.f, "%.1f");
+            ImGui::SliderFloat("haze", &fogScale, 0.f, 4.f, "%.2f");
+            ImGui::Checkbox("clouds", &cloudsOn);
+            if (cloudsOn) {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(-90.f);
+                ImGui::SliderFloat("coverage", &cloudCover, 0.f, 1.f, "%.2f");
+            }
+            ImGui::SeparatorText("Camera");
+            ImGui::Checkbox("cinematic flight (C)", &cinematic);
+            ImGui::TextDisabled("drag=orbit scroll=zoom SPACE=pause");
+        }, "FJORD");
+    }
 
     KeyAdapter keyAdapter(KeyAdapter::KEY_PRESSED, [&](KeyEvent evt) {
-        if (ImGui::GetIO().WantCaptureKeyboard) return;
+        if (ui && ImGui::GetIO().WantCaptureKeyboard) return;
         if (evt.key == Key::C) cinematic = !cinematic;
         if (evt.key == Key::SPACE) cycleSpeed = cycleSpeed > 0.f ? 0.f : 0.08f;
     });
@@ -1434,11 +1405,6 @@ int main(int argc, char** argv) {
             fps = fpsFrames / fpsAccum;
             fpsAccum = 0.f;
             fpsFrames = 0;
-        }
-
-        if (perfDirty) {
-            renderer.setRenderScale(uiRenderScale);
-            perfDirty = false;
         }
 
         // ── advance the day ──
@@ -1490,7 +1456,6 @@ int main(int argc, char** argv) {
             } else {
                 scene.fog.reset();
             }
-            renderer.setVolumetricFog(volumetrics);
         }
 
         // Volumetric cloud deck hugging the ridge line (peaks ~470 m) — the
@@ -1570,7 +1535,7 @@ int main(int argc, char** argv) {
         renderer.render(scene, camera);
 
         if (shotPath.empty()) {
-            ui.render();
+            ui->render();
         } else if (++shotFrame >= shotFrames) {
             const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
             renderer.writeFramebuffer(path);

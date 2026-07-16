@@ -16,7 +16,7 @@
 #include "threepp/threepp.hpp"
 
 #include "threepp/core/Raycaster.hpp"
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 
 #include <PxPhysicsAPI.h>
@@ -303,6 +303,7 @@ int main() {
 
     Vector3 gravity{0, -9.81f, 0};
 
+    RendererSettings settings(*renderer);
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         const float w = 270 * ui.dpiScale();
         ImGui::SetNextWindowPos({float(canvas.size().width()) - w, 0}, 0, {0, 0});
@@ -319,6 +320,8 @@ int main() {
         ImGui::SameLine();
         if (ImGui::Button("Reset (R)")) resetPending = true;
         ImGui::Text("Loose props: %zu", props.size());
+        ImGui::Separator();
+        settings.drawCollapsed();
         ImGui::End();
     });
 

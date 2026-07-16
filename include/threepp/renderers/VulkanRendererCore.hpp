@@ -362,6 +362,12 @@ namespace threepp {
         // Camera exposure triplet (effective while physicalCamera is on):
         // aperture = f-number N, shutter in seconds, iso = sensitivity.
         void setCameraExposure(float aperture, float shutterSeconds, float iso);
+        struct CameraExposure {
+            float aperture;
+            float shutterSeconds;
+            float iso;
+        };
+        [[nodiscard]] CameraExposure cameraExposure() const;
 
         // Exposure compensation in EV (+1 doubles screen brightness);
         // effective while physicalCamera is on. Default 0.
@@ -385,6 +391,8 @@ namespace threepp {
         // green (−) / magenta (+), ±1 ≈ ±0.05 in CIE y. Bradford-adapted
         // to D65 in linear space before the tone curve.
         void setWhiteBalance(float temperatureK, float tint = 0.0f);
+        // {temperatureK, tint} as last set (default {6500, 0} = neutral).
+        [[nodiscard]] std::pair<float, float> whiteBalance() const;
 
         // Lift/gamma/gain colour wheels + saturation + contrast, applied to
         // the tone-mapped sRGB-encoded result via a 33³ LUT baked on the

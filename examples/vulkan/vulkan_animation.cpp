@@ -1,6 +1,6 @@
 
 #include "threepp/animation/AnimationMixer.hpp"
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
@@ -121,44 +121,15 @@ int main(int argc, char** argv) {
     controls.update();
 
     // ---- UI ----
-    bool denoiserOn = renderer.denoise();
-    bool restirOn = renderer.restirDIEnabled();
     bool animate = true;
     bool showEnclosingBox = true;
-    float fps = 0.f;
-    float fpsAccum = 0.f;
-    int fpsFrames = 0;
 
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({});
-        ImGui::SetNextWindowSize({});
-        ImGui::Begin("Vulkan");
-        ImGui::Text("FPS: %.1f", fps);
-        ImGui::Separator();
-
-        // Raster G-buffer debug views.
-        static int debugView = 0;
-        const char* dbgItems[] = {"Off", "Normal", "Motion", "InstanceID", "Albedo"};
-        if (ImGui::Combo("Debug view", &debugView, dbgItems, IM_ARRAYSIZE(dbgItems)))
-            renderer.setHybridDebugView(debugView);
-
+    // Generic renderer settings (exposure, denoiser, debug views, ...) come
+    // from the shared panel; only the scene-specific toggles are added here.
+    RendererSettingsUi ui(canvas, renderer, [&] {
         ImGui::Checkbox("AnimateBox", &animate);
         ImGui::Checkbox("EnclosingBox", &showEnclosingBox);
-        ImGui::SliderFloat("Exposure", &renderer.toneMappingExposure, 0.1f, 2.0f);
-
-        if (ImGui::Checkbox("Denoiser", &denoiserOn)) {
-            renderer.setDenoise(denoiserOn);
-        }
-        if (ImGui::Checkbox("ReSTIR DI", &restirOn)) {
-            renderer.setRestirDIEnabled(restirOn);
-        }
-
-        ImGui::End();
-    });
-
-    IOCapture ioCapture;
-    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    canvas.setIOCapture(&ioCapture);
+    }, "Vulkan");
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
@@ -174,15 +145,6 @@ int main(int argc, char** argv) {
         elapsed += dt;
 
         enclosingBox->visible = showEnclosingBox;
-
-        // FPS
-        fpsAccum += dt;
-        ++fpsFrames;
-        if (fpsAccum >= 0.5f) {
-            fps = fpsFrames / fpsAccum;
-            fpsAccum = 0.f;
-            fpsFrames = 0;
-        }
 
         if (animate) {
             if (mixer) mixer->update(dt);

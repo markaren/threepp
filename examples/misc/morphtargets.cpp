@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cmath>
@@ -84,21 +84,10 @@ int main() {
 
     OrbitControls controls{*camera, canvas};
 
-    ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({0, 0}, 0);
-
-        ImGui::Begin("Morphing");
+    RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::SliderFloat("sphere", &mesh->morphTargetInfluences().at(0), 0, 1);
         ImGui::SliderFloat("twist", &mesh->morphTargetInfluences().at(1), 0, 1);
-        ImGui::End();
-    });
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
+    }, "Morphing");
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
