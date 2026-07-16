@@ -6,8 +6,11 @@
 // compatibility, so nothing graphics-side is duplicated):
 //
 //   1. recordFilter    — phase-1 indirect buffer: last frame's visible set
-//                        (persistent visBits keyed by the stable object id;
-//                        deformers always draw — their CPU AABB is stale).
+//                        (persistent visBits, one bit PER INSTANCE — a
+//                        per-mesh base + instanceIndex from occlCullBitFor,
+//                        so each instance of an InstancedMesh predicts
+//                        independently; deformers always draw — their CPU
+//                        AABB is stale).
 //   2. raster pass A   — draws phase 1; depth ends sampleable.
 //   3. farthest HiZ    — HiZPyramid::record(reduceMin=true) mid-frame.
 //   4. recordCullTest  — every record's world AABB vs the pyramid; the
@@ -48,7 +51,7 @@ namespace threepp::vulkan {
         // Matches occl_cull.comp's CullMeta (std430, 32 B).
         struct CullMeta {
             float    aabbMin[3];
-            uint32_t stableId;
+            uint32_t cullBit;// per-INSTANCE visBits index (CoreImpl::occlCullBitFor)
             float    aabbMax[3];
             uint32_t flags;// bit 0 = always draw (deformers / missing bounds)
         };
@@ -59,16 +62,21 @@ namespace threepp::vulkan {
         OcclusionCull& operator=(const OcclusionCull&) = delete;
 
         // Grow the per-frame meta buffer + the shared phase buffers to hold
-        // `drawCount` records, then (re)write this frame's descriptor sets
-        // if any input changed (safe: the frame's fence retired this fif's
-        // prior use). Call BEFORE filling metaPtr each frame.
+        // `drawCount` records and the visBits store to hold `bitDomain` bits
+        // (the cull-bit allocator's high-water mark), then (re)write this
+        // frame's descriptor sets if any input changed (safe: the frame's
+        // fence retired this fif's prior use). Call BEFORE filling metaPtr
+        // each frame. A grown visBits buffer is re-armed ALL-VISIBLE inside
+        // the next recordFilter (the fill needs a command buffer) — one
+        // conservative frame, never a hole.
         struct FrameInputs {
             VkBuffer    srcCmds   = VK_NULL_HANDLE;// CPU-built indirect records
             VkBuffer    rasterCam = VK_NULL_HANDLE;// jittered-VP UBO
             VkImageView hizView   = VK_NULL_HANDLE;// farthest pyramid (all mips)
             VkSampler   hizSampler = VK_NULL_HANDLE;
         };
-        void prepareFrame(uint32_t frame, uint32_t drawCount, const FrameInputs& in);
+        void prepareFrame(uint32_t frame, uint32_t drawCount, uint32_t bitDomain,
+                          const FrameInputs& in);
 
         // Persistently-mapped CullMeta array for this frame (valid after
         // prepareFrame; capacity >= drawCount).
@@ -101,7 +109,8 @@ namespace threepp::vulkan {
         std::vector<CullMeta*> metaPtrs_;
         Buffer phase1_{};// device-local, INDIRECT | STORAGE
         Buffer phase2_{};
-        Buffer visBits_{};// 8 KB: 1 bit per 16-bit stable id, init ALL-VISIBLE
+        Buffer visBits_{};// 1 bit per instance (occlCullBitFor domain), init ALL-VISIBLE
+        bool   visBitsNeedInit_ = true;// fresh/grown buffer → fill 0xFF in recordFilter
         uint32_t capacity_ = 0;// records the buffers currently hold
 
         // 1×1 GENERAL R32F stand-in for the pyramid in the filter set (the
@@ -123,12 +132,13 @@ namespace threepp::vulkan {
             VkBuffer    meta = VK_NULL_HANDLE;
             VkBuffer    phase1 = VK_NULL_HANDLE;
             VkBuffer    phase2 = VK_NULL_HANDLE;
+            VkBuffer    visBits = VK_NULL_HANDLE;// handle changes when the bit domain grows
         };
         std::vector<CachedInputs> cached_;// [fif]
 
         void createPipeline();
         void createDummyHiz();
-        void ensureCapacity(uint32_t frame, uint32_t drawCount);
+        void ensureCapacity(uint32_t frame, uint32_t drawCount, uint32_t bitDomain);
         void rewriteSets(uint32_t frame, const FrameInputs& in);
     };
 

@@ -284,6 +284,16 @@ namespace threepp {
         void setAutoLod(bool enabled);
         [[nodiscard]] bool autoLod() const;
 
+        // Auto-LOD screen-space error budget τ, in RENDER-scale pixels.
+        // Selection picks the coarsest level whose projected simplification
+        // error stays under τ (hysteresis raises a level only under 0.8·τ).
+        // Default 0.75 px — validated visually lossless under TAA. Raising
+        // it is the perf lever: 1.5-2 px trades (mostly sub-animation-noise)
+        // silhouette error for triangle throughput in geometry-bound scenes.
+        // Clamped to [0.1, 8]; takes effect at the next render().
+        void setAutoLodError(float px);
+        [[nodiscard]] float autoLodError() const;
+
         // Debug/harness stats snapshot from the last render()'s LOD
         // selection pass. entriesPerLevel[0] is LOD0 (unsimplified); [1..4]
         // are the generated chain levels; [5] is a defensive catch-all

@@ -1574,6 +1574,14 @@ namespace threepp {
         return core()->autoLod_;
     }
 
+    void VulkanRendererCore::setAutoLodError(float px) {
+        core()->lodErrorPx_ = std::clamp(px, 0.1f, 8.f);
+    }
+
+    float VulkanRendererCore::autoLodError() const {
+        return core()->lodErrorPx_;
+    }
+
     VulkanRendererCore::AutoLodStats VulkanRendererCore::autoLodStats() const {
         return core()->autoLodStats_;
     }

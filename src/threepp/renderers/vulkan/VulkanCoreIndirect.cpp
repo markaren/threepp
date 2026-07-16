@@ -216,7 +216,10 @@ namespace threepp {
                 // draw bit and can be occlusion-culled behind terrain like a
                 // static mesh, using that same dilated box.
                 vulkan::OcclusionCull::CullMeta cm{};
-                cm.stableId = di.stableId;
+                // Per-INSTANCE visibility bit (per-mesh base + instanceIndex)
+                // — NOT di.stableId, which is per-object and made phase 1
+                // all-or-nothing for InstancedMesh (see occlCullBitFor).
+                cm.cullBit = occlCullBitFor(en);
                 bool always = en.isSkinned || en.isDisplaced ||
                               en.isMorphed || en.isTet;
                 Box3 worldAabb;
@@ -266,7 +269,7 @@ namespace threepp {
             oin.rasterCam  = rasterCameraUbos[frame].handle;
             oin.hizView    = occlHiz_->view();
             oin.hizSampler = occlHiz_->sampler();
-            occl_->prepareFrame(frame, globalIdx, oin);
+            occl_->prepareFrame(frame, globalIdx, occlBitDomain_, oin);
             occlMetaDst = occl_->metaPtr(frame);
         }
 

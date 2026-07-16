@@ -6,11 +6,13 @@
 //
 //   mode 0 (PHASE-1 FILTER, before the raster): copy the CPU-built indirect
 //     record into the phase-1 buffer with instanceCount zeroed unless the
-//     object was visible LAST frame (persistent visBits, keyed by the
-//     renderer's stable per-object id) or is always-draw (deformers: their
-//     CPU AABB is stale — same rule as the frustum cull). Records are
-//     copied, never compacted, so firstInstance (the DrawInfo index the
-//     vertex shader reads) stays untouched and empty draws cost nothing.
+//     INSTANCE was visible LAST frame (persistent visBits, one bit per
+//     instance — a per-mesh base + instanceIndex allocated by the host's
+//     occlCullBitFor, so each instance of an InstancedMesh predicts
+//     independently) or is always-draw (deformers: their CPU AABB is stale
+//     — same rule as the frustum cull). Records are copied, never
+//     compacted, so firstInstance (the DrawInfo index the vertex shader
+//     reads) stays untouched and empty draws cost nothing.
 //
 //   mode 1 (OCCLUSION TEST, after phase-1 depth → farthest-HiZ): project
 //     the object's world AABB with the SAME jittered view-proj the raster
@@ -30,14 +32,14 @@ layout(local_size_x = 64) in;
 
 struct DrawCmd { uint vertexCount; uint instanceCount; uint firstVertex; uint firstInstance; };
 struct CullMeta {
-    vec4 aabbMin;// xyz = world AABB min, w = uintBitsToFloat(stableId)
+    vec4 aabbMin;// xyz = world AABB min, w = uintBitsToFloat(cullBit — per-instance visBits index)
     vec4 aabbMax;// xyz = world AABB max, w = uintBitsToFloat(flags: bit0 alwaysDraw)
 };
 
 layout(set = 0, binding = 0, std430) readonly  buffer SrcCmds { DrawCmd srcCmds[]; };
 layout(set = 0, binding = 1, std430) writeonly buffer DstCmds { DrawCmd dstCmds[]; };
 layout(set = 0, binding = 2, std430) readonly  buffer Meta    { CullMeta meta[]; };
-layout(set = 0, binding = 3, std430) buffer VisBits           { uint visBits[]; };// 1 bit per stableId
+layout(set = 0, binding = 3, std430) buffer VisBits           { uint visBits[]; };// 1 bit per instance (cullBit)
 layout(set = 0, binding = 4) uniform sampler2D hizTex;// FARTHEST (min-reduce) pyramid
 // The raster camera UBO — layout matches gbuffer.vert's CameraUbo. Only
 // the JITTERED current VP is read: the phase-1 depth was rasterized with
@@ -60,8 +62,8 @@ layout(push_constant) uniform Pc {
 
 bool bitGet(uint id) { return (visBits[id >> 5u] & (1u << (id & 31u))) != 0u; }
 void bitSet(uint id, bool v) {
-    // One thread per stableId (unique per object) — plain RMW would race on
-    // the shared word, so use atomics.
+    // Each record owns a unique bit (per-instance cullBit), but 32 bits
+    // share a word — the RMW still needs atomics.
     const uint w = id >> 5u, m = 1u << (id & 31u);
     if (v) atomicOr(visBits[w], m);
     else   atomicAnd(visBits[w], ~m);
@@ -120,21 +122,21 @@ void main() {
     if (i >= pc.drawCount) return;
 
     DrawCmd cmd = srcCmds[i];
-    const uint stableId  = floatBitsToUint(meta[i].aabbMin.w);
-    const bool alwaysOn  = (floatBitsToUint(meta[i].aabbMax.w) & 1u) != 0u;
+    const uint cullBit  = floatBitsToUint(meta[i].aabbMin.w);
+    const bool alwaysOn = (floatBitsToUint(meta[i].aabbMax.w) & 1u) != 0u;
 
     if (pc.mode == 0u) {
         // Phase 1: draw what was visible last frame (+ always-draw).
-        if (!alwaysOn && !bitGet(stableId)) cmd.instanceCount = 0u;
+        if (!alwaysOn && !bitGet(cullBit)) cmd.instanceCount = 0u;
         dstCmds[i] = cmd;
         return;
     }
 
     // Phase 2: test everything against the phase-1 farthest-HiZ; draw only
     // what phase 1 SKIPPED but is actually visible; refresh visBits.
-    const bool wasVisible = alwaysOn || bitGet(stableId);
+    const bool wasVisible = alwaysOn || bitGet(cullBit);
     const bool visible    = alwaysOn || hizVisible(meta[i].aabbMin.xyz, meta[i].aabbMax.xyz);
     if (wasVisible || !visible) cmd.instanceCount = 0u;// already drawn, or hidden
     dstCmds[i] = cmd;
-    bitSet(stableId, visible);
+    bitSet(cullBit, visible);
 }

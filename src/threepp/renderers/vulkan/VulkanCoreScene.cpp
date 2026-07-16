@@ -594,17 +594,21 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                                 if (lvl == 0) return 0.f;
                                 return rec.lodLevels[lvl - 1].errorBound * worldScale * pxPerUnit;
                             };
-                            // Coarsest level whose projected error still fits under τ=0.75px.
+                            // Coarsest level whose projected error still fits under the
+                            // error budget τ (setAutoLodError; default 0.75 px).
+                            const float tau = lodErrorPx_;
                             for (uint8_t i = static_cast<uint8_t>(rec.lodLevels.size()); i >= 1; --i) {
-                                if (projErrorOf(i) <= 0.75f) { selected = i; break; }
+                                if (projErrorOf(i) <= tau) { selected = i; break; }
                             }
                             // Hysteresis around the entry's CURRENT level (carried across
                             // lean frames via lastVisibleEntries_) — prevents a level right
-                            // at the threshold from flip-flopping every frame.
+                            // at the threshold from flip-flopping every frame. The raise
+                            // margin scales with τ (0.8·τ keeps the validated 0.6/0.75
+                            // ratio at the default).
                             const uint8_t cur = (en.lodLevel <= rec.lodLevels.size()) ? en.lodLevel : uint8_t{0};
                             uint8_t next = cur;
-                            if (selected > cur && projErrorOf(selected) <= 0.6f) next = selected;
-                            else if (selected < cur && projErrorOf(cur) > 0.75f) next = selected;
+                            if (selected > cur && projErrorOf(selected) <= 0.8f * tau) next = selected;
+                            else if (selected < cur && projErrorOf(cur) > tau) next = selected;
                             selected = next;
                         }
 

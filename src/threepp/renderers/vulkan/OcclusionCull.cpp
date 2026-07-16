@@ -19,8 +19,8 @@ namespace threepp::vulkan {
         };
         static_assert(sizeof(OcclPc) == 24, "occl_cull push-constant drift");
 
-        constexpr VkDeviceSize kCmdStride  = 4 * sizeof(uint32_t);// VkDrawIndirectCommand
-        constexpr VkDeviceSize kVisBytes   = (1u << 16) / 8;      // 1 bit per 16-bit stable id
+        constexpr VkDeviceSize kCmdStride   = 4 * sizeof(uint32_t);// VkDrawIndirectCommand
+        constexpr VkDeviceSize kVisBytesMin = (1u << 16) / 8;      // 8 KB floor (65 536 instance bits)
     }// namespace
 
     OcclusionCull::OcclusionCull(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight)
@@ -31,32 +31,14 @@ namespace threepp::vulkan {
         createPipeline();
         createDummyHiz();
 
-        // visBits: persistent, device-local, initialised ALL-VISIBLE so
-        // never-tested ids (new objects, first frame) draw in phase 1.
-        visBits_ = createBuffer(ctx_.allocator(), ctx_.device(), kVisBytes,
+        // visBits: persistent, device-local, one bit per instance
+        // (occlCullBitFor domain). Armed ALL-VISIBLE by the first
+        // recordFilter (visBitsNeedInit_) so never-tested bits (new
+        // objects, first frame, post-growth) draw in phase 1.
+        visBits_ = createBuffer(ctx_.allocator(), ctx_.device(), kVisBytesMin,
                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                 VMA_MEMORY_USAGE_AUTO);
-        VkCommandBufferAllocateInfo ai{};
-        ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        ai.commandPool        = cmdPool_;
-        ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = 1;
-        VkCommandBuffer cb = VK_NULL_HANDLE;
-        check(vkAllocateCommandBuffers(ctx_.device(), &ai, &cb), "alloc one-shot cb(occl)");
-        VkCommandBufferBeginInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check(vkBeginCommandBuffer(cb, &bi), "begin one-shot cb(occl)");
-        vkCmdFillBuffer(cb, visBits_.handle, 0, kVisBytes, 0xFFFFFFFFu);
-        check(vkEndCommandBuffer(cb), "end one-shot cb(occl)");
-        VkSubmitInfo si{};
-        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers    = &cb;
-        check(vkQueueSubmit(ctx_.graphicsQueue(), 1, &si, VK_NULL_HANDLE), "submit one-shot(occl)");
-        check(vkQueueWaitIdle(ctx_.graphicsQueue()), "wait one-shot(occl)");
-        vkFreeCommandBuffers(ctx_.device(), cmdPool_, 1, &cb);
     }
 
     OcclusionCull::~OcclusionCull() {
@@ -227,8 +209,24 @@ namespace threepp::vulkan {
                         0, VkDeviceSize(drawCount) * sizeof(CullMeta));
     }
 
-    void OcclusionCull::ensureCapacity(uint32_t frame, uint32_t drawCount) {
+    void OcclusionCull::ensureCapacity(uint32_t frame, uint32_t drawCount, uint32_t bitDomain) {
         const uint32_t needed = std::max(drawCount, 1u);
+
+        // Per-instance visibility bits — grow with the cull-bit allocator's
+        // high-water mark (doubling, so growth stays rare; same shared-
+        // buffer reuse rules as phase1/phase2 below). History is lost on
+        // growth; the next recordFilter re-arms the new buffer ALL-VISIBLE,
+        // which is the conservative reset (one full phase-1 frame).
+        const VkDeviceSize visBytes = VkDeviceSize((std::max(bitDomain, 1u) + 31u) / 32u) * 4u;
+        if (visBits_.size < visBytes) {
+            destroyBuffer(ctx_.allocator(), visBits_);
+            const VkDeviceSize cap = std::max<VkDeviceSize>(visBytes * 2, kVisBytesMin);
+            visBits_ = createBuffer(ctx_.allocator(), ctx_.device(), cap,
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                    VMA_MEMORY_USAGE_AUTO);
+            visBitsNeedInit_ = true;
+        }
 
         // Per-frame meta buffer (host-mapped, sequential writes).
         const VkDeviceSize metaBytes = VkDeviceSize(needed) * sizeof(CullMeta);
@@ -266,10 +264,12 @@ namespace threepp::vulkan {
         auto& c = cached_[frame];
         if (c.srcCmds == in.srcCmds && c.rasterCam == in.rasterCam &&
             c.hizView == in.hizView && c.meta == metaBufs_[frame].handle &&
-            c.phase1 == phase1_.handle && c.phase2 == phase2_.handle)
+            c.phase1 == phase1_.handle && c.phase2 == phase2_.handle &&
+            c.visBits == visBits_.handle)
             return;
         c = {in.srcCmds, in.rasterCam, in.hizView,
-             metaBufs_[frame].handle, phase1_.handle, phase2_.handle};
+             metaBufs_[frame].handle, phase1_.handle, phase2_.handle,
+             visBits_.handle};
 
         auto writeSet = [&](VkDescriptorSet ds, VkBuffer dst, VkImageView hiz,
                             VkSampler hizSamp, VkImageLayout hizLayout) {
@@ -305,12 +305,49 @@ namespace threepp::vulkan {
                  VK_IMAGE_LAYOUT_GENERAL);
     }
 
-    void OcclusionCull::prepareFrame(uint32_t frame, uint32_t drawCount, const FrameInputs& in) {
-        ensureCapacity(frame, drawCount);
+    void OcclusionCull::prepareFrame(uint32_t frame, uint32_t drawCount, uint32_t bitDomain,
+                                     const FrameInputs& in) {
+        ensureCapacity(frame, drawCount, bitDomain);
         rewriteSets(frame, in);
     }
 
     void OcclusionCull::recordFilter(VkCommandBuffer cb, uint32_t frame, uint32_t drawCount) {
+        // Arm a fresh/grown visBits buffer ALL-VISIBLE (construction can't —
+        // no command buffer there; growth loses history and this is its
+        // conservative reset). Rare, so the two dedicated barriers are fine:
+        // prior compute use of the old contents → fill, fill → this frame's
+        // compute reads.
+        if (visBitsNeedInit_) {
+            VkMemoryBarrier2 pre{};
+            pre.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            pre.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            pre.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            pre.dstStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            pre.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            VkDependencyInfo predep{};
+            predep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            predep.memoryBarrierCount = 1;
+            predep.pMemoryBarriers    = &pre;
+            vkCmdPipelineBarrier2(cb, &predep);
+
+            vkCmdFillBuffer(cb, visBits_.handle, 0, VK_WHOLE_SIZE, 0xFFFFFFFFu);
+
+            VkMemoryBarrier2 post{};
+            post.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            post.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            post.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            post.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            post.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            VkDependencyInfo postdep{};
+            postdep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            postdep.memoryBarrierCount = 1;
+            postdep.pMemoryBarriers    = &post;
+            vkCmdPipelineBarrier2(cb, &postdep);
+            visBitsNeedInit_ = false;
+        }
+
         // Prior frames read phase1/phase2 as indirect commands and this
         // frame's dispatch overwrites phase1 (WAR); also flush the host meta
         // writes to compute reads.

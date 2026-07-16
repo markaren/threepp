@@ -1228,6 +1228,13 @@ namespace threepp {
         // noise, switch frames stall-free (geomDescs ring). setAutoLod(false)
         // remains as the manual override / debug escape (Toksvig pattern).
         bool autoLod_ = true;
+        // Screen-space error budget τ for the selection pass, in RENDER-scale
+        // pixels (setAutoLodError). The pass picks the coarsest level whose
+        // projected simplification error stays under τ; the raise-hysteresis
+        // margin scales with it (0.8·τ). 0.75 px = the validated visually-
+        // lossless default; larger trades silhouette error for triangle
+        // throughput (1.5-2 px is a sensible perf setting under TAA).
+        float lodErrorPx_ = 0.75f;
         // Set by the selection pass in ensureSceneBuilt (VulkanCoreScene.cpp)
         // when ANY entry's chosen level changed this frame; read right after
         // to fold into the same "force a full TLAS rebuild" trigger the
@@ -4766,6 +4773,47 @@ namespace threepp {
         uint16_t classIdForObject(const Object3D& o) const {
             const auto it = classIds_.find(o.id);
             return it == classIds_.end() ? uint16_t(0) : it->second;
+        }
+
+        // Per-INSTANCE occlusion-cull bits. The two-phase cull's persistent
+        // visBits history needs one bit per drawn instance — keying it by the
+        // per-OBJECT stable id above made phase 1 all-or-nothing for an
+        // InstancedMesh (every instance shared one bit, and phase 2's
+        // per-instance results raced on it, so a 10k-tree field either drew
+        // whole or not at all and effectively never culled). Each mesh
+        // reserves a contiguous bit range [base, base+capacity) the first
+        // time it is drawn (capacity = its full instance count, 1 for plain
+        // meshes); an entry's bit = base + instanceIndex. If count() later
+        // grows past the reservation the mesh is re-based — the abandoned
+        // bits go stale, which at worst mispredicts phase 1 for one frame
+        // (phase 2 recovers the same frame, the cull's standing guarantee).
+        struct OcclBitRange { uint32_t base; uint32_t capacity; };
+        std::unordered_map<unsigned int, OcclBitRange> occlBitRanges_;// Object3D::id -> range
+        uint32_t occlBitDomain_ = 0;// one past the highest reserved bit
+        // One-entry memo: an InstancedMesh's entries are contiguous in the
+        // record loop, so a 100k-instance field pays ONE map lookup per
+        // frame, not 100k (the same reason the type probes are cached on
+        // the entry). Refreshed on every miss; a re-based range refreshes
+        // it too since the miss path rewrites it.
+        unsigned int occlBitMemoMeshId_ = 0;// Object3D ids start at 1 — 0 = empty
+        OcclBitRange occlBitMemoRange_{0u, 0u};
+
+        uint32_t occlCullBitFor(const MeshEntry& en) {
+            const uint32_t need = en.instanceIndex + 1u;
+            if (en.mesh->id == occlBitMemoMeshId_ && need <= occlBitMemoRange_.capacity)
+                return occlBitMemoRange_.base + en.instanceIndex;
+            auto [it, inserted] = occlBitRanges_.try_emplace(en.mesh->id, OcclBitRange{0u, 0u});
+            if (inserted || it->second.capacity < need) {
+                uint32_t cap = need;
+                if (en.isInstanced)// flag guarantees the static type — no dynamic_cast per record
+                    cap = std::max(cap, static_cast<uint32_t>(
+                                                static_cast<const InstancedMesh*>(en.mesh)->count()));
+                it->second = {occlBitDomain_, cap};
+                occlBitDomain_ += cap;
+            }
+            occlBitMemoMeshId_ = en.mesh->id;
+            occlBitMemoRange_  = it->second;
+            return it->second.base + en.instanceIndex;
         }
 
         // Per-cull-mode dispatch span into indirectCmdBuffers[frame].

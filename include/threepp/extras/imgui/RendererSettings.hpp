@@ -486,6 +486,14 @@ private:
         bool lod = vk_->autoLod();
         if (ImGui::Checkbox("Auto mesh LOD", &lod)) vk_->setAutoLod(lod);
         if (lod) {
+            // Screen-space error budget: 0.75 px = visually lossless default;
+            // raising it is the perf lever (log slider — the useful range is
+            // sub-pixel to a few pixels).
+            float lodErr = vk_->autoLodError();
+            if (ImGui::SliderFloat("LOD error (px)", &lodErr, 0.25f, 4.f, "%.2f",
+                                   ImGuiSliderFlags_Logarithmic)) {
+                vk_->setAutoLodError(lodErr);
+            }
             const auto s = vk_->autoLodStats();
             ImGui::TextDisabled("LOD entries 0..4: %u/%u/%u/%u/%u  chains %u (+%u queued)",
                                 s.entriesPerLevel[0], s.entriesPerLevel[1], s.entriesPerLevel[2],
