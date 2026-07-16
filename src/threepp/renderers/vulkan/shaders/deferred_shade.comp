@@ -835,14 +835,29 @@ void main() {
     if (!aoOn) giSkip = false;// checkerboard only pays off on the RT gather
     vec3 diffInd;
     if (pc.shadeMode == 1u) {
-        // Dispatch B: cheap deterministic env sample only — no RT gather, no
+        // Dispatch B: cheap deterministic fill only — no RT gather, no
         // ReSTIR (both own dispatch-A-exclusive temporal state: the GI
         // accumulator and the reservoir ping-pong). A minority sample's
         // indirect term is a small correction at an edge pixel; the same
         // cost/accuracy call as the inline reflection fold-in above. This is
         // the GI-recombine-albedo approximation documented at the SVGF gate
         // near the end of main().
+        // PROBE-GATED like the glass-retrace hit fill (same shape: a point
+        // shaded without rays). The raw env fill ignores occlusion, so in an
+        // ENCLOSED interior every silhouette's minority sliver carried
+        // full-sky irradiance on top of dispatch A's probe-dark surround —
+        // invisible outdoors (gated ≈ ungated), but auto-exposure gain on a
+        // dark interior amplified it into a lit white rim on every edge
+        // (Sponza + MSAA4 + auto-exposure). Saturated-confidence blend, same
+        // rationale as the retrace fill: a partially-valid interior
+        // neighbourhood is trusted outright; a starved one (conf → 0) means
+        // "unmeasured", not "dark" — fall back to the env fill, never black.
         diffInd = sampleEnvLod(N, maxLod) + lights.ambient;
+        if (probeGrid.enabled > 0.5) {
+            float bConf;
+            const vec3 bFill = probeIrradianceConf(worldPos, N, bConf) * (1.0 / PI);
+            diffInd = mix(diffInd, bFill, smoothstep(0.0, 0.25, bConf));
+        }
     } else if (giSkip) {
         diffInd = vec3(0.0);// unused — the accumulation below carries history
         // ReSTIR reservoirs PING-PONG (read prev fif, write curr): a skipped

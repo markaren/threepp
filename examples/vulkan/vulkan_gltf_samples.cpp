@@ -101,6 +101,8 @@ int main(int argc, char** argv) {
     int optDlss = -1;      // --dlss 0|1: DLSS upscaler (0 falls back to FSR/TAA)
     int optFsr = -1;       // --fsr 0|1: FSR upscaler (--dlss 0 --fsr 0 = built-in TAA)
     int optDenoise = -1;   // --denoise 0|1: deferred SVGF denoiser (raw 1-spp when 0)
+    int optMsaa = -1;      // --msaa 1|2|4: raster G-buffer MSAA (edge shading dispatch B)
+    int optAutoExp = -1;   // --autoexp 0|1: histogram auto-exposure (interior triage)
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -132,6 +134,8 @@ int main(int argc, char** argv) {
         else if (a == "--dlss" && i + 1 < argc) optDlss = std::atoi(argv[++i]);
         else if (a == "--fsr" && i + 1 < argc) optFsr = std::atoi(argv[++i]);
         else if (a == "--denoise" && i + 1 < argc) optDenoise = std::atoi(argv[++i]);
+        else if (a == "--msaa" && i + 1 < argc) optMsaa = std::atoi(argv[++i]);
+        else if (a == "--autoexp" && i + 1 < argc) optAutoExp = std::atoi(argv[++i]);
     }
     if (!fs::exists(modelFolder) || !fs::is_directory(modelFolder)) {
         std::cerr << "Invalid folder path: " << fs::absolute(modelFolder) << std::endl;
@@ -164,6 +168,8 @@ int main(int argc, char** argv) {
     if (optDlss >= 0) renderer.setDlss(optDlss != 0);
     if (optFsr >= 0) renderer.setFsr(optFsr != 0);
     if (optDenoise >= 0) renderer.setDenoise(optDenoise != 0);
+    if (optMsaa > 0) renderer.setGbufferMsaa(static_cast<uint32_t>(optMsaa));
+    if (optAutoExp >= 0) renderer.setAutoExposure(optAutoExp != 0);
     if (dofFocus > 0.f) {// thin-lens DoF: wide-open aperture, focus at S meters
         renderer.setCameraExposure(2.0f, 1.f / 125.f, 100.f);
         renderer.setFocusDistance(dofFocus);
