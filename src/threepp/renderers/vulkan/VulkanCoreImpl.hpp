@@ -794,19 +794,52 @@ namespace threepp {
             float anisotropy;    // HG g, clamped [-0.95, 0.95] by setFogAnisotropy
             float waterSurfaceY; // world-Y of the water surface; 1e30 = no limit
             float worldUp[3];    // world up axis (= camera.up) for sky aerial perspective
-            // Height-fog (setHeightFog) params, MIRRORED from GpuCloudUbo so the
-            // deferred FILTER recombines (deferred_filter_common.glsl, which binds
-            // only this fog UBO — not the CloudUbo) can carry the same hetero
-            // extinction the shade pass applies. 0 density = height fog off.
-            float hfDensity;     // height-fog σ_t at baseY
-            float hfBaseY;       // height-fog base world Y
-            float hfFalloff;     // height-fog exponential height scale (m)
+            // Unified fog medium (setHeightFog / resolved scene.fog) params,
+            // MIRRORED from GpuCloudUbo so the deferred FILTER recombines
+            // (deferred_filter_common.glsl, which binds only this fog UBO — not
+            // the CloudUbo) can carry the same hetero extinction the shade pass
+            // applies. 0 density = no air medium. Phase 2: scene.fog now feeds
+            // these (its density/profile), so the froxel hetero path is the ONE
+            // air medium; the sigmaT/color/enabled fields above are the medium's
+            // beam-σ / albedo / present-flag for the volumetric consumers.
+            float hfDensity;     // air-medium σ_t at baseY
+            float hfBaseY;       // air-medium base world Y
+            float hfFalloff;     // air-medium exponential height scale (m); huge ≈ uniform
+            // Underwater murk (setUnderwaterMurk) — a SEPARATE homogeneous medium
+            // clipped to BELOW waterSurfaceY (the water body's own absorption),
+            // decoupled from the air fog in Phase 2 so a scene can hold clear air
+            // above the waterline and murk below (the fjord). 0 density = off.
+            float murkDensity;   // murk σ_t (1/m); 0 = off
+            float murkColor[3];  // murk inscatter tint (sRGB-linear)
         };
-        static_assert(sizeof(GpuFogUbo) == 60);
+        static_assert(sizeof(GpuFogUbo) == 76);
         std::array<Buffer, kFramesInFlight> fogUbos{};
         float    fogAnisotropy_ = 0.0f;
         float    fogWaterSurfaceY_ = 1e30f;
+        float    murkDensity_ = 0.0f;               // setUnderwaterMurk (0 = off)
+        float    murkColor_[3] = {1.0f, 1.0f, 1.0f};// setUnderwaterMurk tint
         uint64_t prevFogHash_ = 0u;
+        // ── Resolved unified fog medium for THIS frame (computed by updateFogUbo,
+        // consumed by updateCloudUbo + the froxel gate) ──────────────────────────
+        // Phase 2 "one knob": scene.fog is the primary control — when present it
+        // supplies the medium DENSITY (FogExp2.density / linear-Fog span) + COLOUR
+        // and the froxel volumetrics run in HETEROGENEOUS mode with a near-uniform
+        // default profile (baseY 0, huge falloff). setHeightFog is the ADVANCED
+        // profile control: it sets baseY/falloff/noise; its density is used ONLY
+        // when scene.fog is absent (back-compat for existing mist users). When
+        // BOTH are set scene.fog's density WINS (heightFog.density ignored).
+        bool  mediumActiveThisFrame_ = false;// air medium present → run froxels hetero
+        float mediumDensityThisFrame_ = 0.0f;
+        float mediumBaseYThisFrame_   = 0.0f;
+        float mediumFalloffThisFrame_ = 1.0e6f;
+        float mediumNoiseThisFrame_   = 0.0f;
+        // Near-uniform default profile falloff (m) when scene.fog drives the
+        // medium without an explicit setHeightFog profile. exp(-y/H) ≈ 1 over any
+        // real scene extent, and heightFogOpticalDepth clamps y<baseY to full
+        // density → a homogeneous medium (the degenerate case of the height-fog
+        // integral). The sky path detects this magnitude to avoid a divergent
+        // infinite-ray optical depth (see applySkyFog).
+        static constexpr float kUniformFogFalloff = 1.0e6f;
 
         // Volumetric cloud layer (VulkanRenderer::setClouds) + near-field
         // heterogeneous height fog (VulkanRenderer::setHeightFog). Both ride the
@@ -2316,10 +2349,12 @@ namespace threepp {
         // deferred_shade.comp). σ = 0 disables (the march is skipped entirely).
         float deferredVolDensity_ = 0.f;
         float deferredVolAniso_   = 0.55f;
-        // Deferred DIRECTIONAL-light volumetric fog (sun shafts + aerial glow,
-        // ray-marched with RT shadow rays). Opt-in (per-step shadow-ray cost);
-        // only contributes when scene.fog is set. See volumetricDirScatter().
-        bool  deferredVolFog_     = false;
+        // DEPRECATED (Phase 2 fog unification): the directional sun shafts / aerial
+        // glow are now ALWAYS on when the fog medium is present (froxels own the
+        // near field, volumetricDirScatter the > 512 m tail — no opt-in). Kept as a
+        // no-op toggle so setVolumetricFog() callers still compile; default true so
+        // the deprecated getter reads "on when fog is present".
+        bool  deferredVolFog_     = true;
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
 

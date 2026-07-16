@@ -180,8 +180,19 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     float enabled;       // 1.0 = fog active
     vec3  color;         // inscatter tint = single-scattering albedo
     float anisotropy;    // HG g (drives the volumetric beam phase when fog is on)
-    float waterSurfaceY; // world-Y medium cap; 1e30 = unbounded
+    float waterSurfaceY; // world-Y of the water surface — the MURK clip; 1e30 = unbounded
     vec3  worldUp;       // world up axis (= camera.up) for sky aerial perspective
+    // Air-medium profile — declared for offset alignment with GpuFogUbo; the
+    // shade pass reads the SAME values from the CloudUbo (clouds.hf*), which the
+    // froxel passes also bind. Present here so the murk fields below sit at their
+    // real buffer offsets.
+    float hfDensity;
+    float hfBaseY;
+    float hfFalloff;
+    // Underwater murk (setUnderwaterMurk) — a separate homogeneous medium clipped
+    // to BELOW waterSurfaceY (applyMurk). 0 density = off.
+    float murkDensity;
+    vec3  murkColor;
 } fog;
 
 // ── World-space irradiance probe grid (multi-bounce GI, opt-in) ─────────────
@@ -555,12 +566,13 @@ void main() {
         const vec3  wpU    = (cam.viewInverse * vec4(vhU.xyz / vhU.w, 1.0)).xyz;
         // Same coverage weighting as the main path: dominant fraction + the
         // sky minority blended here (dispatch B pays the geometry minority).
-        // Surface fog matches the lit path's dispatch (hetero height fog vs
-        // homogeneous scene fog) so an unlit MeshBasicMaterial fades to the
-        // same haze as everything else — no crisp unlit island in the mist.
-        vec3 outU = ((clouds.heteroActive > 0.5)
+        // Surface fog matches the lit path's dispatch (hetero air medium vs the
+        // vestigial homogeneous path) so an unlit MeshBasicMaterial fades to the
+        // same haze as everything else — no crisp unlit island in the mist. Then
+        // the underwater murk on the below-surface leg portion (no-op above water).
+        vec3 outU = applyMurk((clouds.heteroActive > 0.5)
                    ? applyHeteroSurfaceFog(albedo, uv, length(wpU - camPos), camPos, wpU)
-                   : applySceneFog(albedo, camPos, wpU)) * domWeight;
+                   : applySceneFog(albedo, camPos, wpU), camPos, wpU) * domWeight;
         if (skyEdgeW > 0.0) outU += skyEdgeW * skyBackground(ndc);
         imageStore(outImage, px, vec4(outU * uintBitsToFloat(pc.preExpBits), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
@@ -712,9 +724,9 @@ void main() {
         // Coverage weighting as in the main path — water-dominant edge pixels
         // reserve geoMinW for dispatch B and blend their own sky minority;
         // the volumetric in-scatter is per-pixel and stays at full weight.
-        wcol = ((clouds.heteroActive > 0.5)
+        wcol = applyMurk((clouds.heteroActive > 0.5)
               ? applyHeteroSurfaceFog(wcol, uv, length(worldPos - camPos), camPos, worldPos)
-              : applySceneFog(wcol, camPos, worldPos)) * domWeight;
+              : applySceneFog(wcol, camPos, worldPos), camPos, worldPos) * domWeight;
         if (skyEdgeW > 0.0) wcol += skyEdgeW * skyBackground(ndc);
         // Volumetric in-scatter — the SAME three terms the opaque path adds
         // below: froxel clustered point-light glow, per-pixel spot beams, and
@@ -1245,14 +1257,15 @@ void main() {
     // extinction, in contrast, multiplies the surface radiance itself
     // (different per sample's worldPos/albedo), so both dispatches apply it
     // to their own `lit`.
-    // Surface extinction. HETEROGENEOUS (setHeightFog): from the froxel LUT
-    // (per-slice height-fog + near-cloud σ) + closed-form beyond 512 m; the
-    // in-scatter is added below via froxelInscatter. HOMOGENEOUS: analytic
-    // Beer-Lambert scene fog (in-scatter folded in). The beam march carries its
-    // own extinction either way.
-    lit = (clouds.heteroActive > 0.5)
+    // Surface extinction. HETEROGENEOUS air medium (scene.fog / setHeightFog):
+    // from the froxel LUT (per-slice height-fog σ) + closed-form beyond 512 m; the
+    // in-scatter is added below via froxelInscatter. The vestigial homogeneous
+    // branch runs only when no medium is present (a no-op then). The underwater
+    // murk (below-surface leg) composes on top; the beam march carries its own
+    // extinction either way.
+    lit = applyMurk((clouds.heteroActive > 0.5)
         ? applyHeteroSurfaceFog(lit, uv, length(worldPos - camPos), camPos, worldPos)
-        : applySceneFog(lit, camPos, worldPos);
+        : applySceneFog(lit, camPos, worldPos), camPos, worldPos);
     if (pc.shadeMode == 1u) {
         // Dispatch B: weighted accumulate into dispatch A's already-written
         // pixel (which stored domWeight*lit for the SAME complex pixel — see

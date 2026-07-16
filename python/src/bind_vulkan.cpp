@@ -704,14 +704,28 @@ namespace threepp_py {
                 .def_property("fog_anisotropy",
                               [](PyVulkanRenderer& r) { return r.native().getFogAnisotropy(); },
                               [](PyVulkanRenderer& r, float g) { r.native().setFogAnisotropy(g); })
-                // Volumetric directional-light fog (sun shafts + aerial glow). Ray-marches
-                // the air column with RT shadow rays so trees/terrain carve real light
-                // shafts; the haze brightens toward the sun via fog_anisotropy. Opt-in
-                // (per-step shadow-ray cost); only contributes when scene.set_fog_exp2()
-                // is active. This gives an outdoor scene true volume vs flat distance haze.
+                // DEPRECATED (Phase 2 fog unification) — a no-op. The directional
+                // sun shafts + aerial glow are now ALWAYS on when the fog medium is
+                // present: set scene.set_fog_exp2(...) (or set_height_fog) and the
+                // volumetrics follow automatically — the froxels own the near field
+                // [0, 512 m] and the per-pixel march the far tail. Kept only so
+                // existing callers keep working (the setter does nothing).
                 .def_property("volumetric_fog",
                               [](PyVulkanRenderer& r) { return r.native().volumetricFog(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setVolumetricFog(v); })
+                // Underwater murk — a homogeneous absorption/tint medium clipped to
+                // BELOW the water surface (fog_water_surface_y). Phase 2 decouples
+                // this from scene.fog: scene.fog is the AIR medium (haze / god rays,
+                // unclipped) and this is the SEPARATE below-water medium, so a scene
+                // can hold clear air above the waterline and murk below. density =
+                // sigma_t (1/m; 0 = off); color = inscatter tint.
+                .def("set_underwater_murk",
+                     [](PyVulkanRenderer& r, float density, const Color& color) {
+                         r.native().setUnderwaterMurk(density, color);
+                     },
+                     py::arg("density"), py::arg("color") = Color(1.f, 1.f, 1.f),
+                     "Enable underwater murk (below fog_water_surface_y). density = "
+                     "sigma_t (1/m; 0 disables); color = inscatter tint.")
                 // Volumetric clouds — a far-field raymarched, wind-driven cloud
                 // deck in the world-space shell [bottom_y, top_y], composited
                 // over the sky and (depth-aware) in front of terrain. Lit by the
@@ -737,13 +751,14 @@ namespace threepp_py {
                      "wind m/s xz drift; evolve_speed shape churn rate.")
                 .def("disable_clouds", [](PyVulkanRenderer& r) { r.native().setClouds(std::nullopt); },
                      "Turn the volumetric cloud layer off (default).")
-                // Near-field heterogeneous height fog — exponential height
-                // falloff × wind-scrolled noise, evaluated in the 0.25-512 m view
-                // froxels. Switches the froxels to the heterogeneous path (local
-                // density + a froxel sun term; the per-pixel sun march is
-                // disabled to avoid double-counting) and drives surface fog from
-                // the froxel LUT. scene.fog keeps working; this is a separate
-                // opt-in. Off is free / image-identical.
+                // Fog medium PROFILE control (advanced). Phase 2: there is ONE air
+                // medium. scene.set_fog_exp2(...) is the primary knob (density +
+                // colour); set_height_fog is the ADVANCED control of that medium's
+                // exponential height PROFILE (baseY / falloff) × wind-scrolled
+                // noise, in the 0.25-512 m view froxels. PRECEDENCE: scene.fog
+                // absent → this density CREATES the medium (back-compat); scene.fog
+                // present → scene.fog density WINS and only this profile shapes it.
+                // The underwater murk is a SEPARATE medium (set_underwater_murk).
                 .def("set_height_fog",
                      [](PyVulkanRenderer& r, float density, float base_y,
                         float falloff, float noise_amount) {

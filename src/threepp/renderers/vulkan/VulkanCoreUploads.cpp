@@ -1092,15 +1092,15 @@ namespace threepp {
         ubo.worldUp[0] = camera.up.x;
         ubo.worldUp[1] = camera.up.y;
         ubo.worldUp[2] = camera.up.z;
-        // Height-fog params, mirrored from the cloud UBO's hf* so the deferred
-        // FILTER recombines (which bind only this fog UBO) apply the SAME hetero
-        // extinction the shade pass does. 0 density = off → filter uses homogeneous.
-        ubo.hfDensity = heightFogEnabled_ ? heightFogDensity_ : 0.0f;
-        ubo.hfBaseY   = heightFogBaseY_;
-        ubo.hfFalloff = heightFogFalloff_;
 
+        // scene.fog → the homogeneous UBO fields (medium beam-σ / albedo /
+        // present-flag) that the volumetric consumers read. These are the AIR
+        // medium's params; the froxel hetero path (hf* below) carries the actual
+        // extinction + in-scatter, but the spot-beam march + sky band still read
+        // sigmaT/color/enabled here.
+        bool  fogPresent = false;
+        float sigma = 0.f;
         if (auto* sc = dynamic_cast<Scene*>(&scene); sc && sc->fog.has_value()) {
-            float sigma = 0.f;
             Color tint{1.f, 1.f, 1.f};
             if (std::holds_alternative<FogExp2>(*sc->fog)) {
                 const auto& f = std::get<FogExp2>(*sc->fog);
@@ -1113,6 +1113,7 @@ namespace threepp {
                 tint  = f.color;
             }
             if (sigma > 0.f) {
+                fogPresent    = true;
                 ubo.sigmaT[0] = sigma;
                 ubo.sigmaT[1] = sigma;
                 ubo.sigmaT[2] = sigma;
@@ -1121,9 +1122,36 @@ namespace threepp {
                 ubo.color[1]  = tint.g;
                 ubo.color[2]  = tint.b;
                 ubo.anisotropy = fogAnisotropy_;
-                ubo.waterSurfaceY = fogWaterSurfaceY_;
             }
         }
+
+        // ── Resolve the ONE air medium (Phase 2 unification) ─────────────────
+        // scene.fog is the primary knob: present → its density drives the medium
+        // and the froxels run HETEROGENEOUS with a near-uniform default profile.
+        // setHeightFog is the ADVANCED profile control (baseY/falloff/noise); its
+        // density is used ONLY when scene.fog is absent (back-compat mist). BOTH
+        // set → scene.fog's density WINS, heightFog contributes only its profile.
+        mediumActiveThisFrame_  = fogPresent || heightFogEnabled_;
+        mediumBaseYThisFrame_   = heightFogEnabled_ ? heightFogBaseY_   : 0.0f;
+        mediumFalloffThisFrame_ = heightFogEnabled_ ? heightFogFalloff_ : kUniformFogFalloff;
+        mediumNoiseThisFrame_   = heightFogEnabled_ ? heightFogNoiseAmount_ : 0.0f;
+        mediumDensityThisFrame_ = fogPresent ? sigma
+                                : (heightFogEnabled_ ? heightFogDensity_ : 0.0f);
+
+        // Mirror the resolved medium into the fog UBO's hf* (the FILTER recombines
+        // bind only this UBO; the shade/froxel read the CloudUbo copy). 0 = off →
+        // the filter's fogTransmittance short-circuits the hetero branch exactly.
+        ubo.hfDensity = mediumActiveThisFrame_ ? mediumDensityThisFrame_ : 0.0f;
+        ubo.hfBaseY   = mediumBaseYThisFrame_;
+        ubo.hfFalloff = mediumFalloffThisFrame_;
+
+        // Underwater murk (setUnderwaterMurk) — a SEPARATE homogeneous medium
+        // clipped to below waterSurfaceY, decoupled from the air fog above.
+        ubo.waterSurfaceY = fogWaterSurfaceY_;
+        ubo.murkDensity   = murkDensity_;
+        ubo.murkColor[0]  = murkColor_[0];
+        ubo.murkColor[1]  = murkColor_[1];
+        ubo.murkColor[2]  = murkColor_[2];
 
         uint64_t h = 0xcbf29ce484222325ull;
         const auto* bytes = reinterpret_cast<const uint8_t*>(&ubo);
@@ -1168,19 +1196,21 @@ namespace threepp {
         static const auto cloudEpoch = std::chrono::steady_clock::now();
         ubo.timeSec     = std::chrono::duration<float>(
                                   std::chrono::steady_clock::now() - cloudEpoch).count();
-        // Heterogeneous near-field froxels are gated on the height fog (its
-        // explicit opt-in). The froxel medium is HEIGHT FOG ONLY — the far
-        // cloud march already integrates the cloud over the whole 0→far ray
-        // (including below 512 m), so folding cloudDensity into the froxels
-        // too would double-count it (see mediumExtinction in cloud_density.glsl).
-        ubo.heteroActive  = heightFogEnabled_ ? 1.0f : 0.0f;
+        // Heterogeneous near-field froxels run whenever an AIR medium exists this
+        // frame — Phase 2: scene.fog alone is enough (the resolved medium below),
+        // not only the explicit setHeightFog. The froxel medium is the height-fog
+        // profile ONLY — the far cloud march already integrates the cloud over the
+        // whole 0→far ray (including below 512 m), so folding cloudDensity into the
+        // froxels too would double-count it (see mediumExtinction in cloud_density.glsl).
+        // updateFogUbo ran first (VulkanCoreFrame.cpp) and resolved the medium.
+        ubo.heteroActive  = mediumActiveThisFrame_ ? 1.0f : 0.0f;
         ubo.wind[0]       = cloudWind_[0];
         ubo.wind[1]       = cloudWind_[1];
         ubo.wind[2]       = cloudWind_[2];
-        ubo.hfDensity     = heightFogEnabled_ ? heightFogDensity_ : 0.0f;
-        ubo.hfBaseY       = heightFogBaseY_;
-        ubo.hfFalloff     = heightFogFalloff_;
-        ubo.hfNoiseAmount = heightFogNoiseAmount_;
+        ubo.hfDensity     = mediumActiveThisFrame_ ? mediumDensityThisFrame_ : 0.0f;
+        ubo.hfBaseY       = mediumBaseYThisFrame_;
+        ubo.hfFalloff     = mediumFalloffThisFrame_;
+        ubo.hfNoiseAmount = mediumNoiseThisFrame_;
         // Cloud shadow map is generated + sampled only when clouds are on (it's
         // the cloud's own transmittance projected to the ground).
         ubo.shadowActive  = cloudsEnabled_ ? 1.0f : 0.0f;

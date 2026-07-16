@@ -37,9 +37,13 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     // Height-fog (setHeightFog) params — mirror GpuCloudUbo's hf* so the filter
     // recombines carry the SAME hetero extinction the shade pass applies (the
     // froxel LUT/CloudUbo are NOT bound here → the closed form below stands in).
-    float hfDensity;     // height-fog σ_t at baseY (0 = height fog off)
-    float hfBaseY;       // height-fog base world Y
-    float hfFalloff;     // height-fog exponential height scale (m)
+    float hfDensity;     // air-medium σ_t at baseY (0 = no air medium)
+    float hfBaseY;       // air-medium base world Y
+    float hfFalloff;     // air-medium exponential height scale (m)
+    // Underwater murk (setUnderwaterMurk) — a separate homogeneous medium clipped
+    // to below waterSurfaceY. Composes with the air extinction (see fogTransmittance).
+    float murkDensity;   // murk σ_t (1/m; 0 = off)
+    vec3  murkColor;     // murk tint (unused here — the recombine carries extinction only)
 } fog;
 
 layout(push_constant) uniform Pc {
@@ -76,40 +80,52 @@ vec3 worldFromDepth(ivec2 q, float depth) {
 float heightFogOpticalDepth(vec3 a, vec3 b) {
     if (fog.hfDensity <= 0.0) return 0.0;
     const float H   = max(fog.hfFalloff, 1e-3);
-    const float ya  = a.y - fog.hfBaseY;
-    const float yb  = b.y - fog.hfBaseY;
+    const float ya  = max(a.y - fog.hfBaseY, 0.0);
+    const float yb  = max(b.y - fog.hfBaseY, 0.0);
     const float len = distance(a, b);
-    const float dy  = yb - ya;
-    if (abs(dy) < 1e-3)
-        return fog.hfDensity * exp(-max(ya, 0.0) / H) * len;
-    return fog.hfDensity * H * len / dy * (exp(-max(ya, 0.0) / H) - exp(-max(yb, 0.0) / H));
+    // Numerically-stable (1−e^{−x})/x form — avoids the catastrophic fp32
+    // cancellation of e^{-ya/H} − e^{-yb/H} when H is huge (near-uniform default
+    // profile). KEEP IN SYNC with deferred_shade_60_fog_volumetrics.glsl.
+    const float x = (yb - ya) / H;
+    const float f = (abs(x) < 1e-3) ? (1.0 - 0.5 * x + x * x * (1.0 / 6.0))
+                                    : ((1.0 - exp(-x)) / x);
+    return fog.hfDensity * len * exp(-ya / H) * f;
 }
 
 // Fog transmittance over the camera→surface leg — the GI/reflection recombine
 // must carry the SAME extinction the shade pass applied to the base, or the
-// added radiance glows through the murk (the "fog missed ocean water" class of
-// bug). Mirror the shade pass's surface-fog dispatch EXACTLY:
-//   HETEROGENEOUS (height fog on) → applyHeteroSurfaceFog applies height-fog
-//     extinction ONLY (the homogeneous scene.fog is NOT applied in that branch),
-//     so match it with the whole-path closed form (no froxel LUT bound here —
-//     an accepted approximation of LUT+tail).
-//   HOMOGENEOUS → the original waterSurfaceY-clipped Beer-Lambert (byte-identical
-//     when height fog is off).
+// added radiance glows through the fog (the "fog missed ocean water" class of
+// bug). Composes BOTH unified media multiplicatively (their optical depths add),
+// mirroring the shade pass:
+//   AIR medium (scene.fog / setHeightFog) → applyHeteroSurfaceFog's whole-path
+//     closed-form height-fog extinction (no froxel LUT bound here — an accepted
+//     approximation of LUT+tail); NOT water-clipped. The homogeneous branch is
+//     vestigial (the air medium is always hetero when present).
+//   MURK (setUnderwaterMurk) → applyMurk's homogeneous Beer-Lambert over the
+//     BELOW-waterSurfaceY leg portion.
+// Byte-identical (returns 1) when no medium is present.
 vec3 fogTransmittance(vec3 a, vec3 b) {
+    vec3 T = vec3(1.0);
+    // Air medium (unclipped).
     if (fog.hfDensity > 0.0)
-        return exp(-vec3(heightFogOpticalDepth(a, b)));
-    if (fog.enabled < 0.5) return vec3(1.0);
-    float d = distance(a, b);
-    if (fog.waterSurfaceY < 1e29) {
-        const float ya = a.y - fog.waterSurfaceY;
-        const float yb = b.y - fog.waterSurfaceY;
-        if (ya >= 0.0 && yb >= 0.0) return vec3(1.0);
-        if (!(ya < 0.0 && yb < 0.0)) {
-            const float t = ya / (ya - yb);
-            d *= (ya < 0.0) ? t : (1.0 - t);
+        T = exp(-vec3(heightFogOpticalDepth(a, b)));
+    else if (fog.enabled > 0.5)
+        T = exp(-fog.sigmaT * distance(a, b));// vestigial homogeneous path
+    // Underwater murk (below waterSurfaceY only).
+    if (fog.murkDensity > 0.0) {
+        float d = distance(a, b);
+        if (fog.waterSurfaceY < 1e29) {
+            const float ya = a.y - fog.waterSurfaceY;
+            const float yb = b.y - fog.waterSurfaceY;
+            if (ya >= 0.0 && yb >= 0.0) d = 0.0;
+            else if (!(ya < 0.0 && yb < 0.0)) {
+                const float t = ya / (ya - yb);
+                d *= (ya < 0.0) ? t : (1.0 - t);
+            }
         }
+        T *= exp(-vec3(fog.murkDensity) * d);
     }
-    return exp(-fog.sigmaT * d);
+    return T;
 }
 
 // Coverage weight for the GI/reflection RECOMBINES at MSAA complex (edge) pixels.

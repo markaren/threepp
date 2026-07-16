@@ -791,16 +791,17 @@ int main(int argc, char** argv) {
     // wind never freezes — the "no culling" baseline). The default builds the
     // same blades as a grid of GrassMesh tiles (cullable + distance-frozen).
     bool singleGrass = false;
-    // Froxel-unification scout: --mist [density] swaps the sun-shaft source —
-    // setHeightFog (smooth, tall falloff ≈ homogeneous near the water) engages
-    // the froxel sun in-scatter and disables the per-pixel homogeneous sun
-    // march. Same scene, same medium-ish: the A/B for "can froxels carry the
-    // fjord god rays" (they end at the 512 m froxel far plane; that truncation
-    // is exactly what this flag makes visible).
+    // --mist [density]: shape the unified AIR medium as a tall ground-mist
+    // PROFILE (setHeightFog). With the "haze" slider at 0 (no scene.fog) this
+    // density CREATES the medium directly (back-compat); the froxels own the near
+    // field [0, 512 m] and the per-pixel march the far tail — one continuous fog.
     bool mistOn = false;
-    float mistDensity = 0.0012f;// ≈ the dawn FogExp2 peak below
-    float startFogScale = 1.f;  // --fogscale S: scales the homogeneous FogExp2 density
-                                // (matches --mist densities so the shaft A/B is fair)
+    float mistDensity = 0.0012f;
+    float startFogScale = 0.f;  // --fogscale S: AIR-fog (scene.fog) density scale.
+                                // 0 (default) = clear air + underwater murk only;
+                                // raise it (or the "haze" slider) to fill the fjord
+                                // with haze + god rays (Phase 2: a plain density
+                                // scale — no clip-lifting hack any more).
     bool noAutoExposure = false;// --noae: fixed exposure — the AE histogram meters the
                                 // fog's in-scatter and normalises it away, hiding
                                 // exactly the shafts the scout is trying to compare
@@ -831,23 +832,23 @@ int main(int argc, char** argv) {
     // renderer.setGbufferMsaa(2);// leaf canopies + grass edges
     renderer.setRenderScale(0.85f);
     renderer.setSunAngularRadius(0.6f);// soft RT sun shadows
-    renderer.setVolumetricFog(true);   // god rays through the fjord walls
-    if (mistOn) {// froxel-scout mode: see the --mist comment at the arg parse
+    // Phase 2 unified fog: scene.fog (set per-frame below) is the AIR medium —
+    // the haze + god rays through the fjord walls, driven live by the "haze"
+    // slider. The volumetrics follow automatically (no setVolumetricFog opt-in).
+    if (mistOn) {// --mist: shape the air medium as a tall ground-mist PROFILE
         VulkanRenderer::HeightFogSettings hf;
-        hf.density = mistDensity;
+        hf.density = mistDensity;// used only when the haze slider leaves scene.fog off
         hf.baseY = 0.f;
         hf.falloff = 300.f;   // tall ≈ homogeneous over the shaft zone
-        hf.noiseAmount = 0.f; // smooth analytic — fair vs the homogeneous march
+        hf.noiseAmount = 0.f; // smooth analytic
         renderer.setHeightFog(hf);
     }
     renderer.setFogAnisotropy(0.55f);
-    // Default: scene.fog is UNDERWATER murk only (the waterSurfaceY clip zeroes
-    // fog on any camera→surface leg above y=0 — see fogTransmittance). That is
-    // why the homogeneous sun march never showed AIR shafts in this demo: there
-    // was no air medium. --fogscale (the froxel-unification scout) lifts the
-    // clip so the scaled FogExp2 becomes air fog and the march has something
-    // to scatter in — the honest baseline for the froxel-sun A/B.
-    if (startFogScale == 1.f) renderer.setFogWaterSurfaceY(0.f);
+    // Underwater MURK: the sky-tinted absorption below the waterline, a SEPARATE
+    // medium from the air fog now (Phase 2 decoupling). The water surface at y=0
+    // clips it to the water column; the air fog (scene.fog) is NOT clipped by it.
+    // Density/colour are refreshed per-frame (dawn-peaked, sky-matched) below.
+    renderer.setFogWaterSurfaceY(0.f);
     renderer.setBloomIntensity(0.05f);
 
     Scene scene;
@@ -1480,12 +1481,20 @@ int main(int argc, char** argv) {
         // Stars fade in only once the sun is well below the horizon (-3°→-10°).
         renderer.setDeferredStarfield(1.1f * (1.f - smoothstepf(-0.18f, -0.05f, cs.sunElev)));
 
-        // Fog: colour follows the sky horizon; dawn mist peaks ~06:20.
+        // Fog (colour follows the sky horizon; dawn mist peaks ~06:20):
+        //   • Underwater MURK — the below-waterline absorption, ALWAYS on, its
+        //     dawn-peaked density matching the pre-Phase-2 look. Clipped to y<0 by
+        //     the water surface (setFogWaterSurfaceY above).
+        //   • AIR fog (scene.fog) — the unified volumetric medium (haze, god rays,
+        //     aerial perspective), driven by the "haze" slider (fogScale; default
+        //     0 = clear air). Unclipped — it fills the fjord above the waterline.
         {
             const float mist = std::exp(-std::pow((timeOfDay - 6.3f) / 1.5f, 2.f));
-            const float density = (0.00035f + 0.0009f * mist) * fogScale;
-            if (density > 1e-6f) {
-                scene.fog = FogExp2(horizonColor(sky, cs), density);
+            const Color hz = horizonColor(sky, cs);
+            renderer.setUnderwaterMurk(0.00035f + 0.0009f * mist, hz);
+            const float airDensity = (0.00035f + 0.0009f * mist) * fogScale;
+            if (airDensity > 1e-6f) {
+                scene.fog = FogExp2(hz, airDensity);
             } else {
                 scene.fog.reset();
             }

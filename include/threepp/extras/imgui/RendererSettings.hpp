@@ -409,13 +409,49 @@ private:
             }
         }
 
-        bool volFog = vk_->volumetricFog();
-        if (ImGui::Checkbox("Volumetric fog (needs scene.fog)", &volFog)) {
-            vk_->setVolumetricFog(volFog);
-        }
-        float fogG = vk_->getFogAnisotropy();
-        if (ImGui::SliderFloat("Fog anisotropy", &fogG, -0.95f, 0.95f, "%.2f")) {
-            vk_->setFogAnisotropy(fogG);
+        // ── Fog (one unified volumetric medium) ─────────────────────────────
+        // ONE primary knob: Fog density. This drives the RENDERER-side medium
+        // (setHeightFog) — the froxel volumetrics (god rays, aerial perspective)
+        // run automatically whenever a medium is present, so there is no separate
+        // "volumetric fog" toggle any more. NOTE: if the APP sets scene.fog, that
+        // takes precedence (it supplies density + colour); this control then only
+        // shapes the profile. The panel holds the renderer, not the scene, so it
+        // cannot read/write scene.fog directly — drive scene.fog from the app.
+        {
+            auto hf = vk_->heightFog();
+            float fogDensity = hf ? hf->density : 0.f;
+            if (ImGui::SliderFloat("Fog density", &fogDensity, 0.f, 0.2f, "%.4f",
+                                   ImGuiSliderFlags_Logarithmic)) {
+                if (fogDensity > 1e-6f) {
+                    threepp::VulkanRenderer::HeightFogSettings s = hf.value_or(lastHeightFog_);
+                    s.density = fogDensity;
+                    vk_->setHeightFog(s);
+                } else {
+                    if (hf) lastHeightFog_ = *hf;
+                    vk_->setHeightFog(std::nullopt);
+                }
+            }
+            if (ImGui::TreeNode("Advanced fog")) {
+                float fogG = vk_->getFogAnisotropy();
+                if (ImGui::SliderFloat("Anisotropy", &fogG, -0.95f, 0.95f, "%.2f")) {
+                    vk_->setFogAnisotropy(fogG);
+                }
+                // Profile (only meaningful once a renderer-side medium exists —
+                // a near-uniform default otherwise). Editing these switches the
+                // medium from the uniform default to a layered height fog.
+                if (auto m = vk_->heightFog()) {
+                    auto s = *m;
+                    bool ch = false;
+                    ch |= ImGui::SliderFloat("Base Y (m)", &s.baseY, -100.f, 500.f, "%.0f");
+                    ch |= ImGui::SliderFloat("Falloff (m)", &s.falloff, 1.f, 2000.f, "%.0f",
+                                             ImGuiSliderFlags_Logarithmic);
+                    ch |= ImGui::SliderFloat("Noise", &s.noiseAmount, 0.f, 1.f, "%.2f");
+                    if (ch) vk_->setHeightFog(s);
+                } else {
+                    ImGui::TextDisabled("(uniform profile — raise Fog density to shape it)");
+                }
+                ImGui::TreePop();
+            }
         }
 
         auto [beamDensity, beamAniso] = vk_->deferredVolumetrics();
@@ -453,27 +489,8 @@ private:
             ImGui::PopID();
         }
 
-        bool mistOn = vk_->heightFog().has_value();
-        if (ImGui::Checkbox("Height fog (ground mist)", &mistOn)) {
-            if (mistOn) {
-                vk_->setHeightFog(lastHeightFog_);
-            } else {
-                if (auto cur = vk_->heightFog()) lastHeightFog_ = *cur;
-                vk_->setHeightFog(std::nullopt);
-            }
-        }
-        if (auto mist = vk_->heightFog()) {
-            ImGui::PushID("mist");
-            bool ch = false;
-            ch |= ImGui::SliderFloat("Density", &mist->density, 0.f, 0.2f, "%.3f",
-                                     ImGuiSliderFlags_Logarithmic);
-            ch |= ImGui::SliderFloat("Base (m)", &mist->baseY, -100.f, 500.f, "%.0f");
-            ch |= ImGui::SliderFloat("Falloff (m)", &mist->falloff, 1.f, 500.f, "%.0f",
-                                     ImGuiSliderFlags_Logarithmic);
-            ch |= ImGui::SliderFloat("Noise", &mist->noiseAmount, 0.f, 1.f, "%.2f");
-            if (ch) vk_->setHeightFog(*mist);
-            ImGui::PopID();
-        }
+        // (Height fog is now folded into the unified "Fog density" + "Advanced
+        // fog" controls at the top of this section — no separate toggle.)
     }
 
     void drawVulkanPerformance() {

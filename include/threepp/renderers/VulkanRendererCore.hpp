@@ -172,9 +172,20 @@ namespace threepp {
         void setFogAnisotropy(float g);
         [[nodiscard]] float getFogAnisotropy() const;
 
-        // World-Y of the water surface, bounding underwater fog to the water
-        // column. Default 1e30 (no limit).
+        // World-Y of the water surface. Bounds the underwater MURK
+        // (setUnderwaterMurk) to the water column below this Y; the air fog
+        // (scene.fog) is NOT clipped by it. Default 1e30 (no limit).
         void setFogWaterSurfaceY(float y);
+
+        // Underwater murk — a homogeneous absorption/tint medium clipped to BELOW
+        // setFogWaterSurfaceY (the water body's own attenuation). Phase 2 fog
+        // unification decouples this from scene.fog: scene.fog is now the AIR
+        // medium (haze / god rays, unclipped) and this is the SEPARATE below-water
+        // medium, so a scene can hold clear air above the waterline and murk below
+        // (the fjord). density = σ_t (1/m; 0 = off, the default); color = inscatter
+        // tint. Pair it with setFogWaterSurfaceY to set the clip plane.
+        void setUnderwaterMurk(float density, const Color& color);
+        [[nodiscard]] std::pair<float, Color> underwaterMurk() const;
 
         // Render scale. The scene shade + hybrid raster G-buffer run at (swapchain
         // extent × scale); TAA reconstructs full resolution. Clamped to

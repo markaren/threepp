@@ -231,8 +231,10 @@ namespace threepp {
             // a medium exists this frame. Runs AFTER the cluster barrier
             // (inject reads the cluster grid); the barrier below makes the
             // LUT visible to the shade's trilinear sample.
-            const bool froxelsActive = fogEnabledThisFrame_ || deferredVolDensity_ > 0.f
-                                     || heightFogEnabled_;// hetero near-field height fog needs the froxel LUT
+            // Phase 2: the froxels run whenever the unified AIR medium exists
+            // (scene.fog OR setHeightFog — resolved into mediumActiveThisFrame_ by
+            // updateFogUbo) or the explicit clear-air beam density is set.
+            const bool froxelsActive = mediumActiveThisFrame_ || deferredVolDensity_ > 0.f;
             if (froxelsActive) {
                 deferredShade_->recordFroxels(cb, currentFrame,
                                               regionRenderExt_.width, regionRenderExt_.height,
@@ -1101,6 +1103,18 @@ namespace threepp {
         core()->fogWaterSurfaceY_ = y;
     }
 
+    void VulkanRendererCore::setUnderwaterMurk(float density, const Color& color) {
+        core()->murkDensity_  = density < 0.f ? 0.f : density;
+        core()->murkColor_[0] = color.r;
+        core()->murkColor_[1] = color.g;
+        core()->murkColor_[2] = color.b;
+    }
+
+    std::pair<float, Color> VulkanRendererCore::underwaterMurk() const {
+        return {core()->murkDensity_,
+                Color(core()->murkColor_[0], core()->murkColor_[1], core()->murkColor_[2])};
+    }
+
     void VulkanRendererCore::setRenderScale(float scale) {
         core()->setRenderScale(scale);
     }
@@ -1348,14 +1362,16 @@ namespace threepp {
         return {pimpl_->deferredVolDensity_, pimpl_->deferredVolAniso_};
     }
 
-    void VulkanRenderer::setVolumetricFog(bool enabled) {
-        if (enabled != pimpl_->deferredVolFog_) {
-            pimpl_->deferredVolFog_ = enabled;
-        }
-    }
+    // DEPRECATED (Phase 2 fog unification) — a no-op alias, kept so existing
+    // callers compile (house pattern, cf. setDeferredDenoise). The directional
+    // sun shafts + aerial glow are now ALWAYS on when the fog medium is present:
+    // the froxels own the near field and volumetricDirScatter marches the far
+    // tail. There is no separate "volumetric fog" opt-in any more — set scene.fog
+    // (or setHeightFog) and the volumetrics follow automatically.
+    void VulkanRenderer::setVolumetricFog(bool /*enabled*/) {}
 
     bool VulkanRenderer::volumetricFog() const {
-        return pimpl_->deferredVolFog_;
+        return pimpl_->deferredVolFog_;// always true — shafts follow the medium
     }
 
     void VulkanRenderer::setClouds(const std::optional<CloudSettings>& settings) {

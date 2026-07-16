@@ -72,13 +72,11 @@ namespace threepp {
         // {density, anisotropy} as last set.
         [[nodiscard]] std::pair<float, float> deferredVolumetrics() const;
 
-        // Volumetric DIRECTIONAL-light fog: ray-marches the camera→surface air
-        // column, tracing an RT shadow ray toward each sun per step so trees and
-        // terrain carve real light shafts, and brightens the haze toward the sun
-        // via the Henyey-Greenstein phase (driven by setFogAnisotropy). Only
-        // contributes when scene.fog is set; opt-in because of the per-step
-        // shadow-ray cost. This is what gives an outdoor (sun-lit) deferred scene
-        // genuine volume rather than flat distance-faded haze.
+        // DEPRECATED (Phase 2 fog unification) — a no-op. The directional sun
+        // shafts + aerial glow are now ALWAYS on when the fog medium is present:
+        // set scene.fog (or setHeightFog) and the volumetrics follow automatically
+        // — the froxels own the near field [0, 512 m] and the per-pixel march owns
+        // the far tail [512 m, ∞]. Kept only so existing callers compile.
         void setVolumetricFog(bool enabled);
         [[nodiscard]] bool volumetricFog() const;
 
@@ -102,21 +100,30 @@ namespace threepp {
         void setClouds(const std::optional<CloudSettings>& settings);
         [[nodiscard]] std::optional<CloudSettings> clouds() const;
 
-        // ── Near-field heterogeneous height fog (ground mist, drone low alt) ──
-        // Exponential height falloff × wind-scrolled 3D noise, evaluated inside
-        // the 0.25–512 m view froxels (the near-field volume). Turning it on
-        // switches the froxel volumetrics to the HETEROGENEOUS path: per-slice
-        // HEIGHT-FOG density, a froxel sun in-scatter term (1 RT shadow ray +
-        // a short self-shadow march), and LUT-based surface fog — the
-        // per-pixel homogeneous sun march is disabled to avoid double-counting.
-        // NOTE the froxel medium is height fog ONLY: the setClouds layer is
-        // integrated by the far cloud march over the WHOLE ray (including below
-        // 512 m and inside the deck), so the two volumes split by phenomenon —
-        // no cloud/froxel hand-off exists or is needed. `scene.fog`
-        // (homogeneous) keeps working exactly as today; this activates only via
-        // the setter. nullopt = off (default) — the froxels stay on the
-        // homogeneous path, so off is free / image-identical. Wind is shared
-        // with CloudSettings when both are active.
+        // ── Fog medium PROFILE control (advanced) ────────────────────────────
+        // Phase 2 fog unification: there is ONE air-fog medium. `scene.fog` is
+        // the primary knob — present, it supplies the medium DENSITY (FogExp2
+        // density / linear-Fog span) and COLOUR, and the volumetrics run
+        // automatically. setHeightFog is the ADVANCED control of that same
+        // medium's PROFILE: an exponential height falloff (baseY / falloff) ×
+        // wind-scrolled 3D noise, evaluated inside the 0.25–512 m view froxels.
+        //
+        // PRECEDENCE:
+        //   • scene.fog absent  → setHeightFog's `density` CREATES the medium
+        //     (back-compat: existing ground-mist users keep working unchanged).
+        //   • scene.fog present → scene.fog's density WINS; setHeightFog's
+        //     `density` field is IGNORED and only its profile (baseY / falloff /
+        //     noiseAmount) shapes the medium. scene.fog alone uses a near-uniform
+        //     default profile (baseY 0, huge falloff ≈ homogeneous).
+        //
+        // The froxels run HETEROGENEOUS whenever a medium exists: per-slice
+        // density, a froxel sun in-scatter term (1 RT shadow ray + a short
+        // self-shadow march) for [0, 512 m], and the per-pixel march for the far
+        // tail. NOTE the froxel medium is the height-fog profile ONLY: the
+        // setClouds layer is integrated by the far cloud march over the WHOLE ray,
+        // so the two volumes split by phenomenon — no cloud/froxel hand-off. The
+        // underwater murk is a SEPARATE medium (setUnderwaterMurk). nullopt = the
+        // default near-uniform profile (no explicit height falloff).
         struct HeightFogSettings {
             float density     = 0.02f;// σ_t at baseY
             float baseY       = 0.0f;
