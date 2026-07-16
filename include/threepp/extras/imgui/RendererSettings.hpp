@@ -321,9 +321,6 @@ private:
         if (ImGui::Combo("Texture aniso", &anisoIdx, anisoNames, IM_ARRAYSIZE(anisoNames))) {
             vk_->setTextureAnisotropy(anisoValues[anisoIdx]);
         }
-
-        bool hdrTaa = vk_->taaHdrInput();
-        if (ImGui::Checkbox("HDR-domain TAA resolve", &hdrTaa)) vk_->setTaaHdrInput(hdrTaa);
     }
 
     void drawVulkanLighting() {

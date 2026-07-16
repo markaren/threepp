@@ -915,12 +915,10 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
             uint32_t exposureBits;
             std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
             // Pre-exposure (physical camera mode; 1.0 otherwise — every
-            // consumer's multiply/divide is then an exact no-op). The OTHER
-            // frame-in-flight's stashed value is what last frame baked into
-            // ITS sceneHdr — the TAA history exposure compensation divides
-            // by it (and the exposure meter un-bakes this frame's).
+            // consumer's multiply/divide is then an exact no-op). Stash this
+            // frame-in-flight's value so the exposure meter can un-bake it
+            // (see VulkanRenderer.cpp's readback of preExpHist_[currentFrame]).
             const float preExp     = preExposure();
-            const float prevPreExp = preExpHist_[(currentFrame + 1u) % kFramesInFlight];
             preExpHist_[currentFrame] = preExp;
             std::memcpy(&preExpBits_, &preExp, sizeof(preExpBits_));
 
@@ -1219,8 +1217,8 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                                          sharpenStrength_ > 0.0f, sharpenStrength_);
             } else
 #endif
-            if (!taaHdrInput_) {
-                // ── LEGACY (default) ORDER ──────────────────────────────────────
+            {
+                // ── POST STACK / TAA ────────────────────────────────────────────
                 // Bloom pyramid + post composite (HDR post stack). The shade/
                 // resolve wrote linear HDR into bloom_->sceneHdr (the shared
                 // set's binding 1). The pyramid glows the bright highlights
@@ -1252,65 +1250,8 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                                     static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
                                     ptExt.width, ptExt.height, ext.width, ext.height,
                                     taaDepthLin_.data(), motionBlurAmount_,
-                                    /*hdrMode=*/false, /*bloomIntensity=*/0.f, /*exposureRatio=*/1.f,
                                     taaJitterTexels_[0], taaJitterTexels_[1]);
                 gpuTimings_->end(cb, TP_TAA, currentFrame);
-            } else {
-                // ── HDR-INPUT ORDER (setTaaHdrInput) ────────────────────────────
-                // scene dispatch → DoF (above) → bloom pyramid (unchanged,
-                // still pre-resolve/render-res — see TaaResolve.cpp's header
-                // comment for why) → TaaResolve on LINEAR HDR (bloom added
-                // inside the resolve, companded stats/clip/blend, history
-                // exposure-rescaled) → PostComposite (tone map ONLY, at
-                // DISPLAY resolution, reading the resolve's HDR output) →
-                // RCAS (display-referred, now downstream of PostComposite) →
-                // overlay (unchanged — both orders end at the swapchain).
-                bloom_->recordPyramid(cb, currentFrame,
-                                      regionRenderExt_.width, regionRenderExt_.height,
-                                      bloomIntensity_, bloomThreshold_, bloomClamp_);
-
-                // History exposure compensation: rescale the RAW (true-linear)
-                // history sample by prevPreExp/currPreExp before the resolve's
-                // companding/clip math runs, so a physical-camera exposure
-                // step doesn't read as a whole-scene brightness change (which
-                // would hard-reject history via the deviation/variance-clip
-                // gates — see feedback_temporal_accum_motion_gates.md's FC
-                // floor/cap lesson, same failure shape). 1.0 in legacy mode
-                // (preExp/prevPreExp both 1.0) — exact no-op.
-                const float exposureRatio = prevPreExp / std::max(preExp, 1e-8f);
-
-                gpuTimings_->begin(cb, TP_TAA, currentFrame);
-                taa_->recordResolve(cb, currentFrame, imageIndex,
-                                    regionRenderExt_.width, regionRenderExt_.height,
-                                    regionSwapExt_.width, regionSwapExt_.height, effAlpha, taaDtFrames,
-                                    sharpenStrength_ > 0.0f, sharpenStrength_,
-                                    taaSkyReproj_.data(),
-                                    static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
-                                    ptExt.width, ptExt.height, ext.width, ext.height,
-                                    taaDepthLin_.data(), motionBlurAmount_,
-                                    /*hdrMode=*/true, effBloomIntensity, exposureRatio,
-                                    taaJitterTexels_[0], taaJitterTexels_[1]);
-                gpuTimings_->end(cb, TP_TAA, currentFrame);
-
-                // PostComposite now runs at DISPLAY resolution, reading the
-                // resolve's HDR output (no second bloom add — pass <= 0).
-                // The sky mask (raster ids) still lives at render resolution
-                // (regionRenderExt_), so pass it as the src extent.
-                post_->recordDispatch(cb, currentFrame,
-                                      regionSwapExt_.width, regionSwapExt_.height,
-                                      static_cast<uint32_t>(toneMapping_),
-                                      exposureBits, preExpBits_, envIsBgColor,
-                                      /*effBloomIntensity=*/0.f,
-                                      regionRenderExt_.width, regionRenderExt_.height,
-                                      /*hdrMode=*/true);
-
-                // Finalize PostComposite's hdrOut_ into the swapchain — RCAS
-                // (moved out of TaaResolve; display-referred by design) or a
-                // plain copy. Full-frame only in this mode (split-screen +
-                // HDR-input together isn't a supported combination yet).
-                taa_->recordPostFinalize(cb, currentFrame, imageIndex,
-                                         regionSwapExt_.width, regionSwapExt_.height,
-                                         sharpenStrength_ > 0.0f, sharpenStrength_);
             }
             // ── End post stack / TAA ────────────────────────────────────────────
 

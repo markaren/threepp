@@ -340,28 +340,6 @@ namespace threepp {
         void setMotionBlur(float shutterFraction);
         [[nodiscard]] float motionBlur() const;
 
-        // TAA/TSR resolve input domain (Phase 1 of the FSR2-style resolver
-        // port). OFF (default): the resolve consumes PostComposite's 8-bit
-        // post-tonemap/sRGB output, exactly as before — byte-identical.
-        // ON: the resolve moves BEFORE bloom's add + PostComposite's tone
-        // map, consuming the linear-HDR scene (pre-exposed under
-        // setPhysicalCamera) directly; neighbourhood stats/variance-clip/
-        // blend operate on Reinhard-companded values (FSR2/Karis) so a
-        // single bright pixel can't dominate the clip box, and the history
-        // is exposure-compensated at the reproject read so an exposure
-        // step doesn't reject the whole screen. PostComposite then tone-
-        // maps the resolved HDR at DISPLAY resolution instead of render
-        // resolution. RCAS (display-referred by design) moves to run
-        // AFTER PostComposite instead of inside the resolve; motion blur
-        // stays in the resolve (velocity-domain, domain-agnostic). Bloom
-        // stays PRE-resolve (the pyramid is sized off the render extent;
-        // retargeting it to the display extent per-toggle was judged not
-        // worth the churn for a quality-neutral pass-order change — see
-        // TaaResolve.cpp's HDR-mode bloom-add binding). Toggling drops the
-        // TAA history (one-frame reset to alpha=1, like a resize).
-        void setTaaHdrInput(bool enabled);
-        [[nodiscard]] bool taaHdrInput() const;
-
         // ── Physical camera exposure ─────────────────────────────────────
         // Derive exposure from real camera parameters instead of
         // toneMappingExposure:

@@ -2140,7 +2140,8 @@ namespace threepp {
         // (Windows only) it REPLACES the TAA temporal resolve — see the
         // fsrActive_ branch in VulkanCoreRecord.cpp. FSR writes its upscaled
         // linear-HDR output into TaaResolve's history write slot, so PostComposite
-        // tonemaps it via the same HDR-input path (setTaaHdrInput) with no
+        // tonemaps it via the HDR-input path (its postFlags-bit-3 hdrMode +
+        // recordPostFinalize) with no
         // descriptor rewrite. On create failure fsrActive_ stays false and the
         // TAA path runs unchanged. See FsrUpscaler.{hpp,cpp}.
         std::unique_ptr<vulkan::FsrUpscaler> fsr_;
@@ -2369,30 +2370,6 @@ namespace threepp {
         // shader's velocity/deviation gates are already per-frame-displacement based,
         // so only this base weight needs the correction.
         double taaPrevTimeSec_ = -1.0;
-
-        // TAA/TSR resolve input domain (VulkanRendererCore::setTaaHdrInput).
-        // false (default): resolve consumes PostComposite's post-tonemap 8-bit
-        // output, byte-identical to the pre-Phase-1 pipeline. true: resolve
-        // consumes the linear-HDR scene (+ bloom) directly, before tone
-        // mapping; PostComposite moves after the resolve and runs at display
-        // resolution; RCAS moves to run after PostComposite. See the pass-
-        // order block in recordCommandBuffer (taaHdrInput_ branch) and
-        // TaaResolve.cpp's companded-YCoCg path.
-        bool taaHdrInput_ = false;
-        // Set by setTaaHdrInput/setMotionBlur when the HDR-mode-only image
-        // lifetimes (TaaResolve::mblurOutHdr_ / PostComposite::hdrOut_) or
-        // their descriptor bindings may be stale — never allocated/rewritten
-        // synchronously inside those setters (that's the pre-first-render
-        // setter-side GPU-touch crash class; see
-        // feedback_vulkan_pre_first_render_setters.md). ensureHybridResources
-        // consumes this flag every frame: lazily (re)allocates the HDR-mode
-        // scratch images ONLY while taaHdrInput_ is on (mirrors the
-        // occlusion-culling farthest-HiZ pyramid precedent — allocated only
-        // while its feature is enabled), then rewrites the affected
-        // descriptors, in that order, so no descriptor ever references a
-        // null image. A toggle therefore engages one frame later, same as
-        // enabling occlusion culling mid-run.
-        bool taaHdrPlumbingDirty_ = true;
 
         // Per-frame-slot gate for the raster descriptor's binding 3 — the
         // 2048-entry bindless material-texture array. Its contents are
@@ -2728,7 +2705,6 @@ namespace threepp {
             createFoamDetailImage_();// must run before descriptor writes (binding 45 + deferred 34)
             rewriteTaaDescriptors();// after ensureHybridResources gave us raster gbuf views
             rewriteBloomDescriptors();// bloom composite reads gbuf + writes the TAA input
-            taaHdrPlumbingDirty_ = false;// handled by the call just above (taaHdrInput_ defaults off)
             rewriteDeferredDescriptors();// raster-first deferred shade inputs
             gpuTimings_ = std::make_unique<vulkan::GpuTimings>(*ctx, kFramesInFlight);
             overlayPass_ = std::make_unique<vulkan::OverlayPass>(

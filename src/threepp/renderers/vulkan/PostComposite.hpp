@@ -26,16 +26,15 @@
 // change (UI-rate, not per-frame). Defaults = identity (flag off, LUT
 // never sampled).
 //
-// HDR-MODE INPUT (VulkanRendererCore::setTaaHdrInput): when the TAA resolve
-// runs BEFORE this pass (consuming linear HDR directly, see TaaResolve.cpp),
-// PostComposite's binding 0 instead reads the resolve's already-bloomed,
-// already-exposure-rescaled HDR history slot, and this pass runs at DISPLAY
-// resolution (not the render extent) doing ONLY exposure/WB/tonemap/grade/
-// sRGB — no second bloom add (the caller passes effBloomIntensity <= 0 in
-// this mode). The sky-mask source (rasterIdsTex) still lives at
-// RENDER resolution, so `srcWidth`/`srcHeight` (recordDispatch) tell the
-// shader how to scale its dispatch-space (display) texel index down to the
-// mask's native texel grid.
+// HDR-MODE INPUT (FSR/DLSS upscaler path): when an external upscaler (FSR 3.1
+// / DLSS) REPLACES the TAA resolve, it writes its upscaled linear-HDR output
+// into TaaResolve's history write slot; PostComposite's binding 6 reads that
+// slot (via the hdrMode push-constant flag), and this pass runs at DISPLAY
+// resolution (not the render extent) doing exposure/WB/tonemap/grade/sRGB +
+// the bloom add (the upscaler does not fold bloom in). The sky-mask source
+// (rasterIdsTex) still lives at RENDER resolution, so `srcWidth`/`srcHeight`
+// (recordDispatch) tell the shader how to scale its dispatch-space (display)
+// texel index down to the mask's native texel grid.
 //
 // HDR-MODE OUTPUT: this pass can't write the LDR mode's per-frame-in-flight
 // TAA-input image (that image is render-extent BGRA8; HDR mode's dispatch is

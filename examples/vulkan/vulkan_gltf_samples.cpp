@@ -97,7 +97,6 @@ int main(int argc, char** argv) {
     std::string sunPolicy; // --sunpolicy auto|always|off
     float dofFocus = 0.f;  // --dof S: thin-lens DoF focused at S meters (f/2 aperture)
     int optOccl = -1;      // --occl 0|1: two-phase GPU occlusion culling
-    int optTaaHdr = -1;    // --taa-hdr 0|1: setTaaHdrInput (deferred renderer only)
     int optLod = -1;       // --lod 0|1: automatic mesh LOD (shading-error triage)
     int optDlss = -1;      // --dlss 0|1: DLSS upscaler (0 falls back to FSR/TAA)
     int optFsr = -1;       // --fsr 0|1: FSR upscaler (--dlss 0 --fsr 0 = built-in TAA)
@@ -129,7 +128,6 @@ int main(int argc, char** argv) {
         else if (a == "--sunpolicy" && i + 1 < argc) sunPolicy = argv[++i];
         else if (a == "--dof" && i + 1 < argc) dofFocus = static_cast<float>(std::atof(argv[++i]));
         else if (a == "--occl" && i + 1 < argc) optOccl = std::atoi(argv[++i]);
-        else if (a == "--taa-hdr" && i + 1 < argc) optTaaHdr = std::atoi(argv[++i]);
         else if (a == "--lod" && i + 1 < argc) optLod = std::atoi(argv[++i]);
         else if (a == "--dlss" && i + 1 < argc) optDlss = std::atoi(argv[++i]);
         else if (a == "--fsr" && i + 1 < argc) optFsr = std::atoi(argv[++i]);
@@ -162,7 +160,6 @@ int main(int argc, char** argv) {
     else if (sunPolicy == "auto") renderer.setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Auto);
     if (optSunRad >= 0.f) renderer.setSunAngularRadius(optSunRad);
     if (optOccl >= 0) renderer.setOcclusionCulling(optOccl != 0);
-    if (optTaaHdr >= 0) renderer.setTaaHdrInput(optTaaHdr != 0);
     if (optLod >= 0) renderer.setAutoLod(optLod != 0);
     if (optDlss >= 0) renderer.setDlss(optDlss != 0);
     if (optFsr >= 0) renderer.setFsr(optFsr != 0);

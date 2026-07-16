@@ -6,18 +6,10 @@ void VulkanRendererCore::CoreImpl::rewriteTaaDescriptors() {
             std::array<VkImageView, kFramesInFlight> motionViews{};
             std::array<VkImageView, kFramesInFlight> idsViews{};
             std::array<VkImageView, kFramesInFlight> depthViews{};
-            std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
-            std::array<VkImageView, kFramesInFlight> bloomViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 motionViews[f]   = rasterGbufs[f].motion.view;
                 idsViews[f]      = rasterGbufs[f].ids.view;
                 depthViews[f]    = rasterGbufs[f].depth.view;
-                // HDR-mode-only sources (setTaaHdrInput) — harmlessly bound +
-                // unused when the toggle is off. bloom_ exists by the time
-                // this runs (constructed before the first rewriteTaaDescriptors
-                // call in both the ctor and resize paths).
-                sceneHdrViews[f] = bloom_->sceneHdrView(f);
-                bloomViews[f]    = bloom_->bloomView(f);
             }
             const auto& swapViews = ctx->swapchainImageViews();
             vulkan::TaaResolve::DescriptorWriteInputs in{};
@@ -26,30 +18,24 @@ void VulkanRendererCore::CoreImpl::rewriteTaaDescriptors() {
             in.gbufIdsPerFrame    = idsViews.data();
             in.gbufDepthPerFrame  = depthViews.data();
             in.swapchainViews     = swapViews.data();
-            in.sceneHdrPerFrame   = sceneHdrViews.data();
-            in.bloomPerFrame      = bloomViews.data();
             taa_->rewriteDescriptors(in);
         }
 
 void VulkanRendererCore::CoreImpl::rewriteBloomDescriptors() {
             bloom_->rewriteDescriptors();
-            // HDR-mode-only scratch images (TaaResolve::mblurOutHdr_ /
-            // PostComposite::hdrOut_) are VRAM-costing and only needed when
-            // setTaaHdrInput(true) is active — allocate them lazily, here,
-            // BEFORE the view-capture loop below reads their views, so a
-            // default-off run never allocates them (mirrors the occlusion-
-            // culling farthest-HiZ pyramid: allocated only while its feature
-            // is enabled). Once allocated they are left allocated if the
-            // toggle turns off (no churn) — see ensureHdrMblurImages /
-            // resizeHdrOutput's own idempotency for why repeat calls here
-            // are cheap.
-            // The FSR upscaler path (fsrActive_) reuses the HDR-mode
-            // PostComposite tonemap + recordPostFinalize, so it needs hdrOut_
-            // allocated too — but not the motion-blur HDR intermediate (FSR runs
-            // no McGuire blur). taaHdrInput_ needs both.
-            if (taaHdrInput_ || fsrActiveForHdrPlumbing()) {
+            // PostComposite's display-extent HDR output scratch (hdrOut_) is
+            // VRAM-costing and only needed when an external upscaler (FSR 3.1 /
+            // DLSS) is active — allocate it lazily, here, BEFORE the view-
+            // capture loop below reads its views, so a build without a created
+            // upscaler never allocates it (mirrors the occlusion-culling
+            // farthest-HiZ pyramid: allocated only while its feature is
+            // enabled). Once allocated it is left allocated (no churn) — see
+            // resizeHdrOutput's own idempotency for why repeat calls here are
+            // cheap. FSR/DLSS write their upscaled output into TaaResolve's
+            // history write slot, so PostComposite tonemaps it at display res
+            // and recordPostFinalize copies hdrOut_ to the swapchain.
+            if (fsrActiveForHdrPlumbing()) {
                 const VkExtent2D outExt = ctx->swapchainExtent();
-                if (taaHdrInput_) taa_->ensureHdrMblurImages(outExt.width, outExt.height);
                 post_->resizeHdrOutput(outExt.width, outExt.height);
             }
             std::array<VkImageView, kFramesInFlight> sceneViews{};
@@ -62,24 +48,12 @@ void VulkanRendererCore::CoreImpl::rewriteBloomDescriptors() {
                 bloomViews[f] = bloom_->bloomView(f);
                 idsViews[f]   = rasterGbufs[f].ids.view;
                 taaInViews[f] = taa_->inputView(f);
-                // HDR-mode-only (setTaaHdrInput): PostComposite's binding 6
-                // reads whichever history slot THIS frame-in-flight's
-                // TaaResolve::recordResolve call just wrote — or, when
-                // motion blur is active, the HDR motion-blur intermediate.
-                // motionBlurAmount_ is checked here (not per-frame) because
-                // this rewrite only runs on resize/toggle, same cadence as
-                // every other view capture in this function. Guarded on
-                // hdrMblurImagesValid() so this never reads mblurHdrView()
-                // before ensureHdrMblurImages has actually run for it (e.g.
-                // taaHdrInput_ is still false — the view is unused by the
-                // shader in that case anyway, but must stay non-null).
-                // FSR writes its upscaled output into the history write slot (it
-                // runs no McGuire motion blur), so force that selection when FSR
-                // is active regardless of setMotionBlur / the mblur intermediate.
-                hdrSceneViews[f] = (motionBlurAmount_ > 0.f && taa_->hdrMblurImagesValid()
-                                    && !fsrActiveForHdrPlumbing())
-                        ? taa_->mblurHdrView(f)
-                        : taa_->historyView(vulkan::TaaResolve::writeSlotFor(f));
+                // HDR-mode (FSR/DLSS upscaler path): PostComposite's binding 6
+                // reads whichever history slot THIS frame-in-flight's upscaler
+                // dispatch just wrote its upscaled linear-HDR output into (FSR/
+                // DLSS run no McGuire motion blur, so this is always the plain
+                // history write slot).
+                hdrSceneViews[f] = taa_->historyView(vulkan::TaaResolve::writeSlotFor(f));
             }
             vulkan::PostComposite::DescriptorWriteInputs in{};
             in.sceneHdrPerFrame  = sceneViews.data();
@@ -562,22 +536,6 @@ void VulkanRendererCore::CoreImpl::ensureHybridResources() {
                 }
                 occlHiz_->resize(renderExtent(), dv.data(), dvMS.data(),
                                  haveMS ? gbufMsaaSamples_ : 1u);
-            }
-
-            // HDR-mode-only scratch images (setTaaHdrInput): same "only
-            // allocated while the feature is on" shape as the occlusion
-            // pyramid above. taa_/bloom_/post_ don't exist yet on the very
-            // first (ctor-time) call to ensureHybridResources — guard on
-            // them. taaHdrPlumbingDirty_ starts true so the first real call
-            // (after ctor finishes constructing them) always runs this once;
-            // afterwards it only re-runs when setTaaHdrInput/setMotionBlur
-            // actually changed something relevant (avoids per-frame
-            // vkUpdateDescriptorSets churn in the steady state).
-            if (taaHdrPlumbingDirty_ && taa_ && bloom_ && post_) {
-                rewriteBloomDescriptors();// allocates lazily (gated on
-                                          // taaHdrInput_), then rewrites —
-                                          // see that function's ordering.
-                taaHdrPlumbingDirty_ = false;
             }
         }
 

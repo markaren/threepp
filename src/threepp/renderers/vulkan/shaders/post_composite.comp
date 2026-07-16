@@ -17,10 +17,11 @@
 // at exposure/preExposure (== 1.0 when pre-exposed, == exposure when not —
 // legacy mode passes preExposure = 1.0 and is numerically unchanged).
 //
-// HDR MODE (setTaaHdrInput, postFlags bit 3): the TAA resolve now runs
-// BEFORE this pass, so `color` comes from hdrSceneTex (binding 6 — the
-// resolve's already-bloomed, already-exposure-rescaled HDR history slot)
-// instead of sceneHdrTex+bloomTex, this dispatch runs at DISPLAY resolution,
+// HDR MODE (FSR/DLSS upscaler path, postFlags bit 3): an external upscaler
+// (FSR 3.1 / DLSS) replaces the TAA resolve and writes its upscaled linear-
+// HDR output into TaaResolve's history slot, so `color` comes from
+// hdrSceneTex (binding 6 — that upscaled history slot) plus the bloom add,
+// this dispatch runs at DISPLAY resolution,
 // and the result is written to hdrOutImg (binding 7) instead of outImage —
 // see PostComposite.hpp/.cpp for why (this class's descriptor sets are
 // frame-in-flight-, not swapchain-image-, indexed, so it can't write the
@@ -51,10 +52,10 @@ layout(set = 0, binding = 4) uniform sampler3D gradeLutTex;// 33³ rgba16f
 // The sky source for the solid-bg bypass below: the raster G-buffer ids
 // attachment (.x = instanceCustomIndex+1, 0 = sky).
 layout(set = 0, binding = 5) uniform usampler2D rasterIdsTex;
-// HDR-mode-only (harmlessly bound + unused otherwise): the TAA resolve's
-// output (binding 6, sampled — already bloomed + exposure-rescaled linear
-// HDR at DISPLAY extent) and this pass's HDR-mode output target (binding 7,
-// storage, bgra8 display extent — TaaResolve::mblurHdrView / hdrOut_).
+// HDR-mode-only (harmlessly bound + unused otherwise): the FSR/DLSS upscaler's
+// output (binding 6, sampled — upscaled linear HDR at DISPLAY extent, read
+// from TaaResolve's history slot) and this pass's HDR-mode output target
+// (binding 7, storage, bgra8 display extent — PostComposite::hdrOut_).
 layout(set = 0, binding = 6) uniform sampler2D hdrSceneTex;
 layout(set = 0, binding = 7) uniform writeonly image2D hdrOutImg;
 
@@ -67,7 +68,7 @@ layout(push_constant) uniform Pc {
     uint height;
     uint postFlags;          // bit 0 = white balance active, bit 1 = grade LUT active,
                              // bit 2 retired (was: PT-era gbuf sky source select),
-                             // bit 3 = HDR mode (setTaaHdrInput)
+                             // bit 3 = HDR mode (FSR/DLSS upscaler path)
     uint preExposureBits;    // float-bits: exposure already baked into sceneHdr (1.0 = none)
     vec4 wbRow0;             // white-balance mat3 rows (linear sRGB → linear sRGB),
     vec4 wbRow1;             // Bradford CAT scene-illuminant → D65. .w unused.

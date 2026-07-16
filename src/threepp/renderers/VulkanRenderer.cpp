@@ -1225,45 +1225,11 @@ namespace threepp {
         auto* c = core();
         const float clamped = std::clamp(shutterFraction, 0.f, 1.f);
         if (c->motionBlurAmount_ == clamped) return;
-        const bool wasActive = c->motionBlurAmount_ > 0.f;
         c->motionBlurAmount_ = clamped;
-        // In HDR-input mode, PostComposite's HDR-scene binding must switch
-        // between the plain history slot and the motion-blur intermediate
-        // (see rewriteBloomDescriptors' hdrSceneViews) depending on whether
-        // blur is active. Don't touch GPU resources here (setter-side
-        // allocation/descriptor writes are the pre-first-render crash class
-        // — see feedback_vulkan_pre_first_render_setters.md); just flag it
-        // dirty and let the next frame's ensureHybridResources (which also
-        // owns the HDR-mode lazy allocation) pick it up and rewrite.
-        if (c->taaHdrInput_ && wasActive != (clamped > 0.f)) {
-            c->taaHdrPlumbingDirty_ = true;
-        }
     }
 
     float VulkanRendererCore::motionBlur() const {
         return core()->motionBlurAmount_;
-    }
-
-    void VulkanRendererCore::setTaaHdrInput(bool enabled) {
-        auto* c = core();
-        if (c->taaHdrInput_ == enabled) return;
-        c->taaHdrInput_ = enabled;
-        // Switching domains mid-run would blend history written in one
-        // colour space against neighbourhood stats computed in the other —
-        // drop it (alpha=1 on the next resolve) exactly like a resize.
-        // invalidateHistory is a cheap flag flip (no GPU work), safe here.
-        if (c->taa_) c->taa_->invalidateHistory();
-        // The HDR-mode-only scratch images (TaaResolve::mblurOutHdr_ /
-        // PostComposite::hdrOut_) are allocated lazily and their descriptors
-        // rewritten by ensureHybridResources on the NEXT frame — never
-        // synchronously here. Enabling before the first render or mid-run
-        // both land in the same deferred path, so the toggle engages one
-        // frame later (mirrors setOcclusionCulling's farthest-HiZ pyramid).
-        c->taaHdrPlumbingDirty_ = true;
-    }
-
-    bool VulkanRendererCore::taaHdrInput() const {
-        return core()->taaHdrInput_;
     }
 
     void VulkanRendererCore::setPhysicalCamera(bool enabled) {

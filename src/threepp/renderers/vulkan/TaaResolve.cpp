@@ -21,7 +21,6 @@ namespace threepp::vulkan {
         inputImagesPP_.resize(framesInFlight_);
         tileMax_.resize(framesInFlight_);
         mblurOut_.resize(framesInFlight_);
-        mblurOutHdr_.resize(framesInFlight_);
         createPipeline();
         createDescriptorPool();
     }
@@ -50,7 +49,6 @@ namespace threepp::vulkan {
         for (auto& img : historyImagesPP_) destroyImage2D(ctx_.allocator(), d, img);
         for (auto& img : tileMax_)         destroyImage2D(ctx_.allocator(), d, img);
         for (auto& img : mblurOut_)        destroyImage2D(ctx_.allocator(), d, img);
-        for (auto& img : mblurOutHdr_)     destroyImage2D(ctx_.allocator(), d, img);
         historyValid_ = false;
     }
 
@@ -171,33 +169,6 @@ namespace threepp::vulkan {
             img = createStorageSampledImage(outWidth, outHeight,
                                             VK_FORMAT_B8G8R8A8_UNORM,
                                             "vmaCreateImage(taa.mblurOut)");
-        // mblurOutHdr_ (HDR-mode-only) is NOT allocated here — it is
-        // VRAM-costing and only needed when setTaaHdrInput(true) is active.
-        // destroyImages() above already freed any previous allocation (e.g.
-        // on resize); the caller is responsible for calling
-        // ensureHdrMblurImages afterwards if HDR mode is on, mirroring the
-        // occlusion-culling farthest-HiZ pyramid precedent (allocated
-        // lazily, only while its feature is enabled).
-    }
-
-    void TaaResolve::ensureHdrMblurImages(uint32_t outWidth, uint32_t outHeight) {
-        // Idempotent: skip if already allocated at this exact size (the
-        // steady-state case — called every frame while HDR mode is on).
-        if (!mblurOutHdr_.empty() &&
-            mblurOutHdr_[0].view != VK_NULL_HANDLE &&
-            mblurOutHdr_[0].width == outWidth && mblurOutHdr_[0].height == outHeight) {
-            return;
-        }
-        VkDevice d = ctx_.device();
-        for (auto& img : mblurOutHdr_) destroyImage2D(ctx_.allocator(), d, img);
-        // HDR-mode motion-blur intermediate: same role as mblurOut_ (the
-        // blur can't write back into the history slot it reads — read/write
-        // race across threads) but RGBA16F linear, since HDR mode's history
-        // holds linear HDR, not display-referred colour.
-        for (auto& img : mblurOutHdr_)
-            img = createStorageSampledImage(outWidth, outHeight,
-                                            VK_FORMAT_R16G16B16A16_SFLOAT,
-                                            "vmaCreateImage(taa.mblurOutHdr)");
     }
 
     void TaaResolve::createPipeline() {
@@ -219,14 +190,12 @@ namespace threepp::vulkan {
             check(vkCreateSampler(ctx_.device(), &sci, nullptr, &sampler_),
                   "vkCreateSampler(taa)");
         }
-        // Descriptor set layout — 10 bindings:
+        // Descriptor set layout — 8 bindings:
         //   0..2: combined image samplers — taaInput, historyRead, gbufMotion
         //   3..4: storage images          — swapOut, historyWrite
         //   5..6: combined image samplers — gbufIds (curr + prev)
         //   7:    combined image sampler  — prev-frame depth
-        //   8..9: combined image samplers — HDR-mode-only: sceneHdr, bloom
-        //         level 0 (setTaaHdrInput; harmlessly unused otherwise)
-        VkDescriptorSetLayoutBinding bindings[10]{};
+        VkDescriptorSetLayoutBinding bindings[8]{};
         for (int i = 0; i < 3; ++i) {
             bindings[i].binding         = i;
             bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -254,18 +223,10 @@ namespace threepp::vulkan {
         bindings[7].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[7].descriptorCount = 1;
         bindings[7].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-        bindings[8].binding         = 8;
-        bindings[8].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[8].descriptorCount = 1;
-        bindings[8].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-        bindings[9].binding         = 9;
-        bindings[9].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[9].descriptorCount = 1;
-        bindings[9].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 10;
+        dlci.bindingCount = 8;
         dlci.pBindings    = bindings;
         check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(taa)");
@@ -457,19 +418,19 @@ namespace threepp::vulkan {
     void TaaResolve::createDescriptorPool() {
         const uint32_t totalSets = imageCount_ * framesInFlight_;
         VkDescriptorPoolSize sizes[2]{};
-        // Main resolve set: 8 sampled (6 base + 2 HDR-mode sceneHdr/bloom) + 2
-        // storage. RCAS set: 1 sampled + 1 storage (× 2 families: history-slot
-        // RCAS + HDR-mode postFinalize RCAS). Motion blur: tilemax (1+1) +
-        // mblur→out (3+1) + mblur→outHdr (3+1) per frame, mblur→swap (3+1) +
-        // rcas-from-mblur (1+1) per frame×image. All families share this pool.
+        // Main resolve set: 6 sampled + 2 storage. RCAS set: 1 sampled + 1
+        // storage (× 2 families: history-slot RCAS + FSR/DLSS postFinalize
+        // RCAS). Motion blur: tilemax (1+1) + mblur→out (3+1) per frame,
+        // mblur→swap (3+1) + rcas-from-mblur (1+1) per frame×image. All
+        // families share this pool.
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = totalSets * (8 + 1 + 3 + 1 + 1) + framesInFlight_ * (1 + 3 + 3);
+        sizes[0].descriptorCount = totalSets * (6 + 1 + 3 + 1 + 1) + framesInFlight_ * (1 + 3);
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[1].descriptorCount = totalSets * (2 + 1 + 1 + 1 + 1) + framesInFlight_ * (1 + 1 + 1);
+        sizes[1].descriptorCount = totalSets * (2 + 1 + 1 + 1 + 1) + framesInFlight_ * (1 + 1);
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = totalSets * 5 + framesInFlight_ * 3;// main + rcas + mblurSwap + rcasMb + postFinalizeRcas + tilemax + mblurOut + mblurOutHdr
+        dpci.maxSets       = totalSets * 5 + framesInFlight_ * 2;// main + rcas + mblurSwap + rcasMb + postFinalizeRcas + tilemax + mblurOut
         dpci.poolSizeCount = 2;
         dpci.pPoolSizes    = sizes;
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
@@ -492,7 +453,6 @@ namespace threepp::vulkan {
         allocSets(mblurDsLayout_, totalSets,       mblurSwapSets_, "vkAllocateDescriptorSets(mblur.swap)");
         allocSets(mblurDsLayout_, framesInFlight_, mblurOutSets_,  "vkAllocateDescriptorSets(mblur.out)");
         allocSets(rcasDsLayout_,  totalSets,       rcasMbSets_,    "vkAllocateDescriptorSets(rcas.mblur)");
-        allocSets(mblurDsLayout_, framesInFlight_, mblurOutHdrSets_, "vkAllocateDescriptorSets(mblur.outHdr)");
         allocSets(rcasDsLayout_,  totalSets,       postFinalizeRcasSets_, "vkAllocateDescriptorSets(rcas.postFinalize)");
     }
 
@@ -552,23 +512,8 @@ namespace threepp::vulkan {
                                              ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
                                              : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-                // Bindings 8/9: HDR-mode-only sceneHdr + bloom level 0. Fall
-                // back to the LDR input view when the caller didn't supply
-                // them (keeps the descriptor valid; hdrMode being false means
-                // the shader never samples these anyway).
-                VkDescriptorImageInfo sceneHdrI{};
-                sceneHdrI.sampler     = sampler_;
-                sceneHdrI.imageView   = inputs.sceneHdrPerFrame ? inputs.sceneHdrPerFrame[f]
-                                                                 : inputImagesPP_[f].view;
-                sceneHdrI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                VkDescriptorImageInfo bloomI{};
-                bloomI.sampler     = sampler_;
-                bloomI.imageView   = inputs.bloomPerFrame ? inputs.bloomPerFrame[f]
-                                                           : inputImagesPP_[f].view;
-                bloomI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-                VkWriteDescriptorSet w[10]{};
-                for (int b = 0; b < 10; ++b) {
+                VkWriteDescriptorSet w[8]{};
+                for (int b = 0; b < 8; ++b) {
                     w[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                     w[b].dstSet          = descSets_[idx];
                     w[b].dstBinding      = static_cast<uint32_t>(b);
@@ -590,11 +535,7 @@ namespace threepp::vulkan {
                 w[6].pImageInfo = &idsPrevI;
                 w[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w[7].pImageInfo = &depthPrevI;
-                w[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                w[8].pImageInfo = &sceneHdrI;
-                w[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                w[9].pImageInfo = &bloomI;
-                vkUpdateDescriptorSets(ctx_.device(), 10, w, 0, nullptr);
+                vkUpdateDescriptorSets(ctx_.device(), 8, w, 0, nullptr);
 
                 // RCAS set: this frame's resolved output lives in the history
                 // WRITE slot (writeSlot) → sample it, sharpen, write swapchain.
@@ -715,36 +656,6 @@ namespace threepp::vulkan {
                 mw[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 mw[3].pImageInfo     = &mbOutWriteI;
                 vkUpdateDescriptorSets(ctx_.device(), 4, mw, 0, nullptr);
-
-                // HDR-mode variant: same history/motion/tileMax inputs, but
-                // writes mblurOutHdr_ (rgba16f) instead of mblurOut_ (bgra8) —
-                // PostComposite reads this in HDR mode when motion blur ran.
-                // mblurOutHdr_ is allocated lazily (ensureHdrMblurImages,
-                // only while setTaaHdrInput(true) is active) — fall back to
-                // mblurOut_'s (always-valid) view when it hasn't been
-                // allocated yet, so this descriptor set is never left
-                // pointing at a null image. Harmless: the shader only reads/
-                // writes this set's storage image when hdrMode is true,
-                // which the caller (VulkanCoreImpl.hpp) only sets after
-                // ensureHdrMblurImages has run.
-                VkDescriptorImageInfo mbOutHdrWriteI{};
-                mbOutHdrWriteI.imageView   = mblurOutHdr_[f].view != VK_NULL_HANDLE
-                        ? mblurOutHdr_[f].view : mblurOut_[f].view;
-                mbOutHdrWriteI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                VkWriteDescriptorSet hw[4]{};
-                for (int b = 0; b < 4; ++b) {
-                    hw[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    hw[b].dstSet          = mblurOutHdrSets_[f];
-                    hw[b].dstBinding      = static_cast<uint32_t>(b);
-                    hw[b].descriptorCount = 1;
-                    hw[b].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                }
-                hw[0].pImageInfo     = &mbColorI;
-                hw[1].pImageInfo     = &motionI;
-                hw[2].pImageInfo     = &mbTileI;
-                hw[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                hw[3].pImageInfo     = &mbOutHdrWriteI;
-                vkUpdateDescriptorSets(ctx_.device(), 4, hw, 0, nullptr);
             }
         }
     }
@@ -769,9 +680,6 @@ namespace threepp::vulkan {
                                    uint32_t physOutH,
                                    const float* depthLin,
                                    float mblurShutter,
-                                   bool hdrMode,
-                                   float bloomIntensity,
-                                   float exposureRatio,
                                    float jitterTexX,
                                    float jitterTexY) {
         // Physical (full texture) sizes default to the region sizes → scale 1.
@@ -779,10 +687,7 @@ namespace threepp::vulkan {
         if (physInH == 0)  physInH  = inHeight;
         if (physOutW == 0) physOutW = outWidth;
         if (physOutH == 0) physOutH = outHeight;
-        // RCAS is display-referred by design (its adaptive-sharpen weighting
-        // assumes a post-tonemap [0,1]-ish signal) — HDR mode always runs it
-        // downstream of PostComposite instead, never in here.
-        const bool sharpenHere = sharpen && !hdrMode;
+        const bool sharpenHere = sharpen;
         // Motion blur is full-frame only: split-screen panes (offset stores /
         // region-sized content in full-size textures) skip it silently.
         const bool mblur = mblurShutter > 0.f &&
@@ -791,10 +696,7 @@ namespace threepp::vulkan {
                            tileMax_[frame].view != VK_NULL_HANDLE;
         // Barrier: taaInput write → read; both history slots covered (RAW
         // hazard on the read slot, WAW on the write slot we're about to
-        // overwrite this frame). HDR mode reads sceneHdr + bloom (compute
-        // writes from the shade/resolve + bloom pyramid) instead of the
-        // LDR input image — cover both so this barrier is correct either way
-        // (the unused source costs nothing extra to include).
+        // overwrite this frame).
         std::array<VkImageMemoryBarrier2, 3> pre{};
         for (auto& b : pre) {
             b.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -837,25 +739,17 @@ namespace threepp::vulkan {
         // input w/h (the render extent the samples were traced at).
         // Layout mirrors the shader's std430 push block: 7 scalars, 4 bytes
         // of pad, then the column-major mat4 at offset 32. physIn/physOut are
-        // each packed into ONE uint (w|h<<16, like dstOffset) to free two
-        // slots at offset 96-104 for bloomIntensity/exposureRatio — the
-        // 128-byte push-constant budget (the cross-vendor guaranteed
-        // minimum) was already fully used before HDR mode needed these two
-        // new floats.
-        //
-        // HDR mode: this pass ALWAYS ends at the history write (never the
-        // swapchain, regardless of sharpen/mblur) — PostComposite becomes
-        // the next reader of the history-write slot, exactly like a
-        // downstream RCAS already does in LDR mode.
+        // each packed into ONE uint (w|h<<16, like dstOffset). Offsets 104/108
+        // are reserved padding (the shader's PC block keeps two float slots
+        // there so depthLin stays 16-byte-aligned at offset 112) — left zero.
         float pc[32] = {};
         std::memcpy(&pc[0], &alphaBits, 4);
         const uint32_t dims[4] = {outWidth, outHeight, inWidth, inHeight};
         std::memcpy(&pc[1], dims, 16);
         // bit0 = writeSwap (this pass writes the swapchain directly — only
-        // when nothing downstream needs the history/swap split); bit1 =
-        // hdrMode (shader-side domain switch: companded YCoCg + bloom add).
-        const uint32_t writeSwapBit = (sharpenHere || mblur || hdrMode) ? 0u : 1u;
-        const uint32_t flags = writeSwapBit | (hdrMode ? 2u : 0u);
+        // when nothing downstream needs the history/swap split).
+        const uint32_t writeSwapBit = (sharpenHere || mblur) ? 0u : 1u;
+        const uint32_t flags = writeSwapBit;
         std::memcpy(&pc[5], &flags, 4);
         pc[6] = dtFrames;
         const uint32_t packedDst = (dstX & 0xFFFFu) | (dstY << 16);
@@ -873,11 +767,6 @@ namespace threepp::vulkan {
         const uint32_t packedPhysOut = (physOutW & 0xFFFFu) | (physOutH << 16);
         std::memcpy(&pc[24], &packedPhysIn,  4);// offset 96
         std::memcpy(&pc[25], &packedPhysOut, 4);// offset 100
-        uint32_t bloomBits, expRatioBits;
-        std::memcpy(&bloomBits,    &bloomIntensity, 4);
-        std::memcpy(&expRatioBits, &exposureRatio,  4);
-        std::memcpy(&pc[26], &bloomBits,    4);// offset 104: HDR-mode bloom add amount (<=0 = off)
-        std::memcpy(&pc[27], &expRatioBits, 4);// offset 108: HDR-mode history exposure rescale
         // offset 112: reverse-Z viewZ linearization (A,B,C,D) for depth
         // disocclusion. Null ⇒ leave zero ⇒ shader disables the gate.
         if (depthLin) std::memcpy(&pc[28], depthLin, 16);
@@ -928,15 +817,12 @@ namespace threepp::vulkan {
             computeBarrier();
 
             // Reconstruction: gathers the resolved frame along the tile
-            // neighborhood's dominant velocity. HDR mode always writes
-            // mblurOutHdr_ (PostComposite reads it next; never the
-            // swapchain). LDR mode writes the swapchain, or the pre-sharpen
-            // intermediate when RCAS runs after us.
+            // neighborhood's dominant velocity. Writes the swapchain, or the
+            // pre-sharpen intermediate when RCAS runs after us.
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, mblurPipe_);
             const VkDescriptorSet* mblurTargetSet =
-                    hdrMode        ? &mblurOutHdrSets_[frame]
-                    : sharpenHere ? &mblurOutSets_[frame]
-                                  : &mblurSwapSets_[descIdx];
+                    sharpenHere ? &mblurOutSets_[frame]
+                                : &mblurSwapSets_[descIdx];
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                     mblurPipeLayout_, 0, 1,
                                     mblurTargetSet, 0, nullptr);
@@ -953,8 +839,7 @@ namespace threepp::vulkan {
         if (sharpenHere) {
             // Make the upstream write (resolve's history slot, or the motion
             // blur's intermediate) visible, then RCAS-sharpen it into the
-            // swapchain. Never reached in HDR mode (sharpenHere is false
-            // there) — RCAS runs downstream of PostComposite instead.
+            // swapchain.
             computeBarrier();
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, rcasPipe_);
@@ -991,12 +876,12 @@ namespace threepp::vulkan {
                 VkDescriptorImageInfo srcI{};
                 srcI.sampler     = sampler_;
                 // hdrOutPerFrame[f] is VK_NULL_HANDLE when PostComposite's
-                // HDR-mode output scratch hasn't been allocated yet (HDR
-                // mode never enabled — the common case). Fall back to a TAA
+                // HDR-mode output scratch hasn't been allocated yet (no FSR/
+                // DLSS upscaler active — the common case). Fall back to a TAA
                 // history view so the descriptor never holds a genuinely
                 // null image view; harmless, since recordPostFinalize (the
-                // only reader of this set) is never called while HDR mode
-                // is off. NOT the swapchain view: this is a SAMPLED binding
+                // only reader of this set) is never called without an active
+                // upscaler. NOT the swapchain view: this is a SAMPLED binding
                 // and the swapchain lacks SAMPLED usage — even an unread
                 // descriptor write must reference a usage-compatible view
                 // (VUID-VkWriteDescriptorSet-descriptorType-00337).

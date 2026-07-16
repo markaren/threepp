@@ -325,9 +325,8 @@ void VulkanRendererCore::CoreImpl::reallocateRenderExtentResources() {
             // just rewrite them to the new image / view handles.
             rewriteTaaDescriptors();
             rewriteBloomDescriptors();// gbuf + TAA-input views changed (also
-                                      // covers the HDR-mode lazy alloc — see
-                                      // its own taaHdrInput_ gate)
-            taaHdrPlumbingDirty_ = false;// handled by the call just above
+                                      // covers the FSR/DLSS hdrOut_ plumbing —
+                                      // gated on fsrActiveForHdrPlumbing())
             rewriteDeferredDescriptors();// raster gbuf + sceneHdr views changed
         }
 
