@@ -1,8 +1,9 @@
 # geodata — Norwegian region packs for threepp
 
 `fetch_norway_terrain.py` builds a **region pack** from live Norwegian open
-geodata: national DTM elevation (Kartverket) + the road network (NVDB). The
-C++ engine consumes the pack; this tool is the preprocessor.
+geodata: national DTM elevation (Kartverket) + the road network (NVDB) +
+optionally buildings (OSM footprints, lidar-measured heights). The C++
+engine consumes the pack; this tool is the preprocessor.
 
 ## Install
 
@@ -32,11 +33,13 @@ python fetch_norway_terrain.py --center 62.4482,7.6714 --size 8000 --res 2 --nam
 | `--out` | `C:\dev\threepp\geodata` | output root |
 | `--include-paths` | off | also emit foot/bike paths (Gangveg, Gang- og sykkelveg, Gågate) |
 | `--no-roads` | off | skip the NVDB fetch |
-| `--preview` | off | render `preview.png` (hillshade + roads) |
+| `--buildings` | off | fetch OSM building footprints + DOM nDSM heights |
+| `--preview` | off | render `preview.png` (hillshade + roads + building outlines) |
 
 Output lands in `<out>/<name>/` as `region.json`, `heights.f32`, `roads.json`
-(+ `preview.png` with `--preview`). The output format is the **frozen C++
-contract** — see the tool docstring / the spec; do not change it here.
+(+ `buildings.json` with `--buildings`, `preview.png` with `--preview`). The
+output format is the **frozen C++ contract** — see the tool docstring / the
+spec; do not change it here.
 
 `verify_pack.py <pack_dir>` cross-checks the pack (see Verification below).
 
@@ -107,11 +110,48 @@ Quirks / decisions:
   are clipped to the region AABB (split where they exit/re-enter), dropped if
   <30 m, Douglas–Peucker simplified at 0.5 m, coords rounded to 2 decimals.
 
+### Buildings — OSM footprints + Kartverket DOM heights (`--buildings`)
+
+Footprints from **Overpass** (`way["building"]` + `relation["building"]` with
+`out geom;`, WGS84 bbox over the region corners). License ODbL,
+© OpenStreetMap contributors. Norwegian OSM buildings are largely a cadastre
+(Matrikkelen) import, so coverage is good: central Ålesund ≈ complete.
+
+Heights are **measured, not guessed**: the Kartverket national **DOM**
+(surface model, same WCS family/request form as the DTM — endpoint
+`wcs.hoyde-dom-nhm-25833`, coverage `nhm_dom_topo_25833`, verified live
+2026-07-17) is fetched over the node window covering the footprints, and
+`nDSM = DOM − DTM`. Per building, height = p90 of the nDSM inside the
+footprint. Priority: OSM `height` tag → nDSM (≥3 nodes inside, p90 ≥ 2 m,
+else the lidar predates the building) → `building:levels` × 3 m → per-type
+default. Measured mix (Ålesund 8 km): **7869 ndsm / 29 tag / 4 levels /
+363 default** of 8265.
+
+Quirks / decisions:
+- Multipolygon relations: member ways are chained into rings by shared
+  endpoints; multiple outer rings become separate entries (`r<id>.<n>`) with
+  holes assigned by point-in-ring containment.
+- Kept if the footprint **centroid** is inside the region AABB and area
+  ≥ 10 m²; outer rings normalized to **positive shoelace area in (x,z)**,
+  holes negative; rings stored OPEN (first point not repeated).
+- Contract: **roof top = groundMin + height** (`groundMin`/`groundMax` = DTM
+  min/max under the footprint). For tag/levels/default sources the ground
+  relief is folded into `height`; the nDSM p90 already measures from
+  near-groundMin on slopes.
+- Heights clamped to [2.5, 150] m.
+- Real OSM appearance tags pass through when present (`colour`, `roofColour`,
+  `roofShape` from `building:colour` / `roof:colour` / `roof:shape`) — rare
+  (~0.1% in Ålesund) but they override the consumer's hashed palette.
+
 ## Verification
 
 `verify_pack.py` samples the DTM (bilinear) at each road vertex's local (x,z)
 and compares to the road's own NVDB z-height. This is the **orientation
-proof**: a wrong row order or z-sign makes the two disagree badly.
+proof**: a wrong row order or z-sign makes the two disagree badly. With
+buildings present it repeats the proof against each building's stored
+`groundMin/Max` at the footprint centroid (measured 2026-07-17: Ålesund
+median |Δg| **0.12 m** as-is vs 18.05 m z-flipped; trollstigen 0.07 m vs
+376.95 m) and sanity-checks bounds / height stats.
 
 Measured (2026-07-15):
 
@@ -139,3 +179,12 @@ Pack sizes: `heights.f32` = 64,032,004 bytes (4001² × 4); `roads.json`
   or Z-test roads against terrain, expect legitimate vertical offsets there.
 - `region.json.originEasting/Northing` is the UTM33 (EPSG:25833) coordinate of
   the local origin, for georeferencing back to real-world / other layers.
+- `buildings.json` entries extrude straight up: walls from `groundMin`
+  (sink slightly below for slope embedding) to the flat roof at
+  `groundMin + height`. `GeoTerrainPack` parses the file when present;
+  `terrain::buildGeoBuildingMeshes` (GeoBuildings.hpp) turns it into batched
+  vertex-coloured chunk meshes with procedural facades (FacadeTexture.hpp):
+  wall UVs snapped to (window-bay, floor) units so window grids always come
+  out complete, glass panes glossy for env/sun reflections, utility types
+  windowless. `GeoBuildingsOptions::seed` re-rolls all hashed facades
+  (domain randomization); real `colour`/`roofColour` tags override the hash.

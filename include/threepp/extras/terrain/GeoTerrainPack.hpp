@@ -16,9 +16,17 @@
 //   <pack>/roads.json    { version, roads:[ { id, category, typeVeg, width,
 //                        points:[[x,y,z],...] } ] } — points already in local
 //                        world coords, y = road height (metres).
+//   <pack>/buildings.json (optional) { version, buildings:[ { id, type,
+//                        height, heightSource, groundMin, groundMax, levels?,
+//                        outer:[[x,z],...], holes?:[[[x,z],...],...] } ] } —
+//                        extruded-footprint buildings. Rings are OPEN (first
+//                        point not repeated), outer wound to POSITIVE shoelace
+//                        area in (x,z), holes negative. Roof top sits at
+//                        groundMin + height (slope relief already folded in).
 //
 // region.json fields: version, name, crs, originEasting, originNorthing,
-// worldSize, dim, heightMin, heightMax, seaLevel, heights, roads, attribution.
+// worldSize, dim, heightMin, heightMax, seaLevel, heights, roads, attribution,
+// buildings (optional).
 //
 // load() reads all three files, validates that heights.f32 is exactly
 // dim*dim*4 bytes, and returns a fully-populated GeoTerrainPack (a HeightGrid
@@ -31,6 +39,7 @@
 #define THREEPP_EXTRAS_TERRAIN_GEOTERRAINPACK_HPP
 
 #include "threepp/extras/terrain/TerrainTiles.hpp"// terrain::HeightGrid
+#include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 
 #include <string>
@@ -46,6 +55,25 @@ namespace threepp::terrain {
         std::string typeVeg;       // NVDB road-type label/code (informational)
         float width = 6.f;         // total carriageway width (m)
         std::vector<Vector3> points;// centerline, local world coords, y = height
+    };
+
+    // One building footprint from the pack (OSM-sourced). Rings are OPEN
+    // (first point not repeated) in local world metres; Vector2 = (x, z).
+    // Extrusion contract: walls rise from groundMin (sink slightly below for
+    // slope embedding) to the flat roof at groundMin + height.
+    struct GeoBuilding {
+        std::string id;          // OSM element ("w<id>" way / "r<id>" relation)
+        std::string type;        // OSM building=* value ("house", "garage", ...)
+        float height = 6.f;      // roof top above groundMin (m)
+        float groundMin = 0.f;   // DTM min under the footprint (m)
+        float groundMax = 0.f;   // DTM max under the footprint (m)
+        float levels = 0.f;      // OSM building:levels (0 = unknown)
+        std::string heightSource;// "tag" | "ndsm" | "levels" | "default"
+        std::string colour;      // OSM building:colour (rare; empty = none)
+        std::string roofColour;  // OSM roof:colour (rare; empty = none)
+        std::string roofShape;   // OSM roof:shape (rare; empty = none)
+        std::vector<Vector2> outer;              // footprint, +shoelace in (x,z)
+        std::vector<std::vector<Vector2>> holes; // courtyards, -shoelace
     };
 
     // Region metadata mirroring region.json (minus the file references). Kept
@@ -65,11 +93,12 @@ namespace threepp::terrain {
         std::string attribution;     // data licence / credit to print
     };
 
-    // A loaded region pack: elevation grid + roads + metadata.
+    // A loaded region pack: elevation grid + roads + buildings + metadata.
     struct GeoTerrainPack {
         GeoRegion region;
         HeightGrid grid;             // dim×dim, centred at origin, worldSize wide
         std::vector<GeoRoad> roads;
+        std::vector<GeoBuilding> buildings;// empty if the pack has none
 
         [[nodiscard]] bool valid() const { return region.dim >= 4 && grid.valid(); }
 

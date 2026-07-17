@@ -133,6 +133,51 @@ namespace threepp::terrain {
             }
         }
 
+        // ── buildings.json (optional) ────────────────────────────────────────
+        const std::string bldName = rj.value("buildings", std::string("buildings.json"));
+        const fs::path bldPath = packDir / bldName;
+        if (fs::exists(bldPath)) {
+            const nlohmann::json bldDoc = parseJsonFile(bldPath);
+            const auto itBlds = bldDoc.find("buildings");
+            if (itBlds != bldDoc.end() && itBlds->is_array()) {
+                const auto parseRing = [](const nlohmann::json& arr) {
+                    std::vector<Vector2> ring;
+                    ring.reserve(arr.size());
+                    for (const auto& p : arr) {
+                        if (!p.is_array() || p.size() < 2) continue;
+                        ring.emplace_back(p[0].get<float>(), p[1].get<float>());
+                    }
+                    return ring;
+                };
+                for (const auto& bd : *itBlds) {
+                    if (!bd.is_object()) continue;
+                    GeoBuilding b;
+                    b.id = bd.value("id", std::string{});
+                    b.type = bd.value("type", std::string{});
+                    b.height = bd.value("height", 6.f);
+                    b.groundMin = bd.value("groundMin", 0.f);
+                    b.groundMax = bd.value("groundMax", 0.f);
+                    b.levels = bd.value("levels", 0.f);
+                    b.heightSource = bd.value("heightSource", std::string{});
+                    b.colour = bd.value("colour", std::string{});
+                    b.roofColour = bd.value("roofColour", std::string{});
+                    b.roofShape = bd.value("roofShape", std::string{});
+                    const auto itOuter = bd.find("outer");
+                    if (itOuter == bd.end() || !itOuter->is_array()) continue;
+                    b.outer = parseRing(*itOuter);
+                    if (b.outer.size() < 3) continue;// a footprint needs a polygon
+                    if (auto itHoles = bd.find("holes"); itHoles != bd.end() && itHoles->is_array()) {
+                        for (const auto& h : *itHoles) {
+                            if (!h.is_array()) continue;
+                            auto ring = parseRing(h);
+                            if (ring.size() >= 3) b.holes.push_back(std::move(ring));
+                        }
+                    }
+                    pack.buildings.push_back(std::move(b));
+                }
+            }
+        }
+
         return pack;
     }
 

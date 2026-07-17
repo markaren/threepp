@@ -9,15 +9,16 @@ Generate them locally before running the examples.
 
 The preprocessor lives in [`scripts/geodata`](../scripts/geodata) and fetches
 live Norwegian open data: national DTM elevation (Kartverket) + the road network
-(NVDB). See [`scripts/geodata/README.md`](../scripts/geodata/README.md) for full
-options.
+(NVDB) + optionally buildings (OSM footprints, heights measured from the
+Kartverket DOM surface model). See
+[`scripts/geodata/README.md`](../scripts/geodata/README.md) for full options.
 
 ```
 pip install requests numpy tifffile pyproj      # matplotlib optional (PNG preview)
 
 cd scripts/geodata
-python fetch_norway_terrain.py --preset trollstigen     # the Fv63 hairpins (driving showcase)
-python fetch_norway_terrain.py --preset aalesund        # coastal archipelago (sea/nodata path)
+python fetch_norway_terrain.py --preset trollstigen --buildings   # the Fv63 hairpins (driving showcase)
+python fetch_norway_terrain.py --preset aalesund --buildings      # coastal town (sea path, ~8k buildings)
 ```
 
 Each run writes `geodata/<name>/` containing:
@@ -27,7 +28,8 @@ Each run writes `geodata/<name>/` containing:
 | `region.json` | metadata: origin (EPSG:25833), `worldSize`, `dim`, height range, sea level, attribution |
 | `heights.f32`  | raw little-endian float32 DEM, `dim×dim`, row-major (`iz*dim+ix`) |
 | `roads.json`   | road polylines in local world coords, with category + width |
-| `preview.png`  | hillshade + roads overview (only with `--preview`) |
+| `buildings.json` | extruded-footprint buildings (only with `--buildings`) |
+| `preview.png`  | hillshade + roads + building outlines (only with `--preview`) |
 
 Coordinates are threepp-native: Y-up metres, terrain centred on the origin,
 world x = east, z = −north.
@@ -47,7 +49,10 @@ norway_drive   [<pack-dir>]      # PhysX driving demo
 
 Generated packs embed an attribution string. The source data is:
 
-- **Elevation** — © Kartverket, [høydedata.no](https://hoydedata.no), CC BY 4.0.
+- **Elevation** — © Kartverket, [høydedata.no](https://hoydedata.no), CC BY 4.0
+  (DTM for the terrain; DOM for measured building heights).
 - **Roads** — © Statens vegvesen, [NVDB](https://nvdb.no), NLOD.
+- **Buildings** — © [OpenStreetMap](https://www.openstreetmap.org/copyright)
+  contributors, ODbL (only in packs fetched with `--buildings`).
 
 Respect those licences when redistributing anything derived from a pack.

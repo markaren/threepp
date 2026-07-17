@@ -25,6 +25,7 @@
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/road/RoadNetwork.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
+#include "threepp/extras/terrain/GeoBuildings.hpp"
 #include "threepp/extras/terrain/GeoTerrain.hpp"
 #include "threepp/extras/terrain/GeoTerrainPack.hpp"
 #include "threepp/extras/terrain/TerrainTiles.hpp"
@@ -154,7 +155,7 @@ int main(int argc, char** argv) {
     std::cout << "[norway] loaded pack '" << reg.name << "' (" << packArg << ")\n"
               << "         worldSize " << reg.worldSize << " m, dim " << reg.dim
               << ", height " << reg.heightMin << ".." << reg.heightMax << " m, sea " << reg.seaLevel
-              << ", roads " << pack.roads.size() << "\n"
+              << ", roads " << pack.roads.size() << ", buildings " << pack.buildings.size() << "\n"
               << "         attribution: " << reg.attribution << "\n"
               << std::flush;
 
@@ -366,6 +367,16 @@ int main(int argc, char** argv) {
         scene.add(chunks);
     }
     const float ribbonDist = envF("NT_ROAD_RIBBON_DIST", 600.f);// 6 m road ≈ 5 px here
+
+    // Buildings (packs fetched with --buildings): extruded OSM footprints with
+    // nDSM-measured heights, batched into 500 m chunk meshes with per-building
+    // vertex colours. NT_NO_BUILDINGS=1 hides them for A/B.
+    if (!pack.buildings.empty() && !envSet("NT_NO_BUILDINGS")) {
+        auto buildings = terrain::buildGeoBuildingMeshes(pack);
+        std::cout << "[norway] buildings: " << pack.buildings.size() << " footprints in "
+                  << buildings->children.size() << " chunk meshes\n" << std::flush;
+        scene.add(buildings);
+    }
 
     // Sea on low / coastal packs. A huge FLAT MeshStandardMaterial plane
     // (roughness ~0.15, metalness 0) drives the deferred renderer's STOCHASTIC
