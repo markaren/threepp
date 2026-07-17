@@ -1834,3 +1834,49 @@ class VulkanRenderer:
     def size(self) -> tuple[int, int]:
         ...
 HAS_VULKAN: bool = True
+
+# --- Proprioceptive sensors (PhysX builds only; see tp.HAS_PHYSX) ------------
+# Attach to an Object3D, register with a PhysxWorld (world.register_sensor), and
+# the sensor is sampled from the world's fixed-timestep step loop. The PhysX
+# rigid-body surface (PhysxWorld / RigidBody) is not reflected in this
+# auto-generated stub; the sensor types are declared here for IDE support.
+
+class NoiseModel:
+    """Per-axis Gaussian noise config shared by every sensor. Densities are
+    continuous-time: white_noise_density [X/sqrt(Hz)] -> per-sample stddev
+    density/sqrt(dt); random_walk [X/(s*sqrt(Hz))] -> bias increment stddev
+    random_walk*sqrt(dt); constant_bias [X] is a fixed offset. Deterministic for
+    a given seed + call sequence. All-zero = a perfect sensor."""
+    white_noise_density: Vector3
+    random_walk: Vector3
+    constant_bias: Vector3
+    seed: int
+    def __init__(self, white_noise_density: Vector3 = ..., random_walk: Vector3 = ...,
+                 constant_bias: Vector3 = ..., seed: int = 0) -> None: ...
+
+class ImuSample:
+    """One IMU measurement. t: sim time (s). angular_velocity: rad/s.
+    linear_acceleration: specific force (m/s^2). Both in the sensor frame."""
+    @property
+    def t(self) -> float: ...
+    @property
+    def angular_velocity(self) -> Vector3: ...
+    @property
+    def linear_acceleration(self) -> Vector3: ...
+
+class Imu:
+    """Gyroscope + accelerometer attached to an Object3D (its world frame is the
+    sensor frame). Register with a PhysxWorld AFTER adding the body it rides;
+    each substep it measures the body's angular velocity (rad/s) and the specific
+    force at the sensor point (m/s^2). A level body at rest reads accel
+    (0, +9.81, 0); free fall reads ~0."""
+    gyro_noise: NoiseModel
+    accel_noise: NoiseModel
+    rate_hz: float
+    def __init__(self, node: Object3D, rate_hz: float = 0.0, buffer_capacity: int = 2048) -> None: ...
+    @property
+    def available(self) -> int: ...
+    def reset(self) -> None: ...
+    def latest(self) -> ImuSample | None: ...
+    def drain(self) -> list[ImuSample]: ...
+    def drain_array(self) -> numpy.ndarray[numpy.float64]: ...

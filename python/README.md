@@ -89,6 +89,7 @@ display is only required for the on-screen examples.
 | [`examples/ui_demo.py`](examples/ui_demo.py) | In-window Dear ImGui control panel (sliders/buttons) driving the scene live (GL). Needs a display. |
 | [`examples/vulkan_ui.py`](examples/vulkan_ui.py) | The same ImGui control panel, over the **Vulkan** deferred renderer. Needs a Vulkan build + display. |
 | [`examples/physics_demo.py`](examples/physics_demo.py) | A pile of boxes tumbling onto the floor — `PhysxWorld` rigid bodies driving the scene graph. Needs a PhysX build + display. |
+| [`examples/imu_demo.py`](examples/imu_demo.py) | **Headless IMU** — a box dropped onto the floor with an `Imu` mounted off-CoM; prints the physics-truth table (free fall ~0, at rest ~+9.81). Needs a PhysX build; no display. |
 | [`examples/spider/spider_demo.py`](examples/spider/spider_demo.py) | **Drive a physics hexapod with WASD** — an articulated robot walking via a CPG tripod gait (no training). Needs a PhysX build + display. |
 | [`examples/spider/train_vec.py`](examples/spider/train_vec.py) / [`play.py`](examples/spider/play.py) | Residual RL on the gait. `train_vec.py` runs **K robots in one PhysX scene** (one `world.step()` for all of them, ~7–35× faster than separate processes); `play.py` drives the trained policy with WASD. `train.py` is the slower `SubprocVecEnv` variant. Needs `gymnasium`, `stable-baselines3`. |
 | [`examples/smoke_test.py`](examples/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
@@ -163,6 +164,9 @@ python examples/headless_render.py
   `RigidBody` — add `Mesh`es as dynamic/static bodies (box/sphere/capsule, convex
   hull, or triangle mesh), `step(dt)`, and the bound meshes follow the simulation
   (`tp.HAS_PHYSX`).
+- **Proprioceptive sensors** (PhysX builds): `Imu` — a gyroscope + accelerometer
+  attached to any scene node, driven from the physics step loop, with a
+  configurable `NoiseModel`. See *Proprioceptive sensors* below.
 - **Vulkan deferred renderer + G-buffer AOVs** (when built with Vulkan, see
   below): `VulkanRenderer.render_aov(scene, camera, aov)` returns a deferred
   G-buffer attachment as `(H, W, 3)` uint8 — `'rgb'`, `'normals'`,
@@ -343,6 +347,73 @@ CUDA/GPU path) are not exposed yet — rigid bodies only.
 Combined with the Vulkan AOVs, this is the **dynamic** half of the synthetic-data
 story: physics gives you moving scenes, the G-buffer gives you per-frame
 segmentation / depth / optical-flow labels for free.
+
+## Proprioceptive sensors (IMU)
+
+On top of the PhysX world, threepp exposes a **proprioceptive sensor** suite for
+robotics — the first sensor is a production-quality `Imu` (gyroscope +
+accelerometer). A sensor **rides the scene graph**: you attach it to an
+`Object3D`, and that node's world frame *is* the measurement frame. Register it
+with the world and it is sampled from the physics step loop — one clean sample
+per fixed substep, timestamped with the accumulated sim time — so the sampling
+fidelity is right for lock-step co-simulation (e.g. a future ArduPilot SITL).
+
+```python
+import threepp as tp
+assert tp.HAS_PHYSX
+
+world = tp.PhysxWorld(gravity=tp.Vector3(0, -9.81, 0), fixed_timestep=1/240)
+world.add_static(floor_mesh)                 # top face at y=0
+body = world.add(box_mesh, density=200)      # dynamic body
+
+mount = tp.Group()                           # IMU node, offset from the CoM
+mount.position.set(0.3, 0.2, 0.1)
+box_mesh.add(mount)
+
+imu = tp.Imu(mount)                          # rate_hz=0 -> sample every substep
+world.register_sensor(imu)                   # AFTER adding the body it rides
+
+for _ in range(720):
+    world.step(1/240)
+
+for s in imu.drain():                        # oldest-first; empties the buffer
+    print(s.t, s.angular_velocity, s.linear_acceleration)
+data = imu.drain_array()                     # or a (N, 7) numpy [t, gx,gy,gz, ax,ay,az]
+last = imu.latest()                          # most recent sample (survives drain)
+```
+
+**Contract.** Attach to a node; set `rate_hz` (0 = every physics substep, else
+the sensor sub-samples). Read non-blocking: `latest()` is the most recent sample,
+`drain(out)` / `drain_array()` move everything accumulated since the last drain
+out of a bounded ring buffer (default 2048; oldest dropped on overflow).
+`register_sensor` resolves the rigid body by walking up from the attachment node
+to the nearest ancestor added to the world — it raises immediately if there is
+none.
+
+**IMU units & frames.** Both readings are expressed in the **sensor (node)
+frame**:
+
+| Field | Meaning | Units |
+| --- | --- | --- |
+| `angular_velocity` | the body's angular velocity | rad/s |
+| `linear_acceleration` | **specific force** `f = R⁻¹·(a_point − g)` | m/s² |
+
+Specific force is what a real accelerometer reads (proper acceleration minus
+gravity, threepp is Y-up so `g = (0, −9.81, 0)`), so a **level body at rest reads
+`(0, +9.81, 0)`** and a body in **free fall reads ~0**. When the node is offset
+from the centre of mass, the lever-arm terms `α × r + ω × (ω × r)` are included
+(`a_com` and `α` come from finite-differencing the PhysX velocities across
+samples; the first sample after attach/`reset()` emits zero to avoid a start-up
+spike).
+
+**Noise.** `imu.gyro_noise` and `imu.accel_noise` are `NoiseModel`s with per-axis
+continuous-time densities — `white_noise_density` [X/√Hz], `random_walk`
+[X/(s·√Hz)] bias instability, and a constant `constant_bias` [X] — plus a `seed`
+(deterministic given seed + call sequence). Defaults are consumer MEMS-class; set
+every field to zero for a perfect sensor. Change the noise, then call
+`imu.reset()` (which also re-arms the finite-difference after an episode reset).
+
+See [`examples/imu_demo.py`](examples/imu_demo.py) for the full headless demo.
 
 ## Notes for maintainers
 

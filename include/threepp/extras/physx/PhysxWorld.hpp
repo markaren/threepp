@@ -7,6 +7,7 @@
 #include <cudamanager/PxCudaContextManager.h>
 
 #include "threepp/core/Object3D.hpp"
+#include "threepp/extras/sensors/Sensor.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/CapsuleGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
@@ -306,6 +307,48 @@ namespace threepp {
 
         void onPreSubstep(std::function<void(float)> cb) { preSubstep_.push_back(std::move(cb)); }
         void onPostSubstep(std::function<void(float)> cb) { postSubstep_.push_back(std::move(cb)); }
+
+        // --- Proprioceptive sensors -------------------------------------------
+        // A registered Sensor is sampled from the step loop once per fixed substep
+        // (rate-gated by the sensor), the instant body states are fresh — see
+        // Sensor.hpp. registerSensor calls the sensor's onRegister hook (where an
+        // IMU resolves its rigid body and may throw on a bad attachment), so
+        // register AFTER the body the sensor rides has been add()-ed.
+        //
+        // The sensor is a non-owning pointer: it must outlive its registration
+        // (unregister it, or keep it alive, before it is destroyed). NOTE: sensors
+        // are only driven by the interpolated step() path; the direct-GPU
+        // simulateRaw() path does not sample them.
+        void registerSensor(Sensor* sensor) {
+            if (!sensor) return;
+            if (std::find(sensors_.begin(), sensors_.end(), sensor) != sensors_.end()) return;
+            sensor->onRegister(*this);// may throw (invalid attachment) — do this before storing
+            sensors_.push_back(sensor);
+        }
+
+        void unregisterSensor(Sensor* sensor) {
+            auto it = std::find(sensors_.begin(), sensors_.end(), sensor);
+            if (it == sensors_.end()) return;
+            sensors_.erase(it);
+            sensor->onUnregister();
+        }
+
+        // Accumulated simulation time (s) — sum of every fixed substep advanced so
+        // far. This is the clock stamped onto sensor samples.
+        [[nodiscard]] double simTime() const { return simTime_; }
+
+        // Resolve the PxRigidActor that governs `obj`: walk up the scene graph from
+        // obj to the root and return the actor bound (via bind()/add()) to the
+        // nearest ancestor (or obj itself). nullptr if none is managed here. Used
+        // by sensors to map their attachment node to a rigid body.
+        [[nodiscard]] ::physx::PxRigidActor* findActor(const Object3D* obj) const {
+            for (const Object3D* o = obj; o != nullptr; o = o->parent) {
+                for (const auto& b : objBindings_) {
+                    if (b.obj == o) return b.actor;
+                }
+            }
+            return nullptr;
+        }
 
         // After each step, copy actor's world pose into Object3D.position/quaternion.
         void bind(Object3D& obj, ::physx::PxRigidActor& actor) {
@@ -708,6 +751,11 @@ namespace threepp {
             scene_->simulate(dt);
             scene_->fetchResults(true);
             for (auto& cb : postSubstep_) cb(dt);
+            // Body states are fresh here (post fetchResults). Advance the sim clock
+            // and drive any registered sensors — appended after existing hooks so
+            // the dt / stepping path above is untouched.
+            simTime_ += static_cast<double>(dt);
+            for (auto* s : sensors_) s->tick(static_cast<double>(dt), simTime_);
         }
 
         // Pull deformed positions GPU->CPU for every soft body, then write them into
@@ -797,11 +845,13 @@ namespace threepp {
         std::vector<std::unique_ptr<SoftBody>> softBodies_;
         float accumulator_ = 0.f;
         float dtEma_ = 0.f;// smoothed timestep (see Settings::smoothTimestep); 0 = uninitialised
+        double simTime_ = 0.0;// accumulated fixed-substep sim time; stamps sensor samples
 
         std::vector<ObjBinding> objBindings_;
         std::vector<InstBinding> instBindings_;
         std::vector<std::function<void(float)>> preSubstep_;
         std::vector<std::function<void(float)>> postSubstep_;
+        std::vector<Sensor*> sensors_;// non-owning; sampled each substep
     };
 
 }// namespace threepp

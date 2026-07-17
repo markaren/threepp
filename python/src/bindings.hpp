@@ -57,6 +57,7 @@ namespace threepp_py {
     void init_vulkan(py::module_& m);// no-op unless built with the Vulkan backend
     void init_imgui(py::module_& m); // no-op unless built with imgui
     void init_physx(py::module_& m); // no-op unless built with the omniverse-physx-sdk
+    void init_sensors(py::module_& m);// proprioceptive sensors (Imu); no-op without PhysX
 
     // If `h` is the Python VulkanRenderer facade, returns the underlying
     // threepp::Renderer* (for ImGui's Vulkan overlay), else nullptr. Defined in

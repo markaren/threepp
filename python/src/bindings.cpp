@@ -76,5 +76,6 @@ PYBIND11_MODULE(threepp, m) {
     tp::init_text(m);   // fonts + text + SVG (needs Mesh/Sprite/Group + materials)
     tp::init_vulkan(m); // optional deferred renderer + G-buffer AOVs
     tp::init_imgui(m);  // optional Dear ImGui UI (GL backend)
+    tp::init_sensors(m);// proprioceptive sensors (Imu) — before physx: PhysxWorld.register_sensor(Imu&)
     tp::init_physx(m);  // optional PhysX rigid-body world
 }

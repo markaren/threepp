@@ -37,7 +37,8 @@ pybind11_add_module(threepp_py
         src/bind_text.cpp
         src/bind_vulkan.cpp
         src/bind_imgui.cpp
-        src/bind_physx.cpp)
+        src/bind_physx.cpp
+        src/bind_sensors.cpp)
 
 target_link_libraries(threepp_py PRIVATE threepp)
 target_compile_features(threepp_py PRIVATE cxx_std_20)

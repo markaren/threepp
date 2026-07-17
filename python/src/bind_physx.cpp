@@ -29,6 +29,7 @@
 #include "threepp/extras/physx/PhysxGpuBatch.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/physx/UrdfArticulation.hpp"
+#include "threepp/extras/sensors/Imu.hpp"
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
@@ -401,6 +402,19 @@ namespace threepp_py {
                          w.onPostSubstep([cb](float dt) { py::gil_scoped_acquire g; cb(dt); });
                      },
                      py::arg("callback"), "Register callback(dt) fired after each fixed substep.")
+                .def("register_sensor",
+                     [](PhysxWorld& w, Imu& imu) { w.registerSensor(&imu); },
+                     py::arg("sensor"), py::keep_alive<1, 2>(),
+                     "Register a sensor (e.g. an Imu) to be sampled from the step loop once per "
+                     "fixed substep, the instant body states are fresh. Call AFTER adding the body "
+                     "the sensor is attached to; raises if the attachment has no managed rigid body. "
+                     "The world keeps the sensor alive.")
+                .def("unregister_sensor",
+                     [](PhysxWorld& w, Imu& imu) { w.unregisterSensor(&imu); },
+                     py::arg("sensor"), "Stop sampling a previously registered sensor.")
+                .def_property_readonly("sim_time", &PhysxWorld::simTime,
+                                       "Accumulated fixed-substep simulation time (s) — the clock stamped "
+                                       "onto sensor samples.")
                 .def("create_articulation",
                      [](PhysxWorld& w, bool fixed_base, int solver_position_iterations, bool disable_self_collision) {
                          return std::make_unique<Articulation>(w, fixed_base, solver_position_iterations, disable_self_collision);
