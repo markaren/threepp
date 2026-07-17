@@ -805,8 +805,12 @@ def main():
     # Vulkan's depth sensor traces the TLAS from the last render(); GL re-renders internally.
     is_vulkan = type(rend).__name__ == "VulkanRenderer"
     if is_vulkan:
-        rend.fog_anisotropy = 0.6    # forward scatter → sun-ward glow + god-ray shafts
-        rend.volumetric_fog = True   # ray-marched sun shafts through the trees (real volume)
+        # scene.set_fog_exp2 above IS the single volumetric knob now: the froxel
+        # sun shafts + aerial glow follow automatically wherever the fog medium is
+        # present (the old set_volumetric_fog opt-in is a deprecated no-op). Only
+        # the phase anisotropy is still worth setting — forward scatter gives the
+        # sun-ward glow / god-ray shafts through the trees.
+        rend.fog_anisotropy = 0.6
     scanner = ForwardDepthScanner(rend, scene, meshes,
                                   bounds=(-half, half, -half, half),
                                   cell=0.15, far=SENSOR_FAR,
@@ -930,7 +934,9 @@ def main():
             _fog_density[0] = v
             scene.set_fog_exp2(_fog_color, v)
         if is_vulkan:
-            _, rend.volumetric_fog = tp.imgui.checkbox("sun shafts (volumetric)", rend.volumetric_fog)
+            # Sun shafts are automatic with the fog medium now (the old
+            # "sun shafts" toggle was a deprecated no-op — removed). The density
+            # slider above is the shaft on/off knob; anisotropy shapes the glow.
             chg, v = tp.imgui.slider_float("anisotropy g", rend.fog_anisotropy, -0.9, 0.9)
             if chg:
                 rend.fog_anisotropy = v

@@ -698,8 +698,10 @@ namespace threepp_py {
                 .def("set_scissor_test", &PyVulkanRenderer::set_scissor_test, py::arg("enabled"))
                 .def("save_frame", &PyVulkanRenderer::save_frame, py::arg("scene"), py::arg("camera"), py::arg("path"))
                 .def("size", &PyVulkanRenderer::size)
-                // Volumetric fog: Henyey-Greenstein phase anisotropy.
-                // Clamped to [-0.95, 0.95]. Only takes effect when scene.set_fog_exp2() is active.
+                // Volumetric fog: Henyey-Greenstein phase anisotropy of the ONE air
+                // medium. Clamped to [-0.95, 0.95]. Takes effect whenever a medium is
+                // present — scene.set_fog_exp2(...) OR set_height_fog (the whole froxel
+                // volumetric path reads it, not just the homogeneous scene.fog case).
                 // 0 = isotropic scattering, +0.9 = forward god-rays, -0.9 = back-scatter halo.
                 .def_property("fog_anisotropy",
                               [](PyVulkanRenderer& r) { return r.native().getFogAnisotropy(); },
@@ -755,9 +757,11 @@ namespace threepp_py {
                 // medium. scene.set_fog_exp2(...) is the primary knob (density +
                 // colour); set_height_fog is the ADVANCED control of that medium's
                 // exponential height PROFILE (baseY / falloff) × wind-scrolled
-                // noise, in the 0.25-512 m view froxels. PRECEDENCE: scene.fog
-                // absent → this density CREATES the medium (back-compat); scene.fog
-                // present → scene.fog density WINS and only this profile shapes it.
+                // noise, in the 0.25-512 m view froxels. PRECEDENCE: the PROFILE
+                // (baseY/falloff/noise) always applies when set. DENSITY — an
+                // explicit density > 0 here is the deliberate OVERRIDE and WINS
+                // over scene.fog; density <= 0 is "profile-only" (scene.fog, or
+                // the panel slider, supplies the density and this only shapes it).
                 // The underwater murk is a SEPARATE medium (set_underwater_murk).
                 .def("set_height_fog",
                      [](PyVulkanRenderer& r, float density, float base_y,
