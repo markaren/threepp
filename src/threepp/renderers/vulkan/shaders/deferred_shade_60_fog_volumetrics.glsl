@@ -85,10 +85,11 @@ float heightFogOpticalDepth(vec3 a, vec3 b) {
 // (scene.fog → the huge-falloff default profile) surfaced as a bright horizon
 // band in an enclosed room. For the uniform default this is EXACTLY applySceneFog's
 // Beer-Lambert, so scene.fog fades identically whether the froxels are on or not.
-// The froxel LUT still carries the DIRECT-light (sun shaft + point glow) in-scatter
-// — added SEPARATELY by the caller via froxelInscatter — so the near-field shafts
-// are unaffected. (Extinction drops the height fog's noise modulation, a smooth
-// mean, which is exactly what an extinction wants; the shafts keep it.)
+// The froxel LUT still carries the POINT-light glow in-scatter (the directional
+// sun is a scale-independent per-pixel march — see volumetricDirScatter) — added
+// SEPARATELY by the caller via froxelInscatter — so the near-field glow is
+// unaffected. (Extinction drops the height fog's noise modulation, a smooth mean,
+// which is exactly what an extinction wants; the sun march keeps that same mean.)
 //
 // Ambient in-scatter = medium ALBEDO × an ambient-light estimate (env mean + scene
 // ambient), the SAME closed form A·fogLight·(1−T) applySceneFog uses, keyed on the
@@ -229,12 +230,13 @@ vec3 proceduralStars(vec3 dir) {
     return sum * (pc.starIntensity * smoothstep(0.0, 0.05, dir.y));
 }
 
-// (The per-pixel DIRECTIONAL march moved into froxel_inject/integrate.comp —
-// the shade samples its integrated LUT through froxelInscatter above: same
-// terms, ~2 orders of magnitude fewer shadow rays — and clustered POINT
-// lights gained a froxel fog glow the old spot-only march never gave them.
-// SPOT beams stay per-pixel below: a tight bright cone is a high-frequency
-// feature the froxel grid cannot resolve — the lighthouse turned to mush.)
+// (Only the clustered POINT-light glow lives in froxel_inject/integrate.comp —
+// the shade samples its integrated LUT through froxelInscatter above (soft
+// omnidirectional glow the old spot-only march never gave them). Both the SPOT
+// beams below AND the directional SUN (volumetricDirScatter) stay per-pixel:
+// each is a high-frequency shaft the froxel grid cannot resolve — a tight bright
+// cone (the lighthouse turns to mush), a thin tree-gap god ray (a cell can't
+// resolve a shaft narrower than itself). Per-pixel marching is scale-independent.)
 
 vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     // Scene fog drives the march when active (σ, HG g, and the medium albedo
@@ -296,43 +298,48 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
 }
 
 // ── Directional-light volumetric single scattering (god rays / aerial glow) ───
-// Ray-marches the camera→surface (or →sky-cap) segment; at each step an RT shadow
-// ray toward each sun carves real light shafts through trees/terrain, and the
-// Henyey-Greenstein phase brightens the haze TOWARD the sun (the "volume" a flat
-// extinction haze lacks). Sun shafts are HIGH-frequency (thin occluders, thin
-// fog integrated over kilometres) — the froxel grid blurred them to nothing,
-// so they stay per-pixel. Gated on fog.enabled AND the volumetric-fog flag
-// (bit 4) so the per-step shadow-ray cost is opt-in; the per-pixel jittered
-// step offset relies on TAA to average into smooth shafts.
+// Ray-marches the WHOLE camera→surface (or →sky-cap) segment [0, tEnd]; at each
+// step an RT shadow ray toward each sun carves real light shafts through
+// trees/terrain, and the Henyey-Greenstein phase brightens the haze TOWARD the
+// sun (the "volume" a flat extinction haze lacks). This per-pixel march is the
+// SOLE owner of the directional-sun in-scatter over the ENTIRE ray — near field
+// included. Sun shafts are HIGH-frequency (a thin occluder — a 0.3–2 m tree gap —
+// against thin fog integrated over the leg); the froxel grid's depth cells span
+// ~12.6% of the distance (~1.3 m at 10 m), so a cell CANNOT resolve a shaft
+// narrower than itself: close-range gap god rays averaged into a featureless glow
+// with nothing for the phase to shape (ridge-scale fjord shafts spanned many
+// cells, which masked this). A per-pixel march is scale-INDEPENDENT — it resolves
+// the gap wherever it lands — so the froxel sun loop is DELETED (froxel_inject.comp
+// keeps only the clustered POINT-light glow + the medium-extinction LUT) and this
+// owns [0, tEnd] outright. The per-pixel jittered step offset relies on TAA to
+// average into smooth shafts.
 vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
-    // FAR-TAIL sun shafts (Phase 2 unified fog). The froxels own the near field
-    // [0, 512 m] — their SHADOWED sun in-scatter (1 RT ray/froxel) — and this
-    // per-pixel march owns the remainder [512 m, tMax]: the kilometre-scale god
-    // rays the froxel grid blurs to nothing. Same height-fog σ PROFILE, same HG
-    // phase, and the camera→x transmittance is the froxel NEAR transmittance ×
-    // the closed-form FAR extinction, so the two halves are SEAM-CONSISTENT at
-    // 512 m by construction (no brightness step, no double count — the froxel term
-    // stops exactly where this one starts). Every step traces an RT shadow ray, so
-    // the far shafts are shadowed too (matching the froxel sun at the boundary —
-    // this is what Phase 1 deferred: an UNshadowed far term would band at the
-    // seam). Runs whenever the medium is present; the old setVolumetricFog opt-in
-    // (flags bit 4) is gone. Sky pixels (huge tMax) march the tail the same way.
+    // WHOLE-RAY sun shafts (Phase 3 unified fog). No 512 m split any more — there
+    // is no sun seam by construction. Same height-fog σ PROFILE and HG phase as
+    // before; the camera→x transmittance is now the closed-form MEAN height-fog
+    // optical depth over the WHOLE leg [0, x] (the far-tail steps always used this
+    // closed form — now the near leg does too, so the whole leg is one analytic
+    // integral, EXACTLY the extinction applyHeteroSurfaceFog applies to the
+    // surface). The noise modulation is intentionally excluded (an extinction
+    // wants the smooth mean — the established far-tail precedent). Every step
+    // traces an RT shadow ray, so shafts are shadowed end to end; cloud shadow
+    // overhead dims each step uniformly. Sky pixels (large tMax) march to the
+    // optical-depth horizon the same way.
     if (clouds.heteroActive < 0.5 || clouds.hfDensity <= 0.0 || lights.dirCount == 0u) return vec3(0.0);
-    const float tStart = kFroxelZMax;             // the froxel far plane (512 m)
-    if (tMax <= tStart) return vec3(0.0);         // surface inside the froxel volume → froxels own it
     const float hgG       = fog.anisotropy;// medium HG g — set unconditionally by updateFogUbo (matches froxel_inject's hetero g)
     const vec3  medAlbedo = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
     const float H         = max(clouds.hfFalloff, 1e-3);
-    // camera→seam transmittance (the froxel LUT carried the near [0, 512 m] σ
-    // front-to-back); the [512 m, x] remainder rides the closed-form integral.
-    const vec2  uv    = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
-    const vec3  seam  = ro + rd * tStart;
-    const float Tnear = froxelTransmittance(uv, tStart);
-    // Cap the march where the tail transmittance is essentially extinct so a sky
-    // pixel's huge tMax doesn't spend steps on fully-attenuated distance. σ at the
-    // seam is a good scale for the roughly-constant far density.
-    const float sigmaSeam = max(clouds.hfDensity * exp(-max(seam.y - clouds.hfBaseY, 0.0) / H), 1e-6);
-    const float tEnd = min(tMax, tStart + 6.0 / sigmaSeam);
+    // March the whole ray from the camera. The first sample sits at jitter·dt > 0
+    // (never exactly at ro), so no epsilon is needed; heightFogOpticalDepth(ro,ro)
+    // is 0 (T=1) anyway.
+    const float tStart = 0.0;
+    // Cap the march at the optical-depth horizon (~6/σ ⇒ e^-6 ≈ 0.25% left) so a
+    // sky pixel's huge tMax doesn't spend all 16 steps on fully-attenuated
+    // distance; the per-step `trCam` break below is the exact cutoff, this only
+    // sizes dt. σ at the ray origin (camera height, small floor) is the near-end
+    // density that dominates the leg.
+    const float sigmaRef = max(clouds.hfDensity * exp(-max(ro.y - clouds.hfBaseY, 0.0) / H), 1e-6);
+    const float tEnd = min(tMax, tStart + 6.0 / sigmaRef);
     if (tEnd <= tStart) return vec3(0.0);
 
     const int   STEPS  = 16;
@@ -345,13 +352,12 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
         const float t = tStart + (float(s) + jitter) * dt;
         const vec3  x = ro + rd * t;
         // Local height-fog σ (smooth analytic mean — the noise modulation is a
-        // near-field froxel concern; the far tail wants the mean). Same profile as
+        // near-field froxel concern; the march wants the mean). Same profile as
         // heightFogOpticalDepth / mediumExtinction.
         const float sigmaX = clouds.hfDensity * exp(-max(x.y - clouds.hfBaseY, 0.0) / H);
         if (sigmaX <= 1e-7) continue;
-        const float Tfar  = exp(-heightFogOpticalDepth(seam, x));// [512 m, x] closed form
-        const float trCam = Tnear * Tfar;                        // camera → x
-        if (trCam < 0.003) break;                                // remaining contribution negligible
+        const float trCam = exp(-heightFogOpticalDepth(ro, x));// closed-form camera → x over the WHOLE leg
+        if (trCam < 0.003) break;                              // remaining contribution negligible
         vec3 stepSum = vec3(0.0);
         for (uint i = 0u; i < lights.dirCount; ++i) {
             const vec3  L   = normalize(lights.dirLights[i].direction);
@@ -361,7 +367,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
             stepSum += lights.dirLights[i].color * (phase * vis);
         }
         // σ_s = σ_t · albedo (albedo applied once below); cloud shadow overhead
-        // dims the far shafts exactly like the froxel sun term.
+        // dims the shafts exactly like the (now-deleted) froxel sun term did.
         sum += stepSum * (trCam * sigmaX * cloudShadowSample(x));
     }
     return sum * medAlbedo * dt;

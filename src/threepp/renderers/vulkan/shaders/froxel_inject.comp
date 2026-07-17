@@ -7,18 +7,19 @@
 // per froxel of a kFroxelX×kFroxelY×kFroxelZ view-frustum grid (screen tiles ×
 // exponential view-Z slices): computes the in-scattered radiance PER UNIT
 // LENGTH at a jittered position inside the froxel —
-//   • directional lights with ONE RT shadow ray each (real light shafts
-//     through trees/columns), gated on fog + the volumetric-fog flag exactly
-//     like the per-pixel march this system replaces,
-//   • ALL clustered point/spot lights (the cluster list, not the 8-cap UBO —
-//     point lights glow in fog for the first time; spots keep their beams),
+//   • the clustered POINT lights only (the cluster list, not the 8-cap UBO —
+//     the soft omnidirectional fog glow; SPOTS are skipped and the directional
+//     SUN is NOT injected here — both are high-frequency shafts the froxel grid
+//     cannot resolve, so they stay per-pixel in deferred_shade.comp's
+//     volumetricSpot/DirScatter marches),
 //   • Henyey-Greenstein phase and camera/light-leg extinction matching the
-//     old volumetricSpot/DirScatter marchers term for term —
+//     per-pixel point-glow terms term for term —
 // and EMA-accumulates it against the previous frame's froxel (the sub-froxel
 // jitter is what turns 1 sample/froxel into a converged integral; camera
 // motion shortens the history so beams track instead of smearing). The
 // INTEGRATE pass then folds the slices front-to-back into the 3D LUT the
-// shade pass samples with one trilinear fetch per pixel.
+// shade pass samples with one trilinear fetch per pixel. The LUT's .a channel
+// also carries the medium-extinction transmittance the surface path reads.
 //
 // Shares the DeferredShade set (bindings 0/1/8/33/48/49/50/51) + push block.
 
@@ -229,27 +230,14 @@ void main() {
 
     vec3 sum = vec3(0.0);
 
-    // Directional SUN in-scatter — HETEROGENEOUS mode ONLY. In dense, low-
-    // frequency fog/cloud the sun term is smooth enough for the froxel grid, so
-    // it moves here and the per-pixel volumetricDirScatter is disabled (no
-    // double count). 1 RT shadow ray (hard tree/terrain occlusion) + a short
-    // self-shadow density march toward the sun (Beer), × HG phase. In the
-    // HOMOGENEOUS path the sun stays per-pixel (thin shafts are high-frequency).
-    if (hetero) {
-        for (uint i = 0u; i < lights.dirCount; ++i) {
-            const vec3  L   = normalize(lights.dirLights[i].direction);
-            const float vis = shadowVis(x, L, 1e30);
-            if (vis <= 0.0) continue;
-            const float sunStep = 12.0;// m
-            float od = 0.0;
-            for (int j = 0; j < 6; ++j)
-                od += mediumExtinction(x + L * (float(j) + 0.5) * sunStep, clouds.timeSec);
-            const float beer  = exp(-od * sunStep);
-            const float phase = hgPhase(dot(L, rd), hgG);
-            // Cloud shadow overhead also dims the volumetric sun in-scatter.
-            sum += lights.dirLights[i].color * (vis * beer * phase * cloudShadowSample(x));
-        }
-    }
+    // The directional SUN in-scatter is NO LONGER injected here. It was a froxel
+    // term ([0, 512 m]) split against the per-pixel far tail, but the froxel
+    // grid's depth cells (~12.6% of distance) cannot resolve a shaft narrower
+    // than a cell — close-range tree-gap god rays (0.3–2 m) averaged into a
+    // featureless glow the HG phase had nothing to shape. The scale-independent
+    // per-pixel march (deferred_shade.comp's volumetricDirScatter) now owns the
+    // sun over the WHOLE ray [0, tEnd], so there is exactly ONE sun term and no
+    // seam. Froxels keep only the clustered POINT-light glow below.
 
     // Clustered POINT lights — the volumetricSpotScatter per-step terms
     // (1 m-clamped inverse square, range window, HG phase, light-leg
