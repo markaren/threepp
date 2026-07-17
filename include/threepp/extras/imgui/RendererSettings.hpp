@@ -463,10 +463,10 @@ private:
         beams |= ImGui::SliderFloat("Beam anisotropy", &beamAniso, -0.9f, 0.9f, "%.2f");
         if (beams) vk_->setDeferredVolumetrics(beamDensity, beamAniso);
 
-        float stars = vk_->deferredStarfield();
-        if (ImGui::SliderFloat("Starfield", &stars, 0.f, 2.f, "%.2f")) {
-            vk_->setDeferredStarfield(stars);
-        }
+        // (No Starfield control: setDeferredStarfield is scene-owned — demos
+        // drive it per-frame from their day/night cycle, so a panel slider
+        // would be stomped every frame. See the clouds on-change note above
+        // for the same conflict class.)
 
         bool cloudsOn = vk_->clouds().has_value();
         if (ImGui::Checkbox("Volumetric clouds", &cloudsOn)) {
