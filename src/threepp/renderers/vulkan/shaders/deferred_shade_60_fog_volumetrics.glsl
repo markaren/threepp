@@ -320,7 +320,7 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     if (clouds.heteroActive < 0.5 || clouds.hfDensity <= 0.0 || lights.dirCount == 0u) return vec3(0.0);
     const float tStart = kFroxelZMax;             // the froxel far plane (512 m)
     if (tMax <= tStart) return vec3(0.0);         // surface inside the froxel volume → froxels own it
-    const float hgG       = (fog.enabled > 0.5) ? fog.anisotropy : 0.2;// match froxel_inject's hetero g
+    const float hgG       = fog.anisotropy;// medium HG g — set unconditionally by updateFogUbo (matches froxel_inject's hetero g)
     const vec3  medAlbedo = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
     const float H         = max(clouds.hfFalloff, 1e-3);
     // camera→seam transmittance (the froxel LUT carried the near [0, 512 m] σ

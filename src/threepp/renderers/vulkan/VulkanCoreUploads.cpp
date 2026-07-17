@@ -1121,9 +1121,13 @@ namespace threepp {
                 ubo.color[0]  = tint.r;
                 ubo.color[1]  = tint.g;
                 ubo.color[2]  = tint.b;
-                ubo.anisotropy = fogAnisotropy_;
             }
         }
+        // HG anisotropy is a property of the MEDIUM, not of scene.fog — set it
+        // unconditionally so a heightFog-only medium (panel Fog density, no
+        // scene.fog) honours setFogAnisotropy too. Consumers gate on their own
+        // medium-active conditions, so this is inert when no medium exists.
+        ubo.anisotropy = fogAnisotropy_;
 
         // ── Resolve the ONE air medium (Phase 2 unification) ─────────────────
         // scene.fog is the primary one-knob density. setHeightFog is the ADVANCED

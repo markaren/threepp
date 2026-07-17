@@ -212,7 +212,10 @@ void main() {
     vec3  medAlbedo = fogDriven ? fog.color : vec3(1.0);
     if (hetero) {
         sigma     = mediumExtinction(x, clouds.timeSec);
-        hgG       = fogDriven ? fog.anisotropy : 0.2;
+        // fog.anisotropy is populated whenever ANY medium exists (it is the
+        // medium's HG g, set unconditionally by updateFogUbo) — a heightFog-only
+        // medium honours setFogAnisotropy instead of a hardcoded mist g.
+        hgG       = fog.anisotropy;
     }
     if (sigma <= 0.0) {
         imageStore(froxelScatterImage, fi, vec4(0.0));
