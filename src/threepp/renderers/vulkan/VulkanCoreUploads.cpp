@@ -1126,17 +1126,29 @@ namespace threepp {
         }
 
         // ── Resolve the ONE air medium (Phase 2 unification) ─────────────────
-        // scene.fog is the primary knob: present → its density drives the medium
-        // and the froxels run HETEROGENEOUS with a near-uniform default profile.
-        // setHeightFog is the ADVANCED profile control (baseY/falloff/noise); its
-        // density is used ONLY when scene.fog is absent (back-compat mist). BOTH
-        // set → scene.fog's density WINS, heightFog contributes only its profile.
-        mediumActiveThisFrame_  = fogPresent || heightFogEnabled_;
+        // scene.fog is the primary one-knob density. setHeightFog is the ADVANCED
+        // control, layered so an app that drives scene.fog per frame keeps the
+        // panel's Fog-density slider live:
+        //   • PROFILE (baseY/falloff/noise) — always from setHeightFog when set,
+        //     so scene.fog's density can be shaped into a ground layer.
+        //   • DENSITY precedence — an EXPLICIT setHeightFog density > 0 is the
+        //     deliberate advanced OVERRIDE and WINS over scene.fog. A heightFog
+        //     with density <= 0 is "profile-only": scene.fog supplies the density
+        //     (the panel slider / FogExp2), heightFog only shapes the profile.
+        //   • scene.fog otherwise drives it; neither present → no medium.
+        const bool hfExplicitDensity = heightFogEnabled_ && heightFogDensity_ > 0.0f;
+        mediumDensityThisFrame_ = hfExplicitDensity ? heightFogDensity_
+                                : (fogPresent ? sigma : 0.0f);
+        mediumActiveThisFrame_  = mediumDensityThisFrame_ > 0.0f;
         mediumBaseYThisFrame_   = heightFogEnabled_ ? heightFogBaseY_   : 0.0f;
         mediumFalloffThisFrame_ = heightFogEnabled_ ? heightFogFalloff_ : kUniformFogFalloff;
         mediumNoiseThisFrame_   = heightFogEnabled_ ? heightFogNoiseAmount_ : 0.0f;
-        mediumDensityThisFrame_ = fogPresent ? sigma
-                                : (heightFogEnabled_ ? heightFogDensity_ : 0.0f);
+        // Air-fog tint (= scene.fog colour when present, else white — mirrors the
+        // shade pass's medAlbedo). The overlay particle draw fades smoke toward
+        // this; ubo.color already holds it for the fogPresent case.
+        mediumTintThisFrame_[0] = fogPresent ? ubo.color[0] : 1.0f;
+        mediumTintThisFrame_[1] = fogPresent ? ubo.color[1] : 1.0f;
+        mediumTintThisFrame_[2] = fogPresent ? ubo.color[2] : 1.0f;
 
         // Mirror the resolved medium into the fog UBO's hf* (the FILTER recombines
         // bind only this UBO; the shade/froxel read the CloudUbo copy). 0 = off →

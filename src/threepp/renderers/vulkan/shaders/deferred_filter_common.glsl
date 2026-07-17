@@ -82,14 +82,19 @@ float heightFogOpticalDepth(vec3 a, vec3 b) {
     const float H   = max(fog.hfFalloff, 1e-3);
     const float ya  = max(a.y - fog.hfBaseY, 0.0);
     const float yb  = max(b.y - fog.hfBaseY, 0.0);
-    const float len = distance(a, b);
-    // Numerically-stable (1−e^{−x})/x form — avoids the catastrophic fp32
-    // cancellation of e^{-ya/H} − e^{-yb/H} when H is huge (near-uniform default
-    // profile). KEEP IN SYNC with deferred_shade_60_fog_volumetrics.glsl.
-    const float x = (yb - ya) / H;
-    const float f = (abs(x) < 1e-3) ? (1.0 - 0.5 * x + x * x * (1.0 / 6.0))
-                                    : ((1.0 - exp(-x)) / x);
-    return fog.hfDensity * len * exp(-ya / H) * f;
+    // Clamp the leg (distance()² overflows fp32 for a sentinel/near-infinite end
+    // point → Inf, then Inf·0 → NaN) and saturate the optical depth so every
+    // exp(-od) sees a finite value. KEEP IN SYNC with the shade shader.
+    const float len = min(distance(a, b), 1.0e7);
+    // Overflow-safe DIFFERENCE form (ea−eb)/x with a Taylor fallback near x→0 —
+    // ea, eb ≤ 1 (never overflow), avoids the fp32 cancellation of a huge-H profile.
+    // KEEP IN SYNC with deferred_shade_60_fog_volumetrics.glsl.
+    const float ea = exp(-ya / H);
+    const float eb = exp(-yb / H);
+    const float x  = (yb - ya) / H;
+    const float f  = (abs(x) < 1e-3) ? (ea * (1.0 - 0.5 * x + x * x * (1.0 / 6.0)))
+                                     : ((ea - eb) / x);
+    return min(fog.hfDensity * len * f, 80.0);
 }
 
 // Fog transmittance over the camera→surface leg — the GI/reflection recombine

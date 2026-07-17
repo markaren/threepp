@@ -357,7 +357,10 @@ layout(push_constant) uniform Pc {
 // cloud depth < sceneDist); taps carrying no cloud are the identity and are
 // always safe. All four rejected → identity (cloud fully behind the surface).
 // Sky pixels pass sceneDist=1e30 → nothing rejected → plain bilinear.
-vec4 cloudGather(ivec2 px, float sceneDist) {
+// `meanDist` returns the coverage-weighted mean cloud DISTANCE (aux.r, ray units)
+// over the accepted cloud-bearing taps — sceneDist when no tap carries cloud —
+// so compositeClouds can fog the cloud in-scatter over the camera→cloud leg.
+vec4 cloudGather(ivec2 px, float sceneDist, out float meanDist) {
     const ivec2 hsz = textureSize(cloudColorTex, 0);
     const vec2  uv  = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
     const vec2  pos = uv * vec2(hsz) - 0.5;
@@ -367,24 +370,78 @@ vec4 cloudGather(ivec2 px, float sceneDist) {
                            (1.0 - f.x) * f.y,         f.x * f.y);
     vec4  acc  = vec4(0.0);
     float wSum = 0.0;
+    float dAcc = 0.0;// coverage-weighted mean cloud distance over cloud-bearing taps
+    float dW   = 0.0;
     for (int i = 0; i < 4; ++i) {
         const ivec2 tp = clamp(b0 + ivec2(i & 1, i >> 1), ivec2(0), hsz - 1);
         const vec4  c  = texelFetch(cloudColorTex, tp, 0);
         const bool hasCloud = (c.a < 0.999) || any(greaterThan(c.rgb, vec3(1e-5)));
-        if (hasCloud && texelFetch(cloudAuxTex, tp, 0).r >= sceneDist) continue;
+        float cd = 0.0;
+        if (hasCloud) {
+            cd = texelFetch(cloudAuxTex, tp, 0).r;// aux.r = mean cloud depth (ray distance)
+            if (cd >= sceneDist) continue;        // cloud behind THIS pixel's surface → reject
+        }
         acc  += wb[i] * c;
         wSum += wb[i];
+        if (hasCloud) { dAcc += wb[i] * cd; dW += wb[i]; }
     }
+    meanDist = (dW > 1e-4) ? dAcc / dW : sceneDist;
     return (wSum > 1e-4) ? acc / wSum : vec4(0.0, 0.0, 0.0, 1.0);
 }
+// Forward decls — DEFINED later via the deferred_shade_*.glsl includes below.
+// compositeClouds is declared here (before those includes) but only CALLED from
+// main(), which is after them, so the definitions link in the same translation
+// unit. cam/clouds/fog/lights UBOs are already declared above.
+float heightFogOpticalDepth(vec3 a, vec3 b);// deferred_shade_60_fog_volumetrics.glsl
+vec3  sampleEnvLod(vec3 dir, float lod);    // deferred_shade_10_lighting_utils.glsl
 // Composite the upsampled half-res cloud layer (binding 61) over `col` at this
 // pixel. sceneDist = this pixel's own camera→surface distance (1e30 for sky).
 // A no-op when clouds are off, so the whole system is free/image-identical
 // when unused. rgb = in-scatter, a = transmittance.
 vec3 compositeClouds(vec3 col, ivec2 px, float sceneDist) {
     if (clouds.enabled < 0.5) return col;
-    const vec4 cl = cloudGather(px, sceneDist);
-    return col * cl.a + cl.rgb;
+    float meanDist;
+    const vec4 cl = cloudGather(px, sceneDist, meanDist);
+    // Composite the cloud exactly as before (byte-identical) when EITHER:
+    //   • no air-fog medium is present (nothing to fog), OR
+    //   • no cloud tap contributed here, so cloudGather returned meanDist ==
+    //     sceneDist (the sentinel). On a clear-SKY pixel sceneDist is 1e30, and
+    //     building camP+dir·1e30 would feed a 1e30 leg into heightFogOpticalDepth:
+    //     distance()² = 1e60 overflows fp32 → Inf, and Inf·0 → NaN when the closed
+    //     form's f underflows for a grazing sky ray ⇒ exp(-NaN)=NaN ⇒ the whole SKY
+    //     goes BLACK (angle-dependent, clouds-gated — the observed regression). With
+    //     no cloud gathered there is also no cloud radiance to fog, so this early
+    //     out is the exact result, not an approximation.
+    if (clouds.hfDensity <= 0.0 || meanDist >= sceneDist) return col * cl.a + cl.rgb;
+    // ── Fog the cloud IN-SCATTER over the camera→cloud leg ───────────────────
+    // The background `col` already carries its OWN full-path fog (applySkyFog for
+    // sky pixels, applyHeteroSurfaceFog for terrain/water) and composites through
+    // the cloud transmittance cl.a untouched. Only the cloud's own radiance is
+    // attenuated here — by the closed-form height-fog transmittance camera→cloud
+    // (the froxel LUT is NOT valid at the SKY pixels where clouds most often
+    // composite, so the analytic optical depth — the SAME one applyHeteroSurfaceFog
+    // integrates over the whole leg — stands in). The mist in front of the cloud
+    // also ADDS its haze, but only over the cloud-COVERED fraction (1-cl.a); the
+    // transparent fraction's haze already lives in `col`. This mirrors
+    // applyHeteroSurfaceFog's col*T + medAlbedo*fogLight*(1-T), so cloud, distant
+    // terrain and the fogged sky converge to ONE haze. fogT==1 when the medium is
+    // off (short-circuited above) → byte-identical col*cl.a + cl.rgb.
+    const vec2  uvp   = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
+    const vec2  ndcp  = vec2(uvp.x * 2.0 - 1.0, -(uvp.y * 2.0 - 1.0)) + cam.jitter.xy;
+    const vec4  tVS   = cam.projInverse * vec4(ndcp, 1.0, 1.0);
+    const vec3  dirWS = normalize((cam.viewInverse * vec4(normalize(tVS.xyz / tVS.w), 0.0)).xyz);
+    const vec3  camP  = cam.viewInverse[3].xyz;
+    // Clamp the camera→cloud leg defensively: cloud_march caps mean cloud depth at
+    // 42 km, but a finite bound here means no future far-layer depth can overflow
+    // the closed form regardless (heightFogOpticalDepth also self-clamps len + od).
+    const vec3  cloudP = camP + dirWS * min(meanDist, 6.0e4);
+    const float fogT  = exp(-heightFogOpticalDepth(camP, cloudP));
+    const vec3  fogLight  = lights.ambient
+                          + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    const vec3  medAlbedo = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
+    return col * cl.a
+         + cl.rgb * fogT
+         + medAlbedo * fogLight * ((1.0 - fogT) * (1.0 - cl.a));
 }
 
 #include "deferred_shade_10_lighting_utils.glsl"
@@ -1281,8 +1338,9 @@ void main() {
         // must carry the cloud TRANSMITTANCE too (not the in-scatter: dispatch
         // A already added that once). Without it, complex pixels under cloud
         // grow a bright unattenuated geometry rim.
+        float cloudMeanDistUnused;
         const float cloudT = (clouds.enabled > 0.5)
-                ? cloudGather(px, length(worldPos - camPos)).a : 1.0;
+                ? cloudGather(px, length(worldPos - camPos), cloudMeanDistUnused).a : 1.0;
         imageStore(outImage, px, vec4(base + lit * (msWeight * cloudT * uintBitsToFloat(pc.preExpBits)), 1.0));
     } else {
         // Dispatch A: at a complex pixel, scale down by the dominant

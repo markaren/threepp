@@ -20,12 +20,18 @@ void main() {
     memoryBarrierShared();
 
     const ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    // Skip non-finite pixels: a stray NaN/Inf (e.g. a bad fog/denoiser value)
+    // must NOT be metered — a NaN buckets unpredictably and an Inf slams the top
+    // bin, either of which can collapse the adapted exposure to the floor and
+    // black the frame (defensive; the fog math is now overflow-safe at source).
     if (coord.x < int(pc.width) && coord.y < int(pc.height)) {
         vec3 c = texelFetch(sceneHdr, coord, 0).rgb;
+        if (!any(isnan(c)) && !any(isinf(c))) {
         float L = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
         // Map log2(L) in [-8, +8] -> [0, 1] -> bin [0, 127].
         float t = clamp((log2(L) + 8.0) * (1.0 / 16.0), 0.0, 1.0);
         atomicAdd(localBins[uint(t * 127.0)], 1u);
+        }
     }
     barrier();
     memoryBarrierShared();

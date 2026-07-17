@@ -108,13 +108,17 @@ namespace threepp {
         // medium's PROFILE: an exponential height falloff (baseY / falloff) ×
         // wind-scrolled 3D noise, evaluated inside the 0.25–512 m view froxels.
         //
-        // PRECEDENCE:
-        //   • scene.fog absent  → setHeightFog's `density` CREATES the medium
-        //     (back-compat: existing ground-mist users keep working unchanged).
-        //   • scene.fog present → scene.fog's density WINS; setHeightFog's
-        //     `density` field is IGNORED and only its profile (baseY / falloff /
-        //     noiseAmount) shapes the medium. scene.fog alone uses a near-uniform
-        //     default profile (baseY 0, huge falloff ≈ homogeneous).
+        // DENSITY PRECEDENCE (the PROFILE — baseY/falloff/noiseAmount — always
+        // applies when setHeightFog is set):
+        //   • setHeightFog density > 0 → the deliberate ADVANCED OVERRIDE: it WINS
+        //     over scene.fog (so an explicit ground-mist density holds even while a
+        //     scene sets scene.fog per frame).
+        //   • setHeightFog density <= 0 → "profile-only": scene.fog supplies the
+        //     density (keeping a live Fog-density slider effective in scenes that
+        //     drive scene.fog every frame), setHeightFog only shapes the profile.
+        //   • setHeightFog absent → scene.fog's density drives the medium with a
+        //     near-uniform default profile (baseY 0, huge falloff ≈ homogeneous).
+        //   • neither present → no air medium.
         //
         // The froxels run HETEROGENEOUS whenever a medium exists: per-slice
         // density, a froxel sun in-scatter term (1 RT shadow ray + a short
@@ -125,7 +129,8 @@ namespace threepp {
         // underwater murk is a SEPARATE medium (setUnderwaterMurk). nullopt = the
         // default near-uniform profile (no explicit height falloff).
         struct HeightFogSettings {
-            float density     = 0.02f;// σ_t at baseY
+            float density     = 0.02f;// σ_t at baseY; > 0 OVERRIDES scene.fog,
+                                      // <= 0 = profile-only (scene.fog's density)
             float baseY       = 0.0f;
             float falloff     = 80.0f;// exponential height scale (m)
             float noiseAmount = 0.6f; // 0 = smooth analytic, 1 = fully noise-modulated

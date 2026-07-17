@@ -413,10 +413,12 @@ private:
         // ONE primary knob: Fog density. This drives the RENDERER-side medium
         // (setHeightFog) — the froxel volumetrics (god rays, aerial perspective)
         // run automatically whenever a medium is present, so there is no separate
-        // "volumetric fog" toggle any more. NOTE: if the APP sets scene.fog, that
-        // takes precedence (it supplies density + colour); this control then only
-        // shapes the profile. The panel holds the renderer, not the scene, so it
-        // cannot read/write scene.fog directly — drive scene.fog from the app.
+        // "volumetric fog" toggle any more. This slider sets an EXPLICIT
+        // setHeightFog density > 0, which OVERRIDES scene.fog's density (the
+        // deliberate advanced override) — so it stays live even in scenes that set
+        // scene.fog every frame. Drag it to ~0 to hand density back to scene.fog.
+        // scene.fog still supplies the fog COLOUR; the panel holds the renderer,
+        // not the scene, so it cannot read/write scene.fog directly.
         {
             auto hf = vk_->heightFog();
             float fogDensity = hf ? hf->density : 0.f;

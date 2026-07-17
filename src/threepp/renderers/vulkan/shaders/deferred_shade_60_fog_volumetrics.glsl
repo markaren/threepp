@@ -45,20 +45,33 @@ float heightFogOpticalDepth(vec3 a, vec3 b) {
     const float H   = max(clouds.hfFalloff, 1e-3);
     const float ya  = max(a.y - clouds.hfBaseY, 0.0);
     const float yb  = max(b.y - clouds.hfBaseY, 0.0);
-    const float len = distance(a, b);
+    // Clamp the leg so a sentinel / near-infinite end point can NEVER overflow.
+    // compositeClouds fogs the cloud in-scatter over camP→(camP+dir·meanDist); on
+    // a clear-SKY pixel meanDist falls back to sceneDist = 1e30, and distance()
+    // SQUARES the components: (1e30)² = 1e60 ≫ fp32 max (3.4e38) → Inf. That Inf
+    // then poisons the product below — Inf·f = Inf, or Inf·0 = NaN when f underflows
+    // for a grazing/long leg (camera high above a shallow layer, ya/H ≳ 87 ⇒ ea→0)
+    // — and exp(-NaN) = NaN blacks out the whole sky. 1e7 m dwarfs any real scene
+    // leg; beyond it e^{-od} is already 0, so the clamp is invisible when legit.
+    const float len = min(distance(a, b), 1.0e7);
     // ∫ σ0 e^{-max(y,base)/H} ds along the segment (y linear in s):
-    //   σ0·len·e^{-ya/H}·(1 − e^{−Δ/H})/(Δ/H),   Δ = yb − ya.
-    // The (1−e^{−x})/x factor → 1 as x→0, evaluated by its Taylor series near 0
-    // instead of the DIFFERENCE e^{-ya/H} − e^{-yb/H}. That difference subtracts two
-    // near-equal fp32 values when H is HUGE (the near-uniform default scene.fog
-    // profile) — catastrophic cancellation that banded thick uniform fog (a bright
-    // horizon line in an enclosed room, and mis-weighted the GI/reflection
-    // recombine through fogTransmittance). This stable form is exactly σ0·len for
-    // a uniform medium. KEEP IN SYNC with deferred_filter_common.glsl.
-    const float x = (yb - ya) / H;
-    const float f = (abs(x) < 1e-3) ? (1.0 - 0.5 * x + x * x * (1.0 / 6.0))
-                                    : ((1.0 - exp(-x)) / x);
-    return clouds.hfDensity * len * exp(-ya / H) * f;
+    //   σ0·len·(e^{-ya/H} − e^{-yb/H})/((yb−ya)/H).
+    // ea, eb both ≤ 1 (arguments ≤ 0) so they NEVER overflow. The DIFFERENCE form
+    // (ea−eb)/x is exact everywhere except x→0, where it subtracts two near-equal
+    // fp32 values — catastrophic cancellation when H is HUGE (the near-uniform
+    // default scene.fog profile; banded thick uniform fog + mis-weighted the
+    // GI/reflection recombine). There the Taylor series of (1−e^{−x})/x is exact.
+    // KEEP IN SYNC with deferred_filter_common.glsl and particle.frag.
+    const float ea = exp(-ya / H);
+    const float eb = exp(-yb / H);
+    const float x  = (yb - ya) / H;
+    const float f  = (abs(x) < 1e-3) ? (ea * (1.0 - 0.5 * x + x * x * (1.0 / 6.0)))
+                                     : ((ea - eb) / x);
+    // Saturate the optical depth: exp(-80) ≈ 1.8e-35 ≈ 0, so anything thicker is
+    // fully extinct anyway. With len already finite the product is finite, so this
+    // guarantees a FINITE, non-NaN result at every caller's exp(-od) (the general
+    // fog-hardening rule: no exp(-opticalDepth) is ever fed an Inf/NaN).
+    return min(clouds.hfDensity * len * f, 80.0);
 }
 // Surface fog in heterogeneous mode: CLOSED-FORM height-fog extinction over the
 // WHOLE camera→surface leg + the ambient/skylight in-scatter fade toward the haze.
@@ -175,7 +188,7 @@ vec3 applySkyFog(vec3 sky, vec3 dir) {
     // finite leg) does the horizon closure, exactly as the homogeneous march did.
     float T;
     if (hetero && clouds.hfFalloff < 4000.0) {
-        T = exp(-heightFogSkyOpticalDepth(dir));
+        T = exp(-min(heightFogSkyOpticalDepth(dir), 80.0));// saturate: no Inf into exp
     } else {
         const float band     = exp(-elev * 2.5);            // haze concentrated near the horizon
         const float strength = 1.0 - exp(-sigma * 45.0);    // density → how much sky is obscured

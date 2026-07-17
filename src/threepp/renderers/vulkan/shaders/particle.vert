@@ -24,6 +24,9 @@ layout(location = 3) in vec3 inColor;
 
 layout(location = 0) out vec4 vColor;
 layout(location = 1) out vec2 vUv;
+// View-space particle centre (pre-billboard-expansion, so constant across the
+// quad) — the overlay fog pass needs the camera→particle leg length + world Y.
+layout(location = 2) out vec3 vViewPos;
 
 layout(push_constant) uniform Pc {
     mat4 modelView;   // 64 — viewUnjittered · meshWorld
@@ -44,6 +47,7 @@ void main() {
                         s * inUv.x + c * inUv.y);
 
     vec4 mvPosition = pc.modelView * vec4(inPos, 1.0);
+    vViewPos        = mvPosition.xyz;
     vec4 clipPos    = pc.proj * mvPosition;
 
     // proj[1][1] is the Y scale (≈ 1/tan(fov/2)); reverse-Z only rewrites the

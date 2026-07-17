@@ -1665,6 +1665,47 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                             Matrix4 viewM, projM;
                             std::memcpy(viewM.elements.data(), currViewUnjit_.data(), 64);
                             std::memcpy(projM.elements.data(), currProjUnjit_.data(), 64);
+
+                            // ── Overlay-fog snapshot (Phase 2b) ────────────────
+                            // Fog the world-space billboards (chimney smoke) that
+                            // the post-TAA overlay draws — they never saw the
+                            // unified air-fog / murk medium. particle.frag reads
+                            // this at set 1 and applies the closed-form fog. The
+                            // inverse-view supplies the camera height + the world-Y
+                            // row so the fragment can reconstruct each particle's
+                            // world Y from its view-space position. fogInscatter is
+                            // the LINEAR air-fog tint (no env term — the accepted
+                            // particle-domain approximation); murkInscatter the
+                            // linear murk tint. active==0 or a zero-length fog leg
+                            // → the shader bypasses, byte-identical to pre-Phase-2b.
+                            {
+                                Matrix4 viewInv = viewM;
+                                viewInv.invert();
+                                const auto& iv = viewInv.elements;
+                                GpuOverlayFogUbo of{};
+                                const bool medium = mediumActiveThisFrame_ || murkDensity_ > 0.f;
+                                of.fogActive     = medium ? 1.f : 0.f;
+                                of.hfDensity     = mediumActiveThisFrame_ ? mediumDensityThisFrame_ : 0.f;
+                                of.hfBaseY       = mediumBaseYThisFrame_;
+                                of.hfFalloff     = mediumFalloffThisFrame_;
+                                of.murkDensity   = murkDensity_;
+                                of.waterSurfaceY = fogWaterSurfaceY_;
+                                of.camWorldY     = static_cast<float>(iv[13]);
+                                of.viewToWorldY[0] = static_cast<float>(iv[1]);
+                                of.viewToWorldY[1] = static_cast<float>(iv[5]);
+                                of.viewToWorldY[2] = static_cast<float>(iv[9]);
+                                of.fogInscatter[0] = mediumTintThisFrame_[0];
+                                of.fogInscatter[1] = mediumTintThisFrame_[1];
+                                of.fogInscatter[2] = mediumTintThisFrame_[2];
+                                of.murkInscatter[0] = murkColor_[0];
+                                of.murkInscatter[1] = murkColor_[1];
+                                of.murkInscatter[2] = murkColor_[2];
+                                uploadHostVisible(ctx->allocator(), overlayFogUbos_[currentFrame],
+                                                  &of, sizeof(of));
+                                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                        particlePipelineLayout_, 1, 1,
+                                                        &overlayFogDescSets_[currentFrame], 0, nullptr);
+                            }
                             VkPipeline curParticlePipe = VK_NULL_HANDLE;
 
                             for (const auto& en : lastVisibleEntries_) {

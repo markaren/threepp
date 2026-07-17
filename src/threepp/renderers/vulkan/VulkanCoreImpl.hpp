@@ -833,6 +833,11 @@ namespace threepp {
         float mediumBaseYThisFrame_   = 0.0f;
         float mediumFalloffThisFrame_ = 1.0e6f;
         float mediumNoiseThisFrame_   = 0.0f;
+        // Air-fog single-scattering tint (= scene.fog colour when present, else
+        // white — mirrors the shade pass's medAlbedo). The overlay-fog snapshot
+        // fades particles toward this (× no env, the accepted particle-domain
+        // approximation). Consumed by the overlay particle draw in the record.
+        float mediumTintThisFrame_[3] = {1.0f, 1.0f, 1.0f};
         // Near-uniform default profile falloff (m) when scene.fog drives the
         // medium without an explicit setHeightFog profile. exp(-y/H) ≈ 1 over any
         // real scene extent, and heightFogOpticalDepth clamps y<baseY to full
@@ -2016,6 +2021,36 @@ namespace threepp {
         Image2D particleWhiteTex_{};
         static constexpr uint32_t kMaxParticleTexPerFrame = 64;
 
+        // ── Overlay-pass fog (Phase 2b) ─────────────────────────────────────
+        // The post-TAA overlay draws world-space ParticleSystem billboards
+        // (chimney smoke etc.) that never saw the unified air-fog / murk medium.
+        // particle.frag now binds this per-frame snapshot at SET 1 (the texture
+        // stays at set 0) and applies the closed-form fog per fragment. The
+        // world-space Sprite pipeline shares particlePipelineLayout_ but its
+        // shader does not reference set 1, so it simply ignores the (still-bound)
+        // fog set. std140 — mirrors particle.frag's OverlayFog block.
+        struct GpuOverlayFogUbo {
+            float fogActive;     // >0.5 = a medium is present this frame
+            float hfDensity;     // air-medium σ_t at baseY (0 = no air fog)
+            float hfBaseY;
+            float hfFalloff;     // huge ≈ uniform
+            float murkDensity;   // underwater-murk σ_t (0 = off)
+            float waterSurfaceY; // world Y of the water surface (murk clip)
+            float camWorldY;     // camera world Y
+            float _pad0;
+            float viewToWorldY[3];// world-Y row of the inverse-view
+            float _pad1;
+            float fogInscatter[3];// LINEAR air-fog in-scatter radiance (fade target)
+            float _pad2;
+            float murkInscatter[3];// LINEAR murk in-scatter radiance (fade target)
+            float _pad3;
+        };
+        static_assert(sizeof(GpuOverlayFogUbo) == 80);
+        VkDescriptorSetLayout overlayFogDescSetLayout_ = VK_NULL_HANDLE;
+        VkDescriptorPool      overlayFogDescPool_      = VK_NULL_HANDLE;
+        std::array<VkDescriptorSet, kFramesInFlight> overlayFogDescSets_{};
+        std::array<Buffer, kFramesInFlight>          overlayFogUbos_{};
+
         // Per-BufferGeometry vertex/index buffers for particle billboards. The
         // animated attributes (position/normal/color) are re-uploaded every frame
         // (version-gated); uv + index are static (uploaded once). Particles own
@@ -3075,6 +3110,10 @@ namespace threepp {
             for (auto& pool : particleDescPools_) {
                 if (pool) vkDestroyDescriptorPool(d, pool, nullptr);
             }
+            // Overlay-fog UBO resources (Phase 2b).
+            if (overlayFogDescPool_)        vkDestroyDescriptorPool(d, overlayFogDescPool_, nullptr);
+            if (overlayFogDescSetLayout_)   vkDestroyDescriptorSetLayout(d, overlayFogDescSetLayout_, nullptr);
+            for (auto& b : overlayFogUbos_) destroyBuffer(ctx->allocator(), b);
             if (spriteWorldPipeline_)       vkDestroyPipeline(d, spriteWorldPipeline_, nullptr);
             destroyBuffer(ctx->allocator(), spriteQuadVtx_);
             destroyBuffer(ctx->allocator(), spriteQuadIdx_);

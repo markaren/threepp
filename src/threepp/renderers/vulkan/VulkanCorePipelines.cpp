@@ -1862,18 +1862,77 @@ void VulkanRendererCore::CoreImpl::createParticlePipeline() {
             check(vkCreateDescriptorSetLayout(ctx->device(), &dslci, nullptr, &particleDescSetLayout_),
                   "vkCreateDescriptorSetLayout(particle)");
 
+            // set 1, binding 0: the unified-fog snapshot UBO (Phase 2b). Bound
+            // once per frame; particle.frag fogs world-space billboards with it.
+            // The world-space Sprite pipeline shares this layout but never
+            // references set 1, so it ignores the (still-bound) descriptor.
+            VkDescriptorSetLayoutBinding fb{};
+            fb.binding         = 0;
+            fb.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            fb.descriptorCount = 1;
+            fb.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutCreateInfo fdslci{};
+            fdslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            fdslci.bindingCount = 1;
+            fdslci.pBindings    = &fb;
+            check(vkCreateDescriptorSetLayout(ctx->device(), &fdslci, nullptr, &overlayFogDescSetLayout_),
+                  "vkCreateDescriptorSetLayout(overlayFog)");
+
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             pcRange.offset     = 0;
             pcRange.size       = 128;// mat4 modelView (64) + mat4 proj (64)
+            const VkDescriptorSetLayout setLayouts[2] = {particleDescSetLayout_, overlayFogDescSetLayout_};
             VkPipelineLayoutCreateInfo plci{};
             plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            plci.setLayoutCount         = 1;
-            plci.pSetLayouts            = &particleDescSetLayout_;
+            plci.setLayoutCount         = 2;
+            plci.pSetLayouts            = setLayouts;
             plci.pushConstantRangeCount = 1;
             plci.pPushConstantRanges    = &pcRange;
             check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &particlePipelineLayout_),
                   "vkCreatePipelineLayout(particle)");
+
+            // Persistent per-FIF fog UBO buffers + descriptor sets (host-visible,
+            // memcpy'd each frame in the record). One pool, kFramesInFlight sets.
+            for (auto& b : overlayFogUbos_) {
+                b = createBuffer(ctx->allocator(), ctx->device(), sizeof(GpuOverlayFogUbo),
+                                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
+                                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            }
+            {
+                VkDescriptorPoolSize fps{};
+                fps.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                fps.descriptorCount = kFramesInFlight;
+                VkDescriptorPoolCreateInfo fdpci{};
+                fdpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+                fdpci.maxSets       = kFramesInFlight;
+                fdpci.poolSizeCount = 1;
+                fdpci.pPoolSizes    = &fps;
+                check(vkCreateDescriptorPool(ctx->device(), &fdpci, nullptr, &overlayFogDescPool_),
+                      "vkCreateDescriptorPool(overlayFog)");
+                for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                    VkDescriptorSetAllocateInfo asi{};
+                    asi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                    asi.descriptorPool     = overlayFogDescPool_;
+                    asi.descriptorSetCount = 1;
+                    asi.pSetLayouts        = &overlayFogDescSetLayout_;
+                    check(vkAllocateDescriptorSets(ctx->device(), &asi, &overlayFogDescSets_[f]),
+                          "vkAllocateDescriptorSets(overlayFog)");
+                    VkDescriptorBufferInfo dbi{};
+                    dbi.buffer = overlayFogUbos_[f].handle;
+                    dbi.offset = 0;
+                    dbi.range  = sizeof(GpuOverlayFogUbo);
+                    VkWriteDescriptorSet w{};
+                    w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    w.dstSet          = overlayFogDescSets_[f];
+                    w.dstBinding      = 0;
+                    w.descriptorCount = 1;
+                    w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                    w.pBufferInfo     = &dbi;
+                    vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                }
+            }
 
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 VkDescriptorPoolSize ps{};
@@ -1912,6 +1971,15 @@ void VulkanRendererCore::CoreImpl::createParticlePipeline() {
             stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
             stages[1].module = frag;
             stages[1].pName  = "main";
+            // Fragment spec constant 0 (kAdditive): the fog fade injects the mist
+            // colour for alpha smoke but only ATTENUATES additive glow (see
+            // particle.frag). Normal=0, Additive=1.
+            static const uint32_t kSpecAlpha    = 0u;
+            static const uint32_t kSpecAdditive = 1u;
+            VkSpecializationMapEntry particleSpecEntry{0, 0, sizeof(uint32_t)};
+            VkSpecializationInfo particleSpecAlpha{1, &particleSpecEntry, sizeof(uint32_t), &kSpecAlpha};
+            VkSpecializationInfo particleSpecAdd{1, &particleSpecEntry, sizeof(uint32_t), &kSpecAdditive};
+            stages[1].pSpecializationInfo = &particleSpecAlpha;// Normal variant
 
             // 4 separate vertex bindings: pos(0), normal(1), uv(2), color(3).
             VkVertexInputBindingDescription vibs[4]{};
@@ -2025,7 +2093,12 @@ void VulkanRendererCore::CoreImpl::createParticlePipeline() {
             cbasAdd[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             VkPipelineColorBlendStateCreateInfo cbAdd = cbAlpha;
             cbAdd.pAttachments = cbasAdd;
+            // Additive variant reuses the same stages but with kAdditive=1 so the
+            // fog fade attenuates the glow without injecting the mist colour.
+            VkPipelineShaderStageCreateInfo stagesAdd[2] = {stages[0], stages[1]};
+            stagesAdd[1].pSpecializationInfo = &particleSpecAdd;
             VkGraphicsPipelineCreateInfo gpciAdd = gpci;
+            gpciAdd.pStages            = stagesAdd;
             gpciAdd.pDepthStencilState = &dsAdd;
             gpciAdd.pColorBlendState   = &cbAdd;
             check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciAdd, nullptr,

@@ -797,6 +797,14 @@ int main(int argc, char** argv) {
     // field [0, 512 m] and the per-pixel march the far tail — one continuous fog.
     bool mistOn = false;
     float mistDensity = 0.0012f;
+    float mistFalloff = 300.f;  // --mistfall F: --mist profile falloff (m). Small (e.g.
+                                // 40-60) = a shallow ground layer the aerial cam sees
+                                // from ABOVE (fog-scout: camera-above-the-layer repro).
+    bool  noClouds = false;     // --noclouds: force the cloud deck off (scout: isolate
+                                // real clouds from fog-path artefacts under fog).
+    float climbRate = 0.f;      // --climb R: in shot mode, raise the camera Y by R m per
+                                // frame across the capture — reproduces "flying up/out of
+                                // the mist layer" in motion (regression: black on exit).
     float startFogScale = 0.f;  // --fogscale S: AIR-fog (scene.fog) density scale.
                                 // 0 (default) = clear air + underwater murk only;
                                 // raise it (or the "haze" slider) to fill the fjord
@@ -817,6 +825,9 @@ int main(int argc, char** argv) {
             mistOn = true;
             if (i + 1 < argc && argv[i + 1][0] != '-') mistDensity = static_cast<float>(std::atof(argv[++i]));
         }
+        else if (std::strcmp(argv[i], "--mistfall") == 0 && i + 1 < argc) mistFalloff = static_cast<float>(std::atof(argv[++i]));
+        else if (std::strcmp(argv[i], "--noclouds") == 0) noClouds = true;
+        else if (std::strcmp(argv[i], "--climb") == 0 && i + 1 < argc) climbRate = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--fogscale") == 0 && i + 1 < argc) startFogScale = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--noae") == 0) noAutoExposure = true;
     }
@@ -837,9 +848,12 @@ int main(int argc, char** argv) {
     // slider. The volumetrics follow automatically (no setVolumetricFog opt-in).
     if (mistOn) {// --mist: shape the air medium as a tall ground-mist PROFILE
         VulkanRenderer::HeightFogSettings hf;
-        hf.density = mistDensity;// used only when the haze slider leaves scene.fog off
+        hf.density = mistDensity;// explicit density > 0 → OVERRIDES scene.fog's
+                                 // density (the advanced override); the mist holds
+                                 // its shape even with the haze slider up
         hf.baseY = 0.f;
-        hf.falloff = 300.f;   // tall ≈ homogeneous over the shaft zone
+        hf.falloff = mistFalloff;// tall (default 300) ≈ homogeneous over the shaft zone;
+                                 // small (--mistfall) = a shallow ground layer
         hf.noiseAmount = 0.f; // smooth analytic
         renderer.setHeightFog(hf);
     }
@@ -1364,6 +1378,14 @@ int main(int argc, char** argv) {
                 camera.position.set(padX, 7.f, kPadZ - 120.f);
                 controls.target.set(channelCenterX(-700.f), 90.f, -700.f);
                 break;
+            case 6:// HIGH overlook, steep pitch DOWN — terrain+water fill most of
+                   // the frame while the horizon sits high, leaving a broad SKY band
+                   // (with the cloud deck) across the top. This is the black-sky
+                   // repro: sky pixels feed compositeClouds a 1e30 sceneDist, whose
+                   // camera→cloud fog leg overflowed the closed-form optical depth.
+                camera.position.set(padX + 80.f, 380.f, kPadZ + 300.f);
+                controls.target.set(channelCenterX(-350.f), 0.f, -350.f);
+                break;
         }
         controls.update();
     };
@@ -1373,8 +1395,19 @@ int main(int argc, char** argv) {
     float cycleSpeed = startCycle;// hours per second (0 = paused)
     float windSpeed = 4.5f;
     float fogScale = startFogScale;
-    bool cloudsOn = true;
+    bool cloudsOn = !noClouds;
     float cloudCover = 0.42f;
+    // Cloud application is ON-CHANGE, not every-frame: the fjord used to call
+    // setClouds() unconditionally each frame, which STOMPED the shared
+    // RendererSettings panel's cloud checkbox/sliders (uncheck → the demo
+    // re-enabled it next frame → the getter-driven box flipped back). We now
+    // re-apply only when one of the demo's own cloud inputs actually changes, so
+    // external panel edits stick. The per-frame wind DRIFT itself lives in the
+    // shader timeSec, so on-change writes do not freeze it.
+    bool  cloudsApplied      = false;   // has the demo pushed its state at least once?
+    bool  appliedCloudsOn    = false;
+    float appliedCloudCover  = -1.f;
+    float appliedWindSpeed   = -1.f;
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -1503,17 +1536,26 @@ int main(int argc, char** argv) {
         // Volumetric cloud deck hugging the ridge line (peaks ~470 m) — the
         // summits pierce the base. The wind slider drives the drift — clouds
         // at altitude run ~3× the surface wind, on the same heading the ocean
-        // waves use (setWind dir 2.1 rad).
-        if (cloudsOn) {
-            VulkanRenderer::CloudSettings cl;
-            cl.coverage = cloudCover;
-            cl.bottomY = 250.f;
-            cl.topY = 750.f;
-            cl.wind.set(std::cos(2.1f), 0.f, std::sin(2.1f));
-            cl.wind.multiplyScalar(windSpeed * 3.f);
-            renderer.setClouds(cl);
-        } else {
-            renderer.setClouds(std::nullopt);
+        // waves use (setWind dir 2.1 rad). ON-CHANGE only (see the trackers
+        // above): re-applying every frame would overwrite the shared panel's
+        // cloud controls. --noclouds keeps cloudsOn permanently false.
+        if (!cloudsApplied || cloudsOn != appliedCloudsOn ||
+            cloudCover != appliedCloudCover || windSpeed != appliedWindSpeed) {
+            if (cloudsOn) {
+                VulkanRenderer::CloudSettings cl;
+                cl.coverage = cloudCover;
+                cl.bottomY = 250.f;
+                cl.topY = 750.f;
+                cl.wind.set(std::cos(2.1f), 0.f, std::sin(2.1f));
+                cl.wind.multiplyScalar(windSpeed * 3.f);
+                renderer.setClouds(cl);
+            } else {
+                renderer.setClouds(std::nullopt);
+            }
+            cloudsApplied     = true;
+            appliedCloudsOn   = cloudsOn;
+            appliedCloudCover = cloudCover;
+            appliedWindSpeed  = windSpeed;
         }
 
         // Window / lantern glow after sundown. emissiveIntensity is a plain
@@ -1571,6 +1613,21 @@ int main(int argc, char** argv) {
             camera.position.copy(eye);
             camera.lookAt(look);
         } else {
+            controls.update();
+        }
+        // --climb R (shot mode): rise R m/frame, keeping the shot cam's look —
+        // reproduces "flying up/out of the mist layer" in MOTION (the black-on-
+        // exit regression). The layer is anchored at baseY; climbing lifts the
+        // camera through and above it while the temporal history (froxel EMA,
+        // TAA) tracks the transition.
+        if (!shotPath.empty() && climbRate > 0.f) {
+            camera.position.y += climbRate;
+            // Lift the look target in lock-step so the PITCH stays constant while
+            // the camera climbs — the horizon/sky band above the cloud layer stays
+            // framed (the up-ray clear-sky pixels where the 1e30 cloud-fog leg
+            // NaN'd). Without this the fixed target makes the pitch steepen into a
+            // pure top-down view (all down-rays), hiding the sky regression.
+            controls.target.y += climbRate;
             controls.update();
         }
 
