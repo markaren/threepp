@@ -140,6 +140,7 @@ namespace threepp::terrain {
                 t->wrapS = t->wrapT = TextureWrapping::Repeat;
                 t->magFilter = Filter::Linear;
                 t->minFilter = Filter::LinearMipmapLinear;
+                t->generateMipmaps = true;// DataTexture defaults false → GL black
                 return t;
             };
             FacadeSet s;

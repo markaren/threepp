@@ -309,6 +309,7 @@ namespace threepp::road {
                 tex->colorSpace = ColorSpace::sRGB;
                 tex->magFilter = Filter::Linear;
                 tex->minFilter = Filter::LinearMipmapLinear;
+                tex->generateMipmaps = true;// DataTexture defaults false → GL black
                 tex->wrapS = TextureWrapping::ClampToEdge;
                 tex->wrapT = TextureWrapping::Repeat;// tiles along the road length
                 mat->map = tex;
@@ -649,6 +650,7 @@ namespace threepp::road {
             tex->colorSpace = ColorSpace::sRGB;
             tex->magFilter = Filter::Linear;
             tex->minFilter = Filter::LinearMipmapLinear;
+            tex->generateMipmaps = true;// DataTexture defaults false → GL black
             tex->wrapS = TextureWrapping::ClampToEdge;
             tex->wrapT = TextureWrapping::Repeat;
             mat->map = tex;

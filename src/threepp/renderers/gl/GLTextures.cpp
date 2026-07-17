@@ -116,7 +116,19 @@ void gl::GLTextures::setTextureParameters(GLuint textureType, Texture& texture) 
     }
 
     glTexParameteri(textureType, GL_TEXTURE_MAG_FILTER, filterToGL[texture.magFilter]);
-    glTexParameteri(textureType, GL_TEXTURE_MIN_FILTER, filterToGL[texture.minFilter]);
+
+    // A mipmap min filter on a texture that will never get a mip chain
+    // (generateMipmaps off, no baked mipmaps) makes the texture INCOMPLETE in
+    // GL — every sample returns black. Fall back to the non-mip equivalent.
+    Filter minFilter = texture.minFilter;
+    if (minFilter != Filter::Nearest && minFilter != Filter::Linear &&
+        !texture.generateMipmaps && texture.mipmaps().empty()) {
+        minFilter = (minFilter == Filter::NearestMipmapNearest ||
+                     minFilter == Filter::NearestMipmapLinear)
+                            ? Filter::Nearest
+                            : Filter::Linear;
+    }
+    glTexParameteri(textureType, GL_TEXTURE_MIN_FILTER, filterToGL[minFilter]);
 
     if (texture.anisotropy > 1 || properties->textureProperties.get(&texture)->currentAnisotropy) {
 
