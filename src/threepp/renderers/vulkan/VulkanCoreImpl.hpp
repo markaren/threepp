@@ -1769,7 +1769,7 @@ namespace threepp {
             Image2D       uv;           // rgba16f — material UV in .rg
             Image2D       albedo;       // rgba8 unorm — linear base colour in .rgb, metalness in .a (raster-first deferred input)
             Image2D       indirect;     // rgba16f — demodulated diffuse-indirect irradiance (deferred denoiser scratch; STORAGE, not an attachment)
-            Image2D       momentsSq;    // r32f — temporally-accumulated E[L²] of the indirect luminance (SVGF variance: var = E[L²] - lum(indirect)²); r32 because the square overflows fp16 at lum≈256 (physical-light scenes); STORAGE+SAMPLED, ping-ponged like indirect
+            Image2D       momentsSq;    // rg32f — .r = temporally-accumulated E[L²] of the indirect luminance (SVGF variance: var = E[L²] - lum(indirect)²; r32 because the square overflows fp16 at lum≈256); .g = GI content-change trend (antilag: stale moving-object contact-darkening/bounce fades at content rate); STORAGE+SAMPLED, ping-ponged like indirect
             Image2D       atrousA;      // rgba16f — SVGF multi-pass à-trous ping-pong (rgb=GI, a=variance); STORAGE scratch
             Image2D       atrousB;      // rgba16f — SVGF multi-pass à-trous ping-pong (the other half)
             Image2D       reflect;      // rgba16f — sharp 1-mirror-ray reflection radiance (.rgb), demodulated; roughness-blurred by the reflection denoise. STORAGE

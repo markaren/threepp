@@ -151,10 +151,10 @@ layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;
 layout(set = 0, binding = 17) uniform sampler2D giPrevTex;      // 1-frame GI history (reprojected)
 layout(set = 0, binding = 18) uniform sampler2D gbufMotionTex;  // .rg = NDC motion
 layout(set = 0, binding = 19) uniform sampler2D gbufNormalPrevTex;// prev world normals (geometric disocclusion)
-layout(set = 0, binding = 20, r32f) uniform image2D momentsImage; // SVGF E[L²] accumulator (this frame; r32 — the square overflows fp16 at lum≈256)
+layout(set = 0, binding = 20, rg32f) uniform image2D momentsImage; // .r = SVGF E[L²] accumulator (r32 — the square overflows fp16 at lum≈256); .g = GI content-change trend (antilag)
 layout(set = 0, binding = 21) uniform sampler2D momentsPrevTex;   // PREV E[L²] (reprojected SVGF history)
 layout(set = 0, binding = 24) uniform sampler2D gbufDepthPrevTex; // PREV depth (depth-discontinuity disocclusion)
-layout(set = 0, binding = 55) uniform usampler2D gbufIdsPrevTex;  // PREV ids (.x = instanceId+1) — moving-mesh trailing-edge disocclusion (reflReproject)
+layout(set = 0, binding = 55) uniform usampler2D gbufIdsPrevTex;  // PREV ids (.x = instanceId+1) — moving-mesh trailing-edge GI disocclusion
 layout(set = 0, binding = 25, rgba16f) uniform image2D reflectImage;// sharp mirror-ray reflection radiance (.rgb pre-weighted, .a=roughness); denoise blurs by roughness
 layout(set = 0, binding = 26) uniform sampler2D reflectPrevTex;   // PREV reflect (other fif) — temporal AA history
 // ReSTIR DI reservoir ping-pong (STORAGE images, GENERAL layout).
@@ -444,6 +444,20 @@ vec3 compositeClouds(vec3 col, ivec2 px, float sceneDist) {
          + cl.rgb * fogT
          + medAlbedo * fogLight * ((1.0 - fogT) * (1.0 - cl.a));
 }
+
+// Set per-ray by giRadiance when the 1-bounce hit lands on a currently-MOVING
+// mesh (sticky GeometryDesc._pad); gatherEnv folds the RAY-COUNT fraction into
+// gGiMovFrac. Ray-count, not luminance-weighted — a dark occlusion hit (the
+// car blocking a road pixel's sky = the soft AO blob around the car)
+// contributes no luminance but fully stale history. The GI temporal cuts its
+// cap while the fraction is significant (dwell), which also fixes the
+// departure side by construction: the deposit never gets deep, so the ground
+// the car just left recovers in ~3 frames instead of dragging the contact
+// darkening as a trailing smear (the artifact the RT-AO/GI toggle isolates;
+// the luminance-trend antilag alone is too weak here — the 1-spp gather's
+// noise drowns the trend signal that works for the low-variance channels).
+bool  gGiRayHitMoved = false;
+float gGiMovFrac     = 0.0;
 
 #include "deferred_shade_10_lighting_utils.glsl"
 #include "deferred_shade_20_restir_di.glsl"
@@ -944,6 +958,7 @@ void main() {
         }
     } else if (aoOn) {
         float openness;
+        gGiMovFrac = 0.0;// set by gatherEnv: fraction of GI rays hitting moving geometry
         diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, openness) + lights.ambient * openness;
     } else {
         diffInd = sampleEnvLod(N, maxLod) + lights.ambient;
@@ -1463,6 +1478,30 @@ void main() {
                 }
             }
             valid = found;
+            // MOVING-MESH TRAILING-EDGE GUARD: the joint test above is deliberately
+            // permissive ("was my surface ANYWHERE in the 3×3?") and its depth
+            // tolerance is RELATIVE (10% of view-Z) — a low-profile moving object
+            // over ground (car over road: Δz≈1.2 m at 14 m view-Z → tolerance 1.4 m;
+            // feet over floor: Δz≈0.2 m) passes BOTH gates at its trailing edge, so
+            // the bilinear giPrevTex read blends the departed object's bright/dark
+            // GI history into the revealed ground = the "history edge smear" behind
+            // every moving car / the character's dust-trail feet. The ID compare is
+            // exact where depth is proportionally blind. Gated on the prev mesh
+            // being CURRENTLY MOVING (GeometryDesc._pad), which retires the classic
+            // ID-guard failure (draw-list renumber → global false reset; see the
+            // NOT-prev-IDs note in DeferredShade.cpp — static scenes can't fire
+            // this, and topology reorders clear the gbuf so pid=0 skips). All 4
+            // texels of the history read's bilinear footprint are checked — the
+            // snap texel alone leaves a 1-px bleed.
+            if (valid) {
+                const vec2  fpx = prevUv * vec2(float(pc.width), float(pc.height)) - 0.5;
+                const ivec2 fb  = ivec2(floor(fpx));
+                for (int dy = 0; dy <= 1 && valid; ++dy)
+                    for (int dx = 0; dx <= 1 && valid; ++dx) {
+                        const uint pid = texelFetch(gbufIdsPrevTex, clamp(fb + ivec2(dx, dy), ivec2(0), mx), 0).x;
+                        if (pid != id && pid > 0u && geoms[pid - 1u]._pad != 0u) valid = false;
+                    }
+            }
         }
         // Checkerboard carry: prefer the reprojected history; if this skip-
         // frame pixel's reproject fails (rare gate mismatch), carry the
@@ -1510,12 +1549,47 @@ void main() {
         // the pin may sit an ULP off 6.0 — both gates have miles of margin.
         const float capF = mix(mix(48.0, 6.0, smoothstep(0.002, 0.03, max(length(motionGL), giCamNdc))),
                                6.0, ifIrradianceReactivity(giFlagsZ));
+        // CONTENT-CHANGE TREND ANTILAG (moments .g) — the reflection/shadow
+        // channels' mechanism, applied to the GI accumulator (previously the only
+        // temporal channel WITHOUT one). The receiver's motion vectors can't see a
+        // MOVING OCCLUDER or a moving bounce source: ground the car just vacated
+        // reprojects "valid" while its accumulated gather is stale (the car's
+        // contact darkening / body bounce), so a long motion cap drags it as a
+        // dark/bright smear trailing the object (worst on near-screen-static
+        // ground in a chase cam, cap up to 48). Zero-mean 1-spp boil ALTERNATES
+        // around the mean (trend EMA → ~±0.2, no collapse); real content change
+        // pushes the SAME direction every frame (EMA → ±1) → cap collapses to 3 →
+        // the mean tracks the change in a few frames. Same smoothstep window as
+        // the reflection channel's trendCap.
+        const float curLum  = dot(diffInd, vec3(0.2126, 0.7152, 0.0722));
+        const float prevLum = dot(prev, vec3(0.2126, 0.7152, 0.0722));
+        const float prevTr  = valid ? texture(momentsPrevTex, prevUv).g
+                                    : (giSkip ? texture(momentsPrevTex, uv).g : 0.0);
+        const float sdev    = clamp((curLum - prevLum) / (0.05 + 0.25 * max(curLum, prevLum)), -1.0, 1.0);
+        const float trend   = giSkip ? prevTr : mix(prevTr, sdev, 0.34);// ~3-frame EMA
+        float capTr         = mix(capF, 3.0, smoothstep(0.45, 0.9, abs(trend)));
+        // MOVING-CONTENT dwell cut (see gGiMovFrac decl): while this pixel's
+        // gather sees moving geometry, its irradiance is attached to the mover,
+        // not the surface — keep the history shallow so nothing is left to smear
+        // when the mover departs. Statistics-free where the trend (drowned by
+        // 1-spp gather noise) limps. The adaptive-spp tier reads the short
+        // history and supplies extra rays here (rays-follow-short-history).
+        // RELEASE with hysteresis: the dwell pin (histLen ≤ 3) doubles as the
+        // "was under moving content" marker — hold the short-history regime
+        // until the reprojected history agrees with the fresh gather (|sdev|
+        // gate; adaptive-spp gives these short-history pixels extra rays, so
+        // the comparison isn't 1-spp flicker), then let history regrow. Kills
+        // both the harmonic dark tail the growing histLen left behind a
+        // departing occluder AND the cap-regime stutter of a per-frame noisy
+        // flag.
+        const bool giRelease = valid && prevT.a <= 3.5 && abs(sdev) > 0.5;
+        if (gGiMovFrac > 0.1 || giRelease) capTr = min(capTr, 3.0);
         // Skip frames carry the history UNCHANGED (no new sample → no histLen
         // increment, no blend); trace frames accumulate as before.
         const float histLen = giSkip ? max(prevT.a, 1.0)
-                                     : (valid ? min(prevT.a + 1.0, capF) : 1.0);
+                            : (valid ? min(prevT.a + 1.0, capTr) : 1.0);
         const vec3  accum   = giSkip ? prevT.rgb
-                                     : (valid ? mix(prev, diffInd, 1.0 / histLen) : diffInd);
+                            : (valid ? mix(prev, diffInd, 1.0 / histLen) : diffInd);
         imageStore(indirectImage, px, vec4(accum, histLen));
 
         // SVGF second moment E[L²] of the indirect luminance — accumulated with the
@@ -1524,11 +1598,10 @@ void main() {
         // crisp); flickering 1-spp noise has high var (blur → clean). E[L] needs no
         // storage: luminance is linear, so lum(accum) (the running-mean GI's luma)
         // IS the running-mean luminance E[L].
-        const float curLum = dot(diffInd, vec3(0.2126, 0.7152, 0.0722));
         const float prevSq = valid ? texture(momentsPrevTex, prevUv).r
                                    : (giSkip ? texture(momentsPrevTex, uv).r : (curLum * curLum));
         const float accSq  = giSkip ? prevSq : mix(prevSq, curLum * curLum, 1.0 / histLen);
-        imageStore(momentsImage, px, vec4(accSq, 0.0, 0.0, 0.0));
+        imageStore(momentsImage, px, vec4(accSq, trend, 0.0, 0.0));
 
         // ── Shadow-ratio temporal accumulation ───────────────────────────────
         // Same reproject + disocclusion gates as the GI above (prevUv/valid are

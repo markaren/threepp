@@ -425,8 +425,11 @@ void VulkanRendererCore::CoreImpl::createRasterGbufImages(uint32_t w, uint32_t h
                 // exposed indirect luminance, so fp16 overflows to Inf once
                 // lum > ~256 — routine with physical light units (sun in klux) —
                 // and Inf−E[L]² turns the variance NaN. R32F storage is a
-                // mandatory format; the extra bandwidth is 2 B/px.
-                g.momentsSq = createAttachmentImage2D(w, h, VK_FORMAT_R32_SFLOAT,
+                // mandatory format; the extra bandwidth is 2 B/px. .g carries the
+                // GI content-change TREND (deferred_shade antilag: a moving
+                // object's stale contact-darkening/bounce fades at content rate
+                // instead of dragging as a smear) — RG32F is likewise mandatory.
+                g.momentsSq = createAttachmentImage2D(w, h, VK_FORMAT_R32G32_SFLOAT,
                                                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                       VK_IMAGE_ASPECT_COLOR_BIT, N("momentsSq"));
                 // SVGF multi-pass à-trous ping-pong scratch (rgb=GI, a=variance).

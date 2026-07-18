@@ -308,6 +308,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
 // enclosed scenes don't leak sky while open scenes still get it.
 vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed, out bool missed) {
     missed = false;
+    gGiRayHitMoved = false;// set below on a 1-bounce hit on a MOVING mesh (GI dwell cut)
     rayQueryEXT rq;
     // kRayMaskOpaque: the cheap GI bounce passes through blend decals/glass and
     // shades the opaque surface behind them (shading a decal quad as an opaque
@@ -329,6 +330,7 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
 
     const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+    gGiRayHitMoved = (geoms[hitId]._pad != 0u);// moving 1-bounce hit (before the unlit early-out — those count too)
     if (hm.roughness < 0.0) return hAlbedo;// unlit hit (e.g. a pure-emissive proxy)
 
     if (dot(hitN, -dir) < 0.0) hitN = -hitN;

@@ -28,6 +28,7 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
                                 blueNoiseDef(uvec2(px), frame, 1u));
         vec3  acc   = vec3(0.0);
         float missN = 0.0;
+        float movN  = 0.0;// rays whose 1-bounce hit a MOVING mesh (→ gGiMovFrac dwell cut)
         for (int s = 0; s < N_GI; ++s) {
             const float u1 = fract((float(s) + 0.5) / float(N_GI) + bnOff.x);
             const float u2 = fract(radicalInverse2(uint(s))         + bnOff.y);
@@ -44,7 +45,9 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
             const float gl = max(max(gi.r, gi.g), gi.b);
             if (gl > 6.0) gi *= 6.0 / gl;
             acc += gi;
+            if (gGiRayHitMoved) movN += 1.0;
         }
+        gGiMovFrac = movN / float(N_GI);// ray-count fraction (dark occlusion hits count fully)
         // PROBE-GI mode: ambient is a sky-fill term, so gate it by the gather's
         // REAL sky visibility (the deterministic path's openness semantics) —
         // an enclosed corridor must not receive scene ambient it can't see; the
