@@ -1078,6 +1078,13 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/froxel_integrate.comp"
         kFroxelIntegrateCompSpv
         _froxel_integrate_spv_h)
+    # Particle billboard lighting (deferred): per-particle light field (sun ×
+    # RT shadow, clustered lights, probe/env ambient) + camera→particle fog leg
+    # for the overlay billboards. See DeferredShade::recordParticleLight.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle_light.comp"
+        kParticleLightCompSpv
+        _particle_light_spv_h)
     # Half-res volumetric cloud march (deferred): far-field raymarched cloud
     # deck + temporal reprojection. See DeferredShade::recordCloudMarch.
     compile_vulkan_shader(threepp

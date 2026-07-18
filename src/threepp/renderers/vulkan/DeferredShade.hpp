@@ -247,6 +247,27 @@ namespace threepp::vulkan {
         // compute→compute barrier after. Only dispatch when clouds are on.
         void recordCloudShadow(VkCommandBuffer cb, uint32_t frame, uint32_t frameCounter);
 
+        // Particle billboard lighting (particle_light.comp): one thread per
+        // live overlay particle evaluates the deferred light field at the
+        // particle's world center (sun × RT shadow × cloud shadow, clustered
+        // point/spot lights, probe/env ambient) + the camera→particle fog leg,
+        // writing 2×vec4 per particle into the caller-owned output SSBO the
+        // billboard vertex shader reads. Record AFTER the shade dispatch (its
+        // barriers already made the TLAS/cluster/froxel/cloud/probe inputs
+        // compute-visible); the caller owns the output-write → vertex-read
+        // barrier. ioSet = a set of particleIoLayout() {centers, lightOut}
+        // written by the caller (buffers are the caller's, fixed at creation).
+        void recordParticleLight(VkCommandBuffer cb, uint32_t frame,
+                                 VkDescriptorSet ioSet,
+                                 uint32_t count, uint32_t centerBase,
+                                 uint32_t clusterLightCount,
+                                 bool froxelsActive, uint32_t envMipCount);
+
+        // Layout of the particle IO set (binding 0 = readonly centers SSBO,
+        // binding 1 = writeonly light/fog result SSBO) — the caller allocates
+        // and writes its sets from this.
+        [[nodiscard]] VkDescriptorSetLayout particleIoLayout() const { return particleIoLayout_; }
+
         // Filter the demodulated lighting channels and COMPOSITE them into
         // sceneHdr. Two pipelines run back to back over the same descriptor set:
         //   • giFilterPipe_   — SVGF variance-guided à-trous over the demodulated
@@ -284,6 +305,11 @@ namespace threepp::vulkan {
         VkPipeline            froxelIntegratePipe_ = VK_NULL_HANDLE;// froxel LUT integrate (froxel_integrate.comp)
         VkPipeline            cloudMarchPipe_      = VK_NULL_HANDLE;// half-res cloud march (cloud_march.comp)
         VkPipeline            cloudShadowPipe_     = VK_NULL_HANDLE;// cloud shadow map (cloud_shadow.comp)
+        // Particle billboard lighting (particle_light.comp) — set 0 is the
+        // shared deferred set, set 1 the caller's particle IO buffers.
+        VkDescriptorSetLayout particleIoLayout_    = VK_NULL_HANDLE;
+        VkPipelineLayout      particlePipeLayout_  = VK_NULL_HANDLE;
+        VkPipeline            particleLightPipe_   = VK_NULL_HANDLE;
         VkDescriptorPool      descPool_     = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [framesInFlight]
 

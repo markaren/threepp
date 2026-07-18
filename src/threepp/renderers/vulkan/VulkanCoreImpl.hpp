@@ -2051,8 +2051,15 @@ namespace threepp {
             float _pad2;
             float murkInscatter[3];// LINEAR murk in-scatter radiance (fade target)
             float _pad3;
+            // Lit particles (particle_light.comp): the LIT fragment path needs
+            // the scene's display transform to land in the same domain as the
+            // tonemapped background it alpha-blends over.
+            float litActive;   // >0.5 = particle_light.comp ran this frame
+            float exposure;    // FULL tone-map exposure (currentExposure())
+            float toneMapMode; // threepp::ToneMapping as float (frag casts back)
+            float _pad4;
         };
-        static_assert(sizeof(GpuOverlayFogUbo) == 80);
+        static_assert(sizeof(GpuOverlayFogUbo) == 96);
         VkDescriptorSetLayout overlayFogDescSetLayout_ = VK_NULL_HANDLE;
         VkDescriptorPool      overlayFogDescPool_      = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, kFramesInFlight> overlayFogDescSets_{};
@@ -2077,6 +2084,135 @@ namespace threepp {
             std::weak_ptr<BufferGeometry> liveCheck;
         };
         std::unordered_map<const BufferGeometry*, ParticleGeomRec> particleGeomCache_;
+
+        // ── Lit particles (particle_light.comp) ────────────────────────────
+        // Per-frame world-space particle centers (host-written, one vec4 per
+        // particle across ALL visible systems, in overlay draw order) + the
+        // per-particle {light,T}/{fogAdd} results the compute pass writes and
+        // particle.vert reads (set 1 binding 1 of the billboard pipeline).
+        // Eagerly allocated in createParticlePipeline (fixed footprint, ~1.5 MB
+        // total). Systems past kMaxLitParticles fall back to the unlit path via
+        // the kUnlitBase firstInstance sentinel (KEEP IN SYNC with particle.vert).
+        static constexpr uint32_t kMaxLitParticles = 16384;
+        static constexpr uint32_t kUnlitBase       = 0x40000000u;
+        std::array<Buffer, kFramesInFlight> particleCenterBufs_{};// host-visible SSBO, kMaxLitParticles × vec4
+        std::array<Buffer, kFramesInFlight> particleLightBufs_{}; // device-local SSBO, kMaxLitParticles × 2 × vec4
+        VkDescriptorPool particleIoDescPool_ = VK_NULL_HANDLE;    // particle_light.comp set 1
+        std::array<VkDescriptorSet, kFramesInFlight> particleIoDescSets_{};
+        // Filled by prepareParticleLighting() each frame; consumed by the
+        // subclass scene-dispatch hook (compute) + the overlay particle loop
+        // (per-draw firstInstance base).
+        uint32_t particleLightCount_ = 0;// live particles prepped this frame (0 = pass off)
+        std::unordered_map<const void*, uint32_t> particleLitBase_;// mesh → base particle index
+
+        // CPU-side staging for the centers upload (avoids per-frame realloc).
+        std::vector<float> particleCenterScratch_;
+
+        // Create particle_light.comp's IO sets (set 1: centers in, results out)
+        // once both their layout owner (deferredShade_, lazily constructed on
+        // the first scene build) and the particle buffers (createParticlePipeline)
+        // exist. Idempotent; buffers are fixed at creation so the sets are
+        // written exactly once.
+        void ensureParticleIoSets() {
+            if (particleIoDescPool_ != VK_NULL_HANDLE || !deferredShade_ ||
+                particleCenterBufs_[0].handle == VK_NULL_HANDLE) return;
+            VkDescriptorSetLayout ioLayout = deferredShade_->particleIoLayout();
+            if (ioLayout == VK_NULL_HANDLE) return;
+            VkDescriptorPoolSize ips{};
+            ips.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            ips.descriptorCount = 2 * kFramesInFlight;
+            VkDescriptorPoolCreateInfo ipci{};
+            ipci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            ipci.maxSets       = kFramesInFlight;
+            ipci.poolSizeCount = 1;
+            ipci.pPoolSizes    = &ips;
+            check(vkCreateDescriptorPool(ctx->device(), &ipci, nullptr, &particleIoDescPool_),
+                  "vkCreateDescriptorPool(particleIo)");
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                VkDescriptorSetAllocateInfo asi{};
+                asi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                asi.descriptorPool     = particleIoDescPool_;
+                asi.descriptorSetCount = 1;
+                asi.pSetLayouts        = &ioLayout;
+                check(vkAllocateDescriptorSets(ctx->device(), &asi, &particleIoDescSets_[f]),
+                      "vkAllocateDescriptorSets(particleIo)");
+                VkDescriptorBufferInfo cbi{};
+                cbi.buffer = particleCenterBufs_[f].handle;
+                cbi.offset = 0;
+                cbi.range  = VK_WHOLE_SIZE;
+                VkDescriptorBufferInfo obi{};
+                obi.buffer = particleLightBufs_[f].handle;
+                obi.offset = 0;
+                obi.range  = VK_WHOLE_SIZE;
+                VkWriteDescriptorSet w[2]{};
+                w[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[0].dstSet          = particleIoDescSets_[f];
+                w[0].dstBinding      = 0;
+                w[0].descriptorCount = 1;
+                w[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w[0].pBufferInfo     = &cbi;
+                w[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[1].dstSet          = particleIoDescSets_[f];
+                w[1].dstBinding      = 1;
+                w[1].descriptorCount = 1;
+                w[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w[1].pBufferInfo     = &obi;
+                vkUpdateDescriptorSets(ctx->device(), 2, w, 0, nullptr);
+            }
+        }
+
+        // Gather every visible ParticleSystem's particle centers (model → world,
+        // every 4th vertex of the coincident-quad layout) into this frame's
+        // centers buffer and assign each mesh its base index, in the SAME order
+        // the overlay loop draws them. Runs in recordCommandBuffer BEFORE the
+        // scene-dispatch hook; the hook dispatches particle_light.comp over the
+        // result. No-op (count 0) when the scene has no particles, the billboard
+        // pipeline isn't initialised yet, or the IO sets can't exist (no
+        // deferred shade → nothing would ever light the result buffer).
+        void prepareParticleLighting() {
+            particleLightCount_ = 0;
+            particleLitBase_.clear();
+            ensureParticleIoSets();
+            if (particlePipelineNormal_ == VK_NULL_HANDLE ||
+                particleIoDescSets_[currentFrame] == VK_NULL_HANDLE ||
+                particleCenterBufs_[currentFrame].handle == VK_NULL_HANDLE) return;
+
+            particleCenterScratch_.clear();
+            uint32_t base = 0;
+            for (const auto& en : lastVisibleEntries_) {
+                if (!en.isParticle || !en.mesh) continue;
+                auto geomSp = en.mesh->geometry();
+                BufferGeometry* geom = geomSp.get();
+                if (!geom) continue;
+                auto* posAttr = geom->getAttribute<float>("position");
+                if (!posAttr) continue;
+                const uint32_t vtx = static_cast<uint32_t>(posAttr->count());
+                const uint32_t particles = vtx / 4u;// 4 coincident verts per particle
+                if (particles == 0) continue;
+                if (base + particles > kMaxLitParticles) continue;// draw falls back unlit
+
+                const auto& w = en.worldMatrix;// column-major world transform
+                const auto& p = posAttr->array();
+                particleCenterScratch_.resize(static_cast<size_t>(base + particles) * 4);
+                float* dst = particleCenterScratch_.data() + static_cast<size_t>(base) * 4;
+                for (uint32_t i = 0; i < particles; ++i) {
+                    const float x = p[i * 12u + 0u];// vertex 4i of particle i
+                    const float y = p[i * 12u + 1u];
+                    const float z = p[i * 12u + 2u];
+                    dst[i * 4u + 0u] = w[0] * x + w[4] * y + w[8] * z + w[12];
+                    dst[i * 4u + 1u] = w[1] * x + w[5] * y + w[9] * z + w[13];
+                    dst[i * 4u + 2u] = w[2] * x + w[6] * y + w[10] * z + w[14];
+                    dst[i * 4u + 3u] = 0.f;
+                }
+                particleLitBase_[en.mesh] = base;
+                base += particles;
+            }
+            if (base == 0) return;
+            uploadHostVisible(ctx->allocator(), particleCenterBufs_[currentFrame],
+                              particleCenterScratch_.data(),
+                              particleCenterScratch_.size() * sizeof(float));
+            particleLightCount_ = base;
+        }
 
         // Per-Texture sampled image for particle textures. Keyed on the raw
         // Texture* (the ShaderMaterial uniform holds no shared_ptr) + version;
@@ -3121,6 +3257,10 @@ namespace threepp {
             if (overlayFogDescPool_)        vkDestroyDescriptorPool(d, overlayFogDescPool_, nullptr);
             if (overlayFogDescSetLayout_)   vkDestroyDescriptorSetLayout(d, overlayFogDescSetLayout_, nullptr);
             for (auto& b : overlayFogUbos_) destroyBuffer(ctx->allocator(), b);
+            // Lit-particle buffers + IO sets (particle_light.comp).
+            if (particleIoDescPool_)        vkDestroyDescriptorPool(d, particleIoDescPool_, nullptr);
+            for (auto& b : particleCenterBufs_) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : particleLightBufs_)  destroyBuffer(ctx->allocator(), b);
             if (spriteWorldPipeline_)       vkDestroyPipeline(d, spriteWorldPipeline_, nullptr);
             destroyBuffer(ctx->allocator(), spriteQuadVtx_);
             destroyBuffer(ctx->allocator(), spriteQuadIdx_);

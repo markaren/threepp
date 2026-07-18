@@ -400,6 +400,48 @@ namespace threepp {
                                              regionRenderExt_.width, regionRenderExt_.height,
                                              preExpHist_[currentFrame]);// meter un-bakes this
             }
+            // ── Particle billboard lighting (particle_light.comp) ─────────
+            // One thread per live overlay particle: the deferred light field
+            // at the particle center + the camera→particle fog leg, written
+            // to the per-FIF results SSBO the billboard pass reads. Every
+            // input (TLAS, cluster grid, cloud shadow, froxel LUT, probe SH)
+            // is already compute-visible via the barriers above. The leading
+            // barrier orders this frame's write against the PREVIOUS frame's
+            // vertex-stage reads of the same FIF slot buffer (WAR — cache-
+            // visibility-free execution dependency would do, but keep the
+            // access masks explicit); the trailing one hands the results to
+            // the overlay pass's vertex fetches.
+            if (particleLightCount_ > 0) {
+                VkMemoryBarrier2 preBar{};
+                preBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                preBar.srcStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+                preBar.srcAccessMask = 0;// WAR: execution ordering suffices
+                preBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                preBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                VkDependencyInfo preDep{};
+                preDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                preDep.memoryBarrierCount = 1;
+                preDep.pMemoryBarriers    = &preBar;
+                vkCmdPipelineBarrier2(cb, &preDep);
+
+                deferredShade_->recordParticleLight(
+                        cb, currentFrame, particleIoDescSets_[currentFrame],
+                        particleLightCount_, /*centerBase=*/0u,
+                        clusterLightCountThisFrame_, froxelsActive,
+                        envImage.mipLevels);
+
+                VkMemoryBarrier2 postBar{};
+                postBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                postBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                postBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                postBar.dstStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+                postBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                VkDependencyInfo postDep{};
+                postDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                postDep.memoryBarrierCount = 1;
+                postDep.pMemoryBarriers    = &postBar;
+                vkCmdPipelineBarrier2(cb, &postDep);
+            }
         }
     };
 

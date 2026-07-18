@@ -922,6 +922,11 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
             preExpHist_[currentFrame] = preExp;
             std::memcpy(&preExpBits_, &preExp, sizeof(preExpBits_));
 
+            // Gather this frame's particle centers + base indices BEFORE the
+            // scene dispatch — the hook tail runs particle_light.comp over them
+            // (lit billboards; the overlay loop below consumes the bases).
+            prepareParticleLighting();
+
             // Dispatch the deferred shade compute (VulkanRenderer::Impl);
             // bloom + TAA below are shared.
             recordSceneDispatch(cb, setIdx, ext, ptExt, exposureBits);
@@ -1700,6 +1705,13 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                                 of.murkInscatter[0] = murkColor_[0];
                                 of.murkInscatter[1] = murkColor_[1];
                                 of.murkInscatter[2] = murkColor_[2];
+                                // Lit particles: hand the frag the display
+                                // transform (exposure + tone-map mode) so the
+                                // HDR-lit path lands in the same domain as the
+                                // tonemapped background it blends over.
+                                of.litActive   = particleLightCount_ > 0 ? 1.f : 0.f;
+                                of.exposure    = currentExposure();
+                                of.toneMapMode = static_cast<float>(toneMapping_);
                                 uploadHostVisible(ctx->allocator(), overlayFogUbos_[currentFrame],
                                                   &of, sizeof(of));
                                 vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1777,7 +1789,18 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                                 VkDeviceSize voffs[4] = {0, 0, 0, 0};
                                 vkCmdBindVertexBuffers(cb, 0, 4, vbufs, voffs);
                                 vkCmdBindIndexBuffer(cb, prec->index.handle, 0, VK_INDEX_TYPE_UINT32);
-                                vkCmdDrawIndexed(cb, prec->indexCount, 1, 0, 0, 0);
+                                // firstInstance carries this system's base into
+                                // particle_light.comp's results (gl_InstanceIndex
+                                // in particle.vert; instanceCount stays 1).
+                                // Additive systems are emissive by design and
+                                // draws the lighting pass didn't cover fall
+                                // back — both via the kUnlitBase sentinel.
+                                uint32_t litBase = kUnlitBase;
+                                if (!additive && particleLightCount_ > 0) {
+                                    if (auto bit = particleLitBase_.find(en.mesh);
+                                        bit != particleLitBase_.end()) litBase = bit->second;
+                                }
+                                vkCmdDrawIndexed(cb, prec->indexCount, 1, 0, 0, litBase);
                             }
 
                             // ── World-space sprites ────────────────────────

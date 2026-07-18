@@ -1867,17 +1867,24 @@ void VulkanRendererCore::CoreImpl::createParticlePipeline() {
 
             // set 1, binding 0: the unified-fog snapshot UBO (Phase 2b). Bound
             // once per frame; particle.frag fogs world-space billboards with it.
-            // The world-space Sprite pipeline shares this layout but never
-            // references set 1, so it ignores the (still-bound) descriptor.
-            VkDescriptorSetLayoutBinding fb{};
-            fb.binding         = 0;
-            fb.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            fb.descriptorCount = 1;
-            fb.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+            // binding 1: the per-particle light/fog results particle_light.comp
+            // wrote this frame — particle.vert fetches them by gl_InstanceIndex
+            // (lit particles). The world-space Sprite pipeline shares this
+            // layout but never references set 1, so it ignores the (still-
+            // bound) descriptors.
+            VkDescriptorSetLayoutBinding fb[2]{};
+            fb[0].binding         = 0;
+            fb[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            fb[0].descriptorCount = 1;
+            fb[0].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+            fb[1].binding         = 1;
+            fb[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            fb[1].descriptorCount = 1;
+            fb[1].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
             VkDescriptorSetLayoutCreateInfo fdslci{};
             fdslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            fdslci.bindingCount = 1;
-            fdslci.pBindings    = &fb;
+            fdslci.bindingCount = 2;
+            fdslci.pBindings    = fb;
             check(vkCreateDescriptorSetLayout(ctx->device(), &fdslci, nullptr, &overlayFogDescSetLayout_),
                   "vkCreateDescriptorSetLayout(overlayFog)");
 
@@ -1903,15 +1910,31 @@ void VulkanRendererCore::CoreImpl::createParticlePipeline() {
                                  VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                                          VMA_ALLOCATION_CREATE_MAPPED_BIT);
             }
+            // Lit-particle buffers (eager, fixed footprint): host-written
+            // world-space centers in, particle_light.comp's light/fog results
+            // out (device-local; compute writes, particle.vert reads).
+            for (auto& b : particleCenterBufs_) {
+                b = createBuffer(ctx->allocator(), ctx->device(),
+                                 VkDeviceSize(kMaxLitParticles) * 4 * sizeof(float),
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
+                                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            }
+            for (auto& b : particleLightBufs_) {
+                b = createBuffer(ctx->allocator(), ctx->device(),
+                                 VkDeviceSize(kMaxLitParticles) * 8 * sizeof(float),
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO, 0);
+            }
             {
-                VkDescriptorPoolSize fps{};
-                fps.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                fps.descriptorCount = kFramesInFlight;
+                VkDescriptorPoolSize fps[2]{};
+                fps[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                fps[0].descriptorCount = kFramesInFlight;
+                fps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                fps[1].descriptorCount = kFramesInFlight;
                 VkDescriptorPoolCreateInfo fdpci{};
                 fdpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
                 fdpci.maxSets       = kFramesInFlight;
-                fdpci.poolSizeCount = 1;
-                fdpci.pPoolSizes    = &fps;
+                fdpci.poolSizeCount = 2;
+                fdpci.pPoolSizes    = fps;
                 check(vkCreateDescriptorPool(ctx->device(), &fdpci, nullptr, &overlayFogDescPool_),
                       "vkCreateDescriptorPool(overlayFog)");
                 for (uint32_t f = 0; f < kFramesInFlight; ++f) {
@@ -1926,16 +1949,30 @@ void VulkanRendererCore::CoreImpl::createParticlePipeline() {
                     dbi.buffer = overlayFogUbos_[f].handle;
                     dbi.offset = 0;
                     dbi.range  = sizeof(GpuOverlayFogUbo);
-                    VkWriteDescriptorSet w{};
-                    w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    w.dstSet          = overlayFogDescSets_[f];
-                    w.dstBinding      = 0;
-                    w.descriptorCount = 1;
-                    w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                    w.pBufferInfo     = &dbi;
-                    vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                    VkDescriptorBufferInfo lbi{};
+                    lbi.buffer = particleLightBufs_[f].handle;
+                    lbi.offset = 0;
+                    lbi.range  = VK_WHOLE_SIZE;
+                    VkWriteDescriptorSet w[2]{};
+                    w[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    w[0].dstSet          = overlayFogDescSets_[f];
+                    w[0].dstBinding      = 0;
+                    w[0].descriptorCount = 1;
+                    w[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                    w[0].pBufferInfo     = &dbi;
+                    w[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    w[1].dstSet          = overlayFogDescSets_[f];
+                    w[1].dstBinding      = 1;
+                    w[1].descriptorCount = 1;
+                    w[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    w[1].pBufferInfo     = &lbi;
+                    vkUpdateDescriptorSets(ctx->device(), 2, w, 0, nullptr);
                 }
             }
+            // (particle_light.comp's IO sets are created lazily by
+            // ensureParticleIoSets() — deferredShade_, which owns their layout,
+            // is itself lazily constructed AFTER the first particle-pipeline
+            // ensure, so creating them here would race the init order.)
 
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 VkDescriptorPoolSize ps{};

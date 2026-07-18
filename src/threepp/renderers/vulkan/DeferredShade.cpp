@@ -12,6 +12,7 @@
 #include "threepp/renderers/vulkan/shaders/froxel_integrate.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/cloud_march.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/cloud_shadow.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/particle_light.comp.spv.h"
 
 #include <algorithm>
 #include <array>
@@ -35,6 +36,9 @@ namespace threepp::vulkan {
         if (froxelIntegratePipe_) vkDestroyPipeline(d, froxelIntegratePipe_, nullptr);
         if (cloudMarchPipe_)      vkDestroyPipeline(d, cloudMarchPipe_, nullptr);
         if (cloudShadowPipe_)     vkDestroyPipeline(d, cloudShadowPipe_, nullptr);
+        if (particleLightPipe_)   vkDestroyPipeline(d, particleLightPipe_, nullptr);
+        if (particlePipeLayout_)  vkDestroyPipelineLayout(d, particlePipeLayout_, nullptr);
+        if (particleIoLayout_)    vkDestroyDescriptorSetLayout(d, particleIoLayout_, nullptr);
         if (lutSampler_) vkDestroySampler(d, lutSampler_, nullptr);
         if (pipeLayout_) vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
         if (dsLayout_)   vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
@@ -299,6 +303,52 @@ namespace threepp::vulkan {
         cpciS.stage.module = modS;
         check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciS, nullptr, &cloudShadowPipe_),
               "vkCreateComputePipelines(cloud_shadow)");
+
+        // Particle billboard lighting — set 0 is the shared deferred set; set 1
+        // is the caller-owned particle IO pair (centers in, light/fog out), so
+        // this one needs its own two-set pipeline layout + small push block.
+        {
+            VkDescriptorSetLayoutBinding iob[2]{};
+            for (uint32_t i = 0; i < 2; ++i) {
+                iob[i].binding         = i;
+                iob[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                iob[i].descriptorCount = 1;
+                iob[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            VkDescriptorSetLayoutCreateInfo iolci{};
+            iolci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            iolci.bindingCount = 2;
+            iolci.pBindings    = iob;
+            check(vkCreateDescriptorSetLayout(d, &iolci, nullptr, &particleIoLayout_),
+                  "vkCreateDescriptorSetLayout(particleIo)");
+
+            VkPushConstantRange ppc{};
+            ppc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            ppc.offset     = 0;
+            ppc.size       = 20;// count, centerBase, clusterLightCount, flags, envMipCount
+            const VkDescriptorSetLayout pls[2] = {dsLayout_, particleIoLayout_};
+            VkPipelineLayoutCreateInfo pplci{};
+            pplci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            pplci.setLayoutCount         = 2;
+            pplci.pSetLayouts            = pls;
+            pplci.pushConstantRangeCount = 1;
+            pplci.pPushConstantRanges    = &ppc;
+            check(vkCreatePipelineLayout(d, &pplci, nullptr, &particlePipeLayout_),
+                  "vkCreatePipelineLayout(particle_light)");
+
+            VkShaderModuleCreateInfo smciP{};
+            smciP.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            smciP.codeSize = sizeof(kParticleLightCompSpv);
+            smciP.pCode    = kParticleLightCompSpv;
+            VkShaderModule modP = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(d, &smciP, nullptr, &modP), "vkCreateShaderModule(particle_light)");
+            VkComputePipelineCreateInfo cpciP = cpci;
+            cpciP.stage.module = modP;
+            cpciP.layout       = particlePipeLayout_;
+            check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciP, nullptr, &particleLightPipe_),
+                  "vkCreateComputePipelines(particle_light)");
+            vkDestroyShaderModule(d, modP, nullptr);
+        }
 
         vkDestroyShaderModule(d, mod, nullptr);
         vkDestroyShaderModule(d, modGi, nullptr);
@@ -880,6 +930,24 @@ namespace threepp::vulkan {
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         // One thread per texel of the fixed 512² map (local 8×8).
         vkCmdDispatch(cb, 512u / 8u, 512u / 8u, 1);
+    }
+
+    void DeferredShade::recordParticleLight(VkCommandBuffer cb, uint32_t frame,
+                                            VkDescriptorSet ioSet,
+                                            uint32_t count, uint32_t centerBase,
+                                            uint32_t clusterLightCount,
+                                            bool froxelsActive, uint32_t envMipCount) {
+        if (count == 0 || ioSet == VK_NULL_HANDLE) return;
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, particleLightPipe_);
+        const VkDescriptorSet sets[2] = {sets_[frame], ioSet};
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                particlePipeLayout_, 0, 2, sets, 0, nullptr);
+        const uint32_t pc[5] = {count, centerBase, clusterLightCount,
+                                froxelsActive ? 1u : 0u, envMipCount};
+        vkCmdPushConstants(cb, particlePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(pc), pc);
+        // One thread per live particle (local_size_x = 64).
+        vkCmdDispatch(cb, (count + 63u) / 64u, 1, 1);
     }
 
     void DeferredShade::recordFilterAndComposite(VkCommandBuffer cb, uint32_t frame,

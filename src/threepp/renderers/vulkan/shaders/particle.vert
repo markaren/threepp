@@ -27,11 +27,24 @@ layout(location = 1) out vec2 vUv;
 // View-space particle centre (pre-billboard-expansion, so constant across the
 // quad) — the overlay fog pass needs the camera→particle leg length + world Y.
 layout(location = 2) out vec3 vViewPos;
+// Per-particle lighting from particle_light.comp: vLight = LINEAR radiance ×
+// albedo-to-be (.rgb) + camera→particle transmittance (.a); vFogAdd = the leg's
+// in-scatter to add after T. vLight.a < 0 marks THIS DRAW unlit (legacy path).
+layout(location = 3) flat out vec4 vLight;
+layout(location = 4) flat out vec3 vFogAdd;
 
 layout(push_constant) uniform Pc {
     mat4 modelView;   // 64 — viewUnjittered · meshWorld
     mat4 proj;        // 64 — reverse-Z Vulkan projection (unjittered)
 } pc;
+
+// Per-particle light/fog results written by particle_light.comp (2 vec4 per
+// particle). Indexed by the draw's base particle (firstInstance → gl_InstanceIndex;
+// instanceCount is always 1) + the particle within the geometry (4 verts each).
+// A base of kUnlitBase or higher marks the draw unlit — the compute pass didn't
+// cover it this frame (no deferred scene dispatch, or over ring capacity).
+layout(set = 1, binding = 1, std430) readonly buffer ParticleLightBuf { vec4 plight[]; };
+const uint kUnlitBase = 0x40000000u;
 
 void main() {
     float pSize    = inNormal.x;
@@ -39,6 +52,18 @@ void main() {
     float pOpacity = inNormal.z;
 
     vColor = vec4(inColor, pOpacity);
+
+    // Fetch this particle's lighting (flat across the quad — all 4 verts land
+    // on the same slot). Unlit draws pass the sentinel base instead.
+    const uint base = uint(gl_InstanceIndex);
+    if (base < kUnlitBase) {
+        const uint pIdx = base + (uint(gl_VertexIndex) >> 2u);
+        vLight  = plight[pIdx * 2u + 0u];
+        vFogAdd = plight[pIdx * 2u + 1u].rgb;
+    } else {
+        vLight  = vec4(0.0, 0.0, 0.0, -1.0);// .a < 0 → legacy unlit path
+        vFogAdd = vec3(0.0);
+    }
 
     // Rotate the corner offset by the particle angle (screen-aligned).
     float c = cos(pAngle);

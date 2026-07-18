@@ -1,0 +1,372 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_ray_query : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Particle billboard lighting — one thread per LIVE particle. The overlay
+// billboards (ParticleSystem smoke/dust) were UNLIT: flat vertex color × texture,
+// identical in a cave and in noon sun. This pass evaluates, at each particle's
+// world-space CENTER, the same light field the froxel/deferred stack shades the
+// scene with —
+//   • every directional sun × an RT shadow ray (opaque mask — a puff behind the
+//     barn is dark) × the cloud-shadow map, with a forward-leaning HG phase
+//     toward the camera (backlit smoke gets its silver lining),
+//   • the CLUSTERED point/spot list at the particle's screen cell (uncapped,
+//     the same attenuation/cone/phase terms froxel_inject injects per froxel —
+//     spots are fine here: evaluated at a point, not on a grid too coarse for
+//     the cone),
+//   • ambient: scene ambient + the probe-GI irradiance at the center (falls
+//     back to the top env mip when probes are off/unconfident) — smoke indoors
+//     is lit by the room, not the sky,
+// and the camera→particle FOG leg as the three terms the surface path composes
+// (the applyHeteroSurfaceFog/froxelInscatter/volumetricDirScatter split — see
+// deferred_shade_60_fog_volumetrics.glsl; feedback_water_missing_volumetric_
+// dir_scatter is why all three are mirrored):
+//   1. analytic height-fog + murk extinction T and ambient in-scatter,
+//   2. the froxel LUT's integrated point-light glow over the leg,
+//   3. a short jitter-free sun march over the leg (god rays IN FRONT of the puff).
+// Output per particle: [0] = light RGB (LINEAR radiance, NOT pre-exposed) +
+// leg transmittance T in .a, [1] = fog in-scatter RGB to ADD after T. The
+// billboard pass fetches it per particle (particle.vert, gl_InstanceIndex
+// carries the system's base) and particle.frag tonemaps the lit result into
+// the display-referred overlay domain.
+//
+// Runs per RENDER CALL (fog/phase/LUT are view-dependent) right after the
+// deferred shade — every input (TLAS, cluster grid, cloud shadow, froxel LUT,
+// probe SH) is already compute-visible via the shade's own barriers.
+//
+// Set 0 = the DeferredShade set (bindings 0/1/2/8/33/36/37/48/49/53/54/57/58/65,
+// same sharing pattern as froxel_inject.comp); set 1 = the particle IO buffers.
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+    vec4 jitter;
+} cam;
+
+struct DirLight   { vec3 direction; vec3 color; };
+struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
+struct SpotLight  { vec3 position; float range; vec3 color; float decay;
+                    vec3 direction; float cosAngleOuter; float cosAngleInner; float radius; };
+struct RectLight  { vec3 position; vec3 halfU; vec3 halfV; vec3 normal; vec3 color; };
+layout(set = 0, binding = 1, scalar) uniform LightsUbo {
+    vec3       ambient;
+    uint       dirCount;
+    DirLight   dirLights[8];
+    uint       pointCount;
+    uint       spotCount;
+    uint       rectCount;
+    PointLight pointLights[8];
+    SpotLight  spotLights[8];
+    RectLight  rectLights[4];
+} lights;
+
+layout(set = 0, binding = 2) uniform sampler2D envTex;// prefiltered PMREM mip chain
+
+layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
+
+layout(set = 0, binding = 33, scalar) uniform FogUbo {
+    vec3  sigmaT;
+    float enabled;
+    vec3  color;
+    float anisotropy;
+    float waterSurfaceY;
+    vec3  worldUp;
+    float hfDensity;
+    float hfBaseY;
+    float hfFalloff;
+    float murkDensity;
+    vec3  murkColor;
+} fog;
+
+layout(set = 0, binding = 36, scalar) readonly buffer ProbeShBuf { vec4 probeSh[]; };
+layout(set = 0, binding = 37, scalar) uniform ProbeGridUbo {
+    vec3  origin;  float enabled;
+    vec3  spacing; float _pad0;
+    ivec3 dims;    int   _pad1;
+} probeGrid;
+layout(set = 0, binding = 54, scalar) readonly buffer ProbeDepthBuf { uint probeDepth[]; };
+
+// KEEP IN SYNC with cluster_build.comp / deferred_shade.comp.
+struct ClusterLight {
+    vec3  position;   float range;
+    vec3  color;      float decay;
+    vec3  direction;  float cosAngleOuter;
+    float cosAngleInner;
+    float radius;
+    float cullRadius;
+    float type;
+};
+layout(set = 0, binding = 48, scalar) readonly buffer ClusterGridBuf { uint clusterGrid[]; };
+layout(set = 0, binding = 49, scalar) readonly buffer ClusterLightsBuf { ClusterLight clusterLights[]; };
+
+layout(set = 0, binding = 53) uniform sampler3D froxelLutTex;
+
+// Forward (unjittered) view-projection — projects the particle center to the
+// screen uv the cluster grid and froxel LUT are indexed by.
+layout(set = 0, binding = 57) uniform RasterCamUbo {
+    mat4 currVPjittered;
+    mat4 currVPunjittered;
+    mat4 prevVP;
+    vec4 jitter;
+    vec4 prevJitter;
+} rcam;
+
+layout(set = 0, binding = 58, scalar) uniform CloudUbo {
+    float enabled;
+    float coverage;
+    float density;
+    float bottomY;
+    float topY;
+    float evolveSpeed;
+    float timeSec;
+    float heteroActive;
+    vec3  wind;
+    float hfDensity;
+    float hfBaseY;
+    float hfFalloff;
+    float hfNoiseAmount;
+    float shadowActive;
+} clouds;
+
+layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;
+
+#include "probe_common.glsl"// probeIrradianceConf()
+
+// Particle IO (set 1) — centers written by the CPU per render call (world
+// space, one vec4 per particle), light/fog results read by particle.vert.
+layout(set = 1, binding = 0, scalar) readonly buffer ParticleCenters { vec4 centers[]; };
+layout(set = 1, binding = 1, scalar) writeonly buffer ParticleLightOut { vec4 plight[]; };
+
+layout(push_constant) uniform Pc {
+    uint  count;            // live particles this render call
+    uint  centerBase;       // first center index (render-call slot in the ring)
+    uint  clusterLightCount;// 0 = no cluster grid this frame
+    uint  flags;            // bit 0 = froxel passes ran (LUT valid)
+    uint  envMipCount;
+} pc;
+
+const float PI = 3.14159265358979;
+
+// Fixed forward-leaning particle phase (NOT the medium's fog.anisotropy — the
+// puff is its own dense medium). ×4π-normalized: 1.0 for an isotropic lobe, so
+// a front-lit puff keeps the calibrated albedo×light/π brightness and a backlit
+// one brightens toward its silver lining.
+const float kParticleHgG = 0.35;
+
+// Grid + ladders — KEEP IN SYNC with froxel_inject/integrate.comp + deferred_shade.comp.
+const float kFroxelZMin = 0.25, kFroxelZMax = 512.0;
+const uint  kClusterX = 16u, kClusterY = 8u, kClusterZ = 24u;
+const uint  kClusterMaxPerCell = 24u;
+const float kClusterZMin = 0.1, kClusterZMax = 1024.0;
+
+float hgPhase(float mu, float g) {
+    const float g2 = g * g;
+    return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
+}
+
+vec3 sampleEnvLod(vec3 dir, float lod) {
+    const float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
+    const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
+    return textureLod(envTex, vec2(u, v), lod).rgb;
+}
+
+uint clusterCellBase(vec2 uv, float viewDist) {
+    const uint cx = min(uint(uv.x * float(kClusterX)), kClusterX - 1u);
+    const uint cy = min(uint(uv.y * float(kClusterY)), kClusterY - 1u);
+    const float t = log(max(viewDist, kClusterZMin) / kClusterZMin)
+                  / log(kClusterZMax / kClusterZMin);
+    const uint cz = min(uint(max(t, 0.0) * float(kClusterZ)), kClusterZ - 1u);
+    return (cx + cy * kClusterX + cz * kClusterX * kClusterY) * (kClusterMaxPerCell + 1u);
+}
+
+// Binary occlusion toward a light (opaque-only mask — matches the surface
+// shadow rays and froxel_inject: blend/glass never blocks the sun on a puff).
+float shadowVis(vec3 origin, vec3 dir, float tMax) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+                          0x01u /*kRayMaskOpaque*/, origin, 1e-3, dir, tMax);
+    while (rayQueryProceedEXT(rq)) {}
+    return (rayQueryGetIntersectionTypeEXT(rq, true) ==
+            gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
+}
+
+// Cloud shadow transmittance — KEEP IN SYNC with deferred_shade_10_lighting_utils.glsl.
+float cloudShadowSample(vec3 worldPos) {
+    if (clouds.shadowActive < 0.5) return 1.0;
+    const float halfExt = 4000.0;// == kCloudShadowHalfExt
+    const vec2  cenXZ   = cam.viewInverse[3].xz;
+    const vec2  suv     = (worldPos.xz - cenXZ) / (2.0 * halfExt) + 0.5;
+    if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) return 1.0;
+    return texture(cloudShadowTex, suv).r;
+}
+
+// Closed-form exponential-height-fog optical depth over [a,b] — KEEP IN SYNC
+// with heightFogOpticalDepth in deferred_shade_60_fog_volumetrics.glsl /
+// deferred_filter_common.glsl / particle.frag (same clamps, same Taylor guard).
+float heightFogOpticalDepth(vec3 a, vec3 b) {
+    if (clouds.hfDensity <= 0.0) return 0.0;
+    const float H   = max(clouds.hfFalloff, 1e-3);
+    const float ya  = max(a.y - clouds.hfBaseY, 0.0);
+    const float yb  = max(b.y - clouds.hfBaseY, 0.0);
+    const float len = min(distance(a, b), 1.0e7);
+    const float ea = exp(-ya / H);
+    const float eb = exp(-yb / H);
+    const float x  = (yb - ya) / H;
+    const float f  = (abs(x) < 1e-3) ? (ea * (1.0 - 0.5 * x + x * x * (1.0 / 6.0)))
+                                     : ((ea - eb) / x);
+    return min(clouds.hfDensity * len * f, 80.0);
+}
+
+// Leg length clipped to BELOW the water surface — mirrors fogPathLength.
+float murkPathLength(vec3 a, vec3 b) {
+    const float full = distance(a, b);
+    if (fog.waterSurfaceY > 1e29) return full;
+    const float ya = a.y - fog.waterSurfaceY;
+    const float yb = b.y - fog.waterSurfaceY;
+    if (ya >= 0.0 && yb >= 0.0) return 0.0;
+    if (ya < 0.0 && yb < 0.0) return full;
+    const float t = ya / (ya - yb);
+    return (ya < 0.0) ? full * t : full * (1.0 - t);
+}
+
+// Integrated froxel in-scatter for the camera→(uv, viewDist) leg — KEEP IN
+// SYNC with froxelInscatter in deferred_shade_10_lighting_utils.glsl (the
+// gate is pc.flags bit 0 here, bit 8 there).
+vec3 froxelInscatter(vec2 fuv, float viewDist) {
+    if ((pc.flags & 1u) == 0u) return vec3(0.0);
+    const float t = log(max(viewDist, kFroxelZMin) / kFroxelZMin)
+                  / log(kFroxelZMax / kFroxelZMin);
+    return texture(froxelLutTex, vec3(fuv, clamp(t, 0.0, 1.0))).rgb;
+}
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.count) return;
+
+    const vec3 P      = centers[pc.centerBase + i].xyz;
+    const vec3 camPos = cam.viewInverse[3].xyz;
+    const vec3 toP    = P - camPos;
+    const float dist  = max(length(toP), 1e-4);
+    const vec3 rd     = toP / dist;// camera → particle (the view ray)
+
+    // Screen uv of the center (cluster cell + froxel LUT column). Behind the
+    // camera / far off-screen: clamp — edge cells/columns are the least-wrong
+    // stand-in, and such particles are clipped or peripheral anyway.
+    const vec4 clip     = rcam.currVPunjittered * vec4(P, 1.0);
+    const bool onScreen = clip.w > 1e-4;
+    const vec2 uv       = onScreen ? clamp(clip.xy / clip.w * 0.5 + 0.5, 0.0, 1.0)
+                                   : vec2(0.5);
+
+    // ── Direct: suns (RT shadow + cloud shadow + HG toward the camera) ──────
+    // 1/π calibrates a full-lit white puff to a front-lit white Lambert wall;
+    // phase×4π ≈ 1 isotropic, >1 backlit (silver lining), <1 front-lit.
+    vec3 direct = vec3(0.0);
+    for (uint d = 0u; d < lights.dirCount; ++d) {
+        const vec3  L   = normalize(lights.dirLights[d].direction);
+        const float vis = shadowVis(P, L, 1e30);
+        if (vis <= 0.0) continue;
+        const float phase4 = hgPhase(dot(L, rd), kParticleHgG) * 4.0 * PI;
+        direct += lights.dirLights[d].color * (vis * cloudShadowSample(P) * phase4);
+    }
+
+    // ── Direct: clustered point + spot lights at the particle's cell ────────
+    // Same attenuation terms as froxel_inject / volumetricSpotScatter (1 m-
+    // clamped inverse square, quartic range window, cone smoothstep for spots).
+    if (pc.clusterLightCount > 0u && onScreen) {
+        const uint base = clusterCellBase(uv, dist);
+        const uint cCnt = min(clusterGrid[base], kClusterMaxPerCell);
+        for (uint c = 0u; c < cCnt; ++c) {
+            const uint li = min(clusterGrid[base + 1u + c], pc.clusterLightCount - 1u);
+            vec3        toL = clusterLights[li].position - P;
+            const float dL  = length(toL);
+            if (dL < 1e-3) continue;
+            toL /= dL;
+            float atten = 1.0 / max(dL * dL, 1.0);
+            const float range = (clusterLights[li].range > 0.0) ? clusterLights[li].range : 200.0;
+            const float tr  = dL / range;
+            const float t4  = tr * tr * tr * tr;
+            const float wnd = max(1.0 - t4, 0.0);
+            atten *= wnd * wnd;
+            if (clusterLights[li].type > 0.5) {// spot: carve the cone
+                const float spotCos = dot(-toL, clusterLights[li].direction);
+                atten *= smoothstep(clusterLights[li].cosAngleOuter,
+                                    clusterLights[li].cosAngleInner, spotCos);
+            }
+            if (atten <= 0.0) continue;
+            const float phase4 = hgPhase(dot(toL, rd), kParticleHgG) * 4.0 * PI;
+            direct += clusterLights[li].color * (atten * phase4);
+        }
+    }
+
+    // ── Ambient: scene ambient + probe-GI irradiance (env-top fallback) ─────
+    // Probes carry "indirect + sky irradiance at P" (probe_common.glsl); ±Y
+    // average approximates the isotropic irradiance a volume sample sees. /π
+    // converts irradiance → the radiance-equivalent scale the albedo multiplies
+    // (exactly how a Lambert surface consumes the same probes). Low confidence
+    // (sparse/unlit grid) falls back toward the top env mip — the same
+    // starved-probe rule the surface path uses (envSpecVis).
+    const vec3 envAmb = sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    vec3 ambient = lights.ambient + envAmb;
+    if (probeGrid.enabled > 0.5) {
+        float confUp, confDn;
+        const vec3 eUp = probeIrradianceConf(P, vec3(0.0, 1.0, 0.0), confUp);
+        const vec3 eDn = probeIrradianceConf(P, vec3(0.0, -1.0, 0.0), confDn);
+        const float conf = 0.5 * (confUp + confDn);
+        ambient = lights.ambient + mix(envAmb, (eUp + eDn) * (0.5 / PI), conf);
+    }
+
+    const vec3 light = ambient + direct * (1.0 / PI);
+
+    // ── Fog over the camera→particle leg: the surface path's three terms ────
+    // (extinction + ambient in-scatter, froxel point glow, sun march) so a puff
+    // sits IN the fog instead of punching through it. All radiance-domain —
+    // particle.frag composes lit×T + fogAdd, then tonemaps like post_composite.
+    const float odAir  = heightFogOpticalDepth(camPos, P);
+    const float odMurk = (fog.murkDensity > 0.0) ? fog.murkDensity * murkPathLength(camPos, P) : 0.0;
+    const float Ta = exp(-odAir);
+    const float Tm = exp(-min(odMurk, 80.0));
+    const vec3  fogLight  = lights.ambient + envAmb;
+    const vec3  airAlbedo = (fog.enabled > 0.5) ? fog.color : vec3(1.0);
+    // Sequential air-then-murk composition (mirrors applyHeteroSurfaceFog +
+    // applyMurk): lit×(Ta·Tm) + [airIn×(1−Ta)]×Tm + murkIn×(1−Tm).
+    vec3 fogAdd = airAlbedo * fogLight * (1.0 - Ta) * Tm
+                + fog.murkColor * fogLight * (1.0 - Tm);
+
+    // Froxel LUT: the integrated point/spot glow BETWEEN camera and puff.
+    if (onScreen) fogAdd += froxelInscatter(uv, dist);
+
+    // Short sun march over the leg — the god rays IN FRONT of the puff
+    // (volumetricDirScatter's per-step terms at 8 jitter-free steps; no jitter
+    // because the overlay has no TAA to average it — stable slight banding
+    // beats per-frame shimmer on a moving billboard).
+    if (clouds.heteroActive > 0.5 && clouds.hfDensity > 0.0 && lights.dirCount > 0u && odAir > 1e-4) {
+        const float H  = max(clouds.hfFalloff, 1e-3);
+        const int   STEPS = 8;
+        const float dt = dist / float(STEPS);
+        vec3 sum = vec3(0.0);
+        for (int s = 0; s < STEPS; ++s) {
+            const float t = (float(s) + 0.5) * dt;
+            const vec3  x = camPos + rd * t;
+            const float sigmaX = clouds.hfDensity * exp(-max(x.y - clouds.hfBaseY, 0.0) / H);
+            if (sigmaX <= 1e-7) continue;
+            const float trCam = exp(-heightFogOpticalDepth(camPos, x));
+            if (trCam < 0.003) break;
+            vec3 stepSum = vec3(0.0);
+            for (uint d = 0u; d < lights.dirCount; ++d) {
+                const vec3  L   = normalize(lights.dirLights[d].direction);
+                const float vis = shadowVis(x, L, 1e30);
+                if (vis <= 0.0) continue;
+                stepSum += lights.dirLights[d].color
+                         * (hgPhase(dot(L, rd), fog.anisotropy) * vis);
+            }
+            sum += stepSum * (trCam * sigmaX * cloudShadowSample(x));
+        }
+        fogAdd += sum * airAlbedo * dt;
+    }
+
+    plight[i * 2u + 0u] = vec4(light, Ta * Tm);
+    plight[i * 2u + 1u] = vec4(fogAdd, 0.0);
+}
