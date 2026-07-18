@@ -187,9 +187,21 @@ int main(int argc, char** argv) {
     road::RoadProfileOptions rpo;
     rpo.enabled = true;
     rpo.seaLevel = reg.seaLevel;
+    // NT_ROAD_SMOOTH sets the arc-length grade-smoothing window in metres (0 = the
+    // legacy drape). Off by default here (the viewer keeps roads hugging terrain);
+    // norway_drive turns it on for a drivable vertical alignment.
+    if (const char* e = std::getenv("NT_ROAD_SMOOTH"); e && e[0] != '\0') rpo.gradeSmoothing = std::strtof(e, nullptr);
     network.conformTo([&pack](float x, float z) { return pack.grid.sampleBicubic(x, z); }, 14, rpo);
     terrain::RoadCarveOptions rco;
     rco.bakeSurface = true;
+    // Defaults: full 6 m cut band (the tile-quad anti-poke guarantee — narrowing
+    // it lets uphill quads slice through the pavement) + narrow asymmetric FILL
+    // (fillInflate/fillFeather) so steep sidehills get a tight embankment instead
+    // of a wide berm shelf. Env overrides for A/B.
+    if (const char* e = std::getenv("NT_CARVE_INFLATE"); e && e[0] != '\0') rco.inflate = std::strtof(e, nullptr);
+    if (const char* e = std::getenv("NT_CARVE_FEATHER"); e && e[0] != '\0') rco.feather = std::strtof(e, nullptr);
+    if (const char* e = std::getenv("NT_CARVE_FILL"); e && e[0] != '\0') rco.fillInflate = std::strtof(e, nullptr);
+    if (const char* e = std::getenv("NT_CARVE_FILLFEATHER"); e && e[0] != '\0') rco.fillFeather = std::strtof(e, nullptr);
     terrain::carveRoads(pack.grid, network, rco);
 
     // ── provider + tiles ───────────────────────────────────────────────────────
@@ -279,10 +291,18 @@ int main(int argc, char** argv) {
     const bool headless = !shotPath.empty() || !seqPrefix.empty();
     Canvas canvas("threepp - NORWAY TERRAIN", {{"vsync", false}});
     // Headless capture forces the Vulkan deferred renderer (detail-map layer is
-    // Vulkan-only); interactive runs keep the renderer-select menu.
-    auto renderer = headless ? createRenderer(canvas, GraphicsAPI::Vulkan)
-                             : createRenderer(canvas);
-    renderer->toneMapping = ToneMapping::ACESFilmic;
+    // Vulkan-only); NT_GL=1 captures the forward GL path instead (renderer-specific
+    // artifact A/B — e.g. tile-albedo mip behaviour). Interactive runs keep the
+    // renderer-select menu.
+    auto renderer = !headless ? createRenderer(canvas)
+                    : createRenderer(canvas, std::getenv("NT_GL") ? GraphicsAPI::OpenGL
+                                                                  : GraphicsAPI::Vulkan);
+    // Neutral on the forward GL/WGPU paths, ACESFilmic on Vulkan deferred —
+    // three.js ACESFilmic's 1/0.6 viewing-environment gain washes this bright
+    // scene out on the forward paths (see the NorwayDrive tone-mapping note).
+    renderer->toneMapping = dynamic_cast<VulkanRenderer*>(renderer.get())
+                                    ? ToneMapping::ACESFilmic
+                                    : ToneMapping::Neutral;
     renderer->toneMappingExposure = 1.0f;
 
     // ── instrumentation / A-B knobs (env-driven, so one build sweeps configs) ──

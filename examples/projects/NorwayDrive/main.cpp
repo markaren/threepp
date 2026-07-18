@@ -1,21 +1,26 @@
 // NORWAY DRIVE — a physics car on real-world geodata roads.
 //
-// The lightweight `norway_terrain` viewer renders a Kartverket DTM + NVDB road
-// region pack. This demo makes it DRIVABLE: it reuses the exact same visual
-// stack (GeoTerrainPack + RoadNetwork + makeGeoProvider + TileTerrain) and adds
-// a PhysX PxVehicle2 engine-drive car (the Drive demo's CarRig, procedural — no
-// GLB dependency) on top.
+// The `norway_terrain` viewer renders a Kartverket DTM + NVDB road region pack
+// with the BAKED-ROAD pipeline (roads carved + painted INTO the terrain, only
+// bridge decks + near-detail ground-ribbon chunks kept as geometry). This demo
+// makes that DRIVABLE: it reuses the exact same visual stack (GeoTerrainPack +
+// RoadNetwork profile/carve/paint + makeGeoProvider + TileTerrain) and adds a
+// PhysX PxVehicle2 engine-drive Mustang on top.
 //
 // Physics ground representation (the crux — the world is 8 km, far too big for
 // one fine collider):
-//   • Each ROAD RIBBON (RoadNetwork::buildMeshes geometry) is cooked as a static
-//     PxTriangleMesh — the exact banked driving surface, cheap because ribbons
-//     are thin. This is what the car actually drives on.
 //   • The TERRAIN is a static-trimesh WINDOW (a few hundred metres, ~2 m cells)
-//     sampled from the SAME provider.height, re-cooked and recentred when the
-//     car nears the window edge. It catches the car off-road / on the verge and
-//     keeps physics matching the visuals (trench included — harmless, because
-//     the ribbon collider sits above the trench where the car drives).
+//     sampled from provider.height, re-cooked and recentred as the car roams.
+//     Because carveRoads(bakeSurface) SETS the road bed into the DEM (flat across,
+//     cut AND fill), this window already IS the road surface at grade — it catches
+//     the car off-road AND carries distant roads with no separate collider.
+//   • The near-detail ground-ribbon CHUNKS + BRIDGE decks (RoadNetwork::
+//     buildGroundChunkMeshes / buildBridgeMeshes) are cooked as persistent static
+//     PxTriangleMeshes — the exact banked surface the car rides, sitting
+//     kSurfaceRaise above the baked bed (matching what's drawn). Distance-culling
+//     hides far chunks visually but keeps their colliders.
+//   • Roads classified as TUNNELS or FERRIES are excluded (a car never drives
+//     through a mountain or on the open sea); BRIDGE spans get deck colliders.
 //
 // Default pack: trollstigen (the Fv63 hairpins are the point). Set another with
 // a path arg or THREEPP_REGION_PACK.
@@ -36,6 +41,7 @@
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/road/RoadNetwork.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
+#include "threepp/extras/terrain/GeoBuildings.hpp"
 #include "threepp/extras/terrain/GeoTerrain.hpp"
 #include "threepp/extras/terrain/GeoTerrainPack.hpp"
 #include "threepp/extras/terrain/TerrainTiles.hpp"
@@ -231,6 +237,10 @@ int main(int argc, char** argv) {
     //   THREEPP_CAM_LINEAR=1   revert the chase-cam to frame-rate-dependent min(1,dt·k)
     const bool dtSmooth = std::getenv("THREEPP_DTSMOOTH") != nullptr;
     const bool camLinear = std::getenv("THREEPP_CAM_LINEAR") != nullptr;
+    // ND_TOPDOWN: an above-and-behind camera looking down at the car + the road
+    // behind it — the view that makes the moving-car reflection/GI ghost obvious
+    // (the road-behind is a big flat area where the temporal history smears).
+    const bool topDown = std::getenv("ND_TOPDOWN") != nullptr;
 
     // ── load pack ───────────────────────────────────────────────────────────────
     terrain::GeoTerrainPack pack;
@@ -257,16 +267,48 @@ int main(int argc, char** argv) {
         specs.push_back(std::move(s));
     }
     road::RoadNetwork network(std::move(specs));
-    // Conform to the RAW grid first (roads must meet real ground), then bake the
-    // road cut into the DEM (terrain::carveRoads): the provider below is a pure
-    // bicubic of the carved grid — C1 everywhere, no runtime corridor warp — and
-    // the physics terrain window inherits the same smooth field automatically.
-    network.conformTo([&pack](float x, float z) { return pack.grid.sampleBicubic(x, z); });
-    terrain::carveRoads(pack.grid, network);
+    // BAKED-ROAD pipeline (same as norway_terrain). Conform to the RAW grid first
+    // (roads must meet real ground) with the elevation PROFILE enabled — the
+    // pack's NVDB point heights classify every span: a data height well above
+    // ground (or ground = water) is a BRIDGE deck that spans the vertical U
+    // instead of draping into it; well below ground is a TUNNEL, excluded; a long
+    // water run that never clears the deck minimum is a ferry leg, excluded (a
+    // road is never submerged). THEN bake the roadbed into the DEM: the paved band
+    // is SET to the exact road surface (cut AND fill, dead flat across), so the
+    // provider is a pure bicubic of the carved grid — C1 everywhere, no runtime
+    // corridor warp — and the recentring physics terrain window inherits that flat
+    // road bed automatically. Bridge/excluded spans never carve (deck spans the
+    // ground; tunnels/ferries don't exist on the surface).
+    road::RoadProfileOptions rpo;
+    rpo.enabled = true;
+    rpo.seaLevel = reg.seaLevel;
+    // SMOOTH-ROAD alignment (ARC-LENGTH grade smoothing, density-independent — the
+    // per-sample 1-2-1 pass can't do this, its reach scales with the sub-metre
+    // spacing). A ~40 m window gives a flat, engineered vertical alignment instead
+    // of a drape that follows the DEM's 5-30 m undulation and bounces the car at
+    // speed. It is the grade of the SMOOTH ROAD RIBBON the car drives on (cooked as
+    // one continuous C1 collider per run below) and of the baked bed under it, so
+    // the whole road — geometry, physics, paint — is the one smooth surface.
+    // ND_ROAD_SMOOTH=<metres> overrides (0 = raw DEM drape).
+    rpo.gradeSmoothing = 40.f;
+    if (const char* e = std::getenv("ND_ROAD_SMOOTH"); e && e[0] != '\0') rpo.gradeSmoothing = std::strtof(e, nullptr);
+    network.conformTo([&pack](float x, float z) { return pack.grid.sampleBicubic(x, z); }, 14, rpo);
+    terrain::RoadCarveOptions rco;
+    rco.bakeSurface = true;
+    // Defaults: full 6 m cut band (the tile-quad anti-poke guarantee) + narrow
+    // asymmetric FILL, so the road hugs steep sidehills on a tight embankment.
+    terrain::carveRoads(pack.grid, network, rco);
 
     terrain::GeoTerrainOptions gopt;
     gopt.snowHeightMin = std::max(reg.heightMax - 350.f, 900.f);
     gopt.grassHeightMax = std::clamp(reg.heightMin + 0.45f * (reg.heightMax - reg.heightMin), 200.f, 900.f);
+    // Paint asphalt into the terrain albedo over the paved band — the baked bed IS
+    // the road, so distant tiles (beyond the near-ribbon cull) carry a mip-filtered
+    // painted road that cannot coverage-shimmer the way sub-pixel ribbon geometry
+    // does. Near-tile splat texels are ~0.6-1.3 m; a feather below the texel size
+    // reads as a staircase, so 1.2 m.
+    gopt.paintRoads = true;
+    gopt.roadEdgeFeather = 1.2f;
     const terrain::TerrainProvider prov = terrain::makeGeoProvider(pack, network, gopt);
 
     // ── tile terrain (visuals) ───────────────────────────────────────────────────
@@ -299,8 +341,13 @@ int main(int argc, char** argv) {
 
     // ── renderer ──────────────────────────────────────────────────────────────
     Canvas canvas("threepp - NORWAY DRIVE", {{"vsync", true}, {"aa", 4}});
-    auto renderer = capturing ? createRenderer(canvas, GraphicsAPI::Vulkan)
-                              : createRenderer(canvas);
+    // Capture forces the Vulkan deferred renderer (detail-map layer is Vulkan-only);
+    // ND_CAPTURE_GL captures the forward GL path instead (to A/B renderer-specific
+    // artifacts headlessly — the interactive default is GL). Interactive keeps the
+    // renderer-select menu.
+    auto renderer = !capturing ? createRenderer(canvas)
+                    : createRenderer(canvas, std::getenv("ND_CAPTURE_GL") ? GraphicsAPI::OpenGL
+                                                                          : GraphicsAPI::Vulkan);
 #ifdef THREEPP_WITH_VULKAN
     if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get())) {
         // 2× G-buffer MSAA, no upscaler, native scale. With MSAA the raster runs
@@ -316,9 +363,28 @@ int main(int argc, char** argv) {
         // post-shade tint over the full-quality image instead of re-tracing the
         // scene behind it on the deferred path (headless capture forces Vulkan).
         vk->setOverlayLayer(static_cast<int>(drive::MustangRig::kOverlayLayer));
+        // ND_DENOISE=0 disables the deferred SVGF/temporal denoiser (A/B the
+        // reflection/GI temporal ghost of the moving car — denoiser off = noisy but
+        // ghost-free, the user's on/off knob for the artifact).
+        if (const char* e = std::getenv("ND_DENOISE"); e && e[0] == '0') vk->setDenoise(false);
+        // ND_NO_UPSCALE=1 drops DLSS/FSR to native TAA — stage bisect for
+        // image-space ghosting (afterimages of the moving car).
+        if (std::getenv("ND_NO_UPSCALE")) { vk->setDlss(false); vk->setFsr(false); }
     }
 #endif
-    renderer->toneMapping = ToneMapping::ACESFilmic;
+    // Tone mapping per backend: the forward GL/WGPU paths use Neutral — their
+    // ACESFilmic is the three.js implementation whose deliberate 1/0.6
+    // viewing-environment gain pushes this bright scene (2.8 sun + full-sky
+    // IBL, no GI/AO occlusion on the forward path) into the shoulder: the
+    // asphalt turns pale gray and the grass flattens ("washed out" — the same
+    // reason the plain drive demo runs Neutral). The Vulkan deferred path
+    // keeps ACESFilmic: its physically-calibrated pipeline meters the same
+    // scene correctly, and that is the validated look.
+    renderer->toneMapping = ToneMapping::Neutral;
+#ifdef THREEPP_WITH_VULKAN
+    if (dynamic_cast<VulkanRenderer*>(renderer.get()))
+        renderer->toneMapping = ToneMapping::ACESFilmic;
+#endif
     renderer->toneMappingExposure = 1.0f;
     renderer->shadowMap().enabled = true;
     renderer->shadowMap().type = ShadowMap::PFCSoft;
@@ -336,9 +402,50 @@ int main(int argc, char** argv) {
     tiles->name = "norway_terrain";
     scene.add(tiles);
 
-    // Road ribbons (visuals) — reused as the driving-surface colliders below.
-    auto roads = network.buildMeshes();
-    scene.add(roads);
+    // Roads are BAKED into the terrain (carve + paint above); only bridge decks
+    // stay ribbon geometry. NEAR-DETAIL HYBRID (same as norway_terrain): on-ground
+    // ribbon CHUNKS give stand-on detail (crisp edges, lane markings — the ~1 m
+    // painted splat texels can't hold that) where the car is; each chunk is
+    // distance-culled per frame below, and beyond the cull the painted+baked bed
+    // alone is the road. The chunks + bridge decks double as the driving-surface
+    // colliders (cooked once world exists, below) — the car rides the ribbon the
+    // eye sees. ND_RIBBON_ROADS=1 restores the legacy full-ribbon look for A/B.
+    const bool ribbonMode = std::getenv("ND_RIBBON_ROADS") != nullptr;
+    std::shared_ptr<Group> roadRibbons;// full ribbons (ribbon mode) OR ground chunks (hybrid)
+    std::shared_ptr<Group> bridges;    // bridge decks (hybrid mode only)
+    std::vector<std::pair<Object3D*, Vector3>> roadChunkCenters;
+    std::vector<float> roadChunkRadii;
+    if (ribbonMode) {
+        roadRibbons = network.buildMeshes();
+    } else {
+        bridges = network.buildBridgeMeshes();
+        scene.add(bridges);
+        roadRibbons = network.buildGroundChunkMeshes();
+        for (auto* child : roadRibbons->children) {
+            auto* mesh = child->as<Mesh>();
+            if (!mesh) continue;
+            auto geo = mesh->geometry();
+            geo->computeBoundingSphere();
+            roadChunkCenters.emplace_back(child, geo->boundingSphere->center);
+            roadChunkRadii.push_back(geo->boundingSphere->radius);
+        }
+    }
+    scene.add(roadRibbons);
+    // ND_GLOSSY_ROAD: wet-look road (low roughness) so the moving car's REFLECTION
+    // ghost is reproducible on the near ribbon (the default matte 0.95 asphalt
+    // barely reflects, hiding the temporal artifact offline).
+    if (std::getenv("ND_GLOSSY_ROAD"))
+        roadRibbons->traverseType<Mesh>([](Mesh& m) {
+            for (const auto& mat : m.materials())
+                if (auto* sm = dynamic_cast<MeshStandardMaterial*>(mat.get())) {
+                    sm->roughness = 0.12f;
+                    sm->needsUpdate();
+                }
+        });
+    const float ribbonDist = [] {
+        const char* e = std::getenv("ND_ROAD_RIBBON_DIST");
+        return e ? std::strtof(e, nullptr) : 600.f;// 6 m road ≈ 5 px here
+    }();
 
     if (reg.heightMin < 1.0f) {
         auto seaMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
@@ -377,55 +484,72 @@ int main(int argc, char** argv) {
     worldSettings.smoothTimestep = dtSmooth;// default false (measured smoother); env re-enables for A/B
     PhysxWorld world(worldSettings);
 
-    // Road ribbons as exact static-trimesh driving surfaces.
-    int ribbonColliders = 0;
-    roads->traverseType<Mesh>([&](Mesh& m) {
-        if (world.addStaticTrimesh(m)) ++ribbonColliders;
+    // Driving surface = ONE continuous SMOOTH RIBBON per ground run (buildGround-
+    // ChunkMeshes with an effectively infinite chunk length → a single C1 piece
+    // per run, NO chunk-boundary slope breaks) + the bridge decks. This is the
+    // "smooth second geometry" the car rides: its grade is the arc-length-smoothed
+    // alignment, so the ride is flat at speed regardless of the DEM underneath. The
+    // distance-culled RENDER chunks (roadRibbons) are a SEPARATE build — visuals
+    // only. The baked terrain sits kSurfaceRaise (0.12 m) below this ribbon (so it
+    // never pokes through) and is the off-road catch + distant painted road.
+    // In ribbon mode the full ribbon set is both collider and visual.
+    std::shared_ptr<Group> collisionRibbons =
+            ribbonMode ? roadRibbons : network.buildGroundChunkMeshes(1e9f);
+    int roadColliders = 0, bridgeColliders = 0;
+    collisionRibbons->traverseType<Mesh>([&](Mesh& m) {
+        if (world.addStaticTrimesh(m)) ++roadColliders;
     });
-
-    // Collision-only APRON along both ribbon edges: the carved terrain sits
-    // clearance (~0.4 m) below the ribbon surface, so the shoulder-outer edge is
-    // otherwise a curb-height cliff — a wheel straying off the pavement takes a
-    // 60 m/s² jolt dropping onto the terrain window (measured pre-fix). The
-    // apron ramps from the shoulder edge (centerline height) down to just below
-    // the carved bench over 2.5 m, so leaving/rejoining the road is smooth.
-    // Both windings are emitted so the wheel raycasts can never back-face miss.
-    {
-        std::vector<float> pos;
-        std::vector<unsigned int> idx;
-        const float apronW = 2.5f;
-        const float drop = 0.45f;// just below the carve ceiling (clearance 0.40)
-        network.forEachSegment([&](float ax, float az, float ha, float bx, float bz, float hb,
-                                   float /*pavedHalf*/, float corridorHalf) {
-            const float dx = bx - ax, dz = bz - az;
-            const float len = std::sqrt(dx * dx + dz * dz);
-            if (len < 1e-6f) return;
-            const float px = -dz / len, pz = dx / len;// unit perpendicular (XZ)
-            for (float side : {-1.f, 1.f}) {
-                const float inO = side * corridorHalf, outO = side * (corridorHalf + apronW);
-                const auto base = static_cast<unsigned int>(pos.size() / 3);
-                const float v[4][3] = {
-                        {ax + px * inO, ha, az + pz * inO},          // a inner (shoulder edge)
-                        {bx + px * inO, hb, bz + pz * inO},          // b inner
-                        {ax + px * outO, ha - drop, az + pz * outO}, // a outer (bench level)
-                        {bx + px * outO, hb - drop, bz + pz * outO}};// b outer
-                for (const auto& p : v) pos.insert(pos.end(), {p[0], p[1], p[2]});
-                idx.insert(idx.end(), {base, base + 1, base + 2, base + 1, base + 3, base + 2});
-                idx.insert(idx.end(), {base, base + 2, base + 1, base + 1, base + 2, base + 3});
-            }
+    if (bridges)
+        bridges->traverseType<Mesh>([&](Mesh& m) {
+            if (world.addStaticTrimesh(m)) ++bridgeColliders;
         });
-        auto apron = BufferGeometry::create();
-        apron->setIndex(idx);
-        apron->setAttribute("position", FloatBufferAttribute::create(pos, 3));
-        world.addStaticTrimesh(*apron);// collision only — never added to the scene
+
+    // Buildings (packs fetched with --buildings): extruded OSM footprints with
+    // nDSM-measured heights, batched into 500 m chunk meshes with per-building
+    // vertex colours — same build as the norway_terrain viewer, plus a static
+    // trimesh collider per chunk so the car hits walls instead of ghosting
+    // through the village. ND_NO_BUILDINGS=1 hides them for A/B.
+    if (!pack.buildings.empty() && !std::getenv("ND_NO_BUILDINGS")) {
+        auto buildings = terrain::buildGeoBuildingMeshes(pack);
+        int buildingColliders = 0;
+        buildings->traverseType<Mesh>([&](Mesh& m) {
+            if (world.addStaticTrimesh(m)) ++buildingColliders;
+        });
+        std::cout << "[drive] buildings: " << pack.buildings.size() << " footprints in "
+                  << buildings->children.size() << " chunk meshes ("
+                  << buildingColliders << " colliders)\n" << std::flush;
+        scene.add(buildings);
     }
 
     // Terrain window collider (recentres with the car).
     TerrainWindow terrainWin(world, prov, /*size*/ 300.f, /*res*/ 150, /*recenter*/ 80.f);
 
-    // ── spawn on the longest road midpoint, aligned to its heading ───────────────
+    // ── spawn at the TOP of the longest DRIVABLE road stretch ────────────────────
+    // The longest CONTIGUOUS non-excluded centerline run (not the longest road):
+    // on coastal packs the longest road is often the ferry crossing, which
+    // profile classification EXCLUDES — spawning on it drops the car in the fjord
+    // (no collider there). This run is guaranteed to be real pavement end to end,
+    // so both the spawn and the pure-pursuit auto-steer stay on the road.
+    // The run is ordered TOP→BOTTOM (reversed if needed) and the car starts ~50 m
+    // down from the crest, heading down-route — on Trollstigen that is the top of
+    // the pass with the hairpin descent ahead.
+    std::vector<Vector3> centerline = network.longestDrivableRun();
+    if (centerline.size() >= 2 && centerline.front().y < centerline.back().y)
+        std::reverse(centerline.begin(), centerline.end());
     Vector3 roadMid, roadDir;
-    if (!network.longestRoad(roadMid, roadDir)) {
+    if (centerline.size() >= 2) {
+        size_t si = 0;
+        float acc = 0.f;
+        while (si + 1 < centerline.size() && acc < 50.f) {
+            acc += centerline[si].distanceTo(centerline[si + 1]);
+            ++si;
+        }
+        roadMid = centerline[si];
+        const Vector3 a = centerline.front(), b = centerline.back();
+        roadDir.set(b.x - a.x, 0.f, b.z - a.z);
+        if (roadDir.length() < 1e-4f) roadDir.set(0.f, 0.f, 1.f);
+        else roadDir.normalize();
+    } else {
         roadMid.set(0.f, reg.heightMin, 0.f);
         roadDir.set(0.f, 0.f, 1.f);
     }
@@ -435,10 +559,6 @@ int main(int argc, char** argv) {
     }();
     terrainWin.rebuild(roadMid.x, roadMid.z);// ground under the spawn before the first step
 
-    // Longest-road centerline — spawn alignment + capture-mode auto-steer
-    // (pure-pursuit) so the car FOLLOWS the hairpins instead of ploughing
-    // straight off the first bend.
-    const std::vector<Vector3> centerline = network.longestRoadCenterline();
     // Seed the pure-pursuit progress index to the GLOBAL-nearest centerline
     // sample at the spawn point (the per-frame advance is only a local descent,
     // so it must start near the car or it sticks at a spurious local minimum).
@@ -486,6 +606,22 @@ int main(int argc, char** argv) {
         carModel->scale.multiplyScalar(targetLength / carLength);
         carModel->updateMatrixWorld(true);
     }
+    // Tame the mirror-glossy GLB paint to a SATIN clearcoat. A near-mirror painted
+    // panel is the worst case for the deferred reflection channel: screen-static
+    // but world-moving under the chase cam, its 1-spp GGX reflection gets a short
+    // history and boils / F0-tints (see deferred_shade's "MOTION GUARD"), and it
+    // reads as "too glossy". Flooring roughness widens the BRDF lobe so the blur
+    // absorbs the noise and the reflection is stable. Glass/lights are left alone
+    // (MustangRig tags them); we only lift very-smooth painted metal.
+    carModel->traverseType<Mesh>([](Mesh& mesh) {
+        for (const auto& m : mesh.materials()) {
+            if (auto* sm = dynamic_cast<MeshStandardMaterial*>(m.get());
+                sm && sm->metalness > 0.4f && sm->roughness < 0.30f) {
+                sm->roughness = 0.34f;
+                sm->needsUpdate();
+            }
+        }
+    });
     const auto carMeas = drive::MustangRig::measure(*carModel);
     std::cout << "[drive] car " << (carMeas.valid ? "measured" : "FALLBACK")
               << " WxHxL=" << carMeas.chassisWidth << "x" << carMeas.chassisHeight << "x"
@@ -503,14 +639,30 @@ int main(int argc, char** argv) {
     vs.wheelHalfWidth = carMeas.wheelHalfWidth;
     vs.trackWidth = carMeas.trackWidth;
     vs.wheelbase = carMeas.wheelbase;
-    vs.suspensionTravelDist = 0.16f;// firmer — a sports coupe
+    // Suspension TRAVEL. The old 0.16 (half the 0.32 default) was a firm sports-
+    // coupe tune, but on a terrain-following mountain road at speed the short travel
+    // BOTTOMS OUT over the road's mid-scale undulation and the car bounces. The
+    // spring/damper themselves are well-tuned (~1.6 Hz, 0.66 damping ratio); it's
+    // only the travel that was starving. More travel absorbs the undulation without
+    // touching the road geometry (no launch artifacts). ND_SUSP_TRAVEL overrides.
+    vs.suspensionTravelDist = 0.30f;
+    if (const char* e = std::getenv("ND_SUSP_TRAVEL"); e && e[0] != '\0') vs.suspensionTravelDist = std::strtof(e, nullptr);
     vs.suspensionAttachmentY = carMeas.wheelCenterYRel + vs.suspensionTravelDist * 0.5f;
+    // ARCADE handling (racing-game feel, not a sim). Lower the max front-wheel
+    // angle (34° -> 24°) so the car turns in progressively instead of darting, and
+    // raise tyre grip so it stays planted rather than sliding into understeer. The
+    // per-frame steer slew + speed-sensitive scaling in the loop finish the job.
+    vs.maxSteerAngleRad = 0.42f;
+    if (const char* e = std::getenv("ND_STEER_MAX"); e && e[0] != '\0') vs.maxSteerAngleRad = std::strtof(e, nullptr);
+    vs.tireFriction = 2.6f;
+    vs.lateralStiffness = 130'000.f;// stickier lateral bite — less slide, more grip
     vs.spawnPosition = {roadMid.x, spawnSurf + 1.2f, roadMid.z};
     {
-        // Align to the LOCAL road tangent at the spawn midpoint — the global
-        // end-to-start heading from longestRoad() can be way off on a winding
-        // road, and a misaligned spawn sends the car across the shoulder while
-        // the auto-steer acquires the line (measured 40+ m/s^2 jolts).
+        // Align to the LOCAL road tangent at the spawn midpoint — the run's
+        // end-to-start heading can be way off on a winding road, and a misaligned
+        // spawn sends the car across the shoulder while the auto-steer acquires
+        // the line (measured 40+ m/s^2 jolts). roadDir was overwritten with that
+        // local tangent when ppIdx was seeded.
         Quaternion q;
         q.setFromUnitVectors(Vector3(0.f, 0.f, 1.f), roadDir);
         vs.spawnRotation = q;
@@ -519,9 +671,24 @@ int main(int argc, char** argv) {
 
     auto carRig = std::make_unique<drive::MustangRig>(carModel, carMeas);
     scene.add(carRig->root());
+    // DIAGNOSTIC (ND_BRIGHT_LIGHTS): force the tail/emissive materials bright so the
+    // reflection/GI ghost of the MOVING car is visible in a daytime headless capture
+    // (normally the 0.6-intensity tail-lights wash out and the artifact can't be
+    // reproduced offline). Repro target for the moving-reflected-content history fix.
+    if (std::getenv("ND_BRIGHT_LIGHTS")) {
+        carRig->root()->traverseType<Mesh>([](Mesh& mesh) {
+            for (const auto& m : mesh.materials())
+                if (auto* sm = dynamic_cast<MeshStandardMaterial*>(m.get());
+                    sm && sm->emissiveIntensity > 0.f) {
+                    sm->emissiveIntensity = 20.f;
+                    sm->needsUpdate();
+                }
+        });
+    }
     world.bind(*carRig->root(), *vehicle.chassisActor());
 
-    std::cout << "[drive] " << ribbonColliders << " road-ribbon colliders + recentring terrain window\n"
+    std::cout << "[drive] " << roadColliders << (ribbonMode ? " full-ribbon" : " ground-chunk")
+              << " colliders + " << bridgeColliders << " bridge decks + recentring terrain window\n"
               << "[drive] spawn on road '" << (pack.roads.empty() ? "?" : pack.roads.front().id)
               << "' at (" << roadMid.x << ", " << spawnSurf << ", " << roadMid.z << ")\n"
               << "[drive] controls: W/Up throttle  S/Down brake  A/D steer  SPACE handbrake  R reset\n"
@@ -649,7 +816,7 @@ int main(int argc, char** argv) {
     // --trace: per-frame smoothness log on the REAL vsync path. rawDt = wall frame
     // period; renderPos = interpolated car pos the camera tracks; carScreen = the
     // car's on-screen NDC (what the eye judges). rawPos = un-interpolated actor pos.
-    std::string traceCsv = "frame,rawDtMs,renderX,renderY,renderZ,rawX,rawY,rawZ,screenX,screenY,physSpeed\n";
+    std::string traceCsv = "frame,rawDtMs,renderX,renderY,renderZ,rawX,rawY,rawZ,screenX,screenY,physSpeed,camPitch\n";
 
     canvas.animate([&] {
         // Capture normally steps at a fixed 1/60 (deterministic verification);
@@ -725,17 +892,53 @@ int main(int argc, char** argv) {
             }
             // Corner slower: target a low cruise, and cut throttle hard while
             // steering hard so the car crawls the hairpins under control.
-            const float cruise = 32.f;// km/h
+            // ND_CRUISE overrides the target speed (to probe ride bounce at speed).
+            static const float cruise = [] {
+                const char* e = std::getenv("ND_CRUISE");
+                return (e && e[0] != '\0') ? std::strtof(e, nullptr) : 32.f;
+            }();// km/h
             autoThrottle = (speedKmh < cruise) ? 1.f : 0.1f;
             autoThrottle *= (1.f - 0.75f * steerMag);
             autoThrottle = std::max(autoThrottle, 0.25f);// always enough to keep crawling
         }
 
-        const float steerScale = 1.f / (1.f + speedKmh * 0.015f);
-        const float slew = std::min(1.f, dt * 3.f);
+        // Arcade steering feel: fall the steer authority off faster with speed (so
+        // fast corners need a deliberate input, not a twitch) and slew the command
+        // in more gently (smooth turn-in, no darting). Low-speed hairpins keep near
+        // full lock.
+        const float steerScale = 1.f / (1.f + speedKmh * 0.03f);
+        const float slew = std::min(1.f, dt * 2.2f);
         steerCmd += (steerInput * steerScale - steerCmd) * slew;
-        throttleCmd = autoThrottle;
-        brakeCmd = brakeDown ? 1.f : 0.f;
+
+        // Forward / REVERSE. Auto-drive is always forward. In manual, S brakes while
+        // still rolling forward, then engages REVERSE once nearly stopped — and in
+        // reverse S becomes the (backward) throttle and W the brake; pressing W once
+        // stopped re-selects Drive. Mirrors how an automatic gearbox feels.
+        using Dir = PhysxVehicleEngineDrive::Direction;
+        if (autoDrive) {
+            throttleCmd = autoThrottle;
+            brakeCmd = brakeDown ? 1.f : 0.f;
+            // DIAGNOSTIC (ND_STOP_AT=<frame>): hard-stop the auto-drive at that
+            // frame and hold the brake. A capture some frames later separates
+            // MOTION-HISTORY residue (brightness displaced behind the now-parked
+            // car — pure temporal artifact) from steady-state effects (bloom,
+            // bounce — they sit ON/AROUND the car regardless of motion).
+            static const long stopAt = [] {
+                const char* e = std::getenv("ND_STOP_AT");
+                return (e && e[0] != '\0') ? std::strtol(e, nullptr, 10) : -1L;
+            }();
+            if (stopAt >= 0 && frame >= stopAt) { throttleCmd = 0.f; brakeCmd = 1.f; }
+        } else {
+            const float fwd = vehicle.forwardSpeed();
+            if (vehicle.direction() == Dir::Drive) {
+                if (brakeDown && fwd < 0.5f) vehicle.setDirection(Dir::Reverse);
+            } else if (throttleDown && fwd > -0.5f) {
+                vehicle.setDirection(Dir::Drive);
+            }
+            const bool reversing = vehicle.direction() == Dir::Reverse;
+            throttleCmd = reversing ? (brakeDown ? 1.f : 0.f) : (throttleDown ? 1.f : 0.f);
+            brakeCmd = reversing ? (throttleDown ? 1.f : 0.f) : (brakeDown ? 1.f : 0.f);
+        }
         vehicle.setThrottle(throttleCmd);
         vehicle.setBrake(brakeCmd);
         vehicle.setHandbrake(handbrakeDown ? 1.f : 0.f);
@@ -757,7 +960,10 @@ int main(int argc, char** argv) {
             maxStepMs = std::max(maxStepMs, stepMs);
         }
 
-        // Chase camera in chassis-local space, transformed to world.
+        // Chase camera in chassis-local space, transformed to world. Following the
+        // car's full orientation (incl. pitch) is what lets you SEE down the road on
+        // climbs and descents — essential on the hairpins; a world-level cam leaves
+        // you driving blind over crests.
         carRig->root()->updateMatrixWorld();
         const Matrix4& chassisMat = *carRig->root()->matrixWorld;
         const float cosP = std::cos(orbitPitch);
@@ -767,6 +973,43 @@ int main(int argc, char** argv) {
         desiredCam.applyMatrix4(chassisMat);
         Vector3 desiredTarget(0.f, 1.1f, 1.5f);
         desiredTarget.applyMatrix4(chassisMat);
+        if (topDown) {
+            // Nearly overhead, slightly ahead, looking down-and-back: the car sits
+            // upper-center with the road it JUST LEFT filling the lower frame —
+            // the framing where trailing ghosts (stale history / afterimages of
+            // the car at its previous positions) are visible. Uses the car's
+            // heading so it tracks through turns.
+            Vector3 fwd = Vector3(0.f, 0.f, 1.f).applyQuaternion(fromPxQuat(pose.q));
+            fwd.y = 0.f;
+            if (fwd.length() > 1e-4f) fwd.normalize();
+            desiredCam = carPos + fwd * 4.f + Vector3(0.f, 14.f, 0.f);
+            desiredTarget = carPos - fwd * 4.f + Vector3(0.f, 0.3f, 0.f);
+        }
+        // DIAGNOSTIC (ND_STATIC_CAM): pin the camera in WORLD space (elevated,
+        // looking at a fixed road point set on the first capture frame) and let
+        // the car auto-drive THROUGH the frame. Isolates the canonical hard case
+        // for RT-temporal shadows — static camera + static ground + MOVING
+        // occluder — from any chase-cam / raw-vs-interpolated-pose motion. If the
+        // shadow trails HERE it is purely the renderer's temporal reprojection
+        // (the moving shadow has no motion vector on the static ground); if it is
+        // clean here but trails in chase, the cause is the pose/camera path.
+        static bool  staticCam = std::getenv("ND_STATIC_CAM") != nullptr;
+        static bool  staticSet = false;
+        static Vector3 staticEye, staticTgt;
+        if (staticCam) {
+            if (!staticSet) {
+                Vector3 fwd = Vector3(0.f, 0.f, 1.f).applyQuaternion(fromPxQuat(pose.q));
+                fwd.y = 0.f; if (fwd.length() > 1e-4f) fwd.normalize();
+                // Eye beside/above the road; look at the road ~25 m ahead so the
+                // car drives from far → near → past under a fixed view.
+                staticTgt = carPos + fwd * 25.f;
+                staticEye = carPos + fwd * 10.f + Vector3(0.f, 9.f, 0.f)
+                          + Vector3(fwd.z, 0.f, -fwd.x) * 6.f;// 6 m to the side
+                staticSet = true;
+            }
+            camera->position.copy(staticEye);
+            camera->lookAt(staticTgt);
+        } else {
         // Frame-rate-independent smoothing (default): min(1,dt·k) is linear in dt,
         // so its effective time-constant drifts with the frame rate — under variable
         // dt the camera lag jitters and the whole world appears to shimmy even when
@@ -776,6 +1019,22 @@ int main(int argc, char** argv) {
         camTarget.lerp(desiredTarget, lerp);
         camera->position.copy(camPos);
         camera->lookAt(camTarget);
+        }
+
+        // Near-detail ribbon chunks: visible within ribbonDist of the camera (10%
+        // hysteresis so a boundary chunk doesn't flip every frame). Beyond it the
+        // baked+painted roadbed alone carries the road. Rendering only — the chunk
+        // COLLIDERS stay live regardless, so the car keeps its driving surface.
+        for (size_t ci = 0; ci < roadChunkCenters.size(); ++ci) {
+            auto* obj = roadChunkCenters[ci].first;
+            const float d = camera->position.distanceTo(roadChunkCenters[ci].second) -
+                            roadChunkRadii[ci];
+            if (obj->visible) {
+                if (d > ribbonDist * 1.1f) obj->visible = false;
+            } else if (d < ribbonDist) {
+                obj->visible = true;
+            }
+        }
 
         auto tl0 = std::chrono::steady_clock::now();
         tiles->update(camera->position);
@@ -791,11 +1050,17 @@ int main(int argc, char** argv) {
             const Vector3 rpos = carRig->root()->position;
             const PxTransform rawp = vehicle.chassisActor()->getGlobalPose();
             Vector3 ndc = rpos.clone().project(*camera);// world → NDC via the live camera
-            char line[256];
+            // Camera look-PITCH (rad): how far up/down the view is aimed. Its
+            // frame-to-frame swing IS the "view rock" the rigid cam adds over
+            // undulations; the level cam holds it near-constant.
+            Vector3 look = camTarget.clone().sub(camPos);
+            const float lookLen = std::max(look.length(), 1e-4f);
+            const float camPitch = std::asin(std::clamp(look.y / lookLen, -1.f, 1.f));
+            char line[288];
             std::snprintf(line, sizeof(line),
-                          "%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.5f,%.5f,%.4f\n",
+                          "%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.5f,%.5f,%.4f,%.5f\n",
                           frame, rawDt * 1000.f, rpos.x, rpos.y, rpos.z,
-                          rawp.p.x, rawp.p.y, rawp.p.z, ndc.x, ndc.y, vehicle.forwardSpeed());
+                          rawp.p.x, rawp.p.y, rawp.p.z, ndc.x, ndc.y, vehicle.forwardSpeed(), camPitch);
             traceCsv += line;
             if (++frame >= traceFrames) {
                 std::ofstream(tracePath) << traceCsv;
@@ -880,6 +1145,22 @@ int main(int argc, char** argv) {
                 prevRebuilds = terrainWin.rebuilds();
                 std::cout << "[drive] terrain window re-cook #" << prevRebuilds << " at frame "
                           << frame << "\n";
+            }
+            // DIAGNOSTIC (ND_DUMP_FROM=<frame>): dump EVERY frame from there to the
+            // end into aaa_caps/seq/ — a temporal artifact (history smear trailing a
+            // moving object) is invisible in a single still; a consecutive-frame
+            // sequence lets offline analysis image the residue directly.
+            {
+                static const long dumpFrom = [] {
+                    const char* e = std::getenv("ND_DUMP_FROM");
+                    return (e && e[0] != '\0') ? std::strtol(e, nullptr, 10) : -1L;
+                }();
+                if (dumpFrom >= 0 && frame >= dumpFrom) {
+                    const auto seqDir = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / "seq";
+                    std::filesystem::create_directories(seqDir);
+                    renderer->writeFramebuffer(seqDir / (std::string(std::getenv("ND_DUMP_TAG") ? std::getenv("ND_DUMP_TAG") : "f")
+                                                          + "_" + std::to_string(frame) + ".png"));
+                }
             }
             if (frame % 120 == 0)
                 std::cout << "[t=" << frame << "] speed=" << spd << " km/h  gear=" << vehicle.gearLabel()

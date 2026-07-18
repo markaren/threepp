@@ -462,8 +462,29 @@ namespace threepp::terrain {
                         const float hx = provider_.height(x + ae, z) - provider_.height(x - ae, z);
                         const float hz = provider_.height(x, z + ae) - provider_.height(x, z - ae);
                         const float ny = (2.f * ae) / std::sqrt(hx * hx + hz * hz + 4.f * ae * ae);
-                        float rgb[3] = {0.5f, 0.5f, 0.5f};
-                        provider_.albedo(x, z, h, 1.f - ny, rgb);
+                        // 2×2 SUPERSAMPLED albedo eval — coverage AA for painted
+                        // content. A point-sampled bake turns the ~1.5-texel-wide
+                        // painted road into a BINARY per-texel line on coarse LOD
+                        // tiles (3-5 m/texel): staircase scallops that read as
+                        // beads/dashes at distance and crawl under motion on the
+                        // un-jittered GL/WGPU paths (Vulkan's TAA merely blurred
+                        // them — capture-diffed: the beads are in the DATA, mips
+                        // and aniso never touched them because the quadtree keeps
+                        // tile albedo near screen density, so LOD 0 is what you
+                        // see). Averaging 4 sub-texel evals boxes the paint's
+                        // analytic edge into partial coverage — a smooth, properly
+                        // anti-aliased line at every tile resolution. Height/slope
+                        // stay single-sample (smooth fields; the paint is xz-only).
+                        float rgb[3] = {0.f, 0.f, 0.f};
+                        for (int sj = 0; sj < 2; ++sj)
+                            for (int si = 0; si < 2; ++si) {
+                                float s[3] = {0.5f, 0.5f, 0.5f};
+                                provider_.albedo(x + (si ? 0.25f : -0.25f) * astep,
+                                                 z + (sj ? 0.25f : -0.25f) * astep,
+                                                 h, 1.f - ny, s);
+                                rgb[0] += s[0]; rgb[1] += s[1]; rgb[2] += s[2];
+                            }
+                        rgb[0] *= 0.25f; rgb[1] *= 0.25f; rgb[2] *= 0.25f;
                         const size_t oI = (static_cast<size_t>(j) * adim + i) * 4;
                         b.albedo[oI + 0] = static_cast<unsigned char>(std::clamp(rgb[0], 0.f, 1.f) * 255.f + 0.5f);
                         b.albedo[oI + 1] = static_cast<unsigned char>(std::clamp(rgb[1], 0.f, 1.f) * 255.f + 0.5f);
@@ -505,7 +526,21 @@ namespace threepp::terrain {
                                                static_cast<unsigned int>(b.albedoDim));
                 tex->colorSpace = ColorSpace::sRGB;
                 tex->magFilter = Filter::Linear;
-                tex->minFilter = Filter::Linear;
+                // Mip-filtered: the baked-road pipeline paints roads INTO this
+                // texture and relies on minification integrating them smoothly at
+                // distance — without a mip chain the GL path point-samples the
+                // splat and a distant painted road aliases into dashes. (Vulkan
+                // builds full mip chains for material textures regardless, which
+                // is why only GL showed it.) Aniso keeps grazing-angle roads
+                // sharp instead of mip-blurred: 16, not 8 — a road seen down-route
+                // from a driving camera has footprint anisotropy ratios well past
+                // 8, so at 8 the far road still collapses into mip mush (washed
+                // out) and the mid-range shimmers with the residual undersampling.
+                // 16 matches the Vulkan material-sampler policy (the validated
+                // look); GL and WGPU both honor it, clamped to the hardware max.
+                tex->minFilter = Filter::LinearMipmapLinear;
+                tex->generateMipmaps = true;
+                tex->anisotropy = 16;
                 mat->map = tex;
             }
             if (o_.detailMap) {

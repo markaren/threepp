@@ -92,9 +92,38 @@ namespace threepp::road {
         float minSpanLen = 30.f; // bridge runs shorter than this demote to ground
                                  // (culvert/causeway — carve fills it like a real
                                  // roadbed; a stub deck ribbon would be exactly
-                                 // the floating-shard artifact class)
+                                 // the floating-shard artifact class) — UNLESS the
+                                 // run clears shortSpanMaxLift (a deep ravine
+                                 // crossing is a real short viaduct, not a culvert)
+        float shortSpanMaxLift = 6.f;// a short bridge run whose deck rises more than
+                                 // this above ground is a genuine span (a narrow
+                                 // gorge/stream ravine crossed by a real bridge) and
+                                 // is KEPT even under minSpanLen — draping it to the
+                                 // ravine floor makes a hard vertical-U dive instead
         float maxDataLift = 60.f;// packY more than this above ground = garbage
                                  // elevation data, NOT a viaduct — treat as ground
+        float deckAnchorLift = 0.6f;// after classification, each bridge span EXTENDS
+                                 // outward while dataY still rides this far above the
+                                 // ground, so the deck anchors on solid ground. The
+                                 // lift>bridgeThresh test alone starts the span only
+                                 // once the deck is 3 m up — the approaches (lift
+                                 // 0..3 m) would stay ground-draped, and near a gorge
+                                 // that ground is already collapsing (rim steps,
+                                 // lips), so the road dives into every sub-3 m fold
+                                 // beside the deck and the crossing reads as a warped
+                                 // hump instead of a taut span.
+        float deckAnchorMax = 30.f;// extension bound per side (m) — a long shallow
+                                 // drape is an embankment for the carve, not a deck
+        float gradeSmoothing = 0.f;// ARC-LENGTH grade-smoothing window (m); 0 = off.
+                                 // A real road follows a SMOOTH vertical alignment,
+                                 // not the DEM's 5-30 m micro-undulations that are
+                                 // invisible at a crawl but BOUNCE a car at speed.
+                                 // The per-sample 1-2-1 smoothing can't remove them
+                                 // (its reach scales with sample density, which is
+                                 // sub-metre here); this averages each GROUND sample's
+                                 // grade over a fixed metric window (bridge decks and
+                                 // excluded spans keep their own heights). ~25 m halves
+                                 // the mid-band roughness while the grade moves <~0.2 m.
     };
 
     class RoadNetwork {
@@ -310,6 +339,12 @@ namespace threepp::road {
                 tex->magFilter = Filter::Linear;
                 tex->minFilter = Filter::LinearMipmapLinear;
                 tex->generateMipmaps = true;// DataTexture defaults false → GL black
+                // A road ribbon is viewed at PERMANENT grazing incidence — without
+                // aniso, trilinear collapses to the along-road mip axis and the
+                // lane dashes smear into giant blobs a few car-lengths out (the
+                // Vulkan material sampler forces 16× on unjittered paths, which is
+                // why only GL/WGPU showed it — they honor this per-texture value).
+                tex->anisotropy = 16;
                 tex->wrapS = TextureWrapping::ClampToEdge;
                 tex->wrapT = TextureWrapping::Repeat;// tiles along the road length
                 mat->map = tex;
@@ -491,6 +526,41 @@ namespace threepp::road {
             return roads_[static_cast<size_t>(best)].gen->centerlineSamples();
         }
 
+        // The longest CONTIGUOUS run of DRIVABLE (non-excluded) conformed
+        // centerline samples across all roads — ordered along the road. A driving
+        // demo spawns on and follows this so it never lands on a ferry/tunnel span
+        // that profile classification excluded (there is no collider or surface
+        // there — the car would fall through). In legacy (non-profile) mode every
+        // sample is drivable, so this is simply the longest road's centerline
+        // (same as longestRoadCenterline). Empty if the network has no drivable
+        // road. Call after conformTo().
+        [[nodiscard]] std::vector<Vector3> longestDrivableRun() const {
+            std::vector<Vector3> best;
+            float bestLen = -1.f;
+            for (const auto& r : roads_) {
+                const auto& cl = r.gen->centerlineSamples();
+                const auto& f = r.sampleFlags;
+                const bool flagged = f.size() == cl.size();
+                size_t i = 0;
+                while (i < cl.size()) {
+                    if (flagged && (f[i] & kSegExcluded)) { ++i; continue; }
+                    size_t j = i;// extend the run while the NEXT sample stays drivable
+                    float len = 0.f;
+                    while (j + 1 < cl.size() && !(flagged && (f[j + 1] & kSegExcluded))) {
+                        len += cl[j + 1].distanceTo(cl[j]);
+                        ++j;
+                    }
+                    if (len > bestLen) {
+                        bestLen = len;
+                        best.assign(cl.begin() + static_cast<std::ptrdiff_t>(i),
+                                    cl.begin() + static_cast<std::ptrdiff_t>(j + 1));
+                    }
+                    i = j + 1;
+                }
+            }
+            return best;
+        }
+
     private:
         // ── per-road ownership ───────────────────────────────────────────────
         struct Road {
@@ -627,6 +697,16 @@ namespace threepp::road {
             if (pts.size() < 2) return nullptr;
             RoadParams p = paramsFor(r.spec);
             p.samplesPerSegment = 2;// slice points are already dense
+            // Baked pipeline: the TERRAIN owns the verge (carveRoads bakes the
+            // roadbed and makeGeoProvider paints asphalt→grass over pavedWeight),
+            // so these ribbons need only a THIN SEALED edge to grade their
+            // kSurfaceRaise lip down to grade — not the wide GRAVEL shoulder the
+            // legacy ribbon-is-the-road look bakes, which reads as a dirt band
+            // beside a road that is already painted into the ground. Narrow the
+            // shoulder and colour it asphalt (a sealed road edge). buildMeshes
+            // (legacy full ribbons) keeps the gravel verge.
+            p.shoulderWidth = std::min(p.shoulderWidth, 0.5f);
+            p.shoulderColor = p.asphaltColor;
             RoadGenerator gen(pts, p);
             // "Ground" for the piece is its own profile — light smoothing keeps
             // a deck taut instead of re-draping it into the ravine/water it
@@ -651,6 +731,7 @@ namespace threepp::road {
             tex->magFilter = Filter::Linear;
             tex->minFilter = Filter::LinearMipmapLinear;
             tex->generateMipmaps = true;// DataTexture defaults false → GL black
+            tex->anisotropy = 16;// permanent grazing incidence — see buildMeshes note
             tex->wrapS = TextureWrapping::ClampToEdge;
             tex->wrapT = TextureWrapping::Repeat;
             mat->map = tex;
@@ -760,7 +841,12 @@ namespace threepp::road {
                 if (f[i] != kSegBridge) { ++i; continue; }
                 size_t j = i;
                 while (j < n && f[j] == kSegBridge) ++j;
-                if (runLen(i, j) < po.minSpanLen)
+                // A short run is a blip to demote ONLY if it is also SHALLOW; a
+                // short run whose deck rises well above ground is a real bridge
+                // over a narrow ravine (draping it makes the hard vertical U).
+                float peakLift = 0.f;
+                for (size_t k = i; k < j; ++k) peakLift = std::max(peakLift, dataY[k] - ground[k]);
+                if (runLen(i, j) < po.minSpanLen && peakLift <= po.shortSpanMaxLift)
                     for (size_t k = i; k < j; ++k)
                         f[k] = (ground[k] <= po.seaLevel + po.waterEps)
                                        ? kSegExcluded
@@ -784,6 +870,40 @@ namespace threepp::road {
                     for (size_t k = i; k < j; ++k) f[k] = kSegExcluded;
                 i = j;
             }
+            // Anchor decks on solid ground (see deckAnchorLift): extend each
+            // surviving span outward while the data line still rides clear of
+            // the ground, bounded per side. Runs are collected first so an
+            // extension never feeds the next run's scan.
+            {
+                std::vector<std::pair<size_t, size_t>> runs;
+                for (size_t i = 0; i < n;) {
+                    if (f[i] != kSegBridge) { ++i; continue; }
+                    size_t j = i;
+                    while (j < n && f[j] == kSegBridge) ++j;
+                    runs.emplace_back(i, j);
+                    i = j;
+                }
+                const auto stepLen = [&cl](size_t a, size_t b) {
+                    const float dx = cl[a].x - cl[b].x, dz = cl[a].z - cl[b].z;
+                    return std::sqrt(dx * dx + dz * dz);
+                };
+                for (const auto& [ri, rj] : runs) {
+                    float len = 0.f;
+                    for (size_t k = ri; k > 0 && f[k - 1] == 0 &&
+                                        dataY[k - 1] - ground[k - 1] > po.deckAnchorLift;) {
+                        len += stepLen(k, k - 1);
+                        if (len > po.deckAnchorMax) break;
+                        f[--k] = kSegBridge;
+                    }
+                    len = 0.f;
+                    for (size_t k = rj; k < n && f[k] == 0 &&
+                                        dataY[k] - ground[k] > po.deckAnchorLift;) {
+                        len += stepLen(k, k > 0 ? k - 1 : k);
+                        if (len > po.deckAnchorMax) break;
+                        f[k++] = kSegBridge;
+                    }
+                }
+            }
             // Explicit target elevation per sample for its FINAL role. Demoted
             // water blips still hold the deck minimum (a causeway pad, never a
             // submerged roadbed); everything else on ground drapes the ground.
@@ -794,6 +914,32 @@ namespace threepp::road {
                     target[i] = std::max(dataY[i], po.seaLevel + po.deckMin);
                 else
                     target[i] = water ? po.seaLevel + po.deckMin : ground[i];
+            }
+            // Arc-length grade smoothing (drivable vertical alignment): average
+            // each GROUND sample's target over a fixed metric window so the road
+            // rides a smooth grade instead of draping over the DEM's mid-scale
+            // undulation. Bridge/excluded samples keep their classified height and
+            // are skipped both as targets and as neighbours (a deck must not drag
+            // the approach grade up, nor the approach flatten the deck).
+            if (po.gradeSmoothing > 0.f && n > 2) {
+                std::vector<float> arc(n, 0.f);
+                for (size_t i = 1; i < n; ++i) {
+                    const float dx = cl[i].x - cl[i - 1].x, dz = cl[i].z - cl[i - 1].z;
+                    arc[i] = arc[i - 1] + std::sqrt(dx * dx + dz * dz);
+                }
+                const float half = po.gradeSmoothing * 0.5f;
+                std::vector<float> sm = target;
+                for (size_t i = 0; i < n; ++i) {
+                    if (f[i] != 0) continue;// keep deck / excluded targets
+                    float sum = target[i];
+                    int cnt = 1;
+                    for (size_t k = i + 1; k < n && arc[k] - arc[i] <= half; ++k)
+                        if (f[k] == 0) { sum += target[k]; ++cnt; }
+                    for (size_t k = i; k-- > 0 && arc[i] - arc[k] <= half;)
+                        if (f[k] == 0) { sum += target[k]; ++cnt; }
+                    sm[i] = sum / static_cast<float>(cnt);
+                }
+                target.swap(sm);
             }
             r.gen->conformToHeights(target, smoothingPasses);
             r.sampleFlags = std::move(f);

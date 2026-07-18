@@ -141,6 +141,25 @@ namespace threepp::terrain {
         // segments never carve (the deck spans; ground below stays natural) and
         // excluded segments (tunnels/ferries) never carve at all.
         bool bakeSurface = false;
+        // Bake-mode FILL is ASYMMETRIC from the cut. Cutting (terrain above road
+        // level) must keep the full inflate+feather band — that is the tile-quad
+        // coverage guarantee above, and narrowing it lets uphill quads interpolate
+        // ABOVE the road and slice through the pavement (torn-asphalt artifacts).
+        // Filling (terrain below road level) has no such constraint: a quad edge
+        // sagging below the road is just the hillside falling away. So fill is
+        // confined to a NARROW shoulder band + short embankment taper — on steep
+        // sidehills the road hugs the slope on a tight fill wall instead of the
+        // huge flat berm the full band would build (Trollstigen: terrain drops
+        // ~27 m across the 24 m corridor; a 12 m-half-width flat shelf there reads
+        // as a dark raised bench). Only meaningful with bakeSurface.
+        float fillInflate = 2.f;// full-fill band beyond the pavement edge (m)
+        float fillFeather = 3.f;// fill→natural embankment taper beyond that (m)
+        float bakeClearance = 0.f;// bake mode: hold the baked bed this far below the
+                                // road grade (the driving ribbon rides kSurfaceRaise
+                                // above grade). The gap stops cut-wall bicubic
+                                // overshoot from poking the terrain up through the
+                                // ribbon; a driving demo wants ~0.25 m, a pure viewer
+                                // 0 (terrain == painted road, no shoulder step).
     };
 
     inline void carveRoads(HeightGrid& grid, const road::RoadNetwork& net,
@@ -169,6 +188,7 @@ namespace threepp::terrain {
         std::vector<float> bestD(n, std::numeric_limits<float>::max());
         std::vector<float> allowed(n, 0.f);// nearest winner's ribbonSurface − clearance
         std::vector<float> innerR(n, 0.f); // nearest winner's full-cut lateral reach
+        std::vector<float> fillR(n, 0.f);  // nearest winner's full-FILL reach (bake mode)
         std::vector<float> hardCap(n, std::numeric_limits<float>::max());
 
         net.forEachSegmentFlagged([&](float ax, float az, float ha, float bx, float bz, float hb,
@@ -195,13 +215,14 @@ namespace threepp::terrain {
                     const float d = std::sqrt(dx * dx + dz * dz);
                     if (d >= reach) continue;
                     const size_t idx = static_cast<size_t>(iz) * dim + ix;
-                    // Bake mode: the terrain roadbed sits at the CONFORMED GRADE
-                    // (no raise, no clearance drop) — the distance-culled near
-                    // ribbons (buildGroundChunkMeshes) float kSurfaceRaise above
-                    // it, so both can coexist without z-fighting; where the
-                    // ribbons are culled the painted bed alone is the road.
+                    // Bake mode: the terrain roadbed sits bakeClearance BELOW the
+                    // conformed grade. The driving ribbon floats kSurfaceRaise
+                    // ABOVE the grade, so the total gap (kSurfaceRaise+bakeClearance)
+                    // keeps bicubic overshoot at steep cut walls from poking the
+                    // terrain up THROUGH the ribbon and launching the car — while
+                    // the ribbon and painted bed still line up to well under a curb.
                     const float ceil = o.bakeSurface
-                                               ? ha + (hb - ha) * t
+                                               ? ha + (hb - ha) * t - o.bakeClearance
                                                : ha + (hb - ha) * t +
                                                          road::RoadNetwork::kSurfaceRaise - o.clearance;
                     if (d < hardReach) hardCap[idx] = std::min(hardCap[idx], ceil);
@@ -209,6 +230,7 @@ namespace threepp::terrain {
                     bestD[idx] = d;
                     allowed[idx] = ceil;
                     innerR[idx] = pavedHalf + o.inflate;
+                    fillR[idx] = pavedHalf + o.fillInflate;
                 }
             }
         });
@@ -218,16 +240,23 @@ namespace threepp::terrain {
             return t * t * (3.f - 2.f * t);
         };
         for (size_t i = 0; i < n; ++i) {
-            if (bestD[i] != std::numeric_limits<float>::max() &&
-                (o.bakeSurface || h[i] > allowed[i])) {
-                const float w = (bestD[i] <= innerR[i])
-                                        ? 1.f
-                                        : 1.f - sstep(innerR[i], innerR[i] + o.feather, bestD[i]);
+            if (bestD[i] != std::numeric_limits<float>::max()) {
                 // Legacy: bench cut only (h > allowed), feathered to natural.
-                // Bake: cut AND fill — the paved band lands EXACTLY on the road
-                // surface (flat across, graded along), the feather builds the
-                // embankment/cut slope back to natural ground.
-                h[i] += (allowed[i] - h[i]) * w;
+                // Bake: cut AND fill, but ASYMMETRIC — the cut keeps the full
+                // inflate band (the tile-quad anti-poke guarantee), while the
+                // fill is confined to fillInflate + a short fillFeather taper so
+                // steep sidehills get a tight embankment, not a wide berm shelf.
+                if (o.bakeSurface && h[i] < allowed[i]) {
+                    const float w = (bestD[i] <= fillR[i])
+                                            ? 1.f
+                                            : 1.f - sstep(fillR[i], fillR[i] + o.fillFeather, bestD[i]);
+                    h[i] += (allowed[i] - h[i]) * w;
+                } else if (o.bakeSurface || h[i] > allowed[i]) {
+                    const float w = (bestD[i] <= innerR[i])
+                                            ? 1.f
+                                            : 1.f - sstep(innerR[i], innerR[i] + o.feather, bestD[i]);
+                    h[i] += (allowed[i] - h[i]) * w;
+                }
             }
             // Under-pavement guarantee (stacked hairpins). In bake mode a cell
             // INSIDE its winning road's paved band must keep that exact surface
