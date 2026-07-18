@@ -1584,11 +1584,27 @@ void main() {
         // pushes the SAME direction every frame (EMA → ±1) → cap collapses to 3 →
         // the mean tracks the change in a few frames. Same smoothstep window as
         // the reflection channel's trendCap.
+        // σ-NORMALISED deviation: the raw brightness-relative sdev treats a
+        // pixel's EXPECTED sampling fluctuation as content change. ReSTIR DI
+        // rides this channel as a 1-SAMPLE radiance whose visibility discards
+        // produce dark-frame RUNS (not zero-mean alternation!) near occluders —
+        // the raw sdev trended on them, collapsed the cap to 3, and the
+        // denoiser could no longer smooth ReSTIR at all: permanent boil on the
+        // Bistro lamp walls (bisected: pre-antilag beac67b5 clean). The channel
+        // already stores its own E[L²] (moments .r), so measure the deviation
+        // against the accumulated σ: a high-variance pixel (1-spp emitter
+        // sampling) gets a proportionally larger deadband — its flicker reads
+        // as noise — while a converged smooth pixel (chase-cam road) has σ≈0
+        // and keeps the antilag's full sensitivity. Worst case (σ stays large)
+        // a real content change degrades to the pre-antilag cap-48 fade — the
+        // exact behaviour the clean bisect reference had.
         const float curLum  = dot(diffInd, vec3(0.2126, 0.7152, 0.0722));
         const float prevLum = dot(prev, vec3(0.2126, 0.7152, 0.0722));
-        const float prevTr  = valid ? texture(momentsPrevTex, prevUv).g
-                                    : (giSkip ? texture(momentsPrevTex, uv).g : 0.0);
-        const float sdev    = clamp((curLum - prevLum) / (0.05 + 0.25 * max(curLum, prevLum)), -1.0, 1.0);
+        const vec2  prevM   = valid ? texture(momentsPrevTex, prevUv).rg
+                                    : (giSkip ? texture(momentsPrevTex, uv).rg : vec2(curLum * curLum, 0.0));
+        const float prevTr  = prevM.g;
+        const float prevSig = sqrt(max(prevM.r - prevLum * prevLum, 0.0));
+        const float sdev    = clamp((curLum - prevLum) / (0.05 + 0.25 * max(curLum, prevLum) + 2.0 * prevSig), -1.0, 1.0);
         const float trend   = giSkip ? prevTr : mix(prevTr, sdev, 0.34);// ~3-frame EMA
         float capTr         = mix(capF, 3.0, smoothstep(0.45, 0.9, abs(trend)));
         // MOVING-CONTENT dwell cut (see gGiMovFrac decl): while this pixel's
@@ -1621,8 +1637,7 @@ void main() {
         // crisp); flickering 1-spp noise has high var (blur → clean). E[L] needs no
         // storage: luminance is linear, so lum(accum) (the running-mean GI's luma)
         // IS the running-mean luminance E[L].
-        const float prevSq = valid ? texture(momentsPrevTex, prevUv).r
-                                   : (giSkip ? texture(momentsPrevTex, uv).r : (curLum * curLum));
+        const float prevSq = prevM.r;// fetched with the trend (.rg) above
         const float accSq  = giSkip ? prevSq : mix(prevSq, curLum * curLum, 1.0 / histLen);
         imageStore(momentsImage, px, vec4(accSq, trend, 0.0, 0.0));
 
@@ -1803,8 +1818,15 @@ void main() {
             // exits within a frame of agreement (no permanent noise), and the
             // marker's hysteresis kills the cap-regime stutter a noisy per-frame
             // flag caused at the shadow fringe.
-            const bool sRelease   = sValid && sPrev.z <= 2.5 && abs(visEst - sPrev.x) > 0.1;
-            if (sOccMoved || sRelease) sCap = min(sCap, sTopUp ? 1.0 : 2.0);
+            // sTopUp-GATED: the release compare is only meaningful against the
+            // CONFIDENT (16-ray, sun-dominant) estimate. Without it (night /
+            // point-light scenes) a multi-light pixel's 1-2 ray visEst is a
+            // per-frame binary that never agrees with the mean within 0.1 —
+            // an ungated release TRAPPED those pixels at cap 2 forever
+            // (permanent shadow boil on the Bistro lamp walls).
+            const bool sRelease   = sTopUp && sValid && sPrev.z <= 2.5 && abs(visEst - sPrev.x) > 0.1;
+            if ((pc.flags & 512u) == 0u && (sOccMoved || sRelease))// bit 9 = dwell kill switch
+                sCap = min(sCap, sTopUp ? 1.0 : 2.0);
             const float sHist    = sValid ? min(sPrev.z + 1.0, sCap) : 1.0;
             const float sAcc     = sValid ? mix(sPrev.x, visEst, 1.0 / sHist) : visEst;
             const float sSq      = sValid ? mix(sPrev.y, visEst * visEst, 1.0 / sHist) : visEst * visEst;

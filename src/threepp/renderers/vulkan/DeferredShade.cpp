@@ -4,6 +4,8 @@
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 #include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kMaxMaterialTextures
 
+#include <cstdlib>// std::getenv (THREEPP_VK_SHADOW_DWELL kill switch)
+
 #include "threepp/renderers/vulkan/shaders/deferred_shade.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/deferred_gi_filter.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/deferred_refl_filter.comp.spv.h"
@@ -806,11 +808,19 @@ namespace threepp::vulkan {
         // weight folds back into the dominant surface (no energy loss). Sky
         // minority coverage is ALWAYS blended by dispatch A itself.
         const uint32_t msaaCode = gbufMsaaSamples >= 4u ? 2u : (gbufMsaaSamples >= 2u ? 1u : 0u);
+        // THREEPP_VK_SHADOW_DWELL=0: kill switch for the moving-caster shadow
+        // dwell/top-up machinery (perf-triage instrument — if FPS recovers with
+        // it set, the cost is the top-up RAYS; if not, it's deferred_shade
+        // kernel growth/occupancy, which a runtime flag cannot undo).
+        static const bool shadowDwellOff = [] {
+            const char* e = std::getenv("THREEPP_VK_SHADOW_DWELL");
+            return e && e[0] == '0';
+        }();
         const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u) | (denoise ? 4u : 0u)
                              | (restirDI ? 8u : 0u) | (volFog ? 16u : 0u) | (msaaCode << 5u)
                              | (shadeBActive ? 128u : 0u)
                              | (froxelsActive ? 256u : 0u)  // froxel LUT valid this frame
-                             // (bit 9 / 512u retired with the hybrid SSR fast path)
+                             | (shadowDwellOff ? 512u : 0u)// bit 9: shadow dwell kill switch (was SSR)
                              | (bgIsSolidColor ? 1024u : 0u);// solid bg: sky store NOT pre-exposed
         uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits, starBits,
                 camDeltaBits, camRotBits, timeBits, sunTanBits;

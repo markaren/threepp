@@ -579,13 +579,30 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     // ray-count hint) and treat "was dwell-pinned" like the dwell itself, so the
     // release comparison in the temporal is made against a CONFIDENT estimate,
     // not a 1-ray binary.
-    const bool sWasDwell = texelFetch(shadowVisPrevTex, px, 0).z <= 2.5;
+    // flags bit 9 (512u) = THREEPP_VK_SHADOW_DWELL=0 kill switch (perf triage:
+    // separates the dwell machinery's ray cost from kernel-occupancy cost).
+    // SUN-DOMINANCE gate (> 0.5 share, not > 0): the top-up re-estimates ONLY
+    // the sun, so the folded visEst is confident only where the sun carries the
+    // pixel's light mix. Where analytic point/spot lights dominate (night
+    // bistro lamps), a MULTI-light pixel's 1-2 ray visEst flips 0/1 with the
+    // per-frame stochastic light pick — an estimate the 16 sun rays cannot
+    // stabilise — and the temporal's release compare (|visEst-mean| ≤ 0.1)
+    // can then NEVER be satisfied: the pixel is TRAPPED at cap ≤2 in permanent
+    // binary boil (seen on the Bistro awning wall). No confidence → no top-up
+    // (poor ROI on a minority term) → gShadowSunTopUp stays false → the
+    // temporal's release path stays disabled and history grows normally.
     gShadowSunTopUp = false;
-    if ((gShadowMovingOccluder || sWasDwell) && lights.dirCount > 0u && lw[0] > 1e-8) {
-        const vec3  Ls     = normalize(lights.dirLights[0].direction);
-        const float sunVis = sunShadowVis(orig, Ls, pc.sunTanHalfAngle, /*cheapHit=*/false);
-        visEst = mix(visEst, sunVis, lw[0] / wSum);
-        gShadowSunTopUp = true;
+    if ((pc.flags & 512u) == 0u && lights.dirCount > 0u && lw[0] > 0.5 * wSum) {
+        bool topUp = gShadowMovingOccluder;
+        // Prev-aux fetch deferred behind the cheaper predicates: most pixels
+        // (sun-minor, or flagged already) never pay it.
+        if (!topUp) topUp = texelFetch(shadowVisPrevTex, px, 0).z <= 2.5;
+        if (topUp) {
+            const vec3  Ls     = normalize(lights.dirLights[0].direction);
+            const float sunVis = sunShadowVis(orig, Ls, pc.sunTanHalfAngle, /*cheapHit=*/false);
+            visEst = mix(visEst, sunVis, lw[0] / wSum);
+            gShadowSunTopUp = true;
+        }
     }
     return U;
 }
