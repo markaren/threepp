@@ -163,6 +163,10 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     float curMissLod = missLod;
     gTraceHitT = -1.0;
     gTraceHitMoved = false;
+    // Reset the moving-occluder shadow flag so it observes ONLY this trace's
+    // shadow rays (safe: the shadow channel captured its value right after
+    // analyticDirectSplit, before any reflection/glass tracing).
+    gShadowMovingOccluder = false;
 
     for (int b = 0; b < REFL_MAX_BOUNCES; ++b) {
         rayQueryEXT rq;
@@ -294,6 +298,15 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         o          = hitP + hitN * SHADOW_EPS;
         curMissLod = hRough * maxLod;
     }
+    // A moving-caster SHADOW inside the reflected content is moving content just
+    // like the mover itself: the shadow rays at the reflected hits committed on
+    // a currently-MOVING mesh, so the reflected radiance carries a shadow that
+    // slides frame-to-frame while the reflecting surface's reproject tracks the
+    // surface — without this the swept reflected shadow ACCUMULATES as ghost
+    // echoes on glossy floors (hitMoved alone can't see it: the hit is the
+    // static surface CARRYING the shadow, not the mover). Fold it into the same
+    // hard-reset; when the caster stops the flag drops and accumulation resumes.
+    if (gShadowMovingOccluder) gTraceHitMoved = true;
     return radiance;
 }
 

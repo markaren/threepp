@@ -546,5 +546,46 @@ vec3 analyticDirectSplit(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         vAcc += (pick == 0xFFFFFFFFu) ? 1.0 : shadowRayVisTo(orig, P, pick, xiDisc, cellBase);
     }
     visEst = vAcc / float(nRays);
+    // SUBGROUP DILATION of the moving-occluder flag. The per-pixel signal fires
+    // only when one of THIS pixel's 1-2 rays commits a hit on the mover — in the
+    // OUTER penumbra (visEst 0.8..1.0) the hit probability is low, so a band of
+    // partially-darkened pixels sweeps by unflagged, never gets dwell-pinned,
+    // never becomes release-eligible, and its faint stale darkening keeps the
+    // long history = the residual ghost ring the per-pixel cluster left behind
+    // ("less but not gone"). Inner-penumbra/umbra pixels detect near-certainly
+    // (and, below, with 16 rays), so an OR over the subgroup (≤8 px of the same
+    // 8×8 tile) carries their verdict outward across the penumbra — same-frame,
+    // no extra rays or storage. Vote semantics over ACTIVE lanes only; worst-
+    // case divergence degrades to the per-pixel flag, never worse. The cost of
+    // over-dilation is ≤8 px of briefly-short history beside a moving shadow.
+    gShadowMovingOccluder = subgroupAny(gShadowMovingOccluder);
+    // MOVING-CASTER SHADOW: a ray above (or a subgroup neighbour's) hit a MOVING
+    // occluder (car sweeping its shadow over this pixel — gShadowMovingOccluder,
+    // set in shadowVis). A sweeping shadow cannot be temporally accumulated —
+    // ANY history trails it as a smear (the reason shadow-map engines regenerate
+    // shadows per frame, and NRD SIGMA keeps moving-caster shadows near-
+    // frameless). So these pixels run at cap≈2 in the shadow temporal, and the
+    // penumbra SMOOTHNESS must come from THIS frame: re-estimate the SUN's
+    // visibility with sunShadowVis — the inline (denoise-off) path's adaptive
+    // 3→16-ray, STATIC-dithered estimator, whose per-frame result is already
+    // smooth and stable (the user-validated moving-shadow reference) — and fold
+    // it in by the sun's share of the unshadowed luminance (dir light 0 = the
+    // sun, EnvSunPolicy). Umbra interior costs 3 agreeing rays; only the
+    // penumbra ring pays 16. Static scenes never fire the flag and keep the
+    // converged 1-2 ray economy.
+    // The RELEASE ring needs the same quality: pixels a moving shadow JUST LEFT
+    // carry stale history and a short (pinned ≤2) histLen — read the pixel's own
+    // prev aux (un-reprojected: a chase cam moves it a few px, fine for a
+    // ray-count hint) and treat "was dwell-pinned" like the dwell itself, so the
+    // release comparison in the temporal is made against a CONFIDENT estimate,
+    // not a 1-ray binary.
+    const bool sWasDwell = texelFetch(shadowVisPrevTex, px, 0).z <= 2.5;
+    gShadowSunTopUp = false;
+    if ((gShadowMovingOccluder || sWasDwell) && lights.dirCount > 0u && lw[0] > 1e-8) {
+        const vec3  Ls     = normalize(lights.dirLights[0].direction);
+        const float sunVis = sunShadowVis(orig, Ls, pc.sunTanHalfAngle, /*cheapHit=*/false);
+        visEst = mix(visEst, sunVis, lw[0] / wSum);
+        gShadowSunTopUp = true;
+    }
     return U;
 }

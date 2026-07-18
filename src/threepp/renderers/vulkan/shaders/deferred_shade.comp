@@ -12,6 +12,11 @@
 // jitter's wave composition → per-frame texture flicker that scales with
 // material diversity). Requires shaderSampledImageArrayNonUniformIndexing.
 #extension GL_EXT_nonuniform_qualifier : require
+// Subgroup vote: spatial dilation of the moving-occluder shadow flag
+// (analyticDirectSplit) — the outer penumbra's 1-2 ray economy rarely hits the
+// mover itself, so without the vote those pixels keep their long stale history
+// and trail the swept shadow as a faint ghost ring.
+#extension GL_KHR_shader_subgroup_vote : require
 
 #include "vulkan_shared.h"  // MaterialDesc
 #include "instance_flags.glsl"// per-instance flag accessors + reactivity channels
@@ -445,6 +450,19 @@ vec3 compositeClouds(vec3 col, ivec2 px, float sceneDist) {
          + medAlbedo * fogLight * ((1.0 - fogT) * (1.0 - cl.a));
 }
 
+// Set by shadowVis (in _10) when a committed shadow hit is a currently-MOVING
+// mesh (sticky GeometryDesc._pad): the receiver is under a SWEEPING shadow, so
+// the denoised shadow channel keeps its history short (statistics-free antilag —
+// see the sCap composition in the shadow temporal). Reset before, and captured
+// right after, the analyticDirectSplit visibility rays; later inline shadowVis
+// calls (reflection hits, translucency) don't pollute the captured value.
+bool gShadowMovingOccluder = false;
+// True when analyticDirectSplit replaced this pixel's visEst with the 16-ray
+// static-dithered sunShadowVis estimate (dwell/release top-up). The temporal
+// may then drop to cap 1 (pure per-frame — the denoise-off estimator, per-
+// frame stable by construction): with only 1-2 binary rays a cap-1 mean is
+// salt-and-pepper, so without the top-up the dwell floor stays at 2.
+bool gShadowSunTopUp = false;
 // Set per-ray by giRadiance when the 1-bounce hit lands on a currently-MOVING
 // mesh (sticky GeometryDesc._pad); gatherEnv folds the RAY-COUNT fraction into
 // gGiMovFrac. Ray-count, not luminance-weighted — a dark occlusion hit (the
@@ -982,12 +1000,17 @@ void main() {
     const bool shadowChannel = demodIndirect && shadowsOn;
     vec3  directU = vec3(0.0);
     float visEst  = 1.0;
+    bool  sOccMoved = false;// this pixel's shadow (or a subgroup neighbour's) hit a MOVING occluder
+    bool  sTopUp    = false;// visEst carries the 16-ray sunShadowVis top-up (cap-1 eligible)
     if (shadowChannel) {
         // Cluster slice by view-space -z (matches cluster_build's AABB axis).
         const float clusterDist = max(-(viewH.z / viewH.w), 0.0);
+        gShadowMovingOccluder = false;
         directU = analyticDirectSplit(worldPos, N, V, albedo, roughness, metalness, F0,
                                       pm.sheenColor, pm.sheenRoughness, px, clusterDist,
                                       nSRays, visEst);
+        sOccMoved = gShadowMovingOccluder;
+        sTopUp    = gShadowSunTopUp;
         gSkipAnalyticDirect = true;// shadeDiffuseDirect: skip dir/point/spot loops
     }
 
@@ -1748,9 +1771,40 @@ void main() {
             // Compose the trend + step reductions as a MIN so neither can raise
             // the cap above the other (a nested mix could: mix(4, floor, step)
             // rises to `floor` when floor>4). Both collapse to sCapMot when idle.
+            // MOVING-OCCLUDER cut (sOccMoved): this pixel is shadowed by a mesh
+            // that is currently moving — a sweeping shadow cannot be temporally
+            // accumulated (ANY history trails it as a smear; shadow-map engines
+            // regenerate per frame for exactly this reason), so run it
+            // FRAMELESS: cap 1 when the visEst carries the 16-ray top-up
+            // (sTopUp) — the static-dithered sunShadowVis is per-frame stable
+            // by construction (the denoise-off path displays it raw), so it
+            // needs NO temporal smoothing, and any deeper cap leaves DISCRETE
+            // ghost outlines: a cap-2 EMA holds the previous frame's shadow at
+            // 50% (and 25% at two frames), which at fast per-frame shadow
+            // displacement reads as 1-2 separated shadow copies, not a smear.
+            // Cap 1 also recovers a vacated pixel in exactly one frame. Without
+            // the top-up (no sun share — point/spot casters) the floor stays 2:
+            // a cap-1 mean of 1-2 BINARY rays is salt-and-pepper dusting.
+            // Statistics-free on purpose: the trend needs frames to charge and
+            // the σ-step's variance estimate is degraded over a swept band (the
+            // feedback rewrites the mean but not E[R²]) — both limped exactly
+            // where this direct signal cuts instantly.
             const float sCapTrend = mix(sCapMot, 4.0, trendCut);
             const float sCapStep  = mix(sCapMot, kShadowStepFloor, stepCut);
-            const float sCap      = min(sCapTrend, sCapStep);
+            float sCap            = min(sCapTrend, sCapStep);
+            // RELEASE with hysteresis: the dwell pin (histLen ≤ 2) doubles as a
+            // per-pixel MARKER "was under a moving shadow". Growing histLen out
+            // of a dwell while the mean is still stale fades the dark harmonically
+            // (1/n) — the long trail — so keep the pixel in the short-history
+            // regime until its history AGREES with the current estimate (which
+            // the was-dwell ray top-up makes a confident 16-ray value, so the
+            // comparison is meaningful, not 1-ray binary flicker). Converged →
+            // release ends, history regrows: a PARKED car's settled penumbra
+            // exits within a frame of agreement (no permanent noise), and the
+            // marker's hysteresis kills the cap-regime stutter a noisy per-frame
+            // flag caused at the shadow fringe.
+            const bool sRelease   = sValid && sPrev.z <= 2.5 && abs(visEst - sPrev.x) > 0.1;
+            if (sOccMoved || sRelease) sCap = min(sCap, sTopUp ? 1.0 : 2.0);
             const float sHist    = sValid ? min(sPrev.z + 1.0, sCap) : 1.0;
             const float sAcc     = sValid ? mix(sPrev.x, visEst, 1.0 / sHist) : visEst;
             const float sSq      = sValid ? mix(sPrev.y, visEst * visEst, 1.0 / sHist) : visEst * visEst;

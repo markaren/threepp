@@ -249,24 +249,21 @@ void main() {
     if (pc.feedback == 1u) {
         // MOVING-CONTENT FEEDBACK GATE. This re-injects the SPATIALLY à-trous-
         // filtered value into the temporal history — great for static
-        // disocclusions (converge in ~2 frames), but for a moving object's GI
-        // it is a per-frame SPATIAL conveyor that bypasses the temporal dwell
-        // cut: the filtered value averages in still-darkened neighbours, and
-        // under a chase cam (ground flowing past) that hauls the dark across
-        // the road as a trailing smear — the same conveyor class as the
-        // reflection matte leak. Dwell/release pixels are marked by their
-        // SHORT pinned history (GI .a ≤ 3); for those, DON'T re-inject — keep
-        // the raw temporal value (a cap-3 EMA of the fresh gather, already
-        // smooth) so next frame reprojects that, not a spatially-dragged blur.
-        // Static scenes keep the long history and the fast-convergence
-        // feedback unchanged.
+        // disocclusions (converge in ~2 frames), but for a MOVING occluder's
+        // shadow / a moving object's GI it is a per-frame SPATIAL conveyor that
+        // bypasses the temporal dwell cut: the filtered value averages in
+        // still-shadowed/darkened neighbours, and under a chase cam (ground
+        // flowing past) that hauls the dark across the road as a trailing smear —
+        // the same conveyor class as the reflection matte leak. Dwell/release
+        // pixels are marked by their SHORT pinned history (shadow .z ≤ 2, GI
+        // .a ≤ 3); for those, DON'T re-inject — keep the raw temporal value (a
+        // cap-2/3 EMA of the fresh estimate, already smooth) so next frame
+        // reprojects that, not a spatially-dragged blur. Static scenes keep the
+        // long history and the fast-convergence feedback unchanged.
         const float hl = imageLoad(indirectImage, px).a;
         if (hl > 3.5) imageStore(indirectImage, px, vec4(cC.rgb, hl));
-        // Same feedback for the shadow ratio: next frame's accumulation blends
-        // against the FILTERED (clean) R, so disocclusions converge in ~2
-        // frames instead of fading in — keeps .y/.z/.w (moment/history/trend).
         const vec4 sv = imageLoad(shadowVisImage, px);
-        imageStore(shadowVisImage, px, vec4(cS.x, sv.yzw));
+        if (sv.z > 2.5) imageStore(shadowVisImage, px, vec4(cS.x, sv.yzw));
     }
 
     // Variance rides the rgba16f ping-pong's .a — cap it at fp16 max so a

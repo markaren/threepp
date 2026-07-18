@@ -413,8 +413,17 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
                            rayQueryGetIntersectionBarycentricsEXT(rq, false)))
             rayQueryConfirmIntersectionEXT(rq);
     }
-    return (rayQueryGetIntersectionTypeEXT(rq, true) ==
-            gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT)
+        return 1.0;
+    // MOVING OCCLUDER flag for the denoised shadow channel: this shadow lands on
+    // the receiver from a mesh that is currently moving (sticky GeometryDesc._pad),
+    // so the shadow SWEEPS the receiver and its history must stay short — the
+    // trend/σ-step antilags key off history statistics that the sweep itself
+    // degrades (the à-trous feedback rewrites the mean but not E[R²], inflating σ
+    // over the swept band), while this is a direct, statistics-free signal.
+    if (geoms[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true)]._pad != 0u)
+        gShadowMovingOccluder = true;
+    return 0.0;
 }
 
 // Cook-Torrance specular + Lambert diffuse for one analytic light direction L.
