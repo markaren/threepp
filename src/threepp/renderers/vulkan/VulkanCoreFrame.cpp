@@ -431,6 +431,42 @@ bool VulkanRendererCore::CoreImpl::beginDeferredFrame(Object3D& scene, Camera& c
             // matDescsCached_ + flipped matDescsDirty_[*]=true; flush this
             // slot now (the other slot flushes when its frame comes around).
             flushMaterialDescsIfDirty(currentFrame);
+            // Stamp per-entry MOVED state (meshMovedBits_, finalized in
+            // ensureSceneBuilt) into GeometryDesc._pad so the reflection/GI ray-hit
+            // handler can tell when it reflects a MOVING object and reset its
+            // temporal history, and the reproject guards can reject history
+            // inherited from a moving mesh (a moving reflected object can't be
+            // temporally integrated — the surface reproject tracks the SURFACE,
+            // not the moving content, so it smears into a ghost trail).
+            // STICKY: "moved" holds for kMovedStickyFrames after the last actual
+            // change. A fixed-substep integrator under variable dt produces render
+            // frames with ZERO substeps — the driven car's transform stalls for a
+            // frame, the per-frame bit drops, and every _pad-gated guard goes
+            // inert for exactly that frame: the car's reflection slips into the
+            // vacated road's history and fades out as an intermittent ghost
+            // AFTERIMAGE of the car ("blinks" under engine jank, never on a
+            // smooth gravity roll). Only re-uploads on a 0↔1 transition (the
+            // countdown is host-side), so a settled scene still pays nothing.
+            {
+                constexpr uint32_t kMovedStickyFrames = 30;
+                if (meshMovedSticky_.size() < geomDescsCached_.size())
+                    meshMovedSticky_.resize(geomDescsCached_.size(), 0u);
+                bool changed = false;
+                for (size_t i = 0; i < geomDescsCached_.size(); ++i) {
+                    const uint32_t w = static_cast<uint32_t>(i) >> 5u;
+                    const uint32_t bit = 1u << (static_cast<uint32_t>(i) & 31u);
+                    const bool movedNow = w < meshMovedBits_.size() && (meshMovedBits_[w] & bit);
+                    if (movedNow) meshMovedSticky_[i] = kMovedStickyFrames;
+                    else if (meshMovedSticky_[i] > 0u) --meshMovedSticky_[i];
+                    const uint32_t moved = meshMovedSticky_[i] > 0u ? 1u : 0u;
+                    if (geomDescsCached_[i]._pad != moved) {
+                        geomDescsCached_[i]._pad = moved;
+                        changed = true;
+                    }
+                }
+                if (changed)
+                    for (uint32_t f = 0; f < kFramesInFlight; ++f) geomDescsDirty_[f] = true;
+            }
             // Same fence guarantee covers geometryDescsBuffers[currentFrame]:
             // an auto-LOD level switch patched geomDescsCached_ + flipped
             // geomDescsDirty_[*] in ensureSceneBuilt; landing the flush here —

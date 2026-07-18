@@ -1051,6 +1051,13 @@ namespace threepp {
         std::vector<uint32_t> meshMovedBits_;
         std::array<Buffer, kFramesInFlight> meshMovedBitsBuffers{};
         std::array<VkDeviceSize, kFramesInFlight> meshMovedBitsBufferCapacity{};
+        // Per-entry sticky "recently moved" countdown backing GeometryDesc._pad —
+        // holds the moved flag through zero-substep stall frames of a fixed-step
+        // integrator under variable dt (a 1-frame flag gap disarms the _pad-gated
+        // reproject guards and lets a moving object's reflection ghost into the
+        // ground it vacated). Host-side only; see the stamping loop in
+        // VulkanCoreFrame.cpp.
+        std::vector<uint32_t> meshMovedSticky_;
 
         // FNV-1a 64-bit hash of the previous frame's GpuLightsUbo bytes. Used in
         // updateLightsUbo to detect changes in analytic-light state (visibility,

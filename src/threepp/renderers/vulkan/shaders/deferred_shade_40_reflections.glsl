@@ -148,6 +148,11 @@ vec3 sampleGGXReflectionFib(vec3 V, vec3 N, float roughness, int s, int count) {
 // shaded geometry hit (the mirror ray returns it sharp; the spatial blur IS
 // the gloss there, sized by this distance's projected footprint).
 float gTraceHitT = -1.0;
+// True when the first shaded reflected hit is a MOVING mesh (GeometryDesc._pad,
+// stamped from meshMovedBits each frame). The reflection/GI temporal accumulator
+// resets on it: a moving reflected object can't be temporally integrated (the
+// surface reproject tracks the surface, not the moving content → ghost trail).
+bool gTraceHitMoved = false;
 
 vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits, bool probeHitFill) {
     const int REFL_MAX_BOUNCES = 3;
@@ -157,6 +162,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
     vec3  d          = dir;
     float curMissLod = missLod;
     gTraceHitT = -1.0;
+    gTraceHitMoved = false;
 
     for (int b = 0; b < REFL_MAX_BOUNCES; ++b) {
         rayQueryEXT rq;
@@ -220,8 +226,12 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                       hm.emissive * hm.emissiveIntensity);
         const vec3 hitP = o + d * tHit;
         // First shaded (non-cutout, non-transparent) hit = the visible reflected
-        // content; its distance sizes the denoiser's gloss-blur footprint.
-        if (gTraceHitT < 0.0) gTraceHitT = length(hitP - origin);
+        // content; its distance sizes the denoiser's gloss-blur footprint, and its
+        // MOVED flag tells the temporal accumulator to reset (moving reflection).
+        if (gTraceHitT < 0.0) {
+            gTraceHitT = length(hitP - origin);
+            gTraceHitMoved = (geoms[hitId]._pad != 0u);
+        }
         // Reflected-hit diffuse fill. PROBE-GI mode: the probe field IS the
         // occlusion-correct local irradiance (÷π for the diffInd convention) —
         // the crude env+ambient fill leaked full sky onto reflected interior

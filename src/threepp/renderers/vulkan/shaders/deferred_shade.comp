@@ -154,6 +154,7 @@ layout(set = 0, binding = 19) uniform sampler2D gbufNormalPrevTex;// prev world 
 layout(set = 0, binding = 20, r32f) uniform image2D momentsImage; // SVGF E[L²] accumulator (this frame; r32 — the square overflows fp16 at lum≈256)
 layout(set = 0, binding = 21) uniform sampler2D momentsPrevTex;   // PREV E[L²] (reprojected SVGF history)
 layout(set = 0, binding = 24) uniform sampler2D gbufDepthPrevTex; // PREV depth (depth-discontinuity disocclusion)
+layout(set = 0, binding = 55) uniform usampler2D gbufIdsPrevTex;  // PREV ids (.x = instanceId+1) — moving-mesh trailing-edge disocclusion (reflReproject)
 layout(set = 0, binding = 25, rgba16f) uniform image2D reflectImage;// sharp mirror-ray reflection radiance (.rgb pre-weighted, .a=roughness); denoise blurs by roughness
 layout(set = 0, binding = 26) uniform sampler2D reflectPrevTex;   // PREV reflect (other fif) — temporal AA history
 // ReSTIR DI reservoir ping-pong (STORAGE images, GENERAL layout).
@@ -1233,8 +1234,13 @@ void main() {
         lit += reflOut;
     } else if (demodIndirect) {
         // Denoise ON: temporally AA the sharp reflection, then hand it to the
-        // roughness-blur denoise pass.
-        imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N, length(worldPos - camPos), reflSkip, reflHitT));
+        // roughness-blur denoise pass. (Matte pixels run this too with cur=0 —
+        // keeping their history alive through per-frame roughness-map
+        // classification flips; the moving-mesh ID guard inside reflReproject
+        // is what keeps a moving glossy object's reflection from leaking into
+        // the matte ground it just vacated. A hard zero-store here instead
+        // cold-restarted every straddling pixel = "the car blinks".)
+        imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N, length(worldPos - camPos), reflSkip, reflHitT, gTraceHitMoved));
     } else {
         // Denoise OFF (or glass/sheen, where reflOut==0): inline sharp reflection.
         lit += reflOut;
@@ -1298,7 +1304,7 @@ void main() {
                     // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
                     // curved surface — refraction is far more normal-sensitive than
                     // reflection, so 1 ray aliases into blocky speckles without it.
-                    imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N, length(worldPos - camPos), /*hold=*/false, /*hitT=*/-1.0));// glass: full rate (refraction aliases at half)
+                    imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N, length(worldPos - camPos), /*hold=*/false, /*hitT=*/-1.0, /*hitMoved=*/gTraceHitMoved));// glass: full rate (refraction aliases at half)
                     lit = lit * (1.0 - gt);
                 } else {
                     lit = mix(lit, glassCol, gt);// denoise off → inline (sharp, no frost)

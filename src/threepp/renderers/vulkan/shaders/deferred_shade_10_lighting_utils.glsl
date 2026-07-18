@@ -83,6 +83,26 @@ bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, o
         const float svz   = svh.z / svh.w;
         valid = dot(pn, pn) > 1e-6 && dot(N, normalize(pn)) > 0.7 &&
                 abs(svz - bvh.z / bvh.w) <= 0.1 * max(abs(svz), 1e-3);// same-surface depth gate
+        // MOVING-MESH TRAILING-EDGE GUARD (mirrors the GI reproject's): ground a
+        // moving glossy object just vacated reprojects INTO the object's bright
+        // reflection pixels — the normal (car roof + road both face up) and
+        // relative-depth (10% of view-Z > car height at driving distances) gates
+        // both pass — so the object's reflection enters the ground's history and
+        // trails it as a wake while the silhouette re-feeds it every frame. The
+        // ID compare is exact where those gates are blind; gated on the prev mesh
+        // being CURRENTLY MOVING so static scenes (tile seams) never false-reset.
+        // All 4 texels of the bilinear history footprint are checked.
+        if (valid) {
+            const vec2  sz  = vec2(float(pc.width), float(pc.height));
+            const uint  id  = texelFetch(gbufIdsTex, ivec2(uv * sz), 0).x;
+            const ivec2 mxP = ivec2(int(pc.width) - 1, int(pc.height) - 1);
+            const ivec2 fb  = ivec2(floor(pUv * sz - 0.5));
+            for (int dy = 0; dy <= 1 && valid; ++dy)
+                for (int dx = 0; dx <= 1 && valid; ++dx) {
+                    const uint pid = texelFetch(gbufIdsPrevTex, clamp(fb + ivec2(dx, dy), ivec2(0), mxP), 0).x;
+                    if (pid != id && pid > 0u && geoms[pid - 1u]._pad != 0u) valid = false;
+                }
+        }
     }
     // Static-view cap: 512 (was 32). The reflection ray is GGX-sampled with a
     // per-frame seed, so a held-still view keeps integrating fresh stochastic
@@ -114,12 +134,18 @@ bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, o
 // lobe-filtered via missLod), < 0 = unknown (glass) → the denoiser falls
 // back to the conservative full-width gloss blur. EMA'd into aux .w so the
 // denoiser's footprint doesn't flicker with per-frame lobe samples.
-vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool hold, float hitT) {
+vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool hold, float hitT, bool hitMoved) {
     const float curLum = dot(cur.rgb, vec3(0.2126, 0.7152, 0.0722));
     const float rough  = abs(cur.a);// .a < 0 = glass marker (frost gr) — same policy
     const float hitEnc = hitT < 0.0 ? -1.0 : min(hitT, 1e4);// rgba16f-safe
     vec2 pUv; float histCap;
     bool valid = reflReproject(uv, N, rough, viewDist, pUv, histCap);
+    // MOVING REFLECTED CONTENT — the reflected hit is a moving mesh (its content
+    // slides frame-to-frame while the reflecting surface reproject tracks the
+    // surface, not the content). HARD-reset history so the moving reflection is
+    // re-estimated fresh each frame (the roughness-scaled spatial blur is the
+    // gloss); no accumulation = no ghost comb.
+    if (hitMoved) valid = false;
     const vec4 prevR = valid ? texture(reflectPrevTex, pUv) : vec4(0.0);
     if (valid && any(greaterThan(abs(prevR.rgb), vec3(1e6)))) valid = false;// garbage guard
     if (hold && valid) {
@@ -160,6 +186,27 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
         histLen = max(min(pa.x + 1.0, trendCap), 1.0);
         const float a = 1.0 / histLen;
         accum   = mix(prevR.rgb, cur.rgb, a);
+        // ANTI-GHOST temporal clamp (near-mirror only). A car sweeping the reflection
+        // of a WORLD-STATIC road leaves stale bright history the reproject can't clear:
+        // the departed pixel has ~zero screen motion, so it keeps the 512-frame static
+        // cap, and the current ray no longer hits the moving car (hitMoved can't reset
+        // it). Its moderate brightness (~2× road) stays under the trend antilag's
+        // magnitude threshold, so it lingers seconds as a comb trail (the "render the
+        // car from above" ghost). Clamp the accumulated luminance toward THIS frame's
+        // reflection: on a near-mirror surface the deterministic ray is STABLE
+        // frame-to-frame, so a trailing pixel that now reflects sky pulls its stale
+        // bright history down to the current (dark) sample in ~1 frame, while a pixel
+        // genuinely reflecting the car keeps its (bright) current sample as the ceiling
+        // and a settled surface has accum≈cur so the clamp never binds. Restricted to
+        // low roughness because a wide GGX lobe's 1-spp sample is too noisy to clamp
+        // against (a dark-miss frame would wrongly dim a converged reflection) — and
+        // rough asphalt reflects nothing, so the trail is a glossy-surface artifact
+        // to begin with.
+        if (rough < 0.22) {
+            const float accLum  = dot(accum, vec3(0.2126, 0.7152, 0.0722));
+            const float lumCeil = curLum * 1.4 + 0.02;
+            if (accLum > lumCeil) accum *= lumCeil / accLum;
+        }
         moment  = mix(pa.y, curLum * curLum, a);
         // Hit-distance EMA (floor 0.25: content distance changes matter within a
         // few frames — a slow 1/512 blend would size the gloss blur from stale

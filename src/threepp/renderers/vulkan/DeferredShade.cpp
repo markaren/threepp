@@ -66,7 +66,7 @@ namespace threepp::vulkan {
         lci.minFilter  = VK_FILTER_LINEAR;
         check(vkCreateSampler(d, &lci, nullptr, &lutSampler_), "vkCreateSampler(froxel LUT)");
 
-        VkDescriptorSetLayoutBinding b[65]{};// KEEP the bound >= #set() calls below (a lagging bound = stack smash)
+        VkDescriptorSetLayoutBinding b[66]{};// KEEP the bound >= #set() calls below (a lagging bound = stack smash)
         // Dense cursor: array index and binding number diverge past the
         // retired 55-56 slot (binding numbers stay stable for the shaders,
         // the array carries no zero-init gap entries — those are invalid
@@ -144,7 +144,8 @@ namespace threepp::vulkan {
         set(52, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // froxel LUT (3D, integrate writes)
         set(53, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // froxel LUT (LINEAR — shade's trilinear sample)
         set(54, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // probe Chebyshev depth store
-        // (55-56 retired — they carried the removed hybrid-SSR inputs.)
+        set(55, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV gbuf ids (other fif) — moving-mesh trailing-edge GI disocclusion
+        // (56 retired — it carried a removed hybrid-SSR input.)
         set(57, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // raster camera UBO (cloud_march.comp's prevVP temporal reproject)
         set(58, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // volumetric cloud-layer UBO (setClouds)
         // Half-res cloud march (cloud_march.comp writes 59/62, reads 60/63 as
@@ -429,6 +430,13 @@ namespace threepp::vulkan {
             depthPrevInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
             VkDescriptorImageInfo motionInfo     = sampled(in.gbufMotion[f], gbufSampler_);
             VkDescriptorImageInfo normalPrevInfo = sampled(in.gbufNormal[pf], gbufSampler_);
+            // PREV ids (other fif) — the GI reproject's moving-mesh trailing-edge
+            // guard. The ID-based disocclusion the comment above rejects stays
+            // rejected: this guard only fires when the PREV pixel's mesh is
+            // CURRENTLY MOVING (GeometryDesc._pad), so a draw-list renumber over a
+            // static scene can't false-reset, and topology reorders clear the gbuf
+            // (ids → 0) which the guard skips.
+            VkDescriptorImageInfo idsPrevInfo    = sampled(in.gbufIds[pf], gbufSampler_);
 
             // Ocean textures stay in GENERAL (written by the FFT/foam compute
             // passes, sampled here) — matching the RT set's bindings 32 + 44.
@@ -615,7 +623,7 @@ namespace threepp::vulkan {
             froxelLutTexInfo.imageView   = in.froxelLut[f];
             froxelLutTexInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            VkWriteDescriptorSet w[65]{};
+            VkWriteDescriptorSet w[66]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -690,8 +698,9 @@ namespace threepp::vulkan {
             setw(52, 52, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &froxelLutInfo,         nullptr);
             setw(53, 53, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &froxelLutTexInfo,      nullptr);
             setw(54, 54, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         nullptr, &probeDepthInfo);
-            // (bindings 55-56 retired with the hybrid SSR — write indices
-            // stay dense while binding numbers jump to 57.)
+            // (binding 56 retired with the hybrid SSR — write indices stay
+            // dense while binding numbers jump to 57; 55 = PREV ids, written
+            // at index 65 below.)
             setw(55, 57, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &rcamInfo);
             setw(56, 58, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &cloudInfo);
             setw(57, 59, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudColorInfo,     nullptr);
@@ -702,7 +711,8 @@ namespace threepp::vulkan {
             setw(62, 64, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &cloudShadowInfo,    nullptr);
             setw(63, 65, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudShadowTexInfo, nullptr);
             setw(64, 66, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudAuxTexInfo,    nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 65, w, 0, nullptr);
+            setw(65, 55, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &idsPrevInfo,        nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 66, w, 0, nullptr);
         }
     }
 
