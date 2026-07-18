@@ -23,8 +23,10 @@ namespace threepp::vulkan {
         constexpr VkDeviceSize kVisBytesMin = (1u << 16) / 8;      // 8 KB floor (65 536 instance bits)
     }// namespace
 
-    OcclusionCull::OcclusionCull(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight)
-        : ctx_(ctx), cmdPool_(cmdPool), framesInFlight_(framesInFlight) {
+    OcclusionCull::OcclusionCull(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight,
+                                 RetireBufferFn retireFn)
+        : ctx_(ctx), cmdPool_(cmdPool), framesInFlight_(framesInFlight),
+          retireFn_(std::move(retireFn)) {
         metaBufs_.resize(framesInFlight_);
         metaPtrs_.resize(framesInFlight_, nullptr);
         cached_.resize(framesInFlight_);
@@ -209,6 +211,22 @@ namespace threepp::vulkan {
                         0, VkDeviceSize(drawCount) * sizeof(CullMeta));
     }
 
+    void OcclusionCull::retireBuffer(Buffer& b) {
+        if (b.handle == VK_NULL_HANDLE) return;
+        if (retireFn_) {
+            // Deferred: the old handle may still be read by a sibling frame in
+            // flight (these buffers are single, not per-fif). The retire queue
+            // frees it once its last referencing frame's fence has signaled.
+            // retireFn_ zeroes b so the reallocation below can't double-free.
+            retireFn_(std::move(b));
+        } else {
+            // No queue wired (defensive fallback): a full device drain makes the
+            // inline free safe. CoreImpl always wires the callback in practice.
+            vkDeviceWaitIdle(ctx_.device());
+            destroyBuffer(ctx_.allocator(), b);
+        }
+    }
+
     void OcclusionCull::ensureCapacity(uint32_t frame, uint32_t drawCount, uint32_t bitDomain) {
         const uint32_t needed = std::max(drawCount, 1u);
 
@@ -219,7 +237,7 @@ namespace threepp::vulkan {
         // which is the conservative reset (one full phase-1 frame).
         const VkDeviceSize visBytes = VkDeviceSize((std::max(bitDomain, 1u) + 31u) / 32u) * 4u;
         if (visBits_.size < visBytes) {
-            destroyBuffer(ctx_.allocator(), visBits_);
+            retireBuffer(visBits_);
             const VkDeviceSize cap = std::max<VkDeviceSize>(visBytes * 2, kVisBytesMin);
             visBits_ = createBuffer(ctx_.allocator(), ctx_.device(), cap,
                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -247,8 +265,8 @@ namespace threepp::vulkan {
         // barriers serialize cross-frame reuse).
         const VkDeviceSize cmdBytes = VkDeviceSize(needed) * kCmdStride;
         if (capacity_ < needed) {
-            destroyBuffer(ctx_.allocator(), phase1_);
-            destroyBuffer(ctx_.allocator(), phase2_);
+            retireBuffer(phase1_);
+            retireBuffer(phase2_);
             const VkDeviceSize cap = std::max<VkDeviceSize>(cmdBytes * 2, 256 * kCmdStride);
             const VkBufferUsageFlags usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;

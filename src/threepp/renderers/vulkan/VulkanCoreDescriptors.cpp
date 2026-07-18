@@ -412,7 +412,13 @@ void VulkanRendererCore::CoreImpl::ensureHybridResources() {
             // cheap; the farthest pyramid's IMAGE is only allocated when the
             // feature is enabled — see rewriteBloomDescriptors).
             if (!occl_) {
-                occl_    = std::make_unique<vulkan::OcclusionCull>(*ctx, cmdPool, kFramesInFlight);
+                occl_    = std::make_unique<vulkan::OcclusionCull>(
+                        *ctx, cmdPool, kFramesInFlight,
+                        // Retire grown-out shared phase/visBits buffers through the
+                        // frame-serial queue: they're single (not per-fif) and may
+                        // still be read by a sibling in-flight frame when ensureCapacity
+                        // grows them mid-record. Stamped with the frame being recorded.
+                        [this](Buffer&& b) { retire(std::move(b)); });
                 occlHiz_ = std::make_unique<vulkan::HiZPyramid>(*ctx, kFramesInFlight);
             }
             // MSAA render pass + pipelines — only built when opted in, and

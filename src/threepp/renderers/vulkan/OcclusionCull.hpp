@@ -39,6 +39,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace threepp::vulkan {
@@ -56,7 +57,17 @@ namespace threepp::vulkan {
             uint32_t flags;// bit 0 = always draw (deformers / missing bounds)
         };
 
-        OcclusionCull(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight);
+        // Hands a stale shared phase/visBits Buffer to the renderer's frame-serial
+        // retire queue instead of an immediate vmaDestroyBuffer. ensureCapacity
+        // grows these SINGLE (non-per-fif) buffers mid-record, when the sibling
+        // frame-in-flight may still reference the old handle on the GPU; retiring
+        // defers the free until its fence has provably signaled (VulkanRetireQueue).
+        // The lambda captures CoreImpl and forwards to CoreImpl::retire. Optional:
+        // if unset, ensureCapacity falls back to vkDeviceWaitIdle + destroy.
+        using RetireBufferFn = std::function<void(Buffer&&)>;
+
+        OcclusionCull(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight,
+                      RetireBufferFn retireFn = {});
         ~OcclusionCull();
         OcclusionCull(const OcclusionCull&) = delete;
         OcclusionCull& operator=(const OcclusionCull&) = delete;
@@ -104,6 +115,7 @@ namespace threepp::vulkan {
         VulkanContext& ctx_;
         VkCommandPool  cmdPool_;
         uint32_t       framesInFlight_;
+        RetireBufferFn retireFn_;// defers stale shared-buffer frees; see the ctor doc
 
         std::vector<Buffer>    metaBufs_;// [fif] host-mapped CullMeta[]
         std::vector<CullMeta*> metaPtrs_;
@@ -138,6 +150,10 @@ namespace threepp::vulkan {
 
         void createPipeline();
         void createDummyHiz();
+        // Free a grown-out shared buffer safely: hand it to the retire queue
+        // (deferred until its last in-flight frame's fence signals) or, if no
+        // callback was wired, fall back to a full device drain + destroy.
+        void retireBuffer(Buffer& b);
         void ensureCapacity(uint32_t frame, uint32_t drawCount, uint32_t bitDomain);
         void rewriteSets(uint32_t frame, const FrameInputs& in);
     };
