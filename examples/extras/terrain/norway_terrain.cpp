@@ -33,9 +33,14 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+// Vulkan-only: Ocean (FFT-displaced water) and the VulkanRenderer/Core deferred
+// tuning knobs live behind THREEPP_WITH_VULKAN. The demo itself runs on the
+// forward GL/WGPU backends too — those references are all guarded below.
+#ifdef THREEPP_WITH_VULKAN
 #include "threepp/objects/Ocean.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/VulkanRendererCore.hpp"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -300,9 +305,13 @@ int main(int argc, char** argv) {
     // Neutral on the forward GL/WGPU paths, ACESFilmic on Vulkan deferred —
     // three.js ACESFilmic's 1/0.6 viewing-environment gain washes this bright
     // scene out on the forward paths (see the NorwayDrive tone-mapping note).
+#ifdef THREEPP_WITH_VULKAN
     renderer->toneMapping = dynamic_cast<VulkanRenderer*>(renderer.get())
                                     ? ToneMapping::ACESFilmic
                                     : ToneMapping::Neutral;
+#else
+    renderer->toneMapping = ToneMapping::Neutral;// forward GL/WGPU path
+#endif
     renderer->toneMappingExposure = 1.0f;
 
     // ── instrumentation / A-B knobs (env-driven, so one build sweeps configs) ──
@@ -312,12 +321,13 @@ int main(int argc, char** argv) {
     // blit (1 normal, 2 motion, 3 ids, 4 albedo, 5 depth). NT_RENDERSCALE=<v>.
     // NT_SUNRADIUS=<deg> → setSunAngularRadius. NT_SEA_ROUGH / NT_SEA_METAL /
     // NT_NO_SEA / NT_SUN_ALIGN affect the demo scene (below).
-    auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
     const auto envF = [](const char* k, float def) {
         const char* e = std::getenv(k);
         return e ? std::strtof(e, nullptr) : def;
     };
     const auto envSet = [](const char* k) { const char* e = std::getenv(k); return e && e[0] != '\0'; };
+#ifdef THREEPP_WITH_VULKAN
+    auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
     if (vk) {
         // DEFAULT: 2× G-buffer MSAA, no upscaler. With MSAA the raster runs
         // UNJITTERED — measured on this scene: the jittered TAA/DLSS paths leave
@@ -345,6 +355,7 @@ int main(int argc, char** argv) {
         if (envSet("NT_AO")) vk->setDeferredAO(std::getenv("NT_AO")[0] != '0');
         if (envSet("NT_PROBEGI")) vk->setProbeGI(std::getenv("NT_PROBEGI")[0] != '0');
     }
+#endif// THREEPP_WITH_VULKAN
 
     Scene scene;
     RGBELoader rgbe;
@@ -412,7 +423,14 @@ int main(int argc, char** argv) {
     const bool coastal = reg.heightMin < 1.0f && !envSet("NT_NO_SEA");
     if (coastal) {
         std::shared_ptr<Object3D> seaObj;
-        if (envSet("NT_FLAT_SEA")) {
+#ifdef THREEPP_WITH_VULKAN
+        const bool flatSea = envSet("NT_FLAT_SEA");
+#else
+        // Ocean (FFT-displaced water) is a Vulkan-only object; the forward
+        // GL/WGPU paths always get the flat MeshStandardMaterial sea plane.
+        const bool flatSea = true;
+#endif
+        if (flatSea) {
             auto seaMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
                                                                .color(Color(0.045f, 0.09f, 0.13f))
                                                                .roughness(envF("NT_SEA_ROUGH", 0.15f))
@@ -420,7 +438,9 @@ int main(int argc, char** argv) {
             auto sea = Mesh::create(PlaneGeometry::create(reg.worldSize * 1.2f, reg.worldSize * 1.2f), seaMat);
             sea->rotation.x = -math::PI / 2.f;
             seaObj = sea;
-        } else {
+        }
+#ifdef THREEPP_WITH_VULKAN
+        else {
             Ocean::Options oo;
             oo.size = reg.worldSize * 1.2f;
             oo.resolution = 384;
@@ -437,6 +457,7 @@ int main(int argc, char** argv) {
             }
             seaObj = ocean;
         }
+#endif// THREEPP_WITH_VULKAN
         // Slightly ABOVE the DTM's flat sea sheet (water reads as seaLevel exactly,
         // and the provider suppresses relief noise there) so the seabed never dithers
         // through; real land starts well above this.
@@ -502,7 +523,7 @@ int main(int argc, char** argv) {
     int frame = 0;
     float fpsAccum = 0.f, fps = 0.f;
     int fpsFrames = 0;
-    bool sunAligned = false;
+    [[maybe_unused]] bool sunAligned = false;
     canvas.animate([&] {
         const float dt = clock.getDelta();
         fpsAccum += dt;
@@ -521,6 +542,7 @@ int main(int argc, char** argv) {
         // coherent sun. COASTAL packs only: on mountain packs (no sea) the hardcoded
         // raking heading is a deliberate artistic choice and the HDRI sun would push
         // the valley into shadow. NT_SUN_AZ/EL (if set) keep the manual override.
+#ifdef THREEPP_WITH_VULKAN
         if (!sunAligned && coastal && vk && vk->envSunFound() &&
             !envSet("NT_SUN_AZ") && !envSet("NT_SUN_EL")) {
             const Vector3 d = vk->envSunDirection();// unit vector TOWARD the sun
@@ -532,6 +554,7 @@ int main(int argc, char** argv) {
             }
             sunAligned = true;
         }
+#endif
 
         controls.update();
 
@@ -594,8 +617,10 @@ int main(int argc, char** argv) {
                 renderer->writeFramebuffer(path);
                 std::cout << "seq " << n << " frame " << frame << " tiles "
                           << tiles->activeTiles() << " baking " << tiles->pendingBakes();
+#ifdef THREEPP_WITH_VULKAN
                 if (vk) std::cout << " gbufResolveMs " << vk->lastFrameTimings().gbufResolveMs
                                   << " shadeBMs " << vk->lastFrameTimings().shadeBMs;
+#endif
                 std::cout << std::endl;
                 if (n + 1 >= shotFrames) std::exit(0);
             }
