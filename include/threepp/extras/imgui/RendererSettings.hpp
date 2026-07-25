@@ -355,9 +355,42 @@ private:
         }
     }
 
+    // EV100 the current camera triplet corresponds to, BEFORE compensation —
+    // i.e. the `log2(N²/t · 100/ISO)` term of the renderer's exposure formula.
+    [[nodiscard]] float physicalEvBase() const {
+        const auto ce = vk_->cameraExposure();
+        return std::log2(ce.aperture * ce.aperture / ce.shutterSeconds * 100.f / ce.iso);
+    }
+
     void drawVulkanCamera() {
         bool physCam = vk_->physicalCamera();
-        if (ImGui::Checkbox("Physical camera (EV100)", &physCam)) vk_->setPhysicalCamera(physCam);
+        if (ImGui::Checkbox("Physical camera (EV100)", &physCam)) {
+
+            // Enabling this used to black the scene outright. The default triplet
+            // is sunny-16 (f/16, 1/125 s, ISO 100), which is EV100 ≈ 15 and so an
+            // exposure of ~2.6e-5 — correct ONLY for a scene whose lights are in
+            // real photometric units (the sun at 100,000 lux, emissives in nits;
+            // see examples/vulkan/vulkan_physical_camera.cpp). An ordinary scene
+            // lit at intensity ~1-5 is multiplied into nothing.
+            //
+            // So calibrate on the way in: pick the EV compensation that
+            // reproduces whatever exposure was already on screen, leaving the
+            // photographic triplet at its physically meaningful defaults. The
+            // toggle then changes which knobs drive exposure without changing the
+            // picture, and each subsequent stop of aperture/shutter/ISO does what
+            // a photographer expects. A scene that IS photometric just wants this
+            // compensation dragged back to 0.
+            if (physCam) {
+                const float target = std::max(renderer_->toneMappingExposure, 1e-6f);
+                vk_->setExposureCompensation(physicalEvBase() + std::log2(1.2f * target));
+            }
+            vk_->setPhysicalCamera(physCam);
+        }
+        if (physCam && !vk_->physicalLightUnits()) {
+            ImGui::TextDisabled("EV comp is calibrated to the previous exposure.");
+            ImGui::TextDisabled("Enable physical light units + photometric");
+            ImGui::TextDisabled("intensities to drive it from the triplet alone.");
+        }
 
         bool physUnits = vk_->physicalLightUnits();
         if (ImGui::Checkbox("Physical light units", &physUnits)) vk_->setPhysicalLightUnits(physUnits);
@@ -375,9 +408,18 @@ private:
                                   "%.0f", ImGuiSliderFlags_Logarithmic);
         if (exp) vk_->setCameraExposure(ce.aperture, 1.f / static_cast<float>(shutterDen), ce.iso);
 
+        // Full ±20 EV, matching the renderer's own clamp in
+        // setExposureCompensation. The old ±5 could not span the ~15 stops
+        // between an artistically lit scene and a photometric one, so the
+        // calibration above (and any manual rescue of a blacked-out frame) had
+        // nowhere to go.
         float evComp = vk_->exposureCompensation();
-        if (ImGui::SliderFloat("EV compensation", &evComp, -5.f, 5.f, "%.1f")) {
+        if (ImGui::SliderFloat("EV compensation", &evComp, -20.f, 20.f, "%+.1f EV")) {
             vk_->setExposureCompensation(evComp);
+        }
+        if (physCam) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("0")) vk_->setExposureCompensation(0.f);
         }
 
         bool dof = vk_->depthOfField();
