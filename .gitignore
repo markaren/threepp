@@ -3,6 +3,7 @@
 .cache
 
 build
+build-asan
 cmake-build-*
 compile_commands.json
 

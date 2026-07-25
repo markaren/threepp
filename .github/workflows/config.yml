@@ -49,54 +49,38 @@ jobs:
           cd build/tests
           ctest --output-on-failure
 
-  # AddressSanitizer + UndefinedBehaviorSanitizer over the test suite.
-  #
-  # The weak axis of this codebase has been lifetime/ownership discipline
-  # (dangling scene-graph pointers, double-frees, out-of-range indices), and it
-  # is exactly what a sanitizer build catches for free. Runs the whole ctest
-  # suite, including the GL pixel tests under xvfb + Mesa software rendering.
-  #
-  # Leak detection is OFF on purpose: the GL driver, GLFW and X11 all leak
-  # per-process allocations that we neither own nor can free, and their reports
-  # bury the ones that matter. The value here is use-after-free, out-of-bounds
-  # and undefined behaviour, which detect_leaks does not affect.
-  linux-sanitizers:
-
-    runs-on: ubuntu-22.04
-    env:
-      CC: gcc-11
-      CXX: g++-11
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install prerequisites
+      # --- AddressSanitizer + UndefinedBehaviorSanitizer -----------------------
+      #
+      # Piggybacks on this job rather than taking its own runner: the apt set and
+      # the display stack are identical, so all a separate job would add is queue
+      # time. It uses its own build directory so the Release build above is not
+      # clobbered, and runs after the Release ctest so a plain regression is
+      # reported before a sanitizer one.
+      #
+      # Examples are off here — they are only ever compiled, never run, so
+      # instrumenting them buys nothing and they are the bulk of the build time.
+      #
+      # Leak detection is OFF on purpose: the GL driver, GLFW and X11 all leak
+      # per-process allocations we neither own nor can free, and their reports
+      # bury the ones that matter. The target is use-after-free, out-of-bounds and
+      # undefined behaviour, which detect_leaks does not affect.
+      - name: Configure and build (ASan + UBSan)
         run: |
-          sudo apt-get update && sudo apt-get install -y \
-          libxinerama-dev \
-          libxcursor-dev \
-          xorg-dev \
-          libglu1-mesa-dev \
-          pkg-config \
-          libgl1-mesa-dri \
-          xvfb
-
-      - name: Configure and build
-        run: |
-          cmake . -B build \
+          cmake . -B build-asan \
+            -DTHREEPP_USE_EXTERNAL_GLFW=ON \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DTHREEPP_BUILD_EXAMPLES=OFF \
             -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -g" \
             -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -g" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
-          cmake --build build
+          cmake --build build-asan
 
-      - name: Test
+      - name: Test (ASan + UBSan)
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: |
-          cd build/tests
+          cd build-asan/tests
           ctest --output-on-failure
 
   linux-no-glfw:
