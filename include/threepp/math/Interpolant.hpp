@@ -22,7 +22,12 @@ namespace threepp {
     class Interpolant {
 
     public:
-        InterpolantSettings* settings;
+        // Optional per-instance override of the ending behaviour; null means
+        // "use DefaultSettings_". It had no initialiser and was never assigned by
+        // the constructor, so getSettings_() read an indeterminate pointer and
+        // then DEREFERENCED it — the boundary intervals of CubicInterpolant were
+        // reading whatever happened to be on the stack.
+        InterpolantSettings* settings = nullptr;
 
         Interpolant(
                 Sample parameterPositions,

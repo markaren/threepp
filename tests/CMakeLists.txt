@@ -7,6 +7,7 @@ function(add_test_executable name)
     target_compile_definitions(${name} PRIVATE DATA_FOLDER="${THREEPP_DATA_DIR}")
 endfunction()
 
+add_subdirectory(animation)
 add_subdirectory(cameras)
 add_subdirectory(core)
 add_subdirectory(geometries)

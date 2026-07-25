@@ -274,5 +274,12 @@ void KeyframeTrack::setInterpolation(Interpolation interpolation) {
         return;
     }
 
+    // Record the mode, not just the factory. This assignment was missing
+    // entirely, and interpolation_ has no default initialiser, so every track
+    // ever built read an INDETERMINATE value out of getInterpolation(). That is
+    // undefined behaviour, and it is observable: optimize() branches on
+    // `getInterpolation() == Smooth` to decide whether to drop redundant
+    // keyframes, and the Python binding exposes it as `track.interpolation`.
+    interpolation_ = interpolation;
     createInterpolant_ = *factoryMethod;
 }

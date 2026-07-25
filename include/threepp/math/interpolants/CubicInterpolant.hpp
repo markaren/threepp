@@ -18,14 +18,31 @@ namespace threepp {
         }
 
         void intervalChanged_(size_t i1, float t0, float t1) override {
-            const auto pp = this->parameterPositions;
-            auto iPrev = i1 - 2;
-            auto iNext = i1 + 1;
+            // Reference, not a copy: this ran on every interval change and was
+            // duplicating the whole key-time array each time.
+            const auto& pp = this->parameterPositions;
+            const size_t n = pp.size();
 
-            auto tPrev = pp[iPrev],
-                 tNext = pp[iNext];
+            // three.js finds the ends of the curve by reading pp[i1-2] and
+            // pp[i1+1] and testing the result for `undefined`, which JS returns
+            // for an out-of-range index. Ported literally, those are OUT-OF-BOUNDS
+            // vector reads: i1-2 underflows size_t to SIZE_MAX on the first
+            // interval, and i1+1 runs one past the end on the last. The values
+            // they produced were essentially never NaN, so the boundary branches
+            // below never fired and the end intervals computed their weights from
+            // adjacent heap memory — giving values in the thousands, and NaN when
+            // the bogus tPrev happened to equal t0. Detect the ends by index
+            // instead; the NaN checks were only ever standing in for that.
+            const bool hasPrev = i1 >= 2;
+            const bool hasNext = i1 + 1 < n;
 
-            if (std::isnan(tPrev)) {
+            size_t iPrev = hasPrev ? i1 - 2 : i1;
+            size_t iNext = hasNext ? i1 + 1 : i1;
+
+            float tPrev = hasPrev ? pp[iPrev] : 0.f;
+            float tNext = hasNext ? pp[iNext] : 0.f;
+
+            if (!hasPrev) {
 
                 switch (this->getSettings_()->endingStart) {
 
@@ -53,7 +70,7 @@ namespace threepp {
                 }
             }
 
-            if (std::isnan(tNext)) {
+            if (!hasNext) {
 
                 switch (this->getSettings_()->endingEnd) {
 
@@ -130,7 +147,10 @@ namespace threepp {
         float _weightNext = -0;
         float _offsetNext = -0;
 
-        InterpolantSettings DefaultSettings_;
+        // NB: no DefaultSettings_ member here. There used to be one, which
+        // SHADOWED Interpolant::DefaultSettings_ — so the constructor's
+        // ZeroCurvature assignment landed on the derived copy while
+        // getSettings_() kept reading the base's still-empty optional.
     };
 
 }// namespace threepp
