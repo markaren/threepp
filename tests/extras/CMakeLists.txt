@@ -1,2 +1,18 @@
-
 add_test_executable(PointCloud_test)
+add_test_executable(Sensor_test)
+
+# Imu_test needs the PhysX SDK, which is an optional vcpkg dependency (feature
+# "physx"). Look for it here rather than relying on the examples having already
+# done so — tests must configure standalone.
+if (NOT TARGET unofficial::omniverse-physx-sdk::sdk)
+    find_package(unofficial-omniverse-physx-sdk CONFIG QUIET)
+endif ()
+
+if (TARGET unofficial::omniverse-physx-sdk::sdk)
+    foreach (name Imu_test JointEncoder_test ContactSensor_test ForceTorqueSensor_test)
+        add_test_executable(${name})
+        target_link_libraries(${name} PRIVATE unofficial::omniverse-physx-sdk::sdk)
+    endforeach ()
+else ()
+    message(STATUS "physx not found, skipping the PhysX-backed sensor tests..")
+endif ()
