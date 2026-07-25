@@ -411,14 +411,14 @@ namespace threepp_py {
                      "Unregister a pre/post substep callback by its handle. A stale or "
                      "already-removed handle is a no-op.")
                 .def("register_sensor",
-                     [](PhysxWorld& w, Imu& imu) { w.registerSensor(&imu); },
+                     [](PhysxWorld& w, Sensor& s) { w.registerSensor(&s); },
                      py::arg("sensor"), py::keep_alive<1, 2>(),
-                     "Register a sensor (e.g. an Imu) to be sampled from the step loop once per "
+                     "Register a sensor (Imu, JointEncoder, ContactSensor, ...) to be sampled from the step loop once per "
                      "fixed substep, the instant body states are fresh. Call AFTER adding the body "
                      "the sensor is attached to; raises if the attachment has no managed rigid body. "
                      "The world keeps the sensor alive.")
                 .def("unregister_sensor",
-                     [](PhysxWorld& w, Imu& imu) { w.unregisterSensor(&imu); },
+                     [](PhysxWorld& w, Sensor& s) { w.unregisterSensor(&s); },
                      py::arg("sensor"), "Stop sampling a previously registered sensor.")
                 .def_property_readonly("sim_time", &PhysxWorld::simTime,
                                        "Accumulated fixed-substep simulation time (s) — the clock stamped "

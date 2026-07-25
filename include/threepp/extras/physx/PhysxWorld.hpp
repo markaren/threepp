@@ -38,6 +38,171 @@ namespace threepp {
         return {v.x, v.y, v.z};
     }
 
+    /**
+     * One reported touch involving a watched actor, delivered from inside
+     * fetchResults() — i.e. while the substep that produced it is still current.
+     *
+     * `self` is the watched actor and `other` is whatever it touched (null only
+     * if that actor was removed mid-simulation, in which case the event is
+     * dropped before it gets here). Contact points are PhysX's own manifold
+     * points, in world space, valid ONLY for the duration of the callback —
+     * copy anything you need to keep.
+     *
+     * Normals and impulses follow PhysX's pair convention, which is expressed
+     * relative to the pair's first actor, not to `self`. `selfIsFirst` says
+     * which one `self` was, so a consumer that wants everything oriented
+     * relative to its own body can flip accordingly.
+     */
+    struct ContactEvent {
+        ::physx::PxRigidActor* self = nullptr;
+        ::physx::PxRigidActor* other = nullptr;
+        const ::physx::PxContactPairPoint* points = nullptr;
+        ::physx::PxU32 pointCount = 0;
+        bool selfIsFirst = true;
+        bool touchFound = false;// this pair started touching in this substep
+        bool touchLost = false; // this pair stopped touching in this substep
+    };
+
+    /**
+     * Routes PhysX contact notifications to per-actor callbacks.
+     *
+     * Owned by PhysxWorld and installed as the scene's simulation event
+     * callback. Contact reporting is OPT-IN per actor (see
+     * PhysxWorld::watchContacts): PhysX only generates these notifications for
+     * pairs whose filter data asks for them, so a world with no contact
+     * watchers pays nothing beyond the branch in the filter shader.
+     */
+    class ContactDispatcher: public ::physx::PxSimulationEventCallback {
+
+    public:
+        using Handle = std::size_t;
+
+        // Largest manifold PhysX will be asked to unpack per pair. A box on a
+        // plane produces 4; 16 covers convex-on-mesh comfortably. Extra points
+        // beyond this are counted but not individually reported.
+        static constexpr ::physx::PxU32 maxPointsPerPair = 16;
+
+        Handle add(::physx::PxRigidActor* watch, std::function<void(const ContactEvent&)> fn) {
+            const Handle h = next_++;
+            entries_.push_back({h, watch, std::move(fn)});
+            return h;
+        }
+
+        void remove(Handle handle) {
+            entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
+                                          [handle](const Entry& e) { return e.handle == handle; }),
+                           entries_.end());
+        }
+
+        // Drop every watcher of `actor` — called when the actor is released, so
+        // a stale watch entry cannot match a recycled pointer later.
+        void forget(const ::physx::PxRigidActor* actor) {
+            entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
+                                          [actor](const Entry& e) { return e.watch == actor; }),
+                           entries_.end());
+        }
+
+        [[nodiscard]] bool empty() const { return entries_.empty(); }
+
+        void onContact(const ::physx::PxContactPairHeader& header,
+                       const ::physx::PxContactPair* pairs, ::physx::PxU32 nbPairs) override {
+            using namespace ::physx;
+            if (entries_.empty()) return;
+            // Either actor deleted during simulate(): header.actors[] dangles.
+            if (header.flags & (PxContactPairHeaderFlag::eREMOVED_ACTOR_0 |
+                                PxContactPairHeaderFlag::eREMOVED_ACTOR_1)) {
+                return;
+            }
+
+            // Contact pairs always involve rigid actors, so the downcast from the
+            // header's PxActor* is safe.
+            auto* a0 = static_cast<PxRigidActor*>(header.actors[0]);
+            auto* a1 = static_cast<PxRigidActor*>(header.actors[1]);
+
+            for (PxU32 i = 0; i < nbPairs; ++i) {
+                const PxContactPair& cp = pairs[i];
+                if (cp.flags & (PxContactPairFlag::eREMOVED_SHAPE_0 |
+                                PxContactPairFlag::eREMOVED_SHAPE_1)) {
+                    continue;
+                }
+
+                const bool found = cp.events.isSet(PxPairFlag::eNOTIFY_TOUCH_FOUND);
+                const bool lost = cp.events.isSet(PxPairFlag::eNOTIFY_TOUCH_LOST);
+                const bool persists = cp.events.isSet(PxPairFlag::eNOTIFY_TOUCH_PERSISTS);
+                if (!found && !lost && !persists) continue;
+
+                // A lost touch has no manifold left to extract.
+                const PxU32 n = lost ? 0u : cp.extractContacts(pointBuf_, maxPointsPerPair);
+
+                for (const auto& e: entries_) {
+                    const bool isFirst = (e.watch == a0);
+                    if (!isFirst && e.watch != a1) continue;
+                    ContactEvent ev;
+                    ev.self = e.watch;
+                    ev.other = isFirst ? a1 : a0;
+                    ev.points = pointBuf_;
+                    ev.pointCount = n;
+                    ev.selfIsFirst = isFirst;
+                    ev.touchFound = found;
+                    ev.touchLost = lost;
+                    e.fn(ev);
+                }
+            }
+        }
+
+        // Unused halves of the interface. PhysX requires all of them.
+        void onConstraintBreak(::physx::PxConstraintInfo*, ::physx::PxU32) override {}
+        void onWake(::physx::PxActor**, ::physx::PxU32) override {}
+        void onSleep(::physx::PxActor**, ::physx::PxU32) override {}
+        void onTrigger(::physx::PxTriggerPair*, ::physx::PxU32) override {}
+        void onAdvance(const ::physx::PxRigidBody* const*, const ::physx::PxTransform*,
+                       const ::physx::PxU32) override {}
+
+    private:
+        struct Entry {
+            Handle handle;
+            ::physx::PxRigidActor* watch;
+            std::function<void(const ContactEvent&)> fn;
+        };
+        std::vector<Entry> entries_;
+        Handle next_ = 1;// 0 reserved as "no handle"
+        ::physx::PxContactPairPoint pointBuf_[maxPointsPerPair]{};
+    };
+
+    // Bit set in a shape's SIMULATION filter data (word3) to request contact
+    // notifications for pairs it takes part in. word3 is used because the stock
+    // filter shader's group mechanism reads word0/word1, and nothing in threepp
+    // writes simulation filter data otherwise — so setting this cannot change
+    // which pairs collide, only whether they are reported.
+    inline constexpr ::physx::PxU32 kContactReportFilterBit = 1u << 31;
+
+    /**
+     * The stock filter shader plus opt-in contact reporting.
+     *
+     * Delegating to PxDefaultSimulationFilterShader (rather than reimplementing
+     * it) keeps collision behaviour bit-identical to before this existed: the
+     * only change is the extra pair flags, and only for pairs where one side
+     * asked for them.
+     */
+    inline ::physx::PxFilterFlags contactReportFilterShader(
+            ::physx::PxFilterObjectAttributes attributes0, ::physx::PxFilterData filterData0,
+            ::physx::PxFilterObjectAttributes attributes1, ::physx::PxFilterData filterData1,
+            ::physx::PxPairFlags& pairFlags, const void* constantBlock,
+            ::physx::PxU32 constantBlockSize) {
+        using namespace ::physx;
+        const PxFilterFlags flags = PxDefaultSimulationFilterShader(
+                attributes0, filterData0, attributes1, filterData1,
+                pairFlags, constantBlock, constantBlockSize);
+
+        if ((filterData0.word3 | filterData1.word3) & kContactReportFilterBit) {
+            pairFlags |= PxPairFlag::eNOTIFY_TOUCH_FOUND |
+                         PxPairFlag::eNOTIFY_TOUCH_PERSISTS |
+                         PxPairFlag::eNOTIFY_TOUCH_LOST |
+                         PxPairFlag::eNOTIFY_CONTACT_POINTS;
+        }
+        return flags;
+    }
+
     inline ::physx::PxQuat toPxQuat(const Quaternion& q) {
         return {q.x, q.y, q.z, q.w};
     }
@@ -193,7 +358,10 @@ namespace threepp {
             PxSceneDesc desc(physics_->getTolerancesScale());
             desc.gravity = toPxVec3(settings_.gravity);
             desc.cpuDispatcher = dispatcher_;
-            desc.filterShader = PxDefaultSimulationFilterShader;
+            // The stock shader plus opt-in contact reporting; behaviour is
+            // unchanged for any pair that has not asked to be reported.
+            desc.filterShader = contactReportFilterShader;
+            desc.simulationEventCallback = &contacts_;
             // TGS solver + PCM narrowphase + stabilization. The GPU pipeline requires
             // these; a CPU world opts in via enableTgsPcm so its contact model matches
             // a GPU-trained policy (the GPU-only flags below stay gated separately).
@@ -363,6 +531,61 @@ namespace threepp {
             sensor->onUnregister();
         }
 
+        // --- Contact reporting -------------------------------------------------
+        // Contacts are OFF by default: PhysX only notifies for pairs whose filter
+        // data asks for it, so a world with no watchers pays nothing. Watching an
+        // actor sets that bit on every one of its shapes and re-runs filtering, so
+        // pairs already in flight pick the change up.
+        //
+        // The callback fires from inside fetchResults(), i.e. DURING substep() and
+        // before sensors are ticked — so a sensor sampling in the same substep
+        // sees contacts belonging to that substep. Do not add/remove actors from
+        // inside it.
+        //
+        // Note on sleeping: PhysX stops issuing TOUCH_PERSISTS once a pair goes to
+        // sleep, without a TOUCH_LOST. A resting contact therefore reports points
+        // for a while and then goes quiet while still physically touching — track
+        // the found/lost transitions if you need a steady "is touching" state
+        // (ContactSensor does exactly that).
+        using ContactHandle = ContactDispatcher::Handle;
+
+        ContactHandle watchContacts(::physx::PxRigidActor* actor,
+                                    std::function<void(const ContactEvent&)> cb) {
+            using namespace ::physx;
+            if (!actor || !cb) return 0;
+            setContactReporting(actor, true);
+            return contacts_.add(actor, std::move(cb));
+        }
+
+        // Stop delivering to this watcher. The reporting bit is left set on the
+        // actor's shapes — several watchers may share an actor, and clearing it
+        // per-watcher would silence the others. Use setContactReporting(actor,
+        // false) to turn the actor's reporting off once nothing watches it.
+        void unwatchContacts(ContactHandle handle) { contacts_.remove(handle); }
+
+        // Set/clear the contact-report request on every shape of `actor`.
+        void setContactReporting(::physx::PxRigidActor* actor, bool enabled) {
+            using namespace ::physx;
+            if (!actor) return;
+            const PxU32 n = actor->getNbShapes();
+            if (n == 0) return;
+            std::vector<PxShape*> shapes(n);
+            actor->getShapes(shapes.data(), n);
+            for (auto* s: shapes) {
+                if (!s) continue;
+                PxFilterData fd = s->getSimulationFilterData();
+                const PxU32 before = fd.word3;
+                fd.word3 = enabled ? (fd.word3 | kContactReportFilterBit)
+                                   : (fd.word3 & ~kContactReportFilterBit);
+                if (fd.word3 != before) s->setSimulationFilterData(fd);
+            }
+            // Existing broad-phase pairs were filtered under the old data; without
+            // this they would keep their old pair flags until they separate.
+            scene_->resetFiltering(*actor);
+        }
+
+        [[nodiscard]] ContactDispatcher& contactDispatcher() { return contacts_; }
+
         // Accumulated simulation time (s) — sum of every fixed substep advanced so
         // far. This is the clock stamped onto sensor samples.
         [[nodiscard]] double simTime() const { return simTime_; }
@@ -442,6 +665,9 @@ namespace threepp {
             // above: tell them before the release, or the next substep samples
             // freed memory.
             for (auto* s: sensors_) s->onActorRemoved(actor);
+            // Same reasoning for contact watchers: a stale entry would otherwise
+            // survive and could match a recycled pointer.
+            contacts_.forget(actor);
             scene_->removeActor(*actor);
             actor->release();
         }
@@ -919,6 +1145,11 @@ namespace threepp {
         std::vector<SubstepEntry> postSubstep_;
         SubstepHandle nextSubstepHandle_ = 1;// 0 reserved as "no handle"
         std::vector<Sensor*> sensors_;// non-owning; sampled each substep
+        // Installed as the scene's simulation event callback at construction. The
+        // scene holds a bare pointer to it, but ~PhysxWorld releases the scene in
+        // its body — before any member is destroyed — so this stays valid for as
+        // long as the scene can call it.
+        ContactDispatcher contacts_;
     };
 
 }// namespace threepp
