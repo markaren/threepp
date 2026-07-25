@@ -748,6 +748,12 @@ void VulkanRendererCore::CoreImpl::endFrame() {
             // ahead of slot — keeping the retire queue's serial↔slot fence
             // invariant exact (VulkanRetireQueue.hpp).
             ++frameSerial_;
+            // Same cadence for the 3D-overlay line cache's lastTouch clock, so
+            // its stale sweep has a monotonic reference. It previously sat at 0
+            // forever, which made every entry look freshly touched and meant the
+            // cache only ever grew.
+            ++overlayFrameCounter_;
+            sweepLineGeomCache();
             currentFrame  = (currentFrame + 1) % kFramesInFlight;
             frameState_   = FrameState::Idle;
         }

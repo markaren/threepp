@@ -5830,15 +5830,40 @@ namespace threepp {
         // sprite collection, minus the screen-space branch.
         void collectWorldSprites(Object3D& scene);
 
-        // Line geometry cache shared between the ortho overlay (via
-        // OverlayPass::record) and the 3D hybrid overlay
-        // (recordCommandBuffer's line-draw section). Keyed on raw
-        // BufferGeometry*; geomId in LineRec guards against recycled-
-        // pointer aliasing. Counter bumped each frame by the 3D overlay
-        // path; stale eviction intentionally omitted here (3D overlay
-        // objects are persistent scene objects, not transient geometry).
+        // Line geometry cache for the 3D hybrid overlay (recordCommandBuffer's
+        // line-draw section). Keyed on raw BufferGeometry*; geomId in LineRec
+        // guards against recycled-pointer aliasing. (OverlayPass owns a separate
+        // cache of the same shape for the ortho path — these are NOT shared.)
+        //
+        // The counter is advanced once per SUBMITTED frame in endFrame, which
+        // also runs sweepLineGeomCache. It used to be read but never written, so
+        // every entry's lastTouch stayed 0 and nothing was ever evicted: an app
+        // that rebuilds Line/Points geometry each frame (trajectory, scan and
+        // detection-box overlays) leaked a buffer set per geometry, forever.
         std::unordered_map<const BufferGeometry*, vulkan::LineRec> lineGeomCache_;
         uint64_t overlayFrameCounter_ = 0;// lastTouch reference for lineGeomCache_ entries
+
+        // Evict entries untouched for longer than the in-flight window. The
+        // margin (> kFramesInFlight) guarantees no evicted buffer is still
+        // referenced by an in-flight command buffer; the retire queue then holds
+        // them until their frame serial has provably passed, so this is safe to
+        // call from endFrame while earlier frames are still executing.
+        static constexpr uint64_t kLineGeomEvictAge = 8;
+        void sweepLineGeomCache() {
+            if (lineGeomCache_.empty()) return;
+            if (overlayFrameCounter_ <= kLineGeomEvictAge) return;
+            const uint64_t cutoff = overlayFrameCounter_ - kLineGeomEvictAge;
+            for (auto it = lineGeomCache_.begin(); it != lineGeomCache_.end();) {
+                if (it->second.lastTouch < cutoff) {
+                    retire(std::move(it->second.vertex));
+                    retire(std::move(it->second.index));
+                    retire(std::move(it->second.color));
+                    it = lineGeomCache_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
 
         // Lazy-upload Line / LineSegments geometry into a host-visible
         // vertex (+ optional index) buffer pair. Returns nullptr if the
@@ -5869,9 +5894,12 @@ namespace threepp {
                 // Recycled pointer: this address was a DIFFERENT geometry whose
                 // buffers we still hold. Retire them and re-upload from scratch
                 // (the version fields would otherwise alias — both at 0).
-                destroyBuffer(ctx->allocator(), it->second.vertex);
-                if (it->second.index.handle) destroyBuffer(ctx->allocator(), it->second.index);
-                if (it->second.color.handle) destroyBuffer(ctx->allocator(), it->second.color);
+                // Through the retire queue, not destroyBuffer: this runs during
+                // record, so the previous frame's line draw may still be reading
+                // them. retire() no-ops on null handles.
+                retire(std::move(it->second.vertex));
+                retire(std::move(it->second.index));
+                retire(std::move(it->second.color));
                 lineGeomCache_.erase(it);
                 it = lineGeomCache_.end();
             }

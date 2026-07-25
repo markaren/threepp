@@ -1464,11 +1464,17 @@ void VulkanRendererCore::CoreImpl::recordTlasRefit(VkCommandBuffer cb,
                     &tlasBuild, &instanceCount, &sizes);
 
             // Persistent scratch (sized once; build ≥ update). The TLAS build is
-            // ordered after the prior frame's by submit order, so reuse is safe.
+            // ordered after the prior frame's by submit order, so REUSE is safe.
+            // GROWTH is not: this runs mid-record, and the previous frame's
+            // cmdBuildAccelerationStructures may still be in flight reading the
+            // old buffer at the address it captured. Destroying it here is a
+            // use-after-free (a device-lost / TDR class of multi-second hitch on
+            // a scene whose instance count is climbing). Hand it to the retire
+            // queue instead, which holds it until its frame serial has provably
+            // retired. retire() no-ops on a null handle and zeroes the source.
             const VkDeviceSize need = std::max(sizes.buildScratchSize, sizes.updateScratchSize);
             if (tlasRefitScratch_.handle == VK_NULL_HANDLE || tlasRefitScratchSize_ < need) {
-                if (tlasRefitScratch_.handle != VK_NULL_HANDLE)
-                    destroyBuffer(ctx->allocator(), tlasRefitScratch_);
+                retire(std::move(tlasRefitScratch_));
                 tlasRefitScratch_ = createAsScratchBuffer(ctx->allocator(), ctx->device(), need);
                 tlasRefitScratchSize_ = need;
             }
