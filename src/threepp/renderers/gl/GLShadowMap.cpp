@@ -73,6 +73,12 @@ struct GLShadowMap::Impl {
     }
 
     void VSMPass(GLRenderer& _renderer, LightShadow* shadow, Camera* camera) {
+
+        // Belt and braces: the caller only reaches here for a non-point shadow
+        // with type == VSM, and render() guarantees both targets exist for that
+        // combination. Bail rather than dereference if that ever drifts again.
+        if (!shadow->map || !shadow->mapPass) return;
+
         const auto& geometry = _objects.update(fullScreenMesh.get());
 
         // vertical pass
@@ -305,30 +311,40 @@ struct GLShadowMap::Impl {
                 }
             }
 
-            if (!shadow->map && !std::dynamic_pointer_cast<PointLightShadow>(shadow) && scope->type == ShadowMap::VSM) {
+            // VSM blurs the depth map through a second target, so it needs
+            // `mapPass` and must sample with Linear; every other type compares
+            // depth directly and must NOT filter across texels. `mapPass` is
+            // therefore also the marker for "these targets were built for VSM".
+            const bool wantVsm = scope->type == ShadowMap::VSM && !std::dynamic_pointer_cast<PointLightShadow>(shadow);
+            const bool haveVsm = shadow->mapPass != nullptr;
 
-                GLRenderTarget::Options pars{};
-                pars.minFilter = Filter::Linear;
-                pars.magFilter = Filter::Linear;
-                pars.format = Format::RGBA;
+            if (shadow->map && wantVsm != haveVsm) {
 
-                shadow->map = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
-                shadow->map->texture->name = light->name + ".shadowMap";
-
-                shadow->mapPass = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
-
-                shadow->camera->updateProjectionMatrix();
+                // The shadow type changed after the targets were allocated.
+                // Previously the allocation was guarded on `!shadow->map` alone,
+                // so switching TO VSM at runtime left mapPass null and VSMPass()
+                // dereferenced it — an outright crash. Switching AWAY from VSM
+                // silently kept the Linear filtering, softening every other type.
+                // Drop both and rebuild for the current type.
+                shadow->dispose();
+                shadow->map.reset();
+                shadow->mapPass.reset();
             }
 
             if (!shadow->map) {
 
                 GLRenderTarget::Options pars{};
-                pars.minFilter = Filter::Nearest;
-                pars.magFilter = Filter::Nearest;
+                pars.minFilter = wantVsm ? Filter::Linear : Filter::Nearest;
+                pars.magFilter = wantVsm ? Filter::Linear : Filter::Nearest;
                 pars.format = Format::RGBA;
 
                 shadow->map = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
                 shadow->map->texture->name = light->name + ".shadowMap";
+
+                if (wantVsm) {
+
+                    shadow->mapPass = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
+                }
 
                 shadow->camera->updateProjectionMatrix();
             }

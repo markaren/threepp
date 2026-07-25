@@ -867,6 +867,8 @@ struct GLRenderer::Impl {
         materialProperties->numClippingPlanes = parameters.numClippingPlanes;
         materialProperties->numIntersection = parameters.numClipIntersection;
         materialProperties->vertexAlphas = parameters.vertexAlphas;
+        materialProperties->shadowMapEnabled = parameters.shadowMapEnabled;
+        materialProperties->shadowMapType = parameters.shadowMapType;
     }
 
     gl::GLProgram* setProgram(Camera* camera, Object3D* _scene, Material* material, Object3D* object) {
@@ -965,6 +967,22 @@ struct GLRenderer::Impl {
 
             } else if (materialProperties->vertexAlphas != vertexAlphas) {
 
+                needsProgramChange = true;
+
+            } else if (materialProperties->shadowMapEnabled !=
+                       (shadowMap.enabled && !currentRenderState->getShadowsArray().empty())) {
+
+                // USE_SHADOWMAP is a compile-time define, so toggling
+                // Renderer::shadowMap().enabled has to rebuild the program.
+                // Without this the shadow pass stopped running but the material
+                // kept sampling the shadow map, leaving the last-rendered
+                // shadows frozen on screen instead of disappearing.
+                needsProgramChange = true;
+
+            } else if (materialProperties->shadowMapEnabled && materialProperties->shadowMapType != shadowMap.type) {
+
+                // Likewise SHADOWMAP_TYPE_* — switching Basic/PCF/PCF-soft/VSM
+                // changes the sampling code, not a uniform.
                 needsProgramChange = true;
             }
 
