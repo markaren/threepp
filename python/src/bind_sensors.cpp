@@ -97,6 +97,10 @@ namespace threepp_py {
                      "Re-arm after an episode reset or a noise change: clears the finite-difference "
                      "history + buffer and re-seeds the noise from the current configs.")
                 .def_property_readonly("available", &Imu::available, "Number of buffered samples.")
+                .def_property_readonly("attached", &Imu::attached,
+                                       "True while bound to a live rigid body. False before registering, "
+                                       "after unregistering, and after the body was removed from the world "
+                                       "(remove_actor) — sampling is a silent no-op in all three cases.")
                 .def("latest", &Imu::latest,
                      "The most recent ImuSample, or None. Survives drain().")
                 .def("drain",

@@ -133,6 +133,21 @@ namespace threepp {
             body_ = nullptr;
         }
 
+        // The body this IMU rides is being released: go inert rather than keep a
+        // dangling pointer. Still registered, so re-attaching is a matter of
+        // unregister/register once a new body exists.
+        void onActorRemoved(::physx::PxRigidActor* actor) override {
+            if (actor != actor_) return;
+            actor_ = nullptr;
+            body_ = nullptr;
+            hasPrevVel_ = false;
+        }
+
+        // True once registered against a live rigid body. False before
+        // registration, after unregistering, and after the body was removed —
+        // sampling is a no-op in all three cases.
+        [[nodiscard]] bool attached() const { return actor_ != nullptr; }
+
         // Re-arm: clear the finite-difference history + buffer and re-seed the
         // noise from the current gyroNoise / accelNoise configs. Call after an
         // episode reset (teleport / velocity zeroing) or after changing noise.
@@ -148,6 +163,10 @@ namespace threepp {
 
         void sample(double dt, double simTime) override {
             using namespace ::physx;
+
+            // No live body: unregistered, or the body was removed under us.
+            // tick() is public, so this is reachable without a PhysxWorld at all.
+            if (!actor_) return;
 
             const PxTransform bodyPose = actor_->getGlobalPose();
 

@@ -437,6 +437,11 @@ namespace threepp {
                                                           [](const ::physx::PxRigidActor* a) { return a == nullptr; });
                                    }),
                     instBindings_.end());
+            // Registered sensors cache the actor they ride (resolved once at
+            // registration), so they need the same treatment as the bindings
+            // above: tell them before the release, or the next substep samples
+            // freed memory.
+            for (auto* s: sensors_) s->onActorRemoved(actor);
             scene_->removeActor(*actor);
             actor->release();
         }

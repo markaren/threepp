@@ -29,6 +29,10 @@
 #include <optional>
 #include <vector>
 
+namespace physx {
+    class PxRigidActor;// forward-declared so this header stays PhysX-include-free
+}
+
 namespace threepp {
 
     class Object3D;
@@ -236,19 +240,45 @@ namespace threepp {
         virtual void onRegister(PhysxWorld& /*world*/) {}
         virtual void onUnregister() {}
 
+        // Called by PhysxWorld::removeActor just BEFORE the actor is released. A
+        // sensor that cached this actor at registration must drop it here —
+        // otherwise the next substep samples freed memory. The sensor stays
+        // registered and simply goes quiet, mirroring how a removed actor leaves
+        // its InstancedMesh slot nulled rather than reshuffling the list: whether
+        // to unregister or re-attach is the caller's call.
+        virtual void onActorRemoved(::physx::PxRigidActor* /*actor*/) {}
+
         // Driven by PhysxWorld once per fixed substep with the substep dt and the
         // accumulated sim time. Rate-gates, then calls sample() with the true
         // elapsed time since the previous emitted sample (so a sensor running
         // slower than the physics rate still finite-differences over the correct
         // interval).
+        //
+        // The gate schedules against a fixed period accumulated from the first
+        // sample, NOT against the time the previous sample landed on. Samples can
+        // only land on substep boundaries, so chasing the actual emission time
+        // rounds every interval up to a whole substep and the error compounds:
+        // at 240 Hz physics a 100 Hz request (period 10 ms) would fire every 3rd
+        // substep = 12.5 ms = 80 Hz. Accumulating the due time instead keeps the
+        // long-run average exact and leaves only sub-substep jitter, which is
+        // unavoidable.
         void tick(double dt, double simTime) {
-            if (rateHz_ > 0.0 && hasLast_) {
-                const double period = 1.0 / rateHz_;
-                if ((simTime - lastSampleTime_) + 1e-9 < period) return;
-            }
+            const bool gated = rateHz_ > 0.0;
+            if (gated && hasLast_ && simTime + 1e-9 < nextDue_) return;
+
             const double sampleDt = hasLast_ ? (simTime - lastSampleTime_) : dt;
             sample(sampleDt, simTime);
             lastSampleTime_ = simTime;
+
+            if (gated) {
+                const double period = 1.0 / rateHz_;
+                nextDue_ = hasLast_ ? nextDue_ + period : simTime + period;
+                // If the physics rate is slower than the requested rate we can
+                // never catch up; resync rather than let the due time fall
+                // arbitrarily far behind (which would pin the gate open and, on
+                // a later slowdown, burst).
+                if (nextDue_ <= simTime) nextDue_ = simTime + period;
+            }
             hasLast_ = true;
         }
 
@@ -261,6 +291,7 @@ namespace threepp {
         void resetTiming() {
             hasLast_ = false;
             lastSampleTime_ = 0.0;
+            nextDue_ = 0.0;
         }
 
     private:
@@ -268,6 +299,7 @@ namespace threepp {
         double rateHz_;
         bool hasLast_ = false;
         double lastSampleTime_ = 0.0;
+        double nextDue_ = 0.0;// next scheduled sample time (rate-gated sensors)
     };
 
 }// namespace threepp
