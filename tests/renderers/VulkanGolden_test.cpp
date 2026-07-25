@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<VulkanRenderer> rendererPtr;
     try {
         canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanGolden_test").size(kW, kH).vsync(false));
+                Canvas::Parameters().title("VulkanGolden_test").size(kW, kH).vsync(false).headless(true));
         rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
     } catch (const std::exception& e) {
         std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
