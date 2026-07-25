@@ -28,8 +28,17 @@ jobs:
           libglu1-mesa-dev \
           pkg-config \
           libglfw3 \
-          libglfw3-dev
+          libglfw3-dev \
+          libgl1-mesa-dri \
+          xvfb
 
+      # xvfb + the Mesa DRI driver are declared explicitly for the GL pixel tests
+      # (tests/renderers/gl), which construct a Canvas and so need a display and a
+      # software rasteriser. The runner image happens to ship both already — these
+      # tests have been green without this — but relying on undeclared image
+      # contents is fragile, and the python-bindings job below already installs
+      # them explicitly. NB tests/renderers/gl/CMakeLists.txt looks for xvfb-run at
+      # CONFIGURE time, so the install has to precede cmake either way.
       - name: Configure and build
         run: |
           cmake . -B build -DTHREEPP_USE_EXTERNAL_GLFW=ON -DCMAKE_BUILD_TYPE="Release"
@@ -38,6 +47,40 @@ jobs:
       - name: Test
         run: |
           cd build/tests
+          ctest --output-on-failure
+
+      # --- AddressSanitizer + UndefinedBehaviorSanitizer -----------------------
+      #
+      # Piggybacks on this job rather than taking its own runner: the apt set and
+      # the display stack are identical, so all a separate job would add is queue
+      # time. It uses its own build directory so the Release build above is not
+      # clobbered, and runs after the Release ctest so a plain regression is
+      # reported before a sanitizer one.
+      #
+      # Examples are off here — they are only ever compiled, never run, so
+      # instrumenting them buys nothing and they are the bulk of the build time.
+      #
+      # Leak detection is OFF on purpose: the GL driver, GLFW and X11 all leak
+      # per-process allocations we neither own nor can free, and their reports
+      # bury the ones that matter. The target is use-after-free, out-of-bounds and
+      # undefined behaviour, which detect_leaks does not affect.
+      - name: Configure and build (ASan + UBSan)
+        run: |
+          cmake . -B build-asan \
+            -DTHREEPP_USE_EXTERNAL_GLFW=ON \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DTHREEPP_BUILD_EXAMPLES=OFF \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -g" \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build-asan
+
+      - name: Test (ASan + UBSan)
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          cd build-asan/tests
           ctest --output-on-failure
 
   linux-no-glfw:
