@@ -166,10 +166,8 @@ namespace threepp_py {
                 .def("aspect", &Canvas::aspect)
                 .def_property_readonly("graphics_api", [](const Canvas& c) {
                     switch (c.graphicsApi()) {
-                        case GraphicsAPI::OpenGL: return "OpenGL";
                         case GraphicsAPI::Vulkan: return "Vulkan";
-                        case GraphicsAPI::WebGPU: return "WebGPU";
-                        default: return "Cross";
+                        default: return "OpenGL";
                     }
                 })
                 .def("set_size", [](Canvas& c, int w, int h) { c.setSize({w, h}); }, py::arg("width"), py::arg("height"))

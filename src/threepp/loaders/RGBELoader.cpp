@@ -20,7 +20,8 @@ std::shared_ptr<Texture> RGBELoader::load(const std::filesystem::path& path, boo
     int width{}, height{}, channels{};
     // stbi_loadf decodes RGBE encoding internally and returns linear float RGB(A).
     // Request 3 channels from stbi — then pad to RGBA ourselves.
-    // WebGPU has no rgb32float format; GL also handles rgba32f more reliably.
+    // GL handles rgba32f more reliably than a 3-channel float format, and not
+    // every API exposes an rgb32float at all.
     // Flip manually instead of via stbi_set_flip_vertically_on_load: that flag
     // is process-global and leaked into every later stbi decode (glTF embedded
     // textures came back upside-down once any HDR had loaded with flipY=true —

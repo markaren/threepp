@@ -210,7 +210,7 @@ struct Canvas::Impl {
         params_.graphicsApi_ = api;
 
 #ifndef __EMSCRIPTEN__
-        if (api == GraphicsAPI::WebGPU || api == GraphicsAPI::Vulkan) {
+        if (api == GraphicsAPI::Vulkan) {
             glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         } else {
             glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -221,11 +221,10 @@ struct Canvas::Impl {
         glfwWindowHint(GLFW_RESIZABLE, params_.resizable_);
         glfwWindowHint(GLFW_VISIBLE, params_.headless_ ? GLFW_FALSE : GLFW_TRUE);
 #else
-        // Browser backends: WebGPU needs a context-less window, but OpenGL
-        // (WebGL2) needs GLFW to create the WebGL context. Suppressing it for
-        // every API left GLctx undefined and crashed the GL renderer on startup.
-        glfwWindowHint(GLFW_CLIENT_API,
-                       api == GraphicsAPI::WebGPU ? GLFW_NO_API : GLFW_OPENGL_ES_API);
+        // Browser: OpenGL (WebGL2) needs GLFW to create the WebGL context.
+        // Suppressing it left GLctx undefined and crashed the GL renderer on
+        // startup.
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
 #endif
 
         if (params_.antialiasing_ > 0) {

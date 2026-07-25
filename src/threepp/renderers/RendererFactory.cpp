@@ -4,11 +4,6 @@
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 
-#ifdef THREEPP_WITH_WGPU
-#include "threepp/renderers/CrossRenderer.hpp"
-#include "threepp/renderers/WgpuRenderer.hpp"
-#endif
-
 #ifdef THREEPP_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
 #endif
@@ -27,18 +22,11 @@ namespace threepp {
             // The browser has no interactive console: reading std::cin triggers a
             // blocking window.prompt() popup (or hangs the demo). Skip the menu and
             // keep the default backend. Pass an explicit GraphicsAPI to override.
-#  ifdef THREEPP_WITH_WGPU
-            chosen = GraphicsAPI::WebGPU;
-#  else
             chosen = GraphicsAPI::OpenGL;
-#  endif
 #else
             std::cout << "Select renderer:\n  [1] OpenGL (default)";
-#ifdef THREEPP_WITH_WGPU
-            std::cout << "\n  [2] WebGPU\n  [3] Cross (GL left, WGPU right)";
-#endif
 #ifdef THREEPP_WITH_VULKAN
-            std::cout << "\n  [4] Vulkan Deferred renderer";
+            std::cout << "\n  [2] Vulkan Deferred renderer";
 #endif
             std::cout << "\n  [0] Abort and Exit\n> ";
             std::string line;
@@ -47,12 +35,8 @@ namespace threepp {
                 while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
                     line.pop_back();
                 }
-#ifdef THREEPP_WITH_WGPU
-                if (line == "2") chosen = GraphicsAPI::WebGPU;
-                else if (line == "3") chosen = GraphicsAPI::Cross;
-#endif
 #ifdef THREEPP_WITH_VULKAN
-                if (line == "4") chosen = GraphicsAPI::Vulkan;
+                if (line == "2") chosen = GraphicsAPI::Vulkan;
 #endif
             }
             if (line == "0") {
@@ -60,24 +44,6 @@ namespace threepp {
                 std::exit(0);
             }
 #endif// __EMSCRIPTEN__
-        }
-
-        if (chosen == GraphicsAPI::WebGPU) {
-#ifdef THREEPP_WITH_WGPU
-            std::cout << "Using WebGPU renderer\n";
-            return std::make_unique<WgpuRenderer>(canvas);
-#else
-            throw std::runtime_error("WebGPU renderer not available (build with -DTHREEPP_WITH_WGPU=ON)");
-#endif
-        }
-
-        if (chosen == GraphicsAPI::Cross) {
-#ifdef THREEPP_WITH_WGPU
-            std::cout << "Using Cross renderer\n";
-            return std::make_unique<CrossRenderer>(canvas);
-#else
-            throw std::runtime_error("Cross renderer not available (build with -DTHREEPP_WITH_WGPU=ON)");
-#endif
         }
 
         if (chosen == GraphicsAPI::Vulkan) {

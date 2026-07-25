@@ -6,11 +6,6 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
-#ifdef THREEPP_WITH_WGPU
-#include <imgui_impl_wgpu.h>
-#include <threepp/renderers/WgpuRenderer.hpp>
-#endif
-
 #ifdef THREEPP_WITH_VULKAN
 #include <imgui_impl_vulkan.h>
 #include <threepp/renderers/VulkanRenderer.hpp>
@@ -44,7 +39,7 @@ public:
     }
 
     explicit ImguiContext(const threepp::Canvas& canvas)
-        : ImguiContext(canvas.windowPtr(), canvas.graphicsApi() != threepp::GraphicsAPI::WebGPU) {
+        : ImguiContext(canvas.windowPtr(), canvas.graphicsApi() == threepp::GraphicsAPI::OpenGL) {
         canvas.onMonitorChange([this](int monitor) {
             setFontScale(threepp::monitor::contentScale(monitor).first);
         });
@@ -110,7 +105,7 @@ public:
             }
         } else
 #endif
-        if (canvas.graphicsApi() != threepp::GraphicsAPI::WebGPU) {
+        {
             // GL path — reinitialize for OpenGL (undo the InitForOther from delegated ctor)
             ImGui_ImplGlfw_Shutdown();
             ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(canvas.windowPtr()), true);
@@ -121,38 +116,6 @@ public:
 #endif
             glInitialized_ = true;
         }
-#ifdef THREEPP_WITH_WGPU
-        else {
-            wgpuRenderer_ = dynamic_cast<threepp::WgpuRenderer*>(&renderer);
-            if (wgpuRenderer_) {
-                ImGui_ImplWGPU_InitInfo initInfo{};
-                initInfo.Device = static_cast<WGPUDevice>(wgpuRenderer_->nativeDevice());
-                initInfo.RenderTargetFormat = static_cast<WGPUTextureFormat>(wgpuRenderer_->nativeSurfaceFormat());
-                initInfo.DepthStencilFormat = WGPUTextureFormat_Depth24Plus;
-                initInfo.PipelineMultisampleState.count = 1; // overlay renders to resolved (non-MSAA) surface
-
-                ImGui_ImplWGPU_Init(&initInfo);
-
-                wgpuRenderer_->setOverlayCallback([this](void* passEncoder) {
-                    if (pendingDrawData_) {
-                        // Override the draw data's display size to match the
-                        // current renderer size. During a live window resize,
-                        // the draw data may have been generated with a stale
-                        // display size (from the previous frame's ui.render()),
-                        // causing ImGui's scissor rects to exceed the actual
-                        // render pass attachment dimensions.
-                        auto sz = wgpuRenderer_->size();
-                        pendingDrawData_->DisplaySize = ImVec2(
-                            static_cast<float>(sz.width()),
-                            static_cast<float>(sz.height()));
-                        ImGui_ImplWGPU_RenderDrawData(pendingDrawData_, static_cast<WGPURenderPassEncoder>(passEncoder));
-                    }
-                });
-
-                wgpuInitialized_ = true;
-            }
-        }
-#endif
 
         canvas.onMonitorChange([this](int monitor) {
             setFontScale(threepp::monitor::contentScale(monitor).first);
@@ -164,7 +127,7 @@ public:
     ImguiContext& operator=(const ImguiContext&) = delete;
 
     void render() {
-        if (!glInitialized_ && !wgpuInitialized_ && !vulkanInitialized_) return;
+        if (!glInitialized_ && !vulkanInitialized_) return;
 
         if (!dpiAwareIsConfigured_) {
 
@@ -177,9 +140,6 @@ public:
         }
 
         if (glInitialized_) ImGui_ImplOpenGL3_NewFrame();
-#ifdef THREEPP_WITH_WGPU
-        if (wgpuInitialized_) ImGui_ImplWGPU_NewFrame();
-#endif
 #ifdef THREEPP_WITH_VULKAN
         if (vulkanInitialized_) ImGui_ImplVulkan_NewFrame();
 #endif
@@ -193,11 +153,6 @@ public:
         if (glInitialized_) {
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         }
-#ifdef THREEPP_WITH_WGPU
-        if (wgpuInitialized_) {
-            pendingDrawData_ = ImGui::GetDrawData();
-        }
-#endif
 #ifdef THREEPP_WITH_VULKAN
         if (vulkanInitialized_) {
             pendingDrawData_ = ImGui::GetDrawData();
@@ -207,12 +162,6 @@ public:
 
     virtual ~ImguiContext() {
         if (glInitialized_) ImGui_ImplOpenGL3_Shutdown();
-#ifdef THREEPP_WITH_WGPU
-        if (wgpuInitialized_) {
-            if (wgpuRenderer_) wgpuRenderer_->setOverlayCallback(nullptr);
-            ImGui_ImplWGPU_Shutdown();
-        }
-#endif
 #ifdef THREEPP_WITH_VULKAN
         if (vulkanInitialized_) {
             if (vulkanRenderer_) vulkanRenderer_->setOverlayCallback(nullptr);
@@ -250,14 +199,10 @@ protected:
 
 private:
     bool glInitialized_ = false;
-    bool wgpuInitialized_ = false;
     bool vulkanInitialized_ = false;
     bool dpiAwareIsConfigured_ = true;
     float dpiScale_ = 1.f;
     ImDrawData* pendingDrawData_ = nullptr;
-#ifdef THREEPP_WITH_WGPU
-    threepp::WgpuRenderer* wgpuRenderer_ = nullptr;
-#endif
 #ifdef THREEPP_WITH_VULKAN
     threepp::VulkanRenderer* vulkanRenderer_ = nullptr;
     VkDescriptorPool vulkanDescriptorPool_ = VK_NULL_HANDLE;

@@ -168,7 +168,7 @@ void VulkanRendererCore::CoreImpl::cullEntriesAgainstFrustum(Camera& camera) {
         }
 
 void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
-            // force=false (matching GLRenderer/WgpuRenderer): with
+            // force=false (matching GLRenderer): with
             // updateMatrix()'s change-detection early-out, only subtrees whose
             // transforms actually moved pay the world-matrix multiplies — a
             // forced pass re-multiplied every node every frame (several
@@ -221,7 +221,6 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
             // Expand the visible scene into one MeshEntry per TLAS instance.
             // Regular meshes contribute one entry; an InstancedMesh contributes
             // count() entries each with worldMatrix = matrixWorld * instanceMat[i].
-            // Mirrors WGPU's expandMeshEntries (WgpuPathTracerAtlas.cpp:20).
             std::vector<MeshEntry> built;
             std::vector<LineEntry> builtLines;
             sceneSnapshot_.clear();

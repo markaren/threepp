@@ -21,10 +21,6 @@ add_subdirectory(objects)
 add_subdirectory(shaders)
 add_subdirectory(textures)
 
-if (THREEPP_WITH_WGPU)
-    add_subdirectory(wgpu)
-endif ()
-
 if (THREEPP_WITH_VULKAN)
     add_subdirectory(vulkan)
 endif ()

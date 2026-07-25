@@ -115,7 +115,7 @@ YoloV8nVk::~YoloV8nVk() {
 }
 
 // ============================================================
-//  Weight loading (offline BN-fold + f16 packing — identical to WGPU)
+//  Weight loading (offline BN-fold + f16 packing)
 // ============================================================
 void YoloV8nVk::loadWeights(const std::string& path) {
     auto w = parseWeightBinary(path);

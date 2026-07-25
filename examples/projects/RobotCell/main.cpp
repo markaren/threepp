@@ -832,7 +832,7 @@ namespace {
         return failures == 0 ? 0 : 1;
     }
 
-    // --depthprobe [gl|wgpu|vulkan]: deterministic sensor check. Sensor 1 m
+    // --depthprobe [gl|vulkan]: deterministic sensor check. Sensor 1 m
     // above a flat floor with one 0.4 m box offset in +x: floor points must
     // land at y=0, box-top points at y=0.4, on every backend. On Vulkan the
     // identical pinhole pattern is ray-traced instead of rasterised.
@@ -953,7 +953,6 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--depthprobe") {
         const std::string backend = argc > 2 ? argv[2] : "gl";
         GraphicsAPI api = GraphicsAPI::OpenGL;
-        if (backend == "wgpu") api = GraphicsAPI::WebGPU;
         if (backend == "vulkan") {
 #ifdef ROBOT_CELL_WITH_VULKAN
             api = GraphicsAPI::Vulkan;
@@ -965,13 +964,12 @@ int main(int argc, char** argv) {
         return runDepthProbe(api);
     }
 
-    // --colorprobe [gl|wgpu]: clear-color convention check. The framebuffer
-    // bytes for a flat background must equal the user's sRGB color value on
-    // BOTH the surface and render-target paths (the three.js convention all
-    // backends follow). Catches double/missing encodes in either path.
+    // --colorprobe: clear-color convention check. The framebuffer bytes for a
+    // flat background must equal the user's sRGB color value on BOTH the
+    // surface and render-target paths (the three.js convention all backends
+    // follow). Catches double/missing encodes in either path.
     if (argc > 1 && std::string(argv[1]) == "--colorprobe") {
-        const std::string backend = argc > 2 ? argv[2] : "gl";
-        const GraphicsAPI api = backend == "wgpu" ? GraphicsAPI::WebGPU : GraphicsAPI::OpenGL;
+        const GraphicsAPI api = GraphicsAPI::OpenGL;
         Canvas canvas(Canvas::Parameters().title("color probe").size(320, 240));
         auto renderer = createRenderer(canvas, api);
 
@@ -1168,7 +1166,7 @@ int main(int argc, char** argv) {
 
     // ===== eye-in-hand depth sensor =========================================
     // 70-deg FOV so the survey pose sees the whole crate zone in one scan.
-    // GL/WGPU: raster DepthSensor (render-to-target + depth readback).
+    // GL: raster DepthSensor (render-to-target + depth readback).
     // Vulkan: the SAME pinhole beam pattern, ray-traced through the
     // renderer's TLAS — perception downstream is identical.
     constexpr float kSensFov = 70.f;

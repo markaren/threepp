@@ -7,10 +7,10 @@
 // blade with the inherited InstancedMesh::setMatrixAt(). Advance the wind clock
 // once per frame with setTime().
 //
-// Backends: GL and WebGPU (raster). The blades sway via the instanced
-// ShaderMaterial path. For the Vulkan path tracer use GrassMesh instead — it
-// has no generic ShaderMaterial path, so a GrassField renders there as a static
-// (non-swaying) instanced mesh.
+// Backends: GL (raster). The blades sway via the instanced ShaderMaterial path.
+// On the Vulkan backend use GrassMesh instead — it has no generic
+// ShaderMaterial path, so a GrassField renders there as a static (non-swaying)
+// instanced mesh.
 
 #ifndef THREEPP_GRASSFIELD_HPP
 #define THREEPP_GRASSFIELD_HPP
@@ -147,7 +147,7 @@ namespace threepp {
         }
 
         // The blade sways toward windDir, weighted by height² (base planted, tip
-        // free). instanceMatrix is supplied by the InstancedMesh path on GL/WGPU.
+        // free). instanceMatrix is supplied by the InstancedMesh path on GL.
         static const char* vertexShader() {
             return R"(
                 uniform float time;

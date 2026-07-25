@@ -108,7 +108,7 @@ int main() {
     });
 
     // Plane-transform widgets ride in the shared renderer-settings window;
-    // the panel dispatches on the runtime-selected renderer (GL/WGPU/Vulkan)
+    // the panel dispatches on the runtime-selected renderer (GL/Vulkan)
     // and falls back to tone-map-only controls otherwise.
     std::array<float, 3> posBuf{};
     std::array<float, 3> eulerBuf{};

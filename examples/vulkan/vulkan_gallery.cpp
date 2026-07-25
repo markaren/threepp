@@ -1,7 +1,7 @@
-// Material gallery — Vulkan PT port of wgpu_gallery.
+// Material gallery.
 // Mix of geometries, multiple light sources, and varied materials.
 //
-// Key difference from the wgpu version: the window's emissive plane has been
+// Note: the window's emissive plane has been
 // replaced with a RectAreaLight. The RectAreaLight is sampled analytically
 // (one shadow ray per primary hit) rather than via emissive-triangle NEE,
 // which gives crisper soft shadows in this scene and is one of Vulkan PT's
@@ -134,7 +134,7 @@ namespace {
         leftRight->position.set(-W / 2.f, winCY, D / 2.f - rightOfW / 2.f);
         windowGroup->add(leftRight);
 
-        // Window cross frames — kept from the wgpu version. The bright emissive
+        // Window cross frames. The bright emissive
         // panel that used to fill the window opening is gone; main() adds a
         // RectAreaLight (analytically sampled, no emissive triangles to NEE).
         constexpr float frameT = 0.08f;

@@ -5,7 +5,7 @@
 [![Conan Center](https://img.shields.io/conan/v/threepp)](https://conan.io/center/recipes/threepp)
 
 A cross-platform C++20 3D library with the high-level API of [three.js](https://github.com/mrdoob/three.js/) —
-and modern backends: OpenGL, WebGPU, and a deferred Vulkan renderer with ray-traced accents.
+and modern backends: portable OpenGL, and a deferred Vulkan renderer with ray-traced accents.
 
 ![Real-time ray-traced FFT ocean](doc/screenshots/pt_ocean.png)
 *Real-time FFT ocean — Vulkan deferred-hybrid renderer (raster-first, with ray-traced shadows & reflections) ([examples/vulkan/vulkan_ocean.cpp](examples/vulkan/vulkan_ocean.cpp))*
@@ -18,9 +18,10 @@ and modern backends: OpenGL, WebGPU, and a deferred Vulkan renderer with ray-tra
 
 ## Highlights
 
-* Three rendering backends behind one scene graph: OpenGL 3.3 raster, WebGPU raster,
-  and a **deferred Vulkan renderer** (raster G-buffer with ray-traced AO, GI,
-  reflections and shadows; denoised, with TAA)
+* Two rendering backends behind one scene graph: OpenGL 3.3 raster (the portable
+  baseline, also the Emscripten/WebGL2 target) and a **deferred Vulkan renderer**
+  (raster G-buffer with ray-traced AO, GI, reflections and shadows; denoised,
+  with TAA)
 * **Python bindings** — pybind11 bindings for the core scene API; renders to NumPy arrays
 * FFT-displaced ocean, water & sky shaders, PMREM environment maps
 * Path-traced sensor simulation: LIDAR, depth sensor, event camera
@@ -40,8 +41,7 @@ from interactive 3D apps to robotics and scientific visualization.
 
 The high-level API is mostly in line with three.js [r129](https://github.com/mrdoob/three.js/tree/r129)
 with changes from newer revisions in some areas.
-The OpenGL backend is a mechanical port of the WebGL renderer. The WebGPU renderer is mostly at feature
-parity with the GL backend but is not a direct port of the three.js WebGPU renderer.
+The OpenGL backend is a mechanical port of the WebGL renderer.
 
 ### What works?
 
@@ -157,8 +157,8 @@ int main() {
 }
 ```
 
-Swap `GLRenderer` for `VulkanRenderer` (deferred, ray-traced accents) or `WgpuRenderer` —
-the scene code stays the same.
+Swap `GLRenderer` for `VulkanRenderer` (deferred, ray-traced accents) — the scene
+code stays the same.
 
 ### Python
 

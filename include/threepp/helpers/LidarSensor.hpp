@@ -63,7 +63,7 @@ namespace threepp {
          * data. Use `PathTracedLidarSensor` (Vulkan) for those.
          *
          * The renderer's active render target is restored to nullptr after the scan.
-         * Works with any backend (OpenGL or WebGPU).
+         * Works with any raster backend.
          */
         void scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud);
 

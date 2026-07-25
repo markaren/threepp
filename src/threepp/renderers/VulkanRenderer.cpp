@@ -456,7 +456,7 @@ namespace threepp {
     VulkanRenderer::VulkanRenderer(Canvas& canvas) {
         canvas.initWindow(GraphicsAPI::Vulkan);
         pimpl_ = std::make_unique<Impl>(canvas);
-        // Mirror WgpuRenderer: the user's animate lambda may call render()
+        // The user's animate lambda may call render()
         // multiple times in one iteration (e.g. main scene + HUD overlay
         // via threepp::HUD). Each render() opens or extends the in-flight
         // frame; the present is deferred to the canvas frame-end callback

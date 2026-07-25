@@ -48,7 +48,7 @@ namespace drive {
         // Object3D layer the glass is tagged onto. On Vulkan the demo passes this
         // to renderer.setOverlayLayer() so the windows draw as a post-shade tint
         // over the full-quality image instead of re-tracing the scene behind them.
-        // Harmless on GL/WebGPU (the camera still renders layer 0 as normal).
+        // Harmless on GL (the camera still renders layer 0 as normal).
         static constexpr unsigned kOverlayLayer = 1;
 
         // Real-world geometry read off the loaded model, in the model's own space.
@@ -302,7 +302,7 @@ namespace drive {
         //     drops the grass's vertex colours) vs. the primary raster view.
         //   • GL's transmission pass washed the view out.
         // The robust cross-backend answer is to NOT treat them as refractive
-        // glass at all: render a plain transparent tint. On GL/WebGPU that is a
+        // glass at all: render a plain transparent tint. On GL that is a
         // normal alpha blend over the already-shaded opaque scene (full detail,
         // correct colour). On Vulkan a plain transparent still hits the deferred
         // blend/re-trace, so we ALSO tag the windows onto the overlay layer

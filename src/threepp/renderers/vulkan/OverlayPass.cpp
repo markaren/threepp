@@ -626,7 +626,7 @@ OverlayPass::ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp,
         return nullptr;
     }
 
-    // Match GL/WGPU's colorSpace→format rule (`isSrgb = colorSpace
+    // Match GL's colorSpace→format rule (`isSrgb = colorSpace
     // == sRGB`): ONLY an explicitly sRGB-tagged texture gets hardware
     // sRGB decode on sample. Linear AND NoColorSpace are sampled raw.
     // The TextSprite glyph atlas is NoColorSpace but Font::rasterize

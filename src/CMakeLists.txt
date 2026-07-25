@@ -226,8 +226,6 @@ set(publicHeaders
         "threepp/renderers/Renderer.hpp"
         "threepp/renderers/RendererFactory.hpp"
         "threepp/renderers/GLRenderer.hpp"
-        "threepp/renderers/WgpuRenderer.hpp"
-        "threepp/renderers/CrossRenderer.hpp"
         "threepp/renderers/RenderTarget.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
 
@@ -684,50 +682,11 @@ if (THREEPP_WITH_VULKAN)
 endif ()
 
 # BCn / DXT software decode for compressed-texture upload in the Vulkan
-# renderer. (Originally shared with the now-removed Vulkan path tracer; the
-# WGPU forward-raster backend does not use it.)
+# renderer. (Originally shared with the now-removed Vulkan path tracer.)
 if (THREEPP_WITH_VULKAN)
     list(APPEND sources
             "threepp/renderers/common/BCnDecode.cpp"
     )
-endif ()
-
-if (THREEPP_WITH_WGPU)
-    list(APPEND publicHeaders
-            "threepp/renderers/wgpu/WgpuBuffer.hpp"
-            "threepp/renderers/wgpu/WgpuTexture.hpp"
-            "threepp/renderers/wgpu/WgpuComputePipeline.hpp"
-            "threepp/renderers/wgpu/EffectComposer.hpp"
-            "threepp/renderers/wgpu/ShaderPass.hpp"
-    )
-    list(APPEND sources
-            "threepp/renderers/WgpuRenderer.cpp"
-            "threepp/renderers/CrossRenderer.cpp"
-            "threepp/renderers/wgpu/WgpuBindGroupCache.cpp"
-            "threepp/renderers/wgpu/WgpuBindGroups.cpp"
-            "threepp/renderers/wgpu/WgpuBufferPool.cpp"
-            "threepp/renderers/wgpu/WgpuGeometries.cpp"
-            "threepp/renderers/wgpu/WgpuLights.cpp"
-            "threepp/renderers/wgpu/WgpuMaterials.cpp"
-            "threepp/renderers/wgpu/WgpuPipelines.cpp"
-            "threepp/renderers/wgpu/WgpuReadback.cpp"
-            "threepp/renderers/wgpu/WgpuRenderTargets.cpp"
-            "threepp/renderers/wgpu/WgpuShaders.cpp"
-            "threepp/renderers/wgpu/WgpuShadowMap.cpp"
-            "threepp/renderers/wgpu/WgpuMipmapGenerator.cpp"
-            "threepp/renderers/wgpu/WgpuPMREM.cpp"
-            "threepp/renderers/wgpu/WgpuTextures.cpp"
-            "threepp/renderers/wgpu/WgpuTexture.cpp"
-            "threepp/renderers/wgpu/WgpuBuffer.cpp"
-            "threepp/renderers/wgpu/WgpuComputePipeline.cpp"
-            "threepp/renderers/wgpu/EffectComposer.cpp"
-            "threepp/renderers/wgpu/ShaderPass.cpp"
-    )
-    if (APPLE)
-        list(APPEND sources
-                "threepp/renderers/WgpuSurfaceMacOS.mm"
-        )
-    endif ()
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN)
@@ -812,68 +771,6 @@ if (NOT DEFINED EMSCRIPTEN)
 endif ()
 
 
-if (THREEPP_WITH_WGPU)
-    target_compile_definitions(threepp PRIVATE THREEPP_WITH_WGPU=1)
-
-    if (DEFINED EMSCRIPTEN)
-        # Emscripten exposes the browser's native WebGPU — no wgpu-native needed.
-        target_compile_options(threepp PUBLIC "--use-port=emdawnwebgpu")
-
-        # Pre-translate GLSL shaders to WGSL via naga for browser deployment.
-        # Browsers only accept WGSL (WGPUSType_ShaderSourceSPIRV is not available).
-        include(${PROJECT_SOURCE_DIR}/cmake/FetchNaga.cmake)
-        include(${PROJECT_SOURCE_DIR}/cmake/EmbedWgslFromGlsl.cmake)
-
-        embed_wgsl_from_glsl(threepp water
-            "${PROJECT_SOURCE_DIR}/src/shaders/wgsl_input/water.vert"
-            "${PROJECT_SOURCE_DIR}/src/shaders/wgsl_input/water.frag"
-        )
-    else ()
-        include(${PROJECT_SOURCE_DIR}/cmake/FetchWgpuNative.cmake)
-
-        target_include_directories(threepp PRIVATE "${WGPU_INCLUDE_DIR}")
-        target_link_libraries(threepp PUBLIC ${WGPU_LIBRARY})
-
-        if (THREEPP_WGPU_GLSL_COMPAT)
-            message(STATUS "Wgpu GLSL compat: fetching glslang...")
-            include(${PROJECT_SOURCE_DIR}/cmake/FetchGlslang.cmake)
-
-            target_sources(threepp PRIVATE
-                "threepp/renderers/wgpu/WgpuShaderTranslator.cpp"
-            )
-            target_include_directories(threepp PRIVATE "${glslang_SOURCE_DIR}")
-            target_link_libraries(threepp PRIVATE
-                glslang
-                SPIRV
-                glslang-default-resource-limits
-            )
-            target_compile_definitions(threepp PRIVATE THREEPP_WGPU_GLSL_COMPAT=1)
-        endif()
-
-        if (APPLE)
-            target_link_libraries(threepp PRIVATE "-framework QuartzCore" "-framework Metal")
-        endif ()
-
-        # Copy wgpu_native.dll next to executables so they can find it at runtime.
-        # Multi-config generators (Visual Studio) put EXEs in CMAKE_RUNTIME_OUTPUT_DIRECTORY/$<CONFIG>/,
-        # while single-config generators put them directly in CMAKE_RUNTIME_OUTPUT_DIRECTORY.
-        if (WIN32 AND WGPU_NATIVE_DLL)
-            if (CMAKE_CONFIGURATION_TYPES)
-                set(_wgpu_dll_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>")
-            else ()
-                set(_wgpu_dll_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-            endif ()
-            add_custom_command(TARGET threepp POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${WGPU_NATIVE_DLL}"
-                    "${_wgpu_dll_dest}/wgpu_native.dll"
-                COMMENT "Copying wgpu_native.dll to output directory"
-            )
-        endif ()
-    endif ()
-endif ()
-
-
 if (THREEPP_WITH_VULKAN)
     find_package(Vulkan REQUIRED)
     target_compile_definitions(threepp PRIVATE THREEPP_WITH_VULKAN=1)
@@ -907,7 +804,7 @@ if (THREEPP_WITH_VULKAN)
     # AMD FidelityFX FSR 3.1 upscaler (Windows-only, gated on THREEPP_WITH_FSR).
     # Fetches the SDK and links the prebuilt signed Vulkan ffx-api runtime; the
     # DLL ships every backend + precompiled shader, so there is no shader-build
-    # step. The DLL is copied next to executables (as wgpu_native.dll is).
+    # step. The DLL is copied next to executables.
     if (THREEPP_WITH_FSR)
         include(${PROJECT_SOURCE_DIR}/cmake/FetchFidelityFX.cmake)
         target_include_directories(threepp PRIVATE "${FFX_INCLUDE_DIR}")

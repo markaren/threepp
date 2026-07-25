@@ -8,8 +8,8 @@
 // noise-free, the default for synthetic-perception work. Its shared
 // infrastructure lives in the VulkanRendererCore base.
 //
-// Co-exists with GLRenderer / WgpuRenderer; selected by the application when a
-// Canvas is created with GraphicsAPI::Vulkan.
+// Co-exists with GLRenderer; selected by the application when a Canvas is
+// created with GraphicsAPI::Vulkan.
 
 #ifndef THREEPP_VULKANRENDERER_HPP
 #define THREEPP_VULKANRENDERER_HPP

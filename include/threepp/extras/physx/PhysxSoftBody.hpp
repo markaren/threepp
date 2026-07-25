@@ -1166,7 +1166,7 @@ namespace threepp {
             sb->applyDeformedPositions();
             // Recompute bounds so frustum culling tracks the deformed body — the
             // initial bounds only cover the rest pose. Both sphere AND box are
-            // needed: GL/WGPU renderers cull on boundingSphere, Vulkan culls on
+            // needed: the GL renderer culls on boundingSphere, Vulkan culls on
             // boundingBox. Without the box refresh, a settled body that has
             // fallen below its spawn-y stays culled out by Vulkan's raster
             // gbuf pass once the camera approaches it from below.

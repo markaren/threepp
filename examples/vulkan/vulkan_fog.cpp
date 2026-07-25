@@ -1,6 +1,6 @@
 // Vulkan deferred — fog (homogeneous participating media) showcase.
 // Cornell-style room with a SpotLight aimed across the camera so god rays
-// form prominently when fog is enabled. Mirrors examples/wgpu/wgpu_cornell_box.cpp's
+// form prominently when fog is enabled. Mirrors a Cornell-box setup's
 // fog UI surface (FogExp2 density + sRGB tint + Henyey-Greenstein anisotropy).
 //
 // Demonstrates:

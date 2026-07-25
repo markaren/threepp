@@ -12,9 +12,6 @@
 #include "threepp/renderers/shaders/UniformsLib.hpp"
 #include "threepp/renderers/shaders/UniformsUtil.hpp"
 
-#ifdef THREEPP_WGSL_WATER
-#include "threepp/renderers/wgpu/wgsl/water_wgsl.hpp"
-#endif
 
 using namespace threepp;
 
@@ -41,12 +38,6 @@ namespace {
                                                 {"waterColor", Uniform(Color{0x555555})},
                                         }}),
 
-#ifdef THREEPP_WGSL_WATER
-                // Pre-translated WGSL from naga (Emscripten / browser path).
-                // Each stage is a separate module with its own entry point.
-                threepp::wgpu::wgsl::water_vert,
-                threepp::wgpu::wgsl::water_frag
-#else
                 R"(
                 uniform mat4 textureMatrix;
                 uniform float time;
@@ -130,7 +121,6 @@ namespace {
                     #include <encodings_fragment>
                     #include <fog_fragment>
                 })"
-#endif
 
         };
 
@@ -231,9 +221,10 @@ struct Water::Impl {
             textureMatrix.multiply(mirrorCamera->projectionMatrix);
             textureMatrix.multiply(mirrorCamera->matrixWorldInverse);
 
-            // WebGPU render targets have UV (0,0) at top-left; GL has bottom-left.
-            // Flip the Y row of the textureMatrix: new_row1 = row3 - row1
-            // so that UV.y' / w = 1 - UV.y / w.
+            // GL render targets have UV (0,0) at bottom-left, so no flip is needed
+            // there and this branch is inert today. Kept for a backend whose
+            // render targets are top-left-origin: flip the Y row of the
+            // textureMatrix (new_row1 = row3 - row1) so UV.y' / w = 1 - UV.y / w.
             if (_renderer->renderTargetFlipY()) {
                 auto& e = textureMatrix.elements;
                 e[1]  = e[3]  - e[1];

@@ -3,9 +3,9 @@
 /// Usage: vulkan_yolov8_inference [image_path] [weights_path]
 ///   image_path   – JPEG/PNG input image
 ///   weights_path – .bin file exported by scripts/export_yolov8n_weights.py
-///                  (same format as the WGPU yolov8_inference example)
 ///
-/// Direct Vulkan port of examples/wgpu/yolov8_inference.cpp: runs the full
+///
+/// Runs the full
 /// YOLOv8n forward pass on the Vulkan compute pipeline, then displays the
 /// input image with detection bounding-box overlays.
 

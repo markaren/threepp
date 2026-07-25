@@ -15,7 +15,7 @@
 // shader can read the rest pose while writing the displaced pose into the same
 // BLAS vertex buffer.
 //
-// On the GL / WebGPU raster backends this type renders as a plain static Mesh
+// On the GL raster backend this type renders as a plain static Mesh
 // (no wind); those backends animate grass via their own cheaper paths.
 
 #ifndef THREEPP_GRASSMESH_HPP

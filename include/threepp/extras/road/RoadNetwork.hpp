@@ -343,7 +343,7 @@ namespace threepp::road {
                 // aniso, trilinear collapses to the along-road mip axis and the
                 // lane dashes smear into giant blobs a few car-lengths out (the
                 // Vulkan material sampler forces 16× on unjittered paths, which is
-                // why only GL/WGPU showed it — they honor this per-texture value).
+                // why only GL showed it — it honors this per-texture value).
                 tex->anisotropy = 16;
                 tex->wrapS = TextureWrapping::ClampToEdge;
                 tex->wrapT = TextureWrapping::Repeat;// tiles along the road length

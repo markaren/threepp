@@ -17,7 +17,7 @@ namespace yolo {
     };
 
     /// YOLOv8n object detector running on the Vulkan compute pipeline. A direct
-    /// port of the WGPU YoloV8n: same weight format (export_yolov8n_weights.py),
+    /// YOLOv8n implementation: same weight format (export_yolov8n_weights.py),
     /// same offline BN-folding + f16 weight packing, same op set and forward
     /// pass. The whole forward pass is recorded into one command buffer and
     /// submitted once (see VkInfer); activations are arena-owned Tensor views,
