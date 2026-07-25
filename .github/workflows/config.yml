@@ -32,10 +32,13 @@ jobs:
           libgl1-mesa-dri \
           xvfb
 
-      # xvfb + the Mesa DRI driver are needed by the GL pixel tests
-      # (tests/renderers/gl): they construct a Canvas, so without a display and a
-      # software rasteriser they cannot run at all. tests/renderers/gl/CMakeLists.txt
-      # picks up xvfb-run at CONFIGURE time, so these must be installed first.
+      # xvfb + the Mesa DRI driver are declared explicitly for the GL pixel tests
+      # (tests/renderers/gl), which construct a Canvas and so need a display and a
+      # software rasteriser. The runner image happens to ship both already — these
+      # tests have been green without this — but relying on undeclared image
+      # contents is fragile, and the python-bindings job below already installs
+      # them explicitly. NB tests/renderers/gl/CMakeLists.txt looks for xvfb-run at
+      # CONFIGURE time, so the install has to precede cmake either way.
       - name: Configure and build
         run: |
           cmake . -B build -DTHREEPP_USE_EXTERNAL_GLFW=ON -DCMAKE_BUILD_TYPE="Release"
