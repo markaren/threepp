@@ -108,7 +108,9 @@ namespace threepp {
         bool autoLod = true;
         // This value allows the default rendering order of scene graph objects to be overridden although opaque and transparent objects remain sorted independently.
         // When this property is set for an instance of Group, all descendants objects will be sorted and rendered together. Sorting is from lowest to highest renderOrder. Default value is 0.
-        unsigned int renderOrder = 0;
+        // Signed, as in three.js: a negative value pushes an object behind the
+        // default-ordered ones (the usual way to pin a skybox or backdrop).
+        int renderOrder = 0;
 
         std::unordered_map<std::string, std::any> userData;
 
@@ -183,25 +185,37 @@ namespace threepp {
         virtual void remove(Object3D& object);
 
         // Removes this object from its current parent.
-        void removeFromParent();
+        //
+        // Returns the owning reference if the parent held one, so a caller can
+        // keep the object alive across the call:
+        //     auto kept = obj->removeFromParent();   // obj stays valid
+        // Discarding the result on an object the parent owned destroys it — the
+        // return value is the only thing keeping it alive. Returns nullptr when
+        // the object was attached with addRef() (parent never owned it) or had
+        // no parent.
+        std::shared_ptr<Object3D> removeFromParent();
 
         // Removes all child objects.
         void clear();
 
         // Searches through an object and its children, starting with the object itself, and returns the first with a matching name.
         // Note that for most objects the name is an empty string by default. You will have to set it manually to make use of this method.
+        //
+        // When T is given, the search is for the first node matching BOTH the name
+        // and the type. It used to resolve the first node matching the name only
+        // and then cast it, so getObjectByName<Mesh>("wheel") returned nullptr
+        // whenever any non-Mesh node named "wheel" (a Group, a Bone) came first in
+        // traversal order — a silent miss on a name that really was present.
         template<class T = Object3D>
         T* getObjectByName(const std::string& name) {
-            if (this->name == name) return dynamic_cast<T*>(this);
+
+            if (this->name == name) {
+                if (auto* self = dynamic_cast<T*>(this)) return self;
+            }
 
             for (const auto& child : this->children) {
 
-                auto object = child->getObjectByName(name);
-
-                if (object) {
-
-                    return dynamic_cast<T*>(object);
-                }
+                if (auto* found = child->getObjectByName<T>(name)) return found;
             }
 
             return nullptr;
@@ -331,6 +345,13 @@ namespace threepp {
 
     private:
         inline static unsigned int _object3Did{0};
+
+        // Unlink `object` from this node: drop it from `children`, clear its
+        // parent, fire "remove", and hand back the owning reference if this node
+        // held one. The caller decides whether that reference dies (destroying
+        // the object) or is kept. Shared by remove() and removeFromParent() so
+        // detach order is defined in exactly one place.
+        std::shared_ptr<Object3D> detachChild(Object3D& object);
 
         std::vector<std::shared_ptr<Object3D>> children_;
 

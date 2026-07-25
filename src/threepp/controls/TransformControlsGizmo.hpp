@@ -423,7 +423,11 @@ public:
                     throw std::runtime_error("GizmoObject::setupGizmo: invalid type");
                 }
 
-                object->renderOrder = std::numeric_limits<int>::infinity();
+                // Draw the gizmo last so it is never occluded by the scene.
+                // This read `numeric_limits<int>::infinity()`, which for an
+                // integral type is not infinity at all — it returns int{}, i.e.
+                // 0 — so the gizmo was silently left at the DEFAULT render order.
+                object->renderOrder = std::numeric_limits<int>::max();
 
                 object->position.set(0, 0, 0);
                 object->rotation.set(0, 0, 0);
