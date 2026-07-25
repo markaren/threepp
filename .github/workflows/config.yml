@@ -28,14 +28,70 @@ jobs:
           libglu1-mesa-dev \
           pkg-config \
           libglfw3 \
-          libglfw3-dev
+          libglfw3-dev \
+          libgl1-mesa-dri \
+          xvfb
 
+      # xvfb + the Mesa DRI driver are needed by the GL pixel tests
+      # (tests/renderers/gl): they construct a Canvas, so without a display and a
+      # software rasteriser they cannot run at all. tests/renderers/gl/CMakeLists.txt
+      # picks up xvfb-run at CONFIGURE time, so these must be installed first.
       - name: Configure and build
         run: |
           cmake . -B build -DTHREEPP_USE_EXTERNAL_GLFW=ON -DCMAKE_BUILD_TYPE="Release"
           cmake --build build
 
       - name: Test
+        run: |
+          cd build/tests
+          ctest --output-on-failure
+
+  # AddressSanitizer + UndefinedBehaviorSanitizer over the test suite.
+  #
+  # The weak axis of this codebase has been lifetime/ownership discipline
+  # (dangling scene-graph pointers, double-frees, out-of-range indices), and it
+  # is exactly what a sanitizer build catches for free. Runs the whole ctest
+  # suite, including the GL pixel tests under xvfb + Mesa software rendering.
+  #
+  # Leak detection is OFF on purpose: the GL driver, GLFW and X11 all leak
+  # per-process allocations that we neither own nor can free, and their reports
+  # bury the ones that matter. The value here is use-after-free, out-of-bounds
+  # and undefined behaviour, which detect_leaks does not affect.
+  linux-sanitizers:
+
+    runs-on: ubuntu-22.04
+    env:
+      CC: gcc-11
+      CXX: g++-11
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+          libxinerama-dev \
+          libxcursor-dev \
+          xorg-dev \
+          libglu1-mesa-dev \
+          pkg-config \
+          libgl1-mesa-dri \
+          xvfb
+
+      - name: Configure and build
+        run: |
+          cmake . -B build \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DTHREEPP_BUILD_EXAMPLES=OFF \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -g" \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build
+
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: |
           cd build/tests
           ctest --output-on-failure

@@ -9,6 +9,7 @@ endfunction()
 
 add_subdirectory(cameras)
 add_subdirectory(core)
+add_subdirectory(geometries)
 add_subdirectory(math)
 add_subdirectory(utils)
 add_subdirectory(renderers)

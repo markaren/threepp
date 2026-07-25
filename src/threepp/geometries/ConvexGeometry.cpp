@@ -68,13 +68,16 @@ ConvexGeometry::ConvexGeometry(const std::vector<Vector3>& _points)
     const auto& facets = pimpl_->facets;
     for (const auto& f : facets) {
         const auto& n = f.normal_;
-        normals.emplace_back(n[0]);
-        normals.emplace_back(n[1]);
-        normals.emplace_back(n[2]);
 
-        auto& verts = f.vertices_;
-        for (const auto& it : verts) {
+        // One normal PER VERTEX, not per facet. This used to push a single
+        // normal per facet while pushing one position per facet vertex, so
+        // "normal" came out at a third the length of "position" (8 vs 24 for a
+        // simple hull) and anything binding both as per-vertex attributes read
+        // the normal buffer out of bounds. The hull is flat-shaded, so every
+        // vertex of a facet simply repeats that facet's normal.
+        for (const auto& it : f.vertices_) {
             vertices.insert(vertices.end(), it->begin(), it->end());
+            normals.insert(normals.end(), {n[0], n[1], n[2]});
         }
     }
 
