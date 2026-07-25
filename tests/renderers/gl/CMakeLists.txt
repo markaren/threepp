@@ -28,4 +28,5 @@ if (THREEPP_WITH_GLFW)
 
     add_gl_render_test(GLRenderer_test)
     add_gl_render_test(GLFurnace_test)
+    add_gl_render_test(GLShadowMap_test)
 endif ()

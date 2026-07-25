@@ -3,6 +3,7 @@
 #ifndef THREEPP_GLPROPERTIES_HPP
 #define THREEPP_GLPROPERTIES_HPP
 
+#include "threepp/constants.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include "GLUniforms.hpp"
@@ -57,6 +58,14 @@ namespace threepp::gl {
 
         bool needsLights{};
         bool receiveShadow{};
+
+        // The shadow configuration the current program was compiled against.
+        // USE_SHADOWMAP and SHADOWMAP_TYPE_* are baked into the shader, so a
+        // runtime change to Renderer::shadowMap() has to invalidate the program —
+        // otherwise the shadow pass stops running while the material keeps
+        // sampling the (now frozen) shadow map.
+        bool shadowMapEnabled{};
+        ShadowMap shadowMapType{};
 
         unsigned int lightsStateVersion{};
 
