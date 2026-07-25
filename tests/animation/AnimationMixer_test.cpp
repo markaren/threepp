@@ -304,10 +304,48 @@ TEST_CASE("KeyframeTrack honours the requested interpolation") {
     VectorKeyframeTrack smoothVector("v", times, values, Interpolation::Smooth);
     CHECK(smoothVector.getInterpolation() == Interpolation::Smooth);
 
-    // Quaternions are the deliberate exception: they must slerp, so the track
-    // pins Linear regardless of what is asked for.
-    QuaternionKeyframeTrack quat("q", times,
-                                 std::vector<float>{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f},
-                                 Interpolation::Smooth);
-    CHECK(quat.getInterpolation() == Interpolation::Linear);
+    // Quaternions accept Discrete (glTF STEP: keys are copied verbatim, so the
+    // rotation stays normalised) and Linear (slerp), but coerce Smooth, because
+    // a cubic evaluates the four components independently and denormalises.
+    const std::vector<float> quatValues{0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
+
+    QuaternionKeyframeTrack stepQuat("q", times, quatValues, Interpolation::Discrete);
+    CHECK(stepQuat.getInterpolation() == Interpolation::Discrete);
+
+    QuaternionKeyframeTrack smoothQuat("q", times, quatValues, Interpolation::Smooth);
+    CHECK(smoothQuat.getInterpolation() == Interpolation::Linear);
+
+    QuaternionKeyframeTrack defaultQuat("q", times, quatValues);
+    CHECK(defaultQuat.getInterpolation() == Interpolation::Linear);
+}
+
+TEST_CASE("A STEP rotation track snaps instead of slerping") {
+
+    // glTF's "Step Rotation" case. Two keys 1 s apart: identity, then 90 deg
+    // about Y. Discrete must hold the first key for the whole interval and
+    // switch at the second, never producing anything in between.
+    auto rig = makeRig();
+    AnimationMixer mixer(*rig.root);
+
+    const float s = std::sqrt(0.5f);
+    std::vector<std::shared_ptr<KeyframeTrack>> tracks{
+            std::make_shared<QuaternionKeyframeTrack>(
+                    "Cube.quaternion",
+                    std::vector<float>{0.f, 1.f},
+                    std::vector<float>{0.f, 0.f, 0.f, 1.f, 0.f, s, 0.f, s},
+                    Interpolation::Discrete)};
+
+    auto* action = mixer.clipAction(std::make_shared<AnimationClip>("step", 1.f, tracks));
+    action->play();
+
+    // Partway through the interval the rotation must still be exactly the
+    // first key — a slerp would have it partly rotated by now.
+    mixer.update(0.4f);
+    INFO("y at t=0.4 = " << rig.node->quaternion.y);
+    CHECK_THAT(rig.node->quaternion.y, WithinAbs(0.f, 1e-4));
+    CHECK_THAT(rig.node->quaternion.w, WithinAbs(1.f, 1e-4));
+
+    mixer.update(0.4f);
+    INFO("y at t=0.8 = " << rig.node->quaternion.y);
+    CHECK_THAT(rig.node->quaternion.y, WithinAbs(0.f, 1e-4));
 }

@@ -1960,8 +1960,14 @@ namespace threepp {
                             track = std::make_shared<VectorKeyframeTrack>(
                                     nodeName + ".position", times, values, interp);
                         } else if (path == "rotation") {
+                            // Pass interp here too. glTF STEP rotations were
+                            // silently played as slerp, so a "Step Rotation"
+                            // animation swept smoothly instead of snapping
+                            // between keys. QuaternionKeyframeTrack accepts
+                            // Discrete and Linear and coerces Smooth to Linear,
+                            // since a cubic would denormalise the quaternion.
                             track = std::make_shared<QuaternionKeyframeTrack>(
-                                    nodeName + ".quaternion", times, values);
+                                    nodeName + ".quaternion", times, values, interp);
                         } else if (path == "scale") {
                             track = std::make_shared<VectorKeyframeTrack>(
                                     nodeName + ".scale", times, values, interp);
