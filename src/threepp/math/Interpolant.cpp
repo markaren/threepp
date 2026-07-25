@@ -9,6 +9,12 @@ Interpolant::Interpolant(Sample parameterPositions, Sample sampleValues, int sam
       valueSize(sampleSize) {
 
     if (resultBuffer) {
+        // Size the caller's buffer if it is too small. interpolate_() writes
+        // valueSize floats into it unconditionally, so an under-sized (or empty)
+        // buffer was a silent out-of-bounds write rather than an error.
+        if (resultBuffer->size() < static_cast<std::size_t>(sampleSize)) {
+            resultBuffer->resize(sampleSize);
+        }
         this->resultBuffer = resultBuffer;
     } else {
         this->_resultBuffer.resize(sampleSize);

@@ -10,7 +10,12 @@ namespace threepp {
     class QuaternionKeyframeTrack: public KeyframeTrack {
 
     public:
-        QuaternionKeyframeTrack(const std::string& name, const std::vector<float>& times, const std::vector<float>& values, const std::optional<Interpolation>& interpolation = {})
+        // `interpolation` is accepted for signature parity with the other tracks
+        // but deliberately IGNORED: rotations must be slerped, and only the
+        // Linear path routes through QuaternionLinearInterpolant below.
+        // Discrete or Smooth would interpolate the four components
+        // independently and denormalise the quaternion.
+        QuaternionKeyframeTrack(const std::string& name, const std::vector<float>& times, const std::vector<float>& values, const std::optional<Interpolation>& = {})
             : KeyframeTrack(name, times, values, Interpolation::Linear) {}
 
         [[nodiscard]] std::string ValueTypeName() const override {

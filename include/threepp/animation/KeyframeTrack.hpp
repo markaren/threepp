@@ -80,7 +80,10 @@ namespace threepp {
         std::string name_;
         std::vector<float> times_;
         std::vector<float> values_;
-        Interpolation interpolation_;
+        // Initialised here as well as in setInterpolation(): the constructor
+        // always calls setInterpolation, but a member holding an enum should
+        // never be able to start out indeterminate.
+        Interpolation interpolation_{Interpolation::Linear};
 
         std::function<std::unique_ptr<Interpolant>(const Sample&, const Sample&, int, Sample*)> createInterpolant_;
 
