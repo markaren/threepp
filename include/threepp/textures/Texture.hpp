@@ -12,6 +12,7 @@
 
 #include "threepp/textures/Image.hpp"
 
+#include <atomic>
 #include <memory>
 #include <optional>
 
@@ -22,7 +23,11 @@ namespace threepp {
     public:
         inline static Mapping DEFAULT_MAPPING = Mapping::UV;
 
-        unsigned int id = textureId++;
+        // Atomic — see Object3D::id. Textures are the most exposed of the four:
+        // a model load creates them on the worker thread via TextureLoader, and
+        // the Vulkan backend skips re-uploading the environment map when
+        // `tex->id` matches the one already uploaded.
+        unsigned int id = textureId.fetch_add(1, std::memory_order_relaxed);
 
         std::string name;
 
@@ -117,7 +122,7 @@ namespace threepp {
         bool disposed_{false};
         unsigned int version_{0};
 
-        inline static unsigned int textureId{0};
+        inline static std::atomic<unsigned int> textureId{0};
     };
 
 }// namespace threepp

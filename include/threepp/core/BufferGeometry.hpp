@@ -10,6 +10,7 @@
 
 #include "threepp/core/BufferAttribute.hpp"
 
+#include <atomic>
 #include <optional>
 #include <unordered_map>
 
@@ -18,7 +19,10 @@ namespace threepp {
     class BufferGeometry: public EventDispatcher {
 
     public:
-        const unsigned int id{++_id};
+        // Atomic, and 1-based as before (fetch_add returns the OLD value, so the
+        // +1 preserves the original `++_id` numbering). See Object3D::id for why:
+        // loaders build geometries on a detached worker thread.
+        const unsigned int id{_id.fetch_add(1, std::memory_order_relaxed) + 1};
 
         const std::string uuid;
 
@@ -163,7 +167,7 @@ namespace threepp {
         std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAttribute>>> morphAttributes_;
         unsigned int attributesVersion_ = 0;// see attributesVersion()
 
-        inline static unsigned int _id{0};
+        inline static std::atomic<unsigned int> _id{0};
     };
 
 }// namespace threepp

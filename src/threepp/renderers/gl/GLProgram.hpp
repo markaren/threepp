@@ -45,7 +45,11 @@ namespace threepp {
 
             GLProgram() = default;
 
-            inline static int programIdCount{0};
+            // Deliberately NOT atomic, unlike the Object3D/BufferGeometry/Material/
+    // Texture counters: a GLProgram is only ever constructed while the GL
+    // context is current, and a GL context belongs to exactly one thread. There
+    // is no second thread that can reach this.
+    inline static int programIdCount{0};
         };
 
     }// namespace gl

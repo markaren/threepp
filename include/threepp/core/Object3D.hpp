@@ -17,6 +17,7 @@
 
 #include <any>
 #include <array>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -41,7 +42,13 @@ namespace threepp {
         inline static bool defaultMatrixAutoUpdate{true};
 
         // Unique number for this object instance.
-        unsigned int id{_object3Did++};
+        // Atomic: loaders run on a worker thread (loadAsync detaches one), so
+        // objects are constructed concurrently with the main thread's. A torn
+        // read-modify-write here hands two objects the SAME id, and ids are used
+        // as identity downstream — GLRenderer skips re-uploading a material's
+        // uniforms when the id matches the last bound one, so a collision renders
+        // one material with another's parameters.
+        unsigned int id{_object3Did.fetch_add(1, std::memory_order_relaxed)};
 
         // UUID of this object instance. This gets automatically assigned, so this shouldn't be edited.
         const std::string uuid;
@@ -344,7 +351,7 @@ namespace threepp {
         }
 
     private:
-        inline static unsigned int _object3Did{0};
+        inline static std::atomic<unsigned int> _object3Did{0};
 
         // Unlink `object` from this node: drop it from `children`, clear its
         // parent, fire "remove", and hand back the owning reference if this node

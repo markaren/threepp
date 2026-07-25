@@ -8,6 +8,7 @@
 #include "threepp/core/Uniform.hpp"
 #include "threepp/math/Plane.hpp"
 
+#include <atomic>
 #include <optional>
 #include <variant>
 
@@ -18,7 +19,12 @@ namespace threepp {
     class Material: public EventDispatcher {
 
     public:
-        const unsigned int id = materialId++;
+        // Atomic — see Object3D::id. This is the id whose collision bites
+        // hardest: GLRenderer gates "refreshMaterial" on
+        // `material->id != _currentMaterialId`, so two materials sharing an id
+        // means the second never uploads its uniforms and renders with the
+        // first's colour/roughness/maps.
+        const unsigned int id = materialId.fetch_add(1, std::memory_order_relaxed);
 
         std::string name;
 
@@ -172,7 +178,7 @@ namespace threepp {
         bool disposed_ = false;
         std::string uuid_;
         unsigned int version_ = 0;
-        inline static unsigned int materialId = 0;
+        inline static std::atomic<unsigned int> materialId{0};
     };
 
 
