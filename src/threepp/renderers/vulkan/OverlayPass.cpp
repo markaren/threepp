@@ -859,7 +859,16 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     // resize and the sprite positions per-frame; matrixWorld
     // computation here keeps us self-contained (no implicit
     // requirement that the user call updateMatrixWorld).
-    scene.updateMatrixWorld(true);
+    //
+    // NOT forced: this runs unconditionally every deferred frame (see the
+    // screen-space sprite auto-overlay call in VulkanCoreFrame.cpp), and
+    // ensureSceneBuilt already ran the non-forced pass this frame. force=true
+    // ignored the dirty flags and re-did a 4x4 multiply for every node in the
+    // graph, every frame. Change detection keeps the graph just as current.
+    // The camera stays forced — it is one node, and a HUD camera is commonly
+    // mutated after the main render without its dirty flag being set.
+    // (tests/core/MatrixWorldForceEquivalence_test.cpp pins the equivalence.)
+    scene.updateMatrixWorld();
     camera.updateMatrixWorld(true);
 
     // Draw-list types live on the reused scratch (see OverlayRecordScratch);

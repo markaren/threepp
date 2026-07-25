@@ -138,6 +138,7 @@ namespace threepp {
     using vulkan::TP_GbufResolve;
     using vulkan::TP_ShadeB;
     using vulkan::TP_Dof;
+    using vulkan::TP_Froxel;
 
     namespace {
         // Frames-in-flight depth. Bumped from 2 → 3 to deepen CPU/GPU

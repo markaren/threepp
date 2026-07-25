@@ -488,6 +488,7 @@ namespace threepp {
             float shadeBMs       = 0.f;// MSAA dispatch B: per-sample edge shading (0 unless setGbufferMsaa > 1)
             float overlayMs      = 0.f;// hybrid overlay depth + draw
             float dofMs          = 0.f;// thin-lens depth of field (0 unless setDepthOfField)
+            float froxelMs       = 0.f;// froxel volumetrics: inject + integrate (0 unless a medium is active)
             float cpuEnsureSceneMs = 0.f;// ensureSceneBuilt
             float cpuRecordMs      = 0.f;// recordCommandBuffer
             float cpuFrameMs       = 0.f;// total render() wall time

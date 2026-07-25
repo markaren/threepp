@@ -234,14 +234,25 @@ namespace threepp {
             // Phase 2: the froxels run whenever the unified AIR medium exists
             // (scene.fog OR setHeightFog — resolved into mediumActiveThisFrame_ by
             // updateFogUbo) or the explicit clear-air beam density is set.
-            const bool froxelsActive = mediumActiveThisFrame_ || deferredVolDensity_ > 0.f;
+            // …AND there is at least one clustered light: froxel_inject only ever
+            // accumulates inside `if (pc.clusterLightCount > 0u)` (the sun term was
+            // deliberately removed — it is owned by deferred_shade's per-pixel
+            // volumetricDirScatter), so with a medium but no point/spot lights the
+            // two dispatches converge the EMA onto an all-zero LUT. The same bool
+            // feeds recordDispatch / recordParticleLight and clears shade flag bit
+            // 256, whose froxelInscatter helpers already early-out to vec3(0) —
+            // so skipping the passes is image-identical, not just cheap.
+            const bool froxelsActive = (mediumActiveThisFrame_ || deferredVolDensity_ > 0.f) &&
+                                       clusterLightCountThisFrame_ > 0;
             if (froxelsActive) {
+                gpuTimings_->begin(cb, TP_Froxel, currentFrame);
                 deferredShade_->recordFroxels(cb, currentFrame,
                                               regionRenderExt_.width, regionRenderExt_.height,
                                               deferredVolFog_, deferredVolDensity_, deferredVolAniso_,
                                               sampleIndex,
                                               deferredCamDeltaLen_, deferredCamRotAngle_,
                                               clusterLightCountThisFrame_);
+                gpuTimings_->end(cb, TP_Froxel, currentFrame);
                 VkMemoryBarrier2 fbar{};
                 fbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
                 fbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
