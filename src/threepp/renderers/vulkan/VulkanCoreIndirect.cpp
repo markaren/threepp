@@ -66,13 +66,18 @@ namespace threepp {
         if (lastVisibleEntries_.empty()) return;
 
         // Four buckets: [BACK_cull, FRONT_cull, NONE_cull, decal] order.
-        std::array<std::vector<DrawInfoGpu>, 4>            draws;
-        std::array<std::vector<VkDrawIndirectCommand>, 4>  cmds;
+        // Reused member scratch (see the declarations in VulkanCoreImpl.hpp):
+        // cleared, not reallocated, so capacity survives across frames.
+        auto& draws = indirectDrawScratch_;
+        auto& cmds  = indirectCmdScratch_;
+        for (auto& v : draws) v.clear();
+        for (auto& v : cmds) v.clear();
         // Occlusion-cull metadata rides the same bucketing so its final
         // concatenated order matches the command records 1:1.
         const bool wantOcclMeta = occlusionCullingEnabled_ && occl_ &&
                                   occlHiz_ && occlHiz_->valid() && !scissorTest;
-        std::array<std::vector<vulkan::OcclusionCull::CullMeta>, 4> occlMeta;
+        auto& occlMeta = indirectOcclScratch_;
+        for (auto& v : occlMeta) v.clear();
         auto bucketOf = [](VkCullModeFlags cm) -> int {
             if (cm == VK_CULL_MODE_BACK_BIT)  return 0;
             if (cm == VK_CULL_MODE_FRONT_BIT) return 1;
@@ -80,12 +85,41 @@ namespace threepp {
         };
 
         uint32_t globalIdx = 0;
+        // Last-entry memos. An InstancedMesh expands to one entry per instance,
+        // all sharing a single en.mesh, so these collapse a whole instanced run
+        // to one lookup each; on a scene of distinct meshes they simply always
+        // miss and cost one pointer compare. Keying on en.mesh is exact: the
+        // BLAS resolve dispatches on en.mesh's type and looks up by en.mesh (or
+        // its geometry), and the two id helpers key purely on en.mesh->id. The
+        // caches they read are not mutated inside this loop. Deliberately LOCAL
+        // — a BlasRecord* cached on MeshEntry would dangle after a BLAS evict,
+        // since entries persist across frames via the snapshot fast path.
+        // The id pair is filled LAZILY, below the skip-continues: stableIdForObject
+        // MUTATES (try_emplace hands out the next auto id), so hoisting it above
+        // the BLAS check would assign ids to entries that never previously got
+        // one and shift every later object's stable id.
+        const Object3D*   memoMesh     = nullptr;
+        const BlasRecord* memoRec      = nullptr;
+        bool              memoIdsValid = false;
+        uint16_t          memoClassId  = 0;
+        uint16_t          memoStableId = 0;
         for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
             const auto& en = lastVisibleEntries_[i];
             if (en.isOverlay)  continue;
             if (!en.inFrustum) continue;
-            const BlasRecord* rec = resolveBlasForEntry(en);
+            if (en.mesh != memoMesh) {
+                memoMesh     = en.mesh;
+                memoRec      = resolveBlasForEntry(en);
+                memoIdsValid = false;
+            }
+            const BlasRecord* rec = memoRec;
             if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
+            // One virtual material() call (it is an out-of-line override
+            // returning shared_ptr by value, so the compiler cannot CSE the
+            // three separate calls this replaces). Held by shared_ptr so the
+            // raw pointer cannot dangle on a temporary.
+            const auto      matSp = en.mesh->material();
+            const Material* mat   = matSp.get();
 
             // Auto-LOD: en.lodLevel==0 for every non-eligible entry (the
             // selection pass in ensureSceneBuilt only sets it >0 on plain
@@ -134,12 +168,9 @@ namespace threepp {
             // and the geometry uploaded a color buffer — matches the
             // GeometryDesc::colorAddress gate. gbuffer.frag multiplies albedo
             // by the interpolated value.
-            {
-                const auto dmat = en.mesh->material();
-                di.colorAddr = (rec->color.handle != VK_NULL_HANDLE && dmat && dmat->vertexColors)
-                                       ? rec->color.address
-                                       : 0ull;
-            }
+            di.colorAddr = (rec->color.handle != VK_NULL_HANDLE && mat && mat->vertexColors)
+                                   ? rec->color.address
+                                   : 0ull;
             di.instanceCustomIndex = static_cast<uint32_t>(i);
             // Per-instance flag word — canonical bit layout in
             // vulkan_shared.h (kInstFlag*); shaders read it back from the
@@ -148,7 +179,7 @@ namespace threepp {
             if (en.isDisplaced) flags |= kInstFlagWater;
             if (en.isSkinned)   flags |= kInstFlagSkinned;
             {
-                const auto sm = en.mesh->material();
+                const Material* sm = mat;
                 // DOUBLE_SIDED: gbuffer.frag flips N toward the viewer, so on
                 // cutout foliage the jittered coverage flips a pixel's normal
                 // SIGN frame to frame. The GI temporal reproject + SVGF normal
@@ -174,12 +205,17 @@ namespace threepp {
             // Semantic CLASS id (0..255) packed into bits 8..15 — inert to
             // every flag bit-test (they mask the low byte) and carried
             // through the MSAA resolve. Read back via outIds.z >> 8.
-            flags |= (static_cast<uint32_t>(classIdForObject(*en.mesh)) & 0xFFu) << 8;
+            if (!memoIdsValid) {
+                memoClassId  = classIdForObject(*en.mesh);
+                memoStableId = stableIdForObject(*en.mesh);
+                memoIdsValid = true;
+            }
+            flags |= (static_cast<uint32_t>(memoClassId) & 0xFFu) << 8;
             di.flags   = flags;
             di.indexed = indexed ? 1u : 0u;
             // STABLE per-object instance id -> outIds.y (survives visible-set
             // reordering, unlike instanceCustomIndex/.x).
-            di.stableId = stableIdForObject(*en.mesh);
+            di.stableId = memoStableId;
             di._pad     = 0u;
             // polygonOffset → per-mesh clip-z depth bias (decals). Reverse-Z:
             // a +clip-z bias pushes the surface toward NEAR so it renders on
@@ -189,7 +225,7 @@ namespace threepp {
             // floating. (The slope-scaled `factor` term isn't applied — flat
             // decals don't need it; bias is uniform in NDC.)
             float polyOff = 0.f;
-            if (auto pm = en.mesh->material(); pm && pm->polygonOffset) {
+            if (const Material* pm = mat; pm && pm->polygonOffset) {
                 // Honor BOTH factor + units (combined as a constant NDC bias —
                 // the slope term can't be evaluated in the vertex shader; flat
                 // decals don't need it). 0/0 (bool only) → a small default.

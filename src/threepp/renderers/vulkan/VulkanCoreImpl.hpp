@@ -4953,8 +4953,12 @@ namespace threepp {
         uint32_t nextAutoStableId_ = 1;// 0 reserved for sky / unassigned
 
         uint16_t stableIdForObject(const Object3D& o) {
-            if (const auto it = instanceIdOverride_.find(o.id); it != instanceIdOverride_.end()) {
-                return it->second;
+            // Both id maps are empty unless the app opts in (setInstanceId /
+            // setClassId), which is the common case — skip the probe entirely.
+            if (!instanceIdOverride_.empty()) {
+                if (const auto it = instanceIdOverride_.find(o.id); it != instanceIdOverride_.end()) {
+                    return it->second;
+                }
             }
             const auto [it, inserted] = autoStableIds_.try_emplace(o.id, uint16_t(0));
             if (inserted) {
@@ -4964,6 +4968,7 @@ namespace threepp {
             return it->second;
         }
         uint16_t classIdForObject(const Object3D& o) const {
+            if (classIds_.empty()) return 0;
             const auto it = classIds_.find(o.id);
             return it == classIds_.end() ? uint16_t(0) : it->second;
         }
@@ -5022,6 +5027,18 @@ namespace threepp {
         // vkCmdDrawIndirect calls and skip the empty ones.
         std::array<DrawGroup, 4> indirectGroups_{};
         uint32_t indirectTotalDraws_ = 0;
+
+        // Per-frame scratch for buildIndirectDrawData, kept as members so the
+        // bucket vectors retain their capacity instead of being reallocated and
+        // grown by push_back every frame (a few hundred KB of fresh pages per
+        // frame at high draw counts — steady-state cost plus allocator churn
+        // that surfaces as frame-time variance). Cleared, not rebuilt, at the
+        // top of each build; peak capacity is deliberately retained for the
+        // renderer's lifetime. Only ever touched by buildIndirectDrawData,
+        // which has a single call site and is neither recursive nor reentrant.
+        std::array<std::vector<DrawInfoGpu>, 4>                     indirectDrawScratch_;
+        std::array<std::vector<VkDrawIndirectCommand>, 4>           indirectCmdScratch_;
+        std::array<std::vector<vulkan::OcclusionCull::CullMeta>, 4> indirectOcclScratch_;
 
         bool ensureDrawInfoCapacity(uint32_t frame, VkDeviceSize neededBytes);
 

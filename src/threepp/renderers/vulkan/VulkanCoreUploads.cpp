@@ -894,6 +894,12 @@ namespace threepp {
 
         // traverseVisible so a hidden parent prunes its child lights too.
         scene.traverseVisible([&](Object3D& o) {
+            // One RTTI probe instead of five for the ~99% of nodes that are not
+            // lights: every type the chain below handles derives from Light, so
+            // a failed cast here cannot skip a branch that would have matched.
+            // (HemisphereLight/LightProbe pass this gate and fall through the
+            // chain unhandled, exactly as before.)
+            if (!dynamic_cast<Light*>(&o)) return;
             if (auto* a = dynamic_cast<AmbientLight*>(&o)) {
                 ubo.ambient[0] += a->color.r * a->intensity;
                 ubo.ambient[1] += a->color.g * a->intensity;
