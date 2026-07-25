@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <unordered_map>
 #include <vector>
 
@@ -27,7 +28,22 @@ namespace threepp {
         struct VoxelHashKeyHash {
             std::size_t operator()(const VoxelHashKey& k) const {
                 // Classic large-prime spatial hash (Teschner et al.).
-                return static_cast<std::size_t>((k.x * 73856093) ^ (k.y * 19349663) ^ (k.z * 83492791));
+                //
+                // Multiply in an UNSIGNED type. Done in int, `k.x * 73856093`
+                // overflows for any |coordinate| past 29 (2^31 / 73856093) — three
+                // metres out at a 0.1 m voxel size, so essentially always — and
+                // signed overflow is undefined behaviour, which UBSan rightly
+                // rejects. Unsigned wraparound is well defined and is exactly what
+                // this hash wants. The low 32 bits are unchanged on two's-complement
+                // hardware; the difference is that a negative result no longer
+                // sign-extends into the upper half of size_t, which is harmless
+                // (and slightly better distributed) since the value is never
+                // persisted or compared across builds.
+                // Matches the sibling copy of this hash in PhysxSoftBody.hpp.
+                const auto ux = static_cast<std::uint32_t>(k.x);
+                const auto uy = static_cast<std::uint32_t>(k.y);
+                const auto uz = static_cast<std::uint32_t>(k.z);
+                return static_cast<std::size_t>((ux * 73856093u) ^ (uy * 19349663u) ^ (uz * 83492791u));
             }
         };
 
