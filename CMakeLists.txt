@@ -96,7 +96,7 @@ if (THREEPP_BUILD_EXAMPLES OR THREEPP_BUILD_TESTS)
     FetchContent_Declare(
             threepp_data
             GIT_REPOSITORY https://github.com/markaren/threepp_data.git
-            GIT_TAG main  # pin a release tag for reproducible builds
+            GIT_TAG 6a99ee82f9ce68eddcad6e3d0b5cbb5ea889e5c5
             GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(threepp_data)
