@@ -16,6 +16,10 @@ and modern backends: portable OpenGL, and a deferred Vulkan renderer with ray-tr
 
 > You get a scene graph, materials, lighting, cameras, render loop, controls, loaders, all composable, in a handful of lines.
 
+📖 **New here? Start with [Getting started](doc/getting_started.md)** — a guide to the concepts
+the whole library is built from: the scene graph, ownership and lifetimes, geometry/material,
+lights, the frame loop, loaders and the two backends.
+
 ## Highlights
 
 * Two rendering backends behind one scene graph: OpenGL 3.3 raster (the portable
@@ -189,7 +193,8 @@ Build the wheel from source (OpenGL backend; Vulkan and PhysX remain opt-in CMak
 pip install .
 ```
 
-Looking for more? The [examples](examples) folder is the de-facto documentation,
+Looking for more? [doc/getting_started.md](doc/getting_started.md) walks through the concepts
+behind the API, and the [examples](examples) folder is the de-facto documentation,
 covering everything from geometries and loaders to full demo applications.
 
 ## How to build
