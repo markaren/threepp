@@ -12,9 +12,6 @@
 #include "threepp/renderers/shaders/UniformsLib.hpp"
 #include "threepp/renderers/shaders/UniformsUtil.hpp"
 
-#ifdef THREEPP_WGSL_WATER
-#include "threepp/renderers/wgpu/wgsl/water_wgsl.hpp"
-#endif
 
 using namespace threepp;
 
@@ -41,12 +38,6 @@ namespace {
                                                 {"waterColor", Uniform(Color{0x555555})},
                                         }}),
 
-#ifdef THREEPP_WGSL_WATER
-                // Pre-translated WGSL from naga (Emscripten / browser path).
-                // Each stage is a separate module with its own entry point.
-                threepp::wgpu::wgsl::water_vert,
-                threepp::wgpu::wgsl::water_frag
-#else
                 R"(
                 uniform mat4 textureMatrix;
                 uniform float time;
@@ -130,7 +121,6 @@ namespace {
                     #include <encodings_fragment>
                     #include <fog_fragment>
                 })"
-#endif
 
         };
 

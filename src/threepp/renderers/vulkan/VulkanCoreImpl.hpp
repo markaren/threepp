@@ -2760,8 +2760,8 @@ namespace threepp {
         // PRESENT_SRC.
         std::function<void(void*)> overlayCallback;
 
-        // Per-frame lifecycle state. Mirrors the WgpuRenderer multi-pass /
-        // HUD pattern: the first render() of a user animate iteration runs
+        // Per-frame lifecycle state, following the multi-pass / HUD pattern:
+        // the first render() of a user animate iteration runs
         // beginFrame() (acquire + per-frame UBO uploads + cmd buffer record),
         // subsequent render() calls in the same iteration append to that
         // same cmd buffer, and the Canvas frame-end callback fires endFrame()

@@ -23,7 +23,7 @@ namespace threepp {
         std::string fragmentShader;
         UniformMap uniforms;
 
-        /// Type-erased map for GPU-resident textures (e.g. WgpuTexture* for Wgpu).
+        /// Type-erased map for GPU-resident textures.
         /// Keys are shader binding names. Values are backend-specific texture pointers.
         std::unordered_map<std::string, void*> customTextures;
 

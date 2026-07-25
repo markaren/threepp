@@ -1,5 +1,5 @@
 // Backend-neutral renderer interface.
-// GLRenderer derives from this; future Wgpu/Vulkan renderers will too.
+// GLRenderer and VulkanRendererCore derive from this.
 
 #ifndef THREEPP_RENDERER_HPP
 #define THREEPP_RENDERER_HPP
@@ -123,7 +123,8 @@ namespace threepp {
         // --- Convention flags ---
 
         // True if render-target textures need a Y-flip when sampling with
-        // clip-space-derived UVs (WebGPU: UV (0,0) = top-left; GL: bottom-left).
+        // clip-space-derived UVs (GL puts UV (0,0) at bottom-left, so it
+        // returns false; a top-left-origin backend returns true).
         [[nodiscard]] virtual bool renderTargetFlipY() const { return false; }
 
         // --- Depth state ---

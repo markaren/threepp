@@ -149,7 +149,6 @@ int main(int argc, char** argv) {
             const std::string v = argv[++i];
             if (v == "gl") apiOverride = GraphicsAPI::OpenGL;
             else if (v == "vulkan" || v == "vk") apiOverride = GraphicsAPI::Vulkan;
-            else if (v == "wgpu") apiOverride = GraphicsAPI::WebGPU;
         }
     }
 

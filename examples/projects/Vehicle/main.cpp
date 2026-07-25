@@ -13,7 +13,6 @@
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/objects/Points.hpp"
-#include "threepp/renderers/WgpuRenderer.hpp"
 
 #include "LandRoverScene.hpp"
 #include "VehicleSounds.hpp"
@@ -101,16 +100,11 @@ int main() {
     chassisMesh->add(carBody);
 
     // The .gltf packs AO and metalRoughness into the SAME texture (R=AO,
-    // G=rough, B=metal). If R wasn't authored, GL's aoMap reads it as 0
-    // (full occlusion) and the body goes dark; WGPU evidently doesn't apply
-    // AO from this texture. Drop the aoMap to match.
-    const bool isGL = dynamic_cast<WgpuRenderer*>(renderer.get()) == nullptr;
-    carBody->traverseType<Mesh>([isGL](Mesh& m) {
-
-        if (isGL) {
-            if (auto* std = m.materialAs<MeshStandardMaterial>()) {
-                std->aoMap = nullptr;
-            }
+    // G=rough, B=metal). R wasn't authored, so GL's aoMap reads it as 0
+    // (full occlusion) and the body goes dark. Drop the aoMap.
+    carBody->traverseType<Mesh>([](Mesh& m) {
+        if (auto* std = m.materialAs<MeshStandardMaterial>()) {
+            std->aoMap = nullptr;
         }
     });
 

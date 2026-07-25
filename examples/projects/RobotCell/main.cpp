@@ -953,7 +953,6 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--depthprobe") {
         const std::string backend = argc > 2 ? argv[2] : "gl";
         GraphicsAPI api = GraphicsAPI::OpenGL;
-        if (backend == "wgpu") api = GraphicsAPI::WebGPU;
         if (backend == "vulkan") {
 #ifdef ROBOT_CELL_WITH_VULKAN
             api = GraphicsAPI::Vulkan;
@@ -965,13 +964,12 @@ int main(int argc, char** argv) {
         return runDepthProbe(api);
     }
 
-    // --colorprobe [gl|wgpu]: clear-color convention check. The framebuffer
-    // bytes for a flat background must equal the user's sRGB color value on
-    // BOTH the surface and render-target paths (the three.js convention all
-    // backends follow). Catches double/missing encodes in either path.
+    // --colorprobe: clear-color convention check. The framebuffer bytes for a
+    // flat background must equal the user's sRGB color value on BOTH the
+    // surface and render-target paths (the three.js convention all backends
+    // follow). Catches double/missing encodes in either path.
     if (argc > 1 && std::string(argv[1]) == "--colorprobe") {
-        const std::string backend = argc > 2 ? argv[2] : "gl";
-        const GraphicsAPI api = backend == "wgpu" ? GraphicsAPI::WebGPU : GraphicsAPI::OpenGL;
+        const GraphicsAPI api = GraphicsAPI::OpenGL;
         Canvas canvas(Canvas::Parameters().title("color probe").size(320, 240));
         auto renderer = createRenderer(canvas, api);
 

@@ -1,7 +1,7 @@
-// GL-only renderer tests.
-// Split from CrossRenderer_test.cpp for maintainability.
+// GLRenderer end-to-end pixel tests: clear/readback, material shading,
+// transparency, fog, shadows, render targets, viewport/scissor.
 
-#include "CrossRenderer_helpers.hpp"
+#include "gl_test_helpers.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/materials/MeshDepthMaterial.hpp"
 
@@ -186,7 +186,7 @@ TEST_CASE("GL: object position affects which pixels are lit") {
 
 
 // =============================================================================
-// Section 2: Wgpu-only validation (skipped if no GPU backend)
+// Section 2: material coverage
 // =============================================================================
 
 TEST_CASE("GL: MeshToonMaterial renders with stepped shading") {

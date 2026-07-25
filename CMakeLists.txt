@@ -14,7 +14,6 @@ option(THREEPP_WITH_RLTOOLS "Fetch RLtools (header-only deep RL) for the reinfor
 option(THREEPP_WITH_PYTHON "Build the pybind11 Python bindings (threepp module)" OFF)
 
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
-option(THREEPP_WITH_WGPU "Build with WebGPU backend (via wgpu-native)" OFF)
 option(THREEPP_WITH_VULKAN "Build with Vulkan backend (requires Vulkan SDK)" OFF)
 # AMD FidelityFX FSR 3.1 temporal upscaler for the Vulkan backend. Windows-only:
 # the FidelityFX SDK bundles a Windows shader compiler + builds a Vulkan backend
@@ -32,11 +31,8 @@ cmake_dependent_option(THREEPP_WITH_FSR
 cmake_dependent_option(THREEPP_WITH_DLSS
     "Build with NVIDIA DLSS Super Resolution upscaler (Windows, Vulkan, RTX)"
     OFF "THREEPP_WITH_VULKAN AND WIN32" OFF)
-cmake_dependent_option(THREEPP_WGPU_GLSL_COMPAT
-    "Enable GLSL->SPIR-V translation for ShaderMaterial on the Wgpu backend (requires glslang)"
-    ON "THREEPP_WITH_WGPU" OFF)
 
-cmake_dependent_option(THREEPP_WITH_INFERENCE "Build with Inference support" OFF "THREEPP_WITH_WGPU OR THREEPP_WITH_VULKAN" OFF)
+cmake_dependent_option(THREEPP_WITH_INFERENCE "Build with Inference support" OFF "THREEPP_WITH_VULKAN" OFF)
 
 # Force THREEPP_WITH_GLFW ON when targeting Emscripten
 cmake_dependent_option(THREEPP_WITH_GLFW "Build with GLFW frontend" ON "NOT DEFINED EMSCRIPTEN" ON)
@@ -148,9 +144,6 @@ install(
 
 if (BUILD_SHARED_LIBS AND NOT THREEPP_USE_EXTERNAL_GLFW)
     install(TARGETS glfw EXPORT threepp-targets)
-endif ()
-if (THREEPP_WGPU_GLSL_COMPAT AND NOT EMSCRIPTEN)
-    install(TARGETS glslang SPIRV glslang-default-resource-limits EXPORT threepp-targets)
 endif ()
 if (THREEPP_WITH_USD)
     install(TARGETS tinyusdz_static EXPORT threepp-targets)

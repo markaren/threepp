@@ -16,10 +16,6 @@ if (TARGET unofficial::omniverse-physx-sdk::sdk)
     add_subdirectory(Spot)
 endif ()
 
-if (THREEPP_WITH_WGPU)
-    add_subdirectory(WebTide)
-endif ()
-
 if (TARGET rltools)
     add_subdirectory(RLtools)
 endif ()

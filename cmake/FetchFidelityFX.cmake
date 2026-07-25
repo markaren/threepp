@@ -3,7 +3,7 @@
 # ffx-api runtime (amd_fidelityfx_vk.dll + import lib). No SDK-from-source build
 # is needed: the DLL already contains every backend and precompiled shader
 # permutation, so we only link the import library, add the ffx-api headers, and
-# copy the DLL next to executables — the same shape as FetchWgpuNative.cmake.
+# copy the DLL next to executables.
 #
 # Windows-only (the prebuilt VK runtime is a Windows binary); THREEPP_WITH_FSR
 # is already gated on WIN32 in the top-level CMakeLists.

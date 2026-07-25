@@ -17,17 +17,10 @@ namespace threepp {
 
     enum class GraphicsAPI {
         OpenGL,
-        WebGPU,
-        // Hybrid renderer: WebGPU does scene rendering, OpenGL does display.
-        // Selected via createRenderer; the canvas itself is initialised as
-        // OpenGL by the wrapping CrossRenderer.
-        Cross,
         Vulkan
     };
 
-    class WgpuRenderer;
     class GLRenderer;
-    class CrossRenderer;
     class VulkanRenderer;
 
     class Canvas: public PeripheralsEventSource {
@@ -73,13 +66,14 @@ namespace threepp {
         [[nodiscard]] int samples() const;
 
         /// Register a callback invoked at the end of each frame (after the user
-        /// animate callback, before glfwPollEvents). Used by WgpuRenderer to
-        /// present the surface texture, analogous to glfwSwapBuffers for GL.
+        /// animate callback, before glfwPollEvents). Used by swapchain-based
+        /// backends to present, analogous to glfwSwapBuffers for GL.
         void setFrameEndCallback(std::function<void()> callback);
 
         /// True while inside animateOnce() user callback (between f() call
-        /// and frame-end callback). Used by WgpuRenderer to decide whether
-        /// to auto-present after render() or defer to the frame-end callback.
+        /// and frame-end callback). Lets a swapchain-based backend decide
+        /// whether to auto-present after render() or defer to the frame-end
+        /// callback.
         [[nodiscard]] bool isInsideAnimateLoop() const;
 
         ~Canvas() override;
@@ -87,7 +81,6 @@ namespace threepp {
     private:
         void initWindow(GraphicsAPI api);
 
-        friend class WgpuRenderer;
         friend class GLRenderer;
         friend class VulkanRenderer;
 
