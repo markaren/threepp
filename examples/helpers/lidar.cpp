@@ -74,7 +74,7 @@ namespace {
 int main() {
 
     Canvas canvas("Lidar", {{"antialiasing", 4}});
-    // Works with any backend (OpenGL / WebGPU) — the sensor handles all
+    // Works with any raster backend — the sensor handles all
     // backend differences internally, so no extra setup is needed here.
     auto renderer = createRenderer(canvas);
 

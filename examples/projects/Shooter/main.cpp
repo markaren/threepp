@@ -215,8 +215,8 @@ int main(int argc, char** argv) {
     // Kept rough + low envMapIntensity on purpose: glossy metal cylinders expose
     // a vertical-streak seam in the GL backend's cubeUV PMREM IBL (curved surfaces
     // sample the prefiltered-env atlas across a tile boundary; a cylinder's
-    // constant-along-axis reflection turns it into a clean streak). WGPU/Vulkan
-    // are unaffected — softening the reflection just hides it in the demo.
+    // constant-along-axis reflection turns it into a clean streak). Vulkan is
+    // unaffected — softening the reflection just hides it in the demo.
     auto barrelMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0x3f7d4f).roughness(0.7f).metalness(0.2f).envMapIntensity(0.5f));
 
     // ---- ground ------------------------------------------------------------
@@ -817,7 +817,7 @@ int main(int argc, char** argv) {
         const float s = frand(0.26f, 0.40f);
         auto geo = DecalGeometry::create(*target, point, orientation, Vector3(s, s, s));
         // Coplanar with the surface; the decal material's polygonOffset keeps it
-        // from z-fighting (honored by both the GL and WGPU backends).
+        // from z-fighting (honored by the GL backend).
         auto decal = Mesh::create(geo, decalMat);
 
         // DecalGeometry bakes vertices in WORLD space. Parent to the hit mesh
@@ -840,8 +840,8 @@ int main(int argc, char** argv) {
     // ===== impact particles (dust on surfaces, blood on enemies) ============
     // A short-lived burst of camera-facing billboard sprites per hit, integrated
     // on the CPU (velocity + gravity + drag) and faded via material opacity.
-    // NB: NOT Points — PointsMaterial renders at 1px on the WGPU backend (no
-    // gl_PointSize), so world-sized points are invisible there. Sprites are
+    // NB: NOT Points — PointsMaterial has no gl_PointSize on backends that lack
+    // it, so world-sized points can come out invisible. Sprites are
     // world-sized billboards on every backend. Soft round look from the
     // smoke / disc sprite textures.
     auto dustTex = texLoader.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png", ColorSpace::sRGB);

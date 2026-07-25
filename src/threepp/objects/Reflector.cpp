@@ -49,9 +49,10 @@ namespace {
                     vec4 base = texture2DProj( tDiffuse, vUv );
                     gl_FragColor = vec4( blendOverlay( base.rgb, color ), 1.0 );
                     // Apply the output color-space transform every threepp material does.
-                    // GL encodes sRGB in-shader (its framebuffer is not sRGB); on WGPU this is
-                    // a no-op macro because the sRGB swapchain encodes in hardware. Without it
-                    // the reflection is never encoded on GL and renders too dark vs WGPU.
+                    // GL encodes sRGB in-shader (its framebuffer is not sRGB); on a backend
+                    // with an sRGB swapchain the macro is a no-op because the hardware
+                    // encodes. Without it the reflection is never encoded on GL and renders
+                    // too dark.
                     gl_FragColor = linearToOutputTexel( gl_FragColor );
                 })"
 
@@ -148,9 +149,10 @@ struct Reflector::Impl {
 
             auto _renderer = static_cast<Renderer*>(renderer);
 
-            // WebGPU render targets have UV (0,0) at top-left; GL has bottom-left.
-            // Flip the Y row of the textureMatrix: new_row1 = row3 - row1
-            // so that UV.y' / w = 1 - UV.y / w.
+            // GL render targets have UV (0,0) at bottom-left, so no flip is needed
+            // there and this branch is inert today. Kept for a backend whose
+            // render targets are top-left-origin: flip the Y row of the
+            // textureMatrix (new_row1 = row3 - row1) so UV.y' / w = 1 - UV.y / w.
             if (_renderer->renderTargetFlipY()) {
                 auto& e = textureMatrix.elements;
                 e[1]  = e[3]  - e[1];

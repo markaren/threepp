@@ -1072,8 +1072,7 @@ namespace threepp {
         // Unit of work for ray tracing: a single TLAS instance. A regular Mesh
         // expands to one MeshEntry; an InstancedMesh expands to N entries (one
         // per sub-instance) all sharing the same Mesh*/BLAS but with distinct
-        // worldMatrix = mesh->matrixWorld * instanceMatrix[i] (mirrors the WGPU
-        // PT's RtMeshEntry pattern in WgpuPathTracerAtlas.cpp).
+        // worldMatrix = mesh->matrixWorld * instanceMatrix[i].
         struct MeshEntry {
             Mesh*    mesh;
             std::array<float, 16> worldMatrix;
@@ -2648,7 +2647,7 @@ namespace threepp {
         bool restirDIEnabled_ = true;
         // Hybrid raster overlay: layer index for opt-in overlay objects
         // (alongside auto-detected wireframe materials + Line/LineSegments).
-        // -1 disables layer-based selection. Mirrors WGPU PT's overlayLayer_.
+        // -1 disables layer-based selection.
         int overlayLayer_ = -1;
         // True when the scene has any content the post-TAA overlay pass will
         // draw this frame: an overlay-tagged mesh, or any Line/LineSegments/
@@ -4636,8 +4635,7 @@ namespace threepp {
             d.sideMode = static_cast<int32_t>(mat->side);
             // MeshBasicMaterial is unlit: emit base color directly with no
             // PBR shading or bounce. Use roughness < 0 as the shader sentinel
-            // (avoids growing the MaterialDesc layout). Mirrors WGPU's
-            // shininess = -1 convention in WgpuPathTracerAtlas.cpp.
+            // (avoids growing the MaterialDesc layout).
             if (dynamic_cast<MeshBasicMaterial*>(mat.get())) {
                 d.roughness = -1.0f;
             }
@@ -5122,7 +5120,7 @@ namespace threepp {
         void createFogUbos();
 
         // Pack scene.fog (Fog/FogExp2 variant) into the per-frame fog UBO.
-        // Mirrors WgpuPathTracer.cpp — FogExp2.density maps directly
+        // FogExp2.density maps directly
         // to sigma_t; linear Fog reaches ~63% extinction at farPlane via
         // sigma = 1 / (far - near). Hash detect changes so the per-pixel motion
         // path halves FC and the new fog state converges quickly.

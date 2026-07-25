@@ -131,7 +131,7 @@ namespace threepp_py {
         // ---- GrassMesh -------------------------------------------------------
         // Mesh subclass whose vertices are GPU wind-displaced by the Vulkan path
         // tracer's grass-wind compute pass (renders as a plain static Mesh on
-        // GL/WebGPU). Inherits Mesh's concrete Object3D API via its non-virtual
+        // GL). Inherits Mesh's concrete Object3D API via its non-virtual
         // Mesh parent (same as InstancedMesh). The geometry must be ONE merged
         // blade field carrying a per-vertex float "heightFrac" attribute (0 at a
         // blade's base, 1 at its tip) that drives the wind sway weighting.

@@ -185,7 +185,7 @@ namespace threepp::terrain {
         // world-XZ anchored so every tile shares it seamlessly, is what makes
         // game terrain read sharp. LINEAR color space, 0.5 = neutral; the
         // layer distance-fades in the shader, so it never patterns far away.
-        // Ignored by renderers without detail-map support (GL/WGPU).
+        // Ignored by renderers without detail-map support (GL).
         std::shared_ptr<Texture> detailMap;
         float detailRepeat = 0.8f;  // repeats per world meter
         float detailStrength = 1.f; // 0..1 modulation strength
@@ -467,7 +467,7 @@ namespace threepp::terrain {
                         // painted road into a BINARY per-texel line on coarse LOD
                         // tiles (3-5 m/texel): staircase scallops that read as
                         // beads/dashes at distance and crawl under motion on the
-                        // un-jittered GL/WGPU paths (Vulkan's TAA merely blurred
+                        // un-jittered GL path (Vulkan's TAA merely blurred
                         // them — capture-diffed: the beads are in the DATA, mips
                         // and aniso never touched them because the quadtree keeps
                         // tile albedo near screen density, so LOD 0 is what you
@@ -537,7 +537,7 @@ namespace threepp::terrain {
                 // 8, so at 8 the far road still collapses into mip mush (washed
                 // out) and the mid-range shimmers with the residual undersampling.
                 // 16 matches the Vulkan material-sampler policy (the validated
-                // look); GL and WGPU both honor it, clamped to the hardware max.
+                // look); GL honors it too, clamped to the hardware max.
                 tex->minFilter = Filter::LinearMipmapLinear;
                 tex->generateMipmaps = true;
                 tex->anisotropy = 16;

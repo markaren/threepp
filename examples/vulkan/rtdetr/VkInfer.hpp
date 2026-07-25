@@ -2,7 +2,7 @@
 
 // Minimal Vulkan compute harness for the YOLOv8n inference port.
 //
-// Mirrors the role of threepp's WgpuComputePipeline + WgpuBuffer on the Vulkan
+// Plays the role of a thin compute-pipeline + buffer wrapper on the Vulkan
 // side, but stays entirely example-local: it is constructed from the native
 // handles a VulkanRenderer already exposes (VkDevice / VkPhysicalDevice /
 // graphics-capable VkQueue / queue family), so no core renderer change is
@@ -12,7 +12,7 @@
 //
 // Execution model: a whole inference is recorded into ONE command buffer
 // (beginFrame() -> many dispatch() -> endFrame()) and submitted once, like the
-// WGPU path — not one submit per op. Each dispatch gets its own descriptor set
+// whole graph — not one submit per op. Each dispatch gets its own descriptor set
 // (from a per-frame pool) and a leading storage barrier so layer N+1 sees layer
 // N's writes. Intermediate activations live in a per-inference arena owned by
 // VkInfer (freed by resetArena() after readback), so a recorded buffer is never

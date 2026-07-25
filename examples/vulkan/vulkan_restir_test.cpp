@@ -1,4 +1,4 @@
-// VulkanRenderer Showcase — "The Jewel Room" (port of wgpu_restir_test)
+// VulkanRenderer Showcase — "The Jewel Room"
 // ─────────────────────────────────────────────────────────────────────────────
 // Demonstrates ReSTIR DI on the deferred Vulkan renderer, plus the renderer's
 // other material features:

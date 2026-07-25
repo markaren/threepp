@@ -1081,7 +1081,7 @@ namespace threepp {
     }
 
     // Pack scene.fog (Fog/FogExp2 variant) into the per-frame fog UBO.
-    // Mirrors WgpuPathTracer.cpp — FogExp2.density maps directly
+    // FogExp2.density maps directly
     // to sigma_t; linear Fog reaches ~63% extinction at farPlane via
     // sigma = 1 / (far - near). Hash detect changes so the per-pixel motion
     // path halves FC and the new fog state converges quickly.

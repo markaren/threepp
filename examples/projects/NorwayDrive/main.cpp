@@ -372,7 +372,7 @@ int main(int argc, char** argv) {
         if (std::getenv("ND_NO_UPSCALE")) { vk->setDlss(false); vk->setFsr(false); }
     }
 #endif
-    // Tone mapping per backend: the forward GL/WGPU paths use Neutral — their
+    // Tone mapping per backend: the forward GL path uses Neutral — its
     // ACESFilmic is the three.js implementation whose deliberate 1/0.6
     // viewing-environment gain pushes this bright scene (2.8 sun + full-sky
     // IBL, no GI/AO occlusion on the forward path) into the shoulder: the

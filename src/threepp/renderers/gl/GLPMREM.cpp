@@ -27,7 +27,7 @@ namespace {
     // spheres) whose normal sweeps the full horizon, those face boundaries plus
     // the very low per-face resolution (16x16 for the roughest/diffuse tile)
     // showed up as hard vertical streaks under a high-contrast HDR — a defect
-    // unique to GL (WGPU/Vulkan sample a prefiltered equirect mip chain).
+    // unique to GL (Vulkan samples a prefiltered equirect mip chain).
     //
     // We now store N_LODS *full equirect* strips stacked vertically, each
     // GGX-prefiltered at an increasing roughness, and read them with hardware
@@ -38,8 +38,8 @@ namespace {
     // Mapping::CubeUVReflection trigger).
     //
     // Strip L occupies atlas rows [L*STRIP_H, (L+1)*STRIP_H); roughness is
-    // linear in L (roughness = L/(N_LODS-1)), matching the WGPU PMREM convention
-    // and the shader's `roughness * (N_LODS-1)` LOD lookup.
+    // linear in L (roughness = L/(N_LODS-1)), matching the shader's
+    // `roughness * (N_LODS-1)` LOD lookup.
     // ---------------------------------------------------------------------
 
     constexpr int STRIP_W = 512;
@@ -75,8 +75,8 @@ void main() {
 }
 )";
 
-    // GGX importance-sampled equirect prefilter. Identical math to the WGPU
-    // (WgpuPMREM.cpp) and Vulkan (prefilter_env.comp) prefilters: integrate the
+    // GGX importance-sampled equirect prefilter. Identical math to the Vulkan
+    // prefilter (prefilter_env.comp): integrate the
     // source equirect over a GGX lobe around the output direction (= N for the
     // prefilter), weighted by NdotL. roughness==0 collapses to a direct fetch.
     const char* const FRAGMENT_SRC = R"(#version 330 core
@@ -174,8 +174,9 @@ void main() {
             // spokes that survive as radial streaks on the wide rough lobes
             // (→ vertical streaks on curved surfaces). Reading a sufficiently
             // blurred source mip spreads each sample's footprint enough to
-            // overlap its neighbours and erase the spokes. (WGPU avoids this via
-            // low-res rough mips; our strips are full-res so we blur at source.)
+            // overlap its neighbours and erase the spokes. (A low-res rough-mip
+            // chain avoids this for free; our strips are full-res, so we blur at
+            // source instead.)
             // The floor is RELATIVE to the source size: roughness=1 reads the
             // ~16x8 mip (log2(W)-4), which keeps the hemisphere-scale variation
             // a directional diffuse ambient needs. An absolute floor (was

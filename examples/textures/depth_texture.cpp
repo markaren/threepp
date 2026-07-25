@@ -68,8 +68,9 @@ int main() {
 
 
     auto postMaterial = ShaderMaterial::create();
-    // flipUv compensates for WebGPU sampling render targets with a top-left UV
-    // origin (OpenGL uses bottom-left). Driven by renderer->renderTargetFlipY().
+    // flipUv compensates for a backend that samples render targets with a
+    // top-left UV origin (OpenGL uses bottom-left, so it is 0 there).
+    // Driven by renderer->renderTargetFlipY().
     postMaterial->vertexShader = R"(
         varying vec2 vUv;
         uniform float flipUv;
@@ -79,8 +80,8 @@ int main() {
         }
     )";
     // The packing helpers are inlined (rather than #include <packing>) and the
-    // depth is sampled at point of use — both required for the WebGPU GLSL→SPIR-V
-    // path, which can't pass a combined sampler2D into a function.
+    // depth is sampled at point of use — both required by GLSL→SPIR-V
+    // translation, which can't pass a combined sampler2D into a function.
     postMaterial->fragmentShader = R"(
         varying vec2 vUv;
         uniform sampler2D tDepth;

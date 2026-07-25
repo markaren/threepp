@@ -9,7 +9,7 @@
 ///   weights  – scripts/rtdetr_l.weights   (export_rtdetr_weights.py)
 ///   ref.bin  – scripts/rtdetr_l_ref.bin   (capture_rtdetr_activations.py)
 ///
-/// Direct Vulkan port of examples/wgpu/rtdetr: runs the full RT-DETR-L forward
+/// Runs the full RT-DETR-L forward
 /// pass (HGNetv2 backbone → AIFI encoder → CCFM neck → deformable decoder) on
 /// the Vulkan compute pipeline, then displays the image with detection boxes
 /// through the renderer's ortho HUD overlay (Sprite + LineSegments).

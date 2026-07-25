@@ -832,7 +832,7 @@ namespace {
         return failures == 0 ? 0 : 1;
     }
 
-    // --depthprobe [gl|wgpu|vulkan]: deterministic sensor check. Sensor 1 m
+    // --depthprobe [gl|vulkan]: deterministic sensor check. Sensor 1 m
     // above a flat floor with one 0.4 m box offset in +x: floor points must
     // land at y=0, box-top points at y=0.4, on every backend. On Vulkan the
     // identical pinhole pattern is ray-traced instead of rasterised.
@@ -1166,7 +1166,7 @@ int main(int argc, char** argv) {
 
     // ===== eye-in-hand depth sensor =========================================
     // 70-deg FOV so the survey pose sees the whole crate zone in one scan.
-    // GL/WGPU: raster DepthSensor (render-to-target + depth readback).
+    // GL: raster DepthSensor (render-to-target + depth readback).
     // Vulkan: the SAME pinhole beam pattern, ray-traced through the
     // renderer's TLAS — perception downstream is identical.
     constexpr float kSensFov = 70.f;

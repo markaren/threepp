@@ -15,7 +15,7 @@
 // geometry + BLAS + one TLAS instance).
 //
 // Backends: the wind + per-tile culling/freeze are Vulkan-path features. On the
-// GL / WebGPU raster backends a GrassMesh renders as a plain static Mesh, so the
+// GL raster backend a GrassMesh renders as a plain static Mesh, so the
 // tiles simply draw as static grass there (no wind, no per-tile freeze).
 
 #ifndef THREEPP_GRASSTILES_HPP

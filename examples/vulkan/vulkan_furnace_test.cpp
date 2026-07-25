@@ -1,5 +1,5 @@
 // White-furnace IBL energy-conservation check for the deferred VulkanRenderer
-// (env-only). Port of the (removed) examples/wgpu/wgpu_furnace_env_test.cpp.
+// (env-only).
 //
 // A diffuse-white sphere (albedo=1, metalness=0, roughness=1) sits alone in a
 // constant-radiance environment (scene.environment = (1,1,1) everywhere). For

@@ -162,7 +162,7 @@ RtDetrVk::~RtDetrVk() {
 }
 
 // ============================================================
-//  Weight loading (offline BN-fold — identical to WGPU, fp32 conv weights)
+//  Weight loading (offline BN-fold, fp32 conv weights)
 // ============================================================
 void RtDetrVk::loadWeights(const std::string& path) {
     auto w = parseWeightBinary(path);

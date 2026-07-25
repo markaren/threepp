@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
     std::shared_ptr<Texture> hdr =
             hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/autumn_field_puresky_2k.hdr");
     // Night mode dims the sun and swaps the background to a flat fog color, but
-    // scene->environment also drives IBL (GL/WGPU PMREM, Vulkan PT env CDF+NEE) —
+    // scene->environment also drives IBL (GL PMREM, Vulkan prefiltered env) —
     // leaving it pointed at the bright daytime HDR made night reflections/ambient
     // lighting stay day-bright. Pre-bake a dimmed copy to swap in at night instead.
     std::shared_ptr<Texture> nightEnv;
@@ -456,7 +456,7 @@ int main(int argc, char** argv) {
 
     // Headlight debug helpers: a wireframe cone per SpotLight showing its
     // position, aim and beam angle. Toggle with G (starts visible so the beam
-    // config is obvious). Rendered as line segments — best seen on GL/WebGPU.
+    // config is obvious). Rendered as line segments — best seen on GL.
     std::vector<std::shared_ptr<SpotLightHelper>> headlightHelpers;
     bool showHeadlightHelpers = false;
     for (const auto& hl : carRig->headlights()) {
@@ -562,7 +562,7 @@ int main(int argc, char** argv) {
         }
     };
 
-    // GL/WGPU: a GrassField (instanced GPU vertex-shader wind) so the verge
+    // GL: a GrassField (instanced GPU vertex-shader wind) so the verge
     // sways; held here so the animate loop can advance its clock and day/night
     // can retint its fog. Vulkan (path tracer) has no ShaderMaterial path, so
     // it falls back to static blades.
@@ -869,7 +869,7 @@ int main(int argc, char** argv) {
     canvas.animate([&] {
         const float dt = clock.getDelta();// PhysxWorld smooths this for its own step
 
-        // Advance the GrassField wind clock (GL/WGPU only; null on Vulkan).
+        // Advance the GrassField wind clock (GL only; null on Vulkan).
         grassTime += dt;
         if (windGrass) windGrass->setTime(grassTime);
 

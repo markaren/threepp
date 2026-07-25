@@ -682,7 +682,7 @@ namespace threepp::vulkan {
         vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &pmN, presentModes.data());
         // Honor the canvas vsync flag. vsync (default) -> FIFO: present blocks on
         // the display refresh, capping the render loop to the monitor rate instead
-        // of spinning the GPU at 100% (matches the WGPU backend, and avoids starving
+        // of spinning the GPU at 100% (and avoids starving
         // co-resident compute such as on-device inference). vsync off -> prefer
         // MAILBOX (uncapped, no tearing) then IMMEDIATE, for lowest latency / fastest
         // progressive temporal (TAA/ReSTIR) convergence.

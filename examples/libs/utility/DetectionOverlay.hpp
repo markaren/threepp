@@ -87,8 +87,8 @@ namespace detviz {
         if (yBase + tagH > viewH) yBase = std::max(0.f, yTop - tagH);
 
         // Explicit z layering (image/boxes sit at 0): same-z sprites are an
-        // order-dependent depth tie — Vulkan happened to draw the text on
-        // top, WGPU drew the plate over it.
+        // order-dependent depth tie, and which one wins is not something to
+        // rely on.
         auto plateMat = threepp::SpriteMaterial::create();
         plateMat->map = solidTexture(col);
         auto plate = threepp::Sprite::create(plateMat);

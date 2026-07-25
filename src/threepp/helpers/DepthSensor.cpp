@@ -28,10 +28,10 @@ namespace {
 
     // Sensors render *data* (linearized + packed depth, raw color) into render
     // targets and read it back. Color management (sRGB encode / tone mapping)
-    // would corrupt those bytes — silently on WebGPU, which applies the output
-    // encode to render targets. Force a linear, un-tonemapped pass for the scan
-    // and restore the renderer's settings afterwards, so callers don't need any
-    // backend-specific setup.
+    // would corrupt those bytes — silently, on any backend that applies the
+    // output encode to render targets. Force a linear, un-tonemapped pass for
+    // the scan and restore the renderer's settings afterwards, so callers don't
+    // need any backend-specific setup.
     struct DataPassGuard {
         Renderer& r;
         ColorSpace cs;
@@ -248,10 +248,10 @@ void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& c
 
     // Read back color from the scene color buffer
     renderer.copyTextureToImage(*sceneTarget_->texture);
-    // The depth path goes through a post-pass that, on flip-Y backends (WebGPU),
-    // already compensates for the render-target origin. The color is read back
-    // directly, so flip it to share the depth's row convention — keeping color
-    // and geometry aligned identically on every backend.
+    // The depth path goes through a post-pass that, on a flip-Y backend, already
+    // compensates for the render-target origin. The color is read back directly,
+    // so flip it to share the depth's row convention — keeping color and geometry
+    // aligned identically on every backend. Inert on GL (bottom-left origin).
     if (renderer.renderTargetFlipY()) {
         flipImage(sceneTarget_->texture->image());
     }

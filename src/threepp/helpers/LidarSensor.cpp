@@ -82,9 +82,9 @@ namespace {
 
     // Sensors render *data* (linearized + packed depth) into render targets and
     // read it back. Color management (sRGB encode / tone mapping) would corrupt
-    // those bytes — silently on WebGPU, which applies the output encode to render
-    // targets. Force a linear, un-tonemapped pass for the scan and restore the
-    // renderer's settings afterwards, so callers need no backend-specific setup.
+    // those bytes — silently, on any backend that applies the output encode to
+    // render targets. Force a linear, un-tonemapped pass for the scan and restore
+    // the renderer's settings afterwards, so callers need no backend-specific setup.
     struct DataPassGuard {
         Renderer& r;
         ColorSpace cs;

@@ -44,7 +44,7 @@ namespace threepp {
         // content animates every frame (scrolling UV offset, video texture, live
         // DataTexture) WITHOUT geometric motion, so motion vectors cannot reproject
         // it. Temporal accumulation holds a short history on these surfaces instead
-        // of smearing the moving pattern. No effect on GL/WGPU.
+        // of smearing the moving pattern. No effect on GL.
         bool textureAnimatedHint = false;
 
         float opacity = 1;

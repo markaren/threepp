@@ -221,7 +221,6 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
             // Expand the visible scene into one MeshEntry per TLAS instance.
             // Regular meshes contribute one entry; an InstancedMesh contributes
             // count() entries each with worldMatrix = matrixWorld * instanceMat[i].
-            // Mirrors WGPU's expandMeshEntries (WgpuPathTracerAtlas.cpp:20).
             std::vector<MeshEntry> built;
             std::vector<LineEntry> builtLines;
             sceneSnapshot_.clear();

@@ -50,11 +50,11 @@ namespace {
     };
 
     // ── Grass ────────────────────────────────────────────────────────────
-    // GL/WGPU drive the blades with a GrassField (instanced GPU vertex-shader
-    // wind — threepp/extras/vegetation/GrassField.hpp). Vulkan (path tracer)
+    // GL drives the blades with a GrassField (instanced GPU vertex-shader
+    // wind — threepp/extras/vegetation/GrassField.hpp). Vulkan
     // bakes them into a merged GrassMesh (compute deform) built below.
 
-    // Per-blade static placement data. On WGPU it drives the CPU tilt; on
+    // Per-blade static placement data. On GL it drives the CPU tilt; on
     // Vulkan it's baked into the merged GrassMesh geometry below.
     struct Blade {
         Vector3 pos;
@@ -382,10 +382,9 @@ int main() {
 #endif
 
     // Grass wind path:
-    //  - GL + WGPU (raster): cheap GPU vertex-shader (ShaderMaterial on an
-    //    InstancedMesh). The WGPU GLSL→WGSL path now supports instanceMatrix,
-    //    so both raster backends drive the blades on the GPU.
-    //  - Vulkan (path tracer): grass baked into a merged GrassMesh (GPU deform);
+    //  - GL (raster): cheap GPU vertex-shader (ShaderMaterial on an
+    //    InstancedMesh), so the blades are driven entirely on the GPU.
+    //  - Vulkan: grass baked into a merged GrassMesh (GPU deform);
     //    no generic ShaderMaterial path.
     const bool shaderGrass = !vulkanBackend;
 
@@ -547,14 +546,14 @@ int main() {
     scene.fog = Fog(fogColor, fogNear, fogFar);
 
     // ── Swaying grass ────────────────────────────────────────────────────
-    // GL/WGPU: a dense GrassField (GPU vertex-shader wind, nearly free).
+    // GL: a dense GrassField (GPU vertex-shader wind, nearly free).
     // Vulkan: a merged GrassMesh (compute deform + one TLAS refit) → sparser.
     const int bladeCount = shaderGrass ? 90000 : (vulkanBackend ? 9000 : 30000);
     const float grassRadius = shaderGrass ? 70.f : (vulkanBackend ? 42.f : 58.f);
     const Vector3 windAxis = Vector3(0.6f, 0.f, -0.8f).normalize();// flower CPU-tilt axis ⟂ wind
     const Vector2 windDir2(0.8f, 0.6f);
 
-    // Blade placements — filled once, then either instanced (GL/WGPU) or baked
+    // Blade placements — filled once, then either instanced (GL) or baked
     // into a merged GrassMesh (Vulkan GPU deform).
     std::vector<Blade> blades(static_cast<size_t>(bladeCount));
     {
@@ -579,7 +578,7 @@ int main() {
     }
 
     // Vulkan: one GPU-wind GrassMesh (compute-deform + BLAS refit → one TLAS
-    // instance). GL/WGPU: a GrassField (instanced GPU vertex-shader wind).
+    // instance). GL: a GrassField (instanced GPU vertex-shader wind).
     std::shared_ptr<GrassMesh> grassFieldVk;
     std::shared_ptr<GrassField> grass;
     if (vulkanBackend) {
@@ -658,9 +657,9 @@ int main() {
 
     // ── Wildflowers ──────────────────────────────────────────────────────
     // Vulkan: one GPU-wind GrassMesh per colour variant (compute-deform + BLAS
-    // refit, like the grass) so they add no per-frame TLAS rebuild. GL/WGPU:
+    // refit, like the grass) so they add no per-frame TLAS rebuild. GL:
     // instanced cards with the gentle CPU tilt in the animate loop.
-    std::vector<std::shared_ptr<InstancedMesh>> flowerMeshes;// GL + WGPU
+    std::vector<std::shared_ptr<InstancedMesh>> flowerMeshes;// GL
     std::vector<std::vector<Blade>> flowerBlades;
     std::vector<std::shared_ptr<GrassMesh>> flowerFieldsVk;  // Vulkan
     {
@@ -796,7 +795,7 @@ int main() {
             grassFieldVk->params.time = tElapsed;
             grassFieldVk->params.windStrength = windStrength;
         } else {
-            // GL/WGPU: advance the GrassField's GPU vertex-shader wind clock
+            // GL: advance the GrassField's GPU vertex-shader wind clock
             // (no per-frame CPU work).
             grass->setTime(tElapsed);
             grass->setWind(windStrength, windDir2);
@@ -810,7 +809,7 @@ int main() {
                 ff->params.windStrength = windStrength * 0.7f;
             }
         } else {
-            // GL/WGPU: gentle CPU tilt over the instanced cards.
+            // GL: gentle CPU tilt over the instanced cards.
             for (size_t v = 0; v < flowerMeshes.size(); ++v) {
                 const auto& fb = flowerBlades[v];
                 for (size_t i = 0; i < fb.size(); ++i) {

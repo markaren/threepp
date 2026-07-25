@@ -110,7 +110,7 @@ namespace threepp::terrain {
         // ── Macro variation (WS2): low-frequency world-anchored tone drift ────
         // Two octaves of value noise at ~80-300 m wavelength drive a luminance
         // swing and a subtle warm/cool tint lerp. CPU-baked into the splat, so
-        // it costs the shader nothing and works on GL/WGPU too.
+        // it costs the shader nothing and works on GL too.
         bool macroEnabled = true;
         float macroWavelength1 = 240.f;// metres (large blotches)
         float macroWavelength2 = 95.f; // metres (finer drift)

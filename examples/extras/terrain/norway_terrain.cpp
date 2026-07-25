@@ -35,7 +35,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 // Vulkan-only: Ocean (FFT-displaced water) and the VulkanRenderer/Core deferred
 // tuning knobs live behind THREEPP_WITH_VULKAN. The demo itself runs on the
-// forward GL/WGPU backends too — those references are all guarded below.
+// forward GL backend too — those references are all guarded below.
 #ifdef THREEPP_WITH_VULKAN
 #include "threepp/objects/Ocean.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -302,7 +302,7 @@ int main(int argc, char** argv) {
     auto renderer = !headless ? createRenderer(canvas)
                     : createRenderer(canvas, std::getenv("NT_GL") ? GraphicsAPI::OpenGL
                                                                   : GraphicsAPI::Vulkan);
-    // Neutral on the forward GL/WGPU paths, ACESFilmic on Vulkan deferred —
+    // Neutral on the forward GL path, ACESFilmic on Vulkan deferred —
     // three.js ACESFilmic's 1/0.6 viewing-environment gain washes this bright
     // scene out on the forward paths (see the NorwayDrive tone-mapping note).
 #ifdef THREEPP_WITH_VULKAN
@@ -310,7 +310,7 @@ int main(int argc, char** argv) {
                                     ? ToneMapping::ACESFilmic
                                     : ToneMapping::Neutral;
 #else
-    renderer->toneMapping = ToneMapping::Neutral;// forward GL/WGPU path
+    renderer->toneMapping = ToneMapping::Neutral;// forward GL path
 #endif
     renderer->toneMappingExposure = 1.0f;
 
@@ -427,7 +427,7 @@ int main(int argc, char** argv) {
         const bool flatSea = envSet("NT_FLAT_SEA");
 #else
         // Ocean (FFT-displaced water) is a Vulkan-only object; the forward
-        // GL/WGPU paths always get the flat MeshStandardMaterial sea plane.
+        // The GL path always gets the flat MeshStandardMaterial sea plane.
         const bool flatSea = true;
 #endif
         if (flatSea) {

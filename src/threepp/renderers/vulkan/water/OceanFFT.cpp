@@ -874,7 +874,8 @@ namespace threepp::water {
         cmdTransitionToGeneral(cb, input);
         cmdTransitionToGeneral(cb, scratch);
 
-        // pingPong: starts at false; flipped before each pass in the WGSL ref.
+        // pingPong: starts at false; flipped before each pass in the reference
+        // implementation this follows.
         // We model the same: iter 0 → write to scratch (read input), iter 1 →
         // write to input (read scratch), and so on.
         bool pingPong = false;

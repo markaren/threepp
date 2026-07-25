@@ -381,7 +381,7 @@ int main(int argc, char** argv) {
     renderer->setScissorTest(true);
     renderer->shadowMap().enabled = false;
 
-    // Pick the LIDAR sensor by backend: the raster LidarSensor (GL/WGPU) is
+    // Pick the LIDAR sensor by backend: the raster LidarSensor (GL) is
     // cube-face based and unsupported on Vulkan, which uses the ray-traced
     // PathTracedLidarSensor instead. Everything downstream consumes LidarReturn,
     // so the SLAM + meshing is identical on both.

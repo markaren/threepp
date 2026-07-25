@@ -22,14 +22,15 @@ namespace {
 
     /**
     * Original three.js code by Lee Stemkoski   http://www.adelphi.edu/~stemkoski/
-    * Rewritten to use billboard quads instead of GL points for WebGPU compatibility.
+    * Rewritten to use billboard quads instead of GL points, for portability
+    * across backends (no reliance on gl_PointSize).
     */
 
     /////////////
     // SHADERS //
     /////////////
 
-    // Billboard quad vertex shader — works on both GL and WebGPU (no gl_PointSize).
+    // Billboard quad vertex shader — no gl_PointSize, so it is backend-portable.
     // Uses only the 4 standard vertex attributes (position, normal, uv, color):
     //   position = particle center (world space)
     //   normal   = {size, angle, opacity}  (opacity=0 for invisible)

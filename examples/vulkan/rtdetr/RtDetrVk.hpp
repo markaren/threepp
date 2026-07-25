@@ -24,7 +24,7 @@ namespace rtdetr {
     };
 
     /// RT-DETR-L object detector running on the Vulkan compute pipeline. A direct
-    /// port of the WGPU RtDetr: same weight format (export_rtdetr_weights.py),
+    /// RT-DETR-L implementation: same weight format (export_rtdetr_weights.py),
     /// same offline BN-folding (fp32 conv weights, no f16 packing), same op set
     /// and forward pass. The forward pass is recorded into one command buffer and
     /// submitted once (see VkInfer); activations are arena-owned Tensor views,
@@ -74,7 +74,7 @@ namespace rtdetr {
         // inputs (memory / enc_output / enc_score) are read back.
         ForwardOut runForward(const std::vector<float>& chw, bool captureIntermediates = false);
 
-        // Analytical MSDeformAttn self-test (no weights). Mirrors the WGPU
+        // Analytical MSDeformAttn self-test (no weights). Mirrors the
         // milestone-9 case; expected output is {12, 13, 14, 15}. Isolates the
         // deformable-attention shader from top-K / weight dependencies.
         std::vector<float> selfTestMsDeform();

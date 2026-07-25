@@ -75,7 +75,7 @@ namespace {
 int main() {
 
     Canvas canvas("Depth sensor", {{"antialiasing", 4}});
-    // Works with any backend (OpenGL / WebGPU); DepthSensor handles the rest.
+    // Works with any raster backend; DepthSensor handles the rest.
     auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
