@@ -3,6 +3,7 @@
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/FogExp2.hpp"
 #include "threepp/threepp.hpp"
@@ -59,7 +60,8 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         // https://github.com/KhronosGroup/glTF-Sample-Assets
         std::cout << "Usage: " << argv[0]
-                  << " <path_to_gltf_Models_folder> [--debug N] [--shot <name.png>] [--frames N]"
+                  << " <path_to_gltf_Models_folder> [--gl] [--solo N] [--debug N]"
+                     " [--shot <name.png>] [--frames N]"
                   << std::endl;
         return 1;
     }
@@ -103,6 +105,8 @@ int main(int argc, char** argv) {
     int optDenoise = -1;   // --denoise 0|1: deferred SVGF denoiser (raw 1-spp when 0)
     int optMsaa = -1;      // --msaa 1|2|4: raster G-buffer MSAA (edge shading dispatch B)
     int optAutoExp = -1;   // --autoexp 0|1: histogram auto-exposure (interior triage)
+    bool useGl = false;    // --gl: run the browser on the OpenGL backend instead
+    int soloClip = -1;     // --solo N: play only clip N (-1 = every clip at once)
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
@@ -136,6 +140,16 @@ int main(int argc, char** argv) {
         else if (a == "--denoise" && i + 1 < argc) optDenoise = std::atoi(argv[++i]);
         else if (a == "--msaa" && i + 1 < argc) optMsaa = std::atoi(argv[++i]);
         else if (a == "--autoexp" && i + 1 < argc) optAutoExp = std::atoi(argv[++i]);
+        // Run the same browser on the OpenGL backend. Everything backend-neutral
+        // (scene, env/IBL, tone mapping, animation, browsing, capture, the
+        // settings panel) works unchanged; the Vulkan-only knobs below are simply
+        // skipped, and GL gets shadow maps since it has no ray-traced shadows.
+        else if (a == "--gl") useGl = true;
+        // Play every clip in the file at once instead of just the first. Default
+        // for a sample browser: assets like InterpolationTest ship one clip per
+        // node and are meaningless with only clip 0 running. Press A to cycle
+        // through the clips solo.
+        else if (a == "--solo" && i + 1 < argc) soloClip = std::atoi(argv[++i]);
     }
     if (!fs::exists(modelFolder) || !fs::is_directory(modelFolder)) {
         std::cerr << "Invalid folder path: " << fs::absolute(modelFolder) << std::endl;
@@ -149,35 +163,64 @@ int main(int argc, char** argv) {
     }
     std::cout << "Found " << models.size() << " models. Use Left/Right (or P/N) to browse." << std::endl;
 
+    const std::string title = useGl ? "OpenGL - GLTF Samples" : "Vulkan Deferred - GLTF Samples";
+
     Canvas canvas(Canvas::Parameters()
-                          .title("Vulkan Deferred - GLTF Samples")
+                          .title(title)
                           .vsync(false)
+                          .antialiasing(useGl ? 4 : 0)
                           .size(winW > 0 ? winW : 960, winH > 0 ? winH : 600));
 
-    VulkanRenderer renderer(canvas);
-    if (optProbe >= 0) renderer.setProbeGI(optProbe != 0);
-    if (optSunExt >= 0) renderer.setEnvSunExtraction(optSunExt != 0);
-    if (volFogCli) renderer.setVolumetricFog(true);
-    if (mblurCli > 0.f) renderer.setMotionBlur(mblurCli);
-    if (sunPolicy == "always") renderer.setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Always);
-    else if (sunPolicy == "off") renderer.setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Off);
-    else if (sunPolicy == "auto") renderer.setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Auto);
-    if (optSunRad >= 0.f) renderer.setSunAngularRadius(optSunRad);
-    if (optOccl >= 0) renderer.setOcclusionCulling(optOccl != 0);
-    if (optLod >= 0) renderer.setAutoLod(optLod != 0);
-    if (optDlss >= 0) renderer.setDlss(optDlss != 0);
-    if (optFsr >= 0) renderer.setFsr(optFsr != 0);
-    if (optDenoise >= 0) renderer.setDenoise(optDenoise != 0);
-    if (optMsaa > 0) renderer.setGbufferMsaa(static_cast<uint32_t>(optMsaa));
-    if (optAutoExp >= 0) renderer.setAutoExposure(optAutoExp != 0);
-    if (dofFocus > 0.f) {// thin-lens DoF: wide-open aperture, focus at S meters
-        renderer.setCameraExposure(2.0f, 1.f / 125.f, 100.f);
-        renderer.setFocusDistance(dofFocus);
-        renderer.setDepthOfField(true);
+    // One of the two backends owns the window; `renderer` is the backend-neutral
+    // handle everything below goes through, and `vk` is non-null only on Vulkan
+    // so the deferred-only knobs can be skipped rather than duplicated.
+    std::unique_ptr<GLRenderer> glRenderer;
+    std::unique_ptr<VulkanRenderer> vkRenderer;
+    Renderer* renderer = nullptr;
+    VulkanRenderer* vk = nullptr;
+
+    if (useGl) {
+        glRenderer = std::make_unique<GLRenderer>(canvas);
+        renderer = glRenderer.get();
+        // GL has no ray-traced shadows, so give it shadow maps or every model
+        // reads as flat-lit. PCF soft is the closest match to the deferred look.
+        glRenderer->shadowMap().enabled = true;
+        glRenderer->shadowMap().type = ShadowMap::PFCSoft;
+    } else {
+        vkRenderer = std::make_unique<VulkanRenderer>(canvas);
+        renderer = vkRenderer.get();
+        vk = vkRenderer.get();
     }
-    renderer.setHybridDebugView(cliDebugView);
-    renderer.toneMapping = ToneMapping::ACESFilmic;
-    renderer.toneMappingExposure = 1.0f;
+
+    if (vk) {
+        if (optProbe >= 0) vk->setProbeGI(optProbe != 0);
+        if (optSunExt >= 0) vk->setEnvSunExtraction(optSunExt != 0);
+        if (volFogCli) vk->setVolumetricFog(true);
+        if (mblurCli > 0.f) vk->setMotionBlur(mblurCli);
+        if (sunPolicy == "always") vk->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Always);
+        else if (sunPolicy == "off") vk->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Off);
+        else if (sunPolicy == "auto") vk->setEnvSunPolicy(VulkanRenderer::EnvSunPolicy::Auto);
+        if (optSunRad >= 0.f) vk->setSunAngularRadius(optSunRad);
+        if (optOccl >= 0) vk->setOcclusionCulling(optOccl != 0);
+        if (optLod >= 0) vk->setAutoLod(optLod != 0);
+        if (optDlss >= 0) vk->setDlss(optDlss != 0);
+        if (optFsr >= 0) vk->setFsr(optFsr != 0);
+        if (optDenoise >= 0) vk->setDenoise(optDenoise != 0);
+        if (optMsaa > 0) vk->setGbufferMsaa(static_cast<uint32_t>(optMsaa));
+        if (optAutoExp >= 0) vk->setAutoExposure(optAutoExp != 0);
+        if (dofFocus > 0.f) {// thin-lens DoF: wide-open aperture, focus at S meters
+            vk->setCameraExposure(2.0f, 1.f / 125.f, 100.f);
+            vk->setFocusDistance(dofFocus);
+            vk->setDepthOfField(true);
+        }
+        vk->setHybridDebugView(cliDebugView);
+    } else if (cliDebugView != 0 || volFogCli || mblurCli > 0.f || dofFocus > 0.f) {
+        std::cerr << "note: --debug/--volfog/--mblur/--dof are Vulkan-only; ignored on --gl"
+                  << std::endl;
+    }
+
+    renderer->toneMapping = ToneMapping::ACESFilmic;
+    renderer->toneMappingExposure = 1.0f;
 
     RGBELoader rgbe;
     auto env = rgbe.load(envPath.empty() ? std::string(DATA_FOLDER) +
@@ -190,6 +233,9 @@ int main(int argc, char** argv) {
 
     auto sun = DirectionalLight::create(Color(0xffffff), 3.0f);
     sun->position.set(0.4f, 1.0f, 0.3f);
+    // Needed by GL's shadow-map pass; the Vulkan backend traces shadows and
+    // ignores the flag, so setting it unconditionally costs nothing there.
+    sun->castShadow = true;
     if (optSun >= 0) sun->visible = optSun != 0;
     scene.add(sun);
 
@@ -204,6 +250,18 @@ int main(int argc, char** argv) {
     int currentModel = -1;
     std::shared_ptr<AsyncGroup> loadedModel;
     std::unique_ptr<AnimationMixer> mixer;
+
+    // One action per clip in the current model. soloClip < 0 runs them all;
+    // otherwise only that index contributes (weight 0 elsewhere rather than
+    // stop(), so the reset pose is not re-applied every frame).
+    std::vector<AnimationAction*> clipActions;
+    std::vector<std::string> clipNames;
+    auto applyClipSelection = [&] {
+        for (size_t i = 0; i < clipActions.size(); ++i) {
+            const bool on = soloClip < 0 || static_cast<int>(i) == soloClip;
+            clipActions[i]->setEffectiveWeight(on ? 1.f : 0.f).play();
+        }
+    };
 
     auto fitCamera = [&](Object3D& obj) {
         Box3 bbox;
@@ -244,7 +302,13 @@ int main(int argc, char** argv) {
                 }
                 auto& root = result->scene;
                 bool hasMesh = false;
-                root->traverseType<Mesh>([&](Mesh&) { hasMesh = true; });
+                root->traverseType<Mesh>([&](Mesh& m) {
+                    hasMesh = true;
+                    // Same rationale as the sun's castShadow: required by GL's
+                    // shadow-map pass, ignored by the Vulkan tracer.
+                    m.castShadow = true;
+                    m.receiveShadow = true;
+                });
                 root->traverseType<Light>([&](Light& l) {
                     l.visible = true;
                     l.intensity = std::max(l.intensity, 1.0f);
@@ -269,11 +333,29 @@ int main(int argc, char** argv) {
 
         loadedModel->onLoaded([&](AsyncGroup& g) {
             fitCamera(g);
+            clipActions.clear();
+            clipNames.clear();
             if (!g.animations.empty() && (shotPath.empty() || shotAnim)) {// capture harness: static scene unless --anim
                 mixer = std::make_unique<AnimationMixer>(g);
-                mixer->clipAction(g.animations.front())->play();
-                std::cout << "Playing animation: " << g.animations.front()->name()
-                          << " (" << g.animations.size() << " clip(s))" << std::endl;
+
+                // EVERY clip, not just the first. Multi-clip sample assets
+                // generally drive DISJOINT nodes — InterpolationTest ships nine
+                // clips, one per box (Step/Linear/CubicSpline x scale/rotation/
+                // translation) — so playing only clip 0 left eight boxes frozen
+                // and made the file useless as an interpolation reference. Use
+                // --solo N, or press A to cycle, for assets whose clips are
+                // alternatives for the same node.
+                for (const auto& c : g.animations) {
+                    clipActions.push_back(mixer->clipAction(c));
+                    clipNames.push_back(c->name());
+                }
+                applyClipSelection();
+
+                std::cout << "Animations (" << clipNames.size() << "): ";
+                for (size_t i = 0; i < clipNames.size(); ++i) {
+                    std::cout << (i ? ", " : "") << "[" << i << "] " << clipNames[i];
+                }
+                std::cout << (soloClip < 0 ? "  -> all playing" : "  -> solo") << std::endl;
             }
             std::cout << "Loaded: " << models[currentModel].name << std::endl;
             modelReady = true;// capture harness: --frames settle counts from HERE
@@ -290,6 +372,12 @@ int main(int argc, char** argv) {
         }
         if (ev.key == Key::LEFT || ev.key == Key::P) {
             loadModel((currentModel - 1 + static_cast<int>(models.size())) % static_cast<int>(models.size()));
+        }
+        if (ev.key == Key::A && !clipActions.empty()) {// cycle: all -> 0 -> 1 -> ... -> all
+            soloClip = (soloClip + 1 >= static_cast<int>(clipActions.size())) ? -1 : soloClip + 1;
+            applyClipSelection();
+            std::cout << "clips: " << (soloClip < 0 ? "all" : "[" + std::to_string(soloClip) + "] " + clipNames[soloClip])
+                      << std::endl;
         }
         if (ev.key == Key::C) {// dump the current pose as a --cam repro line
             std::cout << "--cam " << camera.position.x << " " << camera.position.y << " "
@@ -311,10 +399,26 @@ int main(int argc, char** argv) {
     // UI into the measured frames.
     std::unique_ptr<RendererSettingsUi> ui;
     if (shotPath.empty()) {
-        ui = std::make_unique<RendererSettingsUi>(canvas, renderer, [&] {
+        ui = std::make_unique<RendererSettingsUi>(canvas, *renderer, [&] {
             ImGui::Text("Model: %s", currentModel >= 0 ? models[currentModel].name.c_str() : "none");
             if (loadedModel && loadedModel->isLoading()) ImGui::Text("Loading...");
             ImGui::Text("Left/Right arrows to browse");
+
+            if (!clipNames.empty()) {
+                ImGui::Separator();
+                ImGui::Text("Animations (A cycles)");
+                bool all = soloClip < 0;
+                if (ImGui::RadioButton("All at once", all)) {
+                    soloClip = -1;
+                    applyClipSelection();
+                }
+                for (int i = 0; i < static_cast<int>(clipNames.size()); ++i) {
+                    if (ImGui::RadioButton(clipNames[i].c_str(), soloClip == i)) {
+                        soloClip = i;
+                        applyClipSelection();
+                    }
+                }
+            }
 
             if (ImGui::CollapsingHeader("Models")) {
                 for (int i = 0; i < static_cast<int>(models.size()); i++) {
@@ -343,7 +447,7 @@ int main(int argc, char** argv) {
     }
 
     canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
+        renderer->setSize(ns);
         camera.aspect = canvas.aspect();
         camera.updateProjectionMatrix();
     });
@@ -387,7 +491,7 @@ int main(int argc, char** argv) {
 
         if (fogOn) {
             scene.fog = FogExp2(Color(fogColor[0], fogColor[1], fogColor[2]), fogDensity);
-            renderer.setFogAnisotropy(fogG);
+            if (vk) vk->setFogAnisotropy(fogG);
         } else {
             scene.fog.reset();
         }
@@ -421,15 +525,15 @@ int main(int argc, char** argv) {
         } else if (shotPath.empty() || orbitDeg == 0.f) {
             controls.update();
         }
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
 
         if (shotPath.empty()) {
             ui->render();
         } else if (modelReady && ++shotFrame >= shotFrames) {
-            if (shotFrame == shotFrames) {
-                const auto d = renderer.envSunDirection();
-                const auto c = renderer.envSunColor();
-                std::cout << "envSunFound=" << renderer.envSunFound()
+            if (shotFrame == shotFrames && vk) {// env-sun extraction is Vulkan-only
+                const auto d = vk->envSunDirection();
+                const auto c = vk->envSunColor();
+                std::cout << "envSunFound=" << vk->envSunFound()
                           << " dir=(" << d.x << "," << d.y << "," << d.z << ")"
                           << " colorE=(" << c.x << "," << c.y << "," << c.z << ")" << std::endl;
             }
@@ -439,14 +543,14 @@ int main(int argc, char** argv) {
                 char buf[16];
                 std::snprintf(buf, sizeof(buf), "_%03d", seqI);
                 const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / (stem + buf + ext);
-                renderer.writeFramebuffer(path);
+                renderer->writeFramebuffer(path);
                 if (++seqI >= seqN) {
                     std::cout << "wrote " << seqN << " frames to aaa_caps/" << stem << "_*.png" << std::endl;
                     std::exit(0);
                 }
             } else {
                 const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
-                renderer.writeFramebuffer(path);
+                renderer->writeFramebuffer(path);
                 std::cout << "wrote " << path.string() << std::endl;
                 std::exit(0);
             }
