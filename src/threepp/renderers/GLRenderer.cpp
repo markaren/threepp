@@ -507,7 +507,7 @@ struct GLRenderer::Impl {
         }
     }
 
-    void projectObject(Object3D* object, Camera* camera, unsigned int groupOrder, bool sortObjects) {
+    void projectObject(Object3D* object, Camera* camera, int groupOrder, bool sortObjects) {
         if (!object->visible) return;
 
         bool visible = object->layers.test(camera->layers);

@@ -501,3 +501,139 @@ TEST_CASE("updateWorldMatrix") {
 
     REQUIRE(object->matrixWorld->elements == m.setPosition(parent->position).elements);
 }
+
+
+// ---------------------------------------------------------------------------
+// Ownership / lifetime of the scene-graph links
+// ---------------------------------------------------------------------------
+
+TEST_CASE("addRef'd child unlinks itself on destruction") {
+
+    auto parent = Object3D::create();
+
+    {
+        Object3D child;
+        parent->addRef(child);
+        REQUIRE(parent->children.size() == 1);
+    }// child dies here; it was never owned by parent
+
+    // Before the destructor unlinked itself, `children` kept a dangling raw
+    // pointer and the traverse below was a use-after-free.
+    CHECK(parent->children.empty());
+
+    int visited = 0;
+    parent->traverse([&](Object3D&) { ++visited; });
+    CHECK(visited == 1);// just the parent
+}
+
+TEST_CASE("destroying a parent clears its children's parent pointer") {
+
+    Object3D child;
+
+    {
+        auto parent = Object3D::create();
+        parent->addRef(child);
+        REQUIRE(child.parent != nullptr);
+    }// parent dies; child (not owned) outlives it
+
+    CHECK(child.parent == nullptr);
+}
+
+TEST_CASE("removeFromParent hands back ownership") {
+
+    auto parent = Object3D::create();
+    auto child = Object3D::create();
+    parent->add(child);
+
+    Object3D* raw = child.get();
+    child.reset();// the parent is now the only owner
+
+    SECTION("keeping the returned reference keeps the object alive") {
+        auto kept = raw->removeFromParent();
+        REQUIRE(kept);
+        CHECK(kept.get() == raw);
+        CHECK(kept->parent == nullptr);
+        CHECK(parent->children.empty());
+    }
+
+    SECTION("an addRef'd child reports no ownership to hand back") {
+        auto other = Object3D::create();
+        Object3D loose;
+        other->addRef(loose);
+        CHECK(loose.removeFromParent() == nullptr);
+        CHECK(other->children.empty());
+    }
+}
+
+TEST_CASE("remove fires its event against a live object") {
+
+    auto parent = Object3D::create();
+    auto child = Object3D::create();
+    parent->add(child);
+    child.reset();// parent solely owns it
+
+    Object3D* raw = parent->children.front();
+
+    bool sawEvent = false;
+    unsigned int idDuringEvent = 0;
+    LambdaEventListener listener([&](Event&) {
+        sawEvent = true;
+        idDuringEvent = raw->id;// must not be a read of freed memory
+    });
+    raw->addEventListener("remove", listener);
+
+    const unsigned int expectedId = raw->id;
+    parent->remove(*raw);
+
+    CHECK(sawEvent);
+    CHECK(idDuringEvent == expectedId);
+    CHECK(parent->children.empty());
+}
+
+// ---------------------------------------------------------------------------
+// getObjectByName
+// ---------------------------------------------------------------------------
+
+TEST_CASE("getObjectByName matches on name and type together") {
+
+    auto scene = Object3D::create();
+
+    // A non-Camera node with the wanted name comes FIRST in traversal order.
+    auto decoy = Object3D::create();
+    decoy->name = "target";
+    scene->add(decoy);
+
+    auto wanted = PerspectiveCamera::create();
+    wanted->name = "target";
+    scene->add(wanted);
+
+    // Untyped lookup finds the first name match, as before.
+    CHECK(scene->getObjectByName("target") == decoy.get());
+
+    // Typed lookup used to resolve the decoy and then fail the cast, returning
+    // nullptr even though a matching Camera was present.
+    CHECK(scene->getObjectByName<PerspectiveCamera>("target") == wanted.get());
+}
+
+TEST_CASE("getObjectByName returns null when no node matches the type") {
+
+    auto scene = Object3D::create();
+    auto child = Object3D::create();
+    child->name = "plain";
+    scene->add(child);
+
+    CHECK(scene->getObjectByName("plain") == child.get());
+    CHECK(scene->getObjectByName<PerspectiveCamera>("plain") == nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// renderOrder
+// ---------------------------------------------------------------------------
+
+TEST_CASE("renderOrder accepts negative values") {
+
+    auto object = Object3D::create();
+    object->renderOrder = -1;
+    CHECK(object->renderOrder == -1);
+    CHECK(object->renderOrder < 0);// would have wrapped huge when unsigned
+}

@@ -101,6 +101,10 @@ namespace threepp {
             return array_;
         }
 
+        // Copy one element from `attribute` into this attribute.
+        // NB: this used to `return &this;` — taking the address of a prvalue,
+        // which is ill-formed. It only ever compiled because nothing instantiated
+        // it; the first caller would have been a hard error.
         TypedBufferAttribute<T>& copyAt(unsigned int index1, const TypedBufferAttribute<T>& attribute, unsigned int index2) {
 
             index1 *= this->itemSize_;
@@ -111,7 +115,7 @@ namespace threepp {
                 this->array_[index1 + i] = attribute.array_[index2 + i];
             }
 
-            return &this;
+            return *this;
         }
 
         TypedBufferAttribute<T>& copyArray(const std::vector<T>& array) {

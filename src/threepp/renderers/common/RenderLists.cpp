@@ -61,7 +61,7 @@ RenderItem* RenderList::getNextRenderItem(
         Object3D* object,
         BufferGeometry* geometry,
         Material* material,
-        unsigned int groupOrder, float z, std::optional<GeometryGroup> group) {
+        int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     uint64_t progId = resolver_ ? resolver_(material) : 0;
 
@@ -104,7 +104,7 @@ void RenderList::push(
         Object3D* object,
         BufferGeometry* geometry,
         Material* material,
-        unsigned int groupOrder, float z, std::optional<GeometryGroup> group) {
+        int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
@@ -127,7 +127,7 @@ void RenderList::unshift(
         Object3D* object,
         BufferGeometry* geometry,
         Material* material,
-        unsigned int groupOrder, float z, std::optional<GeometryGroup> group) {
+        int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 

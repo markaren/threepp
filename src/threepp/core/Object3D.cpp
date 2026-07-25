@@ -231,37 +231,57 @@ void Object3D::addRef(Object3D& object) {
     object.dispatchEvent("added");
 }
 
-void Object3D::remove(Object3D& object) {
+std::shared_ptr<Object3D> Object3D::detachChild(Object3D& object) {
+
+    // Take the owning reference out of children_ FIRST, into a local. Erasing it
+    // in place would run the shared_ptr destructor right here — destroying the
+    // object while we still have to clear its parent and fire "remove", and while
+    // the caller still holds the reference it passed in. Moving it out keeps the
+    // object alive until the caller drops what we return.
+    std::shared_ptr<Object3D> owned;
+    if (const auto it = std::ranges::find_if(children_, [&object](const auto& obj) {
+            return obj.get() == &object;
+        });
+        it != children_.end()) {
+
+        owned = std::move(*it);
+        children_.erase(it);
+    }
 
     // non-owning (all children should be represented here)
-    if (const auto find = std::ranges::find_if(children, [&object](const auto& obj) {
+    if (const auto it = std::ranges::find_if(children, [&object](const auto& obj) {
             return obj == &object;
         });
-        find != children.end()) {
+        it != children.end()) {
 
-        Object3D* child = *find;
-        children.erase(find);
+        Object3D* child = *it;
+        children.erase(it);
 
         child->parent = nullptr;
         child->dispatchEvent("remove", child);
     }
 
-    // owning
-    if (const auto find = std::ranges::find_if(children_, [&object](const auto& obj) {
-            return obj.get() == &object;
-        });
-        find != children_.end()) {
-
-        children_.erase(find);
-    }
+    return owned;
 }
 
-void Object3D::removeFromParent() {
+void Object3D::remove(Object3D& object) {
 
-    if (parent) {
+    // The returned reference dies at the end of this statement, so an object the
+    // parent solely owned is destroyed here — but only after it has been fully
+    // unlinked and its listeners have run against a live object.
+    detachChild(object);
+}
 
-        parent->remove(*this);
-    }
+std::shared_ptr<Object3D> Object3D::removeFromParent() {
+
+    if (!parent) return nullptr;
+
+    // Hand the owning reference to the caller rather than dropping it inside
+    // this call: `parent->remove(*this)` used to free `this` while this frame was
+    // still executing, which is UB even though nothing touched a member
+    // afterwards. Now self-removal is safe, and `auto kept = o->removeFromParent()`
+    // is the way to detach without destroying.
+    return parent->detachChild(*this);
 }
 
 void Object3D::clear() {
@@ -541,4 +561,33 @@ Object3D::Object3D(Object3D&& source) noexcept: Object3D() {
     }
 }
 
-Object3D::~Object3D() = default;
+Object3D::~Object3D() {
+
+    // Leave no dangling references to this node.
+    //
+    // `children` is a vector of raw, non-owning pointers, and addRef() puts
+    // objects there that the parent does NOT own. Such a child can easily die
+    // first — a stack local, or a unique_ptr the caller holds — and until now the
+    // parent kept a dangling entry, so the next traverse() was a use-after-free:
+    //
+    //     { Mesh m{geo, mat}; scene->addRef(m); }   // m dies here
+    //     scene->traverse(...);                     // read of freed memory
+    //
+    // Detaching in the destructor makes that safe without changing addRef()'s
+    // non-owning contract.
+    if (parent) {
+        auto& siblings = parent->children;
+        siblings.erase(std::remove(siblings.begin(), siblings.end(), this), siblings.end());
+        parent = nullptr;
+    }
+
+    // Symmetrically: any child we do not own outlives us, so clear its parent
+    // before it can point at freed memory. Doing this in the destructor BODY also
+    // means the owned children_ (destroyed after the body, in reverse member
+    // order) already see parent == nullptr and skip the erase above — so they
+    // never reach back into a half-destroyed parent.
+    for (auto* child : children) {
+        if (child->parent == this) child->parent = nullptr;
+    }
+    children.clear();
+}

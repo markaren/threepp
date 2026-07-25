@@ -23,8 +23,11 @@ namespace threepp {
         BufferGeometry* geometry = nullptr;
         Material* material = nullptr;
         uint64_t programId = 0;  // Opaque program identifier for sort ordering
-        unsigned int groupOrder = 0;
-        unsigned int renderOrder = 0;
+        // Both signed: groupOrder is copied from Object3D::renderOrder, so an
+        // unsigned type wrapped a negative order into a huge value and sorted the
+        // object LAST instead of first.
+        int groupOrder = 0;
+        int renderOrder = 0;
         float z = 0;
         std::optional<GeometryGroup> group;
     };
@@ -50,19 +53,19 @@ namespace threepp {
                 Object3D* object,
                 BufferGeometry* geometry,
                 Material* material,
-                unsigned int groupOrder, float z, std::optional<GeometryGroup> group);
+                int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void push(
                 Object3D* object,
                 BufferGeometry* geometry,
                 Material* material,
-                unsigned int groupOrder, float z, std::optional<GeometryGroup> group);
+                int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void unshift(
                 Object3D* object,
                 BufferGeometry* geometry,
                 Material* material,
-                unsigned int groupOrder, float z, std::optional<GeometryGroup> group);
+                int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void sort();
 

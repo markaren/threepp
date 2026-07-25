@@ -1,4 +1,5 @@
 
+add_test_executable(BufferAttribute_test)
 add_test_executable(EventDispatcher_test)
 add_test_executable(Layers_test)
 add_test_executable(Object3D_test)
