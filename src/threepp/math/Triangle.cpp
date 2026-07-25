@@ -158,12 +158,12 @@ void Triangle::closestPointToPoint(const Vector3& p, Vector3& target) const {
     const auto a = this->a_, b = this->b_, c = this->c_;
     float v, w;
 
-    static Vector3 _vab{};
-    static Vector3 _vac{};
-    static Vector3 _vap{};
-    static Vector3 _vbp{};
-    static Vector3 _vcp{};
-    static Vector3 _vbc{};
+    static thread_local Vector3 _vab{};
+    static thread_local Vector3 _vac{};
+    static thread_local Vector3 _vap{};
+    static thread_local Vector3 _vbp{};
+    static thread_local Vector3 _vcp{};
+    static thread_local Vector3 _vbc{};
 
 
     // algorithm thanks to Real-Time Collision Detection by Christer Ericson,

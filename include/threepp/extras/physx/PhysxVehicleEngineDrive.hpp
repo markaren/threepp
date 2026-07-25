@@ -175,11 +175,19 @@ namespace threepp {
             buildComponentSequence();
 
             stepCallback_ = [this](float dt) { stepVehicle(dt); };
-            world_->onPreSubstep(stepCallback_);
+            stepHandle_ = world_->onPreSubstep(stepCallback_);
         }
 
         ~PhysxVehicleEngineDrive() {
             using namespace ::physx;
+
+            // Unregister FIRST: stepCallback_ captures `this`, so a world that
+            // kept calling it after the vehicle died would run stepVehicle() on
+            // freed memory.
+            if (world_ && stepHandle_) {
+                world_->removeSubstepCallback(stepHandle_);
+                stepHandle_ = 0;
+            }
 
             if (constraintsCreated_) {
                 ::physx::vehicle2::PxVehicleConstraintsDestroy(physxConstraints_);
@@ -1015,6 +1023,7 @@ namespace threepp {
         bool initialised_ = false;
 
         std::function<void(float)> stepCallback_;
+        PhysxWorld::SubstepHandle stepHandle_ = 0;
 
         ::physx::PxRigidDynamic* chassisActor_ = nullptr;
         ::physx::PxMaterial* wheelShapeMaterial_ = nullptr;

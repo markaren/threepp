@@ -43,9 +43,9 @@ DirectionalLightHelper::DirectionalLightHelper(DirectionalLight& light, float si
 
 void DirectionalLightHelper::update() {
 
-    static Vector3 _v1;
-    static Vector3 _v2;
-    static Vector3 _v3;
+    static thread_local Vector3 _v1;
+    static thread_local Vector3 _v2;
+    static thread_local Vector3 _v3;
 
     _v1.setFromMatrixPosition(*this->light.matrixWorld);
     _v2.setFromMatrixPosition(*this->light.target().matrixWorld);

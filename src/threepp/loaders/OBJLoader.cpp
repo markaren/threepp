@@ -21,14 +21,35 @@ using namespace threepp;
 
 namespace {
 
-    size_t parseVertexOrNormalIndex(const std::string& value, size_t len) {
-        int index = utils::parseInt(value);
-        return (index > 0 ? (index - 1) : index + len / 3) * 3;
+    // Resolve an OBJ face index into a flat offset into a tightly-packed array
+    // of `stride` floats per element.
+    //
+    // OBJ indices are 1-based, and negative values are relative to the end
+    // (-1 = last element declared so far). Both forms come straight out of the
+    // file, so both must be range-checked: a truncated or hand-edited .obj can
+    // easily name element 999999 of a 3-element array, and the callers index
+    // with operator[]. Returns nullopt for anything that does not address a
+    // real element (including 0, which is never a valid OBJ index) so the
+    // caller can drop the face instead of reading out of bounds.
+    std::optional<size_t> resolveIndex(const std::string& value, size_t arraySize, size_t stride) {
+
+        const int index = utils::parseInt(value);
+        if (index == 0) return std::nullopt;
+
+        const auto count = static_cast<long long>(arraySize / stride);
+        const long long i = index > 0 ? index - 1 : count + index;
+
+        if (i < 0 || i >= count) return std::nullopt;
+
+        return static_cast<size_t>(i) * stride;
     }
 
-    size_t parseUvIndex(const std::string& value, size_t len) {
-        int index = utils::parseInt(value);
-        return (index > 0 ? (index - 1) : index + len / 2) * 2;
+    std::optional<size_t> parseVertexOrNormalIndex(const std::string& value, size_t len) {
+        return resolveIndex(value, len, 3);
+    }
+
+    std::optional<size_t> parseUvIndex(const std::string& value, size_t len) {
+        return resolveIndex(value, len, 2);
     }
 
     struct OBJGeometry {
@@ -136,6 +157,11 @@ namespace {
 
         std::vector<std::string> materialLibraries;
 
+        // Faces/points dropped because an index did not address a declared
+        // element. Reported once after parsing rather than per occurrence — a
+        // broken file tends to repeat the same mistake on every line.
+        size_t badIndexCount = 0;
+
         ParserState() {
             startObject("", false);
         }
@@ -232,49 +258,80 @@ namespace {
                      const std::string& ua, const std::string& ub, const std::string& uc,
                      const std::string& na, const std::string& nb, const std::string& nc) {
 
-            auto vLen = vertices.size();
+            // Resolve EVERY index before appending anything. The per-vertex
+            // arrays (vertices/uvs/normals/colors) are written in parallel, so
+            // emitting a vertex and then bailing on a bad uv would leave them
+            // permanently out of step. A face with any unresolvable index is
+            // dropped whole instead.
+            const auto vLen = vertices.size();
+            const auto ia = parseVertexOrNormalIndex(a, vLen);
+            const auto ib = parseVertexOrNormalIndex(b, vLen);
+            const auto ic = parseVertexOrNormalIndex(c, vLen);
+            if (!ia || !ib || !ic) {
+                ++badIndexCount;
+                return;
+            }
 
-            auto ia = parseVertexOrNormalIndex(a, vLen);
-            auto ib = parseVertexOrNormalIndex(b, vLen);
-            auto ic = parseVertexOrNormalIndex(c, vLen);
-
-            addVertex(ia, ib, ic);
-
+            std::optional<size_t> ta, tb, tc;
             if (!ua.empty()) {
-
-                auto uvlen = uvs.size();
-                ia = parseUvIndex(ua, uvlen);
-                ib = parseUvIndex(ub, uvlen);
-                ic = parseUvIndex(uc, uvlen);
-
-                addUv(ia, ib, ic);
+                const auto uvLen = uvs.size();
+                ta = parseUvIndex(ua, uvLen);
+                tb = parseUvIndex(ub, uvLen);
+                tc = parseUvIndex(uc, uvLen);
+                if (!ta || !tb || !tc) {
+                    ++badIndexCount;
+                    return;
+                }
             }
 
+            std::optional<size_t> nia, nib, nic;
             if (!na.empty()) {
-
-                auto nLen = normals.size();
-                ia = parseVertexOrNormalIndex(na, nLen);
-
-                ib = (na == nb) ? ia : parseVertexOrNormalIndex(nb, nLen);
-                ic = (na == nc) ? ia : parseVertexOrNormalIndex(nc, nLen);
-
-                addNormal(ia, ib, ic);
+                const auto nLen = normals.size();
+                nia = parseVertexOrNormalIndex(na, nLen);
+                nib = (na == nb) ? nia : parseVertexOrNormalIndex(nb, nLen);
+                nic = (na == nc) ? nia : parseVertexOrNormalIndex(nc, nLen);
+                if (!nia || !nib || !nic) {
+                    ++badIndexCount;
+                    return;
+                }
             }
 
+            // Vertex colors come from a 6-float `v` line, so they are addressed
+            // by the VERTEX index at stride 3 — not by whatever ia/ib/ic held
+            // after the uv block above reassigned them at stride 2.
+            std::optional<size_t> ca, cb, cc;
             if (!colors.empty()) {
-
-                addColor(ia, ib, ic);
+                const auto cLen = colors.size();
+                ca = resolveIndex(a, cLen, 3);
+                cb = resolveIndex(b, cLen, 3);
+                cc = resolveIndex(c, cLen, 3);
+                if (!ca || !cb || !cc) {
+                    ++badIndexCount;
+                    return;
+                }
             }
+
+            addVertex(*ia, *ib, *ic);
+            if (ta) addUv(*ta, *tb, *tc);
+            if (nia) addNormal(*nia, *nib, *nic);
+            if (ca) addColor(*ca, *cb, *cc);
         }
 
         void addPointGeometry(const std::vector<std::string>& verts) {
 
             object->geometry.type = "Points";
 
-            auto vLen = verts.size();
+            // Indices address the accumulated vertex array, not this line's
+            // token list — `verts.size()` here silently mis-resolved every
+            // negative (relative) index.
+            const auto vLen = vertices.size();
 
             for (const auto& v : verts) {
-                addVertexPointOrLine(parseVertexOrNormalIndex(v, vLen));
+                if (const auto i = parseVertexOrNormalIndex(v, vLen)) {
+                    addVertexPointOrLine(*i);
+                } else {
+                    ++badIndexCount;
+                }
             }
         }
     };
@@ -447,6 +504,11 @@ struct OBJLoader::Impl {
         }
 
         state.finalize();
+
+        if (state.badIndexCount > 0) {
+            std::cerr << "[OBJLoader] dropped " << state.badIndexCount
+                      << " face(s)/point(s) with out-of-range indices" << std::endl;
+        }
 
         auto container = Group::create();
 

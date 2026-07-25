@@ -29,7 +29,7 @@ std::string BoxHelper::type() const {
 
 void BoxHelper::update() {
 
-    static Box3 _box;
+    static thread_local Box3 _box;
 
     _box.setFromObject(*this->object);
 

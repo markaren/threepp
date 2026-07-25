@@ -66,8 +66,8 @@ size_t LOD::getCurrentLevel() const {
 
 void LOD::update(Camera& camera) {
 
-    static Vector3 _v1;
-    static Vector3 _v2;
+    static thread_local Vector3 _v1;
+    static thread_local Vector3 _v2;
 
     if (levels.size() > 1) {
 

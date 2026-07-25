@@ -166,8 +166,15 @@ namespace threepp::vulkan {
     }
 
     bool DlssUpscaler::ensureNgx() {
-        if (ngxInited_) return params_ != nullptr;
-        ngxInited_ = true;
+        // ngxInited_ tracks "NGX is initialised and owes us a Shutdown1", so it is
+        // set only AFTER a successful Init and cleared by whoever shuts down. It
+        // used to be set here, before the Init call, which made every failure path
+        // below wrong: an Init failure left it true (so shutdownNgx() later called
+        // Shutdown1 on uninitialised NGX), and the capability / parameter failures
+        // shut down inline AND left it true (double shutdown). Both are on the
+        // non-RTX fallback path, i.e. the common case for a machine without DLSS.
+        if (ngxTried_) return params_ != nullptr;
+        ngxTried_ = true;
 
         modulePathW_       = moduleDirW();
         modulePathPtrs_[0] = modulePathW_.c_str();
@@ -185,8 +192,9 @@ namespace threepp::vulkan {
             std::fprintf(stderr,
                          "[threepp] DLSS: NGX init failed (0x%08x) — "
                          "falling back to FSR/TAA.\n", static_cast<unsigned>(r));
-            return false;
+            return false;// nothing to shut down
         }
+        ngxInited_ = true;
 
         // Capability check: driver present + DLSS supported on this GPU.
         NVSDK_NGX_Parameter* caps = nullptr;
@@ -201,6 +209,7 @@ namespace threepp::vulkan {
                          "[threepp] DLSS: not available on this GPU/driver — "
                          "falling back to FSR/TAA.\n");
             NVSDK_NGX_VULKAN_Shutdown1(ctx_.device());
+            ngxInited_ = false;
             return false;
         }
 
@@ -210,6 +219,7 @@ namespace threepp::vulkan {
                          static_cast<unsigned>(r));
             params_ = nullptr;
             NVSDK_NGX_VULKAN_Shutdown1(ctx_.device());
+            ngxInited_ = false;
             return false;
         }
         return true;
