@@ -517,6 +517,7 @@ namespace threepp_py {
                                            d["shade_b_ms"] = t.shadeBMs;
                                            d["overlay_ms"] = t.overlayMs;
                                            d["dof_ms"] = t.dofMs;
+                                           d["froxel_ms"] = t.froxelMs;
                                            d["cpu_ensure_scene_ms"] = t.cpuEnsureSceneMs;
                                            d["cpu_record_ms"] = t.cpuRecordMs;
                                            d["cpu_frame_ms"] = t.cpuFrameMs;
