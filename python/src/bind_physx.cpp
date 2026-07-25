@@ -394,14 +394,22 @@ namespace threepp_py {
                      "Add one dynamic body per instance of an InstancedMesh. Returns a list of RigidBody.")
                 .def("on_pre_substep",
                      [](PhysxWorld& w, py::function cb) {
-                         w.onPreSubstep([cb](float dt) { py::gil_scoped_acquire g; cb(dt); });
+                         return w.onPreSubstep([cb](float dt) { py::gil_scoped_acquire g; cb(dt); });
                      },
-                     py::arg("callback"), "Register callback(dt) fired before each fixed substep.")
+                     py::arg("callback"),
+                     "Register callback(dt) fired before each fixed substep. Returns a "
+                     "handle for remove_substep_callback().")
                 .def("on_post_substep",
                      [](PhysxWorld& w, py::function cb) {
-                         w.onPostSubstep([cb](float dt) { py::gil_scoped_acquire g; cb(dt); });
+                         return w.onPostSubstep([cb](float dt) { py::gil_scoped_acquire g; cb(dt); });
                      },
-                     py::arg("callback"), "Register callback(dt) fired after each fixed substep.")
+                     py::arg("callback"),
+                     "Register callback(dt) fired after each fixed substep. Returns a "
+                     "handle for remove_substep_callback().")
+                .def("remove_substep_callback", &PhysxWorld::removeSubstepCallback,
+                     py::arg("handle"),
+                     "Unregister a pre/post substep callback by its handle. A stale or "
+                     "already-removed handle is a no-op.")
                 .def("register_sensor",
                      [](PhysxWorld& w, Imu& imu) { w.registerSensor(&imu); },
                      py::arg("sensor"), py::keep_alive<1, 2>(),

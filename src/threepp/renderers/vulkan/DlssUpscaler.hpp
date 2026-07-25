@@ -161,6 +161,11 @@ namespace threepp::vulkan {
         VulkanContext& ctx_;
         uint32_t framesInFlight_ = 0;
 
+        // ngxTried_: ensureNgx() has run, so don't retry (success or failure).
+        // ngxInited_: NGX is initialised and owes a matching Shutdown1. Kept
+        // separate so a failed init is never shut down, and a partially-failed
+        // init that already shut down inline is not shut down twice.
+        bool                 ngxTried_  = false;
         bool                 ngxInited_ = false;
         NVSDK_NGX_Parameter* params_    = nullptr;// capability/eval parameter map
         NVSDK_NGX_Handle*    feature_   = nullptr;// the DLSS SR feature

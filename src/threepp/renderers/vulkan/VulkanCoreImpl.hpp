@@ -1563,6 +1563,27 @@ namespace threepp {
             rec.lodState = BlasRecord::LodState::None;
         }
 
+        // Free every GPU resource a BlasRecord owns. Teardown used to inline
+        // this list at each of the six places that hold a BlasRecord (blasCache,
+        // skinned / tet / displaced / grass / morphed states), and five of the
+        // six had drifted: they omitted `color`, so the per-vertex color buffer
+        // leaked for every mesh that wasn't a plain cached BLAS. One helper, so
+        // adding a Buffer to BlasRecord can only ever be missed in one place.
+        // NB: LOD levels are NOT freed here — blasCache is the only owner of a
+        // LOD chain and calls destroyBlasLodLevels() itself, which also keeps
+        // the lodBlasBytes_ accounting straight.
+        void destroyBlasRecord(BlasRecord& rec) {
+            if (rec.as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec.as, nullptr);
+            destroyBuffer(ctx->allocator(), rec.storage);
+            destroyBuffer(ctx->allocator(), rec.vertex);
+            destroyBuffer(ctx->allocator(), rec.index);
+            destroyBuffer(ctx->allocator(), rec.normal);
+            destroyBuffer(ctx->allocator(), rec.uv);
+            destroyBuffer(ctx->allocator(), rec.color);
+            destroyBuffer(ctx->allocator(), rec.prevVertex);
+            destroyBuffer(ctx->allocator(), rec.blasScratch);
+        }
+
         // Cached CDF blob (16 floats per tri) reused across frames when no
         // emissive mesh moved + entries-list size unchanged. The CPU walk in
         // buildAndUploadEmissiveTris is the dominant per-frame cost on
@@ -3048,15 +3069,7 @@ namespace threepp {
 
             for (auto& [_, rec] : blasCache) {
                 destroyBlasLodLevels(*rec);
-                if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
-                destroyBuffer(ctx->allocator(), rec->storage);
-                destroyBuffer(ctx->allocator(), rec->vertex);
-                destroyBuffer(ctx->allocator(), rec->index);
-                destroyBuffer(ctx->allocator(), rec->normal);
-                destroyBuffer(ctx->allocator(), rec->uv);
-                destroyBuffer(ctx->allocator(), rec->color);
-                destroyBuffer(ctx->allocator(), rec->prevVertex);
-                destroyBuffer(ctx->allocator(), rec->blasScratch);
+                destroyBlasRecord(*rec);
             }
             blasCache.clear();
 
@@ -3069,16 +3082,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), st->skinWeight);
                 destroyBuffer(ctx->allocator(), st->boneMatrices);
                 destroyBuffer(ctx->allocator(), st->blasScratch);
-                auto& rec = st->blas;
-                if (!rec) continue;
-                if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
-                destroyBuffer(ctx->allocator(), rec->storage);
-                destroyBuffer(ctx->allocator(), rec->vertex);
-                destroyBuffer(ctx->allocator(), rec->index);
-                destroyBuffer(ctx->allocator(), rec->normal);
-                destroyBuffer(ctx->allocator(), rec->uv);
-                destroyBuffer(ctx->allocator(), rec->prevVertex);
-                destroyBuffer(ctx->allocator(), rec->blasScratch);
+                if (st->blas) destroyBlasRecord(*st->blas);
             }
             skinnedMeshStates.clear();
 
@@ -3092,31 +3096,12 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), st->tetPos);
                 vulkan::destroyExternalBuffer(d, st->tetPosExt);
                 destroyBuffer(ctx->allocator(), st->blasScratch);
-                auto& rec = st->blas;
-                if (!rec) continue;
-                if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
-                destroyBuffer(ctx->allocator(), rec->storage);
-                destroyBuffer(ctx->allocator(), rec->vertex);
-                destroyBuffer(ctx->allocator(), rec->index);
-                destroyBuffer(ctx->allocator(), rec->normal);
-                destroyBuffer(ctx->allocator(), rec->uv);
-                destroyBuffer(ctx->allocator(), rec->prevVertex);
-                destroyBuffer(ctx->allocator(), rec->blasScratch);
+                if (st->blas) destroyBlasRecord(*st->blas);
             }
             tetMeshStates.clear();
 
             for (auto& [_, st] : displacedStates) {
-                if (st->blas) {
-                    auto& rec = st->blas;
-                    if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
-                    destroyBuffer(ctx->allocator(), rec->storage);
-                    destroyBuffer(ctx->allocator(), rec->vertex);
-                    destroyBuffer(ctx->allocator(), rec->index);
-                    destroyBuffer(ctx->allocator(), rec->normal);
-                    destroyBuffer(ctx->allocator(), rec->uv);
-                    destroyBuffer(ctx->allocator(), rec->prevVertex);
-                    destroyBuffer(ctx->allocator(), rec->blasScratch);
-                }
+                if (st->blas) destroyBlasRecord(*st->blas);
                 if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->scratchA.view, nullptr);
                 if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
                 if (st->foamImage.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->foamImage.view, nullptr);
@@ -3132,33 +3117,14 @@ namespace threepp {
             displacedStates.clear();
 
             for (auto& [_, st] : grassStates) {
-                if (st->blas) {
-                    auto& rec = st->blas;
-                    if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
-                    destroyBuffer(ctx->allocator(), rec->storage);
-                    destroyBuffer(ctx->allocator(), rec->vertex);
-                    destroyBuffer(ctx->allocator(), rec->index);
-                    destroyBuffer(ctx->allocator(), rec->normal);
-                    destroyBuffer(ctx->allocator(), rec->uv);
-                    destroyBuffer(ctx->allocator(), rec->prevVertex);
-                    destroyBuffer(ctx->allocator(), rec->blasScratch);
-                }
+                if (st->blas) destroyBlasRecord(*st->blas);
                 destroyBuffer(ctx->allocator(), st->restPos);
                 destroyBuffer(ctx->allocator(), st->heightFrac);
             }
             grassStates.clear();
 
             for (auto& [_, st] : morphedMeshStates) {
-                auto& rec = st->blas;
-                if (!rec) continue;
-                if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
-                destroyBuffer(ctx->allocator(), rec->storage);
-                destroyBuffer(ctx->allocator(), rec->vertex);
-                destroyBuffer(ctx->allocator(), rec->index);
-                destroyBuffer(ctx->allocator(), rec->normal);
-                destroyBuffer(ctx->allocator(), rec->uv);
-                destroyBuffer(ctx->allocator(), rec->prevVertex);
-                destroyBuffer(ctx->allocator(), rec->blasScratch);
+                if (st->blas) destroyBlasRecord(*st->blas);
             }
             morphedMeshStates.clear();
 
@@ -3173,6 +3139,12 @@ namespace threepp {
             for (auto& b : emissiveTriBuffers) destroyBuffer(ctx->allocator(), b);
             destroyImage2D(ctx->allocator(), d, envImage);
             destroyImage2D(ctx->allocator(), d, blueNoiseImage);
+            // 1x1 stand-ins bound to the MS gbuffer descriptor slots whenever
+            // MSAA is off. Created once by ensureGbufDummyMS() (guarded by
+            // gbufDummyMSCreated_) and, until now, destroyed nowhere at all —
+            // 5 VkImage + 5 VkImageView leaked per device. They are not
+            // recreated on resize, so this destructor is their only owner.
+            for (auto& img : gbufDummyMS_) destroyImage2D(ctx->allocator(), d, img);
             destroyImage2D(ctx->allocator(), d, oceanFineHeightDummy);
             destroyImage2D(ctx->allocator(), d, oceanFoamDummy);
             destroyImage2D(ctx->allocator(), d, foamDetailImage);

@@ -305,8 +305,38 @@ namespace threepp {
             syncRigidBindings(alpha);
         }
 
-        void onPreSubstep(std::function<void(float)> cb) { preSubstep_.push_back(std::move(cb)); }
-        void onPostSubstep(std::function<void(float)> cb) { postSubstep_.push_back(std::move(cb)); }
+        // Substep hooks. Both return an opaque handle usable with
+        // removeSubstepCallback(): a callback almost always captures `this` from
+        // some longer-lived object (PhysxVehicle registers its update here), and
+        // without a way to unregister, destroying that object left the world
+        // calling into freed memory on the next step. Anything that registers
+        // must unregister in its destructor.
+        using SubstepHandle = std::size_t;
+
+        SubstepHandle onPreSubstep(std::function<void(float)> cb) {
+            const auto h = nextSubstepHandle_++;
+            preSubstep_.push_back({h, std::move(cb)});
+            return h;
+        }
+
+        SubstepHandle onPostSubstep(std::function<void(float)> cb) {
+            const auto h = nextSubstepHandle_++;
+            postSubstep_.push_back({h, std::move(cb)});
+            return h;
+        }
+
+        // Unregister a pre/post substep callback. Safe to call with a stale or
+        // already-removed handle (no-op), and safe to call from inside a
+        // callback — the step loop iterates by index over a snapshot.
+        void removeSubstepCallback(SubstepHandle handle) {
+            const auto drop = [handle](std::vector<SubstepEntry>& v) {
+                v.erase(std::remove_if(v.begin(), v.end(),
+                                       [handle](const SubstepEntry& e) { return e.handle == handle; }),
+                        v.end());
+            };
+            drop(preSubstep_);
+            drop(postSubstep_);
+        }
 
         // --- Proprioceptive sensors -------------------------------------------
         // A registered Sensor is sampled from the step loop once per fixed substep
@@ -385,6 +415,28 @@ namespace threepp {
                     std::remove_if(objBindings_.begin(), objBindings_.end(),
                                    [&](const ObjBinding& b) { return b.actor == actor; }),
                     objBindings_.end());
+            // InstancedMesh bindings hold actor pointers too, and used to be
+            // skipped here: the actor was released while instBindings_ still
+            // named it, so the next sync dereferenced freed memory.
+            //
+            // Null the slot rather than erasing it — instance i mirrors
+            // actors[i], so compacting the vector would silently repoint every
+            // later instance at a different body. A nulled slot is skipped by
+            // the sync loops, leaving that instance frozen at its last matrix;
+            // hiding or moving it is the caller's call. A binding is dropped
+            // only once every actor in it is gone.
+            for (auto& b : instBindings_) {
+                for (auto*& a : b.actors) {
+                    if (a == actor) a = nullptr;
+                }
+            }
+            instBindings_.erase(
+                    std::remove_if(instBindings_.begin(), instBindings_.end(),
+                                   [](const InstBinding& b) {
+                                       return std::all_of(b.actors.begin(), b.actors.end(),
+                                                          [](const ::physx::PxRigidActor* a) { return a == nullptr; });
+                                   }),
+                    instBindings_.end());
             scene_->removeActor(*actor);
             actor->release();
         }
@@ -747,10 +799,13 @@ namespace threepp {
         }
 
         void substep(float dt) {
-            for (auto& cb : preSubstep_) cb(dt);
+            // Iterate by index, re-reading size each time: a callback is allowed
+            // to register or remove a substep callback (a vehicle tearing itself
+            // down mid-step), which would invalidate a range-for's iterators.
+            for (size_t i = 0; i < preSubstep_.size(); ++i) preSubstep_[i].fn(dt);
             scene_->simulate(dt);
             scene_->fetchResults(true);
-            for (auto& cb : postSubstep_) cb(dt);
+            for (size_t i = 0; i < postSubstep_.size(); ++i) postSubstep_[i].fn(dt);
             // Body states are fresh here (post fetchResults). Advance the sim clock
             // and drive any registered sensors — appended after existing hooks so
             // the dt / stepping path above is untouched.
@@ -777,6 +832,7 @@ namespace threepp {
                     b.prevPoses.resize(b.actors.size());
                 }
                 for (size_t i = 0; i < b.actors.size(); ++i) {
+                    if (!b.actors[i]) continue;// removeActor() nulled this slot
                     b.prevPoses[i] = b.actors[i]->getGlobalPose();
                 }
                 b.hasPrev = true;
@@ -813,6 +869,7 @@ namespace threepp {
                 Vector3 pos, scale;
                 Quaternion rot;
                 for (size_t i = 0; i < b.actors.size(); ++i) {
+                    if (!b.actors[i]) continue;// removeActor() nulled this slot
                     b.mesh->getMatrixAt(i, m);
                     m.decompose(pos, rot, scale);
                     const auto cur = b.actors[i]->getGlobalPose();
@@ -849,8 +906,13 @@ namespace threepp {
 
         std::vector<ObjBinding> objBindings_;
         std::vector<InstBinding> instBindings_;
-        std::vector<std::function<void(float)>> preSubstep_;
-        std::vector<std::function<void(float)>> postSubstep_;
+        struct SubstepEntry {
+            SubstepHandle handle;
+            std::function<void(float)> fn;
+        };
+        std::vector<SubstepEntry> preSubstep_;
+        std::vector<SubstepEntry> postSubstep_;
+        SubstepHandle nextSubstepHandle_ = 1;// 0 reserved as "no handle"
         std::vector<Sensor*> sensors_;// non-owning; sampled each substep
     };
 

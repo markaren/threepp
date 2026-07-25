@@ -22,7 +22,7 @@ namespace {
             Object3D& object, Material& material, const Raycaster& raycaster, const Ray& ray,
             const Vector3& pA, const Vector3& pB, const Vector3& pC, Vector3& point) {
 
-        static Vector3 _intersectionPointWorld{};
+        static thread_local Vector3 _intersectionPointWorld{};
 
         if (material.side == Side::Back) {
 
@@ -60,10 +60,10 @@ namespace {
             const FloatBufferAttribute* uv2,
             unsigned int a, unsigned int b, unsigned int c) {
 
-        static Vector3 _vA{};
-        static Vector3 _vB{};
-        static Vector3 _vC{};
-        static Vector3 _intersectionPoint{};
+        static thread_local Vector3 _vA{};
+        static thread_local Vector3 _vB{};
+        static thread_local Vector3 _vC{};
+        static thread_local Vector3 _intersectionPoint{};
 
         position.setFromBufferAttribute(_vA, a);
         position.setFromBufferAttribute(_vB, b);
@@ -133,9 +133,9 @@ namespace {
 
         if (intersection) {
 
-            static Vector2 _uvA{};
-            static Vector2 _uvB{};
-            static Vector2 _uvC{};
+            static thread_local Vector2 _uvA{};
+            static thread_local Vector2 _uvB{};
+            static thread_local Vector2 _uvC{};
 
             if (uv) {
 
@@ -183,7 +183,7 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
 
     if (material() == nullptr) return;
 
-    static Sphere _sphere{};
+    static thread_local Sphere _sphere{};
 
     // Checking boundingSphere distance to ray
 
@@ -196,8 +196,8 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
 
     //
 
-    static Ray _ray{};
-    static Matrix4 _inverseMatrix{};
+    static thread_local Ray _ray{};
+    static thread_local Matrix4 _inverseMatrix{};
 
     _inverseMatrix.copy(*matrixWorld).invert();
     _ray.copy(raycaster.ray).applyMatrix4(_inverseMatrix);

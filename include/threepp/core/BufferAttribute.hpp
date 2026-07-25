@@ -80,9 +80,6 @@ namespace threepp {
 
             this->usage_ = source.usage_;
         }
-
-        inline static Vector3 _vector{};
-        inline static Vector2 _vector2{};
     };
 
     template<class T>
@@ -180,26 +177,33 @@ namespace threepp {
             return *this;
         }
 
+        // The scratch vectors below are deliberately function-local. They used to
+        // be shared `inline static` members, which made every one of these
+        // transforms a data race when two threads processed different geometries
+        // at once (loaders and sensor code do exactly that). A 12-byte stack
+        // local is also cheaper than thread-local storage.
         TypedBufferAttribute<T>& applyMatrix3(const Matrix3& m) {
 
             if (this->itemSize_ == 2) {
 
+                Vector2 v;
                 for (unsigned i = 0, l = this->count_; i < l; i++) {
 
-                    setFromBufferAttribute(_vector2, i);
-                    _vector2.applyMatrix3(m);
+                    setFromBufferAttribute(v, i);
+                    v.applyMatrix3(m);
 
-                    this->setXY(i, _vector2.x, _vector2.y);
+                    this->setXY(i, v.x, v.y);
                 }
 
             } else if (this->itemSize_ == 3) {
 
+                Vector3 v;
                 for (unsigned i = 0, l = this->count_; i < l; i++) {
 
-                    setFromBufferAttribute(_vector, i);
-                    _vector.applyMatrix3(m);
+                    setFromBufferAttribute(v, i);
+                    v.applyMatrix3(m);
 
-                    this->setXYZ(i, _vector.x, _vector.y, _vector.z);
+                    this->setXYZ(i, v.x, v.y, v.z);
                 }
             }
 
@@ -208,15 +212,16 @@ namespace threepp {
 
         TypedBufferAttribute<T>& applyMatrix4(const Matrix4& m) {
 
+            Vector3 v;
             for (unsigned i = 0, l = this->count_; i < l; i++) {
 
-                _vector.x = this->getX(i);
-                _vector.y = this->getY(i);
-                _vector.z = this->getZ(i);
+                v.x = this->getX(i);
+                v.y = this->getY(i);
+                v.z = this->getZ(i);
 
-                _vector.applyMatrix4(m);
+                v.applyMatrix4(m);
 
-                this->setXYZ(i, _vector.x, _vector.y, _vector.z);
+                this->setXYZ(i, v.x, v.y, v.z);
             }
 
             return *this;
@@ -224,15 +229,16 @@ namespace threepp {
 
         TypedBufferAttribute<T>& applyNormalMatrix(const Matrix3& m) {
 
+            Vector3 v;
             for (unsigned i = 0, l = this->count_; i < l; i++) {
 
-                _vector.x = this->getX(i);
-                _vector.y = this->getY(i);
-                _vector.z = this->getZ(i);
+                v.x = this->getX(i);
+                v.y = this->getY(i);
+                v.z = this->getZ(i);
 
-                _vector.applyNormalMatrix(m);
+                v.applyNormalMatrix(m);
 
-                this->setXYZ(i, _vector.x, _vector.y, _vector.z);
+                this->setXYZ(i, v.x, v.y, v.z);
             }
 
             return *this;
@@ -240,15 +246,16 @@ namespace threepp {
 
         TypedBufferAttribute<T>& transformDirection(const Matrix4& m) {
 
+            Vector3 v;
             for (unsigned i = 0, l = this->count_; i < l; i++) {
 
-                _vector.x = this->getX(i);
-                _vector.y = this->getY(i);
-                _vector.z = this->getZ(i);
+                v.x = this->getX(i);
+                v.y = this->getY(i);
+                v.z = this->getZ(i);
 
-                _vector.transformDirection(m);
+                v.transformDirection(m);
 
-                this->setXYZ(i, _vector.x, _vector.y, _vector.z);
+                this->setXYZ(i, v.x, v.y, v.z);
             }
 
             return *this;
