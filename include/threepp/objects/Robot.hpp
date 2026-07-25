@@ -164,9 +164,23 @@ namespace threepp {
                     break;
                 }
                 case JointType::Prismatic: {
-                    static Vector3 tempAxis;
-                    tempAxis.copy(info.axis).applyEuler(rotation);
-                    joint->position.copy(origPos).addScaledVector(tempAxis, value);
+                    if (info.range.has_value()) {
+                        value = info.range->clamp(value);
+                    }
+                    // The axis is given in the JOINT's own frame while
+                    // joint->position lives in the PARENT's, so the slide has to
+                    // be rotated by the joint's original orientation.
+                    //
+                    // This used to be applyEuler(rotation) — the ROBOT's own
+                    // rotation, which has nothing to do with this joint. With the
+                    // robot at identity that is a no-op, so the axis stayed in the
+                    // joint frame and any joint with an rpy origin slid along the
+                    // wrong world direction; rotating the robot then steered the
+                    // slide direction as well. computeEndEffectorTransform() has
+                    // always applied origQuat here, so the two disagreed.
+                    Vector3 axis = info.axis;
+                    axis.applyQuaternion(origQuat);
+                    joint->position.copy(origPos).addScaledVector(axis, value);
                     jointValues_[index] = value;
                     break;
                 }
