@@ -562,7 +562,7 @@ namespace threepp {
         if (!warned) {
             warned = true;
             std::cerr << "[VulkanRenderer] setPixelRatio: unsupported (the swapchain is "
-                         "native-pixel; use setRenderScale for resolution scaling) — "
+                         "native-pixel; use setRenderScale for resolution scaling) - "
                          "call ignored\n";
         }
     }
@@ -592,7 +592,7 @@ namespace threepp {
         static bool warned = false;
         if (!warned) {
             warned = true;
-            std::cerr << "[VulkanRenderer] clear(): unsupported — the deferred pipeline "
+            std::cerr << "[VulkanRenderer] clear(): unsupported - the deferred pipeline "
                          "rewrites every attachment each render(); call ignored\n";
         }
     }
@@ -606,7 +606,7 @@ namespace threepp {
         if (!warned) {
             warned = true;
             std::cerr << "[VulkanRenderer] setRenderTarget(): offscreen render targets are "
-                         "unsupported (swapchain-only renderer); call ignored — use "
+                         "unsupported (swapchain-only renderer); call ignored - use "
                          "readGBufferAOV/readRGBPixels for capture\n";
         }
     }

@@ -120,7 +120,7 @@ static int runValidation(rtdetr::RtDetrVk& model, const std::string& weightsPath
         for (float v : fw.decBboxes) if (v <= 0.f || v >= 1.f) ++oob;
         std::cout << "  DEC   row-aligned " << std::dec << rowMatched << "/300, set-twins "
                   << setMatched << "/300, boxes-in-(0,1) " << (oob == 0 ? "OK" : "CHECK")
-                  << "  (ordering differs on noise input — see notes)\n";
+                  << "  (ordering differs on noise input - see notes)\n";
         (void) sig;
     }
     std::cout.flush();

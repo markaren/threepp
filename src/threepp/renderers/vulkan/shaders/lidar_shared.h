@@ -28,7 +28,7 @@ namespace threepp::vulkan_lidar {
         float _pad1;
     };
     static_assert(sizeof(LidarBeam) == 32,
-                  "LidarBeam layout drifted — update the GLSL mirror below.");
+                  "LidarBeam layout drifted - update the GLSL mirror below.");
 
     // One per-beam result. instanceId = -1 indicates miss / dropped (below
     // detector threshold). returnNo currently always 1 (single return); the
@@ -43,7 +43,7 @@ namespace threepp::vulkan_lidar {
         float _pad[2];
     };
     static_assert(sizeof(LidarResult) == 48,
-                  "LidarResult layout drifted — update the GLSL mirror below.");
+                  "LidarResult layout drifted - update the GLSL mirror below.");
 
     // 56-byte push constant block. Fits well within the 128-byte minimum
     // pushConstants size that every Vulkan implementation guarantees.
@@ -80,7 +80,7 @@ namespace threepp::vulkan_lidar {
         float mediumAnisotropy;
     };
     static_assert(sizeof(LidarPushConstants) == 56,
-                  "LidarPushConstants layout drifted — update the GLSL mirror below.");
+                  "LidarPushConstants layout drifted - update the GLSL mirror below.");
 
 }// namespace threepp::vulkan_lidar
 

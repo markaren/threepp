@@ -537,7 +537,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                                         ? BlasRecord::LodState::Queued
                                         : BlasRecord::LodState::Failed;
                             } else if (!lodBudgetWarned_) {
-                                std::cerr << "[VulkanRenderer] auto-LOD: 256 MiB byte budget reached — "
+                                std::cerr << "[VulkanRenderer] auto-LOD: 256 MiB byte budget reached - "
                                              "no further chains will be generated this session\n";
                                 lodBudgetWarned_ = true;
                             }

@@ -448,7 +448,7 @@ int main(int argc, char** argv) {
             });
             const float skelH = maxY - minY;
             const float modelH = skelH > 1e-4f ? skelH : 1.f;
-            model->scale *= kCharHeight / modelH;// skeleton span â‰ˆ standing height
+            model->scale *= kCharHeight / modelH;// skeleton span ≈ standing height
             playerRig->add(model);
 
             mixer = std::make_unique<AnimationMixer>(*model);
@@ -493,7 +493,7 @@ int main(int argc, char** argv) {
             for (auto* a : {pa.idle, pa.walk, pa.walkBack, pa.run, pa.runBack,
                             pa.strafeL, pa.strafeR, pa.fire, pa.jump, pa.reload, pa.hit, pa.grenade})
                 if (a) a->setLoop(Loop::Repeat);
-            if (pa.reload) pa.reload->setDuration(kReloadTime); // one play-through â‰ˆ reload time
+            if (pa.reload) pa.reload->setDuration(kReloadTime); // one play-through ≈ reload time
             if (pa.grenade) pa.grenade->setDuration(kThrowTime);// one throw spans the cooldown
             // Stretch the jump clip to span the airtime so it plays ONCE (it's
             // shorter than the ~1s jump, so at natural speed it loops mid-air =
@@ -599,7 +599,7 @@ int main(int argc, char** argv) {
     Vector3 aimDir(0.f, 0.f, 1.f);// camera forward; where shots + grenades go (matches the crosshair)
     Vector3 playerPos{0, kPlayerHalf, 0};
 
-    // landing-edge detection (jump-clip â†’ locomotion transition)
+    // landing-edge detection (jump-clip → locomotion transition)
     bool wasGrounded = true;
 
     // ===== enemies ==========================================================
@@ -760,7 +760,7 @@ int main(int argc, char** argv) {
     bool firedEmpty = false;// debounce empty click
     bool gameOver = false;
     float hitMarkerT = 0.f;// >0 while the hit marker flashes
-    bool  hitWasKill = false;// last hit was a kill â†’ red, popped marker + score float
+    bool  hitWasKill = false;// last hit was a kill → red, popped marker + score float
     float scorePopT  = 0.f;  // >0 while the "+100" kill pop floats up
     float chipHealth = 100.f;// damage-lag bar: eases down toward `health`
     float chSpread   = 6.f;  // crosshair tick spread (eased toward dynamic target)
@@ -1202,7 +1202,7 @@ int main(int argc, char** argv) {
                               TextSprite::HorizontalAlignment::Right)};
     ui->add(aliveTxt.sprite);
 
-    // â”€â”€ compass strip (top-centre) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── compass strip (top-centre) ──────────────────────────────────────────
     // Cardinal labels + 15Â° ticks slide horizontally with camera yaw under a
     // fixed caret; a numeric heading readout sits below the caret. Ticks are
     // SVG rects inside a top-centre-anchored group; labels are independent
@@ -1249,7 +1249,7 @@ int main(int argc, char** argv) {
                                 TextSprite::HorizontalAlignment::Center)};
     ui->add(headingTxt.sprite);
 
-    // â”€â”€ radar (top-right) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── radar (top-right) ───────────────────────────────────────────────────
     // Heading-up scope: rings + cross from one SVG document, a rotating sweep
     // wedge, hostile blips from a small pool, a north tick that orbits with
     // yaw, and the player as a centre dot. Same instrument the ocean demo

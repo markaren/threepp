@@ -110,7 +110,7 @@ static int runValidation(rfdetr::RfDetrVk& model, const std::string& weightsPath
             if (mx > 0.05) ++bad;
         }
         std::cout << "  " << name << ": " << bad << "/" << rows << " query rows diverge (>0.05)"
-                  << " (top-K ordering on noise — see notes)\n";
+                  << " (top-K ordering on noise - see notes)\n";
     };
     rowDiag("logits", fw.predLogits, "pred_logits", 91);
     rowDiag("boxes", fw.predBoxes, "pred_boxes", 4);

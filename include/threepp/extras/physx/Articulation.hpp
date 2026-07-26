@@ -148,7 +148,7 @@ namespace threepp {
         void cpuOnly(const char* what) const {
             if (world_.directGpuEnabled())
                 throw std::runtime_error(std::string("Articulation.") + what +
-                                         ": not valid under direct_gpu — use PhysxGpuBatch for state I/O");
+                                         ": not valid under direct_gpu - use PhysxGpuBatch for state I/O");
         }
 
         // Episode reset: teleport the root to `pos` upright with zero velocity and

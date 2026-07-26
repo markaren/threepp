@@ -3382,7 +3382,7 @@ namespace threepp {
                 if (!warned) {
                     warned = true;
                     std::cerr << "[VulkanRenderer] skinned mesh has a non-float 'normal' "
-                                 "attribute — deforming geometry must keep float attributes "
+                                 "attribute - deforming geometry must keep float attributes "
                                  "(do not compressAttributes() skinned meshes). Skipping.\n";
                 }
             }

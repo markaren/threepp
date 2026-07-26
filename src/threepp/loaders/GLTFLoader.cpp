@@ -1300,7 +1300,7 @@ namespace threepp {
                     const int primMode = prim.value("mode", 4);
                     if (primMode != 4) {
                         std::cerr << "GLTFLoader: skipping primitive " << primIdx
-                                  << " of mesh " << meshIdx << " — unsupported mode "
+                                  << " of mesh " << meshIdx << " - unsupported mode "
                                   << primMode << " (only TRIANGLES is supported)" << std::endl;
                         ++primIdx;
                         continue;

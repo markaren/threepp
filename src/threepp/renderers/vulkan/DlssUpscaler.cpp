@@ -190,7 +190,7 @@ namespace threepp::vulkan {
                 &fci, NVSDK_NGX_Version_API);
         if (NVSDK_NGX_FAILED(r)) {
             std::fprintf(stderr,
-                         "[threepp] DLSS: NGX init failed (0x%08x) — "
+                         "[threepp] DLSS: NGX init failed (0x%08x) - "
                          "falling back to FSR/TAA.\n", static_cast<unsigned>(r));
             return false;// nothing to shut down
         }
@@ -206,7 +206,7 @@ namespace threepp::vulkan {
         }
         if (!available) {
             std::fprintf(stderr,
-                         "[threepp] DLSS: not available on this GPU/driver — "
+                         "[threepp] DLSS: not available on this GPU/driver - "
                          "falling back to FSR/TAA.\n");
             NVSDK_NGX_VULKAN_Shutdown1(ctx_.device());
             ngxInited_ = false;
@@ -275,7 +275,7 @@ namespace threepp::vulkan {
                 ctx_.device(), initCb, 1u, 1u, &feature_, params_, &cp);
         if (NVSDK_NGX_FAILED(r) || !feature_) {
             std::fprintf(stderr,
-                         "[threepp] DLSS: feature creation failed (0x%08x) — "
+                         "[threepp] DLSS: feature creation failed (0x%08x) - "
                          "falling back to FSR/TAA.\n", static_cast<unsigned>(r));
             feature_ = nullptr;
             return false;
@@ -403,7 +403,7 @@ namespace threepp::vulkan {
             // frame loop then falls back to FSR/TAA and recreates the feature.
             if (evalFails_ == 0) {
                 std::fprintf(stderr,
-                             "[threepp] DLSS: evaluate failed (0x%08x) — render %ux%u, "
+                             "[threepp] DLSS: evaluate failed (0x%08x) - render %ux%u, "
                              "display %ux%u, feature %ux%u; will self-heal after 3 failures.\n",
                              static_cast<unsigned>(r),
                              in.renderWidth, in.renderHeight,

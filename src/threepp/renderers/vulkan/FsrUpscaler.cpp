@@ -65,7 +65,7 @@ namespace threepp::vulkan {
             if (!m) {
                 std::fprintf(stderr,
                              "[threepp] FSR: LoadLibrary(amd_fidelityfx_vk.dll) failed "
-                             "(err %lu) — falling back to the built-in TAA upscaler.\n",
+                             "(err %lu) - falling back to the built-in TAA upscaler.\n",
                              static_cast<unsigned long>(GetLastError()));
                 return false;
             }
@@ -195,7 +195,7 @@ namespace threepp::vulkan {
         const ffxReturnCode_t rc = g_ffx.CreateContext(&context, &createDesc.header, nullptr);
         if (rc != FFX_API_RETURN_OK || context == nullptr) {
             std::fprintf(stderr,
-                         "[threepp] FSR: ffxCreateContext failed (code %u) — "
+                         "[threepp] FSR: ffxCreateContext failed (code %u) - "
                          "falling back to the built-in TAA upscaler.\n",
                          static_cast<unsigned>(rc));
             context_ = nullptr;

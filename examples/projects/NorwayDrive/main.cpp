@@ -1204,7 +1204,7 @@ int main(int argc, char** argv) {
                           << dtSpikeFrame << "  (mode " << (realDt ? "REAL-VARIABLE" : "fixed 1/60") << ")\n"
                           << "[drive] stage max ms: recook " << maxRecookMs << ", world.step " << maxStepMs
                           << ", tiles.update " << maxTileMs << "; hitches>33ms after warmup " << bigDt << "\n"
-                          << "[drive] SMOOTHNESS: physics |Δv| max " << maxPhysSpeedJump << " m/s, jolts(>1m/s) "
+                          << "[drive] SMOOTHNESS: physics |dv| max " << maxPhysSpeedJump << " m/s, jolts(>1m/s) "
                           << physSpeedGlitches << "; render-backward(rubber-band) frames " << renderBackward << "\n"
                           << std::flush;
                 std::exit(0);

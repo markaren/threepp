@@ -103,7 +103,7 @@ namespace threepp::vulkan {
         const VkResult r = vkAllocateDescriptorSets(ctx_.device(), &dsAi, &ds);
         if (r == VK_ERROR_OUT_OF_POOL_MEMORY || r == VK_ERROR_FRAGMENTED_POOL) {
             throw std::runtime_error(
-                    "TetSkinningPipeline: descriptor pool exhausted — scene has more "
+                    "TetSkinningPipeline: descriptor pool exhausted - scene has more "
                     "than kMaxTetMeshes=" +
                     std::to_string(kMaxTetMeshes) + " tet-skinned meshes (live count " +
                     std::to_string(liveSetCount_) + "). Bump kMaxTetMeshes in "

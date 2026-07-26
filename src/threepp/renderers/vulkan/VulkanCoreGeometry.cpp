@@ -99,7 +99,7 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
             // a warning rather than killing the whole renderer.
             for (size_t i = 0; i < positions.size(); ++i) {
                 if (!std::isfinite(positions[i])) {
-                    std::cerr << "[VulkanRenderer] buildBlasFor: skipping geometry — "
+                    std::cerr << "[VulkanRenderer] buildBlasFor: skipping geometry - "
                               << "position[" << i << "] is non-finite ("
                               << positions[i] << "), vertexCount=" << vertexCount << '\n';
                     return nullptr;
@@ -109,7 +109,7 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
                 const auto& indices = idxAttr->array();
                 for (size_t i = 0; i < indices.size(); ++i) {
                     if (indices[i] >= vertexCount) {
-                        std::cerr << "[VulkanRenderer] buildBlasFor: skipping geometry — "
+                        std::cerr << "[VulkanRenderer] buildBlasFor: skipping geometry - "
                                   << "index[" << i << "]=" << indices[i]
                                   << " >= vertexCount=" << vertexCount << '\n';
                         return nullptr;
@@ -637,7 +637,7 @@ void VulkanRendererCore::CoreImpl::drainLodResults() {
                     // didn't fit are simply never selectable.
                     if (lodIndexBytes_ + lodBlasBytes_ >= kLodByteBudget) {
                         if (!lodBudgetWarned_) {
-                            std::cerr << "[VulkanRenderer] auto-LOD: 256 MiB byte budget reached — "
+                            std::cerr << "[VulkanRenderer] auto-LOD: 256 MiB byte budget reached - "
                                          "truncating chains; no further levels will be built this session\n";
                             lodBudgetWarned_ = true;
                         }
@@ -786,7 +786,7 @@ void VulkanRendererCore::CoreImpl::refreshGeomBlasBatch(const std::vector<Vulkan
                 const auto& p = posAttr->array();
                 for (size_t i = 0; i < p.size(); ++i) {
                     if (!std::isfinite(p[i])) {
-                        std::cerr << "[VulkanRenderer] refreshGeomBlasBatch: skipping geom — "
+                        std::cerr << "[VulkanRenderer] refreshGeomBlasBatch: skipping geom - "
                                   << "position[" << i << "] is non-finite (" << p[i] << ")\n";
                         ok = false;
                         break;

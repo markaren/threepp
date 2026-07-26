@@ -106,7 +106,7 @@ namespace threepp::vulkan {
         const VkResult r = vkAllocateDescriptorSets(ctx_.device(), &dsAi, &ds);
         if (r == VK_ERROR_OUT_OF_POOL_MEMORY || r == VK_ERROR_FRAGMENTED_POOL) {
             throw std::runtime_error(
-                    "SkinningPipeline: descriptor pool exhausted — "
+                    "SkinningPipeline: descriptor pool exhausted - "
                     "scene has more than kMaxSkinnedMeshes=" +
                     std::to_string(kMaxSkinnedMeshes) + " SkinnedMesh instances "
                     "(live count " + std::to_string(liveSetCount_) + "). "

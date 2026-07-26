@@ -186,7 +186,7 @@ void RfDetrVk::loadWeights(const std::string& path) {
         ++ckptDecLayers;
     if (ckptDecLayers != cfg_.decLayers)
         throw std::runtime_error(
-                "RfDetrVk: variant/weights mismatch — config expects dec_layers=" +
+                "RfDetrVk: variant/weights mismatch - config expects dec_layers=" +
                 std::to_string(cfg_.decLayers) + " but checkpoint has " + std::to_string(ckptDecLayers) +
                 ". Pass the RfDetrVariant matching these weights.");
 

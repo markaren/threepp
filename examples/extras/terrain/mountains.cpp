@@ -290,7 +290,7 @@ int main(int argc, char** argv) {
         scene.environment = env;// image-based lighting (env CDF + MIS in the PT)
     } else {
         scene.background = Color(0.55f, 0.70f, 0.92f);
-        std::cerr << "[mountains] HDRI not found — falling back to flat sky background\n";
+        std::cerr << "[mountains] HDRI not found - falling back to flat sky background\n";
     }
 
     // Directional sun. Driven each frame from azimuth/elevation sliders; the

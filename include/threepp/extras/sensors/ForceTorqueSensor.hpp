@@ -83,12 +83,12 @@ namespace threepp {
         void onRegister(PhysxWorld& world) override {
             if (world.directGpuEnabled()) {
                 throw std::runtime_error(
-                        "ForceTorqueSensor: not valid under direct_gpu — the CPU articulation cache "
+                        "ForceTorqueSensor: not valid under direct_gpu - the CPU articulation cache "
                         "is not synced. Read link forces through PhysxGpuBatch instead.");
             }
             if (!art_->finalized()) {
                 throw std::runtime_error(
-                        "ForceTorqueSensor: finalize() the articulation before registering — the "
+                        "ForceTorqueSensor: finalize() the articulation before registering - the "
                         "state cache can only be created once it belongs to a scene.");
             }
             if (!cache_) cache_ = art_->rawArt()->createCache();

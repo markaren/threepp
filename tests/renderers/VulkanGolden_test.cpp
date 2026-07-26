@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
             int rw = 0, rh = 0;
             const std::vector<unsigned char> golden = readPPM(ref, rw, rh);
             if (golden.empty() || rw != kW || rh != kH || golden.size() != px.size()) {
-                std::printf("[%s] MISSING/!match reference %s — run --update\n",
+                std::printf("[%s] MISSING/!match reference %s - run --update\n",
                             gs.name.c_str(), ref.string().c_str());
                 ++missing;
             } else {

@@ -798,7 +798,7 @@ void VulkanRendererCore::CoreImpl::renderFrame(Object3D& scene, Camera& camera) 
                         } else {
                             dlssActive_ = false;// give up until the next resize
                             std::fprintf(stderr,
-                                         "[threepp] DLSS: persistent evaluate failure — "
+                                         "[threepp] DLSS: persistent evaluate failure - "
                                          "disabled until the next display resize (FSR/TAA fallback).\n");
                         }
                     }

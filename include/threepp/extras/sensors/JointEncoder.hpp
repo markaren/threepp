@@ -121,7 +121,7 @@ namespace threepp {
             // registration rather than silently record garbage.
             if (world.directGpuEnabled()) {
                 throw std::runtime_error(
-                        "JointEncoder: not valid under direct_gpu — per-joint CPU state is not "
+                        "JointEncoder: not valid under direct_gpu - per-joint CPU state is not "
                         "synced. Read joint state through PhysxGpuBatch instead.");
             }
             reset();

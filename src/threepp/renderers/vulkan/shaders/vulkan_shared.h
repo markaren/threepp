@@ -128,7 +128,7 @@ namespace threepp::vulkan_pt {
     // above, the size changes and this fires. Update the GLSL `MaterialDesc`
     // mirror below to match before bumping the expected size.
     static_assert(sizeof(MaterialDesc) == 512,
-                  "MaterialDesc size changed — update the GLSL mirror in this file too.");
+                  "MaterialDesc size changed - update the GLSL mirror in this file too.");
 }
 
 #else  // GLSL

@@ -88,7 +88,7 @@ namespace {
         int over3 = 0;
         for (float v : d) if (v > 3.f) ++over3;
         std::cout << "[norway] road conformance vs pack y over " << d.size() << " points (roads="
-                  << net.roadCount() << "): median |Δh| " << pct(0.5f) << " m, p90 " << pct(0.9f)
+                  << net.roadCount() << "): median |dh| " << pct(0.5f) << " m, p90 " << pct(0.9f)
                   << " m, max " << d.back() << " m; " << over3
                   << " pts > 3 m (likely bridges/tunnels)\n"
                   << std::flush;
@@ -364,7 +364,7 @@ int main(int argc, char** argv) {
         scene.environment = env;
     } else {
         scene.background = Color(0.55f, 0.70f, 0.92f);
-        std::cerr << "[norway] HDRI env not found — flat sky fallback\n";
+        std::cerr << "[norway] HDRI env not found - flat sky fallback\n";
     }
 
     auto tiles = terrain::TileTerrain::create(prov, tileOpts);
