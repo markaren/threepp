@@ -23,6 +23,8 @@ set(publicHeaders
         "threepp/controls/OrbitControls.hpp"
         "threepp/controls/TransformControls.hpp"
 
+        "threepp/core/Assert.hpp"
+        "threepp/core/AttributeView.hpp"
         "threepp/core/BufferAttribute.hpp"
         "threepp/core/BufferGeometry.hpp"
         "threepp/core/Clock.hpp"
@@ -313,6 +315,7 @@ set(sources
         "threepp/controls/OrbitControls.cpp"
         "threepp/controls/TransformControls.cpp"
 
+        "threepp/core/AttributeView.cpp"
         "threepp/core/BufferGeometry.cpp"
         "threepp/core/Clock.cpp"
         "threepp/core/EventDispatcher.cpp"

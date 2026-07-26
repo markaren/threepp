@@ -706,9 +706,11 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     const unsigned int av = g->attributesVersion();
                     if (av != fp.attrVersion) {// attribute added/replaced/removed — re-cache
                         fp.attrVersion = av;
-                        fp.posAttr  = g->getAttribute<float>("position");
-                        fp.normAttr = g->getAttribute<float>("normal");
-                        fp.uvAttr   = g->getAttribute<float>("uv");
+                        // Untyped: only `version` is polled off these, and typed
+                        // lookups would come back null for narrowed attributes.
+                        fp.posAttr  = g->getAttribute("position");
+                        fp.normAttr = g->getAttribute("normal");
+                        fp.uvAttr   = g->getAttribute("uv");
                         fp.idxAttr  = g->getIndex();
                     }
                     unsigned int gv = 0;// must mirror geomVersionOf()
@@ -811,9 +813,9 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     fp.matTyped  = matPtr;
                     fp.geomTyped = m->geometry().get();
                     fp.attrVersion = fp.geomTyped->attributesVersion();
-                    fp.posAttr  = fp.geomTyped->getAttribute<float>("position");
-                    fp.normAttr = fp.geomTyped->getAttribute<float>("normal");
-                    fp.uvAttr   = fp.geomTyped->getAttribute<float>("uv");
+                    fp.posAttr  = fp.geomTyped->getAttribute("position");
+                    fp.normAttr = fp.geomTyped->getAttribute("normal");
+                    fp.uvAttr   = fp.geomTyped->getAttribute("uv");
                     fp.idxAttr  = fp.geomTyped->getIndex();
                     const Material* matKey = matPtr;
                     auto memoIt = fpMemo.find(matKey);
@@ -1840,7 +1842,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                         }
                     }
                     if (it == blasCache.end()) {
-                        auto rec = buildBlasFor(*m->geometry());
+                        auto rec = buildBlasFor(*m->geometry(), /*allowPacked=*/true);
                         if (!rec) continue;// degenerate / unsupported geometry
                         rec->liveCheck = m->geometry();
                         it = blasCache.emplace(geomKey, std::move(rec)).first;
@@ -1920,7 +1922,9 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                                              mat && mat->vertexColors;
                     gdesc.colorAddress = useVtxColor ? recPtr->color.address : 0;
                 }
-                gdesc._pad = 0;
+                // Bit 0 (moved-sticky) is stamped per frame in VulkanCoreFrame;
+                // seed it 0 here and carry the packed-attribute bits above it.
+                gdesc.flags = recPtr->packedMask << 1;
                 geomDescs[i] = gdesc;
 
                 const Material* matKey = m->material().get();
@@ -2099,6 +2103,15 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
             rasterMatTexValid_.fill(0);
             prevSceneFingerprint = std::move(currFp);
             sceneBuilt_ = true;
+
+            // Companion to the post-init dump: with the scene's BLASes +
+            // geometry buffers now resident, allocationBytes − the post-init
+            // baseline is the scene's true device cost (the OS-level per-
+            // process counter only moves in VMA block granularity, so it
+            // under-reports buffer-level savings such as packed attributes).
+            if (const char* e = std::getenv("THREEPP_VK_MEMDUMP"); e && *e && *e != '0') {
+                dumpMemoryStats("scene-built");
+            }
         }
 
 void VulkanRendererCore::CoreImpl::cacheCullFlags(const std::vector<MaterialDesc>& mds) {

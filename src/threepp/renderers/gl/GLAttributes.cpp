@@ -1,6 +1,10 @@
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
+#include "threepp/core/Assert.hpp"
 #include "threepp/core/InterleavedBufferAttribute.hpp"
+
+#include <cstddef>
+#include <stdexcept>
 
 #ifndef __EMSCRIPTEN__
 #include <glad/glad.h>
@@ -11,35 +15,46 @@
 using namespace threepp;
 using namespace threepp::gl;
 
+namespace {
+
+    // GLBindingStates already dispatches glVertexAttribIPointer vs
+    // glVertexAttribPointer off this enum and forwards the attribute's
+    // `normalized` flag, so widening the table here is all that a narrow
+    // attribute type needs to render correctly.
+    GLint glTypeOf(AttributeType type) {
+
+        switch (type) {
+            case AttributeType::Float: return GL_FLOAT;
+            case AttributeType::UInt32: return GL_UNSIGNED_INT;
+            case AttributeType::UInt16: return GL_UNSIGNED_SHORT;
+            case AttributeType::Int16: return GL_SHORT;
+            case AttributeType::UInt8: return GL_UNSIGNED_BYTE;
+            case AttributeType::Int8: return GL_BYTE;
+        }
+
+        throw std::runtime_error("[GLAttributes] unhandled AttributeType");
+    }
+
+}// namespace
+
 Buffer GLAttributes::createBuffer(BufferAttribute* attribute, GLenum bufferType) {
 
     const auto usage = attribute->getUsage();
+    const auto type = attribute->type();
 
     GLuint buffer;
     glGenBuffers(1, &buffer);
     glBindBuffer(bufferType, buffer);
 
-    GLint type;
-    GLsizei bytesPerElement;
-    if (attribute->typed<unsigned int>()) {
-        type = GL_UNSIGNED_INT;
-        bytesPerElement = sizeof(unsigned int);
-        auto attr = attribute->typed<unsigned int>();
-        const auto& array = attr->array();
-        glBufferData(bufferType, static_cast<GLsizei>(array.size() * bytesPerElement), array.data(), as_integer(usage));
+    glBufferData(bufferType,
+                 static_cast<GLsizeiptr>(attribute->byteLength()),
+                 attribute->data(),
+                 as_integer(usage));
 
-    } else if (attribute->typed<float>()) {
-        type = GL_FLOAT;
-        bytesPerElement = sizeof(float);
-        auto attr = attribute->typed<float>();
-        const auto& array = attr->array();
-        glBufferData(bufferType, static_cast<GLsizei>(array.size() * bytesPerElement), array.data(), as_integer(usage));
-    } else {
-
-        throw std::runtime_error("TODO");
-    }
-
-    return {buffer, type, bytesPerElement, attribute->version};// attribute->version + 1 (?)
+    return {buffer,
+            glTypeOf(type),
+            static_cast<int>(threepp::bytesPerElement(type)),
+            attribute->version};// attribute->version + 1 (?)
 }
 
 void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute* attribute, GLenum bufferType, int bytesPerElement) {
@@ -48,43 +63,26 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute* attribute, GLenu
 
     glBindBuffer(bufferType, buffer);
 
+    // updateRange is expressed in scalar elements, not items.
+    const auto* base = static_cast<const std::byte*>(attribute->data());
+
     if (updateRange.count == -1) {
 
-        if (attribute->typed<unsigned int>()) {
-
-            auto attr = attribute->typed<unsigned int>();
-            const auto& array = attr->array();
-            glBufferSubData(bufferType, 0, static_cast<GLsizei>(array.size() * bytesPerElement), array.data());
-
-        } else if (attribute->typed<float>()) {
-
-            auto attr = attribute->typed<float>();
-            const auto& array = attr->array();
-            glBufferSubData(bufferType, 0, static_cast<GLsizei>(array.size() * bytesPerElement), array.data());
-        } else {
-
-            throw std::runtime_error("TODO");
-        }
+        glBufferSubData(bufferType, 0, static_cast<GLsizeiptr>(attribute->byteLength()), base);
 
     } else {
 
-        if (attribute->typed<unsigned int>()) {
+        // Point glBufferSubData straight into the attribute's storage. This used
+        // to materialise a fresh std::vector holding a copy of the sub-range on
+        // every partial update — an allocation plus a memcpy per dirty attribute
+        // per frame, for data the driver was about to copy again anyway.
+        const auto offsetBytes = static_cast<GLintptr>(updateRange.offset) * bytesPerElement;
+        const auto sizeBytes = static_cast<GLsizeiptr>(updateRange.count) * bytesPerElement;
 
-            auto attr = attribute->typed<unsigned int>();
-            const auto& array = attr->array();
-            std::vector<unsigned int> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
-            glBufferSubData(bufferType, updateRange.offset * bytesPerElement, static_cast<GLsizei>(sub.size() * bytesPerElement), sub.data());
+        THREEPP_ASSERT_MSG(static_cast<size_t>(offsetBytes + sizeBytes) <= attribute->byteLength(),
+                           "GLAttributes: updateRange extends past the attribute array");
 
-        } else if (attribute->typed<float>()) {
-
-            auto attr = attribute->typed<float>();
-            const auto& array = attr->array();
-            std::vector<float> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
-            glBufferSubData(bufferType, updateRange.offset * bytesPerElement, static_cast<GLsizei>(sub.size() * bytesPerElement), sub.data());
-        } else {
-
-            throw std::runtime_error("TODO");
-        }
+        glBufferSubData(bufferType, offsetBytes, sizeBytes, base + offsetBytes);
 
         updateRange.count = -1;
     }

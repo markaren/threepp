@@ -47,6 +47,7 @@
 #include "threepp/extras/terrain/TerrainTiles.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
+#include "threepp/utils/BufferGeometryUtils.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 
@@ -817,6 +818,16 @@ int main(int argc, char** argv) {
     // period; renderPos = interpolated car pos the camera tracks; carScreen = the
     // car's on-screen NDC (what the eye judges). rawPos = un-interpolated actor pos.
     std::string traceCsv = "frame,rawDtMs,renderX,renderY,renderZ,rawX,rawY,rawZ,screenX,screenY,physSpeed,camPitch\n";
+
+    // The world is fully built: narrow the static vertex attributes. Terrain
+    // ribbon, roads and the car shell qualify; ocean (DisplacedMesh), grass and
+    // any skinned meshes are skipped automatically. Tiles the streamer creates
+    // later arrive float — startup geometry is where the bulk of the bytes are.
+    {
+        const size_t saved = compressSceneAttributes(scene);
+        std::cout << "[drive] compressed vertex attributes: "
+                  << saved / (1024.0 * 1024.0) << " MiB reclaimed\n";
+    }
 
     canvas.animate([&] {
         // Capture normally steps at a fixed 1/60 (deterministic verification);

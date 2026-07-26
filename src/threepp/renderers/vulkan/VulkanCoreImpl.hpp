@@ -39,6 +39,7 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/canvas/Canvas.hpp"
+#include "threepp/core/AttributeView.hpp"
 #include "threepp/core/InterleavedBufferAttribute.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/lights/AmbientLight.hpp"
@@ -265,6 +266,15 @@ namespace threepp {
             // Surfaced to the shaders via GeometryDesc::colorAddress / DrawInfo::
             // colorAddr, gated on the material's vertexColors flag at fill time.
             Buffer color;
+            // Which of the optional attribute buffers hold PACKED data instead
+            // of tightly-packed float (bit 0: normal snorm16x4 — 8 B/vertex,
+            // bit 1: uv unorm16x2 — 4 B/vertex, bit 2: color unorm8x4 —
+            // 4 B/vertex). Set by buildBlasFor for static geometry only;
+            // deforming records (skinned / tet / displaced / grass / morphed)
+            // stay float because their compute passes rewrite these buffers
+            // every frame. Mirrored to GeometryDesc::packedAttrs and
+            // DrawInfoGpu::packedAttrs; shaders branch per fetch.
+            uint32_t packedMask = 0;
             // True for FFT-displaced ocean meshes — gates world-space foam +
             // thin-shell water shading downstream (surfaced to the shaders via
             // GeometryDesc::foamAddress, now a 0/1 flag). Replaces a per-vertex
@@ -666,7 +676,13 @@ namespace threepp {
             // chit then skips the vertex-color multiply. Set per-instance below.
             VkDeviceAddress colorAddress;
             uint32_t indexed;
-            uint32_t _pad;
+            // Bit 0: sticky "recently moved" flag, stamped per frame by the
+            // loop in VulkanCoreFrame.cpp (reflection/GI history gates read it).
+            // Bits 1..3: BlasRecord::packedMask << 1 — attribute buffers hold
+            // packed data (bit1 nrm oct-snorm16x2 / bit2 uv unorm16x2 / bit3
+            // col unorm8x4). Shaders mask accordingly; a bare `!= 0` test on
+            // this word is WRONG for the moved gate.
+            uint32_t flags;
         };
         // MaterialDesc layout lives in vulkan_shared.h (the same file the GLSL
         // deferred-shade / gbuffer / LIDAR shaders pull in via #include).
@@ -1480,11 +1496,10 @@ namespace threepp {
             // flattens smooth glossy surfaces' shading for free (the
             // CarConcept regression; see generateChain's header doc). On the
             // soup path they additionally drive the weld's seam preservation.
-            if (auto* nrmAttr = geom.getAttribute<float>("normal");
-                nrmAttr && nrmAttr->count() == vtxCount &&
-                nrmAttr->array().size() == static_cast<size_t>(vtxCount) * 3) {
-                const auto& nrm = nrmAttr->array();
-                job.normals.assign(nrm.begin(), nrm.end());
+            if (FloatAttributeView nrm{geom.getAttribute("normal")};
+                nrm && nrm.count() == vtxCount &&
+                nrm.size() == static_cast<size_t>(vtxCount) * 3) {
+                job.normals.assign(nrm.data(), nrm.data() + nrm.size());
             }
             if (const auto* idxAttr = geom.getIndex()) {
                 const auto& idx = idxAttr->array();
@@ -1492,11 +1507,10 @@ namespace threepp {
             } else {
                 // Soup weld only: UVs join the binary-equality test so
                 // genuine UV seams stay split.
-                if (auto* uvAttr = geom.getAttribute<float>("uv");
-                    uvAttr && uvAttr->count() == vtxCount &&
-                    uvAttr->array().size() == static_cast<size_t>(vtxCount) * 2) {
-                    const auto& uv = uvAttr->array();
-                    job.uvs.assign(uv.begin(), uv.end());
+                if (FloatAttributeView uv{geom.getAttribute("uv")};
+                    uv && uv.count() == vtxCount &&
+                    uv.size() == static_cast<size_t>(vtxCount) * 2) {
+                    job.uvs.assign(uv.data(), uv.data() + uv.size());
                 }
             }
             ensureLodWorkerStarted();
@@ -3322,19 +3336,27 @@ namespace threepp {
         }
 
         static unsigned int geomVersionOf(const BufferGeometry& g) {
+            // Untyped lookups: only `version` is read, and the typed getter
+            // returns null for narrowed (compressAttributes) attributes, which
+            // would silently drop their edits from the composite version.
             unsigned int v = 0;
-            if (auto* a = g.getAttribute<float>("position")) v += a->version;
-            if (auto* a = g.getAttribute<float>("normal"))   v += a->version;
-            if (auto* idx = g.getIndex())                     v += idx->version;
-            if (auto* a = g.getAttribute<float>("uv"))        v += a->version;
-            if (auto* a = g.getAttribute<float>("color"))     v += a->version;
+            if (auto* a = g.getAttribute("position")) v += a->version;
+            if (auto* a = g.getAttribute("normal"))   v += a->version;
+            if (auto* idx = g.getIndex())              v += idx->version;
+            if (auto* a = g.getAttribute("uv"))        v += a->version;
+            if (auto* a = g.getAttribute("color"))     v += a->version;
             return v;
         }
 
         // Build a single BLAS for the given geometry. Vertex / index buffers
         // are uploaded host-mapped, then the AS is built into freshly allocated
         // device storage. The temporary scratch buffer is destroyed on exit.
-        std::unique_ptr<BlasRecord> buildBlasFor(const BufferGeometry& geom);
+        // allowPacked: pack normal/uv/color into narrow device formats
+        // (BlasRecord::packedMask). Static geometry only — the deforming
+        // callers (skinned / tet / displaced / grass / morphed) keep the
+        // default false because their per-frame compute rewrites assume
+        // tightly-packed float layouts.
+        std::unique_ptr<BlasRecord> buildBlasFor(const BufferGeometry& geom, bool allowPacked = false);
 
         // Allocate or look up the per-SkinnedMesh BLAS state. Builds the BLAS
         // once with the current pose; subsequent dirty frames go through
@@ -3344,10 +3366,25 @@ namespace threepp {
             auto it = skinnedMeshStates.find(&sm);
             if (it != skinnedMeshStates.end()) return it->second.get();
 
+            // Deforming paths (skinned / tet / morph / displaced) stay
+            // float-typed by design: the skinning compute rewrites these very
+            // buffers every frame, so upload-time widening would be a per-frame
+            // tax and the narrow source array would be dead weight. A narrowed
+            // normal here means someone ran compressAttributes() on a skinned
+            // mesh — warn instead of silently dropping it from the scene.
             auto* posAttr     = sm.geometry()->getAttribute<float>("position");
             auto* nrmAttr     = sm.geometry()->getAttribute<float>("normal");
             auto* skinIdxAttr = sm.geometry()->getAttribute<float>("skinIndex");
             auto* skinWAttr   = sm.geometry()->getAttribute<float>("skinWeight");
+            if (!nrmAttr && sm.geometry()->hasAttribute("normal")) {
+                static bool warned = false;
+                if (!warned) {
+                    warned = true;
+                    std::cerr << "[VulkanRenderer] skinned mesh has a non-float 'normal' "
+                                 "attribute — deforming geometry must keep float attributes "
+                                 "(do not compressAttributes() skinned meshes). Skipping.\n";
+                }
+            }
             if (!posAttr || !nrmAttr || !skinIdxAttr || !skinWAttr) return nullptr;
             if (!sm.skeleton || sm.skeleton->bones.empty()) return nullptr;
 
@@ -4934,7 +4971,7 @@ namespace threepp {
             uint32_t indexed;
             float    polygonOffset;    // clip-z depth bias (reverse-Z: + = toward near = on top)
             uint32_t stableId;         // stable per-object instance id (-> outIds.y)
-            uint32_t _pad;             // keep 8-byte array stride (matches scalar buffer_reference)
+            uint32_t packedAttrs;      // BlasRecord::packedMask (also keeps 8-byte array stride)
         };
         static_assert(sizeof(DrawInfoGpu) == 136,
                       "DrawInfoGpu layout drifted from gbuffer_indirect.vert");
@@ -5484,6 +5521,9 @@ namespace threepp {
         // Ensure the per-geometry particle vertex/index buffers exist and the
         // animated attributes (position/normal/color) are current. uv + index
         // are static (uploaded once). Returns nullptr on malformed geometry.
+        // Float-typed reads on purpose: the animated attributes re-upload on
+        // every version bump, so narrow (compressAttributes) storage would
+        // re-widen per update — particle geometry must stay float.
         ParticleGeomRec* ensureParticleGeom(const std::shared_ptr<BufferGeometry>& geomSp) {
             BufferGeometry* geom = geomSp.get();
             if (!geom) return nullptr;
@@ -5881,9 +5921,9 @@ namespace threepp {
             if (!posAttr || posAttr->count() == 0) return nullptr;
             auto* idxAttr = geom->getIndex();
             // Optional per-vertex color, used by AxesHelper-style overlays.
-            const auto colAttr = geom->hasAttribute("color")
-                                         ? geom->getAttribute<float>("color")
-                                         : nullptr;
+            // Untyped so a narrowed (compressAttributes) color still counts;
+            // the upload below widens it through a FloatAttributeView.
+            const auto* colAttr = geom->getAttribute("color");
 
             const uint32_t posVer = posAttr->version;
             const uint32_t idxVer = (idxAttr && idxAttr->count() > 0) ? idxAttr->version : 0u;
@@ -5949,8 +5989,8 @@ namespace threepp {
 
                 // Color buffer follows the same in-place / recreate logic.
                 if (colAttr && colAttr->count() > 0) {
-                    const auto& colArr = colAttr->array();
-                    const VkDeviceSize cbBytes = colArr.size() * sizeof(float);
+                    FloatAttributeView colView(colAttr);
+                    const VkDeviceSize cbBytes = colView.size() * sizeof(float);
                     if (rec.color.handle == VK_NULL_HANDLE || cbBytes > rec.color.size) {
                         if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.color);
                         rec.color = createBuffer(
@@ -5959,7 +5999,7 @@ namespace threepp {
                                 VMA_MEMORY_USAGE_AUTO,
                                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
                     }
-                    uploadHostVisible(ctx->allocator(), rec.color, colArr.data(), cbBytes);
+                    uploadHostVisible(ctx->allocator(), rec.color, colView.data(), cbBytes);
                     rec.colorVersion = colVer;
                 } else if (rec.color.handle != VK_NULL_HANDLE) {
                     destroyBuffer(ctx->allocator(), rec.color);
@@ -5999,15 +6039,15 @@ namespace threepp {
             }
 
             if (colAttr && colAttr->count() > 0) {
-                const auto& colArr = colAttr->array();
+                FloatAttributeView colView(colAttr);
                 rec.colorVersion = colVer;
-                const VkDeviceSize cbBytes = colArr.size() * sizeof(float);
+                const VkDeviceSize cbBytes = colView.size() * sizeof(float);
                 rec.color = createBuffer(
                         ctx->allocator(), ctx->device(), cbBytes,
                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                uploadHostVisible(ctx->allocator(), rec.color, colArr.data(), cbBytes);
+                uploadHostVisible(ctx->allocator(), rec.color, colView.data(), cbBytes);
             }
 
             return &lineGeomCache_.emplace(geom, std::move(rec)).first->second;

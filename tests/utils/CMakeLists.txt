@@ -1,3 +1,4 @@
 
+add_test_executable(AttributeCompression_test)
 add_test_executable(StringUtils_test)
 add_test_executable(TaskManager_test)

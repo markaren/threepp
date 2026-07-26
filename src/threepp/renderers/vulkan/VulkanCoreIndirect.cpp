@@ -215,8 +215,8 @@ namespace threepp {
             di.indexed = indexed ? 1u : 0u;
             // STABLE per-object instance id -> outIds.y (survives visible-set
             // reordering, unlike instanceCustomIndex/.x).
-            di.stableId = memoStableId;
-            di._pad     = 0u;
+            di.stableId    = memoStableId;
+            di.packedAttrs = rec->packedMask;
             // polygonOffset → per-mesh clip-z depth bias (decals). Reverse-Z:
             // a +clip-z bias pushes the surface toward NEAR so it renders on
             // top of coplanar geometry (no z-fight). threepp/GL uses NEGATIVE

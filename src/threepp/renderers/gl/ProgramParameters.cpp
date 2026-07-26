@@ -147,10 +147,12 @@ ProgramParameters::ProgramParameters(
 
     vertexTangents = normalMaterial && vertextangentsMaterial && vertextangentsMaterial->vertexTangents;
     vertexColors = material->vertexColors;
+    // Untyped lookup: itemSize lives on the base class, and the typed getter
+    // returns null for a narrowed (compressAttributes) color attribute.
     vertexAlphas = material->vertexColors &&
                    object->geometry() &&
                    object->geometry()->hasAttribute("color") &&
-                   object->geometry()->getAttribute<float>("color")->itemSize() == 4;
+                   object->geometry()->getAttribute("color")->itemSize() == 4;
     vertexUvs = true;     // TODO
     uvsVertexOnly = false;// TODO;
 

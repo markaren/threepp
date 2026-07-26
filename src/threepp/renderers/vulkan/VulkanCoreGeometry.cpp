@@ -1,17 +1,88 @@
 #include "VulkanCoreImpl.hpp"
 
+#include "threepp/core/AttributeView.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <utility>
+
+namespace {
+
+    // CPU-side equivalents of GLSL packSnorm2x16 / packUnorm2x16 / packUnorm4x8.
+    // The shaders decode with the matching unpack* built-ins, so the rounding
+    // conventions must match the GLSL spec: round(clamp(v,...) * scale).
+    uint32_t packSnorm2x16(float a, float b) {
+        auto cvt = [](float v) -> uint32_t {
+            const auto s = static_cast<int32_t>(std::lround(std::clamp(v, -1.f, 1.f) * 32767.f));
+            return static_cast<uint32_t>(s) & 0xFFFFu;
+        };
+        return cvt(a) | (cvt(b) << 16);
+    }
+
+    uint32_t packUnorm2x16(float a, float b) {
+        auto cvt = [](float v) -> uint32_t {
+            return static_cast<uint32_t>(std::lround(std::clamp(v, 0.f, 1.f) * 65535.f));
+        };
+        return cvt(a) | (cvt(b) << 16);
+    }
+
+    uint32_t packUnorm4x8(float r, float g, float b, float a) {
+        auto cvt = [](float v) -> uint32_t {
+            return static_cast<uint32_t>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
+        };
+        return cvt(r) | (cvt(g) << 8) | (cvt(b) << 16) | (cvt(a) << 24);
+    }
+
+    bool allWithin(const float* v, size_t n, float lo, float hi) {
+        for (size_t i = 0; i < n; ++i) {
+            if (!(v[i] >= lo && v[i] <= hi)) return false;// NaN also fails here
+        }
+        return true;
+    }
+
+    // Octahedral encode, matching probe_common.glsl's octEncode/octDecode pair
+    // exactly (including the signNotZero convention) — the attribute decoders
+    // in gbuffer_indirect.vert / deferred_shade / probe_update use the same
+    // fold, so encode and decode must agree bit-for-bit on the wrap rule.
+    std::pair<float, float> octEncode(float x, float y, float z) {
+        const float len = std::abs(x) + std::abs(y) + std::abs(z);
+        if (len < 1e-12f) return {0.f, 0.f};// degenerate → decodes to +Z
+        x /= len;
+        y /= len;
+        z /= len;
+        if (z < 0.f) {
+            const float sx = x >= 0.f ? 1.f : -1.f;
+            const float sy = y >= 0.f ? 1.f : -1.f;
+            const float ox = (1.f - std::abs(y)) * sx;
+            const float oy = (1.f - std::abs(x)) * sy;
+            return {ox, oy};
+        }
+        return {x, y};
+    }
+
+}// namespace
+
 namespace threepp {
 
-std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::CoreImpl::buildBlasFor(const BufferGeometry& geom) {
+std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::CoreImpl::buildBlasFor(const BufferGeometry& geom, bool allowPacked) {
+            // Escape hatch for A/B triage: THREEPP_NO_PACK=1 forces every
+            // attribute buffer back to tightly-packed float, same binary.
+            static const bool noPack = std::getenv("THREEPP_NO_PACK") != nullptr;
+            allowPacked = allowPacked && !noPack;
+
             auto* posAttr = geom.getAttribute<float>("position");
             if (!posAttr) return nullptr;
-            auto* normAttr = geom.getAttribute<float>("normal");
-            if (!normAttr) return nullptr;// the RT path requires per-vertex normals
+            // Normal/uv/color may be narrowed (compressAttributes); the view
+            // widens them once here, at upload, so the device buffers — which
+            // the shaders index as tightly-packed float and the raster prepass
+            // binds as float vertex input — keep their layout. Positions are
+            // never narrowed and stay a direct typed read.
+            FloatAttributeView normals(geom.getAttribute("normal"));
+            if (!normals) return nullptr;// the RT path requires per-vertex normals
             const auto& positions = posAttr->array();
-            const auto& normals = normAttr->array();
             const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
             if (vertexCount < 3) return nullptr;
-            if (normAttr->count() != static_cast<int>(vertexCount)) return nullptr;
+            if (normals.count() != static_cast<int>(vertexCount)) return nullptr;
 
             const auto* idxAttr = geom.getIndex();
             const bool indexed = idxAttr != nullptr;
@@ -68,7 +139,27 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             uploadHostVisible(ctx->allocator(), rec->vertex, positions.data(), vbBytes);
 
-            const VkDeviceSize nbBytes = normals.size() * sizeof(float);
+            // Normals: octahedral snorm16x2, ONE uint per vertex (12 → 4 bytes)
+            // when packing is allowed. Every consumer of normalAddress is a
+            // software fetch (gbuffer_indirect.vert vertex-pull, deferred_shade
+            // ray-query hits, probe_update) — the fixed-input gbuffer pipeline
+            // exists but is never bound — so no fixed-function format concerns.
+            const bool packNrm = allowPacked;
+            std::vector<uint32_t> packedNrm;
+            const void* nrmSrc = normals.data();
+            VkDeviceSize nbBytes = normals.size() * sizeof(float);
+            if (packNrm) {
+                packedNrm.resize(vertexCount);
+                for (uint32_t v = 0; v < vertexCount; ++v) {
+                    const auto [ox, oy] = octEncode(normals[v * 3 + 0],
+                                                    normals[v * 3 + 1],
+                                                    normals[v * 3 + 2]);
+                    packedNrm[v] = packSnorm2x16(ox, oy);
+                }
+                nrmSrc = packedNrm.data();
+                nbBytes = packedNrm.size() * sizeof(uint32_t);
+                rec->packedMask |= 1u;
+            }
             rec->normal = createBuffer(
                     ctx->allocator(), ctx->device(), nbBytes,
                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
@@ -76,15 +167,30 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            uploadHostVisible(ctx->allocator(), rec->normal, normals.data(), nbBytes);
+            uploadHostVisible(ctx->allocator(), rec->normal, nrmSrc, nbBytes);
 
             // Optional UV attribute (TEXCOORD_0). closest_hit interpolates and
             // samples albedo with these; absent → bindless texture is ignored.
-            if (auto* uvAttr = geom.getAttribute<float>("uv")) {
-                const auto& uvs = uvAttr->array();
-                if (uvAttr->count() == static_cast<int>(vertexCount) &&
+            if (FloatAttributeView uvs{geom.getAttribute("uv")}) {
+                if (uvs.count() == static_cast<int>(vertexCount) &&
                     uvs.size() == vertexCount * 2) {
-                    const VkDeviceSize uvBytes = uvs.size() * sizeof(float);
+                    // UVs: unorm16x2, one uint per vertex (8 → 4 bytes) — but
+                    // only when every coordinate sits in [0,1]; tiled/atlas UVs
+                    // would clamp onto the texture edge, so those stay float.
+                    const bool packUv = allowPacked &&
+                                        allWithin(uvs.data(), uvs.size(), 0.f, 1.f);
+                    std::vector<uint32_t> packedUv;
+                    const void* uvSrc = uvs.data();
+                    VkDeviceSize uvBytes = uvs.size() * sizeof(float);
+                    if (packUv) {
+                        packedUv.resize(vertexCount);
+                        for (uint32_t v = 0; v < vertexCount; ++v) {
+                            packedUv[v] = packUnorm2x16(uvs[v * 2 + 0], uvs[v * 2 + 1]);
+                        }
+                        uvSrc = packedUv.data();
+                        uvBytes = packedUv.size() * sizeof(uint32_t);
+                        rec->packedMask |= 2u;
+                    }
                     rec->uv = createBuffer(
                             ctx->allocator(), ctx->device(), uvBytes,
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
@@ -92,7 +198,7 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                             VMA_MEMORY_USAGE_AUTO,
                             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                    uploadHostVisible(ctx->allocator(), rec->uv, uvs.data(), uvBytes);
+                    uploadHostVisible(ctx->allocator(), rec->uv, uvSrc, uvBytes);
                 }
             }
 
@@ -103,11 +209,34 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
             // applies is decided per-instance from the material's vertexColors
             // flag when GeometryDesc / DrawInfo are filled — the buffer is always
             // uploaded if present so a shared geometry works under either material.
-            if (auto* colAttr = geom.getAttribute<float>("color")) {
-                const int itemSize = colAttr->itemSize();
-                if (colAttr->count() == static_cast<int>(vertexCount) &&
+            if (FloatAttributeView cols{geom.getAttribute("color")}) {
+                const int itemSize = cols.itemSize();
+                if (cols.count() == static_cast<int>(vertexCount) &&
                     (itemSize == 3 || itemSize == 4)) {
-                    const auto& cols = colAttr->array();
+                    // Colors: unorm8x4, one uint per vertex (12 → 4 bytes) when
+                    // packing is allowed and the values are LDR; HDR vertex
+                    // colors (> 1) keep the float path. Alpha slot is unused by
+                    // the shaders (RGB modulate only) — packed as 1.
+                    const bool packCol = allowPacked &&
+                                         allWithin(cols.data(), cols.size(), 0.f, 1.f);
+                    if (packCol) {
+                        std::vector<uint32_t> packedCol(vertexCount);
+                        for (uint32_t v = 0; v < vertexCount; ++v) {
+                            packedCol[v] = packUnorm4x8(cols[v * itemSize + 0],
+                                                        cols[v * itemSize + 1],
+                                                        cols[v * itemSize + 2], 1.f);
+                        }
+                        const VkDeviceSize cbBytes = packedCol.size() * sizeof(uint32_t);
+                        rec->color = createBuffer(
+                                ctx->allocator(), ctx->device(), cbBytes,
+                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                VMA_MEMORY_USAGE_AUTO,
+                                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                        uploadHostVisible(ctx->allocator(), rec->color, packedCol.data(), cbBytes);
+                        rec->packedMask |= 4u;
+                    } else {
                     const VkDeviceSize cbBytes = static_cast<VkDeviceSize>(vertexCount) * 3 * sizeof(float);
                     rec->color = createBuffer(
                             ctx->allocator(), ctx->device(), cbBytes,
@@ -130,6 +259,7 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
                     }
                     flushHostWrites(ctx->allocator(), rec->color.alloc, 0, cbBytes);
                     vmaUnmapMemory(ctx->allocator(), rec->color.alloc);
+                    }
                 }
             }
 
@@ -605,6 +735,10 @@ void VulkanRendererCore::CoreImpl::refreshGeomBlasBatch(const std::vector<Vulkan
             for (size_t k = 0; k < ops.size(); ++k) {
                 auto* posAttr = ops[k].geom->getAttribute<float>("position");
                 if (!posAttr) continue;
+                // Float-typed on purpose: this is the per-frame deforming
+                // refresh, and only float geometry ever reaches it (physics /
+                // morph / displacement all write float). Narrow attributes are
+                // a static-geometry feature — see buildBlasFor.
                 if (!ops[k].geom->getAttribute<float>("normal")) continue;
                 bool ok = true;
                 const auto& p = posAttr->array();
@@ -663,13 +797,40 @@ void VulkanRendererCore::CoreImpl::refreshGeomBlasBatch(const std::vector<Vulkan
 
                 uploadHostVisible(ctx->allocator(), rec.vertex, posAttr->array().data(),
                                   posAttr->array().size() * sizeof(float));
-                uploadHostVisible(ctx->allocator(), rec.normal, nrmAttr->array().data(),
-                                  nrmAttr->array().size() * sizeof(float));
+
+                // A STATIC geometry whose attributes were edited (needsUpdate)
+                // also lands here, and its buffers may hold PACKED data — the
+                // re-upload must match the buffer's format or it overflows the
+                // smaller packed allocation.
+                const uint32_t vtxCount = static_cast<uint32_t>(posAttr->count());
+                if (rec.packedMask & 1u) {
+                    const auto& nrm = nrmAttr->array();
+                    std::vector<uint32_t> packed(vtxCount);
+                    for (uint32_t v = 0; v < vtxCount; ++v) {
+                        const auto [ox, oy] = octEncode(nrm[v * 3 + 0], nrm[v * 3 + 1], nrm[v * 3 + 2]);
+                        packed[v] = packSnorm2x16(ox, oy);
+                    }
+                    uploadHostVisible(ctx->allocator(), rec.normal, packed.data(),
+                                      packed.size() * sizeof(uint32_t));
+                } else {
+                    uploadHostVisible(ctx->allocator(), rec.normal, nrmAttr->array().data(),
+                                      nrmAttr->array().size() * sizeof(float));
+                }
 
                 if (auto* uvAttr = geom.getAttribute<float>("uv");
                     uvAttr && rec.uv.handle != VK_NULL_HANDLE) {
-                    uploadHostVisible(ctx->allocator(), rec.uv, uvAttr->array().data(),
-                                      uvAttr->array().size() * sizeof(float));
+                    if (rec.packedMask & 2u) {
+                        const auto& uv = uvAttr->array();
+                        std::vector<uint32_t> packed(vtxCount);
+                        for (uint32_t v = 0; v < vtxCount; ++v) {
+                            packed[v] = packUnorm2x16(uv[v * 2 + 0], uv[v * 2 + 1]);
+                        }
+                        uploadHostVisible(ctx->allocator(), rec.uv, packed.data(),
+                                          packed.size() * sizeof(uint32_t));
+                    } else {
+                        uploadHostVisible(ctx->allocator(), rec.uv, uvAttr->array().data(),
+                                          uvAttr->array().size() * sizeof(float));
+                    }
                 }
 
                 if (auto* idxAttr = geom.getIndex();

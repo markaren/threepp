@@ -79,6 +79,13 @@ BufferAttribute* BufferGeometry::getAttribute(const std::string& name) {
     return attributes_.at(name).get();
 }
 
+const BufferAttribute* BufferGeometry::getAttribute(const std::string& name) const {
+
+    if (!hasAttribute(name)) return nullptr;
+
+    return attributes_.at(name).get();
+}
+
 std::vector<std::shared_ptr<BufferAttribute>>* BufferGeometry::getMorphAttribute(const std::string& name) {
 
     if (!morphAttributes_.count(name)) return nullptr;
@@ -485,13 +492,10 @@ void BufferGeometry::copy(const BufferGeometry& source) {
 
     for (const auto& [name, attribute] : attributes) {
 
-        if (attribute->typed<unsigned int>()) {
-            this->setAttribute(name, attribute->typed<unsigned int>()->clone());
-        } else if (attribute->typed<float>()) {
-            this->setAttribute(name, attribute->typed<float>()->clone());
-        } else {
-            throw std::runtime_error("TODO");
-        }
+        // cloneUntyped() dispatches on the attribute's own scalar type, so this
+        // copies narrow (uint8/int8/uint16/int16) attributes without widening
+        // them — and without needing a branch per supported type.
+        this->setAttribute(name, attribute->cloneUntyped());
     }
 
 

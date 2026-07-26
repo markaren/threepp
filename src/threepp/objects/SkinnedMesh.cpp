@@ -87,7 +87,12 @@ void SkinnedMesh::updateMatrixWorld(bool force) {
 
 void SkinnedMesh::boneTransform(size_t index, Vector3& target) {
 
-    geometry_->getAttribute<int>("skinIndex")->setFromBufferAttribute(_skinIndex, index);
+    // skinIndex is a float attribute everywhere it is produced (GLTFLoader's
+    // readJointIndicesAsFloat, ColladaLoader, and the bones example all create a
+    // FloatBufferAttribute), and the GL/Vulkan skinning paths both read it as
+    // vec4<float>. Asking for <int> made the dynamic_cast fail and this line
+    // dereference a null attribute.
+    geometry_->getAttribute<float>("skinIndex")->setFromBufferAttribute(_skinIndex, index);
     geometry_->getAttribute<float>("skinWeight")->setFromBufferAttribute(_skinWeight, index);
 
     geometry_->getAttribute<float>("position")->setFromBufferAttribute(_basePosition, index);

@@ -64,6 +64,7 @@ layout(set = 0, binding = 4, scalar) readonly buffer MatBuf { MaterialDesc mats[
 layout(buffer_reference, scalar) readonly buffer NormalBuf { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf  { uint  i[]; };
 layout(buffer_reference, scalar) readonly buffer UvBuf     { float u[]; };
+layout(buffer_reference, scalar) readonly buffer PackedAttrBuf { uint w[]; };
 struct GeometryDesc {
     uint64_t vertexAddress;
     uint64_t normalAddress;
@@ -73,9 +74,35 @@ struct GeometryDesc {
     uint64_t prevVertexAddress;
     uint64_t colorAddress;
     uint     indexed;
-    uint     _pad;
+    uint     flags;// bit 0: sticky moved (unused here), bit 1: normal oct-snorm16x2,
+                   // bit 2: uv unorm16x2, bit 3: color unorm8x4
 };
 layout(set = 0, binding = 5, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
+
+// Packed-aware per-vertex fetches. octDecode comes from probe_common.glsl —
+// included below at global scope, but GLSL requires declaration before use in
+// these helpers, so the decode is inlined with the identical convention.
+vec3 gfetchNormal(in GeometryDesc g, uint vid) {
+    if ((g.flags & 2u) != 0u) {
+        const vec2 e = unpackSnorm2x16(PackedAttrBuf(g.normalAddress).w[vid]);
+        vec3 v = vec3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+        if (v.z < 0.0) {
+            const vec2 s = vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+            v.xy = (1.0 - abs(v.yx)) * s;
+        }
+        return normalize(v);
+    }
+    NormalBuf nb = NormalBuf(g.normalAddress);
+    return vec3(nb.n[vid * 3 + 0], nb.n[vid * 3 + 1], nb.n[vid * 3 + 2]);
+}
+
+vec2 gfetchUv(in GeometryDesc g, uint vid) {
+    if ((g.flags & 4u) != 0u) {
+        return unpackUnorm2x16(PackedAttrBuf(g.uvAddress).w[vid]);
+    }
+    UvBuf ub = UvBuf(g.uvAddress);
+    return vec2(ub.u[vid * 2 + 0], ub.u[vid * 2 + 1]);
+}
 layout(set = 0, binding = 6) uniform sampler2D albedoMaps[kMaxMaterialTextures];
 struct EmTri {
     vec4 v0;       // xyz = pos, w = area
@@ -140,10 +167,9 @@ vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
     } else {
         idx = uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
     }
-    UvBuf ub = UvBuf(g.uvAddress);
-    const vec2 u0 = vec2(ub.u[idx.x * 2 + 0], ub.u[idx.x * 2 + 1]);
-    const vec2 u1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
-    const vec2 u2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
+    const vec2 u0 = gfetchUv(g, idx.x);
+    const vec2 u1 = gfetchUv(g, idx.y);
+    const vec2 u2 = gfetchUv(g, idx.z);
     return (1.0 - bary.x - bary.y) * u0 + bary.x * u1 + bary.y * u2;
 }
 
@@ -158,18 +184,16 @@ void fetchHit(int instIdx, int primId, vec2 bary, mat4x3 worldToObj,
         idx = uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
     }
     const float w = 1.0 - bary.x - bary.y;
-    NormalBuf nb = NormalBuf(g.normalAddress);
-    const vec3 n0 = vec3(nb.n[idx.x * 3 + 0], nb.n[idx.x * 3 + 1], nb.n[idx.x * 3 + 2]);
-    const vec3 n1 = vec3(nb.n[idx.y * 3 + 0], nb.n[idx.y * 3 + 1], nb.n[idx.y * 3 + 2]);
-    const vec3 n2 = vec3(nb.n[idx.z * 3 + 0], nb.n[idx.z * 3 + 1], nb.n[idx.z * 3 + 2]);
+    const vec3 n0 = gfetchNormal(g, idx.x);
+    const vec3 n1 = gfetchNormal(g, idx.y);
+    const vec3 n2 = gfetchNormal(g, idx.z);
     const vec3 nObj = normalize(w * n0 + bary.x * n1 + bary.y * n2);
     Nworld = normalize(transpose(mat3(worldToObj)) * nObj);
     uvOut = vec2(0.0);
     if (g.uvAddress != 0ul) {
-        UvBuf ub = UvBuf(g.uvAddress);
-        const vec2 u0 = vec2(ub.u[idx.x * 2 + 0], ub.u[idx.x * 2 + 1]);
-        const vec2 u1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
-        const vec2 u2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
+        const vec2 u0 = gfetchUv(g, idx.x);
+        const vec2 u1 = gfetchUv(g, idx.y);
+        const vec2 u2 = gfetchUv(g, idx.z);
         uvOut = w * u0 + bary.x * u1 + bary.y * u2;
     }
 }

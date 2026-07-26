@@ -59,7 +59,7 @@ struct GeometryDesc {
     uint64_t prevVertexAddress;
     uint64_t colorAddress;// unused here, kept for layout match with VulkanCoreImpl::GeometryDesc
     uint     indexed;
-    uint     _pad;
+    uint     flags;// unused here — lidar reads positions/indices only (always float)
 };
 
 layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };

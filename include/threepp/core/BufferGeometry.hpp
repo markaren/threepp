@@ -84,6 +84,8 @@ namespace threepp {
 
         BufferAttribute* getAttribute(const std::string& name);
 
+        [[nodiscard]] const BufferAttribute* getAttribute(const std::string& name) const;
+
         template<class T>
         TypedBufferAttribute<T>* getAttribute(const std::string& name) {
 

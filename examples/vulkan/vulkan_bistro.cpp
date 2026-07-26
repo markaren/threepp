@@ -4,6 +4,7 @@
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/threepp.hpp"
+#include "threepp/utils/BufferGeometryUtils.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -64,6 +65,19 @@ int main(int argc, char** argv) {
 
     scene.add(interior);
     scene.add(exterior);
+
+    // Narrow the static vertex attributes (normal snorm16 / uv unorm16 /
+    // color unorm8) as soon as each half arrives — onLoaded fires on the main
+    // thread before the new children are uploaded, so the renderer only ever
+    // sees the compressed arrays. Bistro is all static geometry; skinned or
+    // deforming meshes would be skipped automatically.
+    for (auto& part : {interior, exterior}) {
+        part->onLoaded([](AsyncGroup& grp) {
+            const size_t saved = compressSceneAttributes(grp);
+            std::cout << "[bistro] compressed vertex attributes: "
+                      << saved / (1024.0 * 1024.0) << " MiB reclaimed" << std::endl;
+        });
+    }
 
     auto toggleBistroLights = [&] {
         scene.traverseType<Light>([&](Light& l) {

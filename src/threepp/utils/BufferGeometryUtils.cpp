@@ -1,9 +1,16 @@
 
 #include "threepp/utils/BufferGeometryUtils.hpp"
 
+#include "threepp/core/AttributeView.hpp"
+#include "threepp/objects/DisplacedMesh.hpp"
+#include "threepp/objects/GrassMesh.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
+
 #include <meshoptimizer.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -56,6 +63,26 @@ namespace {
         }
 
         return TypedBufferAttribute<T>::create(array, itemSize.value(), normalized.value());
+    }
+
+    // Merge `attr` as scalar type T if that is the first attribute's type.
+    // Returns false when T doesn't match (caller tries the next type); returns
+    // true with `out == nullptr` when the types are mixed across geometries.
+    template<typename T>
+    bool mergeAs(const std::vector<BufferAttribute*>& attr, std::unique_ptr<BufferAttribute>& out) {
+        if (!attr.front()->typed<T>()) return false;
+        std::vector<TypedBufferAttribute<T>*> typed;
+        typed.reserve(attr.size());
+        for (auto* a : attr) {
+            auto* t = a->typed<T>();
+            if (!t) {
+                out = nullptr;
+                return true;
+            }
+            typed.emplace_back(t);
+        }
+        out = mergeBufferAttributes<T>(typed);
+        return true;
     }
 
 }// namespace
@@ -161,20 +188,18 @@ std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector
 
     for (const auto& [name, attr] : attributes) {
 
+        // Dispatch on the first geometry's scalar type; every supported
+        // TypedBufferAttribute instantiation merges, so narrow (glTF-preserved
+        // or compressAttributes) attributes survive a merge un-widened. A
+        // geometry whose matching attribute has a DIFFERENT scalar type fails
+        // the merge (typed<T> returns null → mergeAs yields nullptr).
         std::unique_ptr<BufferAttribute> mergedAttribute;
-        if (attr.front()->typed<unsigned int>()) {
-            std::vector<TypedBufferAttribute<unsigned int>*> typed;
-            for (auto& a : attr) {
-                typed.emplace_back(a->typed<unsigned int>());
-            }
-            mergedAttribute = mergeBufferAttributes<unsigned int>(typed);
-        } else if (attr.front()->typed<float>()) {
-            std::vector<TypedBufferAttribute<float>*> typed;
-            for (auto& a : attr) {
-                typed.emplace_back(a->typed<float>());
-            }
-            mergedAttribute = mergeBufferAttributes<float>(typed);
-        }
+        mergeAs<unsigned int>(attr, mergedAttribute) ||
+                mergeAs<float>(attr, mergedAttribute) ||
+                mergeAs<std::uint16_t>(attr, mergedAttribute) ||
+                mergeAs<std::int16_t>(attr, mergedAttribute) ||
+                mergeAs<std::uint8_t>(attr, mergedAttribute) ||
+                mergeAs<std::int8_t>(attr, mergedAttribute);
 
         if (!mergedAttribute) {
 
@@ -221,19 +246,28 @@ std::shared_ptr<BufferGeometry> threepp::mergeVertices(const BufferGeometry& geo
     std::unordered_map<std::string, int> itemSizes;
     std::unordered_map<std::string, bool> normalizeds;
 
+    // Every non-uint attribute is read through a FloatAttributeView: zero-copy
+    // for float sources, widened (and denormalized) once for narrow ones. The
+    // welded output of a narrow source is therefore float — mergeVertices
+    // trades that compression away rather than failing; re-run
+    // compressAttributes() on the result to get it back.
+    std::unordered_map<std::string, FloatAttributeView> floatViews;
+
     for (const auto& [name, attr] : srcAttributes) {
 
         itemSizes[name] = attr->itemSize();
         normalizeds[name] = attr->normalized();
 
-        if (attr->typed<float>()) {
-            floatArrays[name] = {};
-        } else if (attr->typed<unsigned int>()) {
+        if (attr->typed<unsigned int>()) {
             uintArrays[name] = {};
         } else {
-
-            std::cerr << "THREE.BufferGeometryUtils: .mergeVertices() failed. Unsupported attribute type for \"" << name << "\"." << std::endl;
-            return nullptr;
+            FloatAttributeView view(attr.get());
+            if (!view) {
+                std::cerr << "THREE.BufferGeometryUtils: .mergeVertices() failed. Unsupported attribute type for \"" << name << "\"." << std::endl;
+                return nullptr;
+            }
+            floatViews.emplace(name, std::move(view));
+            floatArrays[name] = {};
         }
     }
 
@@ -256,11 +290,11 @@ std::shared_ptr<BufferGeometry> threepp::mergeVertices(const BufferGeometry& geo
 
             const int itemSize = itemSizes[name];
 
-            if (auto fAttr = attr->typed<float>()) {
+            if (auto viewIt = floatViews.find(name); viewIt != floatViews.end()) {
 
-                const auto& arr = fAttr->array();
+                const auto& view = viewIt->second;
                 for (int k = 0; k < itemSize; ++k) {
-                    const double v = static_cast<double>(arr[srcIndex * itemSize + k]) * shiftMultiplier;
+                    const double v = static_cast<double>(view[srcIndex * itemSize + k]) * shiftMultiplier;
                     hash += std::to_string(static_cast<long long>(v));
                     hash += ',';
                 }
@@ -286,12 +320,12 @@ std::shared_ptr<BufferGeometry> threepp::mergeVertices(const BufferGeometry& geo
 
                 const int itemSize = itemSizes[name];
 
-                if (auto fAttr = attr->typed<float>()) {
+                if (auto viewIt = floatViews.find(name); viewIt != floatViews.end()) {
 
-                    const auto& src = fAttr->array();
+                    const auto& view = viewIt->second;
                     auto& dst = floatArrays[name];
                     for (int k = 0; k < itemSize; ++k) {
-                        dst.emplace_back(src[srcIndex * itemSize + k]);
+                        dst.emplace_back(view[srcIndex * itemSize + k]);
                     }
 
                 } else if (auto uAttr = attr->typed<unsigned int>()) {
@@ -314,8 +348,13 @@ std::shared_ptr<BufferGeometry> threepp::mergeVertices(const BufferGeometry& geo
 
     for (const auto& [name, attr] : srcAttributes) {
 
-        if (attr->typed<float>()) {
-            result->setAttribute(name, TypedBufferAttribute<float>::create(floatArrays[name], itemSizes[name], normalizeds[name]));
+        if (floatViews.contains(name)) {
+            // A widened narrow source was denormalized by the view, so the
+            // output floats are plain values — clear the normalized flag.
+            const bool wasNarrow = attr->type() != AttributeType::Float;
+            result->setAttribute(name, TypedBufferAttribute<float>::create(
+                                               floatArrays[name], itemSizes[name],
+                                               wasNarrow ? false : normalizeds[name]));
         } else if (attr->typed<unsigned int>()) {
             result->setAttribute(name, TypedBufferAttribute<unsigned int>::create(uintArrays[name], itemSizes[name], normalizeds[name]));
         }
@@ -418,4 +457,123 @@ std::shared_ptr<BufferGeometry> threepp::simplifyGeometry(const BufferGeometry& 
     if (hasUV) out->setAttribute("uv", FloatBufferAttribute::create(outUV, 2));
     out->setIndex(outIndices);
     return out;
+}
+
+namespace {
+
+    // Quantise a float attribute into `Narrow`, using `scale` as the full-range
+    // multiplier of the target normalized format. Returns nullptr when the
+    // attribute is missing or is not float (already narrowed).
+    template<class Narrow>
+    std::unique_ptr<TypedBufferAttribute<Narrow>> quantize(
+            const BufferAttribute* attribute, float scale, bool signedRange) {
+
+        if (!attribute || attribute->type() != AttributeType::Float) return nullptr;
+        if (attribute->normalized()) return nullptr;// already in a normalized domain
+
+        const auto* src = static_cast<const float*>(attribute->data());
+        const size_t n = attribute->byteLength() / sizeof(float);
+
+        const float lo = signedRange ? -1.f : 0.f;
+
+        std::vector<Narrow> out(n);
+        for (size_t i = 0; i < n; ++i) {
+            const float v = std::clamp(src[i], lo, 1.f);
+            out[i] = static_cast<Narrow>(std::lround(v * scale));
+        }
+
+        return TypedBufferAttribute<Narrow>::create(std::move(out), attribute->itemSize(), true);
+    }
+
+    // Every component must already sit inside [lo, 1] for quantisation to be
+    // lossless-in-range; otherwise clamping would silently move geometry.
+    bool withinRange(const BufferAttribute* attribute, float lo) {
+
+        if (!attribute || attribute->type() != AttributeType::Float) return false;
+
+        const auto* src = static_cast<const float*>(attribute->data());
+        const size_t n = attribute->byteLength() / sizeof(float);
+
+        for (size_t i = 0; i < n; ++i) {
+            if (!std::isfinite(src[i]) || src[i] < lo || src[i] > 1.f) return false;
+        }
+        return true;
+    }
+
+    size_t replaceIfSmaller(BufferGeometry& geometry, const std::string& name,
+                            std::unique_ptr<BufferAttribute> narrowed) {
+
+        if (!narrowed) return 0;
+
+        const size_t before = geometry.getAttribute(name)->byteLength();
+        const size_t after = narrowed->byteLength();
+        if (after >= before) return 0;
+
+        geometry.setAttribute(name, std::move(narrowed));
+        return before - after;
+    }
+
+}// namespace
+
+size_t threepp::compressAttributes(BufferGeometry& geometry, const AttributeCompression& what) {
+
+    size_t saved = 0;
+
+    if (what.normal && geometry.hasAttribute("normal")) {
+        const auto* attr = geometry.getAttribute("normal");
+        // Normals are unit-length, so -1..1 is guaranteed rather than checked;
+        // a non-finite component would still poison the quantisation.
+        if (withinRange(attr, -1.f)) {
+            saved += replaceIfSmaller(geometry, "normal", quantize<std::int16_t>(attr, 32767.f, true));
+        }
+    }
+
+    if (what.tangent && geometry.hasAttribute("tangent")) {
+        const auto* attr = geometry.getAttribute("tangent");
+        if (withinRange(attr, -1.f)) {
+            saved += replaceIfSmaller(geometry, "tangent", quantize<std::int16_t>(attr, 32767.f, true));
+        }
+    }
+
+    if (what.uv && geometry.hasAttribute("uv")) {
+        const auto* attr = geometry.getAttribute("uv");
+        // Tiled or atlas UVs run outside [0,1]; unorm16 would clamp them onto the
+        // texture edge, so those geometries keep their float UVs.
+        if (withinRange(attr, 0.f)) {
+            saved += replaceIfSmaller(geometry, "uv", quantize<std::uint16_t>(attr, 65535.f, false));
+        }
+    }
+
+    if (what.color && geometry.hasAttribute("color")) {
+        const auto* attr = geometry.getAttribute("color");
+        if (withinRange(attr, 0.f)) {
+            saved += replaceIfSmaller(geometry, "color", quantize<std::uint8_t>(attr, 255.f, false));
+        }
+    }
+
+    return saved;
+}
+
+size_t threepp::compressSceneAttributes(Object3D& root, const AttributeCompression& what) {
+
+    size_t saved = 0;
+
+    root.traverseType<Mesh>([&](Mesh& m) {
+        auto geom = m.geometry();
+        if (!geom) return;
+
+        // Deforming geometry must stay float: the Vulkan skinned/displaced/
+        // grass-wind/morph/softbody paths rewrite float device buffers every
+        // frame, and CPU-side skinning (boneTransform) reads typed float
+        // attributes. Ocean derives DisplacedMesh and is covered by that check.
+        if (dynamic_cast<SkinnedMesh*>(&m)) return;
+        if (dynamic_cast<DisplacedMesh*>(&m)) return;
+        if (dynamic_cast<GrassMesh*>(&m)) return;
+        if (!geom->getMorphAttributes().empty()) return;
+        if (geom->hasAttribute("tetIndex")) return;// SoftBody::enableGpuSkinning
+
+        saved += compressAttributes(*geom, what);
+    });
+
+    return saved;
 }

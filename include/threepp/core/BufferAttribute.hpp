@@ -10,15 +10,93 @@
 #include "threepp/math/Vector4.hpp"
 
 #include "threepp/constants.hpp"
+#include "threepp/core/Assert.hpp"
 #include "threepp/core/misc.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <memory>
+#include <type_traits>
 #include <vector>
 
 namespace threepp {
 
     template<class T>
     class TypedBufferAttribute;
+
+    // The scalar type backing a BufferAttribute's array.
+    //
+    // The narrow types exist to cut the resident cost of vertex data: a normal
+    // stored as Int16 (normalized) is 3x6=6 bytes instead of 12, a UV as UInt16
+    // is 4 instead of 8, and a vertex colour as UInt8 is 3 instead of 12. See
+    // compressAttributes() in BufferGeometryUtils.hpp for the opt-in conversion.
+    //
+    // Narrow attributes carry raw integers; `normalized()` declares that the
+    // consumer should map them onto [0,1] (unsigned) or [-1,1] (signed). getX()
+    // and friends always return the *stored* value — use denormalize() or
+    // attributeToFloatArray() when a float is wanted.
+    enum class AttributeType {
+        Float,
+        UInt32,
+        UInt16,
+        Int16,
+        UInt8,
+        Int8
+    };
+
+    namespace detail {
+
+        template<class T>
+        struct AttributeTypeOf {
+            static_assert(sizeof(T) == 0,
+                          "TypedBufferAttribute supports float, unsigned int, "
+                          "uint16_t, int16_t, uint8_t and int8_t only");
+        };
+
+        // clang-format off
+        template<> struct AttributeTypeOf<float>         { static constexpr AttributeType value = AttributeType::Float;  };
+        template<> struct AttributeTypeOf<unsigned int>  { static constexpr AttributeType value = AttributeType::UInt32; };
+        template<> struct AttributeTypeOf<std::uint16_t> { static constexpr AttributeType value = AttributeType::UInt16; };
+        template<> struct AttributeTypeOf<std::int16_t>  { static constexpr AttributeType value = AttributeType::Int16;  };
+        template<> struct AttributeTypeOf<std::uint8_t>  { static constexpr AttributeType value = AttributeType::UInt8;  };
+        template<> struct AttributeTypeOf<std::int8_t>   { static constexpr AttributeType value = AttributeType::Int8;   };
+        // clang-format on
+
+    }// namespace detail
+
+    [[nodiscard]] constexpr size_t bytesPerElement(AttributeType type) {
+
+        switch (type) {
+            case AttributeType::Float:
+            case AttributeType::UInt32: return 4;
+            case AttributeType::UInt16:
+            case AttributeType::Int16: return 2;
+            case AttributeType::UInt8:
+            case AttributeType::Int8: return 1;
+        }
+        return 0;
+    }
+
+    [[nodiscard]] constexpr bool isIntegral(AttributeType type) {
+
+        return type != AttributeType::Float;
+    }
+
+    // Map a stored integer onto the range its `normalized` flag implies, matching
+    // the OpenGL/Vulkan UNORM and SNORM conversion rules exactly. Float
+    // attributes pass through untouched.
+    [[nodiscard]] inline float denormalize(float value, AttributeType type) {
+
+        switch (type) {
+            case AttributeType::Float: return value;
+            case AttributeType::UInt32: return value / 4294967295.f;
+            case AttributeType::UInt16: return value / 65535.f;
+            case AttributeType::Int16: return std::max(value / 32767.f, -1.f);
+            case AttributeType::UInt8: return value / 255.f;
+            case AttributeType::Int8: return std::max(value / 127.f, -1.f);
+        }
+        return value;
+    }
 
     class BufferAttribute {
 
@@ -28,6 +106,17 @@ namespace threepp {
         unsigned int version = 0;
 
         [[nodiscard]] virtual int count() const = 0;
+
+        // Type-erased access to the backing store. These let consumers that only
+        // move bytes around — buffer uploads, geometry copies — stay agnostic of
+        // the scalar type instead of enumerating every instantiation.
+        [[nodiscard]] virtual AttributeType type() const = 0;
+
+        [[nodiscard]] virtual const void* data() const = 0;
+
+        [[nodiscard]] virtual size_t byteLength() const = 0;
+
+        [[nodiscard]] virtual std::unique_ptr<BufferAttribute> cloneUntyped() const = 0;
 
         [[nodiscard]] int itemSize() const {
 
@@ -86,9 +175,36 @@ namespace threepp {
     class TypedBufferAttribute: public BufferAttribute {
 
     public:
+        using value_type = T;
+
+        static constexpr AttributeType scalarType = detail::AttributeTypeOf<T>::value;
+
         [[nodiscard]] int count() const override {
 
             return count_;
+        }
+
+        [[nodiscard]] AttributeType type() const override {
+
+            return scalarType;
+        }
+
+        // Routed through the virtual array() so InterleavedBufferAttribute, whose
+        // storage lives in the shared InterleavedBuffer rather than in array_,
+        // reports the buffer it actually reads from.
+        [[nodiscard]] const void* data() const override {
+
+            return array().data();
+        }
+
+        [[nodiscard]] size_t byteLength() const override {
+
+            return array().size() * sizeof(T);
+        }
+
+        [[nodiscard]] std::unique_ptr<BufferAttribute> cloneUntyped() const override {
+
+            return clone();
         }
 
         virtual std::vector<T>& array() {
@@ -267,11 +383,13 @@ namespace threepp {
 
         [[nodiscard]] virtual T getX(size_t index) const {
 
+            checkAccess(index, 0);
             return this->array_[index * this->itemSize_];
         }
 
         virtual TypedBufferAttribute<T>& setX(size_t index, T x) {
 
+            checkAccess(index, 0);
             this->array_[index * this->itemSize_] = x;
 
             return *this;
@@ -279,11 +397,13 @@ namespace threepp {
 
         [[nodiscard]] virtual T getY(size_t index) const {
 
+            checkAccess(index, 1);
             return this->array_[index * this->itemSize_ + 1];
         }
 
         virtual TypedBufferAttribute<T>& setY(size_t index, T y) {
 
+            checkAccess(index, 1);
             this->array_[index * this->itemSize_ + 1] = y;
 
             return *this;
@@ -291,11 +411,13 @@ namespace threepp {
 
         [[nodiscard]] virtual T getZ(size_t index) const {
 
+            checkAccess(index, 2);
             return this->array_[index * this->itemSize_ + 2];
         }
 
         virtual TypedBufferAttribute<T>& setZ(size_t index, T z) {
 
+            checkAccess(index, 2);
             this->array_[index * this->itemSize_ + 2] = z;
 
             return *this;
@@ -303,11 +425,13 @@ namespace threepp {
 
         [[nodiscard]] virtual T getW(size_t index) const {
 
+            checkAccess(index, 3);
             return this->array_[index * this->itemSize_ + 3];
         }
 
         virtual TypedBufferAttribute<T>& setW(size_t index, T w) {
 
+            checkAccess(index, 3);
             this->array_[index * this->itemSize_ + 3] = w;
 
             return *this;
@@ -315,6 +439,7 @@ namespace threepp {
 
         virtual TypedBufferAttribute<T>& setXY(size_t index, T x, T y) {
 
+            checkAccess(index, 1);
             index *= this->itemSize_;
 
             this->array_[index + 0] = x;
@@ -325,6 +450,7 @@ namespace threepp {
 
         virtual TypedBufferAttribute<T>& setXYZ(size_t index, T x, T y, T z) {
 
+            checkAccess(index, 2);
             index *= this->itemSize_;
 
             this->array_[index + 0] = x;
@@ -336,6 +462,7 @@ namespace threepp {
 
         virtual TypedBufferAttribute<T>& setXYZW(size_t index, T x, T y, T z, T w) {
 
+            checkAccess(index, 3);
             index *= this->itemSize_;
 
             this->array_[index + 0] = x;
@@ -435,18 +562,62 @@ namespace threepp {
         TypedBufferAttribute(const std::vector<T>& array, int count): array_(array), count_(count) {}
 
         TypedBufferAttribute(const std::vector<T>& array, int itemSize, bool normalized)
-            : BufferAttribute(itemSize, normalized), array_(array), count_(array_.size() / itemSize) {}
+            : BufferAttribute(itemSize, normalized), array_(array), count_(array_.size() / itemSize) {
+            checkShape();
+        }
 
         TypedBufferAttribute(std::vector<T>&& array, int itemSize, bool normalized)
-            : BufferAttribute(itemSize, normalized), array_(std::move(array)), count_(static_cast<int>(array_.size()) / itemSize) {}
+            : BufferAttribute(itemSize, normalized), array_(std::move(array)), count_(static_cast<int>(array_.size()) / itemSize) {
+            checkShape();
+        }
+
+        void checkShape() const {
+
+            THREEPP_ASSERT_MSG(this->itemSize_ > 0, "BufferAttribute: itemSize must be positive");
+            THREEPP_ASSERT_MSG(this->array_.size() % static_cast<size_t>(this->itemSize_) == 0,
+                               "BufferAttribute: array size is not a multiple of itemSize");
+        }
 
     private:
         std::vector<T> array_;
         int count_{};
+
+        // Guards the two ways an element accessor goes wrong: reading past the
+        // end of the array (undefined behaviour), and asking for a component the
+        // attribute does not carry — getW() on an itemSize-3 attribute silently
+        // returns the *next* vertex's X, which the bounds check alone misses.
+        // Compiled out entirely unless THREEPP_ENABLE_ASSERTS.
+        void checkAccess([[maybe_unused]] size_t index, [[maybe_unused]] int component) const {
+
+#if THREEPP_ENABLE_ASSERTS
+            THREEPP_ASSERT_MSG(this->itemSize_ > component,
+                               "BufferAttribute: component index >= itemSize");
+            THREEPP_ASSERT_MSG(index * static_cast<size_t>(this->itemSize_) +
+                                               static_cast<size_t>(component) <
+                                       this->array_.size(),
+                               "BufferAttribute: element index out of range");
+#endif
+        }
     };
 
     typedef TypedBufferAttribute<unsigned int> IntBufferAttribute;
     typedef TypedBufferAttribute<float> FloatBufferAttribute;
+
+    // Narrow attribute types. Pair these with `normalized = true` for directional
+    // or [0,1] data so the renderer expands them on fetch at no bandwidth cost:
+    //
+    //   normal   -> Int16BufferAttribute,  normalized  (6 bytes/vertex, was 12)
+    //   tangent  -> Int16BufferAttribute,  normalized  (8 bytes/vertex, was 16)
+    //   uv       -> Uint16BufferAttribute, normalized  (4 bytes/vertex, was 8)
+    //   color    -> Uint8BufferAttribute,  normalized  (3 bytes/vertex, was 12)
+    //   skinIndex-> Uint16BufferAttribute, raw         (8 bytes/vertex, was 16)
+    //
+    // Positions are deliberately absent from that list: they need the dynamic
+    // range of float unless the geometry is quantised against a known AABB.
+    typedef TypedBufferAttribute<std::uint16_t> Uint16BufferAttribute;
+    typedef TypedBufferAttribute<std::int16_t> Int16BufferAttribute;
+    typedef TypedBufferAttribute<std::uint8_t> Uint8BufferAttribute;
+    typedef TypedBufferAttribute<std::int8_t> Int8BufferAttribute;
 
 
 }// namespace threepp

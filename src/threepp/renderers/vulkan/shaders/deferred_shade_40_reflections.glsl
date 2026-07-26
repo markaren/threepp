@@ -18,19 +18,19 @@ void fetchHit(int instIdx, int primId, vec2 bary, mat4x3 worldToObj,
     }
     const float w = 1.0 - bary.x - bary.y;
 
-    NormalBuf nb = NormalBuf(g.normalAddress);
-    const vec3 n0 = vec3(nb.n[idx.x * 3 + 0], nb.n[idx.x * 3 + 1], nb.n[idx.x * 3 + 2]);
-    const vec3 n1 = vec3(nb.n[idx.y * 3 + 0], nb.n[idx.y * 3 + 1], nb.n[idx.y * 3 + 2]);
-    const vec3 n2 = vec3(nb.n[idx.z * 3 + 0], nb.n[idx.z * 3 + 1], nb.n[idx.z * 3 + 2]);
+    // gfetch* honour GeometryDesc.packedAttrs (oct-snorm16 normals / unorm16
+    // uvs on packed static geometry, tightly-packed float otherwise).
+    const vec3 n0 = gfetchNormal(g, idx.x);
+    const vec3 n1 = gfetchNormal(g, idx.y);
+    const vec3 n2 = gfetchNormal(g, idx.z);
     const vec3 nObj = normalize(w * n0 + bary.x * n1 + bary.y * n2);
     Nworld = normalize(transpose(mat3(worldToObj)) * nObj);
 
     uvOut = vec2(0.0);
     if (g.uvAddress != 0ul) {
-        UvBuf ub = UvBuf(g.uvAddress);
-        const vec2 u0 = vec2(ub.u[idx.x * 2 + 0], ub.u[idx.x * 2 + 1]);
-        const vec2 u1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
-        const vec2 u2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
+        const vec2 u0 = gfetchUv(g, idx.x);
+        const vec2 u1 = gfetchUv(g, idx.y);
+        const vec2 u2 = gfetchUv(g, idx.z);
         uvOut = w * u0 + bary.x * u1 + bary.y * u2;
     }
 }
@@ -148,7 +148,7 @@ vec3 sampleGGXReflectionFib(vec3 V, vec3 N, float roughness, int s, int count) {
 // shaded geometry hit (the mirror ray returns it sharp; the spatial blur IS
 // the gloss there, sized by this distance's projected footprint).
 float gTraceHitT = -1.0;
-// True when the first shaded reflected hit is a MOVING mesh (GeometryDesc._pad,
+// True when the first shaded reflected hit is a MOVING mesh (GeometryDesc.flags bit 0,
 // stamped from meshMovedBits each frame). The reflection/GI temporal accumulator
 // resets on it: a moving reflected object can't be temporally integrated (the
 // surface reproject tracks the surface, not the moving content → ghost trail).
@@ -234,7 +234,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // MOVED flag tells the temporal accumulator to reset (moving reflection).
         if (gTraceHitT < 0.0) {
             gTraceHitT = length(hitP - origin);
-            gTraceHitMoved = (geoms[hitId]._pad != 0u);
+            gTraceHitMoved = (geoms[hitId].flags & 1u) != 0u;
         }
         // Reflected-hit diffuse fill. PROBE-GI mode: the probe field IS the
         // occlusion-correct local irradiance (÷π for the diffInd convention) —
@@ -343,7 +343,7 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
 
     const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
-    gGiRayHitMoved = (geoms[hitId]._pad != 0u);// moving 1-bounce hit (before the unlit early-out — those count too)
+    gGiRayHitMoved = (geoms[hitId].flags & 1u) != 0u;// moving 1-bounce hit (before the unlit early-out — those count too)
     if (hm.roughness < 0.0) return hAlbedo;// unlit hit (e.g. a pure-emissive proxy)
 
     if (dot(hitN, -dir) < 0.0) hitN = -hitN;

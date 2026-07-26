@@ -1,12 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include "threepp/core/AttributeView.hpp"
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Mesh.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -455,4 +457,94 @@ TEST_CASE("GLTFLoader creates a SpotLight with nested spot cone angles") {
 
     REQUIRE(point);
     CHECK(point->name == "MyPoint");
+}
+
+TEST_CASE("GLTFLoader preserves normalized uint8 COLOR_0 as a narrow attribute") {
+    Bin bin;
+    size_t posOff = bin.put<float>({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f});
+    size_t colOff = bin.putBytes({255, 0, 0, 0, 255, 0, 128, 128, 128});// u8 RGB per vertex
+
+    std::string json = R"({
+      "asset":{"version":"2.0"},
+      "buffers":[{"byteLength":)" + std::to_string(bin.data.size()) + R"(}],
+      "bufferViews":[
+        {"buffer":0,"byteOffset":)" + std::to_string(posOff) + R"(,"byteLength":36},
+        {"buffer":0,"byteOffset":)" + std::to_string(colOff) + R"(,"byteLength":9}],
+      "accessors":[
+        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":1,"componentType":5121,"normalized":true,"count":3,"type":"VEC3"}],
+      "meshes":[{"primitives":[{"attributes":{"POSITION":0,"COLOR_0":1}}]}],
+      "nodes":[{"mesh":0}],
+      "scenes":[{"nodes":[0]}]
+    })";
+
+    auto path = writeTempGlb(makeGlb(json, bin.data));
+    GLTFLoader loader;
+    auto res = loader.load(path);
+    fs::remove(path);
+
+    REQUIRE(res);
+    auto* mesh = firstMesh(res->scene.get());
+    REQUIRE(mesh);
+    auto geom = mesh->geometry();
+
+    const auto* col = geom->getAttribute("color");
+    REQUIRE(col);
+    CHECK(col->type() == AttributeType::UInt8);
+    CHECK(col->normalized());
+    CHECK(col->itemSize() == 3);
+    CHECK(col->count() == 3);
+    CHECK(col->byteLength() == 9);// was 36 as widened float
+
+    // Raw stored bytes, denormalized on read through the view.
+    FloatAttributeView view(col);
+    CHECK(view[0] == 1.f);
+    CHECK(view[1] == 0.f);
+    CHECK(view[4] == 1.f);
+    CHECK(std::abs(view[6] - 128.f / 255.f) < 1e-6f);
+}
+
+TEST_CASE("GLTFLoader widens COLOR_0 when preserveNarrowAttributes is off") {
+    Bin bin;
+    size_t posOff = bin.put<float>({0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f});
+    size_t colOff = bin.put<uint16_t>({65535, 0, 0, 0, 65535, 0, 0, 0, 65535});
+
+    std::string json = R"({
+      "asset":{"version":"2.0"},
+      "buffers":[{"byteLength":)" + std::to_string(bin.data.size()) + R"(}],
+      "bufferViews":[
+        {"buffer":0,"byteOffset":)" + std::to_string(posOff) + R"(,"byteLength":36},
+        {"buffer":0,"byteOffset":)" + std::to_string(colOff) + R"(,"byteLength":18}],
+      "accessors":[
+        {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":1,"componentType":5123,"normalized":true,"count":3,"type":"VEC3"}],
+      "meshes":[{"primitives":[{"attributes":{"POSITION":0,"COLOR_0":1}}]}],
+      "nodes":[{"mesh":0}],
+      "scenes":[{"nodes":[0]}]
+    })";
+
+    auto path = writeTempGlb(makeGlb(json, bin.data));
+
+    GLTFLoader narrow;
+    auto resNarrow = narrow.load(path);
+
+    GLTFLoader wide;
+    wide.preserveNarrowAttributes = false;
+    auto resWide = wide.load(path);
+    fs::remove(path);
+
+    REQUIRE(resNarrow);
+    REQUIRE(resWide);
+
+    const auto* colNarrow = firstMesh(resNarrow->scene.get())->geometry()->getAttribute("color");
+    REQUIRE(colNarrow);
+    CHECK(colNarrow->type() == AttributeType::UInt16);
+    CHECK(colNarrow->normalized());
+
+    // Opt-out restores the old behaviour: denormalized floats.
+    auto* colWide = firstMesh(resWide->scene.get())->geometry()->getAttribute<float>("color");
+    REQUIRE(colWide);
+    CHECK_FALSE(colWide->normalized());
+    CHECK(colWide->array()[0] == 1.f);
+    CHECK(colWide->array()[4] == 1.f);
 }

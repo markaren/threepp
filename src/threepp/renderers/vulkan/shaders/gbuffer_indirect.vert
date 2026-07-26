@@ -51,7 +51,9 @@ struct DrawInfo {
     uint     indexed;          // 0 / 1
     float    polygonOffset;    // clip-z depth bias (reverse-Z: + = toward near = on top of coplanar geom)
     uint     stableId;         // stable per-object instance id (host-assigned; -> outIds.y)
-    uint     _pad;             // keep 8-byte array stride (scalar buffer_reference)
+    uint     packedAttrs;      // BlasRecord::packedMask — bit 0: nrmAddr is oct-snorm16x2
+                               // (1 uint/vertex), bit 1: uvAddr is unorm16x2, bit 2:
+                               // colorAddr is unorm8x4. 0 → all tightly-packed float.
 };
 layout(set = 0, binding = 4, scalar) readonly buffer DrawInfoBuf {
     DrawInfo draws[];
@@ -77,6 +79,39 @@ vec2 fetchVec2(uint64_t addr, uint i) {
     return vec2(b.v[i * 2u + 0u], b.v[i * 2u + 1u]);
 }
 
+// Octahedral decode — MUST mirror probe_common.glsl's octDecode (and the CPU
+// encoder in VulkanCoreGeometry.cpp) including the signNotZero convention.
+vec3 octDecodeN(vec2 e) {
+    vec3 v = vec3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    if (v.z < 0.0) {
+        const vec2 s = vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+        v.xy = (1.0 - abs(v.yx)) * s;
+    }
+    return normalize(v);
+}
+
+// Packed-aware fetches (DrawInfo.packedAttrs bits, see BlasRecord::packedMask).
+vec3 fetchNormal(uint64_t addr, uint packedAttrs, uint i) {
+    if ((packedAttrs & 1u) != 0u) {
+        return octDecodeN(unpackSnorm2x16(UintBuf(addr).v[i]));
+    }
+    return fetchVec3(addr, i);
+}
+
+vec2 fetchUv(uint64_t addr, uint packedAttrs, uint i) {
+    if ((packedAttrs & 2u) != 0u) {
+        return unpackUnorm2x16(UintBuf(addr).v[i]);
+    }
+    return fetchVec2(addr, i);
+}
+
+vec3 fetchColor(uint64_t addr, uint packedAttrs, uint i) {
+    if ((packedAttrs & 4u) != 0u) {
+        return unpackUnorm4x8(UintBuf(addr).v[i]).rgb;
+    }
+    return fetchVec3(addr, i);
+}
+
 void main() {
     const DrawInfo d = draws[gl_InstanceIndex];
 
@@ -87,9 +122,9 @@ void main() {
             ? UintBuf(d.indexAddr).v[uint(gl_VertexIndex)]
             : uint(gl_VertexIndex);
 
-    const vec3 inPos    = fetchVec3(d.posAddr, vid);
-    const vec3 inNormal = (d.nrmAddr != 0ul) ? fetchVec3(d.nrmAddr, vid) : vec3(0.0, 1.0, 0.0);
-    const vec2 inUv     = (d.uvAddr  != 0ul) ? fetchVec2(d.uvAddr,  vid) : vec2(0.0);
+    const vec3 inPos    = fetchVec3(d.posAddr, vid);// positions are always float
+    const vec3 inNormal = (d.nrmAddr != 0ul) ? fetchNormal(d.nrmAddr, d.packedAttrs, vid) : vec3(0.0, 1.0, 0.0);
+    const vec2 inUv     = (d.uvAddr  != 0ul) ? fetchUv(d.uvAddr, d.packedAttrs, vid) : vec2(0.0);
     // prevPos: for static meshes the host sets prevPosAddr == posAddr so this
     // collapses to motionMat-only motion; skinned / displaced meshes have
     // their own prev-pose buffer captured at the end of the previous frame.
@@ -113,7 +148,7 @@ void main() {
     // Per-vertex color (material.vertexColors). gbuffer.frag multiplies albedo
     // by this; white when the mesh has no "color" attribute so the multiply is
     // a no-op. Linear working space — matches the material albedo.
-    vColor         = (d.colorAddr != 0ul) ? fetchVec3(d.colorAddr, vid) : vec3(1.0);
+    vColor         = (d.colorAddr != 0ul) ? fetchColor(d.colorAddr, d.packedAttrs, vid) : vec3(1.0);
 
     gl_Position    = cam.currVPjittered * worldPos;
     // Per-mesh polygon offset (decals): bias clip-z so the fragment's NDC depth

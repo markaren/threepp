@@ -250,6 +250,7 @@ namespace threepp {
             json gltf;
             std::vector<std::vector<uint8_t>> buffers;
             fs::path basePath;
+            bool preserveNarrowAttributes = true;// mirrors GLTFLoader's flag
 
             // Cache to avoid duplicate GPU uploads.
             // Textures are keyed by (texIdx, colorSpace): the same glTF texture
@@ -541,6 +542,39 @@ namespace threepp {
                                     for (int j = 0; j < lnc; ++j)
                                         out[target * lnc + j] =
                                                 decodeComponentFloat(valPtr + j * lcomp, lct, lnorm);
+                                });
+                }
+                return out;
+            }
+
+            // Read an accessor's components in their native integer width,
+            // honouring stride and any sparse overlay (sparse values share the
+            // accessor's componentType, so a plain byte copy is exact). Callers
+            // must have checked that componentType matches sizeof(T) — this is
+            // the storage behind narrow BufferAttributes, where the normalized
+            // flag travels on the attribute instead of being baked into floats.
+            template<class T>
+            std::vector<T> readNarrow(int accessorIdx) {
+                auto [ptr, stride, count, ct, nc, normalized] = getAccessor(accessorIdx);
+                std::vector<T> out(count * static_cast<size_t>(nc), T{});
+
+                if (ptr) {
+                    if (stride == sizeof(T) * static_cast<size_t>(nc)) {
+                        std::memcpy(out.data(), ptr, out.size() * sizeof(T));
+                    } else {
+                        for (size_t i = 0; i < count; ++i) {
+                            std::memcpy(&out[i * nc], ptr + i * stride, nc * sizeof(T));
+                        }
+                    }
+                }
+
+                const auto& acc = gltf["accessors"][accessorIdx];
+                if (acc.contains("sparse")) {
+                    const int lnc = nc;
+                    applySparse(acc["sparse"], ct, nc,
+                                [&, lnc](uint32_t target, const uint8_t* valPtr) {
+                                    if (static_cast<size_t>(target) * lnc + lnc > out.size()) return;
+                                    std::memcpy(&out[target * lnc], valPtr, lnc * sizeof(T));
                                 });
                 }
                 return out;
@@ -1177,13 +1211,25 @@ namespace threepp {
                 addFloatAttr("NORMAL", "normal", 3);
                 addFloatAttr("TEXCOORD_0", "uv", 2);
                 addFloatAttr("TEXCOORD_1", "uv2", 2);
-                // COLOR_0: use actual accessor component count (VEC3 or VEC4)
+                // COLOR_0: use actual accessor component count (VEC3 or VEC4).
+                // The glTF-recommended encodings are normalized uint8/uint16 —
+                // keep those narrow (1/4 resp. 1/2 the float footprint) instead
+                // of baking the normalization into widened floats. Both
+                // renderers expand them on fetch/upload; the normalized flag
+                // rides on the attribute.
                 if (attrs.contains("COLOR_0")) {
                     int accIdx = attrs["COLOR_0"].get<int>();
                     auto [ptr, stride, count, ct, nc, accNormalized] = getAccessor(accIdx);
-                    auto data = readFloats(accIdx);
-                    geometry->setAttribute("color",
-                            FloatBufferAttribute::create(std::move(data), nc));
+                    if (preserveNarrowAttributes && ct == COMP_UNSIGNED_BYTE && accNormalized) {
+                        geometry->setAttribute("color",
+                                Uint8BufferAttribute::create(readNarrow<uint8_t>(accIdx), nc, true));
+                    } else if (preserveNarrowAttributes && ct == COMP_UNSIGNED_SHORT && accNormalized) {
+                        geometry->setAttribute("color",
+                                Uint16BufferAttribute::create(readNarrow<uint16_t>(accIdx), nc, true));
+                    } else {
+                        geometry->setAttribute("color",
+                                FloatBufferAttribute::create(readFloats(accIdx), nc));
+                    }
                 }
                 addFloatAttr("TANGENT", "tangent", 4);
 
@@ -2046,6 +2092,7 @@ namespace threepp {
             GLTFParser parser;
             parser.basePath = path.parent_path();
             parser.buffers = {};
+            parser.preserveNarrowAttributes = preserveNarrowAttributes;
 
             std::string ext = path.extension().string();
             // lowercase extension

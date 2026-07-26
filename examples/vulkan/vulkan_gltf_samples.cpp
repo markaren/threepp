@@ -7,6 +7,7 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/FogExp2.hpp"
 #include "threepp/threepp.hpp"
+#include "threepp/utils/BufferGeometryUtils.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -332,6 +333,14 @@ int main(int argc, char** argv) {
         });
 
         loadedModel->onLoaded([&](AsyncGroup& g) {
+            // Narrow the static vertex attributes before first upload (onLoaded
+            // runs on the main thread pre-upload). Skinned / morph / deforming
+            // sample assets are skipped automatically, so animated glTF samples
+            // keep their float attributes and animate exactly as before.
+            if (const size_t saved = compressSceneAttributes(g)) {
+                std::cout << "[gltf_samples] compressed vertex attributes: "
+                          << saved / (1024.0 * 1024.0) << " MiB reclaimed" << std::endl;
+            }
             fitCamera(g);
             clipActions.clear();
             clipNames.clear();

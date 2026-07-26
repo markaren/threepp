@@ -100,6 +100,7 @@ layout(set = 0, binding = 9, scalar) readonly buffer MatBuf  { MaterialDesc mats
 layout(buffer_reference, scalar) readonly buffer NormalBuf { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf  { uint  i[]; };
 layout(buffer_reference, scalar) readonly buffer UvBuf     { float u[]; };
+layout(buffer_reference, scalar) readonly buffer PackedAttrBuf { uint w[]; };
 struct GeometryDesc {
     uint64_t vertexAddress;
     uint64_t normalAddress;
@@ -109,9 +110,38 @@ struct GeometryDesc {
     uint64_t prevVertexAddress;
     uint64_t colorAddress;// unused here, kept for layout match with VulkanCoreImpl::GeometryDesc
     uint     indexed;
-    uint     _pad;
+    uint     flags;// bit 0: sticky moved flag (history gates), bit 1: normal is
+                   // oct-snorm16x2, bit 2: uv is unorm16x2, bit 3: color is unorm8x4
 };
 layout(set = 0, binding = 10, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
+
+// Octahedral decode — mirrors probe_common.glsl octDecode and the CPU encoder
+// in VulkanCoreGeometry.cpp (signNotZero convention).
+vec3 gfetchOctDecode(vec2 e) {
+    vec3 v = vec3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    if (v.z < 0.0) {
+        const vec2 s = vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+        v.xy = (1.0 - abs(v.yx)) * s;
+    }
+    return normalize(v);
+}
+
+// Per-vertex fetches that honour GeometryDesc.flags bits 1..3.
+vec3 gfetchNormal(in GeometryDesc g, uint vid) {
+    if ((g.flags & 2u) != 0u) {
+        return gfetchOctDecode(unpackSnorm2x16(PackedAttrBuf(g.normalAddress).w[vid]));
+    }
+    NormalBuf nb = NormalBuf(g.normalAddress);
+    return vec3(nb.n[vid * 3 + 0], nb.n[vid * 3 + 1], nb.n[vid * 3 + 2]);
+}
+
+vec2 gfetchUv(in GeometryDesc g, uint vid) {
+    if ((g.flags & 4u) != 0u) {
+        return unpackUnorm2x16(PackedAttrBuf(g.uvAddress).w[vid]);
+    }
+    UvBuf ub = UvBuf(g.uvAddress);
+    return vec2(ub.u[vid * 2 + 0], ub.u[vid * 2 + 1]);
+}
 // Bindless material textures (reflection hits sample these). Indexed by the
 // material's per-map texIndex.
 layout(set = 0, binding = 11) uniform sampler2D albedoMaps[kMaxMaterialTextures];
@@ -1510,7 +1540,7 @@ void main() {
             // GI history into the revealed ground = the "history edge smear" behind
             // every moving car / the character's dust-trail feet. The ID compare is
             // exact where depth is proportionally blind. Gated on the prev mesh
-            // being CURRENTLY MOVING (GeometryDesc._pad), which retires the classic
+            // being CURRENTLY MOVING (GeometryDesc.flags bit 0), which retires the classic
             // ID-guard failure (draw-list renumber → global false reset; see the
             // NOT-prev-IDs note in DeferredShade.cpp — static scenes can't fire
             // this, and topology reorders clear the gbuf so pid=0 skips). All 4
@@ -1522,7 +1552,7 @@ void main() {
                 for (int dy = 0; dy <= 1 && valid; ++dy)
                     for (int dx = 0; dx <= 1 && valid; ++dx) {
                         const uint pid = texelFetch(gbufIdsPrevTex, clamp(fb + ivec2(dx, dy), ivec2(0), mx), 0).x;
-                        if (pid != id && pid > 0u && geoms[pid - 1u]._pad != 0u) valid = false;
+                        if (pid != id && pid > 0u && (geoms[pid - 1u].flags & 1u) != 0u) valid = false;
                     }
             }
         }

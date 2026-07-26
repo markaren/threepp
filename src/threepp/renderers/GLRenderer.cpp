@@ -898,10 +898,11 @@ struct GLRenderer::Impl {
         } else {
             envMap = cubemaps.getPMREM(environment.get());
         }
+        // Untyped lookup — the typed getter is null for narrowed color attributes.
         bool vertexAlphas = material->vertexColors &&
                             object->geometry() &&
                             object->geometry()->hasAttribute("color") &&
-                            object->geometry()->getAttribute<float>("color")->itemSize() == 4;
+                            object->geometry()->getAttribute("color")->itemSize() == 4;
 
         auto materialProperties = properties.materialProperties.get(material);
         auto& lights = currentRenderState->getLights();

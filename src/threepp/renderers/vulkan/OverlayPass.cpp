@@ -3,6 +3,7 @@
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
 #include "threepp/cameras/Camera.hpp"
+#include "threepp/core/AttributeView.hpp"
 #include "threepp/core/InterleavedBufferAttribute.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/interfaces.hpp"
@@ -713,9 +714,9 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
     if (!posAttr || posAttr->count() == 0) return nullptr;
     auto* idxAttr = geom->getIndex();
     // Optional per-vertex color, used by AxesHelper-style overlays.
-    const auto colAttr = geom->hasAttribute("color")
-                                 ? geom->getAttribute<float>("color")
-                                 : nullptr;
+    // Untyped so a narrowed (compressAttributes) color still counts; the
+    // uploads below widen it through a FloatAttributeView.
+    const auto* colAttr = geom->getAttribute("color");
 
     const uint32_t posVer = posAttr->version;
     const uint32_t idxVer = (idxAttr && idxAttr->count() > 0) ? idxAttr->version : 0u;
@@ -778,8 +779,8 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
 
         // Color buffer follows the same in-place / recreate logic.
         if (colAttr && colAttr->count() > 0) {
-            const auto& colArr = colAttr->array();
-            const VkDeviceSize cbBytes = colArr.size() * sizeof(float);
+            FloatAttributeView colView(colAttr);
+            const VkDeviceSize cbBytes = colView.size() * sizeof(float);
             if (rec.color.handle == VK_NULL_HANDLE || cbBytes > rec.color.size) {
                 if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.color);
                 rec.color = createBuffer(
@@ -788,7 +789,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             }
-            uploadHostVisible(ctx_.allocator(), rec.color, colArr.data(), cbBytes);
+            uploadHostVisible(ctx_.allocator(), rec.color, colView.data(), cbBytes);
             rec.colorVersion = colVer;
         } else if (rec.color.handle != VK_NULL_HANDLE) {
             destroyBuffer(ctx_.allocator(), rec.color);
@@ -828,15 +829,15 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
     }
 
     if (colAttr && colAttr->count() > 0) {
-        const auto& colArr = colAttr->array();
+        FloatAttributeView colView(colAttr);
         rec.colorVersion = colVer;
-        const VkDeviceSize cbBytes = colArr.size() * sizeof(float);
+        const VkDeviceSize cbBytes = colView.size() * sizeof(float);
         rec.color = createBuffer(
                 ctx_.allocator(), ctx_.device(), cbBytes,
                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VMA_MEMORY_USAGE_AUTO,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-        uploadHostVisible(ctx_.allocator(), rec.color, colArr.data(), cbBytes);
+        uploadHostVisible(ctx_.allocator(), rec.color, colView.data(), cbBytes);
     }
 
     return &lineGeomCache_.emplace(geom, std::move(rec)).first->second;

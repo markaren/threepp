@@ -100,7 +100,7 @@ bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, o
             for (int dy = 0; dy <= 1 && valid; ++dy)
                 for (int dx = 0; dx <= 1 && valid; ++dx) {
                     const uint pid = texelFetch(gbufIdsPrevTex, clamp(fb + ivec2(dx, dy), ivec2(0), mxP), 0).x;
-                    if (pid != id && pid > 0u && geoms[pid - 1u]._pad != 0u) valid = false;
+                    if (pid != id && pid > 0u && (geoms[pid - 1u].flags & 1u) != 0u) valid = false;
                 }
         }
     }
@@ -352,10 +352,10 @@ vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
     } else {
         idx = uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
     }
-    UvBuf ub = UvBuf(g.uvAddress);
-    const vec2 u0 = vec2(ub.u[idx.x * 2 + 0], ub.u[idx.x * 2 + 1]);
-    const vec2 u1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
-    const vec2 u2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
+    // Packed-aware (unorm16x2 on packed static geometry — see packedAttrs).
+    const vec2 u0 = gfetchUv(g, idx.x);
+    const vec2 u1 = gfetchUv(g, idx.y);
+    const vec2 u2 = gfetchUv(g, idx.z);
     return (1.0 - bary.x - bary.y) * u0 + bary.x * u1 + bary.y * u2;
 }
 
@@ -416,12 +416,12 @@ float shadowVis(vec3 origin, vec3 dir, float tMax) {
     if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT)
         return 1.0;
     // MOVING OCCLUDER flag for the denoised shadow channel: this shadow lands on
-    // the receiver from a mesh that is currently moving (sticky GeometryDesc._pad),
+    // the receiver from a mesh that is currently moving (GeometryDesc.flags bit 0),
     // so the shadow SWEEPS the receiver and its history must stay short — the
     // trend/σ-step antilags key off history statistics that the sweep itself
     // degrades (the à-trous feedback rewrites the mean but not E[R²], inflating σ
     // over the swept band), while this is a direct, statistics-free signal.
-    if (geoms[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true)]._pad != 0u)
+    if ((geoms[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true)].flags & 1u) != 0u)
         gShadowMovingOccluder = true;
     return 0.0;
 }

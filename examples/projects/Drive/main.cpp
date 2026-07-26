@@ -35,6 +35,7 @@
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/textures/DataTexture.hpp"
+#include "threepp/utils/BufferGeometryUtils.hpp"
 
 #include "DriveSounds.hpp"
 #include "MustangRig.hpp"
@@ -863,6 +864,16 @@ int main(int argc, char** argv) {
             }
         }
     };
+
+    // The world is fully built: narrow the static vertex attributes (normal
+    // snorm16 / uv unorm16 / color unorm8). Terrain, road, trees and the car
+    // shell all qualify; grass, skinned and displaced meshes are skipped
+    // automatically. Host-RAM win on Vulkan, host+VRAM on GL.
+    {
+        const size_t saved = compressSceneAttributes(*scene);
+        std::cout << "[drive] compressed vertex attributes: "
+                  << saved / (1024.0 * 1024.0) << " MiB reclaimed\n";
+    }
 
     Clock clock;
     float grassTime = 0.f;

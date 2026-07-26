@@ -3,6 +3,7 @@
 
 #include "threepp/objects/SkinnedMesh.hpp"
 
+#include "threepp/core/AttributeView.hpp"
 #include "threepp/core/Face3.hpp"
 #include "threepp/core/Raycaster.hpp"
 
@@ -56,8 +57,8 @@ namespace {
             const FloatBufferAttribute& position,
             const std::vector<std::shared_ptr<BufferAttribute>>* morphPosition,
             bool morphTargetsRelative,
-            const FloatBufferAttribute* uv,
-            const FloatBufferAttribute* uv2,
+            const FloatAttributeView* uv,
+            const FloatAttributeView* uv2,
             unsigned int a, unsigned int b, unsigned int c) {
 
         static thread_local Vector3 _vA{};
@@ -137,11 +138,20 @@ namespace {
             static thread_local Vector2 _uvB{};
             static thread_local Vector2 _uvC{};
 
+            // The views are tightly packed (FloatAttributeView de-strides
+            // interleaved sources), so direct itemSize indexing is safe here.
+            // NB: vertex B used to be read from index `c` — a copy-paste slip
+            // that skewed every interpolated raycast UV toward the C corner.
+            const auto readUv = [](const FloatAttributeView& view, unsigned int v, Vector2& target) {
+                const auto base = static_cast<size_t>(v) * view.itemSize();
+                target.set(view[base], view[base + 1]);
+            };
+
             if (uv) {
 
-                uv->setFromBufferAttribute(_uvA, a);
-                uv->setFromBufferAttribute(_uvB, c);
-                uv->setFromBufferAttribute(_uvC, c);
+                readUv(*uv, a, _uvA);
+                readUv(*uv, b, _uvB);
+                readUv(*uv, c, _uvC);
 
                 Vector2 uvTarget{};
                 Triangle::getUV(_intersectionPoint, _vA, _vB, _vC, _uvA, _uvB, _uvC, uvTarget);
@@ -150,9 +160,9 @@ namespace {
 
             if (uv2) {
 
-                uv2->setFromBufferAttribute(_uvA, a);
-                uv2->setFromBufferAttribute(_uvB, c);
-                uv2->setFromBufferAttribute(_uvC, c);
+                readUv(*uv2, a, _uvA);
+                readUv(*uv2, b, _uvB);
+                readUv(*uv2, c, _uvC);
 
                 Vector2 uv2Target{};
                 Triangle::getUV(_intersectionPoint, _vA, _vB, _vC, _uvA, _uvB, _uvC, uv2Target);
@@ -215,8 +225,13 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
     const auto position = geometry_->getAttribute<float>("position");
     const auto morphPosition = geometry_->getMorphAttribute("position");
     const auto morphTargetsRelative = geometry_->morphTargetsRelative;
-    const auto uv = geometry_->getAttribute<float>("uv");
-    const auto uv2 = geometry_->getAttribute<float>("uv2");
+    // Views instead of typed pointers: uv/uv2 may be narrowed
+    // (compressAttributes), and the typed getter would return null — the
+    // intersection would silently lose its uv field. Zero-copy when float.
+    const FloatAttributeView uvView(geometry_->getAttribute("uv"));
+    const FloatAttributeView uv2View(geometry_->getAttribute("uv2"));
+    const auto* uv = uvView ? &uvView : nullptr;
+    const auto* uv2 = uv2View ? &uv2View : nullptr;
     const auto groups = geometry_->groups;
     const auto drawRange = geometry_->drawRange;
 
