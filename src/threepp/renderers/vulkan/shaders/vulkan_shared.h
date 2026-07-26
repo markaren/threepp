@@ -25,9 +25,17 @@
 // GI bounces, emissive-NEE shadow tests) trace with cullMask = kRayMaskOpaque
 // so a decal's transparent quad never blocks IBL/GI/emissive light — the HW
 // skips those instances entirely, no per-candidate alpha test needed. Every
-// radiance/primary trace keeps cullMask 0xFF and sees both groups.
-#define kRayMaskOpaque 0x01u
-#define kRayMaskAlpha  0x02u
+// radiance/primary trace keeps cullMask 0xFF and sees every group.
+//
+// kRayMaskNoShadow is the same idea for OPAQUE geometry that must not occlude:
+// a first-person viewmodel (MeshEntry::camAttached — anything parented under
+// the camera). It rasterizes, shades and reflects normally, but since no
+// occlusion cullMask includes 0x04 it casts no shadow and blocks no sky/GI
+// light — otherwise the sun paints a pair of floating hands and a gun on the
+// ground beside the player.
+#define kRayMaskOpaque   0x01u
+#define kRayMaskAlpha    0x02u
+#define kRayMaskNoShadow 0x04u
 
 // Per-instance flag word — packed host-side (VulkanCoreIndirect.cpp) into
 // DrawInfo.flags, carried through gbuffer.vert into the gbuffer IDs

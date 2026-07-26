@@ -1106,6 +1106,18 @@ namespace threepp {
             // basic overlay-mesh loop, which would render its un-expanded quads as
             // zero-area triangles. The overlay-mesh loop skips on this flag.
             bool     isParticle = false;
+            // Geometry rigidly parented UNDER a Camera — a first-person
+            // viewmodel (hands, weapon, cockpit). Rasterized and shaded like
+            // any other mesh, and still visible to primary/radiance traces
+            // (cullMask 0xFF), but tagged kRayMaskNoShadow in the TLAS so no
+            // occlusion query can see it: a viewmodel that casts sun shadows
+            // paints floating hands and a gun on the floor next to the player.
+            // Resolved by an ancestor walk at full expansion (a reparent is a
+            // structure change ⇒ full re-expansion, so it can't go stale).
+            // NOTE: castShadow can't drive this — it defaults to FALSE on
+            // Object3D and no loader sets it, so honouring the flag in the RT
+            // path would delete the shadows of every loaded scene.
+            bool     camAttached = false;
             // Cached type probes. Resolved once per Mesh in ensureSceneBuilt's
             // traverseVisible callback (before the InstancedMesh fork so an
             // N-instance mesh costs 3 dynamic_casts, not 3·N). Consumers

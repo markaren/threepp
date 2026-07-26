@@ -389,6 +389,17 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     lodCenter = geom->boundingBox->getCenter();
                     lodRadius = geom->boundingBox->getSize().length() * 0.5f;
                 }
+                // First-person viewmodel probe: is this mesh parented under a
+                // Camera? Such geometry sits at the eye and must not occlude
+                // (see MeshEntry::camAttached / kRayMaskNoShadow). One ancestor
+                // walk per Mesh per full expansion.
+                bool camAttached = false;
+                for (auto* p = m->parent; p; p = p->parent) {
+                    if (dynamic_cast<Camera*>(p)) {
+                        camAttached = true;
+                        break;
+                    }
+                }
                 auto setLodCaches = [&](MeshEntry& e) {
                     e.lodExemptStatic = lodExempt;
                     e.lodEmissive       = lodEmissive;
@@ -415,6 +426,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                         e.isMorphed    = isMorphed;
                         e.isTet        = isTet;
                         e.isInstanced  = true;
+                        e.camAttached  = camAttached;
                         setLodCaches(e);
                         std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
                         built.push_back(e);
@@ -430,6 +442,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                     e.isGrass      = isGrass;
                     e.isMorphed    = isMorphed;
                     e.isTet        = isTet;
+                    e.camAttached  = camAttached;
                     setLodCaches(e);
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
                     built.push_back(e);
@@ -1325,13 +1338,15 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                             inst.instanceCustomIndex = static_cast<uint32_t>(i);
                             // Same visibility-group rule as the full rebuild:
                             // blend/transmissive (non-water) → alpha mask so
-                            // occlusion queries skip them.
+                            // occlusion queries skip them, camera-parented
+                            // viewmodels → no-shadow mask.
                             inst.mask = kRayMaskOpaque;
                             if (i < matDescsCached_.size() && !en.isDisplaced) {
                                 const auto& cmd = matDescsCached_[i];
                                 if (cmd.transmission > 0.0f || cmd.alphaCutoff < 0.0f)
                                     inst.mask = kRayMaskAlpha;
                             }
+                            if (en.camAttached) inst.mask = kRayMaskNoShadow;
                             inst.instanceShaderBindingTableRecordOffset = 0;
                             inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
                             inst.accelerationStructureReference = blasAddr;
@@ -1992,9 +2007,11 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
                 // is handled by its volumetrics, not pass-through.
                 if (!instances.empty()) {
                     instances.back().mask =
-                            (!en.isDisplaced && (md.transmission > 0.0f || md.alphaCutoff < 0.0f))
-                                    ? kRayMaskAlpha
-                                    : kRayMaskOpaque;
+                            en.camAttached
+                                    ? kRayMaskNoShadow// FP viewmodel: visible, never occludes
+                                    : (!en.isDisplaced && (md.transmission > 0.0f || md.alphaCutoff < 0.0f))
+                                              ? kRayMaskAlpha
+                                              : kRayMaskOpaque;
                 }
             }
 
