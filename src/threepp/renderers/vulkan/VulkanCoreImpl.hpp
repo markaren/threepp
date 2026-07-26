@@ -6307,6 +6307,57 @@ namespace threepp {
             int channels = 0;
 
             if (img.compressedFormat.has_value()) {
+                // Pass-through: if the file already ships BC blocks (DDS) AND a
+                // complete mip chain, upload them VERBATIM — no decode, no
+                // re-encode, no generation loss, and BC1 sources stay at their
+                // native 0.5 B/px (half of what a BC7 transcode would use).
+                // Anything short of that (partial chain, unmapped format,
+                // THREEPP_NO_BC) falls through to the decode path below, which
+                // re-encodes to BC7 with CPU-built mips.
+                static const bool noBcPass = std::getenv("THREEPP_NO_BC") != nullptr;
+                if (!noBcPass && bc7SampledSupported()) {
+                    const VkFormat vkFmt = glCompressedToVk(
+                            *img.compressedFormat, tex->colorSpace == ColorSpace::sRGB);
+                    const uint32_t fullLevels =
+                            1u + static_cast<uint32_t>(std::floor(std::log2(
+                                         static_cast<float>(std::max(w, h)))));
+                    if (vkFmt != VK_FORMAT_UNDEFINED &&
+                        tex->mipmaps().size() + 1 == fullLevels) {
+                        std::vector<std::vector<std::uint8_t>> levels;
+                        levels.reserve(fullLevels);
+                        bool ok = true;
+                        try {
+                            levels.push_back(img.data<unsigned char>());
+                            uint32_t lw = w, lh = h;
+                            for (auto& mip : const_cast<Texture*>(tex)->mipmaps()) {
+                                lw = std::max(1u, lw >> 1);
+                                lh = std::max(1u, lh >> 1);
+                                if (mip.width() != lw || mip.height() != lh ||
+                                    !mip.compressedFormat.has_value() ||
+                                    *mip.compressedFormat != *img.compressedFormat) {
+                                    ok = false;
+                                    break;
+                                }
+                                levels.push_back(mip.data<unsigned char>());
+                            }
+                        } catch (const std::bad_variant_access&) {
+                            ok = false;
+                        }
+                        if (ok) {
+                            char bcName[80];
+                            std::snprintf(bcName, sizeof(bcName),
+                                          "materialTexture BC-passthrough (%ux%u, tex=%p)",
+                                          w, h, static_cast<const void*>(tex));
+                            return createSampledImageBC(
+                                    w, h, vkFmt, levels,
+                                    VK_FILTER_LINEAR,
+                                    wrapToVk(tex->wrapS),
+                                    wrapToVk(tex->wrapT),
+                                    bcName);
+                        }
+                    }
+                }
+
                 const auto& blocks = img.data<unsigned char>();
                 bcnRgba = bcn::bcnDecompress(
                         blocks.data(),
@@ -6446,6 +6497,37 @@ namespace threepp {
                     wrapToVk(tex->wrapS),
                     wrapToVk(tex->wrapT),
                     texName);
+        }
+
+        // GL compressed-format enum (Image::compressedFormat, as the DDS
+        // loader stores it) → Vulkan BC format. The COLOR-SPACE TAG on the
+        // Texture wins over the GL enum's own sRGB-ness, matching the old
+        // decode path (which uploaded RGBA8_SRGB/UNORM purely by tag): FBX
+        // materials tag albedo sRGB and data maps linear regardless of how
+        // the DDS was authored. UNDEFINED = no pass-through (e.g. BC6H).
+        static VkFormat glCompressedToVk(unsigned int glFmt, bool srgb) {
+            switch (glFmt) {
+                case 0x83F0u:// DXT1 RGB
+                    return srgb ? VK_FORMAT_BC1_RGB_SRGB_BLOCK : VK_FORMAT_BC1_RGB_UNORM_BLOCK;
+                case 0x83F1u:// DXT1 RGBA
+                case 0x8C4Cu:// DXT1 sRGB
+                case 0x8C4Du:// DXT1 sRGB+A
+                    return srgb ? VK_FORMAT_BC1_RGBA_SRGB_BLOCK : VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+                case 0x83F2u:// DXT3
+                    return srgb ? VK_FORMAT_BC2_SRGB_BLOCK : VK_FORMAT_BC2_UNORM_BLOCK;
+                case 0x83F3u:// DXT5
+                case 0x8C4Fu:// DXT5 sRGB
+                    return srgb ? VK_FORMAT_BC3_SRGB_BLOCK : VK_FORMAT_BC3_UNORM_BLOCK;
+                case 0x8DBBu:// RGTC1 / BC4
+                    return VK_FORMAT_BC4_UNORM_BLOCK;
+                case 0x8DBDu:// RGTC2 / BC5
+                    return VK_FORMAT_BC5_UNORM_BLOCK;
+                case 0x8E8Cu:// BPTC / BC7
+                case 0x8E8Du:// BPTC sRGB
+                    return srgb ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK;
+                default:
+                    return VK_FORMAT_UNDEFINED;
+            }
         }
 
         // BC7 sampled-image support, queried once. Universal on desktop GPUs;
