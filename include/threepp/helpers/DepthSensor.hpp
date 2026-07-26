@@ -5,17 +5,20 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/extras/sensors/VisionSensor.hpp"
 #include "threepp/math/Color.hpp"
 #include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 
+#include <memory>
 #include <vector>
 
 namespace threepp {
 
     class ShaderMaterial;
     class Renderer;
+    class PathTracedLidarSensor;
 
     /**
      * Simulates a depth sensor, backend-neutrally.
@@ -32,15 +35,24 @@ namespace threepp {
      * Can scan with or without color: the former is slightly more expensive but gives
      * per-point color information, while the latter is faster and uses less GPU memory.
      * (On Vulkan the "color" is the LIDAR intensity as greyscale, not surface albedo.)
+     *
+     * Range noise is inherited from VisionSensor: `rangeNoise` is a seeded
+     * RangeNoiseModel (default: 0.02 m sigma), so the same scene scanned from
+     * the same pose with the same seed produces the same cloud on every run and
+     * every machine. Two default-constructed sensors share the default seed —
+     * give them distinct seeds if you want their noise decorrelated.
      */
-    class DepthSensor: public Object3D {
+    class DepthSensor: public Object3D, public VisionSensor {
 
     public:
-        // Gaussian range noise standard deviation in metres (0 = perfect sensor)
-        float rangeNoise{0.02f};
-
         DepthSensor(float fovY, unsigned int width, unsigned int height,
                     float near = 0.1f, float far = 100.f);
+
+        // Out-of-line: the cached path-traced back-end is only forward-declared.
+        ~DepthSensor() override;
+
+        // Also re-seeds the Vulkan back-end, which owns the stream on that path.
+        void resetNoise() override;
 
         /**
          * Performs a scan and returns the hit points in world space.
@@ -86,9 +98,18 @@ namespace threepp {
         std::vector<float> xDir_;
         std::vector<float> yDir_;
 
+        // Vulkan back-end: the pinhole ray pattern traced through the path
+        // tracer's TLAS. Built on first use and kept, not rebuilt per scan —
+        // rebuilding would also rebuild the beam table every frame.
+        std::unique_ptr<PathTracedLidarSensor> tracedBackend_;
+
+        // Builds tracedBackend_ on first call and syncs the noise model onto it.
+        // Only defined on a Vulkan build (the back-end's TU is Vulkan-gated).
+        PathTracedLidarSensor& tracedBackend();
+
         void unprojectPoints(std::vector<Vector3>& points,
                              const unsigned char* colorPixels = nullptr,
-                             std::vector<Color>* colors = nullptr) const;
+                             std::vector<Color>* colors = nullptr);
     };
 
 }// namespace threepp

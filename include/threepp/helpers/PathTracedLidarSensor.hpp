@@ -4,6 +4,7 @@
 #include "LidarModel.hpp"
 #include "LidarTypes.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/extras/sensors/VisionSensor.hpp"
 
 #include <vector>
 
@@ -34,8 +35,15 @@ namespace threepp {
      * called at least once for the current scene so the TLAS is built.
      * It is safe to call between `render()` invocations; it must NOT be
      * called concurrently with `render()`.
+     *
+     * Range noise (`rangeNoise`, inherited from VisionSensor) defaults to
+     * OFF here — unlike the raster sensors, this back-end reports the ray
+     * tracer's own physically-derived range, and the callers that want a
+     * noisy sensor (DepthSensor on Vulkan) push their model down into it.
+     * Turn it on for a noisy LIDAR: the seeded stream makes the result
+     * replayable, and beams are perturbed in beam-table order.
      */
-    class PathTracedLidarSensor: public Object3D {
+    class PathTracedLidarSensor: public Object3D, public VisionSensor {
 
     public:
         // Tweakable LIDAR-equation parameters (forwarded to the renderer).
@@ -81,6 +89,10 @@ namespace threepp {
         void buildDenseBeams(unsigned int hRes, unsigned int vRes);
         void buildModelBeams(const LidarModel& model);
         void buildCameraBeams(float fovY, unsigned int width, unsigned int height);
+
+        // Perturbs each return along its beam per `rangeNoise`; no-op when the
+        // model is zero.
+        void applyNoise(std::vector<LidarReturn>& out, const Vector3& origin);
     };
 
 }// namespace threepp

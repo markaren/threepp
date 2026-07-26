@@ -851,7 +851,7 @@ namespace {
         scene.add(boxMesh);
 
         DepthSensor sensor(60.f, 64, 48, 0.05f, 3.f);
-        sensor.rangeNoise = 0.f;
+        sensor.rangeNoise.stddev = 0.f;
         sensor.position.set(0.f, 1.f, 0.f);
         sensor.rotation.x = -math::PI / 2;// look straight down
         scene.addRef(sensor);
@@ -1174,7 +1174,7 @@ int main(int argc, char** argv) {
     constexpr float kSensFar = 1.6f;
 
     DepthSensor sensor(kSensFov, kSensW, kSensH, 0.04f, kSensFar);
-    sensor.rangeNoise = 0.004f;
+    sensor.rangeNoise.stddev = 0.004f;
     sensor.position.set(0.065f, 0.f, 0.01f);
     sensor.rotation.x = math::PI;// camera looks -Z; flip to look along tool +Z (down)
 

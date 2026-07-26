@@ -11,17 +11,29 @@
 
 using namespace threepp;
 
-PathTracedLidarSensor::PathTracedLidarSensor(unsigned int hRes, unsigned int vRes, float maxRange) {
+PathTracedLidarSensor::PathTracedLidarSensor(unsigned int hRes, unsigned int vRes, float maxRange)
+    // The sensor frame is this node's own world frame, so it attaches to itself.
+    // Noise off by default: this back-end reports the tracer's own range.
+    : VisionSensor(*this, RangeNoiseModel{/*stddev*/ 0.f, /*stddevPerMetre*/ 0.f,
+                                          /*bias*/ 0.f, /*seed*/ 0xD1342543DE82EF95ULL}) {
     params.maxRange = maxRange;
     buildDenseBeams(hRes, vRes);
 }
 
-PathTracedLidarSensor::PathTracedLidarSensor(const LidarModel& model, float maxRange) {
+PathTracedLidarSensor::PathTracedLidarSensor(const LidarModel& model, float maxRange)
+    // The sensor frame is this node's own world frame, so it attaches to itself.
+    // Noise off by default: this back-end reports the tracer's own range.
+    : VisionSensor(*this, RangeNoiseModel{/*stddev*/ 0.f, /*stddevPerMetre*/ 0.f,
+                                          /*bias*/ 0.f, /*seed*/ 0xD1342543DE82EF95ULL}) {
     params.maxRange = maxRange;
     buildModelBeams(model);
 }
 
-PathTracedLidarSensor::PathTracedLidarSensor(float fovY, unsigned int width, unsigned int height, float maxRange) {
+PathTracedLidarSensor::PathTracedLidarSensor(float fovY, unsigned int width, unsigned int height, float maxRange)
+    // The sensor frame is this node's own world frame, so it attaches to itself.
+    // Noise off by default: this back-end reports the tracer's own range.
+    : VisionSensor(*this, RangeNoiseModel{/*stddev*/ 0.f, /*stddevPerMetre*/ 0.f,
+                                          /*bias*/ 0.f, /*seed*/ 0xD1342543DE82EF95ULL}) {
     params.maxRange = maxRange;
     buildCameraBeams(fovY, width, height);
 }
@@ -92,6 +104,7 @@ void PathTracedLidarSensor::buildCameraBeams(float fovY, unsigned int width, uns
 }
 
 void PathTracedLidarSensor::scan(VulkanRenderer& renderer, std::vector<LidarReturn>& out) {
+    beginScan();
     out.clear();
     if (directions_.empty()) return;
 
@@ -114,4 +127,45 @@ void PathTracedLidarSensor::scan(VulkanRenderer& renderer, std::vector<LidarRetu
     }
 
     renderer.scanLidar(beamScratch_, out, params);
+
+    applyNoise(out, origin);
+}
+
+// Perturb each return along its own beam. Applied CPU-side rather than in the
+// rgen shader on purpose: the GPU's per-beam RNG is seeded from launch index +
+// frame, so it could not honour a caller's seed, and a scan replayed on another
+// GPU would not reproduce it. Here the stream is the sensor's own.
+//
+// A return whose noisy range leaves (0, maxRange] becomes a miss rather than a
+// point at a range the sensor could not have reported — same rule the raster
+// sensors apply when noise pushes a depth past the far plane.
+void PathTracedLidarSensor::applyNoise(std::vector<LidarReturn>& out, const Vector3& origin) {
+    if (!rangeNoise.active()) return;
+
+    for (auto& ret : out) {
+        if (ret.returnNo <= 0) continue;// miss: nothing was measured to corrupt
+
+        Vector3 dir = ret.position;
+        dir.sub(origin);
+        const float dist = dir.length();
+        if (dist <= 1e-6f) continue;
+
+        const float noisy = applyRangeNoise(dist);
+        if (noisy <= 0.f || noisy > params.maxRange) {
+            // Full miss per the LidarTypes.hpp contract (normal = 0 too), so a
+            // consumer that ignores the sentinel rules still sees miss-shaped
+            // data rather than the stale hit fields.
+            ret.position.set(0.f, 0.f, 0.f);
+            ret.normal.set(0.f, 0.f, 0.f);
+            ret.hitInstanceId = -1;
+            ret.returnNo = 0;
+            ret.distance = 0.f;
+            ret.intensity = 0.f;
+            continue;
+        }
+        ret.position = dir.multiplyScalar(noisy / dist).add(origin);
+        // `distance` is the slant range the consumer reads; keep it consistent
+        // with the point that was just moved.
+        ret.distance = noisy;
+    }
 }

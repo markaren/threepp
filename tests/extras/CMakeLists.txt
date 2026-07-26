@@ -1,5 +1,6 @@
 add_test_executable(PointCloud_test)
 add_test_executable(Sensor_test)
+add_test_executable(VisionSensor_test)
 
 # Imu_test needs the PhysX SDK, which is an optional vcpkg dependency (feature
 # "physx"). Look for it here rather than relying on the examples having already

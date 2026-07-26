@@ -6,6 +6,7 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/extras/sensors/VisionSensor.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/scenes/Scene.hpp"
 
@@ -29,13 +30,16 @@ namespace threepp {
      *
      * The sensor object must be in the scene (or have its parent chain updated)
      * before calling scan(), so all child camera world matrices are current.
+     *
+     * Range noise is inherited from VisionSensor: `rangeNoise` is a seeded
+     * RangeNoiseModel (default: 0.02 m sigma), so a replayed run reproduces the
+     * same cloud. Beams are perturbed in a fixed order (face 0..5, row-major
+     * within a face; beam-table order in model mode), which is what makes the
+     * seed reproduce a specific cloud rather than merely a specific histogram.
      */
-    class LidarSensor: public Object3D {
+    class LidarSensor: public Object3D, public VisionSensor {
 
     public:
-        // Gaussian range noise standard deviation in metres (0 = perfect sensor)
-        float rangeNoise{0.02f};
-
         /**
          * Dense-grid mode: every pixel on all six cube faces is returned.
          * @param faceSize  Resolution of each cube face in pixels (square).
@@ -102,8 +106,8 @@ namespace threepp {
         void buildBeamTable(const LidarModel& model);
 
         void renderFaces(Renderer& renderer, Scene& scene);
-        void unprojectDense(std::vector<LidarReturn>& points) const;
-        void unprojectBeams(std::vector<LidarReturn>& points) const;
+        void unprojectDense(std::vector<LidarReturn>& points);
+        void unprojectBeams(std::vector<LidarReturn>& points);
     };
 
 }// namespace threepp

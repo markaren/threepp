@@ -1,41 +1,36 @@
-// Proprioceptive sensors — the scene-graph-attached, physics-driven sensor
-// suite (extras/sensors), exposed to Python.
+// The sensor suite (extras/sensors), exposed to Python.
 //
-// Compiled unconditionally; the body is active only when threepp can see the
-// omniverse-physx-sdk (THREEPP_PY_HAS_PHYSX, defined by python/CMakeLists).
-// Otherwise init_sensors is a no-op — the sensors are driven by PhysxWorld's
-// step loop, so they only exist in a PhysX-enabled build.
+// Two halves:
+//   init_sensor_base — the PhysX-free contract: Sensor, NoiseModel,
+//     RangeNoiseModel. Always compiled, and registered EARLY (before
+//     init_render) because the vision sensors bound elsewhere — DepthSensor in
+//     bind_render.cpp — derive from Sensor, and pybind requires a base class to
+//     be registered before any class that names it.
+//   init_sensors — the concrete proprioceptive sensors, which are driven by
+//     PhysxWorld's step loop and so only exist in a PhysX-enabled build
+//     (THREEPP_PY_HAS_PHYSX, defined by python/CMakeLists). A no-op otherwise.
 //
-// Scope: NoiseModel, Imu + ImuSample, JointEncoder + JointSample, ContactSensor
-// + ContactSample, ForceTorqueSensor + WrenchSample. The world-side hooks (register_sensor / unregister_sensor /
+// Scope: Sensor, NoiseModel, RangeNoiseModel, Imu + ImuSample, JointEncoder +
+// JointSample, ContactSensor + ContactSample, ForceTorqueSensor +
+// WrenchSample. The world-side hooks (register_sensor / unregister_sensor /
 // sim_time) are added to PhysxWorld in bind_physx.cpp so all PhysxWorld methods
 // live together.
 #include "bindings.hpp"
 
-#ifdef THREEPP_PY_HAS_PHYSX
+#include <pybind11/pybind11.h>
 
-#include <pybind11/numpy.h>
-#include <pybind11/stl.h>
-
-#include "threepp/core/Object3D.hpp"
-#include "threepp/extras/physx/Articulation.hpp"
-#include "threepp/extras/sensors/ContactSensor.hpp"
-#include "threepp/extras/sensors/ForceTorqueSensor.hpp"
-#include "threepp/extras/sensors/Imu.hpp"
-#include "threepp/extras/sensors/JointEncoder.hpp"
 #include "threepp/extras/sensors/Sensor.hpp"
 #include "threepp/math/Vector3.hpp"
 
-#include <cstring>
-#include <optional>
-#include <vector>
-
-namespace py = pybind11;
-using namespace threepp;
+#include <cstdint>
+#include <memory>
+#include <string>
 
 namespace threepp_py {
 
-    void init_sensors(py::module_& m) {
+    void init_sensor_base(pybind11::module_& m) {
+        namespace py = pybind11;
+        using namespace threepp;
 
         // --- Sensor (abstract base) ----------------------------------------
         // Bound so PhysxWorld.register_sensor can take any sensor rather than
@@ -44,11 +39,23 @@ namespace threepp_py {
         // and ContactSensor would have silently been unregisterable from Python.
         // Safe to bind as a base here because Sensor is a NON-virtual base (see
         // bind_objects.cpp for why threepp's virtual Object3D bases are not).
-        py::class_<Sensor>(m, "Sensor",
-                           "Abstract base of the sensor suite. Register a concrete sensor with "
-                           "PhysxWorld.register_sensor to have it sampled from the step loop.")
+        // shared_ptr holder to match Object3D's: the vision sensors are both an
+        // Object3D and a Sensor, and pybind requires one holder type across a
+        // whole hierarchy.
+        py::class_<Sensor, std::shared_ptr<Sensor>>(
+                m, "Sensor",
+                "Abstract base of the sensor suite. Register a concrete sensor with "
+                "PhysxWorld.register_sensor to have it sampled from the step loop.")
                 .def_property("rate_hz", &Sensor::rateHz, &Sensor::setRateHz,
-                              "Target sample rate (Hz); 0 = every physics substep.");
+                              "Target sample rate (Hz); 0 = every physics substep.")
+                .def_property("sim_time", &Sensor::simTime, &Sensor::setSimTime,
+                              "The sensor's clock (s) — the time base every measurement is stamped "
+                              "with. Latched from the world automatically while registered with a "
+                              "PhysxWorld; drive it yourself (advance_clock / sim_time = t) for a "
+                              "sensor pulled from a render loop. Always sim time, never wall time, "
+                              "so a replayed run reproduces its timestamps.")
+                .def("advance_clock", &Sensor::advanceClock, py::arg("dt"),
+                     "Advance the sensor clock by dt seconds.");
 
         // --- NoiseModel ----------------------------------------------------
         py::class_<NoiseModel>(m, "NoiseModel",
@@ -78,6 +85,61 @@ namespace threepp_py {
                     return "<threepp.NoiseModel seed=" + std::to_string(n.seed) + ">";
                 });
 
+        // --- RangeNoiseModel -----------------------------------------------
+        py::class_<RangeNoiseModel>(m, "RangeNoiseModel",
+                                    "Range noise for a ranging sensor (LIDAR / depth camera). Per RETURN, "
+                                    "not per second: sigma = hypot(stddev, r * stddev_per_metre) metres, "
+                                    "plus a fixed `bias`. `seed` makes a scan reproducible — same seed and "
+                                    "same beam order gives the same cloud on every run and machine. "
+                                    "All-zero = a perfect sensor (clean ranges pass through untouched).")
+                .def(py::init([](float stddev, float stddev_per_metre, float bias, std::uint64_t seed) {
+                         RangeNoiseModel n;
+                         n.stddev = stddev;
+                         n.stddevPerMetre = stddev_per_metre;
+                         n.bias = bias;
+                         n.seed = seed;
+                         return n;
+                     }),
+                     py::arg("stddev") = 0.f, py::arg("stddev_per_metre") = 0.f,
+                     py::arg("bias") = 0.f, py::arg("seed") = 0)
+                .def_readwrite("stddev", &RangeNoiseModel::stddev, "Constant sigma [m].")
+                .def_readwrite("stddev_per_metre", &RangeNoiseModel::stddevPerMetre,
+                               "Range-proportional sigma [m/m], added in quadrature.")
+                .def_readwrite("bias", &RangeNoiseModel::bias, "Fixed offset [m]; positive reads long.")
+                .def_readwrite("seed", &RangeNoiseModel::seed)
+                .def("__repr__", [](const RangeNoiseModel& n) {
+                    return "<threepp.RangeNoiseModel stddev=" + std::to_string(n.stddev) +
+                           " seed=" + std::to_string(n.seed) + ">";
+                });
+    }
+
+}// namespace threepp_py
+
+#ifdef THREEPP_PY_HAS_PHYSX
+
+#include <pybind11/numpy.h>
+#include <pybind11/stl.h>
+
+#include "threepp/core/Object3D.hpp"
+#include "threepp/extras/physx/Articulation.hpp"
+#include "threepp/extras/sensors/ContactSensor.hpp"
+#include "threepp/extras/sensors/ForceTorqueSensor.hpp"
+#include "threepp/extras/sensors/Imu.hpp"
+#include "threepp/extras/sensors/JointEncoder.hpp"
+#include "threepp/extras/sensors/Sensor.hpp"
+#include "threepp/math/Vector3.hpp"
+
+#include <cstring>
+#include <optional>
+#include <vector>
+
+namespace py = pybind11;
+using namespace threepp;
+
+namespace threepp_py {
+
+    void init_sensors(py::module_& m) {
+
         // --- ImuSample -----------------------------------------------------
         py::class_<ImuSample>(m, "ImuSample",
                               "One IMU measurement. t: sim time (s). angular_velocity: rad/s. "
@@ -90,7 +152,7 @@ namespace threepp_py {
                 });
 
         // --- Imu -----------------------------------------------------------
-        py::class_<Imu, Sensor>(m, "Imu",
+        py::class_<Imu, Sensor, std::shared_ptr<Imu>>(m, "Imu",
                         "Gyroscope + accelerometer attached to an Object3D. Its measurement frame is "
                         "that node's world frame; register it with a PhysxWorld (world.register_sensor) "
                         "AFTER adding the body it rides. Each substep it measures the body's angular "
@@ -162,7 +224,7 @@ namespace threepp_py {
                            " pos=" + std::to_string(s.position) + ">";
                 });
 
-        py::class_<JointEncoder, Sensor>(m, "JointEncoder",
+        py::class_<JointEncoder, Sensor, std::shared_ptr<JointEncoder>>(m, "JointEncoder",
                                  "Joint position/velocity encoder on an articulation link's inbound "
                                  "joint. Adds what a real encoder has and Articulation.joint_positions "
                                  "does not: tick quantization, noise, rate gating and buffering.")
@@ -253,7 +315,7 @@ namespace threepp_py {
                            " in_contact=" + (s.inContact ? "True" : "False") + ">";
                 });
 
-        py::class_<ContactSensor, Sensor>(m, "ContactSensor",
+        py::class_<ContactSensor, Sensor, std::shared_ptr<ContactSensor>>(m, "ContactSensor",
                                   "Reports whether the attached body is touching anything, where, and "
                                   "how hard — a bumper, a foot-contact switch, a grasp detector.")
                 .def(py::init([](const py::handle& node, double rate_hz, std::size_t buffer_capacity) {
@@ -293,7 +355,7 @@ namespace threepp_py {
                     return "<threepp.WrenchSample t=" + std::to_string(s.t) + ">";
                 });
 
-        py::class_<ForceTorqueSensor, Sensor>(
+        py::class_<ForceTorqueSensor, Sensor, std::shared_ptr<ForceTorqueSensor>>(
                 m, "ForceTorqueSensor",
                 "Load cell on an articulation joint: the wrench the parent link transmits to the "
                 "child through their joint, as the solver computed it. The input to force control, "

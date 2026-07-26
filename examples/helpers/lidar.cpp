@@ -123,7 +123,7 @@ int main() {
     bool senorDataOnly = false;
     RendererSettingsUi ui(canvas, *renderer, [&] {
         ImGui::Checkbox("Show senor data only", &senorDataOnly);
-        ImGui::SliderFloat("Range noise", &lidar->rangeNoise, 0.f, 0.1f);
+        ImGui::SliderFloat("Range noise", &lidar->rangeNoise.stddev, 0.f, 0.1f);
 
         int prevMode = currentMode;
         ImGui::Combo("Mode", &currentMode, modeNames, 5);
@@ -154,7 +154,10 @@ int main() {
         lidar->rotation.y = t * 0.4f;
         lidar->rotation.x = -0.4f + 0.25f * std::sin(t * 0.3f);
 
-        // Scan the scene and update the visualised point cloud
+        // Scan the scene and update the visualised point cloud. The sensor
+        // clock is driven from here (nothing else does: this app has no
+        // physics), so lidar->lastScanTime() stamps each cloud with sim time.
+        lidar->setSimTime(t);
         points->visible = false;
         colors.clear();
         lidar->scan(*renderer, *scene, cloud);

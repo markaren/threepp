@@ -58,6 +58,7 @@ PYBIND11_MODULE(threepp, m) {
     tp::init_math(m);
     tp::init_textures(m);// before materials: their map slots reference Texture
     tp::init_core(m);
+    tp::init_sensor_base(m);// Sensor base: before init_render, whose DepthSensor derives from it
     tp::init_geometries(m);
     tp::init_materials(m);
     tp::init_objects(m);

@@ -246,14 +246,35 @@ namespace threepp_py {
             }
             return pts;
         };
-        py::class_<DepthSensor, Object3D, std::shared_ptr<DepthSensor>>(m, "DepthSensor")
+        py::class_<DepthSensor, Object3D, Sensor, std::shared_ptr<DepthSensor>>(m, "DepthSensor")
                 .def(py::init([](float fov_y, unsigned int width, unsigned int height, float near, float far) {
                     return std::make_shared<DepthSensor>(fov_y, width, height, near, far);
                 }), py::arg("fov_y"), py::arg("width"), py::arg("height"),
                     py::arg("near") = 0.1f, py::arg("far") = 100.f,
                     "Depth sensor with a vertical FOV (deg), output resolution, and near/far clip (m).")
-                .def_readwrite("range_noise", &DepthSensor::rangeNoise,
-                               "Gaussian range-noise std-dev in metres (0 = perfect sensor).")
+                // `range_noise` stays a float — the sigma is the knob every
+                // caller actually turns (sliders, episode randomization) — with
+                // the full seeded model beside it as `noise`.
+                .def_property(
+                        "range_noise",
+                        [](const DepthSensor& s) { return s.rangeNoise.stddev; },
+                        [](DepthSensor& s, float v) { s.rangeNoise.stddev = v; },
+                        "Gaussian range-noise std-dev in metres (0 = perfect sensor). "
+                        "Shorthand for noise.stddev.")
+                .def_readwrite("noise", &DepthSensor::rangeNoise,
+                               "The full RangeNoiseModel (stddev, stddev_per_metre, bias, seed). "
+                               "Set `seed` to make a captured dataset replayable; the stream re-seeds "
+                               "on the next scan when the seed changes.")
+                .def_property_readonly("last_scan_time", &DepthSensor::lastScanTime,
+                                       "Sim time (s) stamped on the most recent scan — the timestamp to "
+                                       "record alongside the cloud. Register the sensor with a PhysxWorld "
+                                       "or drive `sim_time` yourself; see threepp.Sensor.")
+                .def_property_readonly("scan_due", &DepthSensor::scanDue,
+                                       "True when the rate gate says a scan is due (always true unless "
+                                       "rate_hz is set and the sensor is registered with a PhysxWorld).")
+                .def("reset_noise", &DepthSensor::resetNoise,
+                     "Re-seed the noise stream from noise.seed and clear last_scan_time — call between "
+                     "episodes so two runs with the same seed produce the same clouds.")
                 .def_property_readonly("width", &DepthSensor::width)
                 .def_property_readonly("height", &DepthSensor::height)
                 .def_property_readonly("fov", &DepthSensor::fov)

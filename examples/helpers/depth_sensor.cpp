@@ -114,7 +114,7 @@ int main() {
     bool sensorOnly = false;
     bool withColors = false;
     RendererSettingsUi ui(canvas, *renderer, [&] {
-        ImGui::SliderFloat("Range noise", &lidar.rangeNoise, 0.f, 0.1f);
+        ImGui::SliderFloat("Range noise", &lidar.rangeNoise.stddev, 0.f, 0.1f);
         ImGui::Checkbox("Show sensor helper", &helper->visible);
         ImGui::Checkbox("Sample colors", &withColors);
         ImGui::Checkbox("Show sensor data only", &sensorOnly);
@@ -136,7 +136,10 @@ int main() {
         lidar.rotation.y = t * 0.4f;
         lidar.rotation.x = -0.4f + 0.25f * std::sin(t * 0.3f);
 
-        // Scan the scene and update the visualised point cloud
+        // Scan the scene and update the visualised point cloud. The sensor
+        // clock is driven from here (nothing else does: this app has no
+        // physics), so lidar.lastScanTime() stamps each cloud with sim time.
+        lidar.setSimTime(t);
         const auto wasHelperVisible = helper->visible;
         helper->visible = false;
         points->visible = false;

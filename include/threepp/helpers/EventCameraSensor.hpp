@@ -20,6 +20,18 @@
 //      mid-grey with exponential decay) — the standard DVS visualisation
 //      pattern, ready to drop into a `Sprite` overlay.
 //
+// Timestamps come from a SIM clock the owner drives, not from a wall clock.
+// An event stream stamped with steady_clock is not reproducible: replay the
+// same simulation on a slower machine and every timestamp moves, which makes a
+// recorded dataset unusable as ground truth. Drive it from your frame loop
+// (`sensor.advanceClock(clock.getDelta())`) or, when the events are meant to
+// line up with physics, from the same sim time PhysxWorld reports.
+//
+// Unlike the ranging sensors this one does not derive from VisionSensor: it has
+// no attachment node (its frame is whatever the renderer just drew) and no
+// range to perturb, so the only piece of the sensor contract that applies is
+// the clock.
+//
 // Limitations of this first version:
 //   - Per-frame discretisation (timestamps = frame time), not sub-frame.
 //     Real DVS sensors operate at μs-level temporal resolution; this is
@@ -50,7 +62,7 @@ namespace threepp {
     struct EventCameraEvent {
         uint16_t x;
         uint16_t y;
-        float    timestamp;// seconds since sensor construction
+        float    timestamp;// sim-clock seconds (see the sim-clock note above)
         int8_t   polarity; // +1 = brighter, -1 = darker
     };
 
@@ -118,6 +130,16 @@ namespace threepp {
                           std::size_t bytes,
                           std::vector<EventCameraEvent>& events);
 
+        // --- sim clock ------------------------------------------------
+        //
+        // The time base stamped on every emitted event. Advance it once per
+        // frame from your own clock (or set it from the physics sim time);
+        // left undriven it stays at 0 and every event carries t = 0, which is
+        // an obviously-unstamped stream rather than a plausible wrong one.
+        [[nodiscard]] double simTime() const { return simTime_; }
+        void setSimTime(double t) { simTime_ = t; }
+        void advanceClock(double dt) { simTime_ += dt; }
+
         /**
          * Resize the sensor (call after the canvas resizes). Clears
          * history so the first frame after resize doesn't emit a
@@ -145,8 +167,7 @@ namespace threepp {
         std::vector<unsigned char> readbackBuf_;  // RGB readback scratch
         std::shared_ptr<DataTexture> vizTex_;
 
-        float startTime_  = 0.f;
-        float lastTime_   = 0.f;
+        double simTime_   = 0.0;
         bool  firstFrame_ = true;
 
         void allocateImages();

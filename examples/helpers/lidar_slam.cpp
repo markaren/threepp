@@ -435,7 +435,7 @@ int main(int argc, char** argv) {
 #endif
         rasterLidar = std::make_unique<LidarSensor>(
                 makeModel(), static_cast<unsigned int>(faceSizeOptions[currentFaceIdx]), kSensorNear, kSensorFar);
-        rasterLidar->rangeNoise = 0.02f;
+        rasterLidar->rangeNoise.stddev = 0.02f;
         sensorObj = rasterLidar.get();
         sceneLeft.addRef(*rasterLidar);
     };
@@ -547,14 +547,14 @@ int main(int argc, char** argv) {
     bool showLive = true;
 
     auto rebuildSensor = [&] {
-        const float noise = rasterLidar ? rasterLidar->rangeNoise : 0.02f;
+        const float noise = rasterLidar ? rasterLidar->rangeNoise.stddev : 0.02f;
         if (sensorObj) sceneLeft.remove(*sensorObj);
         rasterLidar.reset();
 #ifdef THREEPP_WITH_VULKAN
         ptLidar.reset();
 #endif
         buildSensor();// pose is re-applied next frame
-        if (rasterLidar) rasterLidar->rangeNoise = noise;
+        if (rasterLidar) rasterLidar->rangeNoise.stddev = noise;
         resetReconstruction();
     };
 
@@ -629,7 +629,7 @@ int main(int argc, char** argv) {
             int prevFace = currentFaceIdx;
             ImGui::Combo("Scan res", &currentFaceIdx, faceSizeNames, 4);
             if (currentFaceIdx != prevFace) rebuildSensor();
-            ImGui::SliderFloat("Range noise (m)", &rasterLidar->rangeNoise, 0.f, 0.1f);
+            ImGui::SliderFloat("Range noise (m)", &rasterLidar->rangeNoise.stddev, 0.f, 0.1f);
         }
 #ifdef THREEPP_WITH_VULKAN
         if (ptLidar) {

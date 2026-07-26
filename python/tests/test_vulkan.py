@@ -197,6 +197,11 @@ def test_ocean_is_displaced_mesh_with_knobs():
 
 def test_ocean_renders_and_displaces(vk_renderer):
     scene, cam, ocean = _ocean_scene()
+    # The CPU height mirror is a lazy sticky opt-in: the renderer only records
+    # the GPU->host copies once something has called sample_height, and the
+    # data lands the next rendered frame. Prime it BEFORE the render loop or
+    # every later sample reads an (correctly) empty mirror.
+    ocean.sample_height(0.0, 0.0)
     for _ in range(8):  # let the wave field evolve + the BLAS displace
         ocean.warp_toward(0.0, 0.0, 0.3)
         vk_renderer.render(scene, cam)
@@ -241,3 +246,45 @@ def test_depthsensor_pathtraced(vk_renderer):
     on_ground = (r > 1.0) & (r < 4.0)                     # well off the cube
     assert on_box.sum() > 5 and z[on_box].mean() == pytest.approx(0.30, abs=0.02)
     assert on_ground.sum() > 50 and z[on_ground].mean() == pytest.approx(0.0, abs=0.02)
+
+
+def test_depthsensor_scan_is_reproducible(vk_renderer):
+    # A generated dataset is only worth recording if it can be replayed. On
+    # Vulkan the range noise is drawn by the path-traced back-end the sensor
+    # delegates to, so this covers the seam a GL-only test cannot: a reset that
+    # stopped at the front door would leave exactly this path unreplayable.
+    scene = tp.Scene()
+    scene.add(tp.HemisphereLight(0xffffff, 0x404040, 1.0))
+    ground = tp.Mesh(tp.BoxGeometry(20, 20, 1.0), tp.MeshStandardMaterial())
+    ground.position.set(0, 0, -0.5)                       # Z-up, top at z=0
+    scene.add(ground)
+    cam = tp.PerspectiveCamera(55, W / H, 0.05, 100)
+    cam.up.set(0, 0, 1)
+    cam.position.set(3, 3, 3)
+    cam.look_at(0, 0, 0)
+    vk_renderer.render(scene, cam)                        # build the TLAS
+
+    sensor = tp.DepthSensor(fov_y=70, width=64, height=64, near=0.05, far=8.0)
+    sensor.position.set(0, 0, 3.0)
+
+    # A zero model is a perfect sensor: two scans of a static scene are equal.
+    sensor.noise = tp.RangeNoiseModel()
+    assert np.array_equal(sensor.scan(vk_renderer, scene), sensor.scan(vk_renderer, scene))
+
+    # With noise the stream advances (consecutive scans differ)...
+    sensor.noise = tp.RangeNoiseModel(stddev=0.03, seed=99)
+    first = sensor.scan(vk_renderer, scene)
+    second = sensor.scan(vk_renderer, scene)
+    assert not np.array_equal(first, second), "noise frozen: the stream is not advancing"
+    assert first.shape == second.shape
+    assert np.abs(first - second).max() > 1e-4
+
+    # ...and re-seeding replays the episode exactly.
+    sensor.reset_noise()
+    assert np.array_equal(sensor.scan(vk_renderer, scene), first)
+
+    # Scans are stamped with the sensor's sim clock, not a wall clock.
+    assert sensor.last_scan_time == 0.0                   # nothing has driven it
+    sensor.advance_clock(0.25)
+    sensor.scan(vk_renderer, scene)
+    assert sensor.last_scan_time == pytest.approx(0.25)

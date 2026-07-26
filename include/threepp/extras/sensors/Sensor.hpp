@@ -1,12 +1,18 @@
-// Proprioceptive sensor suite — shared base contract.
+// Sensor suite — shared base contract.
 //
 // A Sensor rides the scene graph: it is attached to an Object3D and its
-// measurement frame IS that node's world frame. Sensors are push-based —
-// PhysxWorld drives them from its fixed-timestep step loop (see
+// measurement frame IS that node's world frame. Proprioceptive sensors are
+// push-based — PhysxWorld drives them from its fixed-timestep step loop (see
 // PhysxWorld::registerSensor), so each measurement is taken the instant the
 // physics state is fresh (after fetchResults) and timestamped with the
 // accumulated simulation time. This is the fidelity a future ArduPilot SITL
 // lock-step integration needs: one clean sample per (sub)step.
+//
+// The vision sensors (VisionSensor.hpp: depth camera, LIDAR) are PULLED
+// instead — a scan needs a Renderer, which the physics step loop does not
+// hold — but they share this base so that a whole rig speaks one vocabulary:
+// one seeded PRNG per sensor instance, one declarative noise model, and one
+// sim clock stamping every measurement.
 //
 // Read side is non-blocking and decoupled from the physics thread cadence:
 //   latest()  — the most recent measurement (a snapshot; survives drain()).
@@ -60,8 +66,28 @@ namespace threepp {
             return static_cast<double>(next() >> 11) * (1.0 / 9007199254740992.0);
         }
 
+        // Standard-normal draw via Box-Muller; caches the paired value, so two
+        // consecutive calls cost one transform. Lives here rather than in a
+        // noise class so every sensor draws from the same portable routine
+        // (std::normal_distribution is not reproducible across stdlibs).
+        double nextGaussian() {
+            if (haveSpare_) {
+                haveSpare_ = false;
+                return spare_;
+            }
+            const double u1 = nextDouble();// [0, 1)
+            const double u2 = nextDouble();
+            const double r = std::sqrt(-2.0 * std::log(1.0 - u1));// 1-u1 in (0, 1]
+            const double theta = 6.283185307179586 * u2;
+            spare_ = r * std::sin(theta);
+            haveSpare_ = true;
+            return r * std::cos(theta);
+        }
+
     private:
         std::uint64_t state_;
+        double spare_ = 0.0;
+        bool haveSpare_ = false;
     };
 
     /**
@@ -102,7 +128,6 @@ namespace threepp {
             model_ = model;
             rng_ = SplitMix64{model.seed};
             bias_.set(0.f, 0.f, 0.f);
-            haveSpare_ = false;
         }
 
         // Corrupt a clean per-axis measurement sampled over `dt` seconds.
@@ -127,26 +152,46 @@ namespace threepp {
         [[nodiscard]] const Vector3& bias() const { return bias_; }
 
     private:
-        // Standard-normal draw via Box-Muller; caches the paired value.
-        double gaussian() {
-            if (haveSpare_) {
-                haveSpare_ = false;
-                return spare_;
-            }
-            const double u1 = rng_.nextDouble();// [0, 1)
-            const double u2 = rng_.nextDouble();
-            const double r = std::sqrt(-2.0 * std::log(1.0 - u1));// 1-u1 in (0, 1]
-            const double theta = 6.283185307179586 * u2;
-            spare_ = r * std::sin(theta);
-            haveSpare_ = true;
-            return r * std::cos(theta);
-        }
+        double gaussian() { return rng_.nextGaussian(); }
 
         NoiseModel model_{};
         SplitMix64 rng_{0};
         Vector3 bias_{0.f, 0.f, 0.f};
-        double spare_ = 0.0;
-        bool haveSpare_ = false;
+    };
+
+    /**
+     * Noise config for a ranging measurement (a LIDAR / depth-camera return).
+     *
+     * Deliberately NOT a NoiseModel: that one describes a signal integrated
+     * continuously in time, so its densities divide by sqrt(dt). A range return
+     * is a one-shot measurement — its uncertainty comes from the timing
+     * electronics of that single laser pulse, not from how long ago the previous
+     * scan happened — so `stddev` is per return and independent of the scan
+     * rate. Two returns in the same scan are as independent as two returns a
+     * second apart.
+     *
+     *   stddev         [m]      Gaussian sigma applied to every return
+     *   stddevPerMetre [m/m]    range-proportional sigma, added in quadrature
+     *                           (real ToF sensors get noisier with distance);
+     *                           total sigma = hypot(stddev, r * stddevPerMetre)
+     *   bias           [m]      fixed offset (positive = reads long)
+     *   seed                    PRNG seed; same seed + same beam order
+     *                           reproduces the exact same noise, which is what
+     *                           makes a recorded dataset replayable
+     *
+     * All-zero = a perfect sensor: the clean range passes through bit-for-bit
+     * and no random numbers are drawn.
+     */
+    struct RangeNoiseModel {
+        float stddev = 0.f;
+        float stddevPerMetre = 0.f;
+        float bias = 0.f;
+        std::uint64_t seed = 0;
+
+        // True when the model would alter a measurement at all.
+        [[nodiscard]] bool active() const {
+            return stddev != 0.f || stddevPerMetre != 0.f || bias != 0.f;
+        }
     };
 
     /**
@@ -233,6 +278,27 @@ namespace threepp {
         [[nodiscard]] double rateHz() const { return rateHz_; }
         void setRateHz(double hz) { rateHz_ = hz; }
 
+        // --- sim clock -----------------------------------------------------
+        //
+        // The single time base every measurement is stamped with. It is SIM
+        // time, never wall time: replaying the same simulation must reproduce
+        // the same timestamps, and a run that is stepped faster or slower than
+        // real time must not shift them.
+        //
+        // Registered with a PhysxWorld, the clock is latched from the world's
+        // accumulated substep time on every tick() and needs no attention.
+        // A sensor driven from a render loop instead (the vision sensors are
+        // pulled, not pushed — they need a Renderer, which the physics step
+        // loop has no business holding) must be advanced by its owner:
+        //
+        //     sensor.advanceClock(clock.getDelta());   // or setSimTime(t)
+        //
+        // Left undriven the clock simply stays at 0 — an obviously-unstamped
+        // dataset, which is preferable to a plausible-looking wall-clock one.
+        [[nodiscard]] double simTime() const { return simTime_; }
+        void setSimTime(double t) { simTime_ = t; }
+        void advanceClock(double dt) { simTime_ += dt; }
+
         // Hooks invoked by PhysxWorld::registerSensor / unregisterSensor. The
         // default is a no-op; a concrete sensor resolves its rigid body / caches
         // world state here and should throw on an invalid attachment (so the
@@ -263,6 +329,11 @@ namespace threepp {
         // long-run average exact and leaves only sub-substep jitter, which is
         // unavoidable.
         void tick(double dt, double simTime) {
+            // Latch the clock before the gate: the sensor always knows what
+            // time it is, even on a substep where it does not sample. A pulled
+            // sensor (vision) reads this to stamp a scan taken between ticks.
+            simTime_ = simTime;
+
             const bool gated = rateHz_ > 0.0;
             if (gated && hasLast_ && simTime + 1e-9 < nextDue_) return;
 
@@ -297,6 +368,7 @@ namespace threepp {
     private:
         Object3D* node_;
         double rateHz_;
+        double simTime_ = 0.0;// see the sim-clock block above
         bool hasLast_ = false;
         double lastSampleTime_ = 0.0;
         double nextDue_ = 0.0;// next scheduled sample time (rate-gated sensors)

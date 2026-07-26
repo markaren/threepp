@@ -1,31 +1,17 @@
 
 #include "threepp/helpers/EventCameraSensor.hpp"
 
-#include "threepp/core/Clock.hpp"
 #include "threepp/renderers/Renderer.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 
 using namespace threepp;
-
-namespace {
-    // Process-local clock so timestamps survive across sensor instances
-    // and behave consistently if the user constructs the sensor lazily.
-    float epochSeconds() {
-        using clock = std::chrono::steady_clock;
-        static const auto t0 = clock::now();
-        const auto now = clock::now();
-        return std::chrono::duration<float>(now - t0).count();
-    }
-}// namespace
 
 
 EventCameraSensor::EventCameraSensor(unsigned int width, unsigned int height)
     : width_(width), height_(height) {
     allocateImages();
-    startTime_ = epochSeconds();
 }
 
 void EventCameraSensor::allocateImages() {
@@ -74,7 +60,7 @@ void EventCameraSensor::ingestPixels(const unsigned char* rgb,
         return;
     }
 
-    const float t       = epochSeconds() - startTime_;
+    const auto  t       = static_cast<float>(simTime_);
     const float thresh  = std::max(1e-4f, params.contrastThreshold);
     const float minLuma = std::max(1e-6f, params.minLuma);
     const float decay   = std::clamp(params.vizDecay, 0.f, 1.f);
@@ -133,7 +119,6 @@ void EventCameraSensor::ingestPixels(const unsigned char* rgb,
     }
 
     firstFrame_ = false;
-    lastTime_   = t;
 
     // Project accumulator into the visualisation texture. Map [-1, +1]
     // into [0, 1] with 0.5 = "no recent event". sRGB byte encoding.

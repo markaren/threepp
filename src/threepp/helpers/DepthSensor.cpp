@@ -11,16 +11,17 @@
 #include "threepp/textures/DepthTexture.hpp"
 #include "threepp/utils/ImageUtils.hpp"
 
-// On a Vulkan build, DepthSensor::scan dispatches to the path-traced sensor (no
-// raster depth pass exists); these are only pulled in there.
-#ifdef THREEPP_WITH_VULKAN
+// The path-traced back-end is only *used* on a Vulkan build (there is no raster
+// depth pass there), but its header is included unconditionally so the cached
+// unique_ptr member has a complete type to destroy. The header itself is
+// Vulkan-include-free; only the renderer header below is gated.
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
+
+#ifdef THREEPP_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
 #endif
 
 #include <cmath>
-#include <optional>
-#include <random>
 
 using namespace threepp;
 
@@ -63,10 +64,14 @@ namespace {
     // and trace it through the renderer's path-tracing TLAS. The TLAS, not the
     // `scene` graph, is what gets traced, so the scene must have been render()-ed
     // at least once before scanning (the public scan() doc spells this out).
-    void scanViaPathTracer(const Matrix4& world, float fovY, unsigned int width, unsigned int height,
-                           float far, float rangeNoise, VulkanRenderer& vk,
+    //
+    // `lidar` is the DepthSensor's cached back-end, not a fresh one per scan:
+    // its RNG stream has to continue across scans, or every frame would be
+    // perturbed by the identical noise pattern (a seeded sensor rebuilt each
+    // frame replays its seed each frame — noise frozen into the geometry).
+    void scanViaPathTracer(PathTracedLidarSensor& lidar, const Matrix4& world,
+                           VulkanRenderer& vk,
                            std::vector<Vector3>& cloud, std::vector<Color>* colors) {
-        PathTracedLidarSensor lidar(fovY, width, height, far);
         Vector3 pos, scl;
         Quaternion quat;
         world.decompose(pos, quat, scl);
@@ -75,7 +80,7 @@ namespace {
         lidar.scale = scl;
 
         std::vector<LidarReturn> returns;
-        lidar.scan(vk, returns);
+        lidar.scan(vk, returns);// range noise applied by the back-end
 
         cloud.clear();
         cloud.reserve(returns.size());
@@ -83,10 +88,6 @@ namespace {
             colors->clear();
             colors->reserve(returns.size());
         }
-
-        static std::mt19937 rng{std::random_device{}()};
-        std::optional<std::normal_distribution<float>> noiseDist;
-        if (rangeNoise > 0.f) noiseDist = std::normal_distribution{0.f, rangeNoise};
 
         for (const auto& ret : returns) {
             // A depth camera measures geometry, not atmosphere. The path-traced
@@ -97,20 +98,7 @@ namespace {
             // the raster (GL) DepthSensor never sees fog, so this also restores
             // GL/Vulkan parity.
             if (ret.hitInstanceId < 0) continue;
-            Vector3 p = ret.position;
-            if (noiseDist) {
-                // perturb the hit along its beam to mirror DepthSensor's range noise
-                Vector3 dir = ret.position;
-                dir.sub(pos);
-                const float dist = dir.length();
-                if (dist > 1e-6f) {
-                    const float nd = dist + (*noiseDist)(rng);
-                    if (nd <= 0.f || nd > far) continue;
-                    dir.multiplyScalar(nd / dist).add(pos);
-                    p = dir;
-                }
-            }
-            cloud.push_back(p);
+            cloud.push_back(ret.position);
             // The path tracer returns LIDAR intensity, not surface colour; expose
             // it as greyscale so scan_rgbd has a uniform (cloud, colors) shape.
             if (colors) colors->emplace_back(ret.intensity, ret.intensity, ret.intensity);
@@ -121,7 +109,11 @@ namespace {
 }// namespace
 
 DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, float near, float far)
-    : width_(width),
+    // The sensor frame is this node's own world frame, so it attaches to itself.
+    // Default noise mirrors the pre-port constant: 2 cm sigma, fixed seed.
+    : VisionSensor(*this, RangeNoiseModel{/*stddev*/ 0.02f, /*stddevPerMetre*/ 0.f,
+                                          /*bias*/ 0.f, /*seed*/ 0x94D049BB133111EBULL}),
+      width_(width),
       height_(height),
       postCamera_(-1, 1, 1, -1, 0, 1),
       camera_(fovY, static_cast<float>(width) / static_cast<float>(height), near, far) {
@@ -201,12 +193,36 @@ DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, fl
         yDir_[y] = ((static_cast<float>(y) + 0.5f) / fh * 2.f - 1.f) * tanHalfFovY;
 }
 
+DepthSensor::~DepthSensor() = default;
+
+void DepthSensor::resetNoise() {
+    VisionSensor::resetNoise();
+    // On Vulkan the back-end draws the noise, so resetting only our own stream
+    // would silently leave that path unreplayable.
+    if (tracedBackend_) tracedBackend_->resetNoise();
+}
+
+#ifdef THREEPP_WITH_VULKAN
+PathTracedLidarSensor& DepthSensor::tracedBackend() {
+    if (!tracedBackend_) {
+        tracedBackend_ = std::make_unique<PathTracedLidarSensor>(
+                camera_.fov, width_, height_, camera_.farPlane);
+    }
+    // The depth sensor owns the noise contract; the back-end just applies it,
+    // so its model tracks ours (including a seed the caller re-rolled). Copying
+    // an unchanged seed does not restart the stream — see VisionSensor.
+    tracedBackend_->rangeNoise = rangeNoise;
+    return *tracedBackend_;
+}
+#endif
+
 void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
+
+    beginScan();
 
 #ifdef THREEPP_WITH_VULKAN
     if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
-        scanViaPathTracer(*matrixWorld, camera_.fov, width_, height_, camera_.farPlane,
-                          rangeNoise, *vk, cloud, nullptr);
+        scanViaPathTracer(tracedBackend(), *matrixWorld, *vk, cloud, nullptr);
         return;
     }
 #endif
@@ -232,10 +248,11 @@ void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& c
 
 void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud, std::vector<Color>& colors) {
 
+    beginScan();
+
 #ifdef THREEPP_WITH_VULKAN
     if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
-        scanViaPathTracer(*matrixWorld, camera_.fov, width_, height_, camera_.farPlane,
-                          rangeNoise, *vk, cloud, &colors);
+        scanViaPathTracer(tracedBackend(), *matrixWorld, *vk, cloud, &colors);
         return;
     }
 #endif
@@ -272,8 +289,7 @@ void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& c
 
 void DepthSensor::unprojectPoints(std::vector<Vector3>& points,
                                    const unsigned char* colorPixels,
-                                   std::vector<Color>* colors) const {
-    static std::mt19937 rng_{std::random_device{}()};
+                                   std::vector<Color>* colors) {
 
     points.clear();
     points.reserve(width_ * height_);
@@ -290,9 +306,7 @@ void DepthSensor::unprojectPoints(std::vector<Vector3>& points,
     const float m12 = me[12], m13 = me[13], m14 = me[14];
 
     const float far = camera_.farPlane;
-    const bool addNoise = rangeNoise > 0.f;
-    std::optional<std::normal_distribution<float>> noiseDist;
-    if (addNoise) noiseDist = std::normal_distribution{0.f, rangeNoise};
+    const bool addNoise = rangeNoise.active();
 
     for (unsigned y = 0; y < height_; ++y) {
         // Hoist row-constant contributions from yDir_[y]
@@ -307,7 +321,7 @@ void DepthSensor::unprojectPoints(std::vector<Vector3>& points,
 
             float depth = normalizedDepth * far;// positive distance along view axis
             if (addNoise) {
-                depth += (*noiseDist)(rng_);
+                depth = applyRangeNoise(depth);
                 if (depth <= 0.f || depth > far) continue;
             }
 

@@ -11,8 +11,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <optional>
-#include <random>
 
 using namespace threepp;
 
@@ -229,7 +227,11 @@ void LidarSensor::buildBeamTable(const LidarModel& model) {
 // ---------------------------------------------------------------------------
 
 LidarSensor::LidarSensor(unsigned int faceSize, float near, float far)
-    : faceSize_(faceSize), near_(near), far_(far), postCamera_(-1, 1, 1, -1, 0, 1) {
+    // The sensor frame is this node's own world frame, so it attaches to itself.
+    // Default noise mirrors the pre-port constant: 2 cm sigma, fixed seed.
+    : VisionSensor(*this, RangeNoiseModel{/*stddev*/ 0.02f, /*stddevPerMetre*/ 0.f,
+                                          /*bias*/ 0.f, /*seed*/ 0x2545F4914F6CDD1DULL}),
+      faceSize_(faceSize), near_(near), far_(far), postCamera_(-1, 1, 1, -1, 0, 1) {
 
     init(near, far);
 
@@ -241,7 +243,11 @@ LidarSensor::LidarSensor(unsigned int faceSize, float near, float far)
 }
 
 LidarSensor::LidarSensor(const LidarModel& model, unsigned int faceSize, float near, float far)
-    : faceSize_(faceSize), near_(near), far_(far), postCamera_(-1, 1, 1, -1, 0, 1) {
+    // The sensor frame is this node's own world frame, so it attaches to itself.
+    // Default noise mirrors the pre-port constant: 2 cm sigma, fixed seed.
+    : VisionSensor(*this, RangeNoiseModel{/*stddev*/ 0.02f, /*stddevPerMetre*/ 0.f,
+                                          /*bias*/ 0.f, /*seed*/ 0x2545F4914F6CDD1DULL}),
+      faceSize_(faceSize), near_(near), far_(far), postCamera_(-1, 1, 1, -1, 0, 1) {
 
     init(near, far);
     buildBeamTable(model);
@@ -252,6 +258,7 @@ LidarSensor::LidarSensor(const LidarModel& model, unsigned int faceSize, float n
 // ---------------------------------------------------------------------------
 
 void LidarSensor::scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud) {
+    beginScan();
     cloud.clear();
     DataPassGuard guard(renderer);
     renderFaces(renderer, scene);
@@ -283,12 +290,9 @@ void LidarSensor::renderFaces(Renderer& renderer, Scene& scene) {
 // Unprojection
 // ---------------------------------------------------------------------------
 
-void LidarSensor::unprojectDense(std::vector<LidarReturn>& points) const {
-    static std::mt19937 rng_{std::random_device{}()};
+void LidarSensor::unprojectDense(std::vector<LidarReturn>& points) {
 
-    const bool addNoise = rangeNoise > 0.f;
-    std::optional<std::normal_distribution<float>> noiseDist;
-    if (addNoise) noiseDist = std::normal_distribution{0.f, rangeNoise};
+    const bool addNoise = rangeNoise.active();
 
     for (int face = 0; face < kNumFaces; ++face) {
         points.reserve(points.size() + faceSize_ * faceSize_);
@@ -312,7 +316,7 @@ void LidarSensor::unprojectDense(std::vector<LidarReturn>& points) const {
 
                 float depth = nd * far_;
                 if (addNoise) {
-                    depth += (*noiseDist)(rng_);
+                    depth = applyRangeNoise(depth);
                     if (depth <= 0.f || depth > far_) continue;
                 }
 
@@ -337,8 +341,7 @@ void LidarSensor::unprojectDense(std::vector<LidarReturn>& points) const {
     }
 }
 
-void LidarSensor::unprojectBeams(std::vector<LidarReturn>& points) const {
-    static std::mt19937 rng_{std::random_device{}()};
+void LidarSensor::unprojectBeams(std::vector<LidarReturn>& points) {
 
     points.reserve(beams_.size());
 
@@ -350,9 +353,7 @@ void LidarSensor::unprojectBeams(std::vector<LidarReturn>& points) const {
         faceMat[f] = cameras_[f]->matrixWorld->elements.data();
     }
 
-    const bool addNoise = rangeNoise > 0.f;
-    std::optional<std::normal_distribution<float>> noiseDist;
-    if (addNoise) noiseDist = std::normal_distribution{0.f, rangeNoise};
+    const bool addNoise = rangeNoise.active();
 
     for (const auto& b : beams_) {
         const unsigned char* px = facePixels[b.face] + (static_cast<unsigned>(b.pixelY) * faceSize_ + b.pixelX) * 2;
@@ -362,7 +363,7 @@ void LidarSensor::unprojectBeams(std::vector<LidarReturn>& points) const {
 
         float depth = nd * far_;
         if (addNoise) {
-            depth += (*noiseDist)(rng_);
+            depth = applyRangeNoise(depth);
             if (depth <= 0.f || depth > far_) continue;
         }
 
