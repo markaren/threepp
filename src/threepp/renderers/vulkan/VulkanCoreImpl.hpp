@@ -531,8 +531,13 @@ namespace threepp {
             water::OceanImage scratchA;          // RG32F IFFT scratch — shared across cascades (sequential dispatch)
             VkDescriptorSet displaceDS = VK_NULL_HANDLE;
             uint32_t vertexCount = 0;
-            uint32_t gridDim     = 0;            // sqrt(vertexCount); validated at init
-            float    planeSize   = 0.f;
+            // Grid topology + rest extents (rectangular grids supported; a
+            // square is just gridDimX == gridDimZ). Validated at init:
+            // gridDimX · gridDimZ == vertexCount.
+            uint32_t gridDimX   = 0;
+            uint32_t gridDimZ   = 0;
+            float    planeSizeX = 0.f;
+            float    planeSizeZ = 0.f;
             // Per-cascade height readback for CPU-side wave sampling (boat
             // hydrodynamics, pitch/roll from multi-scale wave slope, etc.).
             // Host-mapped RG32F buffers of size textureSize²·8 bytes each;
@@ -3919,22 +3924,36 @@ namespace threepp {
             auto* posAttr = dm.geometry()->getAttribute<float>("position");
             if (!posAttr) return nullptr;
             const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
-            // Plane is gridDim × gridDim. PlaneGeometry(w, h, segX, segY)
-            // produces (segX+1)·(segY+1) verts; the demo is expected to call
-            // segX == segY == gridDim-1.
-            const uint32_t gridDim = static_cast<uint32_t>(std::round(std::sqrt(double(vertexCount))));
-            if (gridDim * gridDim != vertexCount) return nullptr;
+            // Grid topology: explicit gridWidth/gridDepth hints when set
+            // (Ocean::create always fills them — required for rectangular
+            // grids), else the historical square derivation from
+            // sqrt(vertexCount). PlaneGeometry(w, h, segX, segY) produces
+            // (segX+1)·(segY+1) verts laid out row-major, X fastest.
+            uint32_t gridDimX = dm.gridWidth;
+            uint32_t gridDimZ = dm.gridDepth;
+            if (gridDimX == 0 || gridDimZ == 0) {
+                const uint32_t gridDim = static_cast<uint32_t>(std::round(std::sqrt(double(vertexCount))));
+                gridDimX = gridDimZ = gridDim;
+            }
+            if (gridDimX < 2 || gridDimZ < 2 || gridDimX * gridDimZ != vertexCount) return nullptr;
 
-            // Plane edge length: derive from rest-position bbox extent in X.
+            // Plane extents: derive from the rest-position bbox (the displace
+            // pass reconstructs rest positions from grid index + these).
             float xMin = std::numeric_limits<float>::infinity();
             float xMax = -std::numeric_limits<float>::infinity();
+            float zMin = std::numeric_limits<float>::infinity();
+            float zMax = -std::numeric_limits<float>::infinity();
             for (uint32_t i = 0; i < vertexCount; ++i) {
                 const float x = posAttr->getX(i);
+                const float z = posAttr->getZ(i);
                 if (x < xMin) xMin = x;
                 if (x > xMax) xMax = x;
+                if (z < zMin) zMin = z;
+                if (z > zMax) zMax = z;
             }
-            const float planeSize = xMax - xMin;
-            if (!(planeSize > 0.f)) return nullptr;
+            const float planeSizeX = xMax - xMin;
+            const float planeSizeZ = zMax - zMin;
+            if (!(planeSizeX > 0.f) || !(planeSizeZ > 0.f)) return nullptr;
 
             auto blas = buildBlasFor(*dm.geometry());
             if (!blas) return nullptr;
@@ -3962,8 +3981,10 @@ namespace threepp {
             auto state = std::make_unique<DisplacedMeshState>();
             state->blas = std::move(blas);
             state->vertexCount = vertexCount;
-            state->gridDim = gridDim;
-            state->planeSize = planeSize;
+            state->gridDimX = gridDimX;
+            state->gridDimZ = gridDimZ;
+            state->planeSizeX = planeSizeX;
+            state->planeSizeZ = planeSizeZ;
             state->liveCheck = dm.geometry();
 
             // FFT cascades — one Phillips/Dynamic/IFFT chain per non-zero

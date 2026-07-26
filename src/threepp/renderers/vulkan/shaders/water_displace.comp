@@ -73,8 +73,10 @@ layout(push_constant, scalar) uniform Pc {
     uint64_t disturbAddr;
     uint64_t wakeTrailAddr; // 0 = no historical trail (falls back to current pose)
     uint    vertexCount;
-    uint    gridDim;
-    float   planeSize;
+    uint    gridDimX;       // vertices along local X / Z (rectangles supported)
+    uint    gridDimZ;
+    float   planeSizeX;
+    float   planeSizeZ;
     float   tileSize0;
     float   tileSize1;
     float   tileSize2;
@@ -224,13 +226,15 @@ void main() {
     const uint i = gl_GlobalInvocationID.x;
     if (i >= pc.vertexCount) return;
 
-    // Rest position from grid index. PlaneGeometry::create(planeSize, planeSize,
-    // gridDim-1, gridDim-1) followed by rotateX(-π/2) places vertices on the XZ
-    // plane with x ∈ [-planeSize/2, +planeSize/2], z ∈ [-planeSize/2, +planeSize/2].
-    // After rotateX, vertex i's z is FLIPPED relative to the unrotated plane;
-    // we mirror that here so the FFT texture aligns with mesh world space.
-    const float u = float(i % pc.gridDim) / float(pc.gridDim - 1u);
-    const float v = float(i / pc.gridDim) / float(pc.gridDim - 1u);
+    // Rest position from grid index. PlaneGeometry::create(planeSizeX,
+    // planeSizeZ, gridDimX-1, gridDimZ-1) followed by rotateX(-π/2) places
+    // vertices on the XZ plane, row-major with X fastest: x ∈ ±planeSizeX/2,
+    // z ∈ ±planeSizeZ/2 (a rectangle; squares are the gridDimX == gridDimZ
+    // special case). After rotateX, vertex i's z is FLIPPED relative to the
+    // unrotated plane; we mirror that here so the FFT texture aligns with
+    // mesh world space.
+    const float u = float(i % pc.gridDimX) / float(pc.gridDimX - 1u);
+    const float v = float(i / pc.gridDimX) / float(pc.gridDimZ - 1u);
 
     // Rest position. Uniform grid by default; when the host sets a non-zero
     // warpHalfRange the (u,v) ∈ [-1,1]² coordinates are remapped through a
@@ -249,9 +253,9 @@ void main() {
                     0.0,
                     pc.warpCenterZ - wv * pc.warpHalfRange);
     } else {
-        rest = vec3((u - 0.5) * pc.planeSize,
+        rest = vec3((u - 0.5) * pc.planeSizeX,
                     0.0,
-                    -(v - 0.5) * pc.planeSize);
+                    -(v - 0.5) * pc.planeSizeZ);
     }
 
     vec3 disp = sampleDisplacement(rest.xz);
@@ -470,14 +474,19 @@ void main() {
 
     // Finite-difference normal from BICUBIC height taps (cascades 0+1 —
     // see sampleHeightSmooth for why cascade 2 is excluded). eps matches
-    // the vertex grid (the old tileSize0/256 ≈ 2× spacing oversmoothed
-    // the resolvable band on top of the bilinear-derivative kinks).
-    const float eps = pc.planeSize / float(pc.gridDim - 1u);
-    const float hL = sampleHeightSmooth(rest.xz + vec2(-eps, 0.0));
-    const float hR = sampleHeightSmooth(rest.xz + vec2( eps, 0.0));
-    const float hD = sampleHeightSmooth(rest.xz + vec2(0.0, -eps));
-    const float hU = sampleHeightSmooth(rest.xz + vec2(0.0,  eps));
-    const vec3 n = normalize(vec3(hL - hR, 2.0 * eps, hD - hU));
+    // the vertex grid PER AXIS (the old tileSize0/256 ≈ 2× spacing
+    // oversmoothed the resolvable band on top of the bilinear-derivative
+    // kinks; rectangular grids have anisotropic spacing, so each axis's
+    // slope is measured at its own stencil width).
+    const float epsX = pc.planeSizeX / float(pc.gridDimX - 1u);
+    const float epsZ = pc.planeSizeZ / float(pc.gridDimZ - 1u);
+    const float hL = sampleHeightSmooth(rest.xz + vec2(-epsX, 0.0));
+    const float hR = sampleHeightSmooth(rest.xz + vec2( epsX, 0.0));
+    const float hD = sampleHeightSmooth(rest.xz + vec2(0.0, -epsZ));
+    const float hU = sampleHeightSmooth(rest.xz + vec2(0.0,  epsZ));
+    const vec3 n = normalize(vec3((hL - hR) / (2.0 * epsX),
+                                  1.0,
+                                  (hD - hU) / (2.0 * epsZ)));
 
     pc.posOut.v[i * 3u + 0u] = outPos.x;
     pc.posOut.v[i * 3u + 1u] = outPos.y;

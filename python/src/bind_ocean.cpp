@@ -93,10 +93,12 @@ namespace threepp_py {
         py::class_<Ocean, DisplacedMesh, std::shared_ptr<Ocean>>(m, "Ocean")
                 .def(py::init([](float size, unsigned int resolution, float wind_speed, float wind_theta,
                                  float choppiness, float wave_scale, float tile_size_1, float tile_size_2,
-                                 unsigned int fft_size) {
+                                 unsigned int fft_size, float size_z, unsigned int resolution_z) {
                          Ocean::Options o;
                          o.size = size;
+                         o.sizeZ = size_z;
                          o.resolution = resolution;
+                         o.resolutionZ = resolution_z;
                          o.windSpeed = wind_speed;
                          o.windTheta = wind_theta;
                          o.choppiness = choppiness;
@@ -111,10 +113,13 @@ namespace threepp_py {
                      py::arg("choppiness") = 0.55f, py::arg("wave_scale") = 1.0f,
                      py::arg("tile_size_1") = -1.0f, py::arg("tile_size_2") = -1.0f,
                      py::arg("fft_size") = 1024u,
+                     py::arg("size_z") = 0.0f, py::arg("resolution_z") = 0u,
                      "A ready-to-use FFT ocean. Add it to a Scene and render with the Vulkan "
-                     "renderer. size is the tile extent (m); resolution is the vertex grid per "
-                     "side; fft_size caps the per-cascade FFT resolutions (band-passed cascades "
-                     "auto-size below it). tile_size_1/2 default to -1 = auto: scaled from size "
+                     "renderer. size is the local-X extent (m); size_z=0 makes a square, >0 a "
+                     "rectangle (vertices only where the water is — the wave field is unaffected). "
+                     "resolution is the vertex grid along X; resolution_z=0 keeps cells square-ish. "
+                     "fft_size caps the per-cascade FFT resolutions (band-passed cascades auto-size "
+                     "below it). tile_size_1/2 default to -1 = auto: scaled from the larger extent "
                      "(a 1000 m ocean gets the classic 127/9.3 bands, a 16 m pond gets dm-scale "
                      "ripples); 0 disables a cascade, >0 pins it. Ponds also want wind_speed 2-5.")
                 .def("warp_toward", &Ocean::warpToward,

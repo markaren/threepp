@@ -29,16 +29,19 @@ namespace threepp::vulkan {
         // combined-image-samplers (3 cascades × 2 images).
         static constexpr uint32_t kMaxOceans = 16;
 
-        // Must match water_displace.comp's `Pc` struct (120 bytes total):
-        // 4 × VkDeviceAddress (32) + 22 × u32/float (88).
+        // Must match water_displace.comp's `Pc` struct (128 bytes total —
+        // exactly the Vulkan-guaranteed maxPushConstantsSize; do NOT grow):
+        // 4 × VkDeviceAddress (32) + 24 × u32/float (96).
         struct PushConstants {
             VkDeviceAddress posOut;
             VkDeviceAddress normOut;
             VkDeviceAddress disturbAddr;  // 0 = no disturbance buffer
             VkDeviceAddress wakeTrailAddr;// 0 = no historical trail
             uint32_t        vertexCount;
-            uint32_t        gridDim;
-            float           planeSize;
+            uint32_t        gridDimX;     // vertices along local X / Z — a
+            uint32_t        gridDimZ;     // rectangle is first-class now
+            float           planeSizeX;
+            float           planeSizeZ;
             float           tileSize0;
             float           tileSize1;
             float           tileSize2;

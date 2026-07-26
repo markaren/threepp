@@ -5,8 +5,8 @@
 //     then a fjord channel is carved along an S-curve (deep water, a green shore
 //     bench, steep walls) and a slope/altitude splat albedo is baked from the
 //     carved heights (wet shore rock → heath → scree → rock → snow).
-//   • Ocean — the FFT water (three Phillips cascades, foam, adaptive density
-//     warp toward the camera) fills the channel at sea level y=0.
+//   • Ocean — the FFT water (three Phillips cascades, foam) fills the channel
+//     at sea level y=0 as a static channel-fitting rectangle.
 //   • vegetation::TreeGenerator — pine + birch prototypes instanced along the
 //     shore bench (detailed cross-quad leaf cards near the cabin, cheap blob
 //     canopies for the far bank), plus boulders and a GrassMesh meadow
@@ -945,9 +945,19 @@ int main(int argc, char** argv) {
     }
 
     // ── water ───────────────────────────────────────────────────────────────
+    // A STATIC rectangle over the channel, not a camera-following 3200² sheet:
+    // the S-curve centreline wanders ±~230 m and the waterline reaches ~166 m
+    // beyond it, so 900 m of X covers every bank with margin while the old
+    // square spent ~70% of its 262k vertices under the mountains. 192 × 512
+    // verts = 2.7× fewer, with FINER across-channel spacing (4.7 m vs 6.3 m)
+    // where the camera actually looks along the water. The wave field is
+    // unaffected — FFT tiles key on the larger extent (3200 m, as before) and
+    // are world-anchored, so the surface pattern is identical.
     Ocean::Options oo;
-    oo.size = 3200.f;
-    oo.resolution = 512;
+    oo.size = 900.f;
+    oo.sizeZ = 3200.f;
+    oo.resolution = 192;
+    oo.resolutionZ = 512;
     oo.windSpeed = 4.5f;
     oo.windTheta = 2.1f;
     oo.choppiness = 0.5f;
@@ -1581,12 +1591,10 @@ int main(int argc, char** argv) {
 
         // Water, grass, smoke, boat.
         ocean->setWind(windSpeed, 2.1f);
-        // Pack water vertices toward the camera at eye level; from high up the
-        // density rings show, so relax toward uniform with altitude.
-        const float warpCoef = camera.position.y < 60.f
-                                       ? 0.12f
-                                       : std::min(1.f, 0.12f + (camera.position.y - 60.f) / 200.f);
-        ocean->warpToward(camera.position.x, camera.position.z, warpCoef);
+        // The water grid is STATIC (a channel-fitting rectangle, no camera
+        // warp): the mesh never re-tessellates under the viewer, so per-vertex
+        // motion vectors stay valid and the surface doesn't subtly reflow as
+        // the camera moves.
         // Advance the wind clock on ALL tiles (frozen far tiles ignore it until
         // they re-enter range). Only time + windStrength change; windDir and
         // maxAnimDistance persist from setup.

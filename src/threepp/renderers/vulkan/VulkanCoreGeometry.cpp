@@ -1262,8 +1262,10 @@ void VulkanRendererCore::CoreImpl::recordDisplacedDeform(VkCommandBuffer cb, Dis
             pc.normOut      = st.blas->normal.address;
             pc.disturbAddr  = st.foamDisturbBuffer.address;
             pc.vertexCount  = st.vertexCount;
-            pc.gridDim      = st.gridDim;
-            pc.planeSize    = st.planeSize;
+            pc.gridDimX     = st.gridDimX;
+            pc.gridDimZ     = st.gridDimZ;
+            pc.planeSizeX   = st.planeSizeX;
+            pc.planeSizeZ   = st.planeSizeZ;
             pc.tileSize0    = dm.params.tileSize0;
             pc.tileSize1    = dm.params.tileSize1;
             pc.tileSize2    = dm.params.tileSize2;

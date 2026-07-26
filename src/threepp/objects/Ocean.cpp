@@ -6,6 +6,7 @@
 #include "threepp/math/MathUtils.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace threepp {
 
@@ -74,27 +75,46 @@ namespace threepp {
     }
 
     std::shared_ptr<Ocean> Ocean::create(const Options& options) {
-        const unsigned int res = std::max<unsigned int>(2u, options.resolution);
+        // Rectangle support: sizeZ 0 = square. Everything SCALE-derived (the
+        // cascade-0 tile, the auto tile trio, foam amount, the freshwater
+        // material gate) keys on the LARGER extent — a 900 × 3200 fjord
+        // channel is a 3200 m-class water body that happens to waste no
+        // vertices on land.
+        const float sizeX = options.size;
+        const float sizeZ = options.sizeZ > 0.f ? options.sizeZ : options.size;
+        const float scaleRef = std::max(sizeX, sizeZ);
+
+        const unsigned int resX = std::max<unsigned int>(2u, options.resolution);
+        // Default row count keeps grid cells square-ish across the rectangle.
+        const unsigned int resZ = options.resolutionZ > 0
+                ? std::max<unsigned int>(2u, options.resolutionZ)
+                : std::max<unsigned int>(2u, static_cast<unsigned int>(
+                          std::lround(double(resX) * double(sizeZ) / double(sizeX))));
+
         // Mesh density is decoupled from the FFT field: the renderer samples the
         // height texture via normalised UVs, so the plane can be any tessellation.
-        auto geo = PlaneGeometry::create(options.size, options.size,
-                                         res - 1u, res - 1u);
+        auto geo = PlaneGeometry::create(sizeX, sizeZ, resX - 1u, resZ - 1u);
         geo->rotateX(-math::PI / 2.0f);
 
-        auto ocean = std::make_shared<Ocean>(geo, makeOceanMaterial(options.size));
-        ocean->halfExtent_ = options.size * 0.5f;
+        auto ocean = std::make_shared<Ocean>(geo, makeOceanMaterial(scaleRef));
+        ocean->halfExtent_ = scaleRef * 0.5f;
+        // Non-square grids can't be derived from sqrt(vertexCount) — hand the
+        // renderer the actual topology.
+        ocean->gridWidth = resX;
+        ocean->gridDepth = resZ;
 
-        // Resolve the auto (−1) tile sentinels: proportional to `size`, capped
-        // at the 1000 m reference trio — see Options::tileSize1 for the why.
+        // Resolve the auto (−1) tile sentinels: proportional to the water
+        // body's scale, capped at the 1000 m reference trio — see
+        // Options::tileSize1 for the why.
         const float tile1 = options.tileSize1 < 0.f
-                ? std::min(options.size * (127.0f / 1000.f), 127.0f)
+                ? std::min(scaleRef * (127.0f / 1000.f), 127.0f)
                 : options.tileSize1;
         const float tile2 = options.tileSize2 < 0.f
-                ? std::min(options.size * (9.3f / 1000.f), 9.3f)
+                ? std::min(scaleRef * (9.3f / 1000.f), 9.3f)
                 : options.tileSize2;
 
         auto& p = ocean->params;
-        p.tileSize0 = options.size;
+        p.tileSize0 = scaleRef;
         p.tileSize1 = tile1;
         p.tileSize2 = tile2;
         p.windTheta = options.windTheta;
@@ -103,7 +123,7 @@ namespace threepp {
         p.choppiness = options.choppiness;
         // Natural whitecaps fade out with the water body's scale — see
         // Params::foamAmount. Overridable any time via params.
-        p.foamAmount = std::min(options.size / 300.0f, 1.0f);
+        p.foamAmount = std::min(scaleRef / 300.0f, 1.0f);
 
         // Per-cascade FFT resolution, derived from the band each cascade
         // actually carries. The renderer band-passes cascade 0 to
@@ -123,7 +143,7 @@ namespace threepp {
             return n;
         };
         if (tile1 > 0.f) {
-            p.textureSize0 = bandRes(options.size, tile1, options.fftSize);
+            p.textureSize0 = bandRes(scaleRef, tile1, options.fftSize);
             if (tile2 > 0.f) {
                 p.textureSize1 = bandRes(tile1, tile2, half);
                 p.textureSize2 = half;

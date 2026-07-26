@@ -182,6 +182,15 @@ namespace threepp {
         // Internal; do not mutate from user code.
         uint64_t frameTick = 0;
 
+        // Grid topology hint for the renderer's displacement pass, which
+        // reconstructs rest positions from vertex index (the displaced buffer
+        // is rewritten in place, so rest can't be read back). 0 = derive a
+        // SQUARE grid from sqrt(vertexCount) — the historical default.
+        // Ocean::create always fills these; hand-built rectangular grids
+        // (gridWidth ≠ gridDepth) must set them or state creation fails.
+        uint32_t gridWidth = 0;// vertices along local X
+        uint32_t gridDepth = 0;// vertices along local Z
+
         // Sticky opt-in for the CPU height mirror. Set by sampleHeight() on
         // first use; the Vulkan renderer skips the per-frame GPU→host cascade
         // copies (and the mirror memcpy) entirely until then, so scenes that

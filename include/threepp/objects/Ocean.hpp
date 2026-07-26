@@ -43,14 +43,26 @@ namespace threepp {
 
     public:
         struct Options {
-            // Mesh extent in metres (square tile). Doubles as the cascade-0 FFT
-            // tile, i.e. the wavelength of the largest swell.
+            // Mesh extent in metres along local X. The LARGER of size/sizeZ
+            // doubles as the cascade-0 FFT tile, i.e. the wavelength of the
+            // largest swell.
             float size = 1000.0f;
 
-            // Vertex grid resolution per side (total vertices = resolution²).
-            // Decoupled from the FFT size — the wave field stays at fftSize²
+            // Mesh extent along local Z. 0 (default) = square (`size`). A
+            // rectangle spends vertices only where the water actually is —
+            // e.g. a fjord channel wants ~900 × 3200 instead of 3200² (the
+            // wave field is unaffected: FFT tiles are world-anchored and
+            // decoupled from the mesh extent).
+            float sizeZ = 0.0f;
+
+            // Vertex grid resolution along local X (columns). Decoupled from
+            // the FFT size — the wave field stays at the FFT resolutions
             // regardless, so the mesh can be coarser than the spectrum.
             uint32_t resolution = 512;
+
+            // Vertex rows along local Z. 0 (default) = derive from resolution
+            // so grid cells stay square-ish (resolution · sizeZ / size).
+            uint32_t resolutionZ = 0;
 
             // Wind direction (radians, 0 = +X) and speed (m/s). Speed is the
             // dominant "how big is the sea" lever (Phillips amplitude ∝ V⁴):
