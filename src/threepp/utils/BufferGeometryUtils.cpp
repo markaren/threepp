@@ -2,9 +2,14 @@
 #include "threepp/utils/BufferGeometryUtils.hpp"
 
 #include "threepp/core/AttributeView.hpp"
-#include "threepp/objects/DisplacedMesh.hpp"
 #include "threepp/objects/GrassMesh.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
+
+#ifdef THREEPP_WITH_VULKAN
+// DisplacedMesh.cpp is only compiled into Vulkan builds (its typeinfo lives
+// there), and no DisplacedMesh can exist without the Vulkan renderer.
+#include "threepp/objects/DisplacedMesh.hpp"
+#endif
 
 #include <meshoptimizer.h>
 
@@ -567,7 +572,9 @@ size_t threepp::compressSceneAttributes(Object3D& root, const AttributeCompressi
         // frame, and CPU-side skinning (boneTransform) reads typed float
         // attributes. Ocean derives DisplacedMesh and is covered by that check.
         if (dynamic_cast<SkinnedMesh*>(&m)) return;
+#ifdef THREEPP_WITH_VULKAN
         if (dynamic_cast<DisplacedMesh*>(&m)) return;
+#endif
         if (dynamic_cast<GrassMesh*>(&m)) return;
         if (!geom->getMorphAttributes().empty()) return;
         if (geom->hasAttribute("tetIndex")) return;// SoftBody::enableGpuSkinning
