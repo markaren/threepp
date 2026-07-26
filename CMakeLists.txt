@@ -1,10 +1,13 @@
-cmake_minimum_required(VERSION 3.19)
+cmake_minimum_required(VERSION 3.21)
 project(threepp)
 
 include(CMakeDependentOption)
 
-option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
-option(THREEPP_BUILD_TESTS "Build test suite" ON)
+# Examples and tests are for people working *on* threepp: they add 100+ executables,
+# Catch2 and the (large) asset repo to the build. Consumers who add_subdirectory or
+# FetchContent threepp get just the library unless they ask for more.
+option(THREEPP_BUILD_EXAMPLES "Build examples" ${PROJECT_IS_TOP_LEVEL})
+option(THREEPP_BUILD_TESTS "Build test suite" ${PROJECT_IS_TOP_LEVEL})
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
 
 option(THREEPP_WITH_FBX "Build with FBXLoader (OpenFBX)" OFF)

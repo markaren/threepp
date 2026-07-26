@@ -49,7 +49,7 @@ minimum-version = "0.10"
 build.targets = ["threepp_py"]
 install.components = ["python_module"]
 wheel.packages = []
-cmake.version = ">=3.19"
+cmake.version = ">=3.21"
 cmake.args = [
     "-DTHREEPP_WITH_PYTHON=ON",
     "-DTHREEPP_BUILD_EXAMPLES=OFF",

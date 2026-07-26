@@ -783,7 +783,7 @@ under `extras/` and `helpers/`:
 
 The [examples](../examples) folder is the de-facto documentation. The examples build from the
 repository itself, not from a FetchContent consumer: clone `threepp`, configure with the
-defaults (`THREEPP_BUILD_EXAMPLES` is ON), and the models/textures they need are fetched
+defaults (`THREEPP_BUILD_EXAMPLES` is ON for a top-level build), and the models/textures they need are fetched
 automatically into a `threepp_data` checkout — see [How to build](../README.md#how-to-build).
 
 A reading order:

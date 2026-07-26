@@ -40,7 +40,7 @@ Python from the Releases page, then:
 pip install ./threepp-2026.6.17-cp312-cp312-win_amd64.whl
 ```
 
-Or build from source (needs a C++ compiler + CMake ≥ 3.19; pybind11 is fetched
+Or build from source (needs a C++ compiler + CMake ≥ 3.21; pybind11 is fetched
 automatically):
 
 ```sh

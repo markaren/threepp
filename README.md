@@ -254,8 +254,6 @@ so it can be consumed using [conan](https://conan.io/) or [xmake](https://xmake.
 
 ```cmake
 include(FetchContent)
-set(THREEPP_BUILD_TESTS OFF)
-set(THREEPP_BUILD_EXAMPLES OFF)
 FetchContent_Declare(
         threepp
         GIT_REPOSITORY https://github.com/markaren/threepp.git
@@ -269,7 +267,9 @@ target_link_libraries(main PUBLIC threepp::threepp)
 
 This is the preferred approach, as it enables users to update the targeted threepp version at will.
 
-With `THREEPP_BUILD_EXAMPLES` and `THREEPP_BUILD_TESTS` off (as above), only the library is fetched. 
+`THREEPP_BUILD_EXAMPLES` and `THREEPP_BUILD_TESTS` default to ON only when threepp is the 
+top-level project, so consuming it via `FetchContent` (or `add_subdirectory`) builds just the 
+library — set either to `ON` explicitly if you do want them. 
 The example/test assets (models, textures, fonts, sounds, …) live in a separate 
 [`threepp_data`](https://github.com/markaren/threepp_data) repository, fetched automatically *only* 
 when examples or tests are enabled — library consumers never download them. 
