@@ -78,6 +78,13 @@ namespace threepp::water {
         // DynamicSpectrum.
         void recordCompute(VkCommandBuffer cb);
 
+        // Live wind change: rewrites the params UBO so the next recordCompute
+        // regenerates h0 with the new wind (caller re-dispatches). The noise
+        // image persists, so successive regenerations are phase-correlated and
+        // the sea state morphs smoothly. Same mapped-UBO-rewrite convention as
+        // DynamicSpectrum's per-frame time update.
+        void updateWind(float windTheta, float windSpeed);
+
         VkImage     h0Image() const { return h0_.image; }
         VkImageView h0View()  const { return h0_.view;  }
         const OceanImage& h0() const { return h0_; }
@@ -105,11 +112,13 @@ namespace threepp::water {
     };
 
     // ─── DynamicSpectrum ───────────────────────────────────────────────
-    // Outputs four RG32F images per dispatch:
+    // Outputs two RG32F images per dispatch:
     //   ht           — height-field spectrum (IFFT → spatial-domain height)
-    //   dht          — gradient spectrum
     //   displacement — packed horizontal-displacement spectrum (IFFT → (dx,dz))
-    //   jacDiag      — Jacobian diagonal spectrum (foam input)
+    // (The gradient and Jacobian-diagonal spectra the WebTide reference also
+    // emitted were computed here for a while but never consumed — normals come
+    // from finite-differencing the spatial height, foam from finite-
+    // differencing the spatial displacement — so they were dropped.)
     class DynamicSpectrum {
     public:
         DynamicSpectrum(vulkan::VulkanContext& ctx,
@@ -124,9 +133,7 @@ namespace threepp::water {
         void recordCompute(VkCommandBuffer cb, float elapsedSeconds);
 
         const OceanImage& ht()           const { return ht_; }
-        const OceanImage& dht()          const { return dht_; }
         const OceanImage& displacement() const { return displacement_; }
-        const OceanImage& jacDiag()      const { return jacDiag_; }
 
     private:
         vulkan::VulkanContext& ctx_;
@@ -134,7 +141,7 @@ namespace threepp::water {
         uint32_t textureSize_;
         float    tileSize_;
 
-        OceanImage  ht_, dht_, displacement_, jacDiag_;
+        OceanImage  ht_, displacement_;
         OceanBuffer paramsUbo_;
         VkSampler   sampler_ = VK_NULL_HANDLE;
 

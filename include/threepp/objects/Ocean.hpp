@@ -59,10 +59,22 @@ namespace threepp {
             float waveScale = 1.0f;
 
             // Mid + fine cascade tile sizes (metres). Cascade-0 uses `size`.
-            float tileSize1 = 100.0f;
-            float tileSize2 = 8.0f;
+            // Deliberately NON-COMMENSURATE with the 1000 m default size
+            // (1000/127 ≈ 7.9, 127/9.3 ≈ 13.7): integer tile ratios keep every
+            // repeat of a cascade phase-aligned with the one above it, which
+            // reads as a visible plaid in the far field. Combined with the
+            // cascade-1 domain rotation (vulkan_shared.h) the repeats stop
+            // lining up with anything.
+            float tileSize1 = 127.0f;
+            float tileSize2 = 9.3f;
 
-            // Cascade-0 FFT resolution (power of two). Cascades 1 & 2 use half.
+            // FFT resolution CAP (power of two). Cascade 0 and 1 are band-
+            // passed by the renderer (cascade 0 carries only λ ≥ tileSize1,
+            // cascade 1 only λ ≥ tileSize2), so create() derives their actual
+            // resolutions from the band (~10 samples per shortest wavelength,
+            // clamped to this cap / half of it) — with the default tiles that
+            // is {128, 256} instead of {1024, 512}, at identical wave content.
+            // The open-band fine cascade always runs at fftSize / 2.
             uint32_t fftSize = 1024;
         };
 
@@ -83,7 +95,11 @@ namespace threepp {
         // each frame before render(); halfRange defaults to size/2.
         void warpToward(float worldX, float worldZ, float coefA = 0.1f);
 
-        // Convenience setters that forward to `params`.
+        // Convenience setter that forwards to `params`. LIVE: the Vulkan
+        // renderer detects the change and regenerates the Phillips spectra
+        // next frame; the persistent noise keeps the regenerations phase-
+        // correlated, so the sea morphs smoothly into the new state instead
+        // of popping. Safe to drive from a UI slider every frame.
         void setWind(float speed, float theta);
 
         Ocean(const std::shared_ptr<BufferGeometry>& geometry,

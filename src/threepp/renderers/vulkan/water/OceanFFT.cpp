@@ -470,6 +470,12 @@ namespace threepp::water {
         cmdShaderRWBarrier(cb, h0_.image);
     }
 
+    void PhillipsSpectrum::updateWind(float windTheta, float windSpeed) {
+        settings_.windTheta = windTheta;
+        settings_.windSpeed = windSpeed;
+        writeParams();
+    }
+
     PhillipsSpectrum::~PhillipsSpectrum() {
         if (pipe_   != VK_NULL_HANDLE) vkDestroyPipeline(ctx_.device(), pipe_, nullptr);
         if (layout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(ctx_.device(), layout_, nullptr);
@@ -497,19 +503,19 @@ namespace threepp::water {
 
     void DynamicSpectrum::createImages() {
         ht_           = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.ht");
-        dht_          = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.dht");
         displacement_ = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.displacement");
-        jacDiag_      = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.jacDiag");
     }
 
     void DynamicSpectrum::createPipeline() {
-        const std::array<VkDescriptorSetLayoutBinding, 6> bindings{
+        // Binding indices 2 and 5 (the unused gradient / Jacobian-diagonal
+        // spectra) were retired; gaps in a set layout are legal, so the
+        // remaining bindings keep their historical numbers and the shader's
+        // layout qualifiers stay put.
+        const std::array<VkDescriptorSetLayoutBinding, 4> bindings{
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // H0
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // HT
-            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // DHT
             VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // Displacement
             VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // Params
-            VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // JacDiag
         };
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -531,7 +537,7 @@ namespace threepp::water {
 
         const std::array<VkDescriptorPoolSize, 3> poolSizes{
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          4},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          2},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         1},
         };
         VkDescriptorPoolCreateInfo dpci{};
@@ -562,23 +568,15 @@ namespace threepp::water {
         htInfo.imageView   = ht_.view;
         htInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-        VkDescriptorImageInfo dhtInfo{};
-        dhtInfo.imageView   = dht_.view;
-        dhtInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
         VkDescriptorImageInfo dispInfo{};
         dispInfo.imageView   = displacement_.view;
         dispInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-        VkDescriptorImageInfo jacInfo{};
-        jacInfo.imageView   = jacDiag_.view;
-        jacInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
         VkDescriptorBufferInfo pInfo{};
         pInfo.buffer = paramsUbo_.handle;
         pInfo.range  = paramsUbo_.size;
 
-        std::array<VkWriteDescriptorSet, 6> writes{};
+        std::array<VkWriteDescriptorSet, 4> writes{};
         for (auto& w : writes) {
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w.dstSet = ds_;
@@ -586,10 +584,8 @@ namespace threepp::water {
         }
         writes[0].dstBinding = 0; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; writes[0].pImageInfo = &h0Info;
         writes[1].dstBinding = 1; writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[1].pImageInfo = &htInfo;
-        writes[2].dstBinding = 2; writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[2].pImageInfo = &dhtInfo;
-        writes[3].dstBinding = 3; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[3].pImageInfo = &dispInfo;
-        writes[4].dstBinding = 4; writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         writes[4].pBufferInfo = &pInfo;
-        writes[5].dstBinding = 5; writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[5].pImageInfo = &jacInfo;
+        writes[2].dstBinding = 3; writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          writes[2].pImageInfo = &dispInfo;
+        writes[3].dstBinding = 4; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         writes[3].pBufferInfo = &pInfo;
         vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
@@ -607,9 +603,7 @@ namespace threepp::water {
         vulkan::flushHostWrites(ctx_.allocator(), paramsUbo_.alloc, 0, sizeof(p));
 
         cmdTransitionToGeneral(cb, ht_);
-        cmdTransitionToGeneral(cb, dht_);
         cmdTransitionToGeneral(cb, displacement_);
-        cmdTransitionToGeneral(cb, jacDiag_);
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout_,
@@ -618,9 +612,7 @@ namespace threepp::water {
         vkCmdDispatch(cb, g, g, 1);
 
         cmdShaderRWBarrier(cb, ht_.image);
-        cmdShaderRWBarrier(cb, dht_.image);
         cmdShaderRWBarrier(cb, displacement_.image);
-        cmdShaderRWBarrier(cb, jacDiag_.image);
     }
 
     DynamicSpectrum::~DynamicSpectrum() {
@@ -631,9 +623,7 @@ namespace threepp::water {
         if (sampler_!= VK_NULL_HANDLE) vkDestroySampler(ctx_.device(), sampler_, nullptr);
         destroyBuffer(ctx_, paramsUbo_);
         destroyImage(ctx_, ht_);
-        destroyImage(ctx_, dht_);
         destroyImage(ctx_, displacement_);
-        destroyImage(ctx_, jacDiag_);
     }
 
     // ─────────────────────────────────────────────────────────────────

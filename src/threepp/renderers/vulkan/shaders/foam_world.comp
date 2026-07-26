@@ -3,6 +3,9 @@
 #extension GL_EXT_buffer_reference                       : require
 #extension GL_EXT_buffer_reference2                      : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive                   : enable
+
+#include "ocean_cascade.glsl"// cascade-1 domain rotation (repeat-lattice break)
 
 // World-space foam accumulator. One texel = one fixed point in world XZ;
 // foam value is preserved frame-to-frame regardless of how the ocean's
@@ -108,8 +111,9 @@ vec2 sampleDispXZ(vec2 worldXZ, uint mask) {
         d += texture(displace0, worldXZ * invTile).rg * invTile;
     }
     if ((mask & pc.cascadeMask & 2u) != 0u) {
+        // Rotated domain + world back-rotation — must match water_displace.
         const float invTile = 1.0 / pc.tileSize1;
-        d += texture(displace1, worldXZ * invTile).rg * invTile;
+        d += oceanC1World(texture(displace1, oceanC1Domain(worldXZ) * invTile).rg) * invTile;
     }
     if ((mask & pc.cascadeMask & 4u) != 0u) {
         const float invTile = 1.0 / pc.tileSize2;
@@ -157,8 +161,9 @@ vec2 sampleDispXZSmooth(vec2 worldXZ, uint mask) {
         d += sampleBicubicRG(displace0, worldXZ * invTile) * invTile;
     }
     if ((mask & pc.cascadeMask & 2u) != 0u) {
+        // Rotated domain + world back-rotation — must match water_displace.
         const float invTile = 1.0 / pc.tileSize1;
-        d += sampleBicubicRG(displace1, worldXZ * invTile) * invTile;
+        d += oceanC1World(sampleBicubicRG(displace1, oceanC1Domain(worldXZ) * invTile)) * invTile;
     }
     if ((mask & pc.cascadeMask & 4u) != 0u) {
         const float invTile = 1.0 / pc.tileSize2;

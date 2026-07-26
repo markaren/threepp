@@ -12,8 +12,18 @@
 // never tied to the boat; here it's the camera.
 //
 // Controls: drag to orbit, scroll to zoom.
+//   Up/Down    — wind speed ±1 m/s (live; the sea morphs into the new state)
+//   Left/Right — wind direction ∓15°
 // Headless capture: vulkan_ocean_minimal --shot <name.png> [--frames N] [--pt]
-//   (plus --cam x,y,z / --look x,y,z to reframe with no rebuild).
+//   (plus --cam x,y,z / --look x,y,z to reframe with no rebuild, and
+//   --wind <m/s> to capture a specific sea state).
+// Validation hooks:
+//   --wind2 <m/s> — setWind() to this halfway through a --shot run; exercises
+//                   the live-wind respectrum path headlessly.
+//   --probes      — 3×3 emissive spheres pinned to sampleHeight() around the
+//                   orbit target: the CPU/GPU wave-field parity check (spheres
+//                   must sit ON the surface), and a lazy-height-readback smoke
+//                   test in one flag.
 
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -23,6 +33,7 @@
 
 #include "capture_util.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -36,9 +47,15 @@ int main(int argc, char** argv) {
     // ── Headless capture (dev iteration): N warm-up frames then one PNG ──────
     std::string shotPath;
     int shotFrames = 240, shotFrame = 0;
+    float windOverride = -1.f;// <0 = keep the Ocean default
+    float wind2 = -1.f;       // ≥0 = setWind() to this halfway through a --shot run (live-wind test)
+    bool probes = false;      // sampleHeight parity probes (debug)
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--wind") == 0 && i + 1 < argc) windOverride = float(std::atof(argv[++i]));
+        else if (std::strcmp(argv[i], "--wind2") == 0 && i + 1 < argc) wind2 = float(std::atof(argv[++i]));
+        else if (std::strcmp(argv[i], "--probes") == 0) probes = true;
     }
     const capture::Args capArgs = capture::parseArgs(argc, argv);
     if (capArgs.frames) shotFrames = *capArgs.frames;
@@ -89,8 +106,25 @@ int main(int argc, char** argv) {
     // The whole "fancy water" in one line.
     Ocean::Options opts;
     opts.size = kSize;
+    if (windOverride >= 0.f) opts.windSpeed = windOverride;
     auto ocean = Ocean::create(opts);
     scene.add(ocean);
+
+    // Live wind control — setWind() takes effect next frame; the sea morphs
+    // smoothly because the spectrum noise is persistent.
+    KeyAdapter windKeys(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
+        auto& p = ocean->params;
+        float speed = p.windSpeed, theta = p.windTheta;
+        if (ev.key == Key::UP)         speed = std::min(speed + 1.f, 30.f);
+        else if (ev.key == Key::DOWN)  speed = std::max(speed - 1.f, 0.5f);
+        else if (ev.key == Key::LEFT)  theta -= math::PI / 12.f;
+        else if (ev.key == Key::RIGHT) theta += math::PI / 12.f;
+        else return;
+        ocean->setWind(speed, theta);
+        std::cout << "wind: " << speed << " m/s, "
+                  << theta * math::RAD2DEG << " deg" << std::endl;
+    });
+    canvas.addKeyListener(windKeys);
 
     PerspectiveCamera camera(50.f, canvas.aspect(), 0.1f, 2000.f);
     camera.position.set(0.f, 10.f, 35.f);
@@ -107,12 +141,43 @@ int main(int argc, char** argv) {
         camera.updateProjectionMatrix();
     });
 
+    // sampleHeight parity probes (--probes): emissive spheres pinned to the
+    // CPU-mirrored wave height each frame. If the CPU sampler matches the GPU
+    // displacement they sit ON the surface; any axis flip / offset shows as
+    // spheres hovering or submerged. Also exercises the lazy height readback.
+    std::vector<std::shared_ptr<Mesh>> probeSpheres;
+    if (probes) {
+        auto probeMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(1.f, 0.15f, 0.05f)).roughness(0.4f));
+        probeMat->emissive = Color(1.f, 0.2f, 0.05f);
+        probeMat->emissiveIntensity = 2.f;
+        for (int i = 0; i < 9; ++i) {
+            auto s = Mesh::create(SphereGeometry::create(0.5f, 16, 12), probeMat);
+            probeSpheres.push_back(s);
+            scene.add(s);
+        }
+    }
+
     canvas.animate([&] {
         controls.update();
 
         // Pack vertex density toward where the camera is looking. The focus is
         // just a world coordinate — the same warp the showcase points at a boat.
         ocean->warpToward(controls.target.x, controls.target.z, 0.3f);
+
+        if (wind2 >= 0.f && shotFrame == shotFrames / 2)
+            ocean->setWind(wind2, ocean->params.windTheta);
+
+        if (!probeSpheres.empty()) {
+            int k = 0;
+            for (int gz = -1; gz <= 1; ++gz)
+                for (int gx = -1; gx <= 1; ++gx) {
+                    const float px = controls.target.x + float(gx) * 12.f;
+                    const float pz = controls.target.z + float(gz) * 12.f;
+                    probeSpheres[k++]->position.set(
+                            px, ocean->sampleHeight(px, pz), pz);
+                }
+        }
 
         renderer.render(scene, camera);
 

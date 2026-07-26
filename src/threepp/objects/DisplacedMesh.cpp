@@ -1,5 +1,11 @@
 #include "threepp/objects/DisplacedMesh.hpp"
 
+// kOceanCascade1Rot* — cascade-1 sample-domain rotation, shared with the GLSL
+// samplers (water_displace.comp / foam_world.comp). Header is cross-language
+// (pure constants + a POD struct); including it here keeps CPU/GPU parity
+// literal-exact.
+#include "threepp/renderers/vulkan/shaders/vulkan_shared.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -22,8 +28,12 @@ namespace threepp {
 
             const uint32_t dim = cf.dim;
             const float invTile = 1.f / cf.tileSize;
+            // Same mapping as the GPU samplers: texture v = +worldZ / tile
+            // (an earlier version negated z here, which silently sampled the
+            // z-MIRRORED field — statistically identical, so floaters bobbed
+            // plausibly without actually riding the rendered crests).
             const float u = worldX * invTile;
-            const float v = -worldZ * invTile;
+            const float v = worldZ * invTile;
 
             auto wrap = [dim](float x) {
                 const float fdim = float(dim);
@@ -31,8 +41,11 @@ namespace threepp {
                 if (w < 0.f) w += fdim;
                 return w;
             };
-            const float fx = wrap(u * float(dim));
-            const float fz = wrap(v * float(dim));
+            // −0.5: GPU texture() bilinear places texel i's value at
+            // (i+0.5)/dim — emulate that so the field isn't shifted by half a
+            // texel (which at coarse cascade resolutions is metres of world).
+            const float fx = wrap(u * float(dim) - 0.5f);
+            const float fz = wrap(v * float(dim) - 0.5f);
 
             const uint32_t x0 = uint32_t(std::floor(fx)) % dim;
             const uint32_t z0 = uint32_t(std::floor(fz)) % dim;
@@ -58,10 +71,25 @@ namespace threepp {
 
     float DisplacedMesh::sampleHeight(float worldX, float worldZ,
                                       uint32_t cascadeMask) const {
+        // Sticky opt-in: the Vulkan renderer only records the GPU→host height
+        // copies (and the per-frame mirror memcpy) once something actually
+        // queries the CPU wave field. First-ever call may return 0 until the
+        // next frame's readback lands — same one-frame latency the mirror
+        // always had.
+        wantsHeightReadback = true;
+
         float total = 0.f;
         for (uint32_t i = 0; i < 3; ++i) {
-            if ((cascadeMask & (1u << i)) != 0u)
+            if ((cascadeMask & (1u << i)) == 0u) continue;
+            if (i == 1) {
+                // Cascade 1 is sampled in a ROTATED domain (repeat-lattice
+                // break — see vulkan_shared.h). Mirror of oceanC1Domain().
+                const float qx = kOceanCascade1RotCos * worldX - kOceanCascade1RotSin * worldZ;
+                const float qz = kOceanCascade1RotSin * worldX + kOceanCascade1RotCos * worldZ;
+                total += sampleCascade(heightFields[i], qx, qz);
+            } else {
                 total += sampleCascade(heightFields[i], worldX, worldZ);
+            }
         }
         return total * params.waveScale;
     }

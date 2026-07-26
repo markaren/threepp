@@ -74,11 +74,39 @@ namespace threepp {
         p.windSpeed = options.windSpeed;
         p.waveScale = options.waveScale;
         p.choppiness = options.choppiness;
-        // Cascade-0 keeps the full FFT for macro-shape fidelity; the
-        // shorter-wavelength cascades saturate well below it, so halve them.
-        p.textureSize0 = options.fftSize;
-        p.textureSize1 = std::max<uint32_t>(1u, options.fftSize / 2u);
-        p.textureSize2 = std::max<uint32_t>(1u, options.fftSize / 2u);
+
+        // Per-cascade FFT resolution, derived from the band each cascade
+        // actually carries. The renderer band-passes cascade 0 to
+        // λ ∈ [tileSize1, size] and cascade 1 to λ ∈ [tileSize2, tileSize1],
+        // so the resolution only has to sample the SHORTEST wavelength in the
+        // band well (~10 texels per wavelength keeps the bicubic B-spline
+        // reconstruction within ~2% amplitude at the band edge). Running them
+        // at fftSize like before computed 1024² FFTs whose spectra held ~10
+        // active modes per axis — ~50× wasted texel work per frame.
+        // The last enabled cascade has an OPEN band (no kMax) and keeps the
+        // resolution-driven detail cap, so it stays at fftSize / 2.
+        const uint32_t half = std::max<uint32_t>(1u, options.fftSize / 2u);
+        auto bandRes = [&](float tile, float lambdaMin, uint32_t cap) {
+            uint32_t n = 64u;
+            const float want = 10.f * tile / std::max(lambdaMin, 1e-3f);
+            while (float(n) < want && n < cap) n *= 2u;
+            return n;
+        };
+        if (options.tileSize1 > 0.f) {
+            p.textureSize0 = bandRes(options.size, options.tileSize1, options.fftSize);
+            if (options.tileSize2 > 0.f) {
+                p.textureSize1 = bandRes(options.tileSize1, options.tileSize2, half);
+                p.textureSize2 = half;
+            } else {
+                p.textureSize1 = half;// open band — full detail resolution
+                p.textureSize2 = half;
+            }
+        } else {
+            // Single-cascade setup: cascade 0 is the open band.
+            p.textureSize0 = options.fftSize;
+            p.textureSize1 = half;
+            p.textureSize2 = half;
+        }
 
         return ocean;
     }

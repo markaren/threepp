@@ -106,16 +106,20 @@ namespace threepp_py {
                      py::arg("size") = 1000.0f, py::arg("resolution") = 512u,
                      py::arg("wind_speed") = 10.0f, py::arg("wind_theta") = 0.6f,
                      py::arg("choppiness") = 0.55f, py::arg("wave_scale") = 1.0f,
-                     py::arg("tile_size_1") = 100.0f, py::arg("tile_size_2") = 8.0f,
+                     py::arg("tile_size_1") = 127.0f, py::arg("tile_size_2") = 9.3f,
                      py::arg("fft_size") = 1024u,
                      "A ready-to-use FFT ocean. Add it to a Scene and render with the Vulkan "
-                     "renderer. size is the tile extent (m); resolution is the vertex grid per side.")
+                     "renderer. size is the tile extent (m); resolution is the vertex grid per "
+                     "side; fft_size caps the per-cascade FFT resolutions (band-passed cascades "
+                     "auto-size below it). Defaults are non-commensurate to break tiling repeats.")
                 .def("warp_toward", &Ocean::warpToward,
                      py::arg("world_x"), py::arg("world_z"), py::arg("coef_a") = 0.1f,
                      "Pack vertex density toward a world-space focus point (e.g. the camera). "
                      "Call each frame before render().")
                 .def("set_wind", &Ocean::setWind, py::arg("speed"), py::arg("theta"),
-                     "Set wind speed (m/s) and direction (radians).");
+                     "Set wind speed (m/s) and direction (radians). Live: the renderer "
+                     "regenerates the spectra next frame and the sea morphs smoothly into "
+                     "the new state.");
     }
 
 }// namespace threepp_py

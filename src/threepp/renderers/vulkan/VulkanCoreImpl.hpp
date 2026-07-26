@@ -521,6 +521,13 @@ namespace threepp {
             };
             std::array<Cascade, 3> cascades;
             uint32_t cascadeMask = 0;            // bit i set = cascade i enabled
+            // Wind actually baked into the cascades' h0 spectra. When
+            // dm.params drifts from these, recordDisplacedDeform rewrites the
+            // Phillips params and re-dispatches the (normally one-shot) h0
+            // pass — the per-cascade noise images persist, so the wave field
+            // MORPHS smoothly into the new sea state instead of jumping.
+            float appliedWindSpeed = 0.f;
+            float appliedWindTheta = 0.f;
             water::OceanImage scratchA;          // RG32F IFFT scratch — shared across cascades (sequential dispatch)
             VkDescriptorSet displaceDS = VK_NULL_HANDLE;
             uint32_t vertexCount = 0;
@@ -537,6 +544,12 @@ namespace threepp {
             // different FFT resolutions — each cascade's readback buffer is
             // sized to its own dim²·8 bytes (RG32F).
             uint32_t  heightReadbackDim[3] = {0, 0, 0};
+            // True once at least one frame has RECORDED the image→buffer
+            // height copies. The copies are gated on the sampleHeight()
+            // opt-in, so before the first opted-in frame the readback
+            // buffers hold uninitialized VMA memory — mirroring them would
+            // hand garbage heights to buoyancy for a frame.
+            bool      heightCopiesEverRecorded = false;
             std::weak_ptr<BufferGeometry> liveCheck;
             // Per-frame BLAS-refit state. The initial AS is built (buildBlasFor)
             // with ALLOW_UPDATE, so subsequent per-frame refreshes can use
@@ -3995,14 +4008,14 @@ namespace threepp {
                 water::PhillipsSpectrum::Settings ps{};
                 ps.textureSize = texSize;
                 ps.tileSize    = tileSizes[i];
-                ps.windTheta   = dm.params.windTheta;
+                // Cascade 1's SAMPLE DOMAIN is rotated by kOceanCascade1RotTheta
+                // (repeat-lattice break — see vulkan_shared.h). A domain-space
+                // wave at angle θd propagates in world at θd − θrot, so add the
+                // rotation here to keep the rendered propagation direction at
+                // the caller's windTheta for every cascade.
+                ps.windTheta   = dm.params.windTheta +
+                                 (i == 1 ? kOceanCascade1RotTheta : 0.f);
                 ps.windSpeed   = dm.params.windSpeed;
-                // Suppress wavelengths shorter than ~5× the cascade's sample
-                // spacing. Without this, single-cascade Phillips puts energy
-                // into bands the FFT can't resolve, producing spike-crest
-                // aliasing. Per-cascade `texSize` so each cascade's cutoff
-                // tracks its own resolution.
-                ps.smallWaveCutoff = 5.f * tileSizes[i] / float(texSize);
                 if (i == 0) {
                     ps.kMin = 0.f;
                     ps.kMax = kHandoff01; // 0 if no cascade 1 → no upper bound
@@ -4013,6 +4026,28 @@ namespace threepp {
                     ps.kMin = kHandoff12;
                     ps.kMax = 0.f;
                 }
+                // Short-wave roll-off. Two regimes:
+                //  • OPEN band (kMax == 0, the finest enabled cascade): suppress
+                //    wavelengths shorter than ~5× the sample spacing, or
+                //    Phillips puts energy into bands the FFT can't resolve and
+                //    the crests alias into spikes. Resolution-tied by design.
+                //  • BAND-LIMITED (kMax > 0): the hard kMax already guarantees
+                //    nothing unresolvable is emitted, so the roll-off only
+                //    tapers the band edge. Keyed to the BAND, not the
+                //    resolution: the old 5·tile/texSize formula would wipe out
+                //    the entire band content when the band-passed cascades run
+                //    at their right-sized (small) resolutions.
+                //    The per-cascade ratios REPRODUCE the attenuation the old
+                //    formula gave at the historical resolutions ({1024, 512}):
+                //    0.05·λmin ≈ 0.91 at cascade 0's edge, 0.12·λmin ≈ 0.55 at
+                //    cascade 1's. The stronger cascade-1 taper is load-bearing:
+                //    a first cut used 0.05 for both, and the extra ~9–12 m
+                //    energy it left in cascade 1 aliased into a checkerboard
+                //    moiré at grazing distances where the (warp-thinned) mesh
+                //    spacing approaches those wavelengths' Nyquist.
+                ps.smallWaveCutoff = (ps.kMax > 0.f)
+                        ? (i == 0 ? 0.05f : 0.12f) * (kTwoPi / ps.kMax)
+                        : 5.f * tileSizes[i] / float(texSize);
                 auto& c = state->cascades[i];
                 c.tileSize = tileSizes[i];
                 c.phillips = std::make_unique<water::PhillipsSpectrum>(*ctx, ps);
@@ -4022,6 +4057,8 @@ namespace threepp {
                 state->cascadeMask |= (1u << i);
             }
             if (state->cascadeMask == 0u) return nullptr; // no cascades → invalid setup
+            state->appliedWindSpeed = dm.params.windSpeed;
+            state->appliedWindTheta = dm.params.windTheta;
 
             // Per-cascade height readback buffers (host-mapped). Each cascade
             // can run at a different FFT resolution, so each readback is

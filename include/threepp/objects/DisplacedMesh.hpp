@@ -54,12 +54,13 @@ namespace threepp {
             float choppiness = 0.45f;
 
             // FFT texture resolution per cascade (must be power of two).
-            // Decoupled per-cascade because the smaller-tile cascades carry
-            // shorter wavelengths whose resolvable detail saturates at lower
-            // resolution — running every cascade at the same size as
-            // cascade-0 is wasted compute. Typical setting for a 1 km / 100 m
-            // / 8 m cascade trio: {1024, 512, 512} — cascade-0 keeps macro-
-            // shape fidelity, cascades 1 & 2 halve to cut FFT cost ~2×.
+            // Band-passed cascades need only enough texels to resolve their
+            // own wavelength band (~10 samples per shortest wavelength) — the
+            // renderer's band-pass caps cascade 0 at λ ≥ tileSize1 and
+            // cascade 1 at λ ≥ tileSize2, so running them at cascade-2-like
+            // resolutions is pure waste. Typical trio for 1 km / 127 m /
+            // 9.3 m tiles: {128, 256, 512} (Ocean::create derives exactly
+            // this from its tile sizes).
             uint32_t textureSize0 = 256;
             uint32_t textureSize1 = 256;
             uint32_t textureSize2 = 256;
@@ -173,8 +174,16 @@ namespace threepp {
         // Internal; do not mutate from user code.
         uint64_t frameTick = 0;
 
+        // Sticky opt-in for the CPU height mirror. Set by sampleHeight() on
+        // first use; the Vulkan renderer skips the per-frame GPU→host cascade
+        // copies (and the mirror memcpy) entirely until then, so scenes that
+        // never query wave height pay nothing for it. Internal; do not mutate
+        // from user code.
+        mutable bool wantsHeightReadback = false;
+
         // Renderer-filled spatial-domain height fields, one per cascade,
-        // copied back from GPU each frame after the IFFT pass. Layout:
+        // copied back from GPU each frame after the IFFT pass (only while
+        // wantsHeightReadback is set). Layout:
         // row-major RG32F (R = vertical displacement, G = unused).
         // Cell (ix, iz) lives at index `(iz*dim + ix)*2`.
         // mutable so const-method `sampleHeight` can be called on a const

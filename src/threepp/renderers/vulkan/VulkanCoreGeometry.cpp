@@ -1072,6 +1072,30 @@ void VulkanRendererCore::CoreImpl::refreshMorphedBlas(Mesh& mesh, MorphedMeshSta
 
 void VulkanRendererCore::CoreImpl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds) {
 
+            // (0) Live wind. The Phillips h0 pass is normally one-shot, but
+            // windSpeed/windTheta are plain Params fields — when they drift
+            // from what the cascades were baked with, rewrite each cascade's
+            // spectrum params and drop the phillipsRecorded latch so the loop
+            // below re-dispatches h0 this frame. The persistent per-cascade
+            // noise images keep successive h0 fields phase-correlated, so the
+            // sea MORPHS into the new state over a few swell periods instead
+            // of popping. (Mapped-UBO rewrite mid-flight follows the same
+            // convention as DynamicSpectrum's per-frame time update.)
+            if (dm.params.windSpeed != st.appliedWindSpeed ||
+                dm.params.windTheta != st.appliedWindTheta) {
+                for (uint32_t i = 0; i < 3; ++i) {
+                    if (!(st.cascadeMask & (1u << i))) continue;
+                    // Cascade 1's sample domain is rotated; keep its world
+                    // propagation on windTheta (same compensation as setup).
+                    const float theta = dm.params.windTheta +
+                            (i == 1 ? kOceanCascade1RotTheta : 0.f);
+                    st.cascades[i].phillips->updateWind(theta, dm.params.windSpeed);
+                    st.cascades[i].phillipsRecorded = false;
+                }
+                st.appliedWindSpeed = dm.params.windSpeed;
+                st.appliedWindTheta = dm.params.windTheta;
+            }
+
             // (1)..(3) Run each enabled cascade's FFT chain in turn. Phillips
             // is one-shot per cascade. DynamicSpectrum re-runs each frame.
             // IFFT calls are sequential on the same queue so they can share
@@ -1097,10 +1121,14 @@ void VulkanRendererCore::CoreImpl::recordDisplacedDeform(VkCommandBuffer cb, Dis
                 // Copy the spatial-domain height image into the host-mapped
                 // readback buffer for this cascade. By the time
                 // endAndSubmitOneShot returns, the buffer is filled.
+                // Gated on the sticky sampleHeight() opt-in — scenes that
+                // never query CPU wave height skip the copies (and their
+                // barriers) entirely.
                 Buffer* rb = (i == 0) ? &st.heightReadback
                            : (i == 1) ? &st.heightReadback1
                                       : &st.heightReadback2;
-                if (rb->handle != VK_NULL_HANDLE) {
+                if (dm.wantsHeightReadback && rb->handle != VK_NULL_HANDLE) {
+                    st.heightCopiesEverRecorded = true;
                     VkImageMemoryBarrier imb{};
                     imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
                     imb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -1418,6 +1446,12 @@ void VulkanRendererCore::CoreImpl::recordDisplacedDeform(VkCommandBuffer cb, Dis
         }
 
 void VulkanRendererCore::CoreImpl::mirrorDisplacedHeightfields(DisplacedMesh& dm, DisplacedMeshState& st) {
+            // Nothing has ever called sampleHeight() on this mesh → the GPU
+            // copies were skipped and there is nothing (correct) to mirror.
+            // heightCopiesEverRecorded additionally guards the first opted-in
+            // frame: the flag flips at sampleHeight() time, but the buffers
+            // only hold real data once a frame has recorded the copies.
+            if (!dm.wantsHeightReadback || !st.heightCopiesEverRecorded) return;
             struct { Buffer* buf; float tileSize; } cascades[] = {
                 {&st.heightReadback,  dm.params.tileSize0},
                 {&st.heightReadback1, dm.params.tileSize1},

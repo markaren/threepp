@@ -51,6 +51,28 @@
 #define kInstFlagDeformer    0x20u// persistent per-frame deformer (tet soft body)
 #define kInstFlagTexAnim     0x40u// per-frame texture animation (Material::textureAnimatedHint)
 
+// Ocean cascade-1 sample-domain rotation. The mid cascade carries only ~a
+// dozen Fourier modes per axis (band-passed to λ ∈ [tileSize2, tileSize1]),
+// so its tile repeats as a visible axis-aligned plaid across the ocean.
+// Rotating WHERE cascade 1 is sampled (domain q = R·worldXZ) turns its
+// repeat lattice diagonal — decorrelated from cascade 0's wind-aligned
+// pattern and from its own crest direction — which breaks the periodicity
+// perception without changing the wave statistics. The spectrum's windTheta
+// is compensated host-side (+kOceanCascade1RotTheta) so the waves still
+// PROPAGATE along the world wind direction; only the lattice rotates.
+//
+// Consumers that sample cascade 1 must all agree: water_displace.comp,
+// foam_world.comp (via ocean_cascade.glsl) and the CPU mirror
+// DisplacedMesh::sampleHeight. Height is a scalar (rotate the sample point
+// only); horizontal displacement is a vector (rotate the sampled (dx,dz)
+// BACK into world by the inverse rotation).
+//
+// θ = atan(1/2) ≈ 26.565°; sin = 1/√5, cos = 2/√5 — kept as literals so the
+// C++ and GLSL sides fold identical values.
+#define kOceanCascade1RotTheta 0.4636476090008061f
+#define kOceanCascade1RotSin   0.4472135954999579f
+#define kOceanCascade1RotCos   0.8944271909999159f
+
 #ifdef __cplusplus
 
 #include <cstdint>
