@@ -179,7 +179,9 @@ python examples/headless_render.py
   transmission. Add it to a scene and render. Tune `ocean.params` (wind / cascades
   / choppiness), pack vertex density toward any focus with `warp_toward(x, z)`, add
   `add_foam_disturbance(...)` splats, and read the wave height on the CPU with
-  `sample_height(x, z)`. The low-level `tp.DisplacedMesh` (own geometry + material)
+  `sample_height(x, z)` (lazy opt-in: the first call enables the GPU->CPU
+  mirror and may return 0 — values are live from the next rendered frame).
+  The low-level `tp.DisplacedMesh` (own geometry + material)
   is exposed too. Not tied to any "hero" object — see
   [`examples/vulkan_ocean.py`](examples/vulkan_ocean.py).
 
