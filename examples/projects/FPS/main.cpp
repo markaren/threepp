@@ -94,6 +94,15 @@ namespace {
 
 // A live enemy = pooled SWAT visual + a locked capsule body; a dead one keeps
 // the visual and swaps the capsule for a skinned ragdoll.
+// Bot behaviour states. Advance closes on the player (flow field, so it routes
+// around cover); Engage holds the fire band and strafes; Reposition breaks
+// contact and runs to a chosen post — preferring one the player can't see.
+enum class AiState {
+    Advance,
+    Engage,
+    Reposition
+};
+
 struct Enemy {
     EnemySlot* slot = nullptr;
     std::shared_ptr<Mesh> proxy;// invisible physics capsule
@@ -108,6 +117,19 @@ struct Enemy {
     float yaw = 0.f;     // smoothed facing
     SkinnedRagdoll ragdoll;
     PxRigidDynamic* rifleBody = nullptr;// dropped weapon (spawned at death)
+    // ---- AI ----------------------------------------------------------------
+    AiState state = AiState::Advance;
+    float stateT = 0.f;      // Reposition countdown / Engage re-decide cooldown
+    float losT = 0.f;        // seconds of UNBROKEN line of sight (reaction + aim spool)
+    float sinceSeen = 99.f;  // seconds since the player was last visible
+    Vector3 lastSeen;        // where that was (searched after contact breaks)
+    Vector3 post;            // Reposition destination
+    float strafeT = 0.f;     // seconds left on this strafe leg
+    float strafeSign = 1.f;
+    float flankSign = 1.f;   // which way this bot arcs in while closing
+    float aim = 0.f;         // 0..1 accuracy multiplier, spools with losT
+    int mag = kEnemyMag;
+    float reloadT = 0.f;     // >0 while reloading (blocks fire, plays the clip)
 };
 
 constexpr float kEnemyRadius = 0.35f;
@@ -119,7 +141,8 @@ constexpr float kEnemyHalf = kEnemyLen * 0.5f + kEnemyRadius;
 int main(int argc, char** argv) {
 
     // Headless capture (dev): fps_demo --shot <name.png> [--frames N] [--run]
-    // [--spin] [--api gl|vulkan] [--timing]. Renders N fixed-dt frames and
+    // [--spin] [--look yawDeg pitchDeg] [--api gl|vulkan] [--timing].
+    // Renders N fixed-dt frames and
     // saves via writeFramebuffer (Vulkan backend), then exits. --timing
     // prints per-frame wall ms (stutter hunting; works windowed too).
     std::string shotPath;
@@ -129,6 +152,7 @@ int main(int argc, char** argv) {
     bool shotFire = false;// hold LMB from frame 30 (muzzle flash / casings / decals repro)
     bool shotKill = false;// kill the nearest enemy at frame 220 + track the corpse (ragdoll repro)
     bool timing = false; // print per-frame wall ms (stutter hunting)
+    std::optional<float> shotYaw, shotPitch;// --look <yawDeg> <pitchDeg>
     std::optional<GraphicsAPI> apiOverride;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -138,6 +162,10 @@ int main(int argc, char** argv) {
         else if (a == "--spin") shotSpin = true;
         else if (a == "--fire") shotFire = true;
         else if (a == "--killtest") shotKill = true;
+        else if (a == "--look" && i + 2 < argc) {
+            shotYaw = std::strtof(argv[++i], nullptr);
+            shotPitch = std::strtof(argv[++i], nullptr);
+        }
         else if (a == "--timing") timing = true;
         else if (a == "--api" && i + 1 < argc) {
             const std::string v = argv[++i];
@@ -303,6 +331,9 @@ int main(int argc, char** argv) {
     AnimationAction* vmCurrent = nullptr;
     Object3D* vmMuzzle = nullptr;// Silencer_metarig — muzzle flash / tracer origin
     Object3D* vmEject = nullptr; // Eject_metarig — casing origin
+    // Length of the Equip clip, read off the loaded clip. The draw must run to
+    // its natural end (see kEquipTime) — that is where it meets Idle's pose.
+    float vmEquipLen = kEquipTime;
     // Placement under the camera is AUTO-FIT at load: the Sketchfab rig is
     // ~2.4x oversized and floats ~2.5 m up, so constants would be brittle.
     // Scale is normalised from the bind-pose armspan, then the model is
@@ -343,10 +374,36 @@ int main(int argc, char** argv) {
             vmShoot = pick("shoot");
             vmReload = pick("reload");
             vmEquip = pick("equip");
+            for (auto& c : res->animations) {
+                std::string n = c->name();
+                std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+                if (n == "equip") vmEquipLen = c->getDuration();
+            }
             for (auto* a : {vmIdle, vmShoot, vmReload, vmEquip})
                 if (a) a->setLoop(Loop::Repeat);
-            if (vmShoot) vmShoot->setDuration(0.16f);       // full-auto recoil pop
-            if (vmReload) vmReload->setDuration(kReloadTime);// squeeze the 4 s clip
+            if (vmShoot) vmShoot->setDuration(0.16f);// full-auto recoil pop
+            if (vmEquip) {
+                // Draw: play once at the authored rate and hold the last frame
+                // (which IS Idle's first pose) while the crossfade runs. It used
+                // to be a Repeat action cut off 0.57 s early — mid-pose, 0.67 rad
+                // from Idle — which lurched on every spawn and restart.
+                vmEquip->setLoop(Loop::Once, 1);
+                vmEquip->setClampWhenFinished(true);
+            }
+            if (vmReload) {
+                // Reload is an ADDITIVE overlay squeezed into kReloadTime. As a
+                // Repeat action it wrapped to frame 0 exactly as the reload
+                // ended — and since the weight only STARTED fading at that
+                // moment, the hands visibly snapped back to the start of the
+                // reload before going quiet. Loop::Once + clampWhenFinished
+                // holds the last frame instead (paused, still fed), so the
+                // fade-out happens from the pose the clip ended on. Finishing
+                // kReloadHold early leaves that held frame on screen for the
+                // whole fade.
+                vmReload->setLoop(Loop::Once, 1);
+                vmReload->setClampWhenFinished(true);
+                vmReload->setDuration(kReloadTime - kReloadHold);
+            }
             // base layer: Equip plays first, crossfades to Idle (timer below)
             vmCurrent = vmEquip ? vmEquip : vmIdle;
             if (vmCurrent) vmCurrent->play();
@@ -370,6 +427,11 @@ int main(int argc, char** argv) {
             });
             std::cout << "Loaded AK-12 viewmodel: " << res->animations.size() << " clip(s); bones muzzle="
                       << (vmMuzzle ? "ok" : "MISSING") << " eject=" << (vmEject ? "ok" : "MISSING") << std::endl;
+            // Clip durations matter: a base-layer clip held on screen for
+            // LONGER than its own length silently wraps and replays (that was
+            // the reload snap, and the equip draw before setDuration below).
+            for (auto& c : res->animations)
+                std::cout << "  clip '" << c->name() << "' " << c->getDuration() << " s" << std::endl;
             {
                 // auto-fit: normalise scale by armspan, anchor the breech
                 vmModel->updateMatrixWorld(true);
@@ -611,11 +673,27 @@ int main(int argc, char** argv) {
                 return nullptr;
             };
             slot->anims.idle = pick("rifle aiming idle");
+            slot->anims.walk = pick("walking");
             slot->anims.run = pick("rifle run");
-            if (!slot->anims.run) slot->anims.run = pick("walking");
+            if (!slot->anims.run) slot->anims.run = slot->anims.walk;
+            slot->anims.walkBack = pick("walking backwards");
+            slot->anims.runBack = pick("run backwards");
+            slot->anims.strafeL = pick("strafe left");
+            slot->anims.strafeR = pick("strafe right");
+            // Mixamo shipped a second, much faster strafe pair under these
+            // names — "strafe" goes -X (right), "strafe (2)" goes +X (left).
+            // They matter: the slow pair is authored at 1.35 / 0.74 m/s, way
+            // under the speeds the bots actually strafe at.
+            slot->anims.strafeRFast = pick("strafe");
+            slot->anims.strafeLFast = pick("strafe (2)");
             slot->anims.fire = pick("firing rifle");
+            slot->anims.reload = pick("reloading");
             slot->anims.hit = pick("hit reaction");
-            for (auto* a : {slot->anims.idle, slot->anims.run, slot->anims.fire, slot->anims.hit})
+            for (auto* a : {slot->anims.idle, slot->anims.walk, slot->anims.run,
+                            slot->anims.walkBack, slot->anims.runBack,
+                            slot->anims.strafeL, slot->anims.strafeR,
+                            slot->anims.strafeLFast, slot->anims.strafeRFast,
+                            slot->anims.fire, slot->anims.reload, slot->anims.hit})
                 if (a) a->setLoop(Loop::Repeat);
             if (!slot->anims.idle && !res->animations.empty()) slot->anims.idle = slot->mixer->clipAction(res->animations.front());
             slot->current = slot->anims.idle;
@@ -679,6 +757,76 @@ int main(int argc, char** argv) {
     std::unordered_set<const PxRigidActor*> ragdollActors;// corpse hits -> blood
     auto enemyProxyGeo = CapsuleGeometry::create(kEnemyRadius, kEnemyLen);
     float enemySpawnTimer = 1.f;
+
+    // ===== enemy perception / steering =======================================
+    // Static-only line of sight from an eye point to the player's chest.
+    auto seesPlayer = [&](const Vector3& from) {
+        Vector3 dir = (playerPos + Vector3(0, 0.35f, 0)) - from;
+        const float dl = dir.length();
+        if (dl < 1e-3f) return true;
+        dir.multiplyScalar(1.f / dl);
+        PxRaycastBuffer hb;
+        PxQueryFilterData fd;
+        fd.flags = PxQueryFlags(PxQueryFlag::eSTATIC);
+        return !(world.scene().raycast(toPxVec3(from), toPxVec3(dir), dl, hb,
+                                       PxHitFlags(PxHitFlag::eDEFAULT), fd) &&
+                 hb.hasBlock);
+    };
+    // Is there room to keep walking that way? (chest height, static only)
+    auto clearAhead = [&](const Vector3& from, const Vector3& dir) {
+        PxRaycastBuffer hb;
+        PxQueryFilterData fd;
+        fd.flags = PxQueryFlags(PxQueryFlag::eSTATIC);
+        return !(world.scene().raycast(toPxVec3(from), toPxVec3(dir), kEnemyProbeDist, hb,
+                                       PxHitFlags(PxHitFlag::eDEFAULT), fd) &&
+                 hb.hasBlock);
+    };
+    // Head for `goal`, sliding around whatever is in the way: the direct
+    // heading first, then progressively wider fans either side of it. Used off
+    // the flow field (which only ever points at the player).
+    auto steerTo = [&](const Vector3& from, const Vector3& goal) {
+        Vector3 want(goal.x - from.x, 0.f, goal.z - from.z);
+        if (want.length() < 1e-3f) return Vector3(0.f, 0.f, 0.f);
+        want.normalize();
+        static constexpr float kFan[] = {0.f, 0.45f, -0.45f, 0.95f, -0.95f, 1.6f, -1.6f};
+        for (float a : kFan) {
+            const float ca = std::cos(a), sa = std::sin(a);
+            const Vector3 d(want.x * ca + want.z * sa, 0.f, -want.x * sa + want.z * ca);
+            if (clearAhead(from, d)) return d;
+        }
+        return want;
+    };
+    // Choose somewhere to fall back to between bursts: reachable per the nav
+    // grid, inside the arena, and ideally OUT of the player's sight, biased
+    // around the player rather than straight backwards — that arc is what
+    // makes a squad look like it's working angles instead of queueing up.
+    auto pickPost = [&](const Vector3& from, float flankSign) {
+        const float bearingNow = std::atan2(from.x - playerPos.x, from.z - playerPos.z);
+        Vector3 best = from;
+        float bestScore = -1e9f;
+        for (int i = 0; i < 16; ++i) {
+            const float a = (static_cast<float>(i) / 16.f) * 2.f * math::PI;
+            const float rad = frand(kEnemyPostRadiusMin, kEnemyPostRadiusMax);
+            const Vector3 c(from.x + std::cos(a) * rad, from.y, from.z + std::sin(a) * rad);
+            if (std::abs(c.x) > kArena - 2.f || std::abs(c.z) > kArena - 2.f) continue;
+            const size_t ci = navIdx(colOf(c.z), colOf(c.x));
+            if (navBlocked[ci] || navDist[ci] < 0) continue;// blocked or unreachable
+            const float dp = Vector3(c.x - playerPos.x, 0.f, c.z - playerPos.z).length();
+            float score = seesPlayer(Vector3(c.x, c.y + 0.45f, c.z)) ? 0.f : 55.f;// cover wins
+            score -= std::abs(dp - (kEnemyIdealMin + kEnemyIdealMax) * 0.5f) * 3.f;
+            score += flankSign * 14.f *
+                     wrapPi(std::atan2(c.x - playerPos.x, c.z - playerPos.z) - bearingNow);
+            for (auto& o : enemies) {// don't pile onto a squadmate's post
+                if (!o->alive) continue;
+                if (Vector3(o->post.x - c.x, 0.f, o->post.z - c.z).length() < 2.5f) score -= 25.f;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = c;
+            }
+        }
+        return best;
+    };
 
     auto removeEnemy = [&](Enemy* e) {
         if (e->ragdoll.valid()) {
@@ -751,6 +899,9 @@ int main(int argc, char** argv) {
         e->body->userData = e.get();
         e->fireCd = frand(0.6f, 1.4f);
         e->yaw = frand(-math::PI, math::PI);
+        e->flankSign = frand(-1.f, 1.f) < 0.f ? -1.f : 1.f;
+        e->lastSeen.copy(playerPos);
+        e->post.copy(at);
         // reset the recycled slot's animation state
         if (slot->current) {
             slot->current->stop();
@@ -769,7 +920,7 @@ int main(int argc, char** argv) {
         enemies.push_back(std::move(e));
     };
 
-    auto killEnemy = [&](Enemy* e, const Vector3& impulseDir) {
+    auto killEnemy = [&](Enemy* e, const Vector3& hitPoint, const Vector3& impulseDir) {
         e->alive = false;
         e->deadTtl = kRagdollTtl;
         Vector3 vel(0, 0, 0);
@@ -781,8 +932,11 @@ int main(int argc, char** argv) {
             e->body->release();
             e->body = nullptr;
         }
-        // hand the skeleton to physics
-        e->ragdoll.build(world, *e->slot->model, vel, (impulseDir + Vector3(0, 0.35f, 0)) * 42.f);
+        // hand the skeleton to physics. The impulse lands AT the wound (see
+        // fps_ragdoll.hpp) — modest, with only a little lift: a launched corpse
+        // reads as a cartoon, a corpse that buckles where it was hit does not.
+        e->ragdoll.build(world, *e->slot->model, vel, hitPoint,
+                         (impulseDir + Vector3(0, 0.12f, 0)) * 26.f);
         for (auto& p : e->ragdoll.parts) ragdollActors.insert(p.body);
         // the rifle drops out of the hand as its own prop
         if (!e->rifleBody) {
@@ -807,7 +961,9 @@ int main(int argc, char** argv) {
     bool reloading = false;
     float reloadTimer = 0.f;
     float fireTimer = 0.f;
-    float equipTimer = kEquipTime;// blocks firing while the draw anim plays
+    // blocks firing while the draw anim plays: the clip's own length plus the
+    // crossfade tail, so the draw is never cut mid-pose
+    float equipTimer = vmEquipLen + kEquipFade;
     bool firing = false;
     bool firedEmpty = false;
     bool gameOver = false;
@@ -944,7 +1100,7 @@ int main(int argc, char** argv) {
                 hitMarkerT = 0.12f;
                 hitWasKill = false;
                 if (e->hp <= 0) {
-                    killEnemy(e, dir);
+                    killEnemy(e, point, dir);
                     score += 100;
                     hitMarkerT = 0.25f;
                     hitWasKill = true;
@@ -997,10 +1153,16 @@ int main(int argc, char** argv) {
         enemyLight->intensity = 7.f;
         enemyLightT = 0.05f;
 
-        // hit chance falls with range and player speed; misses land visibly
+        // Hit chance falls with range and player speed, and is scaled by the
+        // shooter's own aim (Enemy::aim — spools up with unbroken line of
+        // sight, washes out while it moves or flinches). That is what makes a
+        // bot feel like it ACQUIRES you instead of being a hitscan dice roll:
+        // the first round out of a fresh burst is the one that misses.
+        e->mag = std::max(0, e->mag - 1);
         const PxVec3 pv = playerBody->getLinearVelocity();
         const float pSpeed = std::sqrt(pv.x * pv.x + pv.z * pv.z);
-        const float pHit = std::clamp(0.48f - dist * 0.014f - pSpeed * 0.05f, 0.06f, 0.48f);
+        const float pHit = std::clamp((0.52f - dist * 0.014f - pSpeed * 0.05f) * e->aim,
+                                      0.04f, 0.5f);
         Vector3 endPt;
         if (!gameOver && frand(0.f, 1.f) < pHit) {
             endPt = chest + Vector3(frand(-0.1f, 0.1f), frand(-0.2f, 0.2f), frand(-0.1f, 0.1f));
@@ -1214,7 +1376,7 @@ int main(int argc, char** argv) {
         reloading = false;
         gameOver = false;
         over->visible = false;
-        equipTimer = kEquipTime;
+        equipTimer = vmEquipLen + kEquipFade;
         if (vmEquip && vmCurrent != vmEquip) {
             vmEquip->reset();
             vmEquip->play();
@@ -1317,7 +1479,19 @@ int main(int argc, char** argv) {
                       << " decals=" << std::count_if(decalSlots.begin(), decalSlots.end(), [](const auto& d) { return d.target != nullptr; });
             if (auto* vk = dynamic_cast<VulkanRendererCore*>(renderer.get()))
                 std::cout << " overlayMs=" << vk->lastFrameTimings().overlayMs;
-            std::cout << std::endl;
+            // Bot state machine, one token per live enemy: <state><range>/<aim>.
+            // A/E/R = Advance/Engage/Reposition — a column of frozen tokens is
+            // the tell that a state stopped transitioning.
+            std::cout << " ai=";
+            for (auto& e : enemies) {
+                if (!e->alive) continue;
+                const PxVec3 bp = e->body->getGlobalPose().p;
+                std::cout << (e->state == AiState::Advance ? 'A' : e->state == AiState::Engage ? 'E' : 'R')
+                          << std::fixed << std::setprecision(1)
+                          << Vector3(bp.x - playerPos.x, 0.f, bp.z - playerPos.z).length()
+                          << '/' << std::setprecision(2) << e->aim << ' ';
+            }
+            std::cout << std::defaultfloat << std::endl;
         }
         if (dt > 0.05f) dt = 0.05f;
         if (!shotPath.empty()) dt = 1.f / 60.f;// deterministic captures
@@ -1327,6 +1501,11 @@ int main(int argc, char** argv) {
             camYaw = math::PI;// face away from the ramp...
             camPitch = -0.5f; // ...and down at the open floor ~3 m out (decal inspection)
         }
+        // --look <yawDeg> <pitchDeg>: pin the camera for a capture. Needed to
+        // inspect the ground AT the player's feet (viewmodel shadow checks) —
+        // at pitch 0 the nearest visible floor is already ~2.4 m out.
+        if (shotYaw) camYaw = math::degToRad(*shotYaw);
+        if (shotPitch) camPitch = math::degToRad(*shotPitch);
         // --killtest: mid-run, execute the nearest enemy and keep the camera on
         // the corpse so the capture shows the skinned ragdoll in motion.
         static Enemy* killTarget = nullptr;
@@ -1349,7 +1528,9 @@ int main(int argc, char** argv) {
             }
         }
         if (shotKill && shotFrame == 230 && killTarget && killTarget->alive) {
-            killEnemy(killTarget, Vector3(-std::sin(camYaw), 0.f, -std::cos(camYaw)));
+            const PxVec3 kp = killTarget->body->getGlobalPose().p;
+            killEnemy(killTarget, Vector3(kp.x, kp.y + 0.35f, kp.z),
+                      Vector3(-std::sin(camYaw), 0.f, -std::cos(camYaw)));
             score += 100;
         }
         if (shotKill && killTarget && killTarget->slot) {
@@ -1412,10 +1593,13 @@ int main(int argc, char** argv) {
 
         // --- weapon state ---
         equipTimer = std::max(0.f, equipTimer - dt);
-        if (vmEquip && vmIdle && vmCurrent == vmEquip && equipTimer <= 0.25f) {
+        // Crossfade to Idle only once the draw has actually finished and is
+        // holding its final frame (clampWhenFinished), so the blend is between
+        // two poses that already match.
+        if (vmEquip && vmIdle && vmCurrent == vmEquip && equipTimer <= kEquipFade) {
             vmIdle->reset();
             vmIdle->play();
-            vmCurrent->crossFadeTo(vmIdle, 0.25f);
+            vmCurrent->crossFadeTo(vmIdle, kEquipFade);
             vmCurrent = vmIdle;
         }
         fireTimer -= dt;
@@ -1440,7 +1624,12 @@ int main(int argc, char** argv) {
 
         // viewmodel overlays + sway/bob
         if (vmMixer) {
-            if (reloading && !wasReloading && vmReload) vmReload->reset();
+            // reset() clears the clampWhenFinished pause from the previous
+            // reload, so the Once action runs again from frame 0.
+            if (reloading && !wasReloading && vmReload) {
+                vmReload->reset();
+                vmReload->play();
+            }
             wasReloading = reloading;
             const float shootTarget = (firing && !reloading && ammo > 0 && equipTimer <= 0.f && !gameOver) ? 1.f : 0.f;
             const float reloadTarget = reloading ? 1.f : 0.f;
@@ -1502,39 +1691,117 @@ int main(int argc, char** argv) {
             }
             EnemySlot* s = e->slot;
             const PxVec3 ep = e->body->getGlobalPose().p;
+            const Vector3 epv(ep.x, ep.y, ep.z);
             Vector3 toPlayer(playerPos.x - ep.x, 0, playerPos.z - ep.z);
             const float d = toPlayer.length();
+            const Vector3 fwd = d > 1e-3f ? toPlayer / d : Vector3(0.f, 0.f, 1.f);
+            const Vector3 lat(-fwd.z, 0.f, fwd.x);// perpendicular to the sightline
 
-            // line of sight: static geometry only (eye height -> player chest)
-            bool los = false;
-            {
-                const Vector3 eye(ep.x, ep.y + 0.45f, ep.z);
-                Vector3 dir = (playerPos + Vector3(0, 0.35f, 0)) - eye;
-                const float dl = dir.length();
-                if (dl > 1e-3f) {
-                    dir.multiplyScalar(1.f / dl);
-                    PxRaycastBuffer hb;
-                    PxQueryFilterData fd;
-                    fd.flags = PxQueryFlags(PxQueryFlag::eSTATIC);
-                    los = !(world.scene().raycast(toPxVec3(eye), toPxVec3(dir), dl, hb,
-                                                  PxHitFlags(PxHitFlag::eDEFAULT), fd) &&
-                            hb.hasBlock);
+            // --- perception ---------------------------------------------------
+            const bool los = seesPlayer(Vector3(ep.x, ep.y + 0.45f, ep.z));
+            if (los) {
+                e->losT += dt;
+                e->sinceSeen = 0.f;
+                e->lastSeen.copy(playerPos);
+            } else {
+                e->losT = 0.f;
+                e->sinceSeen += dt;
+            }
+            const bool canEngage = los && d < kEnemyFireRange;
+            e->stateT -= dt;
+            e->hitFlinch = std::max(0.f, e->hitFlinch - dt);
+            e->reloadT = std::max(0.f, e->reloadT - dt);
+            if (e->reloadT <= 0.f && e->mag <= 0) e->mag = kEnemyMag;
+
+            // Never shoot a squadmate in the back: anyone standing near our
+            // line to the player masks it (and makes us move, below).
+            bool friendlyInLine = false;
+            for (auto& o : enemies) {
+                if (o.get() == e.get() || !o->alive) continue;
+                const PxVec3 op = o->body->getGlobalPose().p;
+                const Vector3 rel(op.x - ep.x, 0.f, op.z - ep.z);
+                const float along = rel.dot(fwd);
+                if (along < 0.8f || along > d) continue;
+                if (std::abs(rel.dot(lat)) < 0.75f) {
+                    friendlyInLine = true;
+                    break;
                 }
             }
 
-            PxVec3 v = e->body->getLinearVelocity();
-            const bool engaging = d < kEnemyFireRange && los;
-            if (!engaging) {
-                // steer down the flow field (routes around cover)
-                Vector3 desired = toPlayer;
-                desired.normalize();
+            // --- state transitions --------------------------------------------
+            switch (e->state) {
+                case AiState::Advance:
+                    if (canEngage) {
+                        e->state = AiState::Engage;
+                        e->strafeT = 0.f;
+                        e->stateT = 0.f;
+                    }
+                    break;
+                case AiState::Engage:
+                    if (!canEngage) {
+                        e->state = AiState::Advance;
+                    } else if (e->stateT <= 0.f && e->burstLeft == 0 &&
+                               (e->fireCd > 0.f || e->reloadT > 0.f || friendlyInLine)) {
+                        // Between bursts (or reloading, or masked by a mate):
+                        // break contact and take a new angle, or sit tight and
+                        // re-ask shortly. Taking fire makes moving far likelier.
+                        const float odds = (friendlyInLine || e->reloadT > 0.f) ? 0.95f
+                                           : e->hitFlinch > 0.f                ? 0.8f
+                                                                               : kEnemyRepositionOdds;
+                        if (frand(0.f, 1.f) < odds) {
+                            e->post.copy(pickPost(epv, e->flankSign));
+                            e->flankSign = -e->flankSign;// arc the other way next time
+                            e->state = AiState::Reposition;
+                            e->stateT = kEnemyRepositionTime + frand(0.f, 0.8f);
+                        } else {
+                            e->stateT = 1.f;
+                        }
+                    }
+                    break;
+                case AiState::Reposition:
+                    if (e->stateT <= 0.f ||
+                        Vector3(e->post.x - ep.x, 0.f, e->post.z - ep.z).length() < 1.1f)
+                        e->state = canEngage ? AiState::Engage : AiState::Advance;
+                    break;
+            }
+
+            // --- steering ------------------------------------------------------
+            Vector3 dir(0.f, 0.f, 0.f);
+            float speed = 0.f;
+            bool holding = false;// Engage: facing the player, cleared to fire
+            if (e->state == AiState::Engage) {
+                holding = true;
+                if (e->strafeT <= 0.f) {
+                    e->strafeT = frand(kEnemyStrafeMin, kEnemyStrafeMax);
+                    e->strafeSign = frand(-1.f, 1.f) < 0.f ? -1.f : 1.f;
+                }
+                e->strafeT -= dt;
+                // hold the band: close if too far, give ground if too close
+                float radial = 0.f;
+                if (d > kEnemyIdealMax) radial = 1.f;
+                else if (d < kEnemyIdealMin) radial = -1.f;
+                Vector3 strafe = lat * e->strafeSign;
+                if (!clearAhead(epv, strafe)) {// wall that side — turn around
+                    e->strafeSign = -e->strafeSign;
+                    e->strafeT = frand(kEnemyStrafeMin, kEnemyStrafeMax);
+                    strafe = lat * e->strafeSign;
+                }
+                dir = fwd * radial + strafe * 0.9f;
+                speed = kEnemyWalkSpeed;
+            } else if (e->state == AiState::Reposition) {
+                dir = steerTo(epv, e->post);
+                speed = kEnemyRunSpeed;
+            } else {
+                // Advance: down the flow field (routes around cover) with a
+                // tangential bias, so a squad converges from spread angles
+                // instead of single file.
+                dir.copy(fwd);
                 const int er = colOf(ep.z), ec = colOf(ep.x);
                 auto rawDist = [&](int r, int c) -> float {
                     if (r < 0 || r >= gridN || c < 0 || c >= gridN) return 1e6f;
                     const int dv = navDist[navIdx(r, c)];
                     return dv < 0 ? 1e6f : static_cast<float>(dv);
                 };
-                Vector3 dir = desired;
                 const float here = rawDist(er, ec);
                 if (here < 1e6f) {
                     auto g = [&](int r, int c) { return std::min(rawDist(r, c), here + 3.f); };
@@ -1542,55 +1809,133 @@ int main(int argc, char** argv) {
                                  g(er - 1, ec) - g(er + 1, ec));
                     if (flow.length() > 1e-3f) {
                         flow.normalize();
-                        dir = flow;
+                        dir.copy(flow);
                     }
                 }
-                for (auto& o : enemies) {
-                    if (o.get() == e.get() || !o->alive) continue;
-                    const PxVec3 op = o->body->getGlobalPose().p;
-                    Vector3 away(ep.x - op.x, 0.f, ep.z - op.z);
-                    const float sd = away.length();
-                    if (sd > 1e-3f && sd < kSeparation)
-                        dir += away * ((kSeparation - sd) / sd * 0.6f);
-                }
-                if (dir.length() < 1e-3f) dir = desired;
+                // Arc in, but only once we're near enough for the angle to
+                // matter — biasing a bot that is still 20 m out just makes it
+                // orbit the arena instead of showing up.
+                dir += lat * (e->flankSign * (d > 18.f ? 0.f : d > 10.f ? 0.4f : 0.15f));
+                speed = d > 9.f ? kEnemyRunSpeed : kEnemyWalkSpeed;
+                // contact lost nearby: move up carefully. Far out there is
+                // nothing to be careful about yet — just close.
+                if (e->sinceSeen > 2.f && d < 14.f) speed *= 0.75f;
+            }
+            // squad spacing, in every state
+            for (auto& o : enemies) {
+                if (o.get() == e.get() || !o->alive) continue;
+                const PxVec3 op = o->body->getGlobalPose().p;
+                Vector3 away(ep.x - op.x, 0.f, ep.z - op.z);
+                const float sd = away.length();
+                if (sd > 1e-3f && sd < kSeparation)
+                    dir += away * ((kSeparation - sd) / sd * 0.6f);
+            }
+            PxVec3 v = e->body->getLinearVelocity();
+            if (speed > 0.f && dir.length() > 1e-3f) {
                 dir.normalize();
-                v.x = dir.x * kEnemySpeed;
-                v.z = dir.z * kEnemySpeed;
+                v.x = dir.x * speed;
+                v.z = dir.z * speed;
             } else {
-                v.x = 0;
-                v.z = 0;
-                // burst fire
-                e->fireCd -= dt;
-                if (e->burstLeft > 0) {
+                v.x = 0.f;
+                v.z = 0.f;
+            }
+            e->body->setLinearVelocity(v);
+
+            // --- aim + burst fire ----------------------------------------------
+            // Accuracy spools up with unbroken sight and washes out while the
+            // bot is moving or flinching, so one that just cleared a corner is
+            // beatable. kEnemyReaction gates the first round of the engagement.
+            const float settle = std::clamp((e->losT - kEnemyReaction) / 0.9f, 0.f, 1.f);
+            const float moving = std::min(1.f, std::sqrt(v.x * v.x + v.z * v.z) / kEnemyWalkSpeed);
+            e->aim = (0.4f + 0.6f * settle) * (1.f - 0.35f * moving) *
+                     (e->hitFlinch > 0.f ? 0.6f : 1.f);
+            e->fireCd = std::max(0.f, e->fireCd - dt);
+            const bool mayFire = holding && !gameOver && !friendlyInLine &&
+                                 e->reloadT <= 0.f && e->losT > kEnemyReaction;
+            if (e->burstLeft > 0) {
+                if (!mayFire) {
+                    e->burstLeft = 0;// contact broken mid-burst
+                } else {
                     e->burstCd -= dt;
                     if (e->burstCd <= 0.f) {
                         enemyShoot(e.get());
                         e->burstLeft--;
                         e->burstCd = kEnemyBurstGap;
+                        if (e->mag <= 0) {// dry: reload, which blocks fire
+                            e->burstLeft = 0;
+                            e->reloadT = kEnemyReloadTime;
+                        }
                     }
-                } else if (e->fireCd <= 0.f && !gameOver) {
-                    e->burstLeft = static_cast<int>(kEnemyBurst);
-                    e->burstCd = 0.f;
-                    e->fireCd = kEnemyFireInterval + frand(0.f, 0.5f);
                 }
+            } else if (mayFire && e->fireCd <= 0.f) {
+                e->burstLeft = std::min(static_cast<int>(kEnemyBurst), std::max(1, e->mag));
+                e->burstCd = 0.f;
+                e->fireCd = kEnemyFireInterval + frand(0.f, 0.5f);
             }
-            e->body->setLinearVelocity(v);
-            e->hitFlinch = std::max(0.f, e->hitFlinch - dt);
 
-            // facing: velocity when moving, the player when engaging
+            // facing: the player whenever they're visible (so the rifle tracks
+            // while strafing and backing off), else where we're headed, else
+            // the last place we saw them
             {
                 float wantYaw = e->yaw;
-                if (engaging) wantYaw = std::atan2(toPlayer.x, toPlayer.z);
+                if (los) wantYaw = std::atan2(toPlayer.x, toPlayer.z);
                 else if (std::abs(v.x) + std::abs(v.z) > 0.2f) wantYaw = std::atan2(v.x, v.z);
+                else if (e->sinceSeen < 6.f)
+                    wantYaw = std::atan2(e->lastSeen.x - ep.x, e->lastSeen.z - ep.z);
                 e->yaw += wrapPi(wantYaw - e->yaw) * std::min(1.f, dt * 8.f);
             }
 
-            // base anim: run / idle / flinch; fire is an additive overlay
+            // Base anim: 6-way locomotion resolved in the BOT'S OWN frame, so a
+            // strafing bot plays a strafe and a retreating one backpedals
+            // instead of sliding around on the run cycle. Reload and flinch
+            // override; fire stays an additive overlay.
             {
+                const float sy = std::sin(e->yaw), cy = std::cos(e->yaw);
+                const float sp = std::sqrt(v.x * v.x + v.z * v.z);
                 AnimationAction* want = s->anims.idle;
-                if (std::abs(v.x) + std::abs(v.z) > 0.3f && s->anims.run) want = s->anims.run;
-                if (e->hitFlinch > 0.f && s->anims.hit) want = s->anims.hit;
+                float gaitScale = 1.f;
+                if (e->reloadT > 0.f && s->anims.reload) {
+                    want = s->anims.reload;
+                } else if (e->hitFlinch > 0.f && s->anims.hit) {
+                    want = s->anims.hit;
+                } else if (sp > 0.35f) {
+                    const float f = (v.x * sy + v.z * cy) / sp;// forward-ness
+                    const float l = (v.x * cy - v.z * sy) / sp;// left-ness (see tps_shooter)
+                    // Of the two clips authored for this direction, take the one
+                    // whose own stride speed is nearer (in ratio) to what we're
+                    // actually travelling, and time-scale away the rest. See the
+                    // kClip* measurements in fps_constants.hpp.
+                    auto gait = [&](AnimationAction* slow, float slowSpd,
+                                    AnimationAction* fast, float fastSpd) {
+                        AnimationAction* a = slow;
+                        float ref = slowSpd;
+                        const bool preferFast =
+                                fast && (!slow || std::abs(std::log(sp / fastSpd)) <
+                                                          std::abs(std::log(sp / slowSpd)));
+                        if (preferFast) {
+                            a = fast;
+                            ref = fastSpd;
+                        } else if (!slow) {
+                            a = fast;
+                            ref = fastSpd;
+                        }
+                        if (a) gaitScale = std::clamp(sp / ref, kGaitTimeScaleMin, kGaitTimeScaleMax);
+                        return a;
+                    };
+                    if (f > 0.55f)
+                        want = gait(s->anims.walk, kClipWalk, s->anims.run, kClipRun);
+                    else if (f < -0.45f)
+                        want = gait(s->anims.walkBack, kClipWalkBack, s->anims.runBack, kClipRunBack);
+                    else if (l > 0.f)
+                        want = gait(s->anims.strafeL, kClipStrafeL, s->anims.strafeLFast, kClipStrafeLFast);
+                    else
+                        want = gait(s->anims.strafeR, kClipStrafeR, s->anims.strafeRFast, kClipStrafeRFast);
+                    if (!want) {
+                        want = s->anims.run ? s->anims.run : s->anims.idle;
+                        gaitScale = 1.f;
+                    }
+                }
+                if (want) want->setEffectiveTimeScale(gaitScale);
                 if (want && want != s->current) {
                     want->reset();
                     want->play();
@@ -1858,6 +2203,8 @@ int main(int argc, char** argv) {
             const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
             renderer->writeFramebuffer(path);
             std::cout << "wrote " << path.string() << std::endl;
+            setCursorLocked(false);// std::exit runs no destructors — Canvas's
+                                   // pointer-release never happens, so do it here
             std::exit(0);
         }
     });

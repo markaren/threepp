@@ -41,12 +41,22 @@ struct ParticleBurst {
     float maxOpacity = 1.f;// caps the fade-in peak; < 1 reads as a hazy/translucent cloud
 };
 
-// Named animation actions for the SWAT enemy.
+// Named animation actions for the SWAT enemy. swat.glb ships the full Mixamo
+// rifle locomotion set, so the bots get a 6-way pick (see the AI loop) instead
+// of the run-or-idle pair they used to slide around on.
 struct EnemyAnims {
-    AnimationAction* idle = nullptr;// rifle aiming idle
-    AnimationAction* run = nullptr; // rifle run
-    AnimationAction* fire = nullptr;// firing rifle (additive overlay)
-    AnimationAction* hit = nullptr; // hit reaction
+    AnimationAction* idle = nullptr;     // rifle aiming idle
+    AnimationAction* walk = nullptr;     // walking
+    AnimationAction* run = nullptr;      // rifle run
+    AnimationAction* walkBack = nullptr; // walking backwards
+    AnimationAction* runBack = nullptr;  // run backwards
+    AnimationAction* strafeL = nullptr;  // strafe left
+    AnimationAction* strafeR = nullptr;  // strafe right
+    AnimationAction* strafeLFast = nullptr;// "strafe (2)" — fast left
+    AnimationAction* strafeRFast = nullptr;// "strafe"     — fast right
+    AnimationAction* fire = nullptr;     // firing rifle (additive overlay)
+    AnimationAction* reload = nullptr;   // reloading
+    AnimationAction* hit = nullptr;      // hit reaction
 };
 
 // Pooled SWAT visual: the 14 MB GLB is loaded once per slot at startup and
