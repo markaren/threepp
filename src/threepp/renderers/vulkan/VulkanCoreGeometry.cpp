@@ -263,14 +263,37 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
                 }
             }
 
+            // Indices: uint16 (half the bytes, half the fetch bandwidth) when
+            // every index fits — LOSSLESS, unlike the attribute packing above.
+            // bit3 is set by vertex count alone so LOD levels of a non-indexed
+            // soup record (which ARE indexed) can pack against the same rule;
+            // any level's max index is bounded by the record's vertex count.
+            const bool packIdx = allowPacked && vertexCount <= 65536u;
+            if (packIdx) rec->packedMask |= 8u;
+
             if (indexed) {
                 const auto& indices = idxAttr->array();
-                const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
-                rec->index = createBuffer(
-                        ctx->allocator(), ctx->device(), ibBytes,
-                        geomUsage, VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                uploadHostVisible(ctx->allocator(), rec->index, indices.data(), ibBytes);
+                if (packIdx) {
+                    // Word-align the allocation: the shader-side fetch reads
+                    // whole uints and extracts 16-bit halves.
+                    std::vector<uint16_t> idx16(indices.size() + (indices.size() & 1u), 0);
+                    for (size_t k = 0; k < indices.size(); ++k) {
+                        idx16[k] = static_cast<uint16_t>(indices[k]);
+                    }
+                    const VkDeviceSize ibBytes = idx16.size() * sizeof(uint16_t);
+                    rec->index = createBuffer(
+                            ctx->allocator(), ctx->device(), ibBytes,
+                            geomUsage, VMA_MEMORY_USAGE_AUTO,
+                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    uploadHostVisible(ctx->allocator(), rec->index, idx16.data(), ibBytes);
+                } else {
+                    const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
+                    rec->index = createBuffer(
+                            ctx->allocator(), ctx->device(), ibBytes,
+                            geomUsage, VMA_MEMORY_USAGE_AUTO,
+                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    uploadHostVisible(ctx->allocator(), rec->index, indices.data(), ibBytes);
+                }
             }
 
             VkAccelerationStructureGeometryTrianglesDataKHR triData{};
@@ -280,7 +303,7 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
             triData.vertexStride = 3 * sizeof(float);
             triData.maxVertex = vertexCount - 1;
             if (indexed) {
-                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexType = packIdx ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
                 triData.indexData.deviceAddress = rec->index.address;
             } else {
                 triData.indexType = VK_INDEX_TYPE_NONE_KHR;
@@ -409,12 +432,30 @@ bool VulkanRendererCore::CoreImpl::buildLodLevelFor(BlasRecord& rec,
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
                     VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
 
-            const VkDeviceSize ibBytes = level.indices.size() * sizeof(uint32_t);
-            out.index = createBuffer(
-                    ctx->allocator(), ctx->device(), ibBytes,
-                    idxUsage, VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            uploadHostVisible(ctx->allocator(), out.index, level.indices.data(), ibBytes);
+            // Levels pack to uint16 exactly when the base record does (bit 3):
+            // every level index refers into rec->vertex, so base-fits implies
+            // level-fits. GeometryDesc/DrawInfo carry the same bit per record,
+            // and a LOD switch only repoints indexAddress — the flag holds.
+            const bool packIdx = (rec.packedMask & 8u) != 0u;
+            if (packIdx) {
+                std::vector<uint16_t> idx16(level.indices.size() + (level.indices.size() & 1u), 0);
+                for (size_t k = 0; k < level.indices.size(); ++k) {
+                    idx16[k] = static_cast<uint16_t>(level.indices[k]);
+                }
+                const VkDeviceSize ibBytes = idx16.size() * sizeof(uint16_t);
+                out.index = createBuffer(
+                        ctx->allocator(), ctx->device(), ibBytes,
+                        idxUsage, VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                uploadHostVisible(ctx->allocator(), out.index, idx16.data(), ibBytes);
+            } else {
+                const VkDeviceSize ibBytes = level.indices.size() * sizeof(uint32_t);
+                out.index = createBuffer(
+                        ctx->allocator(), ctx->device(), ibBytes,
+                        idxUsage, VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                uploadHostVisible(ctx->allocator(), out.index, level.indices.data(), ibBytes);
+            }
 
             // Size query needs a fully-specified build info; a LOCAL struct is
             // fine here (only the final batched cmdBuildAccelerationStructures
@@ -425,7 +466,7 @@ bool VulkanRendererCore::CoreImpl::buildLodLevelFor(BlasRecord& rec,
             triData.vertexData.deviceAddress = rec.vertex.address;
             triData.vertexStride = 3 * sizeof(float);
             triData.maxVertex = rec.vertexCount - 1;
-            triData.indexType = VK_INDEX_TYPE_UINT32;
+            triData.indexType = packIdx ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
             triData.indexData.deviceAddress = out.index.address;
 
             VkAccelerationStructureGeometryKHR blasGeom{};
@@ -484,6 +525,7 @@ bool VulkanRendererCore::CoreImpl::buildLodLevelFor(BlasRecord& rec,
             build.indexAddress = out.index.address;
             build.maxVertex = rec.vertexCount - 1;
             build.primitiveCount = primitiveCount;
+            build.packedIdx = packIdx;
             // Per-build scratch — concurrent builds recorded into one command
             // buffer must not alias scratch memory (same rule as
             // refreshGeomBlasBatch's per-record persistent scratch).
@@ -514,7 +556,7 @@ void VulkanRendererCore::CoreImpl::flushLodLevelBuilds(std::vector<LodPendingBui
                 triDatas[k].vertexData.deviceAddress = b.vertexAddress;
                 triDatas[k].vertexStride = 3 * sizeof(float);
                 triDatas[k].maxVertex = b.maxVertex;
-                triDatas[k].indexType = VK_INDEX_TYPE_UINT32;
+                triDatas[k].indexType = b.packedIdx ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
                 triDatas[k].indexData.deviceAddress = b.indexAddress;
 
                 blasGeoms[k].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -835,8 +877,18 @@ void VulkanRendererCore::CoreImpl::refreshGeomBlasBatch(const std::vector<Vulkan
 
                 if (auto* idxAttr = geom.getIndex();
                     idxAttr && rec.index.handle != VK_NULL_HANDLE) {
-                    uploadHostVisible(ctx->allocator(), rec.index, idxAttr->array().data(),
-                                      idxAttr->array().size() * sizeof(unsigned int));
+                    if (rec.packedMask & 8u) {
+                        const auto& src = idxAttr->array();
+                        std::vector<uint16_t> idx16(src.size() + (src.size() & 1u), 0);
+                        for (size_t k2 = 0; k2 < src.size(); ++k2) {
+                            idx16[k2] = static_cast<uint16_t>(src[k2]);
+                        }
+                        uploadHostVisible(ctx->allocator(), rec.index, idx16.data(),
+                                          idx16.size() * sizeof(uint16_t));
+                    } else {
+                        uploadHostVisible(ctx->allocator(), rec.index, idxAttr->array().data(),
+                                          idxAttr->array().size() * sizeof(unsigned int));
+                    }
                 }
             }
 
@@ -870,7 +922,8 @@ void VulkanRendererCore::CoreImpl::refreshGeomBlasBatch(const std::vector<Vulkan
                 triDatas[kk].vertexStride = 3 * sizeof(float);
                 triDatas[kk].maxVertex = vertexCount - 1;
                 if (indexed) {
-                    triDatas[kk].indexType = VK_INDEX_TYPE_UINT32;
+                    triDatas[kk].indexType = (rec.packedMask & 8u) ? VK_INDEX_TYPE_UINT16
+                                                                   : VK_INDEX_TYPE_UINT32;
                     triDatas[kk].indexData.deviceAddress = rec.index.address;
                 } else {
                     triDatas[kk].indexType = VK_INDEX_TYPE_NONE_KHR;

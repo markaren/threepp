@@ -658,7 +658,10 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                         VkDeviceSize voffs[1] = {0};
                         vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
                         if (rec->index.handle != VK_NULL_HANDLE) {
-                            vkCmdBindIndexBuffer(cb, rec->index.handle, 0, VK_INDEX_TYPE_UINT32);
+                            // Packed static records store uint16 indices (bit 3).
+                            vkCmdBindIndexBuffer(cb, rec->index.handle, 0,
+                                                 (rec->packedMask & 8u) ? VK_INDEX_TYPE_UINT16
+                                                                        : VK_INDEX_TYPE_UINT32);
                             auto* idxAttr = en.mesh->geometry()->getIndex();
                             if (idxAttr) {
                                 vkCmdDrawIndexed(cb, static_cast<uint32_t>(idxAttr->count()),
@@ -1464,7 +1467,10 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                         VkDeviceSize voffs[1] = {0};
                         vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
                         if (rec->index.handle != VK_NULL_HANDLE) {
-                            vkCmdBindIndexBuffer(cb, rec->index.handle, 0, VK_INDEX_TYPE_UINT32);
+                            // Packed static records store uint16 indices (bit 3).
+                            vkCmdBindIndexBuffer(cb, rec->index.handle, 0,
+                                                 (rec->packedMask & 8u) ? VK_INDEX_TYPE_UINT16
+                                                                        : VK_INDEX_TYPE_UINT32);
                             auto* idxAttr = en.mesh->geometry()->getIndex();
                             if (idxAttr) {
                                 vkCmdDrawIndexed(cb, static_cast<uint32_t>(idxAttr->count()),

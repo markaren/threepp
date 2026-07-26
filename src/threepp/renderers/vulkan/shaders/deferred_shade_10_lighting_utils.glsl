@@ -345,13 +345,7 @@ vec3 evalIridescence(float outsideIOR, float eta2, float cosTheta1,
 vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
     const GeometryDesc g = geoms[instIdx];
     if (g.uvAddress == 0ul) return vec2(0.0);
-    uvec3 idx;
-    if (g.indexed != 0u) {
-        IndexBuf ib = IndexBuf(g.indexAddress);
-        idx = uvec3(ib.i[primId * 3 + 0], ib.i[primId * 3 + 1], ib.i[primId * 3 + 2]);
-    } else {
-        idx = uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
-    }
+    const uvec3 idx = gfetchTri(g, primId);
     // Packed-aware (unorm16x2 on packed static geometry — see packedAttrs).
     const vec2 u0 = gfetchUv(g, idx.x);
     const vec2 u1 = gfetchUv(g, idx.y);

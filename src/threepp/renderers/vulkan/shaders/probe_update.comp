@@ -103,6 +103,21 @@ vec2 gfetchUv(in GeometryDesc g, uint vid) {
     UvBuf ub = UvBuf(g.uvAddress);
     return vec2(ub.u[vid * 2 + 0], ub.u[vid * 2 + 1]);
 }
+
+// Triangle indices, honouring flags bit 4 (uint16 indices, two per word).
+uvec3 gfetchTri(in GeometryDesc g, int primId) {
+    if (g.indexed == 0u)
+        return uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
+    const uint base = uint(primId) * 3u;
+    if ((g.flags & 16u) != 0u) {
+        PackedAttrBuf ib = PackedAttrBuf(g.indexAddress);
+        return uvec3((ib.w[(base + 0u) >> 1u] >> (((base + 0u) & 1u) << 4u)) & 0xFFFFu,
+                     (ib.w[(base + 1u) >> 1u] >> (((base + 1u) & 1u) << 4u)) & 0xFFFFu,
+                     (ib.w[(base + 2u) >> 1u] >> (((base + 2u) & 1u) << 4u)) & 0xFFFFu);
+    }
+    IndexBuf ib = IndexBuf(g.indexAddress);
+    return uvec3(ib.i[base + 0u], ib.i[base + 1u], ib.i[base + 2u]);
+}
 layout(set = 0, binding = 6) uniform sampler2D albedoMaps[kMaxMaterialTextures];
 struct EmTri {
     vec4 v0;       // xyz = pos, w = area
@@ -160,13 +175,7 @@ vec3 sampleEnvLod(vec3 dir, float lod) {
 vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
     const GeometryDesc g = geoms[instIdx];
     if (g.uvAddress == 0ul) return vec2(0.0);
-    uvec3 idx;
-    if (g.indexed != 0u) {
-        IndexBuf ib = IndexBuf(g.indexAddress);
-        idx = uvec3(ib.i[primId * 3 + 0], ib.i[primId * 3 + 1], ib.i[primId * 3 + 2]);
-    } else {
-        idx = uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
-    }
+    const uvec3 idx = gfetchTri(g, primId);
     const vec2 u0 = gfetchUv(g, idx.x);
     const vec2 u1 = gfetchUv(g, idx.y);
     const vec2 u2 = gfetchUv(g, idx.z);
@@ -176,13 +185,7 @@ vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
 void fetchHit(int instIdx, int primId, vec2 bary, mat4x3 worldToObj,
               out vec3 Nworld, out vec2 uvOut) {
     const GeometryDesc g = geoms[instIdx];
-    uvec3 idx;
-    if (g.indexed != 0u) {
-        IndexBuf ib = IndexBuf(g.indexAddress);
-        idx = uvec3(ib.i[primId * 3 + 0], ib.i[primId * 3 + 1], ib.i[primId * 3 + 2]);
-    } else {
-        idx = uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
-    }
+    const uvec3 idx = gfetchTri(g, primId);
     const float w = 1.0 - bary.x - bary.y;
     const vec3 n0 = gfetchNormal(g, idx.x);
     const vec3 n1 = gfetchNormal(g, idx.y);

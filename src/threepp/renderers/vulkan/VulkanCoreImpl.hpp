@@ -1543,6 +1543,7 @@ namespace threepp {
             VkDeviceAddress indexAddress = 0;
             uint32_t maxVertex = 0;
             uint32_t primitiveCount = 0;
+            bool packedIdx = false;// index buffer is uint16 (base record's bit 3)
             Buffer scratch{};// per-build scratch: concurrent builds in one cmdbuf must not alias
         };
         // Creates one level's index buffer + AS handle/storage/address

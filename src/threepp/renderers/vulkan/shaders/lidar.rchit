@@ -110,17 +110,24 @@ void main() {
 
     const uint primId = uint(gl_PrimitiveID);
 
-    // Resolve the three vertex indices of the hit triangle.
+    // Resolve the three vertex indices of the hit triangle. flags bit 4:
+    // packed static geometry stores uint16 indices, two per word.
     uint i0, i1, i2;
-    if (geom.indexed != 0u) {
+    if (geom.indexed == 0u) {
+        i0 = primId * 3 + 0;
+        i1 = primId * 3 + 1;
+        i2 = primId * 3 + 2;
+    } else if ((geom.flags & 16u) != 0u) {
+        IndexBuf ib = IndexBuf(geom.indexAddress);
+        const uint base = primId * 3;
+        i0 = (ib.i[(base + 0) >> 1] >> (((base + 0) & 1) << 4)) & 0xFFFFu;
+        i1 = (ib.i[(base + 1) >> 1] >> (((base + 1) & 1) << 4)) & 0xFFFFu;
+        i2 = (ib.i[(base + 2) >> 1] >> (((base + 2) & 1) << 4)) & 0xFFFFu;
+    } else {
         IndexBuf ib = IndexBuf(geom.indexAddress);
         i0 = ib.i[primId * 3 + 0];
         i1 = ib.i[primId * 3 + 1];
         i2 = ib.i[primId * 3 + 2];
-    } else {
-        i0 = primId * 3 + 0;
-        i1 = primId * 3 + 1;
-        i2 = primId * 3 + 2;
     }
 
     // Fetch object-space positions and derive the face normal. A LIDAR

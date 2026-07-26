@@ -9,13 +9,7 @@
 void fetchHit(int instIdx, int primId, vec2 bary, mat4x3 worldToObj,
               out vec3 Nworld, out vec2 uvOut) {
     const GeometryDesc g = geoms[instIdx];
-    uvec3 idx;
-    if (g.indexed != 0u) {
-        IndexBuf ib = IndexBuf(g.indexAddress);
-        idx = uvec3(ib.i[primId * 3 + 0], ib.i[primId * 3 + 1], ib.i[primId * 3 + 2]);
-    } else {
-        idx = uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
-    }
+    const uvec3 idx = gfetchTri(g, primId);
     const float w = 1.0 - bary.x - bary.y;
 
     // gfetch* honour GeometryDesc.packedAttrs (oct-snorm16 normals / unorm16

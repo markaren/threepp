@@ -117,10 +117,17 @@ void main() {
 
     // Indexed meshes: gl_VertexIndex is the index-buffer cursor (0..indexCount-1);
     // resolve to the real vertex ID by reading from the bindless index buffer.
-    // Non-indexed: gl_VertexIndex IS the vertex ID directly.
-    const uint vid = (d.indexed != 0u)
-            ? UintBuf(d.indexAddr).v[uint(gl_VertexIndex)]
-            : uint(gl_VertexIndex);
+    // Non-indexed: gl_VertexIndex IS the vertex ID directly. packedAttrs bit 3:
+    // the index buffer is uint16, two indices per word.
+    uint vid;
+    if (d.indexed == 0u) {
+        vid = uint(gl_VertexIndex);
+    } else if ((d.packedAttrs & 8u) != 0u) {
+        const uint k = uint(gl_VertexIndex);
+        vid = (UintBuf(d.indexAddr).v[k >> 1u] >> ((k & 1u) << 4u)) & 0xFFFFu;
+    } else {
+        vid = UintBuf(d.indexAddr).v[uint(gl_VertexIndex)];
+    }
 
     const vec3 inPos    = fetchVec3(d.posAddr, vid);// positions are always float
     const vec3 inNormal = (d.nrmAddr != 0ul) ? fetchNormal(d.nrmAddr, d.packedAttrs, vid) : vec3(0.0, 1.0, 0.0);
