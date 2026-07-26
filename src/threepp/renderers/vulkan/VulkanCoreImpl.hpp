@@ -85,6 +85,7 @@
 //  sprite3d shader SPVs moved into vulkan/VulkanCorePipelines.cpp)
 // (debug_resolve.comp.spv moved into vulkan/VulkanCoreIndirect.cpp)
 
+#include "threepp/renderers/common/BC7Encode.hpp"
 #include "threepp/renderers/common/BCnDecode.hpp"
 #include "threepp/utils/GeometryLod.hpp"
 
@@ -5183,6 +5184,155 @@ namespace threepp {
             return out;
         }
 
+        // Block-compressed sampled image from PRE-ENCODED mip levels (level 0
+        // first, every level present down to 1x1). BC images cannot be blit-
+        // downsampled, so unlike buildSampledImage2D there is no GPU mip-gen:
+        // the caller encodes each level (bcn::buildMipChainRGBA8 +
+        // bcn::bc7EncodeMode6) and this uploads the chain verbatim — one
+        // staging buffer, one copy region per level. View/sampler setup
+        // matches buildSampledImage2D (aniso + full LOD range).
+        Image2D createSampledImageBC(uint32_t w, uint32_t h, VkFormat format,
+                                     const std::vector<std::vector<std::uint8_t>>& levels,
+                                     VkFilter filter, VkSamplerAddressMode addrU,
+                                     VkSamplerAddressMode addrV,
+                                     const char* debugName = nullptr) {
+            Image2D out{};
+            if (levels.empty()) return out;
+            out.width  = w;
+            out.height = h;
+            out.format = format;
+            const auto mipLevels = static_cast<uint32_t>(levels.size());
+            out.mipLevels = mipLevels;
+
+            VkImageCreateInfo ici{};
+            ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType     = VK_IMAGE_TYPE_2D;
+            ici.format        = format;
+            ici.extent        = {w, h, 1};
+            ici.mipLevels     = mipLevels;
+            ici.arrayLayers   = 1;
+            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            VmaAllocationCreateInfo aci{};
+            aci.usage = VMA_MEMORY_USAGE_AUTO;
+            check(vmaCreateImage(ctx->allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
+                  "vmaCreateImage(bc)");
+
+            VkDeviceSize total = 0;
+            for (const auto& l : levels) total += static_cast<VkDeviceSize>(l.size());
+            Buffer staging = createBuffer(
+                    ctx->allocator(), ctx->device(), total,
+                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), staging.alloc, &mapped);
+                auto* dst = static_cast<std::uint8_t*>(mapped);
+                for (const auto& l : levels) {
+                    std::memcpy(dst, l.data(), l.size());
+                    dst += l.size();
+                }
+                flushHostWrites(ctx->allocator(), staging.alloc, 0, total);
+                vmaUnmapMemory(ctx->allocator(), staging.alloc);
+            }
+
+            VkCommandBuffer cb = beginOneShot();
+
+            VkImageMemoryBarrier toDst{};
+            toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDst.image = out.image;
+            toDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            toDst.subresourceRange.levelCount = mipLevels;
+            toDst.subresourceRange.layerCount = 1;
+            toDst.srcAccessMask = 0;
+            toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &toDst);
+
+            std::vector<VkBufferImageCopy> regions(mipLevels);
+            VkDeviceSize offset = 0;
+            for (uint32_t i = 0; i < mipLevels; ++i) {
+                regions[i] = {};
+                regions[i].bufferOffset = offset;// multiples of the 16-byte block size
+                regions[i].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                regions[i].imageSubresource.mipLevel = i;
+                regions[i].imageSubresource.layerCount = 1;
+                regions[i].imageExtent = {std::max(1u, w >> i), std::max(1u, h >> i), 1};
+                offset += static_cast<VkDeviceSize>(levels[i].size());
+            }
+            vkCmdCopyBufferToImage(cb, staging.handle, out.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   mipLevels, regions.data());
+
+            VkImageMemoryBarrier toRead = toDst;
+            toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                 0, 0, nullptr, 0, nullptr, 1, &toRead);
+
+            endAndSubmitOneShot(cb);
+            destroyBufferMaybeBatched(staging);
+
+            VkImageViewCreateInfo vci{};
+            vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vci.image = out.image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format = format;
+            vci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                              VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+            vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vci.subresourceRange.levelCount = mipLevels;
+            vci.subresourceRange.layerCount = 1;
+            check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
+                  "vkCreateImageView(bc)");
+
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
+            const float maxAniso = std::min(16.0f, props.limits.maxSamplerAnisotropy);
+
+            VkSamplerCreateInfo sci{};
+            sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            sci.magFilter = filter;
+            sci.minFilter = filter;
+            sci.mipmapMode = (mipLevels > 1u) ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+                                              : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sci.addressModeU = addrU;
+            sci.addressModeV = addrV;
+            sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            sci.anisotropyEnable = (mipLevels > 1u) ? VK_TRUE : VK_FALSE;
+            sci.maxAnisotropy = (mipLevels > 1u) ? maxAniso : 1.0f;
+            sci.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+            sci.unnormalizedCoordinates = VK_FALSE;
+            sci.compareEnable = VK_FALSE;
+            sci.minLod = 0.0f;
+            sci.maxLod = (mipLevels > 1u) ? VK_LOD_CLAMP_NONE : 0.0f;
+            check(vkCreateSampler(ctx->device(), &sci, nullptr, &out.sampler),
+                  "vkCreateSampler(bc)");
+
+            if (debugName) {
+                ctx->setObjectName(out.image, debugName);
+                ctx->setObjectName(out.view,  debugName);
+            }
+            return out;
+        }
+
         // In-frame variant: records the upload into the CALLER's command
         // buffer (must be outside a render-pass instance) and retires the
         // staging buffer through the frame-serial queue — no submit, no
@@ -6250,13 +6400,45 @@ namespace threepp {
             // sRGB tag → hardware decode at sample time. Loaders should mark
             // albedo maps as SRGBColorSpace; legacy (untagged) textures fall
             // through as UNORM so the shader sees raw channel values.
-            const VkFormat fmt = (tex->colorSpace == ColorSpace::sRGB)
-                                         ? VK_FORMAT_R8G8B8A8_SRGB
-                                         : VK_FORMAT_R8G8B8A8_UNORM;
+            const bool srgb = tex->colorSpace == ColorSpace::sRGB;
             char texName[80];
             std::snprintf(texName, sizeof(texName),
                           "materialTexture (%ux%u, tex=%p)",
                           w, h, static_cast<const void*>(tex));
+
+            // BC7 transcode: 4x less VRAM and 4x less bandwidth per sample.
+            // Everything above was normalised to RGBA8 — including BCn (DDS)
+            // sources, which the old path decompressed and uploaded FAT at 4x
+            // their on-disk size. Mips are built + encoded on the CPU (BC
+            // images cannot blit-downsample); tiny images (LUT-like defaults,
+            // 1x1 constants) stay uncompressed, as does everything when the
+            // device lacks BC7 or THREEPP_NO_BC=1 (same-binary A/B hatch).
+            static const bool noBc = std::getenv("THREEPP_NO_BC") != nullptr;
+            if (!noBc && w >= 8u && h >= 8u && bc7SampledSupported()) {
+                auto mips = bcn::buildMipChainRGBA8(rgba.data(), static_cast<int>(w),
+                                                    static_cast<int>(h), srgb);
+                std::vector<std::vector<std::uint8_t>> blocks;
+                blocks.reserve(mips.size() + 1);
+                blocks.push_back(bcn::bc7EncodeMode6(rgba.data(), static_cast<int>(w),
+                                                     static_cast<int>(h)));
+                int mw = static_cast<int>(w), mh = static_cast<int>(h);
+                for (const auto& lvl : mips) {
+                    mw = std::max(1, mw >> 1);
+                    mh = std::max(1, mh >> 1);
+                    blocks.push_back(bcn::bc7EncodeMode6(lvl.data(), mw, mh));
+                }
+                return createSampledImageBC(
+                        w, h,
+                        srgb ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK,
+                        blocks,
+                        VK_FILTER_LINEAR,
+                        wrapToVk(tex->wrapS),
+                        wrapToVk(tex->wrapT),
+                        texName);
+            }
+
+            const VkFormat fmt = srgb ? VK_FORMAT_R8G8B8A8_SRGB
+                                      : VK_FORMAT_R8G8B8A8_UNORM;
             return createSampledImage2D(
                     w, h, fmt,
                     rgba.data(), rgba.size(),
@@ -6265,6 +6447,19 @@ namespace threepp {
                     wrapToVk(tex->wrapT),
                     texName);
         }
+
+        // BC7 sampled-image support, queried once. Universal on desktop GPUs;
+        // the check exists for headless/software drivers (lavapipe et al).
+        bool bc7SampledSupported() {
+            if (bc7Supported_ < 0) {
+                VkFormatProperties fp{};
+                vkGetPhysicalDeviceFormatProperties(ctx->physicalDevice(),
+                                                    VK_FORMAT_BC7_SRGB_BLOCK, &fp);
+                bc7Supported_ = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) ? 1 : 0;
+            }
+            return bc7Supported_ == 1;
+        }
+        int bc7Supported_ = -1;
 
         // Re-upload any cached material texture whose Texture::version() changed
         // since last upload (e.g. a DataTexture edited via setData + needsUpdate),

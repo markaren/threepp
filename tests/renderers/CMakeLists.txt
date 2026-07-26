@@ -1,6 +1,11 @@
 
 add_subdirectory(gl)
 
+# First-party BC7 mode-6 encoder, round-tripped against the renderer's own
+# BCnDecode — pins the palette weights / P-bit / anchor conventions the two
+# sides must agree on.
+add_test_executable(BC7Encode_test)
+
 # Vulkan deferred golden-image regression net. Plain exit-code program (not
 # Catch2): renders fixed deterministic scenes and compares to committed PPM
 # references via examples/vulkan/capture_util.hpp. Needs an RT-capable GPU at

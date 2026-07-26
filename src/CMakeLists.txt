@@ -688,6 +688,7 @@ endif ()
 # renderer. (Originally shared with the now-removed Vulkan path tracer.)
 if (THREEPP_WITH_VULKAN)
     list(APPEND sources
+            "threepp/renderers/common/BC7Encode.cpp"
             "threepp/renderers/common/BCnDecode.cpp"
     )
 endif ()
