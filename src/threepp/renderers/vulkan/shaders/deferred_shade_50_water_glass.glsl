@@ -1,6 +1,13 @@
 // Split from deferred_shade.comp: thin-shell water shading (RasterFirst),
 // in-glass interior transit marching, and refractive glass shading.
 
+// Term isolation for water-artefact triage (-DSCOUT_WATER=N):
+//   1 = reflection only, 2 = transmission only, 3 = Fresnel F as grey,
+//   4 = foam mask as grey, 5 = |N - up| amplified. 0 = normal shading.
+#ifndef SCOUT_WATER
+#define SCOUT_WATER 0
+#endif
+
 // Thin-shell water (RenderMode::RasterFirst). Replicates closest_hit's
 // DETERMINISTIC thin-shell BSDF — noise-free because it's an analytic Fresnel
 // split, not a stochastic reflect/refract pick:
@@ -22,7 +29,7 @@
 // razor-sharp). σ_slope² adds to α² (≈roughness²) for a GGX lobe.
 vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 bool doShadows, float maxLod, uint frame, inout uint seed,
-                float slopeVarSq) {
+                float slopeVarSq, vec3 Nmacro) {
     const float NdotV = max(dot(N, V), 1e-4);
     const float ior   = max(pm.ior, 1.0);
     const float r0    = pow((1.0 - ior) / (1.0 + ior), 2.0);
@@ -34,20 +41,43 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // keeps its crisp near-mirror sparkle.
     const float effRough = sqrt(pm.roughness * pm.roughness + slopeVarSq);
 
-    // Reflected sky + scene. The reflection ray points up/out (away from the
-    // water), so it escapes to the sky or hits scene geometry cleanly. Env
-    // MISSES read a MILDLY blurred mip — point features in the env (stars, a
-    // small bright moon) otherwise reflect off the chop-perturbed normals as
-    // per-pixel white speckle; smooth day skies are visually unchanged.
-    const vec3 R = reflect(-V, N);
+    // Reflected sky + scene. Env MISSES read a MILDLY blurred mip — point
+    // features in the env (stars, a small bright moon) otherwise reflect off
+    // the chop-perturbed normals as per-pixel white speckle; smooth day skies
+    // are visually unchanged.
+    //
+    // HORIZON CLAMP (Nmacro): the wave-perturbed N can reflect the view ray
+    // BELOW the water's own plane. Such a ray immediately re-hits the surface
+    // (a neighbouring crest), and traceRadiance shades that hit as an opaque
+    // water surface → a dark dot. Scattered over the distance band where the
+    // slope distribution straddles the horizon, that is exactly the
+    // long-standing "square patch of breakup" on calm fjord/norway water
+    // (proven with a reflection-hit classification AOV: the speckles are
+    // self-hits < 60 m). The transmission path documents the identical failure
+    // mode — a downward ray self-intersecting the chop — and side-steps it by
+    // staying analytic; the reflection ray had no such guard.
+    //
+    // Lifting R just above the macro plane is the physically-right repair: a
+    // real surface cannot reflect below itself, and a grazing ray that would
+    // have skimmed a crest reflects near-horizon light anyway. Clamped against
+    // the MACRO normal (pre-tilt, pre-jitter), so a rotated ocean (Z-up pond)
+    // needs no world-up assumption.
+    vec3 R = reflect(-V, N);
+    const float rDotUp = dot(R, Nmacro);
+    if (rDotUp < 0.02) R = normalize(R + Nmacro * (0.02 - rDotUp));
     // Env-miss reflection blur widens with the banked chop variance: distant
     // sub-pixel wave facets reflect a point-feature sky (sun disc / bright cloud
     // edge) as per-pixel speckle unless the reflection is filtered by the same
     // footprint the glint is. Floor at 0.12 (the near-water sheen).
     const float reflLod = max(0.12, effRough) * maxLod;
-    const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod,
+    // Offset along the MACRO normal, not the tilted N: on a coarse water mesh
+    // the shading normal can lean far enough from the triangle plane that a
+    // fixed offset along it fails to clear the neighbouring facet.
+    gTraceSkipWater = true;// this water's own reflection: pass through crests
+    const vec3 reflectColor = traceRadiance(P + Nmacro * SHADOW_EPS, R, doShadows, maxLod,
                                             reflLod, seed, /*cheapHits=*/true,// water: blur+temporal absorb
                                             /*probeHitFill=*/true);
+    gTraceSkipWater = false;
 
     // Transmission, two terms:
     //
@@ -140,6 +170,22 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             }
         }
     }
+
+#if SCOUT_WATER == 6
+    // Reflection hit classification: red = SELF-HIT on water (< 60 m),
+    // green = other geometry, blue = escaped to sky.
+    if (gTraceHitT < 0.0)      return vec3(0.0, 0.0, 1.0);
+    if (gTraceHitT < 60.0)     return vec3(1.0, 0.0, 0.0);
+    return vec3(0.0, 1.0, 0.0);
+#elif SCOUT_WATER == 1
+    return reflectColor;
+#elif SCOUT_WATER == 2
+    return transmitColor;
+#elif SCOUT_WATER == 3
+    return vec3(F * 8.0);
+#elif SCOUT_WATER == 5
+    return vec3(length(N - vec3(0.0, 1.0, 0.0)) * 20.0);
+#endif
 
     vec3 col = mix(transmitColor, reflectColor, F);
 

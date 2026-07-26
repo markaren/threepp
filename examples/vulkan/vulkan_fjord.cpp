@@ -53,9 +53,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <numeric>
@@ -813,6 +815,19 @@ int main(int argc, char** argv) {
     bool noAutoExposure = false;// --noae: fixed exposure — the AE histogram meters the
                                 // fog's in-scatter and normalises it away, hiding
                                 // exactly the shafts the scout is trying to compare
+    float startWind = 4.5f;     // --wind W: initial wind (m/s); the UI slider still works
+    float foamAmount = -1.f;    // --foamamount F: override natural whitecap foam (0..1; <0 = keep default)
+    int   waterResX = 0, waterResZ = 0;// --waterres X Z: override the water grid (scout: geometric-aliasing tests)
+    int   winW = 0, winH = 0;   // --size W H: window/render size (default 960x600)
+    int   debugView = 0;        // --debugview N: blit a G-buffer channel (1=normal 2=motion 3=id 4=albedo)
+    float tile2Override = -1.f; // --tile2 F: cascade-2 tile (0 disables the fine cascade)
+    // --campos x,y,z / --look x,y,z: free camera override for shot mode —
+    // scouting artefacts at arbitrary viewpoints without adding a preset each time.
+    bool  hasCamPos = false, hasCamLook = false;
+    float camPos[3]{}, camLook[3]{};
+    auto parseVec3 = [](const char* s, float out[3]) {
+        return std::sscanf(s, "%f,%f,%f", &out[0], &out[1], &out[2]) == 3;
+    };
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
@@ -830,12 +845,33 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--climb") == 0 && i + 1 < argc) climbRate = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--fogscale") == 0 && i + 1 < argc) startFogScale = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--noae") == 0) noAutoExposure = true;
+        else if (std::strcmp(argv[i], "--wind") == 0 && i + 1 < argc) startWind = static_cast<float>(std::atof(argv[++i]));
+        else if (std::strcmp(argv[i], "--foamamount") == 0 && i + 1 < argc) foamAmount = static_cast<float>(std::atof(argv[++i]));
+        else if (std::strcmp(argv[i], "--waterres") == 0 && i + 2 < argc) {
+            waterResX = std::atoi(argv[++i]);
+            waterResZ = std::atoi(argv[++i]);
+        }
+        else if (std::strcmp(argv[i], "--size") == 0 && i + 2 < argc) {
+            winW = std::atoi(argv[++i]);
+            winH = std::atoi(argv[++i]);
+        }
+        else if (std::strcmp(argv[i], "--debugview") == 0 && i + 1 < argc) debugView = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--tile2") == 0 && i + 1 < argc) tile2Override = static_cast<float>(std::atof(argv[++i]));
+        else if (std::strcmp(argv[i], "--campos") == 0 && i + 1 < argc) hasCamPos = parseVec3(argv[++i], camPos);
+        else if (std::strcmp(argv[i], "--look") == 0 && i + 1 < argc) hasCamLook = parseVec3(argv[++i], camLook);
     }
 
-    Canvas canvas("threepp - FJORD (Vulkan deferred)", {{"vsync", false}});
+    // Window size matters for artefact scouting, not just framing: the water's
+    // spec-AA fades the fine chop out of N by the PIXEL FOOTPRINT, so a
+    // 960×600 capture banks ~4× more slope variance (blurrier, more forgiving)
+    // than a 1920×1129 session at the same view. Repro at the reported size.
+    Canvas canvas("threepp - FJORD (Vulkan deferred)",
+                  {{"vsync", false},
+                   {"size", WindowSize{winW > 0 ? winW : 960, winH > 0 ? winH : 600}}});
     VulkanRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.setAutoExposure(!noAutoExposure);
+    if (debugView > 0) renderer.setHybridDebugView(debugView);
     // Cap the upper end well below the default +3 EV: the eye should NOT
     // re-expose midnight back to daylight — night must stay dark.
     renderer.setAutoExposureRange(-2.5f, 1.5f);
@@ -956,14 +992,15 @@ int main(int argc, char** argv) {
     Ocean::Options oo;
     oo.size = 900.f;
     oo.sizeZ = 3200.f;
-    oo.resolution = 192;
-    oo.resolutionZ = 512;
+    oo.resolution = waterResX > 0 ? static_cast<uint32_t>(waterResX) : 192;
+    oo.resolutionZ = waterResZ > 0 ? static_cast<uint32_t>(waterResZ) : 512;
     oo.windSpeed = 4.5f;
     oo.windTheta = 2.1f;
     oo.choppiness = 0.5f;
     oo.tileSize1 = 90.f;
-    oo.tileSize2 = 7.f;
+    oo.tileSize2 = tile2Override >= 0.f ? tile2Override : 7.f;
     auto ocean = Ocean::create(oo);
+    if (foamAmount >= 0.f) ocean->params.foamAmount = foamAmount;
     ocean->name = "fjord_water";
     // Nordic water: darker, greener absorption than the default tropical teal.
     if (auto* waterMat = ocean->material()->as<MeshPhysicalMaterial>()) {
@@ -1400,10 +1437,13 @@ int main(int argc, char** argv) {
         controls.update();
     };
     if (!shotPath.empty()) applyShotCam(shotCam);
+    if (hasCamPos) camera.position.set(camPos[0], camPos[1], camPos[2]);
+    if (hasCamLook) controls.target.set(camLook[0], camLook[1], camLook[2]);
+    if (hasCamPos || hasCamLook) controls.update();
 
     // ── state + UI ──────────────────────────────────────────────────────────
     float cycleSpeed = startCycle;// hours per second (0 = paused)
-    float windSpeed = 4.5f;
+    float windSpeed = startWind;
     float fogScale = startFogScale;
     bool cloudsOn = !noClouds;
     float cloudCover = 0.42f;
@@ -1454,10 +1494,17 @@ int main(int argc, char** argv) {
         }, "FJORD");
     }
 
+    // F9 = repro dump: when an artefact shows up in a LIVE session, one press
+    // saves the frame plus a sidecar with the exact camera/time/weather state
+    // AND a ready-to-run --shot command line that replays the view headlessly.
+    // Turns "I saw it while flying around" into a deterministic capture.
+    bool reproDumpRequest = false;
+    int  reproDumpIndex = 0;
     KeyAdapter keyAdapter(KeyAdapter::KEY_PRESSED, [&](KeyEvent evt) {
         if (ui && ImGui::GetIO().WantCaptureKeyboard) return;
         if (evt.key == Key::C) cinematic = !cinematic;
         if (evt.key == Key::SPACE) cycleSpeed = cycleSpeed > 0.f ? 0.f : 0.08f;
+        if (evt.key == Key::F9) reproDumpRequest = true;
     });
     canvas.addKeyListener(keyAdapter);
 
@@ -1640,6 +1687,26 @@ int main(int argc, char** argv) {
         }
 
         renderer.render(scene, camera);
+
+        if (reproDumpRequest) {
+            reproDumpRequest = false;
+            const auto dir = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps";
+            std::filesystem::create_directories(dir);
+            char base[64];
+            std::snprintf(base, sizeof(base), "fjord_repro_%02d", reproDumpIndex++);
+            renderer.writeFramebuffer(dir / (std::string(base) + ".png"));
+            char cmd[512];
+            std::snprintf(cmd, sizeof(cmd),
+                          "vulkan_fjord --shot %s_replay.png --frames 220 --time %.2f --wind %.1f "
+                          "--fogscale %.2f%s --campos %.1f,%.1f,%.1f --look %.1f,%.1f,%.1f",
+                          base, timeOfDay, windSpeed, fogScale,
+                          cloudsOn ? "" : " --noclouds",
+                          camera.position.x, camera.position.y, camera.position.z,
+                          controls.target.x, controls.target.y, controls.target.z);
+            std::ofstream side(dir / (std::string(base) + ".txt"));
+            side << cmd << "\n";
+            std::cout << "[repro] wrote " << base << ".png  replay: " << cmd << std::endl;
+        }
 
         if (shotPath.empty()) {
             ui->render();

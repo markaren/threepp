@@ -533,7 +533,8 @@ namespace threepp {
             uint32_t vertexCount = 0;
             // Grid topology + rest extents (rectangular grids supported; a
             // square is just gridDimX == gridDimZ). Validated at init:
-            // gridDimX · gridDimZ == vertexCount.
+            // gridDimX · gridDimZ == vertexCount. Rest positions are
+            // reconstructed from these in water_displace.comp.
             uint32_t gridDimX   = 0;
             uint32_t gridDimZ   = 0;
             float    planeSizeX = 0.f;

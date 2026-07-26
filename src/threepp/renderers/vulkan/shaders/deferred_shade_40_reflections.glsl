@@ -148,6 +148,19 @@ float gTraceHitT = -1.0;
 // surface reproject tracks the surface, not the moving content → ghost trail).
 bool gTraceHitMoved = false;
 
+// Set by shadeWater around its own reflection trace: PASS THROUGH other water
+// surfaces instead of shading them. A wave-perturbed reflection ray leaves the
+// surface nearly grazing and re-enters a neighbouring crest — geometrically
+// legitimate on a curved surface, not merely a precision artefact — and
+// shading that hit as opaque water paints a DARK DOT. Scattered across the
+// distance band where the slope distribution straddles the horizon, those dots
+// are the long-standing "patch of breakup" on calm fjord/norway water.
+// Skipping is also the physically better answer: what a grazing ray would see
+// past the crest is the near-horizon sky it is already about to sample.
+// Water reflected in OTHER surfaces is unaffected — only water's own
+// reflection sets this.
+bool gTraceSkipWater = false;
+
 vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits, bool probeHitFill) {
     const int REFL_MAX_BOUNCES = 3;
     vec3  radiance   = vec3(0.0);
@@ -178,6 +191,14 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
         vec3 hitN; vec2 hitUv;
         fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
+
+        // Water self-hit pass-through (see gTraceSkipWater). Advance past the
+        // crest and keep tracing; the offset scales with the hit distance so a
+        // far grazing hit doesn't re-hit the same triangle from float error.
+        if (gTraceSkipWater && geoms[hitId].foamAddress != 0ul) {
+            o = o + d * (tHit + max(1e-3, tHit * 1e-4));
+            continue;
+        }
 
         // Cutout (MASK): the query runs force-opaque, so alpha-test here —
         // sub-cutoff texels pass through (mirrors gbuffer.frag / shadow_anyhit).

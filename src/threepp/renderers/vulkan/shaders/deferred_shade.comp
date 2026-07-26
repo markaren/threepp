@@ -780,6 +780,11 @@ void main() {
     // Removed sub-pixel FFT-chop slope variance, banked into the water roughness
     // below (declared out here so it survives the block's scope).
     float fineKernelSq = 0.0;
+    // MACRO surface normal — the gbuffer normal BEFORE the fine-cascade tilt
+    // (and before any stochastic jitter). shadeWater clamps its reflection ray
+    // against this plane; see the self-hit note there. Orientation-agnostic,
+    // so a rotated (Z-up) ocean works without a world-up assumption.
+    vec3 Nmacro = N;
     if (pm.thinWalled != 0 && pc.oceanFineTileSize > 0.0) {
         // The FFT DisplacedMesh's gbuffer normal comes out INVERTED (pointing down
         // into the water) → NdotV≈0 → Fresnel pinned at ~1 → the ocean read as a
@@ -787,6 +792,7 @@ void main() {
         // always viewed from above, so face the camera. Done BEFORE the fine-cascade
         // perturbation so the chop tilt is added in the correct (up) frame.
         if (dot(N, V) < 0.0) N = -N;
+        Nmacro = N;// post-flip, pre-tilt: the surface's own plane
         const float invTile = 1.0 / pc.oceanFineTileSize;
         const float eps     = pc.oceanFineTileSize / 32.0;
         const float depsUV  = eps * invTile;
@@ -855,7 +861,7 @@ void main() {
         // with shadeMode==1 at all.
         if (pc.shadeMode == 1u) return;
         vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
-                               shadowsOn, maxLod, pc.frame, seed, fineKernelSq);
+                               shadowsOn, maxLod, pc.frame, seed, fineKernelSq, Nmacro);
         // Coverage weighting as in the main path — water-dominant edge pixels
         // reserve geoMinW for dispatch B and blend their own sky minority;
         // the volumetric in-scatter is per-pixel and stays at full weight.
