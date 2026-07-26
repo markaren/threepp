@@ -1331,7 +1331,7 @@ void VulkanRendererCore::CoreImpl::recordDisplacedDeform(VkCommandBuffer cb, Dis
                 fpc.decay          = foamDecay;
                 fpc.wakeTrailAddr  = st.wakeTrailBuffer.address;
                 fpc.wakeTrailCount = wakeSampleCount;
-                fpc._pad           = 0;
+                fpc.natFoamScale   = std::clamp(dm.params.foamAmount, 0.0f, 1.0f);
                 foamWorld_->recordDispatch(cb, st.foamWorldDS, fpc);
 
                 // Barrier: compute WRITE → ray-trace shader READ on the foam

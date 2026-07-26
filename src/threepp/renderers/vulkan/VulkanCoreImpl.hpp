@@ -4133,13 +4133,18 @@ namespace threepp {
             // World-space foam image. Coverage equals the cascade-0 tile
             // (matches the FFT periodicity, so REPEAT-sampling at any
             // world XZ folds back into the same texture cell). Resolution
-            // 2048² over 1000 m → ~0.49 m per texel — fine enough to carry
-            // the cascade-1 whitecap detail foam_world.comp's fine Jacobian
-            // stencil extracts (16 MB R32F). R32F storage so both compute
-            // imageLoad/Store and chit linear sampling work without
-            // format conversions.
+            // targets ~0.5 m per texel — fine enough to carry the cascade-1
+            // whitecap detail foam_world.comp's fine Jacobian stencil
+            // extracts — capped at 2048² (a 1000 m tile → 0.49 m/texel,
+            // 16 MB R32F, exactly the historical footprint) and floored at
+            // 256² so a small pond isn't handed a 16 MB accumulator for a
+            // 16 m tile. R32F storage so both compute imageLoad/Store and
+            // chit linear sampling work without format conversions.
             {
-                state->foamRes      = 2048u;
+                uint32_t foamRes = 256u;
+                while (foamRes < 2048u && float(foamRes) * 0.5f < dm.params.tileSize0)
+                    foamRes *= 2u;
+                state->foamRes      = foamRes;
                 state->foamTileSize = dm.params.tileSize0;
                 VkImageCreateInfo ici{};
                 ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -4171,8 +4176,8 @@ namespace threepp {
                 vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 check(vkCreateImageView(ctx->device(), &vci, nullptr, &state->foamImage.view),
                       "vkCreateImageView(foamWorld)");
-                ctx->setObjectName(state->foamImage.image, "ocean.foamWorld (2048x2048 R32F)");
-                ctx->setObjectName(state->foamImage.view,  "ocean.foamWorld (2048x2048 R32F)");
+                ctx->setObjectName(state->foamImage.image, "ocean.foamWorld (R32F)");
+                ctx->setObjectName(state->foamImage.view,  "ocean.foamWorld (R32F)");
 
                 // Initial clear to zero + layout transition to GENERAL so the
                 // first foam_world dispatch's imageLoad reads 0 (no foam yet)

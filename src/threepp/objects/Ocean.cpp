@@ -15,7 +15,7 @@ namespace threepp {
         // path tracer / deferred renderer refract through with Beer-Lambert
         // absorption. Lifted from examples/vulkan/vulkan_ocean.cpp so the tuned
         // values now live in one first-party place.
-        std::shared_ptr<MeshPhysicalMaterial> makeOceanMaterial() {
+        std::shared_ptr<MeshPhysicalMaterial> makeOceanMaterial(float size) {
             auto mat = MeshPhysicalMaterial::create();
             // Pure water has no diffuse pigment — the blue comes from
             // Beer-Lambert absorption through the medium, not albedo.
@@ -38,6 +38,24 @@ namespace threepp {
             mat->attenuationColor = Color(0.10f, 0.45f, 0.55f);
             mat->attenuationDistance = 3.0f;
             mat->clearcoat = 0.1f;
+            // Pond/lake regime: the tropical-ocean murk above (3 m visibility,
+            // red almost fully absorbed) renders a metre-deep pond as opaque
+            // teal — the shallow-water transmission never gets to show the
+            // bottom. Small bodies default to NATURAL POND water instead:
+            // green-brown, ~2.5 m visibility — the bottom reads through a
+            // clearly-present water medium rather than window glass (a first
+            // cut at 6 m visibility looked like a swimming pool). Override on
+            // the material afterwards for a clear alpine tarn or a black bog.
+            if (size < 100.f) {
+                mat->attenuationColor = Color(0.22f, 0.45f, 0.38f);
+                mat->attenuationDistance = 2.5f;
+                // Body-veil proxy depth. The deep-water veil brightness goes as
+                // attenuationColor^(2·thickness/attenuationDistance): with the
+                // ocean's 2 m proxy a murky (small-attDist) pond drives the
+                // veil to BLACK instead of green. Sub-metre proxy keeps the
+                // veil ≈ one attenuation length of colour — green murk, not tar.
+                mat->thickness = 0.8f;
+            }
             return mat;
         }
 
@@ -63,17 +81,29 @@ namespace threepp {
                                          res - 1u, res - 1u);
         geo->rotateX(-math::PI / 2.0f);
 
-        auto ocean = std::make_shared<Ocean>(geo, makeOceanMaterial());
+        auto ocean = std::make_shared<Ocean>(geo, makeOceanMaterial(options.size));
         ocean->halfExtent_ = options.size * 0.5f;
+
+        // Resolve the auto (−1) tile sentinels: proportional to `size`, capped
+        // at the 1000 m reference trio — see Options::tileSize1 for the why.
+        const float tile1 = options.tileSize1 < 0.f
+                ? std::min(options.size * (127.0f / 1000.f), 127.0f)
+                : options.tileSize1;
+        const float tile2 = options.tileSize2 < 0.f
+                ? std::min(options.size * (9.3f / 1000.f), 9.3f)
+                : options.tileSize2;
 
         auto& p = ocean->params;
         p.tileSize0 = options.size;
-        p.tileSize1 = options.tileSize1;
-        p.tileSize2 = options.tileSize2;
+        p.tileSize1 = tile1;
+        p.tileSize2 = tile2;
         p.windTheta = options.windTheta;
         p.windSpeed = options.windSpeed;
         p.waveScale = options.waveScale;
         p.choppiness = options.choppiness;
+        // Natural whitecaps fade out with the water body's scale — see
+        // Params::foamAmount. Overridable any time via params.
+        p.foamAmount = std::min(options.size / 300.0f, 1.0f);
 
         // Per-cascade FFT resolution, derived from the band each cascade
         // actually carries. The renderer band-passes cascade 0 to
@@ -92,10 +122,10 @@ namespace threepp {
             while (float(n) < want && n < cap) n *= 2u;
             return n;
         };
-        if (options.tileSize1 > 0.f) {
-            p.textureSize0 = bandRes(options.size, options.tileSize1, options.fftSize);
-            if (options.tileSize2 > 0.f) {
-                p.textureSize1 = bandRes(options.tileSize1, options.tileSize2, half);
+        if (tile1 > 0.f) {
+            p.textureSize0 = bandRes(options.size, tile1, options.fftSize);
+            if (tile2 > 0.f) {
+                p.textureSize1 = bandRes(tile1, tile2, half);
                 p.textureSize2 = half;
             } else {
                 p.textureSize1 = half;// open band — full detail resolution

@@ -18,6 +18,9 @@
 //   (plus --cam x,y,z / --look x,y,z to reframe with no rebuild, and
 //   --wind <m/s> to capture a specific sea state).
 // Validation hooks:
+//   --pond        — 16 m garden-pond preset: shallow sandy bottom + rocks,
+//                   calm wind. Exercises the scale-aware Ocean defaults and
+//                   the shallow-water (visible-bottom) transmission path.
 //   --wind2 <m/s> — setWind() to this halfway through a --shot run; exercises
 //                   the live-wind respectrum path headlessly.
 //   --probes      — 3×3 emissive spheres pinned to sampleHeight() around the
@@ -50,12 +53,14 @@ int main(int argc, char** argv) {
     float windOverride = -1.f;// <0 = keep the Ocean default
     float wind2 = -1.f;       // ≥0 = setWind() to this halfway through a --shot run (live-wind test)
     bool probes = false;      // sampleHeight parity probes (debug)
+    bool pond = false;        // 16 m pond preset: shallow bright bottom, calm wind
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--wind") == 0 && i + 1 < argc) windOverride = float(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--wind2") == 0 && i + 1 < argc) wind2 = float(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--probes") == 0) probes = true;
+        else if (std::strcmp(argv[i], "--pond") == 0) pond = true;
     }
     const capture::Args capArgs = capture::parseArgs(argc, argv);
     if (capArgs.frames) shotFrames = *capArgs.frames;
@@ -92,20 +97,50 @@ int main(int argc, char** argv) {
     sun->setTarget(sunTarget);
     scene.add(sun);
 
-    constexpr float kSize = 1000.0f;
+    // --pond swaps the 1 km deep ocean for a 16 m garden pond: shallow bright
+    // sandy bottom with a few rocks, calm wind. Exercises the scale-aware
+    // Ocean defaults (auto tiles → dm-scale ripples) and the shallow-water
+    // transmission (the bottom is genuinely SEEN through the surface via the
+    // refracted-ray path in deferred_shade — not a repainted water body).
+    const float kSize = pond ? 16.0f : 1000.0f;
 
-    // Dark sand floor under the water so refraction and caustics read. Matches
-    // the ocean extent so there's no visible sand frame around the tile.
+    // Floor under the water. Ocean: near-black 5 m down — reads as deep water
+    // (the analytic body dominates). Pond: bright sand 1.2 m down so the
+    // shallow transmission has something worth refracting to.
     auto floorMat = MeshStandardMaterial::create(
-            MeshStandardMaterial::Params{}.color(Color(0.02f, 0.02f, 0.02f)).roughness(1.0f));
-    auto floor = Mesh::create(PlaneGeometry::create(kSize, kSize), floorMat);
+            pond ? MeshStandardMaterial::Params{}.color(Color(0.55f, 0.42f, 0.24f)).roughness(1.0f)
+                 : MeshStandardMaterial::Params{}.color(Color(0.02f, 0.02f, 0.02f)).roughness(1.0f));
+    auto floor = Mesh::create(PlaneGeometry::create(pond ? kSize * 3.f : kSize,
+                                                    pond ? kSize * 3.f : kSize),
+                              floorMat);
     floor->rotation.x = -math::PI / 2.f;
-    floor->position.y = -5.f;
+    floor->position.y = pond ? -1.2f : -5.f;
     scene.add(floor);
 
-    // The whole "fancy water" in one line.
+    if (pond) {
+        // A few rocks on the bottom — proof the refracted view resolves real
+        // geometry (position, tint shift with depth), plus one breaking the
+        // surface as an above-water reference.
+        auto rockMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color(0.42f, 0.38f, 0.33f)).roughness(0.9f));
+        const struct { float x, z, r, y; } rocks[] = {
+                {-2.5f, -1.5f, 0.55f, -1.05f}, {1.8f, 0.8f, 0.75f, -0.95f},
+                {0.2f, -3.0f, 0.4f, -1.1f},    {3.4f, -2.2f, 0.5f, -1.0f},
+                {-1.2f, 2.6f, 1.05f, -0.35f}// last one clearly pierces the surface
+        };
+        for (const auto& r : rocks) {
+            auto rock = Mesh::create(SphereGeometry::create(r.r, 24, 18), rockMat);
+            rock->position.set(r.x, r.y, r.z);
+            rock->scale.y = 0.75f;// flattened boulders
+            scene.add(rock);
+        }
+    }
+
+    // The whole "fancy water" in one line. For the pond, size alone retunes
+    // the cascades (auto tiles); calm default wind unless overridden.
     Ocean::Options opts;
     opts.size = kSize;
+    if (pond) opts.windSpeed = 3.0f;
     if (windOverride >= 0.f) opts.windSpeed = windOverride;
     auto ocean = Ocean::create(opts);
     scene.add(ocean);
@@ -127,7 +162,8 @@ int main(int argc, char** argv) {
     canvas.addKeyListener(windKeys);
 
     PerspectiveCamera camera(50.f, canvas.aspect(), 0.1f, 2000.f);
-    camera.position.set(0.f, 10.f, 35.f);
+    if (pond) camera.position.set(0.f, 2.4f, 8.5f);
+    else      camera.position.set(0.f, 10.f, 35.f);
     if (capArgs.camPos) camera.position.copy(*capArgs.camPos);
 
     OrbitControls controls{camera, canvas};
@@ -152,7 +188,7 @@ int main(int argc, char** argv) {
         probeMat->emissive = Color(1.f, 0.2f, 0.05f);
         probeMat->emissiveIntensity = 2.f;
         for (int i = 0; i < 9; ++i) {
-            auto s = Mesh::create(SphereGeometry::create(0.5f, 16, 12), probeMat);
+            auto s = Mesh::create(SphereGeometry::create(pond ? 0.12f : 0.5f, 16, 12), probeMat);
             probeSpheres.push_back(s);
             scene.add(s);
         }
@@ -169,11 +205,12 @@ int main(int argc, char** argv) {
             ocean->setWind(wind2, ocean->params.windTheta);
 
         if (!probeSpheres.empty()) {
+            const float spacing = pond ? 3.f : 12.f;
             int k = 0;
             for (int gz = -1; gz <= 1; ++gz)
                 for (int gx = -1; gx <= 1; ++gx) {
-                    const float px = controls.target.x + float(gx) * 12.f;
-                    const float pz = controls.target.z + float(gz) * 12.f;
+                    const float px = controls.target.x + float(gx) * spacing;
+                    const float pz = controls.target.z + float(gz) * spacing;
                     probeSpheres[k++]->position.set(
                             px, ocean->sampleHeight(px, pz), pz);
                 }

@@ -87,6 +87,7 @@ layout(push_constant, scalar) uniform Pc {
     uint   disturbCount;
     float  decay;
     uint   wakeTrailCount;  // # valid samples in wakeTrailAddr
+    float  natFoamScale;    // scales NATURAL Jacobian whitecaps; wake/splats unaffected
 } pc;
 
 // Toroidal world-XZ delta: a − b, wrapped into (−tileSize/2, +tileSize/2].
@@ -238,7 +239,13 @@ void main() {
     // must be retuned TOGETHER or the ocean under/over-foams.
     const float foamCoarse  = max(foldCoarse - 0.02, 0.0) / 0.12;
     const float foamFine    = max(foldFine   - 0.03, 0.0) / 0.25;
-    const float foamInstant = 1.0 - exp(-3.0 * (min(foamCoarse, 1.4) + 0.85 * min(foamFine, 1.0)));
+    // natFoamScale: the fold measure is scale-free (dimensionless displacement
+    // gradients), so a pond's cm-ripples "fold" as readily as ocean swell —
+    // but real short waves don't whitecap (surface tension damps them, which
+    // the model lacks). Ocean::create derives this from the tile scale so
+    // small water reads calm; it's also a live artistic knob (params.foamAmount).
+    const float foamInstant = pc.natFoamScale *
+            (1.0 - exp(-3.0 * (min(foamCoarse, 1.4) + 0.85 * min(foamFine, 1.0))));
 
     // ── Vessel wake foam ─────────────────────────────────────────────
     // Iterates the historical pose trail and takes MAX over each

@@ -18,6 +18,7 @@ namespace threepp_py {
     if (auto p = std::dynamic_pointer_cast<T>(mat)) {   \
         return py::cast(p);                             \
     }
+        THREEPP_TRY_MAT(MeshPhysicalMaterial)// before Standard — Physical IS-A Standard
         THREEPP_TRY_MAT(MeshStandardMaterial)
         THREEPP_TRY_MAT(MeshPhongMaterial)
         THREEPP_TRY_MAT(MeshBasicMaterial)
@@ -38,6 +39,7 @@ namespace threepp_py {
     if (py::isinstance<T>(h)) {     \
         return h.cast<std::shared_ptr<T>>(); \
     }
+        THREEPP_CAST_MAT(MeshPhysicalMaterial)// before Standard — Physical IS-A Standard
         THREEPP_CAST_MAT(MeshStandardMaterial)
         THREEPP_CAST_MAT(MeshPhongMaterial)
         THREEPP_CAST_MAT(MeshBasicMaterial)
@@ -153,6 +155,35 @@ namespace threepp_py {
                 .def_readwrite("bump_map", &MeshStandardMaterial::bumpMap)
                 .def_readwrite("displacement_map", &MeshStandardMaterial::displacementMap)
                 .def_readwrite("env_map", &MeshStandardMaterial::envMap);
+
+        // ---- MeshPhysicalMaterial -------------------------------------------
+        // Extends Standard with the transmissive / clearcoat / attenuation set —
+        // the water material (Ocean), glass, etc. Standard's fields come through
+        // the pybind base; only the physical-layer scalars are added here.
+        // (ior is a property: the C++ setter keeps reflectivity in sync.)
+        auto physical = py::class_<MeshPhysicalMaterial, MeshStandardMaterial,
+                                   std::shared_ptr<MeshPhysicalMaterial>>(m, "MeshPhysicalMaterial");
+        physical.def(py::init([] { return MeshPhysicalMaterial::create(); }))
+                .def_property("ior",
+                              [](const MeshPhysicalMaterial& self) { return self.ior; },
+                              &MeshPhysicalMaterial::setIor)
+                .def_readwrite("transmission", &MeshPhysicalMaterial::transmission,
+                               "0 = opaque, 1 = fully transmissive (water/glass).")
+                .def_readwrite("thickness", &MeshPhysicalMaterial::thickness,
+                               "Thin-shell in-medium proxy distance (m) for Beer-Lambert; also "
+                               "scales the water body veil (attenuation_color^(2*thickness/attenuation_distance)).")
+                .def_readwrite("thin_walled", &MeshPhysicalMaterial::thinWalled,
+                               "Surface is a thin shell (ocean plane, lens), not a closed volume.")
+                .def_readwrite("attenuation_color", &MeshPhysicalMaterial::attenuationColor,
+                               "Beer-Lambert tint per attenuation_distance of travel — the water colour lever.")
+                .def_readwrite("attenuation_distance", &MeshPhysicalMaterial::attenuationDistance,
+                               "Distance (m) over which attenuation_color is applied once; smaller = murkier.")
+                .def_readwrite("clearcoat", &MeshPhysicalMaterial::clearcoat)
+                .def_readwrite("clearcoat_roughness", &MeshPhysicalMaterial::clearcoatRoughness)
+                .def_readwrite("dispersion", &MeshPhysicalMaterial::dispersion)
+                .def_readwrite("iridescence", &MeshPhysicalMaterial::iridescence)
+                .def_readwrite("iridescence_ior", &MeshPhysicalMaterial::iridescenceIOR)
+                .def_readwrite("iridescence_thickness_nm", &MeshPhysicalMaterial::iridescenceThicknessNm);
 
         // ---- MeshPhongMaterial ----------------------------------------------
         auto phong = py::class_<MeshPhongMaterial, Material, std::shared_ptr<MeshPhongMaterial>>(m, "MeshPhongMaterial");

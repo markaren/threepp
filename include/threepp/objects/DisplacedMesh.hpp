@@ -53,6 +53,14 @@ namespace threepp {
             // wave-folding artefacts (white spike crests).
             float choppiness = 0.45f;
 
+            // Natural whitecap (Jacobian-fold) foam scale, live-tunable.
+            // 1 = full ocean whitewater, 0 = none. Wake trails and explicit
+            // foam disturbances are NOT scaled by this. The Tessendorf fold
+            // measure is scale-free, so without this a pond's cm-ripples foam
+            // like a gale — Ocean::create derives ~size/300 (capped at 1) so
+            // small water reads calm by default.
+            float foamAmount = 1.0f;
+
             // FFT texture resolution per cascade (must be power of two).
             // Band-passed cascades need only enough texels to resolve their
             // own wavelength band (~10 samples per shortest wavelength) — the

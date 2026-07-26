@@ -475,11 +475,23 @@ def add_pond(scene, gen, params, max_r=20.0, exclude_r=7.0, depth=1.4):
                 best = (float(x), float(y), h)
     lx, ly, lh = best
     wl = lh + depth
+    # Ocean is scale-aware now: size=32 alone derives pond-scale cascade tiles,
+    # clear-ish freshwater absorption (the bottom is genuinely visible through
+    # the surface via the shallow-water shading), and near-zero natural
+    # whitecap foam — the manual tile_size_0/1 overrides that used to fake
+    # this are gone. tile_size_2=0 stays: the deferred fine-chop normal is
+    # sampled in world XZ (Y-up assumption), so on this ROTATED (Z-up) ocean
+    # the finest cascade would render as 1-D stripes.
     pond = tp.Ocean(size=32.0, resolution=128, wind_speed=3.0, wind_theta=0.5,
-                    choppiness=0.4, wave_scale=0.4, fft_size=256)
-    pond.params.tile_size_0 = 28.0     # small tiles → pond-scale ripples, not ocean swell
-    pond.params.tile_size_1 = 7.0
-    pond.params.tile_size_2 = 0.0
+                    choppiness=0.4, wave_scale=0.4, tile_size_2=0.0, fft_size=256)
+    # Murkier than the freshwater default: this pond is only ~0.4 m deep, and
+    # at that depth clear water reads as wet sand. A short attenuation distance
+    # veils the bottom into a proper green-brown; thickness scales the veil's
+    # own brightness (see MeshPhysicalMaterial.thickness).
+    mat = pond.material
+    mat.attenuation_color = 0x245238   # green-brown murk
+    mat.attenuation_distance = 1.2     # ~a metre of visibility
+    mat.thickness = 0.6
     pond.rotation.x = math.pi / 2      # Y-up ocean → Z-up world (waves rise in +Z)
     pond.position.set(lx, ly, wl-1)
     scene.add(pond)

@@ -18,6 +18,13 @@
 // showcase in examples/vulkan/vulkan_ocean.cpp drives those same fields from a
 // boat; a stripped-down demo lives in examples/vulkan/vulkan_ocean_minimal.cpp.
 //
+// ROTATED / TRANSLATED oceans (e.g. a Z-up robotics world with
+// rotation.x = π/2): geometry, waves and the shallow-bottom shading all work,
+// but the deferred per-pixel fine-chop normal and the foam accumulator are
+// sampled in world XZ (Y-up assumption), so set tileSize2 = 0 there or the
+// finest cascade reads as 1-D stripes (see spot_slam.py's pond). The warp /
+// hull / wake fields additionally assume an identity transform.
+//
 // Distinct from threepp::Water (objects/Water.hpp), which is the classic
 // three.js flat reflective plane, not an FFT-displaced surface.
 
@@ -59,14 +66,24 @@ namespace threepp {
             float waveScale = 1.0f;
 
             // Mid + fine cascade tile sizes (metres). Cascade-0 uses `size`.
-            // Deliberately NON-COMMENSURATE with the 1000 m default size
+            //
+            // Default −1 = AUTO: derived from `size` as size/7.87 and
+            // size/107.5, each capped at the 1000 m reference trio (127 m /
+            // 9.3 m). A 1000 m ocean gets exactly {127, 9.3}; anything larger
+            // keeps those classic bands (chop doesn't grow with the domain);
+            // a small pond gets proportionally finer ones — size = 16 →
+            // {2.0, 0.15}, i.e. dm-scale ripples instead of the ocean bands
+            // that used to leave cascade 0 with ZERO representable modes
+            // below size ≈ 100. Set 0 to disable a cascade, > 0 to pin it.
+            //
+            // The resolved trio is deliberately NON-COMMENSURATE
             // (1000/127 ≈ 7.9, 127/9.3 ≈ 13.7): integer tile ratios keep every
             // repeat of a cascade phase-aligned with the one above it, which
             // reads as a visible plaid in the far field. Combined with the
             // cascade-1 domain rotation (vulkan_shared.h) the repeats stop
             // lining up with anything.
-            float tileSize1 = 127.0f;
-            float tileSize2 = 9.3f;
+            float tileSize1 = -1.0f;
+            float tileSize2 = -1.0f;
 
             // FFT resolution CAP (power of two). Cascade 0 and 1 are band-
             // passed by the renderer (cascade 0 carries only λ ≥ tileSize1,

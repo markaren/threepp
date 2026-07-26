@@ -49,15 +49,16 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                                             reflLod, seed, /*cheapHits=*/true,// water: blur+temporal absorb
                                             /*probeHitFill=*/true);
 
-    // Transmission: ANALYTIC deep-water body — deliberately NOT a refraction
-    // ray. A downward ray self-intersects this same choppy surface (adjacent
-    // wave crests), which traceRadiance then shades as opaque water → a chaotic
-    // black/white speckle that fills the screen when viewed from ABOVE (F≈0.02
-    // there, so the transmission term dominates). The seabed is near-black and
-    // metres down anyway, so true see-through buys almost nothing. Instead: the
-    // Beer-Lambert absorption tint lit by ambient skylight → a smooth deep
-    // blue-green. (The path tracer can refract correctly because it CONTINUES
-    // the path with medium tracking across the bounce; a single inline ray can't.)
+    // Transmission, two terms:
+    //
+    // 1) ANALYTIC deep-water body — deliberately NOT a refraction ray for the
+    // body itself. A stochastic downward continuation self-intersects this same
+    // choppy surface (adjacent wave crests), which traceRadiance then shades as
+    // opaque water → a chaotic black/white speckle that fills the screen when
+    // viewed from ABOVE (F≈0.02 there, so the transmission term dominates).
+    // Instead: the Beer-Lambert absorption tint lit by ambient skylight → a
+    // smooth deep blue-green. (The path tracer can refract correctly because it
+    // CONTINUES the path with medium tracking across the bounce.)
     vec3 tint = vec3(1.0);
     if (pm.attenuationDistance > 0.0)
         // 2× the crossing depth → an approximate down+up Beer-Lambert (2 crossings
@@ -78,7 +79,67 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // a smooth volumetric quantity; the chop belongs to Fresnel/reflection only.
     const float skyLum    = dot(sampleEnvLod(vec3(0.0, 1.0, 0.0), maxLod), vec3(0.2126, 0.7152, 0.0722));
     const float depthFade = mix(1.0, 0.4, clamp(V.y, 0.0, 1.0));// darker looking down into the column
-    const vec3  transmitColor = tint * (skyLum * 0.35 + lights.ambient) * depthFade;
+    const vec3  deepBody  = tint * (skyLum * 0.35 + lights.ambient) * depthFade;
+    vec3 transmitColor = deepBody;
+
+    // 2) SHALLOW BOTTOM — the pond/shore path. Refract the view ray for real
+    // and probe for geometry within the Beer-Lambert visibility range; a hit
+    // (sand, rocks, a hull below the waterline) is shaded deterministically and
+    // ADDED with the absorption over the actual in-water path. Design notes:
+    //  • The deterministic single refracted ray doesn't have the deep path's
+    //    speckle problem: it only degenerates when it re-hits the WATER surface
+    //    (steep chop relative to depth) — detected via the instance's water
+    //    marker (foamAddress) and dropped, falling back to the body alone.
+    //  • deepBody stays UNREDUCED: its ×0.35/×0.45 constants were calibrated
+    //    over a finite dark seabed, so the finite-column energy loss is already
+    //    baked in — cross-fading by transmittance would double-count it and
+    //    darken every existing deep scene. Adding the attenuated bottom instead
+    //    keeps deep water bit-identical (dark bottom × tint ≈ 0) and lets a
+    //    bright shallow floor show through. Mild over-energy where both terms
+    //    are bright; acceptable for the pond regime.
+    //  • doShadows=false on the bottom shade: water is opaque-masked for
+    //    occlusion queries (see vulkan_shared.h — the PT's caustic energy
+    //    balance relies on it), so a shadow ray from the bottom would report
+    //    the surface above as a full occluder and render the floor sun-black.
+    //    Unshadowed direct + the vertical-depth absorption term is the honest
+    //    raster approximation of sunlight penetrating water.
+    if (pm.attenuationDistance > 0.0) {
+        // Beyond ~6 attenuation lengths the bottom term is < ~2% — invisible.
+        const float maxVis = 6.0 * pm.attenuationDistance;
+        vec3 dRef = refract(-V, N, 1.0 / ior);
+        if (dot(dRef, dRef) > 1e-6) {
+            dRef = normalize(dRef);
+            const vec3 uwOrigin = P - N * SHADOW_EPS;
+            rayQueryEXT rq;
+            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu,
+                                  uwOrigin, 1e-3, dRef, maxVis);
+            while (rayQueryProceedEXT(rq)) {}
+            if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
+                const int   hitId = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+                const float dBot  = rayQueryGetIntersectionTEXT(rq, true);
+                if (geoms[hitId].foamAddress == 0ul) {// not a wave-crest self-hit
+                    const vec3 bottom = traceRadiance(uwOrigin, dRef, /*doShadows=*/false,
+                                                      maxLod, 0.12 * maxLod, seed,
+                                                      /*cheapHits=*/false,// the floor IS the subject — keep it sharp
+                                                      /*probeHitFill=*/false);// probes can't resolve the underwater cavity
+                    // View path + approximate sun path (vertical depth) through
+                    // the column, Beer-Lambert per channel.
+                    const float sunPath = dBot * (1.0 + clamp(-dRef.y, 0.0, 1.0));
+                    const vec3  Tbot    = pow(max(pm.attenuationColor, vec3(1e-6)),
+                                              vec3(sunPath / pm.attenuationDistance));
+                    // The body veil builds up over the water column: SCALAR
+                    // exponential saturation with a half-attenuation-length
+                    // constant. Deep water (d ≥ ~2 lengths) keeps ≥96% of the
+                    // calibrated deepBody — visually the old look — while a
+                    // metre-deep pond sheds most of the veil so its floor
+                    // reads instead of drowning in deep-ocean teal. Scalar on
+                    // purpose: a per-channel weight would hue-shift the body.
+                    const float bodyW = 1.0 - exp(-dBot / (0.5 * pm.attenuationDistance));
+                    transmitColor = deepBody * bodyW + bottom * Tbot;
+                }
+            }
+        }
+    }
 
     vec3 col = mix(transmitColor, reflectColor, F);
 

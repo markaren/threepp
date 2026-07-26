@@ -48,6 +48,9 @@ namespace threepp_py {
                 .def_readwrite("wave_scale", &DisplacedMesh::Params::waveScale, "Global wave-height multiplier; 1.0 = physical.")
                 .def_readwrite("choppiness", &DisplacedMesh::Params::choppiness,
                                "Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.")
+                .def_readwrite("foam_amount", &DisplacedMesh::Params::foamAmount,
+                               "Natural whitecap foam scale, live-tunable (1 = ocean whitewater, 0 = none; "
+                               "wake/disturbance foam unaffected). Ocean auto-derives ~size/300.")
                 .def_readwrite("texture_size_0", &DisplacedMesh::Params::textureSize0, "Cascade-0 FFT resolution (power of two).")
                 .def_readwrite("texture_size_1", &DisplacedMesh::Params::textureSize1, "Cascade-1 FFT resolution (power of two).")
                 .def_readwrite("texture_size_2", &DisplacedMesh::Params::textureSize2, "Cascade-2 FFT resolution (power of two).");
@@ -106,12 +109,14 @@ namespace threepp_py {
                      py::arg("size") = 1000.0f, py::arg("resolution") = 512u,
                      py::arg("wind_speed") = 10.0f, py::arg("wind_theta") = 0.6f,
                      py::arg("choppiness") = 0.55f, py::arg("wave_scale") = 1.0f,
-                     py::arg("tile_size_1") = 127.0f, py::arg("tile_size_2") = 9.3f,
+                     py::arg("tile_size_1") = -1.0f, py::arg("tile_size_2") = -1.0f,
                      py::arg("fft_size") = 1024u,
                      "A ready-to-use FFT ocean. Add it to a Scene and render with the Vulkan "
                      "renderer. size is the tile extent (m); resolution is the vertex grid per "
                      "side; fft_size caps the per-cascade FFT resolutions (band-passed cascades "
-                     "auto-size below it). Defaults are non-commensurate to break tiling repeats.")
+                     "auto-size below it). tile_size_1/2 default to -1 = auto: scaled from size "
+                     "(a 1000 m ocean gets the classic 127/9.3 bands, a 16 m pond gets dm-scale "
+                     "ripples); 0 disables a cascade, >0 pins it. Ponds also want wind_speed 2-5.")
                 .def("warp_toward", &Ocean::warpToward,
                      py::arg("world_x"), py::arg("world_z"), py::arg("coef_a") = 0.1f,
                      "Pack vertex density toward a world-space focus point (e.g. the camera). "
