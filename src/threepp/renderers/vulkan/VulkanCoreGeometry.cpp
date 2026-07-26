@@ -618,7 +618,20 @@ void VulkanRendererCore::CoreImpl::drainLodResults() {
                 if (it == blasCache.end()) continue;// record evicted while the job was in flight
                 BlasRecord& rec = *it->second;
                 if (rec.geomVersion != result.geomVersion) {
-                    rec.lodState = BlasRecord::LodState::None;// stale — re-enqueue will pick up the new version
+                    // Stale — drop WITHOUT touching lodState. Every version-
+                    // advance path already reset it (refreshGeomBlasBatch's
+                    // destroyBlasLodLevels, record eviction), and a job for
+                    // the CURRENT version may be Queued right now — resetting
+                    // to None here would let selection enqueue a duplicate,
+                    // whose result would then append a second copy of every
+                    // level onto the Ready chain.
+                    continue;
+                }
+                if (rec.lodState != BlasRecord::LodState::Queued) {
+                    // Version matches but no job is outstanding for it —
+                    // this is the second result of a double-enqueue (or the
+                    // state moved on some other way). Appending would
+                    // duplicate the chain's levels and double-count stats.
                     continue;
                 }
                 if (result.levels.empty()) {
