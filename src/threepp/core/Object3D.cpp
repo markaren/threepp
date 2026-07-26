@@ -14,9 +14,34 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iostream>
 #include <limits>
 
 using namespace threepp;
+
+namespace {
+
+    // Gate for add()/addRef(): inserting a node under itself or under one of
+    // its own descendants makes the graph cyclic, and traverse()/
+    // updateMatrixWorld() recurse over children without cycle detection - so
+    // the insertion is rejected here instead of overflowing the stack there.
+    bool canAttach(const Object3D& parent, const Object3D& child) {
+
+        for (const auto* node = &parent; node; node = node->parent) {
+
+            if (node == &child) {
+
+                std::cerr << "[Object3D] add: rejected inserting '" << child.name
+                          << "' under '" << parent.name
+                          << "' - it is the target itself or one of its ancestors" << std::endl;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+}// namespace
 
 Object3D::Object3D()
     : uuid(math::generateUUID()),
@@ -208,15 +233,38 @@ void Object3D::lookAt(float x, float y, float z) {
 
 void Object3D::add(const std::shared_ptr<Object3D>& object) {
 
-    this->children_.emplace_back(object);
+    if (!object) {
+
+        std::cerr << "[Object3D] add: ignored null child" << std::endl;
+        return;
+    }
+
     addRef(*object);
+
+    // addRef() validates the insertion; only take ownership when the link was
+    // actually made - a rejected self/ancestor insertion must not be kept
+    // alive by a parent that does not list it as a child.
+    if (object->parent != this) return;
+
+    // Reparenting a child its old parent owned: addRef() already moved that
+    // owning reference into children_ - don't own it twice.
+    if (std::ranges::none_of(children_, [&object](const auto& c) { return c == object; })) {
+
+        this->children_.emplace_back(object);
+    }
 }
 
 void Object3D::addRef(Object3D& object) {
 
+    if (!canAttach(*this, object)) return;
+
+    // Unlink from any current parent directly rather than via remove():
+    // remove() drops the old parent's owning reference, destroying an object
+    // that parent solely owned - while this function still has to write to it.
+    std::shared_ptr<Object3D> kept;
     if (object.parent) {
 
-        object.parent->remove(object);
+        kept = object.parent->detachChild(object);
     }
 
     object.parent = this;
@@ -227,6 +275,13 @@ void Object3D::addRef(Object3D& object) {
     // longer raises this flag every frame). The child's world multiply then
     // force-propagates to its descendants.
     object.matrixWorldNeedsUpdate = true;
+
+    // Ownership follows the object: if the old parent owned it, letting `kept`
+    // die here would destroy the object the moment this call returned.
+    if (kept) {
+
+        this->children_.emplace_back(std::move(kept));
+    }
 
     object.dispatchEvent("added");
 }
@@ -519,8 +574,26 @@ Object3D::Object3D(Object3D&& source) noexcept: Object3D() {
     this->up = source.up;
     source.up = defaultUp;
 
-    this->parent = source.parent;
-    source.parent = nullptr;
+    // Take over the source's slot in its parent. Transferring only the parent
+    // POINTER left the parent's child list still naming the moved-from object -
+    // a dangling entry once the source died, and freed-memory reads on the
+    // next traversal.
+    if (Object3D* p = source.parent) {
+
+        const bool ownedByParent = std::ranges::any_of(p->children_, [&source](const auto& c) {
+            return c.get() == &source;
+        });
+        if (ownedByParent) {
+            // The parent owns the source's storage through a shared_ptr, which
+            // cannot follow a move to a new address. Leave the hollowed-out
+            // source attached where its owner expects it; this object starts
+            // detached.
+        } else {
+            this->parent = p;
+            source.parent = nullptr;
+            std::ranges::replace(p->children, &source, this);
+        }
+    }
 
     this->scale.copy(source.scale);
     this->position.copy(source.position);
