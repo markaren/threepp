@@ -82,9 +82,19 @@ namespace threepp {
         Matrix3 normalMatrix;
 
         // The local transform matrix.
-        std::shared_ptr<Matrix4> matrix;
+        //
+        // The Matrix4 lives by VALUE inside this object (matrixLocal_ below);
+        // this handle is a non-owning alias to it — no heap allocation, no
+        // refcount. The shared_ptr type is kept so the three.js-style aliasing
+        // stays source-compatible: helpers re-point it at another object's
+        // matrixWorld (`helper.matrix = light.matrixWorld`). An alias does NOT
+        // keep its target alive — the target must outlive the aliasing object
+        // (every in-tree helper already holds its target by reference/pointer
+        // and assumed exactly that).
+        std::shared_ptr<Matrix4> matrix{std::shared_ptr<Matrix4>{}, &matrixLocal_};
         // The global transform of the object. If the Object3D has no parent, then it's identical to the local transform .matrix.
-        std::shared_ptr<Matrix4> matrixWorld;
+        // Stored by value like `matrix` (see matrixWorldLocal_); same aliasing caveat.
+        std::shared_ptr<Matrix4> matrixWorld{std::shared_ptr<Matrix4>{}, &matrixWorldLocal_};
 
         // When this is set, it calculates the matrix of position, (rotation or quaternion) and scale every frame and also recalculates the matrixWorld property.
         // Default is Object3D::defaultMatrixAutoUpdate (true).
@@ -378,6 +388,18 @@ namespace threepp {
         std::array<float, 10> composedPqs_{};
         std::array<float, 16> composedMatrix_{};
         bool composedValid_ = false;
+
+        // Value storage for the public `matrix`/`matrixWorld` handles above.
+        // Keeping the payload in the object's own cache lines (instead of two
+        // per-node heap allocations) removes an indirection from every
+        // updateMatrix()/updateMatrixWorld() compare and every scene-prep
+        // matrixWorld read, and drops 2 allocs + ~2 control blocks per node.
+        // It also makes a moved-from object keep VALID matrices — the move
+        // constructor used to null the source's shared_ptrs while the parent's
+        // children list could still reference it (a guaranteed nullptr deref
+        // on the next traversal).
+        Matrix4 matrixLocal_;
+        Matrix4 matrixWorldLocal_;
     };
 
 }// namespace threepp

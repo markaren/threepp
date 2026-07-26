@@ -44,9 +44,7 @@ namespace {
 }// namespace
 
 Object3D::Object3D()
-    : uuid(math::generateUUID()),
-      matrix(std::make_shared<Matrix4>()),
-      matrixWorld(std::make_shared<Matrix4>()) {
+    : uuid(math::generateUUID()) {
 
     rotation._onChange([this] {
         quaternion.setFromEuler(rotation, false);
@@ -601,8 +599,23 @@ Object3D::Object3D(Object3D&& source) noexcept: Object3D() {
     this->rotation = std::move(source.rotation);
     this->quaternion = std::move(source.quaternion);
 
-    this->matrix = std::move(source.matrix);
-    this->matrixWorld = std::move(source.matrixWorld);
+    // The matrices live by value inside the object, so "moving" them copies
+    // the 64-byte payloads into our own storage — which also leaves the
+    // moved-from source with VALID matrices (it may still sit in its parent's
+    // children list, see above; stealing the old shared_ptrs left it with
+    // nulls and a guaranteed deref on the next traversal). When the source's
+    // handle was re-pointed at external storage (helpers alias another
+    // object's matrixWorld), transfer the alias itself instead.
+    if (source.matrix.get() == &source.matrixLocal_) {
+        this->matrixLocal_.copy(source.matrixLocal_);
+    } else {
+        this->matrix = source.matrix;
+    }
+    if (source.matrixWorld.get() == &source.matrixWorldLocal_) {
+        this->matrixWorldLocal_.copy(source.matrixWorldLocal_);
+    } else {
+        this->matrixWorld = source.matrixWorld;
+    }
 
     this->matrixAutoUpdate = source.matrixAutoUpdate;
     this->matrixWorldNeedsUpdate = source.matrixWorldNeedsUpdate;
