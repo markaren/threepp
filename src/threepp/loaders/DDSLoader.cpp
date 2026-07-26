@@ -2,6 +2,7 @@
 
 #include "threepp/textures/Texture.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -96,8 +97,12 @@ namespace threepp {
             return 16;
         }
 
-        uint32_t mipDataSize(uint32_t w, uint32_t h, uint32_t bb) {
-            return ((w + 3u) / 4u) * ((h + 3u) / 4u) * bb;
+        uint64_t mipDataSize(uint32_t w, uint32_t h, uint32_t bb) {
+            // 64-bit on purpose: header dimensions are untrusted, and with e.g.
+            // w = h = 262144 the 32-bit product wraps to 0, sails past the
+            // truncation check, and flipMipY then writes far outside a
+            // zero-byte allocation.
+            return ((static_cast<uint64_t>(w) + 3u) / 4u) * ((static_cast<uint64_t>(h) + 3u) / 4u) * bb;
         }
 
         // -----------------------------------------------------------------------
@@ -210,6 +215,15 @@ namespace threepp {
                 return nullptr;
             }
 
+            // The header drives every allocation and offset below; bound it to
+            // sane GPU limits before doing arithmetic with it.
+            constexpr uint32_t maxDim = 16384;
+            if (hdr.dwWidth == 0 || hdr.dwHeight == 0 || hdr.dwWidth > maxDim || hdr.dwHeight > maxDim) {
+                std::cerr << "[DDSLoader] Rejecting image dimensions "
+                          << hdr.dwWidth << "x" << hdr.dwHeight << "\n";
+                return nullptr;
+            }
+
             size_t dataOffset = 4 + sizeof(DDSHeader);
 
             // Determine GL compressed format.
@@ -240,7 +254,9 @@ namespace threepp {
             }
 
             const uint32_t bb       = blockBytes(glFmt);
-            const uint32_t mipCount = std::max(1u, hdr.dwMipMapCount);
+            // A full chain for a 16384-wide image is 15 levels; anything above
+            // 16 is a corrupt or hostile count, not a real texture.
+            const uint32_t mipCount = std::min(std::max(1u, hdr.dwMipMapCount), 16u);
 
             // Parse each mip level into a separate Image.
             std::vector<Image> mips;
@@ -249,16 +265,18 @@ namespace threepp {
             for (uint32_t i = 0; i < mipCount; ++i) {
                 const uint32_t w = std::max(1u, hdr.dwWidth  >> i);
                 const uint32_t h = std::max(1u, hdr.dwHeight >> i);
-                const uint32_t bytes = mipDataSize(w, h, bb);
+                const uint64_t bytes = mipDataSize(w, h, bb);
 
-                if (dataOffset + bytes > size) {
+                // dataOffset <= size holds on entry, so the subtraction cannot
+                // wrap the way `dataOffset + bytes` could.
+                if (bytes > size - dataOffset) {
                     std::cerr << "[DDSLoader] Truncated mip level " << i << "\n";
                     break;
                 }
 
-                std::vector<unsigned char> buf(bytes);
-                std::memcpy(buf.data(), raw + dataOffset, bytes);
-                dataOffset += bytes;
+                std::vector<unsigned char> buf(static_cast<size_t>(bytes));
+                std::memcpy(buf.data(), raw + dataOffset, buf.size());
+                dataOffset += buf.size();
 
                 // Flip Y to match stb_image's flipY=true convention so DDS
                 // textures are consistent with all other texture formats.

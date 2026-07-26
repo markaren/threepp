@@ -1,5 +1,6 @@
 
 add_test_executable(ColladaLoader_test)
+add_test_executable(DDSLoader_test)
 add_test_executable(Fontloader_test)
 add_test_executable(GLTFLoader_test)
 add_test_executable(ImageLoader_test)
