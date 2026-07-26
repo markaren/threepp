@@ -355,10 +355,9 @@ void VulkanRendererCore::CoreImpl::setGbufferMsaa(uint32_t samples) {
             const uint32_t clamped = samples >= 4 ? 4u : (samples >= 2 ? 2u : 1u);
             if (clamped == gbufMsaaSamples_) return;
             gbufMsaaSamples_ = clamped;
-            // msaa>1 without an upscaler rasterizes unjittered → the material
-            // sampler policy (aniso vs isotropic) flips with this setting. The
-            // reallocation below rebuilds descriptors anyway; the explicit mark
-            // covers the deferred (pendingRenderScaleRealloc_) path too.
+            // The material sampler is 16x aniso regardless of jitter now, so
+            // this mark only matters when a setTextureAnisotropy override is
+            // active; kept for that path (rebuild is descriptor-cheap).
             markMaterialSamplerDirty();
             if (frameState_ != FrameState::Idle) {
                 pendingRenderScaleRealloc_ = true;// shares the reallocation gate

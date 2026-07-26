@@ -84,11 +84,17 @@ void VulkanRendererCore::CoreImpl::createTextureSampler() {
         }
 
 VkSampler VulkanRendererCore::CoreImpl::materialSampler(bool clampUV) {
-            // AUTO policy: sharp when the raster is unjittered, prefiltered
-            // (isotropic) when it is jittered — see the member comment for why.
+            // AUTO policy: 16x anisotropic, jittered or not. An earlier policy
+            // dropped to isotropic under a jittered raster (TAA/DLSS/FSR) on
+            // the theory that aniso re-sharpened grazing-angle content into
+            // temporal shimmer — later triage attributed that shimmer to other
+            // sources, and the isotropic fallback just mip-blurred every
+            // ground/facade texture at distance for no stability gain.
+            // setTextureAnisotropy / THREEPP_VK_ANISO remain as explicit
+            // overrides (1 forces the old isotropic behaviour).
             const float want = (textureAnisoOverride_ >= 1.0f)
                                        ? textureAnisoOverride_
-                                       : (rasterJitterActive() ? 1.0f : 16.0f);
+                                       : 16.0f;
             if (want <= 1.0f) return clampUV ? textureSamplerIsoClamp_ : textureSamplerIso_;
             if (want >= 16.0f) return clampUV ? textureSamplerClamp_ : textureSampler_;
             if (textureSamplerCustom_ != VK_NULL_HANDLE && textureSamplerCustomAniso_ == want)

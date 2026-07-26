@@ -1015,19 +1015,18 @@ namespace threepp {
         // these and returns the slots to freeTextureSlots.
         std::vector<uint32_t> retiredTextureSlots_;
         // The policy samplers every material-texture binding chooses between
-        // (fillMaterialTextureInfos → materialSampler()): 16× aniso when the
-        // raster is UNJITTERED (sharpness has no temporal cost), and
-        // isotropic-trilinear when the raster is JITTERED (TAA/DLSS/FSR) —
-        // anisotropic filtering re-sharpens grazing-angle textures back to
-        // pixel frequency, which no temporal resolve can hold still; measured
-        // as the dominant carrier of the "whole scene shimmers at a distance"
-        // residual on terrain/Bistro-class content. Each policy exists in a
-        // REPEAT and a CLAMP_TO_EDGE flavour — clamp-tagged textures
-        // (materialTexClampUV_) get the clamp twin, same filter policy.
+        // (fillMaterialTextureInfos → materialSampler()): 16× aniso is the
+        // DEFAULT regardless of raster jitter. (A retired policy dropped to
+        // isotropic under TAA/DLSS/FSR, blaming aniso for distance shimmer;
+        // triage later pinned that on other mechanisms, and the fallback only
+        // bought mip-blurred grazing angles.) The isotropic twins survive for
+        // the explicit setTextureAnisotropy(1) / THREEPP_VK_ANISO=1 override.
+        // Each policy exists in a REPEAT and a CLAMP_TO_EDGE flavour —
+        // clamp-tagged textures (materialTexClampUV_) get the clamp twin.
         // NOTE: the per-image samplers buildSampledImage2D creates are NOT
         // bound for material textures — these are.
-        VkSampler textureSampler_ = VK_NULL_HANDLE;        // 16× aniso (unjittered raster)
-        VkSampler textureSamplerIso_ = VK_NULL_HANDLE;     // isotropic (jittered raster)
+        VkSampler textureSampler_ = VK_NULL_HANDLE;        // 16× aniso (default)
+        VkSampler textureSamplerIso_ = VK_NULL_HANDLE;     // isotropic (override=1 only)
         VkSampler textureSamplerClamp_ = VK_NULL_HANDLE;   // 16× aniso, clamp-to-edge
         VkSampler textureSamplerIsoClamp_ = VK_NULL_HANDLE;// isotropic, clamp-to-edge
         // setTextureAnisotropy override: 0 = AUTO (the policy above), 1..16
