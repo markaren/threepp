@@ -1,3 +1,4 @@
 
 add_test_executable(Interpolants_test)
 add_test_executable(AnimationMixer_test)
+add_test_executable(KeyframeTrack_test)

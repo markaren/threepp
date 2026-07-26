@@ -1,6 +1,7 @@
 #ifndef THREEPP_WAVFILE_HPP
 #define THREEPP_WAVFILE_HPP
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>

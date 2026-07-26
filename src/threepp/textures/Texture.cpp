@@ -44,6 +44,13 @@ Image& Texture::image() {
 
 const Image& Texture::image() const {
 
+    // Same contract as the mutable overload: an image-less texture is a valid
+    // construction state, and front() on the empty vector is UB, not an error.
+    if (images_.empty()) {
+
+        throw std::runtime_error("Error, no Image set for texture");
+    }
+
     return images_.front();
 }
 

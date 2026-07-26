@@ -25,6 +25,19 @@ KeyframeTrack::KeyframeTrack(std::string name, const std::vector<float>& times, 
       times_(times),
       values_(values) {
 
+    // Everything downstream divides by the time count (getValueSize) and
+    // indexes values_ in valueSize strides - an empty or mismatched track is
+    // not a playable state, only a deferred crash.
+    if (times_.empty()) {
+
+        throw std::invalid_argument("KeyframeTrack '" + name_ + "': no keyframe times");
+    }
+    if (values_.empty() || values_.size() % times_.size() != 0) {
+
+        throw std::invalid_argument("KeyframeTrack '" + name_ + "': value count " + std::to_string(values_.size()) +
+                                    " is not a positive multiple of the time count " + std::to_string(times_.size()));
+    }
+
     setInterpolation(interpolation.value_or(defaultInterpolation));
 }
 
