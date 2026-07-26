@@ -2116,7 +2116,11 @@ int main(int argc, char** argv) {
             const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / (second ? "b_" + shotPath : shotPath);
             if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get())) vk->writeFramebuffer(path);
             std::cout << "wrote " << path.string() << std::endl;
-            if (!shotPair || second) std::exit(0);
+            if (!shotPair || second) {
+                setCursorLocked(false);// std::exit runs no destructors — Canvas's
+                                       // pointer-release never happens, so do it here
+                std::exit(0);
+            }
         }
     });
 }

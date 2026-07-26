@@ -335,7 +335,22 @@ struct Canvas::Impl {
     }
 
     ~Impl() {
-        if (window) glfwDestroyWindow(window);
+        if (window) {
+            // Hand the pointer back BEFORE the window goes away, for apps that
+            // grabbed it for mouse-look (GLFW_CURSOR_DISABLED + raw motion —
+            // see the FPS/TPS demos). The bundled GLFW does call enableCursor()
+            // from its destroy path, but GLFW 3.3.x does not (it only nulls
+            // _glfw.win32.disabledCursorWindow), so a system/older GLFW leaves
+            // the OS cursor hidden, clipped and in raw-motion mode after the
+            // process ends. Doing it here makes the release explicit and
+            // version-independent. Paths that never reach this destructor at
+            // all (std::exit, Ctrl+C, a crash) still have to release it
+            // themselves — the demos do so before their std::exit.
+            if (glfwRawMouseMotionSupported())// else GLFW_FEATURE_UNAVAILABLE
+                glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            glfwDestroyWindow(window);
+        }
         termGLfw();
     }
 

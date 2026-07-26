@@ -86,6 +86,18 @@ AnimationAction& AnimationAction::setLoop(Loop mode, int repetitions) {
     return *this;
 }
 
+AnimationAction& AnimationAction::setClampWhenFinished(bool clamp) {
+
+    this->clampWhenFinished = clamp;
+
+    return *this;
+}
+
+bool AnimationAction::getClampWhenFinished() const {
+
+    return this->clampWhenFinished;
+}
+
 AnimationAction& AnimationAction::setEffectiveWeight(float weight) {
 
     this->weight = weight;

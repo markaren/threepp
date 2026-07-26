@@ -38,6 +38,16 @@ namespace threepp {
 
         AnimationAction& setLoop(Loop mode, int repetitions = -1);
 
+        // Loop::Once (or an exhausted repetition count) normally ends with
+        // enabled=false, i.e. effective weight 0 — the action stops
+        // contributing, which snaps a base layer back to the bind pose and
+        // drops an additive overlay's contribution instantly. Set this and the
+        // action instead PAUSES on its last frame and keeps feeding it, so the
+        // caller can fade the pose out (three.js: .clampWhenFinished).
+        AnimationAction& setClampWhenFinished(bool clamp);
+
+        [[nodiscard]] bool getClampWhenFinished() const;
+
         // Weight
 
         // set the weight stopping any scheduled fading
