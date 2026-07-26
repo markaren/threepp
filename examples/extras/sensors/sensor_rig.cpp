@@ -104,8 +104,13 @@ namespace {
         const float lo = t.min(), hi = t.max();
         const float pad = std::max(1e-3f, (hi - lo) * 0.15f);
         ImGui::TextUnformatted(label);
+        // The plot's own label is hidden ("##"), so every call would otherwise
+        // land on the same ImGui ID and the plots would share hover state.
+        // Scope each one by its visible label instead.
+        ImGui::PushID(label);
         ImGui::PlotLines("##p", t.data(), t.size(), 0, nullptr, lo - pad, hi + pad,
                          ImVec2(-1, height));
+        ImGui::PopID();
     }
 
 }// namespace
@@ -392,6 +397,15 @@ int main() {
 
         ImGui::End();
     });
+
+    IOCapture cap;
+    cap.preventMouseEvent = []{
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    cap.preventScrollEvent = []{
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&cap);
 
     Clock clock;
     canvas.animate([&] {
