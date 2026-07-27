@@ -582,6 +582,15 @@ int EditorApp::runSelfTest() {
             check(inspection.fields.size() == 1 && inspection.fields.front().name == "speed",
                   "the inline script's parameter is discovered");
 
+            // And through the inspector's own cache, which has no file write
+            // time to key on and uses a hash of the text instead.
+            const auto& cached = inspectScriptSource(box->uuid, "Box", stored.source);
+            check(cached.className == "Inline" && cached.fields.size() == 1,
+                  "the inspector discovers inline parameters through its cache");
+            const auto& reinspected = inspectScriptSource(
+                    box->uuid, "Box", "class Edited:\n    def update(self, dt):\n        pass\n");
+            check(reinspected.className == "Edited", "changed source is inspected again");
+
             const float restY = box->rotation.y;
             startPlay();
             step(30);
