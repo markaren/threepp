@@ -6,6 +6,8 @@
 #include "FontLoader.hpp"
 #include "ModelLoader.hpp"
 #include "OBJLoader.hpp"
+#include "ObjectExporter.hpp"
+#include "ObjectLoader.hpp"
 #include "STLLoader.hpp"
 #include "TextureLoader.hpp"
 

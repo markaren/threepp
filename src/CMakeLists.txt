@@ -125,6 +125,8 @@ set(publicHeaders
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/RGBELoader.hpp"
         "threepp/loaders/ModelLoader.hpp"
+        "threepp/loaders/ObjectExporter.hpp"
+        "threepp/loaders/ObjectLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
         "threepp/loaders/STLLoader.hpp"
         "threepp/loaders/SVGLoader.hpp"
@@ -286,7 +288,10 @@ set(privateHeaders
         "threepp/renderers/gl/ProgramParameters.hpp"
         "threepp/renderers/gl/UniformUtils.hpp"
 
+        "threepp/utils/Base64.hpp"
         "threepp/utils/RegexUtil.hpp"
+
+        "threepp/loaders/ObjectJsonConstants.hpp"
 )
 
 set(sources
@@ -395,6 +400,8 @@ set(sources
         "threepp/loaders/RGBELoader.cpp"
         "threepp/loaders/MTLLoader.cpp"
         "threepp/loaders/ModelLoader.cpp"
+        "threepp/loaders/ObjectExporter.cpp"
+        "threepp/loaders/ObjectLoader.cpp"
         "threepp/loaders/OBJLoader.cpp"
         "threepp/loaders/STLLoader.cpp"
         "threepp/loaders/SVGLoader.cpp"
@@ -480,6 +487,7 @@ set(sources
         "threepp/textures/DataTexture3D.cpp"
         "threepp/textures/DepthTexture.cpp"
 
+        "threepp/utils/Base64.cpp"
         "threepp/utils/BufferGeometryUtils.cpp"
         "threepp/utils/GeometryLod.cpp"
         "threepp/utils/ImageUtils.cpp"

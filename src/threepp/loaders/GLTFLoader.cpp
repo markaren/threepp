@@ -35,6 +35,8 @@
 #include <threepp/objects/Skeleton.hpp>
 #include <threepp/objects/SkinnedMesh.hpp>
 
+#include "threepp/utils/Base64.hpp"
+
 #include <unordered_set>
 
 #include "meshoptimizer.h"
@@ -44,26 +46,9 @@ namespace fs = std::filesystem;
 
 namespace threepp {
 
-    // ===========================================================================
-    //  Base64 decoder
-    // ===========================================================================
     namespace {
 
-        constexpr std::array<int, 256> buildDecodeTable() {
-            std::array<int, 256> t{};
-            t.fill(-1);
-            for (int i = 0; i < 26; ++i) {
-                t['A' + i] = i;
-                t['a' + i] = i + 26;
-            }
-            for (int i = 0; i < 10; ++i) t['0' + i] = i + 52;
-            t['+'] = 62;
-            t['/'] = 63;
-            t['='] = 0;
-            return t;
-        }
-
-        constexpr auto kDecodeTable = buildDecodeTable();
+        using utils::base64Decode;
 
         // Percent-decode a glTF URI (RFC 3986). glTF texture URIs with spaces or
         // other reserved chars arrive as e.g. "Base%20Color.jpg"; we must decode
@@ -107,24 +92,6 @@ namespace threepp {
                 out.resize(static_cast<size_t>(f.gcount()));
             } else {
                 out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-            }
-            return out;
-        }
-
-        std::vector<uint8_t> base64Decode(const std::string& encoded) {
-            std::vector<uint8_t> out;
-            out.reserve(encoded.size() * 3 / 4);
-            int val = 0, valb = -8;
-            for (unsigned char c : encoded) {
-                if (c == '\n' || c == '\r' || c == ' ') continue;
-                int d = kDecodeTable[c];
-                if (d == -1) break;
-                val = (val << 6) + d;
-                valb += 6;
-                if (valb >= 0) {
-                    out.push_back(static_cast<uint8_t>((val >> valb) & 0xFF));
-                    valb -= 8;
-                }
             }
             return out;
         }
