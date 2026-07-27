@@ -20,6 +20,7 @@
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/helpers/AxesHelper.hpp"
+#include "threepp/helpers/CameraHelper.hpp"
 #include "threepp/helpers/GridHelper.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
@@ -116,6 +117,10 @@ EditorApp::EditorApp(const Options& options)
     axes_ = AxesHelper::create(1.5f);
     overlay_->add(axes_);
 
+    markers_ = Group::create();
+    markers_->name = "__editor_markers";
+    overlay_->add(markers_);
+
     gizmo_ = std::make_unique<TransformControls>(camera_, canvas_);
     gizmo_->setSize(0.9f);
     overlay_->addRef(*gizmo_);
@@ -167,6 +172,14 @@ EditorApp::EditorApp(const Options& options)
         // The previewed nodes lived in the old scene; restoring would write
         // through dangling pointers. Discard only.
         stopAnimationPreview(false);
+        // Markers and the frustum helper point into the outgoing graph too.
+        // Drop them before anything can dereference an owner that is gone.
+        clearViewportMarkers();
+        if (cameraHelper_) {
+            cameraHelper_->removeFromParent();
+            cameraHelper_.reset();
+            cameraHelperFor_ = nullptr;
+        }
         // Recorded commands point into the old scene too. Re-resolve their
         // targets by uuid against the new graph; commands that cannot (raw
         // captures in property setters) are dropped rather than left dangling.
@@ -276,11 +289,13 @@ int EditorApp::runSelfTest() {
         return found;
     };
     // Overlay children that are not the fixed furniture — i.e. selection
-    // outlines. Exactly one while something is selected, zero otherwise.
+    // outlines. Exactly one while a bounded object is selected, zero otherwise.
     const auto outlineCount = [&] {
         int n = 0;
         for (auto* child : overlay_->children) {
             if (child == grid_.get() || child == axes_.get() ||
+                child == markers_.get() ||
+                child == static_cast<Object3D*>(cameraHelper_.get()) ||
                 child == static_cast<Object3D*>(gizmo_.get())) continue;
             ++n;
         }
@@ -347,6 +362,36 @@ int EditorApp::runSelfTest() {
     } else {
         check(false, "Box available for the undo-across-play drive");
     }
+
+    // Viewport markers and the camera frustum. The marker count is also the
+    // check that the embedded SVG parses — a failure there is silent by
+    // design (the object stays selectable from the hierarchy).
+    step();
+    const auto lightMarkers = viewportMarkers_.size();
+    check(lightMarkers > 0, "template lights have marker icons");
+
+    auto addedCamera = ObjectFactory::createCamera(document_.scene());
+    auto* cameraRaw = addedCamera.get();
+    addObject(addedCamera, document_.scene(), "Add Camera");
+    step();
+    check(viewportMarkers_.size() == lightMarkers + 1, "adding a camera adds a marker");
+    check(selection_.get() == cameraRaw, "the new camera is selected");
+    check(cameraHelper_ != nullptr, "selecting a camera shows the frustum helper");
+    check(!selectionBox_, "a camera gets no degenerate bounding box");
+
+    selectObject(nullptr);
+    step();
+    check(cameraHelper_ == nullptr, "deselecting drops the frustum helper");
+    check(viewportMarkers_.size() == lightMarkers + 1, "the marker outlives deselection");
+
+    selectObject(cameraRaw);
+    step();
+    deleteSelected();
+    step();
+    check(viewportMarkers_.size() == lightMarkers, "deleting the camera drops its marker");
+    check(cameraHelper_ == nullptr, "deleting the camera drops the frustum helper");
+    commands_.undo();// leave the scene as we found it
+    step();
 
     // With a model path on the command line, exercise the async import path
     // end to end: queue -> worker -> finalize -> selected group in the scene.
@@ -984,10 +1029,17 @@ void EditorApp::selectObject(Object3D* object) {
 
     if (object && object != &document_.scene()) {
         gizmo_->attach(*object);
-        selectionBox_ = BoxHelper::create(*object, 0xffcc44);
-        // The outline is editor furniture: it lives under the overlay so it is
-        // never saved and never picked.
-        overlay_->add(selectionBox_);
+        // A camera or a light bounds to nothing, and BoxHelper silently keeps
+        // its degenerate initial geometry in that case — a speck at the origin.
+        // Those objects carry a marker icon (and cameras a frustum) instead.
+        Box3 bounds;
+        bounds.setFromObject(*object);
+        if (!bounds.isEmpty()) {
+            selectionBox_ = BoxHelper::create(*object, 0xffcc44);
+            // The outline is editor furniture: it lives under the overlay so it
+            // is never saved and never picked.
+            overlay_->add(selectionBox_);
+        }
     } else {
         gizmo_->detach();
     }
@@ -1127,6 +1179,9 @@ void EditorApp::refreshSelectionHelpers() {
         selectionBox_->update();
     }
 
+    syncViewportMarkers();
+    syncCameraHelper();
+
     // Snap is a hold-to-engage modifier, exactly like the transform example.
     const bool snap = snapEnabled_ || ImGui::GetIO().KeyShift;
     if (snap) {
@@ -1180,6 +1235,17 @@ void EditorApp::pickAt(float mouseX, float mouseY) {
 
     raycaster_.setFromCamera(ndc, camera_);
     auto intersections = raycaster_.intersectObject(document_.scene(), true);
+
+    // Markers win over geometry regardless of depth: they are drawn on top of
+    // everything, so clicking one has to select its owner even when the icon
+    // floats inside a wall.
+    for (const auto& hit : intersections) {
+        if (!hit.object) continue;
+        if (auto* owner = markerOwnerOf(hit.object)) {
+            selectObject(owner);
+            return;
+        }
+    }
 
     for (const auto& hit : intersections) {
         if (!hit.object) continue;

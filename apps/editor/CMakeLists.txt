@@ -11,6 +11,7 @@ add_executable(threepp_editor
         EditorApp.cpp
         EditorTheme.cpp
         FileBrowser.cpp
+        ViewportMarkers.cpp
         panels/AssetPanel.cpp
         panels/HierarchyPanel.cpp
         panels/InspectorPanel.cpp

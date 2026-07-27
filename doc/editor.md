@@ -60,6 +60,17 @@ Picking selects the top-level object of whatever was hit — clicking an importe
 model selects the model, not one of its sub-meshes. Click again inside the same
 subtree to drill down to the exact node.
 
+**Markers.** Cameras and lights render nothing, so each one gets a billboarded
+icon at a constant screen size, tinted with the accent colour while selected.
+Clicking an icon selects its owner, and it wins over geometry behind it — the
+icons draw on top, so picking follows what you see rather than raw depth order.
+The artwork is SVG parsed at startup by threepp's `SVGLoader` and embedded as
+source in `ViewportMarkers.cpp`, so the editor does not depend on finding asset
+files at runtime. Selecting a camera additionally shows its frustum
+(`CameraHelper`), which tracks fov/near/far edits live. Objects that bound to
+nothing get no selection box — an empty `Box3` would leave `BoxHelper` showing a
+degenerate speck at the origin.
+
 **Hierarchy.** The full `Object3D` tree, selection synced both ways with the
 viewport, double-click to rename, drag-and-drop to reparent (undoable, world
 transform preserved), and a right-click menu with Add ▸ / Duplicate / Delete /

@@ -47,7 +47,9 @@ class ImguiContext;
 
 namespace threepp {
 
+    class CameraHelper;
     class Material;
+    class MeshBasicMaterial;
     class ObjectWithMorphTargetInfluences;
     class Texture;
 
@@ -136,6 +138,16 @@ namespace threepp::editor {
         // --- selection / picking -------------------------------------------
         void selectObject(Object3D* object);
         void refreshSelectionHelpers();
+
+        // --- viewport markers ----------------------------------------------
+        // Billboarded SVG icons standing in for objects that draw nothing
+        // (cameras, lights), plus the frustum helper for a selected camera.
+        void syncViewportMarkers();
+        void syncCameraHelper();
+        void clearViewportMarkers();
+        // The object a marker stands for, or nullptr when `hit` is not part of
+        // one. Lets a click on an icon select its owner.
+        [[nodiscard]] Object3D* markerOwnerOf(Object3D* hit) const;
         // Renders the selected scene camera into a bottom-right inset of the
         // viewport; drawUi frames and labels it via preview_.
         void renderCameraPreview();
@@ -204,6 +216,20 @@ namespace threepp::editor {
         std::shared_ptr<Object3D> axes_;
         std::shared_ptr<BoxHelper> selectionBox_;
         std::unique_ptr<TransformControls> gizmo_;
+
+        // Marker icons. One node per owner, all parented to markers_, which is
+        // itself part of the editor-only overlay.
+        struct ViewportMarker {
+            Object3D* owner = nullptr;
+            std::shared_ptr<Object3D> node;
+            std::vector<std::shared_ptr<MeshBasicMaterial>> materials;
+        };
+        std::shared_ptr<Group> markers_;
+        std::vector<ViewportMarker> viewportMarkers_;
+        // Frustum of the selected camera. Holds a reference to that camera, so
+        // it is torn down whenever the selection or the scene changes.
+        std::shared_ptr<CameraHelper> cameraHelper_;
+        Object3D* cameraHelperFor_ = nullptr;
 
         Raycaster raycaster_;
         std::unique_ptr<ImguiContext> ui_;

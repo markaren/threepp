@@ -22,6 +22,8 @@ namespace threepp::editor::theme {
     ImVec4 danger();
     ImVec4 muted();
     ImVec4 playing();
+    // Tint for an unselected viewport marker icon.
+    ImVec4 markerIdle();
 
 }// namespace threepp::editor::theme
 

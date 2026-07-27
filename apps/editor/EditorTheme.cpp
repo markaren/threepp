@@ -14,6 +14,10 @@ namespace {
     constexpr ImVec4 kDanger{0.90f, 0.42f, 0.40f, 1.00f};
     constexpr ImVec4 kMuted{0.55f, 0.57f, 0.60f, 1.00f};
     constexpr ImVec4 kPlaying{0.35f, 0.82f, 0.45f, 1.00f};
+    // Viewport marker icons at rest: bright enough to read against both the
+    // dark grid and lit geometry, dim enough that the accent still stands out
+    // when the object is selected.
+    constexpr ImVec4 kMarkerIdle{0.78f, 0.80f, 0.84f, 1.00f};
 
     constexpr ImVec4 grey(float v, float a = 1.f) { return {v, v, v, a}; }
 
@@ -25,6 +29,7 @@ ImVec4 threepp::editor::theme::warning() { return kWarning; }
 ImVec4 threepp::editor::theme::danger() { return kDanger; }
 ImVec4 threepp::editor::theme::muted() { return kMuted; }
 ImVec4 threepp::editor::theme::playing() { return kPlaying; }
+ImVec4 threepp::editor::theme::markerIdle() { return kMarkerIdle; }
 
 void threepp::editor::theme::apply(float scale) {
 
