@@ -370,34 +370,11 @@ layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;
 
 #include "probe_common.glsl"// probeIrradiance()
 
-layout(push_constant) uniform Pc {
-    uint  envMipCount;       // PMREM mip levels (>=1)
-    uint  width;
-    uint  height;
-    uint  flags;             // bit 0 = shadows, bit 1 = RT env-visibility (AO/GI)
-    uint  frame;             // sample/frame index — temporal jitter (TAA averages it)
-    uint  emissiveCount;     // # emissive triangles (0 = none)
-    float emissiveTotalPower;// power-CDF total (denominator)
-    float fireflyClamp;      // luminance cap for emissive NEE samples (large = disabled)
-    float oceanFineTileSize; // FFT fine-cascade tile (m); 0 = no ocean fine normal
-    float oceanFoamTileSize; // world-space foam tile (m); 0 = no foam sampling
-    float volDensity;        // volumetric scattering σ (1/m); 0 = beams off
-    float volAniso;          // Henyey-Greenstein g for the beam phase
-    float starIntensity;     // procedural sky star field brightness; 0 = off
-    float camDelta;          // camera WORLD translation this frame (m)
-    float camRot;            // camera forward-direction change this frame (rad)
-    float timeSec;           // wall-clock seconds — foam noise drift (frame-rate independent)
-    float sunTanHalfAngle;   // tan(directional-light angular RADIUS) — soft sun-shadow cone; 0 = hard 1-ray shadow
-    uint  clusterLightCount; // # lights in the cluster-light buffer (0 = none in scene)
-    uint  shadeMode;         // 0 = dispatch A (today's shading over the resolved G-buffer, always runs).
-                              // 1 = dispatch B (MSAA only): per-sample shading at COMPLEX (edge) pixels —
-                              // early-outs elsewhere; shades the single largest non-dominant sample cluster
-                              // and accumulates its weighted contribution into outImage. See main()'s top
-                              // (tap selection) and bottom (imageStore gating) for the shadeMode==1 branches.
-    uint  preExpBits;        // float-bits: pre-exposure baked into every outImage (sceneHdr) store —
-                              // physical-camera mode keeps 100k-lux radiance inside fp16.
-                              // 1.0 in legacy mode: an exact no-op multiply.
-} pc;
+// Shared ShadePush block (vulkan_shared.h) — field docs + the flags bit
+// table live there. shadeMode == 1 is dispatch B (MSAA only): per-sample
+// shading at COMPLEX (edge) pixels — see main()'s top (tap selection) and
+// bottom (imageStore gating) for the shadeMode == 1 branches.
+layout(push_constant) uniform Pc { ShadePush pc; };
 
 // DEPTH-AWARE 2×2 upsample of the half-res cloud layer at this full-res pixel.
 // A plain bilinear tap bleeds across depth discontinuities: a full-res pixel

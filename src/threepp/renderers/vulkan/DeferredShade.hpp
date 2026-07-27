@@ -151,59 +151,71 @@ namespace threepp::vulkan {
         // reallocates (mirrors the RT rewriteEmissiveTriDescriptors).
         void rewriteEmissive(uint32_t frame, VkBuffer emissiveTriBuf);
 
-        // Dispatch the deferred shade over the render extent. width/height =
-        // the deferred render extent (== G-buffer extent). envMipCount drives the
-        // roughness→mip mapping for specular IBL. The caller is responsible for
+        // Everything the deferred-shade dispatch needs, filled by NAME at the
+        // call site (a 24-argument positional list is a silent-swap trap).
+        // The bools become pc.flags bits; the rest map 1:1 onto the shared
+        // ShadePush block (vulkan_shared.h). The caller is responsible for
         // making the G-buffer visible to COMPUTE (the raster G-buffer render
         // pass declares a COMPUTE consumer dependency) and for the sceneHdr
         // write→read barrier (BloomPass::recordDispatch's leading barrier).
-        // camDeltaLen/camRotAngle: the camera's WORLD motion this frame (m,
-        // radians) — the reflection history policy needs it because a chase-cam
-        // surface (sunroof on a followed car) is screen-stationary (motion
-        // vectors ~0) while its view-dependent reflection content slides.
-        // timeSec: wall-clock seconds (frame-rate independent) — drives the
-        // foam-noise drift so its speed doesn't scale with fps.
-        // sunTanHalfAngle: tan of the directional-light angular RADIUS — jitters
-        // the primary sun-shadow ray within that cone (0 = hard 1-ray shadow).
-        // gbufMsaaSamples: setGbufferMsaa's sample count (1/2/4). Packed into
-        // spare pc.flags bits (5-6) so dispatch A can weight complex pixels
-        // by their dominant-cluster fraction and blend sky-minority coverage;
-        // 1 = today's behaviour (no weighting, MS G-buffer bindings unused).
-        // shadeMode: 0 = dispatch A (always). 1 = dispatch B, the MSAA
-        // per-sample edge-shading pass — caller only issues this when
-        // gbufMsaaSamples > 1, AFTER dispatch A and a compute->compute
-        // barrier (dispatch B reads dispatch A's outImage write).
-        // shadeBActive: whether dispatch B WILL run this frame — dispatch A
-        // reserves the geometry-minority coverage weight only then (flags
-        // bit 7); otherwise it folds that weight into the dominant surface.
-        // clusterLightCount: # lights in the cluster buffer this frame — the
-        // shade's analytic split reads its cell's list when > 0 (the caller
-        // must have recorded recordClusterBuild + a compute barrier first).
-        // preExpBits: float-bits of the pre-exposure to bake into every
-        // sceneHdr store (physical-camera mode; keeps 100k-lux radiance
-        // inside fp16). 0x3F800000 = 1.0f = legacy.
-        // bgIsSolidColor: the background is a DISPLAY-referred solid colour
-        // (the composite bypass restores it verbatim) — the sky store skips
-        // the pre-exposure so sky and geometry share one value domain
-        // (flags bit 10; without it any DoF/bloom mixing into sky pixels is
-        // amplified 1/preExposure at the bypass → white silhouette rims).
-        void recordDispatch(VkCommandBuffer cb, uint32_t frame,
-                            uint32_t width, uint32_t height, uint32_t envMipCount,
-                            bool shadows, bool ao, uint32_t frameCounter,
-                            uint32_t emissiveCount, float emissiveTotalPower,
-                            float fireflyClamp,
-                            float oceanFineTileSize, float oceanFoamTileSize,
-                            bool denoise, bool restirDI, bool volFog,
-                            float volDensity, float volAniso,
-                            float starIntensity,
-                            float camDeltaLen, float camRotAngle,
-                            float timeSec, float sunTanHalfAngle,
-                            uint32_t gbufMsaaSamples = 1, uint32_t shadeMode = 0,
-                            bool shadeBActive = false,
-                            uint32_t clusterLightCount = 0,
-                            bool froxelsActive = false,
-                            uint32_t preExpBits = 0x3F800000u,
-                            bool bgIsSolidColor = false);
+        struct DispatchParams {
+            uint32_t width  = 0;// deferred render extent (== G-buffer extent)
+            uint32_t height = 0;
+            uint32_t envMipCount = 1;// PMREM mips — roughness→mip for specular IBL
+            bool shadows = true;
+            bool ao      = true;// RT env-visibility (AO/GI)
+            uint32_t frameCounter  = 0;
+            uint32_t emissiveCount = 0;
+            float emissiveTotalPower = 0.f;
+            float fireflyClamp       = 0.f;
+            float oceanFineTileSize  = 0.f;
+            float oceanFoamTileSize  = 0.f;
+            bool denoise  = true;
+            bool restirDI = false;
+            bool volFog   = false;// volumetric spot-light beams
+            float volDensity    = 0.f;
+            float volAniso      = 0.f;
+            float starIntensity = 0.f;
+            // Camera WORLD motion this frame (m, radians) — the reflection
+            // history policy needs it because a chase-cam surface (sunroof on
+            // a followed car) is screen-stationary (motion vectors ~0) while
+            // its view-dependent reflection content slides.
+            float camDeltaLen = 0.f;
+            float camRotAngle = 0.f;
+            // Wall-clock seconds (frame-rate independent) — foam-noise drift.
+            float timeSec = 0.f;
+            // tan of the directional-light angular RADIUS — jitters the
+            // primary sun-shadow ray within that cone (0 = hard 1-ray shadow).
+            float sunTanHalfAngle = 0.f;
+            // setGbufferMsaa's sample count (1/2/4) → pc.flags bits 5-6 so
+            // dispatch A can weight complex pixels by their dominant-cluster
+            // fraction; 1 = no weighting, MS G-buffer bindings unused.
+            uint32_t gbufMsaaSamples = 1;
+            // 0 = dispatch A (always). 1 = dispatch B, the MSAA per-sample
+            // edge-shading pass — only when gbufMsaaSamples > 1, AFTER
+            // dispatch A and a compute→compute barrier (B reads A's write).
+            uint32_t shadeMode = 0;
+            // Whether dispatch B WILL run this frame — dispatch A reserves
+            // the geometry-minority coverage weight only then (flags bit 7);
+            // otherwise it folds that weight into the dominant surface.
+            bool shadeBActive = false;
+            // # lights in the cluster buffer — the shade's analytic split
+            // reads its cell's list when > 0 (the caller must have recorded
+            // recordClusterBuild + a compute barrier first).
+            uint32_t clusterLightCount = 0;
+            bool froxelsActive = false;// froxel LUT valid this frame (flags bit 8)
+            // Float-bits of the pre-exposure baked into every sceneHdr store
+            // (physical camera keeps 100k lux in fp16). 0x3F800000 = legacy 1.
+            uint32_t preExpBits = 0x3F800000u;
+            // DISPLAY-referred solid background (the composite bypass restores
+            // it verbatim) — the sky store skips the pre-exposure so sky and
+            // geometry share one value domain (flags bit 10; without it any
+            // DoF/bloom mixing into sky pixels is amplified 1/preExposure at
+            // the bypass → white silhouette rims).
+            bool bgIsSolidColor = false;
+        };
+        // Dispatch the deferred shade over the render extent.
+        void recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p);
 
         // Clustered light culling: one thread per cluster cell tests every
         // light's cull sphere against the cell's view-space AABB and writes

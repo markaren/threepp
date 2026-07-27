@@ -3,6 +3,8 @@
 #extension GL_EXT_ray_query : require
 #extension GL_GOOGLE_include_directive : enable
 
+#include "vulkan_shared.h"// ShadePush
+
 // Froxel volumetric lighting — INJECT (Wronski 2014 / Frostbite). One thread
 // per froxel of a kFroxelX×kFroxelY×kFroxelZ view-frustum grid (screen tiles ×
 // exponential view-Z slices): computes the in-scattered radiance PER UNIT
@@ -107,27 +109,9 @@ float cloudShadowSample(vec3 worldPos) {
     return texture(cloudShadowTex, suv).r;
 }
 
-layout(push_constant) uniform Pc {
-    uint  envMipCount;
-    uint  width;
-    uint  height;
-    uint  flags;             // bit 4 (16u) = volumetric dir-light fog enabled
-    uint  frame;
-    uint  emissiveCount;
-    float emissiveTotalPower;
-    float fireflyClamp;
-    float oceanFineTileSize;
-    float oceanFoamTileSize;
-    float volDensity;
-    float volAniso;
-    float starIntensity;
-    float camDelta;
-    float camRot;
-    float timeSec;
-    float sunTanHalfAngle;
-    uint  clusterLightCount;
-    uint  shadeMode;
-} pc;
+// Shared ShadePush block (vulkan_shared.h) — this pass reads only the
+// fields it names; the host zero-fills the rest.
+layout(push_constant) uniform Pc { ShadePush pc; };
 
 const float PI = 3.14159265358979;
 

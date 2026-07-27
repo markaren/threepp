@@ -2,6 +2,8 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : enable
 
+#include "vulkan_shared.h"// ShadePush
+
 // Far-field volumetric cloud march — HALF-RESOLUTION, temporally reprojected.
 //
 // One thread per HALF-res pixel raymarches the [clouds.bottomY, clouds.topY]
@@ -84,27 +86,9 @@ layout(set = 0, binding = 60) uniform sampler2D cloudColorPrevTex;              
 layout(set = 0, binding = 62, rgba16f) uniform writeonly image2D cloudAuxImage;   // r=mean depth, g=histLen, b=scene dist, a=epoch
 layout(set = 0, binding = 63) uniform sampler2D cloudAuxPrevTex;                   // prev-frame aux
 
-layout(push_constant) uniform Pc {
-    uint  envMipCount;
-    uint  width;              // FULL render extent
-    uint  height;
-    uint  flags;
-    uint  frame;
-    uint  emissiveCount;
-    float emissiveTotalPower;
-    float fireflyClamp;
-    float oceanFineTileSize;
-    float oceanFoamTileSize;
-    float volDensity;
-    float volAniso;
-    float starIntensity;
-    float camDelta;
-    float camRot;
-    float timeSec;
-    float sunTanHalfAngle;
-    uint  clusterLightCount;
-    uint  shadeMode;
-} pc;
+// Shared ShadePush block (vulkan_shared.h) — this pass reads only the
+// fields it names; the host zero-fills the rest.
+layout(push_constant) uniform Pc { ShadePush pc; };
 
 const float PI = 3.14159265358979;
 

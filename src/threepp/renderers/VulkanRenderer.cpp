@@ -203,24 +203,38 @@ namespace threepp {
             cldDep.pMemoryBarriers = &cldBar;
             vkCmdPipelineBarrier2(cb, &cldDep);
         }
+        vulkan::DeferredShade::DispatchParams shadeParams{};
+        shadeParams.width              = regionRenderExt_.width;
+        shadeParams.height             = regionRenderExt_.height;
+        shadeParams.envMipCount        = envImage.mipLevels;
+        shadeParams.shadows            = true;
+        shadeParams.ao                 = deferredAO_;
+        shadeParams.frameCounter       = sampleIndex;
+        shadeParams.emissiveCount      = emissiveTriCountThisFrame_;
+        shadeParams.emissiveTotalPower = emissiveTotalPowerThisFrame_;
+        shadeParams.fireflyClamp       = fireflyClamp_;
+        shadeParams.oceanFineTileSize  = oceanFineTileSize;
+        shadeParams.oceanFoamTileSize  = oceanFoamTileSize;
+        shadeParams.denoise            = denoiseEnabled_;
+        shadeParams.restirDI           = restirDIEnabled_;
+        shadeParams.volFog             = deferredVolFog_;
+        shadeParams.volDensity         = deferredVolDensity_;
+        shadeParams.volAniso           = deferredVolAniso_;
+        shadeParams.starIntensity      = deferredStarIntensity_;
+        shadeParams.camDeltaLen        = deferredCamDeltaLen_;
+        shadeParams.camRotAngle        = deferredCamRotAngle_;
+        shadeParams.timeSec            = static_cast<float>(glfwGetTime());
+        shadeParams.sunTanHalfAngle    = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
+        shadeParams.gbufMsaaSamples    = gbufMsaaSamples_;
+        shadeParams.shadeMode          = 0u;// dispatch A
+        shadeParams.shadeBActive       = shadeBActive;
+        shadeParams.clusterLightCount  = clusterLightCountThisFrame_;
+        shadeParams.froxelsActive      = froxelsActive;
+        shadeParams.preExpBits         = preExpBits_;
+        shadeParams.bgIsSolidColor     = envIsBgColor;
+
         gpuTimings_->begin(cb, TP_DeferredShade, currentFrame);
-        deferredShade_->recordDispatch(cb, currentFrame,
-                                       regionRenderExt_.width, regionRenderExt_.height,
-                                       envImage.mipLevels, /*shadows=*/true,
-                                       /*ao=*/deferredAO_, sampleIndex,
-                                       emissiveTriCountThisFrame_,
-                                       emissiveTotalPowerThisFrame_,
-                                       fireflyClamp_,
-                                       oceanFineTileSize, oceanFoamTileSize,
-                                       denoiseEnabled_, restirDIEnabled_, deferredVolFog_,
-                                       deferredVolDensity_, deferredVolAniso_,
-                                       deferredStarIntensity_,
-                                       deferredCamDeltaLen_, deferredCamRotAngle_,
-                                       static_cast<float>(glfwGetTime()),
-                                       std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
-                                       gbufMsaaSamples_, /*shadeMode=*/0u, shadeBActive,
-                                       clusterLightCountThisFrame_, froxelsActive,
-                                       preExpBits_, envIsBgColor);
+        deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
         gpuTimings_->end(cb, TP_DeferredShade, currentFrame);// pathTraceMs = deferred SHADE only
 
         // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
@@ -246,24 +260,12 @@ namespace threepp {
             shadeDep.pMemoryBarriers    = &shadeBar;
             vkCmdPipelineBarrier2(cb, &shadeDep);
 
+            // Dispatch B reuses dispatch A's params verbatim — only the mode
+            // differs (and shadeBActive is trivially true when B itself runs).
+            shadeParams.shadeMode    = 1u;
+            shadeParams.shadeBActive = true;
             gpuTimings_->begin(cb, TP_ShadeB, currentFrame);
-            deferredShade_->recordDispatch(cb, currentFrame,
-                                           regionRenderExt_.width, regionRenderExt_.height,
-                                           envImage.mipLevels, /*shadows=*/true,
-                                           /*ao=*/deferredAO_, sampleIndex,
-                                           emissiveTriCountThisFrame_,
-                                           emissiveTotalPowerThisFrame_,
-                                           fireflyClamp_,
-                                           oceanFineTileSize, oceanFoamTileSize,
-                                           denoiseEnabled_, restirDIEnabled_, deferredVolFog_,
-                                           deferredVolDensity_, deferredVolAniso_,
-                                           deferredStarIntensity_,
-                                           deferredCamDeltaLen_, deferredCamRotAngle_,
-                                           static_cast<float>(glfwGetTime()),
-                                           std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
-                                           gbufMsaaSamples_, /*shadeMode=*/1u, /*shadeBActive=*/true,
-                                           clusterLightCountThisFrame_, froxelsActive,
-                                           preExpBits_, envIsBgColor);
+            deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
             gpuTimings_->end(cb, TP_ShadeB, currentFrame);
 
             // Dispatch B's outImage write -> bloom/composite's read.

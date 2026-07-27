@@ -1,5 +1,8 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "vulkan_shared.h"// ShadePush
 
 // Clustered light culling for the deferred renderer. The scene's point/spot
 // lights (ALL of them — the 8-per-type UBO caps only bound the legacy paths)
@@ -37,27 +40,9 @@ struct ClusterLight {
 layout(set = 0, binding = 48, scalar) buffer ClusterGridBuf { uint clusterGrid[]; };
 layout(set = 0, binding = 49, scalar) readonly buffer ClusterLightsBuf { ClusterLight clusterLights[]; };
 
-layout(push_constant) uniform Pc {
-    uint  envMipCount;
-    uint  width;
-    uint  height;
-    uint  flags;
-    uint  frame;
-    uint  emissiveCount;
-    float emissiveTotalPower;
-    float fireflyClamp;
-    float oceanFineTileSize;
-    float oceanFoamTileSize;
-    float volDensity;
-    float volAniso;
-    float starIntensity;
-    float camDelta;
-    float camRot;
-    float timeSec;
-    float sunTanHalfAngle;
-    uint  clusterLightCount;
-    uint  shadeMode;
-} pc;
+// Shared ShadePush block (vulkan_shared.h) — this pass reads only the
+// fields it names; the host zero-fills the rest.
+layout(push_constant) uniform Pc { ShadePush pc; };
 
 // Grid + Z mapping — KEEP IN SYNC with deferred_shade.comp. The Z slices are
 // a FIXED exponential ladder over view-space distance [kClusterZMin,

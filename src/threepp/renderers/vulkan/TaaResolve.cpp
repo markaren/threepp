@@ -740,8 +740,8 @@ namespace threepp::vulkan {
         // Layout mirrors the shader's std430 push block: 7 scalars, 4 bytes
         // of pad, then the column-major mat4 at offset 32. physIn/physOut are
         // each packed into ONE uint (w|h<<16, like dstOffset). Offsets 104/108
-        // are reserved padding (the shader's PC block keeps two float slots
-        // there so depthLin stays 16-byte-aligned at offset 112) — left zero.
+        // carry this frame's jitter (jitterTexX/Y — the slots double as the
+        // padding that keeps depthLin 16-byte-aligned at offset 112).
         float pc[32] = {};
         std::memcpy(&pc[0], &alphaBits, 4);
         const uint32_t dims[4] = {outWidth, outHeight, inWidth, inHeight};
@@ -754,19 +754,15 @@ namespace threepp::vulkan {
         pc[6] = dtFrames;
         const uint32_t packedDst = (dstX & 0xFFFFu) | (dstY << 16);
         std::memcpy(&pc[7], &packedDst, 4);// offset 28: swapchain write offset
-        std::memcpy(&pc[8], skyReproj, 64);// offset 32: mat4
-        // Smuggle this frame's jitter (RENDER TEXELS) into the mat4's dead
-        // z-column (column-major: col 2 rows 0/1 = pc[16]/pc[17]). The shader
-        // only ever applies skyReproj to vec4(ndc, 0, 1), so column 2
-        // multiplies z = 0 and is inert — see the header-comment contract.
-        // Patched ONLY in this resolve's copy; the tilemax/mblur push blocks
-        // below keep the caller's untouched matrix.
-        pc[16] = jitterTexX;
-        pc[17] = jitterTexY;
+        std::memcpy(&pc[8], skyReproj, 64);// offset 32: mat4 (verbatim — never patched)
         const uint32_t packedPhysIn  = (physInW  & 0xFFFFu) | (physInH  << 16);
         const uint32_t packedPhysOut = (physOutW & 0xFFFFu) | (physOutH << 16);
         std::memcpy(&pc[24], &packedPhysIn,  4);// offset 96
         std::memcpy(&pc[25], &packedPhysOut, 4);// offset 100
+        // This frame's jitter (RENDER TEXELS) in its own slots (offsets
+        // 104/108) — the resolve's jitter cancellation reads pc.jitterTexX/Y.
+        pc[26] = jitterTexX;
+        pc[27] = jitterTexY;
         // offset 112: reverse-Z viewZ linearization (A,B,C,D) for depth
         // disocclusion. Null ⇒ leave zero ⇒ shader disables the gate.
         if (depthLin) std::memcpy(&pc[28], depthLin, 16);

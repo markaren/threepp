@@ -86,11 +86,6 @@ layout(push_constant) uniform Pc {
     // prevVPunjit · currVPunjit⁻¹ — maps current CLIP at the far plane
     // (reversed-Z: z = 0) to previous clip. Supplies SKY pixels their true
     // rotation-induced motion. std430: mat4 aligns to offset 32.
-    // SMUGGLED: column 2 rows 0/1 ([2].xy) carry this frame's Halton jitter
-    // in RENDER TEXELS for the current-sample jitter cancellation (see main).
-    // Legal because the matrix is only ever applied to vec4(ndc, 0, 1) —
-    // column 2 multiplies z = 0 and is inert. The 128-byte push-constant
-    // budget (cross-vendor guaranteed minimum) is otherwise full.
     mat4  skyReproj;
     // Split-screen: full (physical) texture sizes for UV normalisation, each
     // packed as (w | h<<16) — same convention as dstOffset. The pane content
@@ -99,11 +94,13 @@ layout(push_constant) uniform Pc {
     // Default (phys == region) → scale 1 → identical to full-frame.
     uint  physIn;    // physInW | physInH << 16
     uint  physOut;   // physOutW | physOutH << 16
-    // Reserved padding (offsets 104/108): kept so the vec4 depthLin below
-    // stays 16-byte-aligned at offset 112, matching the host push block
-    // (TaaResolve::recordResolve leaves these two slots zero).
-    float _reserved0;
-    float _reserved1;
+    // This frame's Halton sub-pixel jitter in RENDER TEXELS (offsets
+    // 104/108 — these two slots also keep the vec4 depthLin below 16-byte-
+    // aligned at offset 112). (0, 0) whenever the raster is unjittered
+    // (MSAA mode, event camera). Consumed by the jitter cancellation in
+    // main(); see TaaResolve::recordResolve for the host side.
+    float jitterTexX;
+    float jitterTexY;
     // Reverse-Z view-depth linearization terms (A,B,C,D): viewZ = (A·d+B)/(C·d+D),
     // taken from the inverse reverse-Z projection's z/w rows. Lets the depth
     // disocclusion gate compare surfaces in linear view-Z (matches deferred_shade).
@@ -254,12 +251,11 @@ void main() {
     // input. History reprojection needs NO extra term — motion vectors are
     // jitter-free and the history itself is unjittered-anchored from here on.
     //
-    // The jitter (in RENDER TEXELS) rides in skyReproj's dead z-column: the
-    // matrix is only ever applied to vec4(ndc, 0, 1), so column 2 multiplies
-    // z = 0 and is inert — see TaaResolve::recordResolve. (0,0) whenever the
-    // raster is unjittered (MSAA mode, event camera) — every path below then
-    // collapses to the exact pre-fix arithmetic.
-    const vec2 jitTex   = vec2(pc.skyReproj[2].x, pc.skyReproj[2].y);
+    // The jitter (in RENDER TEXELS) arrives in its own push-constant slots
+    // (pc.jitterTexX/Y). (0,0) whenever the raster is unjittered (MSAA mode,
+    // event camera) — every path below then collapses to the exact pre-fix
+    // arithmetic.
+    const vec2 jitTex   = vec2(pc.jitterTexX, pc.jitterTexY);
     const bool jittered = any(notEqual(jitTex, vec2(0.0)));
     // Clamp half a texel inside the pane so the sub-texel offset can't read
     // beyond the region at the borders.

@@ -783,22 +783,7 @@ namespace threepp::vulkan {
         vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
     }
 
-    void DeferredShade::recordDispatch(VkCommandBuffer cb, uint32_t frame,
-                                       uint32_t width, uint32_t height, uint32_t envMipCount,
-                                       bool shadows, bool ao, uint32_t frameCounter,
-                                       uint32_t emissiveCount, float emissiveTotalPower,
-                                       float fireflyClamp,
-                                       float oceanFineTileSize, float oceanFoamTileSize,
-                                       bool denoise, bool restirDI, bool volFog,
-                                       float volDensity, float volAniso,
-                                       float starIntensity,
-                                       float camDeltaLen, float camRotAngle,
-                                       float timeSec, float sunTanHalfAngle,
-                                       uint32_t gbufMsaaSamples, uint32_t shadeMode,
-                                       bool shadeBActive, uint32_t clusterLightCount,
-                                       bool froxelsActive,
-                                       uint32_t preExpBits,
-                                       bool bgIsSolidColor) {
+    void DeferredShade::recordDispatch(VkCommandBuffer cb, uint32_t frame, const DispatchParams& p) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
@@ -807,7 +792,7 @@ namespace threepp::vulkan {
         // geometry-minority coverage weight for it; with bit 7 clear that
         // weight folds back into the dominant surface (no energy loss). Sky
         // minority coverage is ALWAYS blended by dispatch A itself.
-        const uint32_t msaaCode = gbufMsaaSamples >= 4u ? 2u : (gbufMsaaSamples >= 2u ? 1u : 0u);
+        const uint32_t msaaCode = p.gbufMsaaSamples >= 4u ? 2u : (p.gbufMsaaSamples >= 2u ? 1u : 0u);
         // THREEPP_VK_SHADOW_DWELL=0: kill switch for the moving-caster shadow
         // dwell/top-up machinery (perf-triage instrument — if FPS recovers with
         // it set, the cost is the top-up RAYS; if not, it's deferred_shade
@@ -816,33 +801,34 @@ namespace threepp::vulkan {
             const char* e = std::getenv("THREEPP_VK_SHADOW_DWELL");
             return e && e[0] == '0';
         }();
-        const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u) | (denoise ? 4u : 0u)
-                             | (restirDI ? 8u : 0u) | (volFog ? 16u : 0u) | (msaaCode << 5u)
-                             | (shadeBActive ? 128u : 0u)
-                             | (froxelsActive ? 256u : 0u)  // froxel LUT valid this frame
-                             | (shadowDwellOff ? 512u : 0u)// bit 9: shadow dwell kill switch (was SSR)
-                             | (bgIsSolidColor ? 1024u : 0u);// solid bg: sky store NOT pre-exposed
-        uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits, starBits,
-                camDeltaBits, camRotBits, timeBits, sunTanBits;
-        std::memcpy(&emPowerBits,   &emissiveTotalPower, sizeof(emPowerBits));
-        std::memcpy(&fireflyBits,   &fireflyClamp,       sizeof(fireflyBits));
-        std::memcpy(&oceanFineBits, &oceanFineTileSize,  sizeof(oceanFineBits));
-        std::memcpy(&oceanFoamBits, &oceanFoamTileSize,  sizeof(oceanFoamBits));
-        std::memcpy(&volDensBits,   &volDensity,         sizeof(volDensBits));
-        std::memcpy(&volAnisoBits,  &volAniso,           sizeof(volAnisoBits));
-        std::memcpy(&starBits,      &starIntensity,      sizeof(starBits));
-        std::memcpy(&camDeltaBits,  &camDeltaLen,        sizeof(camDeltaBits));
-        std::memcpy(&camRotBits,    &camRotAngle,        sizeof(camRotBits));
-        std::memcpy(&timeBits,      &timeSec,            sizeof(timeBits));
-        std::memcpy(&sunTanBits,    &sunTanHalfAngle,    sizeof(sunTanBits));
-        const uint32_t pc[20] = {envMipCount, width, height, flags,
-                                 frameCounter, emissiveCount, emPowerBits, fireflyBits,
-                                 oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits,
-                                 starBits, camDeltaBits, camRotBits, timeBits,
-                                 sunTanBits, clusterLightCount, shadeMode,
-                                 preExpBits};
-        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
-        vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
+        ShadePush push{};
+        push.envMipCount        = p.envMipCount;
+        push.width              = p.width;
+        push.height             = p.height;
+        push.flags = (p.shadows ? 1u : 0u) | (p.ao ? 2u : 0u) | (p.denoise ? 4u : 0u)
+                   | (p.restirDI ? 8u : 0u) | (p.volFog ? 16u : 0u) | (msaaCode << 5u)
+                   | (p.shadeBActive ? 128u : 0u)
+                   | (p.froxelsActive ? 256u : 0u)  // froxel LUT valid this frame
+                   | (shadowDwellOff ? 512u : 0u)   // bit 9: shadow dwell kill switch (was SSR)
+                   | (p.bgIsSolidColor ? 1024u : 0u);// solid bg: sky store NOT pre-exposed
+        push.frame              = p.frameCounter;
+        push.emissiveCount      = p.emissiveCount;
+        push.emissiveTotalPower = p.emissiveTotalPower;
+        push.fireflyClamp       = p.fireflyClamp;
+        push.oceanFineTileSize  = p.oceanFineTileSize;
+        push.oceanFoamTileSize  = p.oceanFoamTileSize;
+        push.volDensity         = p.volDensity;
+        push.volAniso           = p.volAniso;
+        push.starIntensity      = p.starIntensity;
+        push.camDelta           = p.camDeltaLen;
+        push.camRot             = p.camRotAngle;
+        push.timeSec            = p.timeSec;
+        push.sunTanHalfAngle    = p.sunTanHalfAngle;
+        push.clusterLightCount  = p.clusterLightCount;
+        push.shadeMode          = p.shadeMode;
+        push.preExpBits         = p.preExpBits;
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+        vkCmdDispatch(cb, (p.width + 7u) / 8u, (p.height + 7u) / 8u, 1);
     }
 
     void DeferredShade::recordClusterBuild(VkCommandBuffer cb, uint32_t frame,
@@ -851,13 +837,13 @@ namespace threepp::vulkan {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, clusterPipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
-        // Shared 19-uint push-constant block — the cull consumes width/height
-        // (tile footprint) + clusterLightCount only; the rest ride as zeros.
-        uint32_t pc[19] = {};
-        pc[1]  = width;
-        pc[2]  = height;
-        pc[17] = lightCount;
-        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+        // Shared ShadePush block — the cull consumes width/height (tile
+        // footprint) + clusterLightCount only; the rest ride as zeros.
+        ShadePush push{};
+        push.width             = width;
+        push.height            = height;
+        push.clusterLightCount = lightCount;
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         // One thread per cluster cell (16×8×24 = 3072, local_size_x = 64).
         vkCmdDispatch(cb, (16u * 8u * 24u + 63u) / 64u, 1, 1);
     }
@@ -868,25 +854,25 @@ namespace threepp::vulkan {
                                       uint32_t frameCounter,
                                       float camDeltaLen, float camRotAngle,
                                       uint32_t clusterLightCount) {
-        // Shared 19-uint push block — the froxel passes consume width/height
+        // Shared ShadePush block — the froxel passes consume width/height
         // (cluster-cell mapping), the volFog flag, frame, the beam density/
         // anisotropy, the camera-motion history gates and the cluster count.
-        uint32_t pc[19] = {};
-        pc[1] = width;
-        pc[2] = height;
-        pc[3] = volFog ? 16u : 0u;
-        pc[4] = frameCounter;
-        std::memcpy(&pc[10], &volDensity,  sizeof(uint32_t));
-        std::memcpy(&pc[11], &volAniso,    sizeof(uint32_t));
-        std::memcpy(&pc[13], &camDeltaLen, sizeof(uint32_t));
-        std::memcpy(&pc[14], &camRotAngle, sizeof(uint32_t));
-        pc[17] = clusterLightCount;
+        ShadePush push{};
+        push.width             = width;
+        push.height            = height;
+        push.flags             = volFog ? 16u : 0u;
+        push.frame             = frameCounter;
+        push.volDensity        = volDensity;
+        push.volAniso          = volAniso;
+        push.camDelta          = camDeltaLen;
+        push.camRot            = camRotAngle;
+        push.clusterLightCount = clusterLightCount;
 
         // Inject: one thread per froxel (128×72×64, local 4×4×4).
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, froxelInjectPipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
-        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         vkCmdDispatch(cb, 128u / 4u, 72u / 4u, 64u / 4u);
 
         // Inject's scatter writes → integrate's reads.
@@ -900,7 +886,7 @@ namespace threepp::vulkan {
 
         // Integrate: one thread per froxel column (128×72, local 8×8).
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, froxelIntegratePipe_);
-        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         vkCmdDispatch(cb, 128u / 8u, 72u / 8u, 1);
     }
 
@@ -908,36 +894,36 @@ namespace threepp::vulkan {
                                          uint32_t width, uint32_t height, uint32_t envMipCount,
                                          uint32_t frameCounter,
                                          float camDeltaLen, float camRotAngle) {
-        // Shared 19-uint push block — the cloud march consumes envMipCount
+        // Shared ShadePush block — the cloud march consumes envMipCount
         // (ambient LOD), the FULL render extent (it derives half res + the
         // primary rays), frame (blue-noise jitter) and the camera-motion gates
         // (temporal history shortening). The rest ride as zeros.
-        uint32_t pc[19] = {};
-        pc[0] = envMipCount;
-        pc[1] = width;
-        pc[2] = height;
-        pc[4] = frameCounter;
-        std::memcpy(&pc[13], &camDeltaLen, sizeof(uint32_t));
-        std::memcpy(&pc[14], &camRotAngle, sizeof(uint32_t));
+        ShadePush push{};
+        push.envMipCount = envMipCount;
+        push.width       = width;
+        push.height      = height;
+        push.frame       = frameCounter;
+        push.camDelta    = camDeltaLen;
+        push.camRot      = camRotAngle;
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cloudMarchPipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
-        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         // One thread per HALF-res pixel (local 8×8).
         const uint32_t hw = (width + 1u) / 2u, hh = (height + 1u) / 2u;
         vkCmdDispatch(cb, (hw + 7u) / 8u, (hh + 7u) / 8u, 1);
     }
 
     void DeferredShade::recordCloudShadow(VkCommandBuffer cb, uint32_t frame, uint32_t frameCounter) {
-        // Shared 19-uint push block — the shadow pass consumes only frame (and
+        // Shared ShadePush block — the shadow pass consumes only frame (and
         // reads the cloud shell + sun from the UBOs). The rest ride as zeros.
-        uint32_t pc[19] = {};
-        pc[4] = frameCounter;
+        ShadePush push{};
+        push.frame = frameCounter;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cloudShadowPipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
-        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
         // One thread per texel of the fixed 512² map (local 8×8).
         vkCmdDispatch(cb, 512u / 8u, 512u / 8u, 1);
     }

@@ -100,9 +100,8 @@ namespace threepp::vulkan {
         // frame read at the output pixel's UNJITTERED center — without this
         // the composed output translates with the 8-phase jitter pattern
         // (the systemic "everything shakes", measured ±0.9 px global shift).
-        // Rides in the push constants inside skyReproj's dead z-column (the
-        // matrix is only ever applied to vec4(ndc, 0, 1)) because the
-        // 128-byte push-constant budget is otherwise full.
+        // Carried in its own push-constant slots at offsets 104/108 (which
+        // double as the padding that keeps depthLin 16-byte-aligned).
         void recordResolve(VkCommandBuffer cb,
                            uint32_t frame,
                            uint32_t imageIndex,

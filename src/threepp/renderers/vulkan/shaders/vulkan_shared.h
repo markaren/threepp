@@ -220,4 +220,83 @@ struct MaterialDesc {
 
 #endif  // __cplusplus
 
+// ── ShadePush ───────────────────────────────────────────────────────────────
+// The ONE push-constant block for the deferred-shade pipeline family
+// (deferred_shade, cluster_build, froxel_inject, froxel_integrate,
+// cloud_march, cloud_shadow — all created against the same 80-byte push
+// range in DeferredShade::createPipeline). Each pass reads the fields it
+// needs and leaves the rest zero; the host fills the struct by NAME
+// (DeferredShade.cpp), so there is no positional index to drift between
+// C++ and GLSL. Every member is a 4-byte scalar, so the C++ layout, std430
+// and scalar block layout agree byte-for-byte (static_assert below).
+//
+// flags bits: 0 = shadows, 1 = RT env-visibility (AO/GI), 2 = denoise,
+// 3 = ReSTIR DI, 4 = volumetric dir-light fog, 5-6 = G-buffer MSAA code
+// (0 = 1x, 1 = 2x, 2 = 4x), 7 = dispatch B runs this frame, 8 = froxel LUT
+// valid this frame, 9 = shadow-dwell kill switch, 10 = solid display-
+// referred background (sky store skips the pre-exposure).
+//
+// NO default member initializers on the C++ side: `ShadePush p{};` must
+// zero-fill, exactly like the positional `uint32_t pc[19] = {}` blocks it
+// replaced, so passes that leave a field unset push the same bytes.
+
+#ifdef __cplusplus
+namespace threepp::vulkan {
+    struct ShadePush {
+        uint32_t envMipCount;      // PMREM mip levels (>= 1); shade + cloud ambient LOD
+        uint32_t width;            // deferred render extent (== G-buffer extent)
+        uint32_t height;
+        uint32_t flags;            // bit table above
+        uint32_t frame;            // frame/sample index — temporal jitter seeds
+        uint32_t emissiveCount;    // # emissive triangles (0 = none)
+        float emissiveTotalPower;  // emissive power-CDF total (denominator)
+        float fireflyClamp;        // luminance cap for emissive NEE (large = disabled)
+        float oceanFineTileSize;   // FFT fine-cascade tile (m); 0 = no ocean fine normal
+        float oceanFoamTileSize;   // world-space foam tile (m); 0 = no foam sampling
+        float volDensity;          // spot-beam scattering σ (1/m); 0 = beams off
+        float volAniso;            // Henyey-Greenstein g for the beam phase
+        float starIntensity;       // procedural sky star field; 0 = off
+        float camDelta;            // camera WORLD translation this frame (m)
+        float camRot;              // camera forward-direction change this frame (rad)
+        float timeSec;             // wall-clock seconds (fps-independent drift)
+        float sunTanHalfAngle;     // tan(sun angular RADIUS); 0 = hard 1-ray shadow
+        uint32_t clusterLightCount;// # lights in the cluster buffer (0 = none)
+        uint32_t shadeMode;        // 0 = dispatch A; 1 = MSAA per-sample dispatch B
+        uint32_t preExpBits;       // float-bits pre-exposure baked into sceneHdr stores
+    };
+    static_assert(sizeof(ShadePush) == 80,
+                  "ShadePush size changed - update the GLSL mirror in this file "
+                  "and the 80-byte push range in DeferredShade::createPipeline.");
+}
+
+#else  // GLSL
+
+struct ShadePush {
+    uint  envMipCount;
+    uint  width;
+    uint  height;
+    uint  flags;
+    uint  frame;
+    uint  emissiveCount;
+    float emissiveTotalPower;
+    float fireflyClamp;
+    float oceanFineTileSize;
+    float oceanFoamTileSize;
+    float volDensity;
+    float volAniso;
+    float starIntensity;
+    float camDelta;
+    float camRot;
+    float timeSec;
+    float sunTanHalfAngle;
+    uint  clusterLightCount;
+    uint  shadeMode;
+    uint  preExpBits;
+};
+// Every consumer declares:
+//   layout(push_constant) uniform Pc { ShadePush pc; };
+// so field access stays `pc.<field>`, unchanged from the old inline blocks.
+
+#endif  // __cplusplus
+
 #endif  // THREEPP_VULKAN_SHARED_H

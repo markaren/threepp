@@ -2,6 +2,8 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : enable
 
+#include "vulkan_shared.h"// ShadePush
+
 // Cloud shadow map — a 512² R8 top-down cloud TRANSMITTANCE field over an
 // 8 km square centred on the camera. One thread per texel marches the cloud
 // shell along the SUN direction and stores exp(-τ) (1 = full sun, 0 = full
@@ -58,27 +60,9 @@ layout(set = 0, binding = 58, scalar) uniform CloudUbo {
 
 layout(set = 0, binding = 64, r8) uniform writeonly image2D cloudShadowImage;
 
-layout(push_constant) uniform Pc {
-    uint  envMipCount;
-    uint  width;
-    uint  height;
-    uint  flags;
-    uint  frame;
-    uint  emissiveCount;
-    float emissiveTotalPower;
-    float fireflyClamp;
-    float oceanFineTileSize;
-    float oceanFoamTileSize;
-    float volDensity;
-    float volAniso;
-    float starIntensity;
-    float camDelta;
-    float camRot;
-    float timeSec;
-    float sunTanHalfAngle;
-    uint  clusterLightCount;
-    uint  shadeMode;
-} pc;
+// Shared ShadePush block (vulkan_shared.h) — this pass reads only the
+// fields it names; the host zero-fills the rest.
+layout(push_constant) uniform Pc { ShadePush pc; };
 
 const float PI = 3.14159265358979;
 
