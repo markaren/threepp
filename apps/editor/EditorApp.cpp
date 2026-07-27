@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 // GLFW's window-title setter. Declared rather than included: the GLFW headers
 // are private to the threepp target, but the symbol is linked into it and the
@@ -153,7 +154,12 @@ EditorApp::EditorApp(const Options& options)
         const auto uuid = selection_.uuid();
         selection_.set(nullptr);
         gizmo_->detach();
-        selectionBox_.reset();
+        // The overlay group survives the scene swap, so the outline must be
+        // detached from it, not just dropped.
+        if (selectionBox_) {
+            selectionBox_->removeFromParent();
+            selectionBox_.reset();
+        }
         if (!uuid.empty()) {
             Object3D* found = nullptr;
             scene.traverse([&](Object3D& o) {
@@ -205,6 +211,8 @@ int EditorApp::run() {
 
     Clock clock;
 
+    if (options_.selfTest) return runSelfTest();
+
     if (options_.maxFrames > 0) {
         for (int i = 0; i < options_.maxFrames; ++i) {
             if (!canvas_.animateOnce([&] { frame(clock.getDelta()); })) break;
@@ -219,6 +227,76 @@ int EditorApp::run() {
     return 0;
 }
 
+int EditorApp::runSelfTest() {
+
+    Clock clock;
+    int failed = 0;
+
+    const auto step = [&](int frames = 1) {
+        for (int i = 0; i < frames; ++i) {
+            canvas_.animateOnce([&] { frame(clock.getDelta()); });
+        }
+    };
+    const auto check = [&](bool ok, const char* what) {
+        std::cout << (ok ? "[selftest] PASS " : "[selftest] FAIL ") << what << std::endl;
+        if (!ok) ++failed;
+    };
+    const auto inScene = [&](const Object3D* object) {
+        bool found = false;
+        document_.scene().traverse([&](Object3D& o) {
+            if (&o == object) found = true;
+        });
+        return found;
+    };
+    // Overlay children that are not the fixed furniture — i.e. selection
+    // outlines. Exactly one while something is selected, zero otherwise.
+    const auto outlineCount = [&] {
+        int n = 0;
+        for (auto* child : overlay_->children) {
+            if (child == grid_.get() || child == axes_.get() ||
+                child == static_cast<Object3D*>(gizmo_.get())) continue;
+            ++n;
+        }
+        return n;
+    };
+
+    step(2);
+
+    auto* box = document_.scene().getObjectByName("Box");
+    auto* ground = document_.scene().getObjectByName("Ground");
+    check(box != nullptr, "template Box exists");
+    check(ground != nullptr, "template Ground exists");
+    if (!box || !ground) return 1;
+
+    // Outline-leak regression: re-selecting must not accumulate helpers.
+    selectObject(box);
+    step();
+    selectObject(ground);
+    step();
+    selectObject(box);
+    step();
+    check(selection_.get() == box, "selection is Box");
+    check(outlineCount() == 1, "one outline after repeated re-select");
+
+    // Delete through the same member the Del key and menus call.
+    deleteSelected();
+    step();
+    check(!inScene(box), "delete removes Box from the scene");
+    check(selection_.get() == nullptr, "delete clears the selection");
+    check(outlineCount() == 0, "no outline after delete");
+    check(commands_.canUndo(), "delete is undoable");
+
+    commands_.undo();
+    step();
+    check(inScene(box), "undo restores Box");
+    commands_.redo();
+    step();
+    check(!inScene(box), "redo removes Box again");
+
+    std::cout << "[selftest] " << (failed == 0 ? "ALL PASS" : "FAILED") << std::endl;
+    return failed == 0 ? 0 : 1;
+}
+
 void EditorApp::frame(float dt) {
 
     play_.update(dt);
@@ -227,6 +305,7 @@ void EditorApp::frame(float dt) {
     refreshSelectionHelpers();
 
     renderer_->render(document_.scene(), camera_);
+    renderCameraPreview();
     ui_->render();
 
     updateWindowTitle();
@@ -264,6 +343,20 @@ void EditorApp::drawUi() {
     drawBottomPanel();
     drawStatusBar();
     drawPlayBanner();
+
+    if (preview_.active) {
+        auto* draw = ImGui::GetForegroundDrawList();
+        const ImVec2 min(preview_.x, preview_.y);
+        const ImVec2 max(preview_.x + preview_.w, preview_.y + preview_.h);
+        draw->AddRect(ImVec2(min.x - 1, min.y - 1), ImVec2(max.x + 1, max.y + 1),
+                      ImGui::GetColorU32(ImGuiCol_Border));
+        const ImVec2 pad(6.f * contentScale_, 3.f * contentScale_);
+        const ImVec2 textSize = ImGui::CalcTextSize(preview_.label.c_str());
+        draw->AddRectFilled(min, ImVec2(min.x + textSize.x + 2 * pad.x, min.y + textSize.y + 2 * pad.y),
+                            ImGui::GetColorU32(ImGuiCol_WindowBg, 0.85f));
+        draw->AddText(ImVec2(min.x + pad.x, min.y + pad.y),
+                      ImGui::GetColorU32(ImGuiCol_Text), preview_.label.c_str());
+    }
 
     // Dialogs and modals last so they sit above the panels.
     if (fileBrowser_.draw(contentScale_)) {
@@ -674,6 +767,13 @@ void EditorApp::selectObject(Object3D* object) {
 
     selection_.set(object);
 
+    // Always drop the previous outline first: the overlay group co-owns it, so
+    // overwriting the pointer alone would leave the old box in the scene.
+    if (selectionBox_) {
+        selectionBox_->removeFromParent();
+        selectionBox_.reset();
+    }
+
     if (object && object != &document_.scene()) {
         gizmo_->attach(*object);
         selectionBox_ = BoxHelper::create(*object, 0xffcc44);
@@ -682,12 +782,76 @@ void EditorApp::selectObject(Object3D* object) {
         overlay_->add(selectionBox_);
     } else {
         gizmo_->detach();
-        if (selectionBox_) {
-            selectionBox_->removeFromParent();
-            selectionBox_.reset();
-        }
     }
     applyGizmoMode();
+}
+
+void EditorApp::renderCameraPreview() {
+
+    preview_.active = false;
+
+    auto* selected = selection_.get();
+    auto* cam = selected ? selected->as<PerspectiveCamera>() : nullptr;
+    if (!cam) return;
+
+    const auto size = renderer_->size();
+    const auto width = static_cast<float>(size.width());
+    const auto height = static_cast<float>(size.height());
+
+    // The 3D viewport region, window coordinates (origin top-left).
+    const float s = contentScale_;
+    const float left = kHierarchyWidth * s;
+    const float right = width - kInspectorWidth * s;
+    const float top = menuHeight_ + toolbarHeight_;
+    const float bottom = height - statusHeight_ - (bottomPanelOpen_ ? kBottomHeight * s : 0.f);
+    const float viewW = right - left;
+    const float viewH = bottom - top;
+    if (viewW < 160.f * s || viewH < 120.f * s) return;
+
+    // Bottom-right inset, shaped like the viewport so the framing matches
+    // what a fullscreen render from this camera would show.
+    const float margin = 12.f * s;
+    float w = std::clamp(viewW * 0.30f, 160.f * s, 480.f * s);
+    float h = w * (viewH / viewW);
+    if (h > viewH * 0.5f) {
+        h = viewH * 0.5f;
+        w = h * (viewW / viewH);
+    }
+    const float x = right - margin - w;
+    const float y = bottom - margin - h;
+
+    // Editor furniture (grid, gizmo, outline) must not appear in the preview,
+    // and the camera keeps its own aspect outside of it.
+    const bool overlayVisible = overlay_->visible;
+    overlay_->visible = false;
+    const float aspectBefore = cam->aspect;
+    cam->aspect = w / h;
+    cam->updateProjectionMatrix();
+
+    // GL viewport origin is bottom-left.
+    const int glX = static_cast<int>(x);
+    const int glY = static_cast<int>(height - y - h);
+    const int glW = static_cast<int>(w);
+    const int glH = static_cast<int>(h);
+
+    renderer_->setScissorTest(true);
+    renderer_->setScissor(glX, glY, glW, glH);
+    renderer_->setViewport(glX, glY, glW, glH);
+    renderer_->render(document_.scene(), *cam);
+    renderer_->setScissorTest(false);
+    renderer_->setScissor(0, 0, size.width(), size.height());
+    renderer_->setViewport(0, 0, size.width(), size.height());
+
+    cam->aspect = aspectBefore;
+    cam->updateProjectionMatrix();
+    overlay_->visible = overlayVisible;
+
+    preview_.x = x;
+    preview_.y = y;
+    preview_.w = w;
+    preview_.h = h;
+    preview_.label = cam->name.empty() ? std::string("Camera") : cam->name;
+    preview_.active = true;
 }
 
 void EditorApp::refreshSelectionHelpers() {
@@ -820,7 +984,12 @@ void EditorApp::applyGizmoMode() {
 void EditorApp::handleShortcuts() {
 
     const ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureKeyboard) return;
+    // Panels keep keyboard focus after a click (selecting in the hierarchy
+    // does it), and WantCaptureKeyboard stays true the whole time — gating on
+    // it made every shortcut dead until the viewport was clicked again. Only
+    // real text entry and open popups may swallow the keys.
+    if (io.WantTextInput) return;
+    if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return;
     if (fileBrowser_.isOpen()) return;
 
     const bool ctrl = io.KeyCtrl;

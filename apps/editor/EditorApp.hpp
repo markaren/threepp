@@ -61,6 +61,9 @@ namespace threepp::editor {
             // Run this many frames and exit (0 = until the window closes).
             // Makes the editor scriptable enough for a smoke test.
             int maxFrames = 0;
+            // Drive select/delete/undo through the UI code paths and exit
+            // non-zero on failure. Diagnostic, not part of the test suite.
+            bool selfTest = false;
         };
 
         explicit EditorApp(const Options& options);
@@ -129,6 +132,9 @@ namespace threepp::editor {
         // --- selection / picking -------------------------------------------
         void selectObject(Object3D* object);
         void refreshSelectionHelpers();
+        // Renders the selected scene camera into a bottom-right inset of the
+        // viewport; drawUi frames and labels it via preview_.
+        void renderCameraPreview();
         void pickAt(float mouseX, float mouseY);
         [[nodiscard]] Object3D* resolveSelectable(Object3D* hit) const;
 
@@ -139,6 +145,7 @@ namespace threepp::editor {
         [[nodiscard]] bool isPlaying() const;
 
         // --- misc ----------------------------------------------------------
+        int runSelfTest();
         void handleShortcuts();
         void handleFileDrop(const std::vector<std::string>& paths);
         void log(const std::string& message);
@@ -245,6 +252,13 @@ namespace threepp::editor {
         float fps_ = 0.f;
         std::size_t objectCount_ = 0;
         std::string lastWindowTitle_;
+        // Camera-preview inset, filled by renderCameraPreview each frame and
+        // read by drawUi to draw the border and label on top.
+        struct {
+            float x = 0, y = 0, w = 0, h = 0;
+            bool active = false;
+            std::string label;
+        } preview_;
         // Object3D* the hierarchy wants to scroll into view next frame.
         Object3D* scrollTo_ = nullptr;
         // Structural edits requested from inside a tree walk (delete, reparent,

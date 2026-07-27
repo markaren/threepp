@@ -16,6 +16,8 @@ int main(int argc, char** argv) {
             options.vulkan = true;
         } else if (std::strncmp(argument, "--frames=", 9) == 0) {
             options.maxFrames = std::atoi(argument + 9);
+        } else if (std::strcmp(argument, "--selftest") == 0) {
+            options.selfTest = true;
         } else if (std::strcmp(argument, "--help") == 0 || std::strcmp(argument, "-h") == 0) {
             std::cout << "threepp editor\n"
                       << "  usage: threepp_editor [--vulkan] [--frames=N] [scene.json]\n"
