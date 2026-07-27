@@ -96,14 +96,26 @@ namespace {
         return keys;
     }
 
+    // -0.f and 0.f compare equal but serialize differently ("-0.0" vs "0.0").
+    // Matrix4::compose() produces negative zeros for ordinary transforms, so an
+    // exported document that is loaded and re-exported would otherwise differ
+    // from the original on those bytes alone - which defeats the point of
+    // deterministic output for autosave diffs.
+    constexpr float noNegativeZero(float v) {
+
+        return v == 0.f ? 0.f : v;
+    }
+
     json toArray(const Matrix4& m) {
 
-        return json(m.elements);
+        json out = json::array();
+        for (const auto e : m.elements) out.push_back(noNegativeZero(e));
+        return out;
     }
 
     json toArray(const Vector2& v) {
 
-        return json::array({v.x, v.y});
+        return json::array({noNegativeZero(v.x), noNegativeZero(v.y)});
     }
 
     unsigned int hex(const Color& c) {
@@ -506,21 +518,40 @@ namespace {
 
     // ---------------------------------------------------------- geometries
 
+    // Writes the backing store verbatim. array() returns the STORED scalars, not
+    // the denormalized ones, which is exactly what three.js expects next to a
+    // `normalized` flag - so nothing is decoded on the way out.
+    template<class T>
+    bool storeAttributeArray(const BufferAttribute& attribute, json& data) {
+
+        const auto* typed = dynamic_cast<const TypedBufferAttribute<T>*>(&attribute);
+        if (!typed) return false;
+
+        data["array"] = typed->array();
+        return true;
+    }
+
     json writeAttribute(const BufferAttribute& attribute) {
 
         json data;
         data["itemSize"] = attribute.itemSize();
+        // Load-bearing since compressAttributes() landed: for the narrow integer
+        // types this flag is what declares the [0,1]/[-1,1] mapping. Dropping it
+        // turns a normal or a UV attribute into garbage on reload.
         data["normalized"] = attribute.normalized();
+        data["type"] = attributeTypeToArrayName(attribute.type());
 
-        if (const auto* f = dynamic_cast<const TypedBufferAttribute<float>*>(&attribute)) {
-            data["type"] = "Float32Array";
-            data["array"] = f->array();
-        } else if (const auto* u = dynamic_cast<const TypedBufferAttribute<unsigned int>*>(&attribute)) {
-            data["type"] = "Uint32Array";
-            data["array"] = u->array();
-        } else {
-            return json();
+        bool stored = false;
+        switch (attribute.type()) {
+            case AttributeType::Float: stored = storeAttributeArray<float>(attribute, data); break;
+            case AttributeType::UInt32: stored = storeAttributeArray<unsigned int>(attribute, data); break;
+            case AttributeType::UInt16: stored = storeAttributeArray<std::uint16_t>(attribute, data); break;
+            case AttributeType::Int16: stored = storeAttributeArray<std::int16_t>(attribute, data); break;
+            case AttributeType::UInt8: stored = storeAttributeArray<std::uint8_t>(attribute, data); break;
+            case AttributeType::Int8: stored = storeAttributeArray<std::int8_t>(attribute, data); break;
         }
+
+        if (!stored) return json();
 
         if (attribute.getUsage() != DrawUsage::Static) {
             data["usage"] = as_integer(attribute.getUsage());
@@ -673,9 +704,13 @@ namespace {
         json inner;
         inner["attributes"] = json::object();
 
+        // The host-side index is always uint32 (BufferGeometry::index_ is an
+        // IntBufferAttribute); the uint16 index buffers added in dce8acbb are a
+        // Vulkan device-side packing that never reaches this layer. Derived from
+        // type() regardless, so this stays correct if that ever changes.
         if (const auto* index = geometry.getIndex()) {
             json idx;
-            idx["type"] = "Uint32Array";
+            idx["type"] = attributeTypeToArrayName(index->type());
             idx["array"] = index->array();
             inner["index"] = idx;
         }

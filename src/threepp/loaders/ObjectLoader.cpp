@@ -513,23 +513,77 @@ namespace {
 
     // ---------------------------------------------------------- geometries
 
-    std::shared_ptr<BufferAttribute> parseAttribute(const json& j) {
+    template<class T>
+    std::shared_ptr<BufferAttribute> makeAttribute(const json& array, int itemSize, bool normalized) {
+
+        return TypedBufferAttribute<T>::create(array.get<std::vector<T>>(), itemSize, normalized);
+    }
+
+    // three.js typed-array name -> threepp TypedBufferAttribute. Six of the names
+    // map exactly onto an AttributeType, so a narrowed attribute round-trips with
+    // its stored integers bit-identical and its `normalized` flag intact. The two
+    // names with no threepp counterpart are widened, each with a warning.
+    std::shared_ptr<BufferAttribute> parseAttribute(const json& j, Warnings& warnings) {
 
         const auto type = value<std::string>(j, "type", "Float32Array");
         const int itemSize = value(j, "itemSize", 1);
         const bool normalized = value(j, "normalized", false);
 
         if (!j.contains("array")) return nullptr;
+        const auto& array = j["array"];
 
         std::shared_ptr<BufferAttribute> attribute;
 
-        if (isFloatArrayName(type)) {
-            attribute = FloatBufferAttribute::create(j["array"].get<std::vector<float>>(), itemSize, normalized);
+        if (type == "Float32Array") {
+            attribute = makeAttribute<float>(array, itemSize, normalized);
+        } else if (type == "Uint32Array") {
+            attribute = makeAttribute<unsigned int>(array, itemSize, normalized);
+        } else if (type == "Uint16Array") {
+            attribute = makeAttribute<std::uint16_t>(array, itemSize, normalized);
+        } else if (type == "Int16Array") {
+            attribute = makeAttribute<std::int16_t>(array, itemSize, normalized);
+        } else if (type == "Uint8Array" || type == "Uint8ClampedArray") {
+            // Uint8ClampedArray differs from Uint8Array only in how JS coerces
+            // out-of-range writes; the stored bytes are identical, so this is exact.
+            attribute = makeAttribute<std::uint8_t>(array, itemSize, normalized);
+        } else if (type == "Int8Array") {
+            attribute = makeAttribute<std::int8_t>(array, itemSize, normalized);
+
+        } else if (type == "Float64Array") {
+            // No 64-bit attribute type in threepp. Float32 is the least-lossy
+            // target: it keeps sign and magnitude, losing only mantissa bits.
+            warnings.add("attribute type 'Float64Array' has no threepp counterpart - "
+                         "narrowed to Float32Array (double-precision mantissa bits are lost)");
+            attribute = makeAttribute<float>(array, itemSize, normalized);
+
+        } else if (type == "Int32Array") {
+            // No signed 32-bit attribute type. Two candidate widenings, neither
+            // lossless in general, so pick per data: UInt32 keeps all 32 bits but
+            // misreads negatives, Float32 keeps the sign but is only exact to 2^24.
+            const auto values = array.get<std::vector<std::int64_t>>();
+            const bool anyNegative = std::any_of(values.begin(), values.end(),
+                                                 [](std::int64_t v) { return v < 0; });
+
+            if (!anyNegative) {
+                warnings.add("attribute type 'Int32Array' has no threepp counterpart - "
+                             "stored as Uint32Array (bit-exact: no negative values present)");
+                std::vector<unsigned int> widened;
+                widened.reserve(values.size());
+                for (const auto v : values) widened.push_back(static_cast<unsigned int>(v));
+                attribute = IntBufferAttribute::create(std::move(widened), itemSize, normalized);
+            } else {
+                warnings.add("attribute type 'Int32Array' has no threepp counterpart and carries "
+                             "negative values - converted to Float32Array (exact for magnitudes "
+                             "up to 2^24, beyond which precision is lost)");
+                std::vector<float> widened;
+                widened.reserve(values.size());
+                for (const auto v : values) widened.push_back(static_cast<float>(v));
+                attribute = FloatBufferAttribute::create(std::move(widened), itemSize, normalized);
+            }
+
         } else {
-            // Integer typed arrays: threepp keeps CPU-side attribute data as
-            // float or unsigned int only, so anything else lands on float
-            // unless it is an index (handled by the caller).
-            attribute = FloatBufferAttribute::create(j["array"].get<std::vector<float>>(), itemSize, normalized);
+            warnings.add("unknown attribute array type '" + type + "' - read as Float32Array");
+            attribute = makeAttribute<float>(array, itemSize, normalized);
         }
 
         if (j.contains("usage")) attribute->setUsage(static_cast<DrawUsage>(j["usage"].get<int>()));
@@ -537,17 +591,19 @@ namespace {
         return attribute;
     }
 
-    std::shared_ptr<BufferGeometry> parseDataGeometry(const json& data) {
+    std::shared_ptr<BufferGeometry> parseDataGeometry(const json& data, Warnings& warnings) {
 
         auto geometry = BufferGeometry::create();
 
+        // BufferGeometry's index is always uint32 host-side, so a three.js
+        // Uint16Array index widens here (lossless - indices are non-negative).
         if (data.contains("index")) {
             geometry->setIndex(data["index"]["array"].get<std::vector<unsigned int>>());
         }
 
         if (data.contains("attributes")) {
             for (auto it = data["attributes"].begin(); it != data["attributes"].end(); ++it) {
-                if (auto attribute = parseAttribute(it.value())) {
+                if (auto attribute = parseAttribute(it.value(), warnings)) {
                     geometry->setAttribute(it.key(), attribute);
                 }
             }
@@ -557,7 +613,7 @@ namespace {
             for (auto it = data["morphAttributes"].begin(); it != data["morphAttributes"].end(); ++it) {
                 auto* target = geometry->getOrCreateMorphAttribute(it.key());
                 for (const auto& entry : it.value()) {
-                    if (auto attribute = parseAttribute(entry)) target->push_back(attribute);
+                    if (auto attribute = parseAttribute(entry, warnings)) target->push_back(attribute);
                 }
             }
             geometry->morphTargetsRelative = value(data, "morphTargetsRelative", false);
@@ -679,14 +735,14 @@ namespace {
 
             if (type == "BufferGeometry" || type == "InstancedBufferGeometry") {
                 if (entry.contains("data")) {
-                    geometry = parseDataGeometry(entry["data"]);
+                    geometry = parseDataGeometry(entry["data"], warnings);
                 } else {
                     geometry = BufferGeometry::create();
                 }
             } else {
                 geometry = parseParametricGeometry(type, entry);
                 if (!geometry && entry.contains("data")) {
-                    geometry = parseDataGeometry(entry["data"]);
+                    geometry = parseDataGeometry(entry["data"], warnings);
                 }
                 if (!geometry) {
                     warnings.add("unsupported geometry type '" + type + "'");

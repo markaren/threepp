@@ -29,8 +29,12 @@
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/textures/Texture.hpp"
+#include "threepp/utils/BufferGeometryUtils.hpp"
+
+#include "external/nlohmann/nlohmann/json.hpp"
 
 #include <any>
+#include <cstdint>
 #include <string>
 
 using namespace threepp;
@@ -61,6 +65,61 @@ namespace {
         geometry->computeBoundingSphere();
 
         return geometry;
+    }
+
+    // A geometry whose normal/uv/color attributes compressAttributes() will
+    // narrow: normals are unit length, uvs and colours sit inside [0,1].
+    std::shared_ptr<BufferGeometry> makeCompressibleGeometry() {
+
+        auto geometry = BufferGeometry::create();
+        geometry->setAttribute("position", FloatBufferAttribute::create(
+                                                   std::vector<float>{0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0}, 3));
+        geometry->setAttribute("normal", FloatBufferAttribute::create(
+                                                 std::vector<float>{0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, -1}, 3));
+        geometry->setAttribute("uv", FloatBufferAttribute::create(
+                                             std::vector<float>{0, 0, 1, 0, 1, 1, 0, 1}, 2));
+        geometry->setAttribute("color", FloatBufferAttribute::create(
+                                                std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0}, 3));
+        geometry->setIndex(std::vector<unsigned int>{0, 1, 2, 2, 3, 0});
+
+        return geometry;
+    }
+
+    template<class T>
+    std::vector<T> storedArray(const BufferAttribute* attribute) {
+
+        const auto* typed = dynamic_cast<const TypedBufferAttribute<T>*>(attribute);
+        REQUIRE(typed != nullptr);
+        return typed->array();
+    }
+
+    // The single geometry entry of an exported document, in its data form.
+    nlohmann::json geometryData(const std::string& text) {
+
+        const auto doc = nlohmann::json::parse(text);
+        REQUIRE(doc.contains("geometries"));
+        REQUIRE(doc["geometries"].size() == 1);
+        REQUIRE(doc["geometries"][0].contains("data"));
+        return doc["geometries"][0]["data"];
+    }
+
+    std::string threejsDocWithAttribute(const std::string& type, const std::string& array,
+                                        int itemSize, const std::string& normalized = "false") {
+
+        return R"({
+            "metadata": { "version": 4.5, "type": "Object" },
+            "geometries": [ { "uuid": "G", "type": "BufferGeometry", "data": { "attributes": {
+                "custom": { "type": ")" +
+               type + R"(", "array": )" + array +
+               R"(, "itemSize": )" + std::to_string(itemSize) +
+               R"(, "normalized": )" + normalized + R"( } } } } ],
+            "materials": [ { "uuid": "M", "type": "MeshStandardMaterial" } ],
+            "object": {
+                "uuid": "ROOT", "type": "Mesh", "layers": 1,
+                "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
+                "geometry": "G", "material": "M"
+            }
+        })";
     }
 
 }// namespace
@@ -802,5 +861,274 @@ TEST_CASE("Malformed and unknown input is handled without crashing") {
         // three.js falls back to a default material rather than dropping the node
         REQUIRE(parsed->material() != nullptr);
         CHECK(parsed->material()->type() == "MeshStandardMaterial");
+    }
+}
+
+
+TEST_CASE("Narrowed attributes round-trip bit-exact with their type and normalized flag") {
+
+    auto geometry = makeCompressibleGeometry();
+    REQUIRE(compressAttributes(*geometry) > 0);
+
+    // Precondition: compressAttributes() actually narrowed the three attributes.
+    REQUIRE(geometry->getAttribute("normal")->type() == AttributeType::Int16);
+    REQUIRE(geometry->getAttribute("uv")->type() == AttributeType::UInt16);
+    REQUIRE(geometry->getAttribute("color")->type() == AttributeType::UInt8);
+    REQUIRE(geometry->getAttribute("position")->type() == AttributeType::Float);
+    REQUIRE(geometry->getAttribute("normal")->normalized());
+    REQUIRE(geometry->getAttribute("uv")->normalized());
+    REQUIRE(geometry->getAttribute("color")->normalized());
+
+    const auto normals = storedArray<std::int16_t>(geometry->getAttribute("normal"));
+    const auto uvs = storedArray<std::uint16_t>(geometry->getAttribute("uv"));
+    const auto colors = storedArray<std::uint8_t>(geometry->getAttribute("color"));
+    const auto positions = storedArray<float>(geometry->getAttribute("position"));
+    const auto indices = geometry->getIndex()->array();
+
+    auto mesh = Mesh::create(geometry, MeshStandardMaterial::create());
+
+    ObjectExporter exporter;
+    const auto text = exporter.toJson(*mesh);
+
+    SECTION("the emitted typed-array names are the three.js ones") {
+
+        const auto data = geometryData(text);
+
+        CHECK(data["attributes"]["position"]["type"] == "Float32Array");
+        CHECK(data["attributes"]["normal"]["type"] == "Int16Array");
+        CHECK(data["attributes"]["uv"]["type"] == "Uint16Array");
+        CHECK(data["attributes"]["color"]["type"] == "Uint8Array");
+        // The host-side index is always uint32; the uint16 index buffers are a
+        // Vulkan device-side packing that never reaches the serializer.
+        CHECK(data["index"]["type"] == "Uint32Array");
+
+        // normalized is what declares the [0,1] / [-1,1] mapping - it must be
+        // written, not inferred from the type.
+        CHECK(data["attributes"]["normal"]["normalized"] == true);
+        CHECK(data["attributes"]["uv"]["normalized"] == true);
+        CHECK(data["attributes"]["color"]["normalized"] == true);
+        CHECK(data["attributes"]["position"]["normalized"] == false);
+
+        CHECK(data["attributes"]["normal"]["itemSize"] == 3);
+        CHECK(data["attributes"]["uv"]["itemSize"] == 2);
+        CHECK(data["attributes"]["color"]["itemSize"] == 3);
+
+        // The stored integers go out raw, never denormalized.
+        CHECK(data["attributes"]["normal"]["array"].get<std::vector<std::int16_t>>() == normals);
+        CHECK(data["attributes"]["uv"]["array"].get<std::vector<std::uint16_t>>() == uvs);
+        CHECK(data["attributes"]["color"]["array"].get<std::vector<std::uint8_t>>() == colors);
+    }
+
+    SECTION("importing restores the same scalar types and stored values") {
+
+        ObjectLoader loader;
+        auto parsed = loader.parse(text);
+        REQUIRE(parsed != nullptr);
+        CHECK(loader.warnings().empty());
+
+        auto parsedGeometry = parsed->geometry();
+        REQUIRE(parsedGeometry != nullptr);
+
+        const auto* normal = parsedGeometry->getAttribute("normal");
+        const auto* uv = parsedGeometry->getAttribute("uv");
+        const auto* color = parsedGeometry->getAttribute("color");
+        const auto* position = parsedGeometry->getAttribute("position");
+        REQUIRE(normal != nullptr);
+        REQUIRE(uv != nullptr);
+        REQUIRE(color != nullptr);
+        REQUIRE(position != nullptr);
+
+        CHECK(normal->type() == AttributeType::Int16);
+        CHECK(uv->type() == AttributeType::UInt16);
+        CHECK(color->type() == AttributeType::UInt8);
+        CHECK(position->type() == AttributeType::Float);
+
+        CHECK(normal->normalized());
+        CHECK(uv->normalized());
+        CHECK(color->normalized());
+        CHECK_FALSE(position->normalized());
+
+        CHECK(normal->itemSize() == 3);
+        CHECK(uv->itemSize() == 2);
+        CHECK(color->itemSize() == 3);
+
+        // Bit-exact: no decode/re-encode happened in either direction.
+        CHECK(storedArray<std::int16_t>(normal) == normals);
+        CHECK(storedArray<std::uint16_t>(uv) == uvs);
+        CHECK(storedArray<std::uint8_t>(color) == colors);
+        CHECK(storedArray<float>(position) == positions);
+
+        REQUIRE(parsedGeometry->hasIndex());
+        CHECK(parsedGeometry->getIndex()->array() == indices);
+    }
+
+    SECTION("a second round-trip is stable") {
+
+        ObjectLoader loader;
+        auto parsed = loader.parse(text);
+        REQUIRE(parsed != nullptr);
+
+        ObjectExporter again;
+        CHECK(again.toJson(*parsed) == text);
+    }
+}
+
+
+TEST_CASE("A raw (non-normalized) narrow attribute keeps its integers unscaled") {
+
+    auto geometry = BufferGeometry::create();
+    geometry->setAttribute("position", FloatBufferAttribute::create(
+                                               std::vector<float>{0, 0, 0, 1, 0, 0}, 3));
+    // skinIndex is the canonical raw uint16 attribute - the values are bone
+    // indices, so normalized stays false and 300 must come back as 300.
+    geometry->setAttribute("skinIndex", Uint16BufferAttribute::create(
+                                                std::vector<std::uint16_t>{0, 1, 300, 65535, 7, 8, 9, 10}, 4));
+
+    auto mesh = Mesh::create(geometry, MeshStandardMaterial::create());
+
+    ObjectExporter exporter;
+    const auto text = exporter.toJson(*mesh);
+
+    const auto data = geometryData(text);
+    CHECK(data["attributes"]["skinIndex"]["type"] == "Uint16Array");
+    CHECK(data["attributes"]["skinIndex"]["normalized"] == false);
+
+    ObjectLoader loader;
+    auto parsed = loader.parse(text);
+    REQUIRE(parsed != nullptr);
+
+    const auto* skinIndex = parsed->geometry()->getAttribute("skinIndex");
+    REQUIRE(skinIndex != nullptr);
+    CHECK(skinIndex->type() == AttributeType::UInt16);
+    CHECK_FALSE(skinIndex->normalized());
+    CHECK(skinIndex->itemSize() == 4);
+    CHECK(storedArray<std::uint16_t>(skinIndex) ==
+          std::vector<std::uint16_t>{0, 1, 300, 65535, 7, 8, 9, 10});
+}
+
+
+TEST_CASE("three.js typed-array names map onto threepp attribute types") {
+
+    ObjectLoader loader;
+
+    SECTION("Int8Array and Uint8Array are exact") {
+
+        auto parsed = loader.parse(threejsDocWithAttribute("Int8Array", "[-128,0,127,-1]", 1));
+        REQUIRE(parsed != nullptr);
+        CHECK(loader.warnings().empty());
+
+        const auto* attribute = parsed->geometry()->getAttribute("custom");
+        REQUIRE(attribute != nullptr);
+        CHECK(attribute->type() == AttributeType::Int8);
+        CHECK(storedArray<std::int8_t>(attribute) == std::vector<std::int8_t>{-128, 0, 127, -1});
+    }
+
+    SECTION("Int16Array keeps its sign and its normalized flag") {
+
+        auto parsed = loader.parse(
+                threejsDocWithAttribute("Int16Array", "[-32768,0,32767]", 3, "true"));
+        REQUIRE(parsed != nullptr);
+        CHECK(loader.warnings().empty());
+
+        const auto* attribute = parsed->geometry()->getAttribute("custom");
+        REQUIRE(attribute != nullptr);
+        CHECK(attribute->type() == AttributeType::Int16);
+        CHECK(attribute->normalized());
+        CHECK(storedArray<std::int16_t>(attribute) == std::vector<std::int16_t>{-32768, 0, 32767});
+    }
+
+    SECTION("Uint8ClampedArray is an exact alias of Uint8Array") {
+
+        auto parsed = loader.parse(threejsDocWithAttribute("Uint8ClampedArray", "[0,128,255]", 3, "true"));
+        REQUIRE(parsed != nullptr);
+        // Exact - the stored bytes are identical, so no warning is due.
+        CHECK(loader.warnings().empty());
+
+        const auto* attribute = parsed->geometry()->getAttribute("custom");
+        REQUIRE(attribute != nullptr);
+        CHECK(attribute->type() == AttributeType::UInt8);
+        CHECK(attribute->normalized());
+        CHECK(storedArray<std::uint8_t>(attribute) == std::vector<std::uint8_t>{0, 128, 255});
+    }
+
+    SECTION("Int32Array without negatives widens to UInt32, bit-exact, with a warning") {
+
+        auto parsed = loader.parse(threejsDocWithAttribute("Int32Array", "[0,1,2147483647]", 1));
+        REQUIRE(parsed != nullptr);
+
+        const auto* attribute = parsed->geometry()->getAttribute("custom");
+        REQUIRE(attribute != nullptr);
+        CHECK(attribute->type() == AttributeType::UInt32);
+        CHECK(storedArray<unsigned int>(attribute) == std::vector<unsigned int>{0, 1, 2147483647});
+
+        REQUIRE(loader.warnings().size() == 1);
+        CHECK(loader.warnings().front().find("Int32Array") != std::string::npos);
+        CHECK(loader.warnings().front().find("bit-exact") != std::string::npos);
+    }
+
+    SECTION("Int32Array with negatives falls back to Float32, with a warning") {
+
+        auto parsed = loader.parse(threejsDocWithAttribute("Int32Array", "[-5,0,7]", 1));
+        REQUIRE(parsed != nullptr);
+
+        const auto* attribute = parsed->geometry()->getAttribute("custom");
+        REQUIRE(attribute != nullptr);
+        CHECK(attribute->type() == AttributeType::Float);
+        CHECK(storedArray<float>(attribute) == std::vector<float>{-5, 0, 7});
+
+        REQUIRE(loader.warnings().size() == 1);
+        CHECK(loader.warnings().front().find("Int32Array") != std::string::npos);
+        CHECK(loader.warnings().front().find("negative") != std::string::npos);
+    }
+
+    SECTION("Float64Array narrows to Float32, with a warning") {
+
+        auto parsed = loader.parse(threejsDocWithAttribute("Float64Array", "[0.5,-1.25,2.0]", 1));
+        REQUIRE(parsed != nullptr);
+
+        const auto* attribute = parsed->geometry()->getAttribute("custom");
+        REQUIRE(attribute != nullptr);
+        CHECK(attribute->type() == AttributeType::Float);
+        CHECK(storedArray<float>(attribute) == std::vector<float>{0.5f, -1.25f, 2.f});
+
+        REQUIRE(loader.warnings().size() == 1);
+        CHECK(loader.warnings().front().find("Float64Array") != std::string::npos);
+    }
+
+    SECTION("an unknown array name is read as float and warned about") {
+
+        auto parsed = loader.parse(threejsDocWithAttribute("BigInt64Array", "[1,2,3]", 1));
+        REQUIRE(parsed != nullptr);
+
+        const auto* attribute = parsed->geometry()->getAttribute("custom");
+        REQUIRE(attribute != nullptr);
+        CHECK(attribute->type() == AttributeType::Float);
+
+        REQUIRE(loader.warnings().size() == 1);
+        CHECK(loader.warnings().front().find("BigInt64Array") != std::string::npos);
+    }
+
+    SECTION("a three.js Uint16Array index widens losslessly to threepp's uint32 index") {
+
+        const std::string text = R"({
+            "metadata": { "version": 4.5, "type": "Object" },
+            "geometries": [ { "uuid": "G", "type": "BufferGeometry", "data": {
+                "attributes": { "position": { "type": "Float32Array",
+                    "array": [0,0,0, 1,0,0, 1,1,0], "itemSize": 3, "normalized": false } },
+                "index": { "type": "Uint16Array", "array": [0,1,2,2,1,0] } } } ],
+            "materials": [ { "uuid": "M", "type": "MeshStandardMaterial" } ],
+            "object": {
+                "uuid": "ROOT", "type": "Mesh", "layers": 1,
+                "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
+                "geometry": "G", "material": "M"
+            }
+        })";
+
+        auto parsed = loader.parse(text);
+        REQUIRE(parsed != nullptr);
+
+        REQUIRE(parsed->geometry()->hasIndex());
+        CHECK(parsed->geometry()->getIndex()->array() ==
+              std::vector<unsigned int>{0, 1, 2, 2, 1, 0});
     }
 }

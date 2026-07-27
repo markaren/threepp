@@ -7,6 +7,7 @@
 #define THREEPP_OBJECTJSONCONSTANTS_HPP
 
 #include "threepp/constants.hpp"
+#include "threepp/core/BufferAttribute.hpp"
 
 #include <string>
 
@@ -125,11 +126,23 @@ namespace threepp::objectjson {
     }
 
     // ------------------------------------------------------- typed array name
-    // three.js writes `array.constructor.name`. threepp keeps CPU-side
-    // attribute data as either float or unsigned int.
-    inline bool isFloatArrayName(const std::string& name) {
+    // three.js writes `array.constructor.name`. Each of threepp's six host-side
+    // AttributeType values has an exact three.js typed-array counterpart, so the
+    // stored integers of a narrowed attribute (see compressAttributes()) go out
+    // raw and come back bit-identical. `normalized` carries the [0,1] / [-1,1]
+    // mapping in both engines, following the same GL/Vulkan UNORM/SNORM rules,
+    // so no decode/re-encode is involved.
+    inline const char* attributeTypeToArrayName(AttributeType type) {
 
-        return name == "Float32Array" || name == "Float64Array";
+        switch (type) {
+            case AttributeType::Float: return "Float32Array";
+            case AttributeType::UInt32: return "Uint32Array";
+            case AttributeType::UInt16: return "Uint16Array";
+            case AttributeType::Int16: return "Int16Array";
+            case AttributeType::UInt8: return "Uint8Array";
+            case AttributeType::Int8: return "Int8Array";
+        }
+        return "Float32Array";
     }
 
 }// namespace threepp::objectjson
