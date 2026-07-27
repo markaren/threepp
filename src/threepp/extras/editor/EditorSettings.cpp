@@ -1,0 +1,122 @@
+
+#include "threepp/extras/editor/EditorSettings.hpp"
+
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
+#include <cstdlib>
+#include <fstream>
+
+using namespace threepp;
+using namespace threepp::editor;
+
+namespace {
+
+    std::string environmentVariable(const char* name) {
+
+        const char* value = std::getenv(name);
+        return value ? std::string(value) : std::string{};
+    }
+
+    std::string getString(const nlohmann::json& j, const char* key) {
+
+        if (!j.contains(key) || !j[key].is_string()) return {};
+        return j[key].get<std::string>();
+    }
+
+}// namespace
+
+
+std::filesystem::path EditorSettings::defaultPath() {
+
+    std::filesystem::path base;
+
+#ifdef _WIN32
+    if (auto appData = environmentVariable("APPDATA"); !appData.empty()) {
+        base = appData;
+    }
+#else
+    if (auto xdg = environmentVariable("XDG_CONFIG_HOME"); !xdg.empty()) {
+        base = xdg;
+    } else if (auto home = environmentVariable("HOME"); !home.empty()) {
+        base = std::filesystem::path(home) / ".config";
+    }
+#endif
+
+    // No home directory to speak of (a service account, a stripped container):
+    // fall back to the working directory rather than refusing to remember
+    // anything.
+    if (base.empty()) base = std::filesystem::current_path();
+
+    return base / "threepp-editor" / "settings.json";
+}
+
+bool EditorSettings::load(const std::filesystem::path& path) {
+
+    std::ifstream file(path);
+    if (!file.is_open()) return false;
+
+    nlohmann::json j;
+    try {
+        file >> j;
+    } catch (const std::exception&) {
+        return false;
+    }
+    if (!j.is_object()) return false;
+
+    sceneDir = getString(j, "sceneDir");
+    modelDir = getString(j, "modelDir");
+    textureDir = getString(j, "textureDir");
+    environmentDir = getString(j, "environmentDir");
+
+    if (j.contains("bottomPanelOpen") && j["bottomPanelOpen"].is_boolean()) {
+        bottomPanelOpen = j["bottomPanelOpen"].get<bool>();
+    }
+
+    recentFiles_.clear();
+    if (j.contains("recentFiles") && j["recentFiles"].is_array()) {
+        for (const auto& entry : j["recentFiles"]) {
+            if (!entry.is_string()) continue;
+            auto value = entry.get<std::string>();
+            // A recent entry pointing at a deleted file is noise in the menu.
+            std::error_code ec;
+            if (!std::filesystem::exists(value, ec)) continue;
+            recentFiles_.push_back(std::move(value));
+            if (recentFiles_.size() >= maxRecentFiles) break;
+        }
+    }
+
+    return true;
+}
+
+bool EditorSettings::save(const std::filesystem::path& path) const {
+
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+
+    nlohmann::json j;
+    j["sceneDir"] = sceneDir;
+    j["modelDir"] = modelDir;
+    j["textureDir"] = textureDir;
+    j["environmentDir"] = environmentDir;
+    j["bottomPanelOpen"] = bottomPanelOpen;
+    j["recentFiles"] = recentFiles_;
+
+    std::ofstream file(path);
+    if (!file.is_open()) return false;
+    file << j.dump(2) << "\n";
+    return file.good();
+}
+
+void EditorSettings::addRecentFile(const std::filesystem::path& path) {
+
+    if (path.empty()) return;
+
+    std::error_code ec;
+    auto canonical = std::filesystem::weakly_canonical(path, ec);
+    const auto value = (ec ? path : canonical).string();
+
+    recentFiles_.erase(std::remove(recentFiles_.begin(), recentFiles_.end(), value), recentFiles_.end());
+    recentFiles_.insert(recentFiles_.begin(), value);
+    if (recentFiles_.size() > maxRecentFiles) recentFiles_.resize(maxRecentFiles);
+}
