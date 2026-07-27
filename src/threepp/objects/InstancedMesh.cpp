@@ -3,7 +3,25 @@
 
 #include "threepp/core/Raycaster.hpp"
 
+#include <stdexcept>
+
 using namespace threepp;
+
+namespace {
+
+    // Bounds are the buffer capacity (maxCount), not the live count: setCount()
+    // may shrink the drawn range, but staging data for instances that will be
+    // re-enabled later is legal, exactly like writing instanceMatrix in three.js.
+    void checkInstanceIndex(size_t index, size_t maxCount) {
+
+        if (index >= maxCount) {
+
+            throw std::out_of_range("InstancedMesh: instance index " + std::to_string(index) +
+                                    " out of range (capacity " + std::to_string(maxCount) + ")");
+        }
+    }
+
+}// namespace
 
 
 InstancedMesh::InstancedMesh(
@@ -48,15 +66,25 @@ std::string InstancedMesh::type() const {
 
 void InstancedMesh::getColorAt(size_t index, Color& color) const {
 
+    if (!this->instanceColor_) {
+
+        throw std::runtime_error("InstancedMesh: no instance colors set (call setColorAt first)");
+    }
+    checkInstanceIndex(index, maxCount_);
+
     color.fromArray(this->instanceColor_->array(), index * 3);
 }
 
 void InstancedMesh::getMatrixAt(size_t index, Matrix4& matrix) const {
 
+    checkInstanceIndex(index, maxCount_);
+
     matrix.fromArray(this->instanceMatrix_->array(), index * 16);
 }
 
 void InstancedMesh::setColorAt(size_t index, const Color& color) {
+
+    checkInstanceIndex(index, maxCount_);
 
     if (!this->instanceColor_) {
 
@@ -67,6 +95,8 @@ void InstancedMesh::setColorAt(size_t index, const Color& color) {
 }
 
 void InstancedMesh::setMatrixAt(size_t index, const Matrix4& matrix) const {
+
+    checkInstanceIndex(index, maxCount_);
 
     matrix.toArray(this->instanceMatrix_->array(), index * 16);
 }

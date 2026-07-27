@@ -1063,9 +1063,10 @@ namespace {
             auto mesh = InstancedMesh::create(geometry, material, value(j, "count", size_t(0)));
             if (materials.size() > 1) mesh->setMaterials(materials);
             if (j.contains("instanceMatrix")) applyInstanceAttribute(mesh->instanceMatrix(), j["instanceMatrix"]);
-            if (j.contains("instanceColor")) {
+            if (j.contains("instanceColor") && mesh->count() > 0) {
                 // Allocate the per-instance colour buffer through the public API
-                // before filling it in.
+                // before filling it in. A count-0 mesh has no buffer to allocate
+                // (and setColorAt would rightly throw), so skip it.
                 Color c;
                 mesh->setColorAt(0, c);
                 applyInstanceAttribute(mesh->instanceColor(), j["instanceColor"]);
