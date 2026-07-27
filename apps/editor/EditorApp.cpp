@@ -62,14 +62,20 @@ namespace {
 
     constexpr std::size_t kConsoleLimit = 400;
 
-    std::optional<GraphicsAPI> requestedApi(bool vulkan) {
+    // Always names a backend. Handing createRenderer no preference makes it
+    // print a console menu and block on std::cin, which a windowed app must
+    // never do — it stalls the editor behind a prompt nobody sees and hangs
+    // any piped or scripted run.
+    GraphicsAPI requestedApi(bool vulkan) {
 
 #ifdef THREEPP_WITH_VULKAN
         if (vulkan) return GraphicsAPI::Vulkan;
 #else
-        (void) vulkan;
+        if (vulkan) {
+            std::cerr << "threepp editor: built without Vulkan support, using OpenGL\n";
+        }
 #endif
-        return std::nullopt;
+        return GraphicsAPI::OpenGL;
     }
 
 }// namespace

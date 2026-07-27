@@ -254,9 +254,9 @@ Play simply runs with no physics session.
   full-resolution image.
 * **Vulkan is best-effort.** `--vulkan` is wired through `createRenderer` and
   `ImguiContext` already supports the Vulkan backend, but OpenGL is the tested
-  and supported path.
-* **No camera preview.** Adding a `PerspectiveCamera` gives you an object with
-  editable parameters, not a render-through-it view.
+  and supported path. The editor always names its backend explicitly —
+  `createRenderer`'s "no preference" overload prints a console menu and blocks
+  on `std::cin`, which a windowed application must never do.
 * **Duplicate shares geometry.** `Object3D::clone()` shares both geometry and
   materials; the editor clones the materials afterwards so recolouring a copy
   does not recolour the original, but geometry stays shared. That is intentional
