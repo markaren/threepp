@@ -1,3 +1,4 @@
+add_test_executable(EditorAnimation_test)
 add_test_executable(EditorCommands_test)
 add_test_executable(EditorDocument_test)
 add_test_executable(EditorPlaySession_test)
