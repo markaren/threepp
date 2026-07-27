@@ -493,6 +493,12 @@ set(sources
         "threepp/renderers/common/Lights.cpp"
         "threepp/renderers/common/RenderLists.cpp"
         "threepp/renderers/common/RenderStates.cpp"
+        # Pure-CPU BCn encode/decode. Only the Vulkan renderer consumes these,
+        # but they have no Vulkan dependency and BC7Encode_test round-trips
+        # them unconditionally — keeping them in every build lets CI without a
+        # Vulkan SDK still pin the encoder/decoder conventions.
+        "threepp/renderers/common/BC7Encode.cpp"
+        "threepp/renderers/common/BCnDecode.cpp"
 
         "threepp/renderers/gl/GLAttributes.cpp"
         "threepp/renderers/gl/GLBackground.cpp"
@@ -683,15 +689,6 @@ if (THREEPP_WITH_VULKAN)
         list(APPEND privateHeaders "threepp/renderers/vulkan/DlssUpscaler.hpp")
         list(APPEND sources        "threepp/renderers/vulkan/DlssUpscaler.cpp")
     endif ()
-endif ()
-
-# BCn / DXT software decode for compressed-texture upload in the Vulkan
-# renderer. (Originally shared with the now-removed Vulkan path tracer.)
-if (THREEPP_WITH_VULKAN)
-    list(APPEND sources
-            "threepp/renderers/common/BC7Encode.cpp"
-            "threepp/renderers/common/BCnDecode.cpp"
-    )
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN)
