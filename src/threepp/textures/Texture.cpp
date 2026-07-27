@@ -32,6 +32,11 @@ const std::string& Texture::uuid() const {
     return uuid_;
 }
 
+void Texture::setUuid(const std::string& uuid) {
+
+    uuid_ = uuid;
+}
+
 Image& Texture::image() {
 
     if (images_.empty()) {

@@ -64,6 +64,11 @@ size_t LOD::getCurrentLevel() const {
     return _currentLevel;
 }
 
+const std::vector<Level>& LOD::getLevels() const {
+
+    return levels;
+}
+
 void LOD::update(Camera& camera) {
 
     static thread_local Vector3 _v1;

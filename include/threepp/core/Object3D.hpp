@@ -59,8 +59,9 @@ namespace threepp {
         // one material with another's parameters.
         unsigned int id{_object3Did.fetch_add(1, std::memory_order_relaxed)};
 
-        // UUID of this object instance. This gets automatically assigned, so this shouldn't be edited.
-        const std::string uuid;
+        // UUID of this object instance. Automatically assigned; only serialization
+        // round-trips (ObjectLoader) have a reason to overwrite it.
+        std::string uuid;
 
         // Optional name of the object (doesn't need to be unique). Default is an empty string.
         std::string name;

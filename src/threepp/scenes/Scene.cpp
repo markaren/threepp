@@ -7,6 +7,11 @@
 using namespace threepp;
 
 
+std::string Scene::type() const {
+
+    return "Scene";
+}
+
 std::shared_ptr<Scene> Scene::create() {
 
     return std::make_shared<Scene>();

@@ -25,6 +25,11 @@ std::string Skeleton::uuid() const {
     return uuid_;
 }
 
+void Skeleton::setUuid(const std::string& uuid) {
+
+    uuid_ = uuid;
+}
+
 void Skeleton::init() {
 
     // calculate inverse bone matrices if necessary

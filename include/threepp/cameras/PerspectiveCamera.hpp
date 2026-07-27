@@ -30,6 +30,8 @@ namespace threepp {
         explicit PerspectiveCamera(float fov = 60, float aspect = 1,
                                    float nearPlane = 0.1, float farPlane = 2000);
 
+        [[nodiscard]] std::string type() const override;
+
         /**
          * Sets the FOV by focal length in respect to the current .filmGauge.
          *

@@ -25,9 +25,14 @@ namespace threepp {
 
         [[nodiscard]] std::string uuid() const;
 
+        // Only serialization round-trips (ObjectLoader) have a reason to call this.
+        void setUuid(const std::string& uuid) { uuid_ = uuid; }
+
         [[nodiscard]] std::string name() const { return name_; }
 
         [[nodiscard]] float getDuration() const { return duration; }
+
+        [[nodiscard]] const std::vector<std::shared_ptr<KeyframeTrack>>& getTracks() const { return tracks; }
 
         void resetDuration();
 

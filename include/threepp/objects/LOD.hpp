@@ -32,6 +32,8 @@ namespace threepp {
 
         [[nodiscard]] size_t getCurrentLevel() const;
 
+        [[nodiscard]] const std::vector<Level>& getLevels() const;
+
         void update(Camera& camera);
 
         void copy(const Object3D& source, bool recursive = false) override;

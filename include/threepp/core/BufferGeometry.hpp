@@ -24,7 +24,9 @@ namespace threepp {
         // loaders build geometries on a detached worker thread.
         const unsigned int id{_id.fetch_add(1, std::memory_order_relaxed) + 1};
 
-        const std::string uuid;
+        // Automatically assigned; only serialization round-trips (ObjectLoader)
+        // have a reason to overwrite it.
+        std::string uuid;
 
         std::string name;
 
