@@ -159,8 +159,12 @@ namespace threepp::editor {
         // The object a marker stands for, or nullptr when `hit` is not part of
         // one. Lets a click on an icon select its owner.
         [[nodiscard]] Object3D* markerOwnerOf(Object3D* hit) const;
-        // Renders the selected scene camera into a bottom-right inset of the
-        // viewport; drawUi frames and labels it via preview_.
+        // The dock the selected camera renders into: the band beside the bottom
+        // panel, under the inspector. False when there is no room for it (the
+        // bottom panel is collapsed, or the window is tiny).
+        [[nodiscard]] bool cameraDockRect(float& x, float& y, float& w, float& h) const;
+        // Renders the selected scene camera into that dock; drawUi frames and
+        // labels it via preview_.
         void renderCameraPreview();
         void pickAt(float mouseX, float mouseY);
         [[nodiscard]] Object3D* resolveSelectable(Object3D* hit) const;
@@ -356,10 +360,14 @@ namespace threepp::editor {
         // Accumulated frame time driving the import spinner.
         float uiTime_ = 0.f;
 
-        // Camera-preview inset, filled by renderCameraPreview each frame and
-        // read by drawUi to draw the border and label on top.
+        // Camera dock, filled by renderCameraPreview each frame and read by
+        // drawUi, which draws the frame and label over it. `visible` is whether
+        // the dock has room this frame; `active` whether a camera rendered into
+        // it — an empty dock still paints itself, so the corner never reverts
+        // to a sliver of unreachable viewport.
         struct {
             float x = 0, y = 0, w = 0, h = 0;
+            bool visible = false;
             bool active = false;
             std::string label;
         } preview_;

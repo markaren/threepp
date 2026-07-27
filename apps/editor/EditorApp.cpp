@@ -59,11 +59,6 @@ namespace {
     constexpr int kDefaultWidth = 1600;
     constexpr int kDefaultHeight = 900;
 
-    // Pixel budget at 100% DPI; multiplied by the monitor content scale at
-    // draw time. The side panel widths are a user preference — see
-    // EditorApp::hierarchyPx() / inspectorPx().
-    constexpr float kBottomHeight = 200.f;
-
     constexpr std::size_t kConsoleLimit = 400;
 
     // Always names a backend. Handing createRenderer no preference makes it
@@ -605,18 +600,37 @@ void EditorApp::drawUi() {
     drawPlayBanner();
     drawImportToast();
 
-    if (preview_.active) {
-        auto* draw = ImGui::GetForegroundDrawList();
-        const ImVec2 min(preview_.x, preview_.y);
-        const ImVec2 max(preview_.x + preview_.w, preview_.y + preview_.h);
-        draw->AddRect(ImVec2(min.x - 1, min.y - 1), ImVec2(max.x + 1, max.y + 1),
-                      ImGui::GetColorU32(ImGuiCol_Border));
-        const ImVec2 pad(6.f * contentScale_, 3.f * contentScale_);
-        const ImVec2 textSize = ImGui::CalcTextSize(preview_.label.c_str());
-        draw->AddRectFilled(min, ImVec2(min.x + textSize.x + 2 * pad.x, min.y + textSize.y + 2 * pad.y),
-                            ImGui::GetColorU32(ImGuiCol_WindowBg, 0.85f));
-        draw->AddText(ImVec2(min.x + pad.x, min.y + pad.y),
-                      ImGui::GetColorU32(ImGuiCol_Text), preview_.label.c_str());
+    if (preview_.visible) {
+        // Background list, not foreground: the camera image is drawn by the
+        // renderer before any ImGui at all, so this layer sits over it while
+        // still passing under dialogs and menus.
+        auto* draw = ImGui::GetBackgroundDrawList();
+        const auto* viewport = ImGui::GetMainViewport();
+        const ImVec2 min(viewport->Pos.x + preview_.x, viewport->Pos.y + preview_.y);
+        const ImVec2 max(min.x + preview_.w, min.y + preview_.h);
+        const float s = contentScale_;
+
+        if (!preview_.active) {
+            // Nothing selected: paint the dock so the corner reads as panel
+            // rather than as a scrap of viewport nobody can reach.
+            draw->AddRectFilled(min, max, ImGui::GetColorU32(ImGuiCol_WindowBg));
+            const char* hint = "No camera selected";
+            const auto textSize = ImGui::CalcTextSize(hint);
+            draw->AddText({min.x + (preview_.w - textSize.x) * 0.5f,
+                           min.y + (preview_.h - textSize.y) * 0.5f},
+                          ImGui::GetColorU32(theme::muted()), hint);
+        }
+
+        draw->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border));
+
+        if (preview_.active) {
+            const ImVec2 pad(6.f * s, 3.f * s);
+            const auto textSize = ImGui::CalcTextSize(preview_.label.c_str());
+            draw->AddRectFilled(min, {min.x + textSize.x + 2 * pad.x, min.y + textSize.y + 2 * pad.y},
+                                ImGui::GetColorU32(ImGuiCol_WindowBg, 0.85f));
+            draw->AddText({min.x + pad.x, min.y + pad.y},
+                          ImGui::GetColorU32(ImGuiCol_Text), preview_.label.c_str());
+        }
     }
 
     // Dialogs and modals last so they sit above the panels.
@@ -983,7 +997,7 @@ void EditorApp::drawImportToast() {
     const float width = textSize.x + radius * 2 + 34 * s;
 
     // Bottom-left of the viewport (the camera preview owns the bottom-right).
-    const float bottom = viewport->Size.y - statusHeight_ - (bottomPanelOpen_ ? kBottomHeight * s : 0.f);
+    const float bottom = viewport->Size.y - statusHeight_ - (bottomPanelOpen_ ? layout::bottomHeight * s : 0.f);
     ImGui::SetNextWindowPos({viewport->Pos.x + hierarchyPx() + 12 * s,
                              viewport->Pos.y + bottom - height - 12 * s});
     ImGui::SetNextWindowSize({width, height});
@@ -1363,39 +1377,45 @@ bool EditorApp::isPreviewing(const Object3D& root) const {
     return animPreview_ && animPreview_->root == &root;
 }
 
+bool EditorApp::cameraDockRect(float& x, float& y, float& w, float& h) const {
+
+    // Collapsing the bottom panel collapses this with it — the two share a
+    // band, and a camera view the height of a tab strip is worth nothing.
+    if (!bottomPanelOpen_) return false;
+
+    const auto size = renderer_->size();
+    const float s = contentScale_;
+
+    w = inspectorPx();
+    h = layout::bottomHeight * s;
+    x = static_cast<float>(size.width()) - w;
+    y = static_cast<float>(size.height()) - statusHeight_ - h;
+
+    return w >= 80.f * s && h >= 60.f * s;
+}
+
 void EditorApp::renderCameraPreview() {
 
     preview_.active = false;
+    preview_.visible = false;
+
+    float x = 0, y = 0, w = 0, h = 0;
+    if (!cameraDockRect(x, y, w, h)) return;
+
+    // The dock paints itself even with nothing selected, so record it before
+    // the camera check.
+    preview_.x = x;
+    preview_.y = y;
+    preview_.w = w;
+    preview_.h = h;
+    preview_.visible = true;
 
     auto* selected = selection_.get();
     auto* cam = selected ? selected->as<PerspectiveCamera>() : nullptr;
     if (!cam) return;
 
     const auto size = renderer_->size();
-    const auto width = static_cast<float>(size.width());
     const auto height = static_cast<float>(size.height());
-
-    // The 3D viewport region, window coordinates (origin top-left).
-    const float s = contentScale_;
-    const float left = hierarchyPx();
-    const float right = width - inspectorPx();
-    const float top = menuHeight_ + toolbarHeight_;
-    const float bottom = height - statusHeight_ - (bottomPanelOpen_ ? kBottomHeight * s : 0.f);
-    const float viewW = right - left;
-    const float viewH = bottom - top;
-    if (viewW < 160.f * s || viewH < 120.f * s) return;
-
-    // Bottom-right inset, shaped like the viewport so the framing matches
-    // what a fullscreen render from this camera would show.
-    const float margin = 12.f * s;
-    float w = std::clamp(viewW * 0.30f, 160.f * s, 480.f * s);
-    float h = w * (viewH / viewW);
-    if (h > viewH * 0.5f) {
-        h = viewH * 0.5f;
-        w = h * (viewW / viewH);
-    }
-    const float x = right - margin - w;
-    const float y = bottom - margin - h;
 
     // Editor furniture (grid, gizmo, outline) must not appear in the preview,
     // and the camera keeps its own aspect outside of it.
@@ -1423,10 +1443,6 @@ void EditorApp::renderCameraPreview() {
     cam->updateProjectionMatrix();
     overlay_->visible = overlayVisible;
 
-    preview_.x = x;
-    preview_.y = y;
-    preview_.w = w;
-    preview_.h = h;
     preview_.label = cam->name.empty() ? std::string("Camera") : cam->name;
     preview_.active = true;
 }

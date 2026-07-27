@@ -196,14 +196,16 @@ void EditorApp::drawBottomPanel() {
     const auto* viewport = ImGui::GetMainViewport();
     const float s = contentScale_;
 
-    const float left = hierarchyPx();
+    // Runs to the left edge: the strip under the hierarchy was showing bare
+    // viewport, too short to see anything in and too small to click in. The
+    // matching strip on the right is the camera dock — see cameraDockRect().
     const float right = inspectorPx();
     const float collapsedHeight = ImGui::GetFrameHeight() + 6 * s;
     const float height = bottomPanelOpen_ ? layout::bottomHeight * s : collapsedHeight;
 
-    ImGui::SetNextWindowPos({viewport->Pos.x + left,
+    ImGui::SetNextWindowPos({viewport->Pos.x,
                              viewport->Pos.y + viewport->Size.y - statusHeight_ - height});
-    ImGui::SetNextWindowSize({std::max(viewport->Size.x - left - right, 120.f * s), height});
+    ImGui::SetNextWindowSize({std::max(viewport->Size.x - right, 120.f * s), height});
 
     if (ImGui::Begin("##bottom", nullptr, layout::barFlags)) {
 
@@ -211,18 +213,21 @@ void EditorApp::drawBottomPanel() {
         ImGui::SameLine();
 
         if (!bottomPanelOpen_) {
-            ImGui::TextColored(theme::muted(), "Assets / Console");
+            ImGui::TextColored(theme::muted(), "Console / Assets");
             if (!console_.empty()) {
                 ImGui::SameLine();
                 ImGui::TextColored(theme::muted(), "- %s", console_.back().c_str());
             }
         } else if (ImGui::BeginTabBar("##bottomTabs")) {
-            if (ImGui::BeginTabItem("Assets")) {
-                drawAssetsTab();
-                ImGui::EndTabItem();
-            }
+            // Console first, so it is what the tab bar opens on: it is where
+            // load errors, import results and warnings land, and it is worth
+            // seeing without being asked for.
             if (ImGui::BeginTabItem("Console")) {
                 drawConsoleTab();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Assets")) {
+                drawAssetsTab();
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();

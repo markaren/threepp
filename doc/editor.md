@@ -71,7 +71,8 @@ icons draw on top, so picking follows what you see rather than raw depth order.
 The artwork is SVG parsed at startup by threepp's `SVGLoader` and embedded as
 source in `ViewportMarkers.cpp`, so the editor does not depend on finding asset
 files at runtime. Selecting a camera additionally shows its frustum
-(`CameraHelper`), which tracks fov/near/far edits live. Objects that bound to
+(`CameraHelper`), which tracks fov/near/far edits live, and renders its view into
+the camera dock beside the bottom panel. Objects that bound to
 nothing get no selection box — an empty `Box3` would leave `BoxHelper` showing a
 degenerate speck at the origin.
 
@@ -86,8 +87,15 @@ wireframe, flat shading, six texture slots with previews), read-only geometry
 counts, light parameters, camera parameters, and physics. Every edit is
 undoable, and a drag collapses into a single undo step.
 
-**Bottom panel.** An asset browser (double-click a file to open/import/assign)
-and a console showing loader and exporter warnings. Collapsible.
+**Bottom panel.** A console showing loader and exporter warnings, and an asset
+browser (double-click a file to open/import/assign). Console is the first tab —
+it is where import results and errors land. Collapsible, and it runs to the left
+edge of the window.
+
+**Camera dock.** The band beside the bottom panel, under the inspector, renders
+the selected camera live. It collapses with the bottom panel and paints itself
+when nothing is selected, so that corner is never a sliver of viewport too small
+to see into or click in.
 
 **Panel sizes.** The hierarchy and inspector are resized by dragging their inner
 edge, and the widths persist in the settings file. The hierarchy also scrolls
