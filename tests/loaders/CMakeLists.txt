@@ -5,6 +5,7 @@ add_test_executable(Fontloader_test)
 add_test_executable(GLTFLoader_test)
 add_test_executable(ImageLoader_test)
 add_test_executable(OBJLoader_test)
+add_test_executable(ObjectLoader_test)
 add_test_executable(STLLoader_test)
 add_test_executable(URDFLoader_test)
 
