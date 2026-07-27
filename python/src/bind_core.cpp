@@ -176,6 +176,12 @@ namespace threepp_py {
                     const size_t need = static_cast<size_t>(n) * item;
                     if (need > arr.size()) throw std::runtime_error("update_attribute: N exceeds allocated capacity (use set_attribute to grow)");
                     std::copy(data.data(), data.data() + need, arr.begin());
+                    // Publish exactly what was written so both backends upload
+                    // only the touched prefix — without this a geometry
+                    // preallocated at capacity pays a full-capacity upload on
+                    // every edit, which is the whole point of updating in place.
+                    attr->updateRange.offset = 0;
+                    attr->updateRange.count  = static_cast<int>(need);
                     attr->needsUpdate();
                     return g;
                 }, py::arg("name"), py::arg("data"), py::return_value_policy::reference_internal)

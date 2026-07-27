@@ -854,34 +854,81 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
             // index buffers (flushed for non-coherent portability); the
             // implicit submit barrier on the next phase makes these visible
             // to the BLAS build.
+            // Vertex-range of an attribute's pending edit, honouring
+            // BufferAttribute::updateRange (offset/count in SCALAR elements,
+            // count == -1 ⇒ whole array — the same contract GLAttributes has
+            // always implemented). Without this a geometry preallocated at
+            // capacity and updated in place — a growing reconstruction surface,
+            // a dynamic trail — re-uploaded the ENTIRE allocation and, for
+            // packed normals, re-encoded every vertex, so the cost tracked the
+            // capacity instead of the edit (measured: a 600k-vertex capacity
+            // holding ~150k live vertices spent ~15 ms in the frame that
+            // touched it). Snapped to whole vertices so the packed encoders
+            // never see a partial vertex.
+            auto vertexRangeOf = [](const FloatBufferAttribute& a, uint32_t itemSize)
+                    -> std::pair<uint32_t, uint32_t> {
+                const auto total = static_cast<uint32_t>(a.array().size() / itemSize);
+                const auto& r = a.updateRange;
+                if (r.count < 0) return {0u, total};
+                const uint32_t first = static_cast<uint32_t>(r.offset) / itemSize;
+                const uint32_t last  = (static_cast<uint32_t>(r.offset + r.count) + itemSize - 1u) / itemSize;
+                if (first >= total) return {0u, 0u};
+                return {first, std::min(last, total) - first};
+            };
+
             for (size_t k : liveOps) {
                 const auto& geom = *ops[k].geom;
                 auto& rec = *ops[k].rec;
                 auto* posAttr = geom.getAttribute<float>("position");
                 auto* nrmAttr = geom.getAttribute<float>("normal");
 
-                uploadHostVisible(ctx->allocator(), rec.vertex, posAttr->array().data(),
-                                  posAttr->array().size() * sizeof(float));
+                const auto [pFirst, pCount] = vertexRangeOf(*posAttr, 3u);
+                if (pCount > 0) {
+                    uploadHostVisible(ctx->allocator(), rec.vertex,
+                                      posAttr->array().data() + static_cast<size_t>(pFirst) * 3u,
+                                      static_cast<VkDeviceSize>(pCount) * 3u * sizeof(float),
+                                      static_cast<VkDeviceSize>(pFirst) * 3u * sizeof(float));
+                }
+                // Consume the range, exactly as GLAttributes::updateBuffer does:
+                // a later needsUpdate() that sets no range must mean "all of
+                // it", and without clearing it here the two backends would
+                // disagree on that. updateRange is upload bookkeeping rather
+                // than geometry content — the const_cast is because
+                // GeomRefreshOp holds the geometry by const pointer (nothing
+                // else in this path mutates it), not because this is unsafe.
+                const_cast<FloatBufferAttribute*>(posAttr)->updateRange.count = -1;
 
                 // A STATIC geometry whose attributes were edited (needsUpdate)
                 // also lands here, and its buffers may hold PACKED data — the
                 // re-upload must match the buffer's format or it overflows the
                 // smaller packed allocation.
-                const uint32_t vtxCount = static_cast<uint32_t>(posAttr->count());
+                const auto [nFirst, nCount] = vertexRangeOf(*nrmAttr, 3u);
                 if (rec.packedMask & 1u) {
-                    const auto& nrm = nrmAttr->array();
-                    std::vector<uint32_t> packed(vtxCount);
-                    for (uint32_t v = 0; v < vtxCount; ++v) {
-                        const auto [ox, oy] = octEncode(nrm[v * 3 + 0], nrm[v * 3 + 1], nrm[v * 3 + 2]);
-                        packed[v] = packSnorm2x16(ox, oy);
+                    if (nCount > 0) {
+                        const auto& nrm = nrmAttr->array();
+                        std::vector<uint32_t> packed(nCount);
+                        for (uint32_t v = 0; v < nCount; ++v) {
+                            const size_t s = (static_cast<size_t>(nFirst) + v) * 3u;
+                            const auto [ox, oy] = octEncode(nrm[s + 0], nrm[s + 1], nrm[s + 2]);
+                            packed[v] = packSnorm2x16(ox, oy);
+                        }
+                        uploadHostVisible(ctx->allocator(), rec.normal, packed.data(),
+                                          packed.size() * sizeof(uint32_t),
+                                          static_cast<VkDeviceSize>(nFirst) * sizeof(uint32_t));
                     }
-                    uploadHostVisible(ctx->allocator(), rec.normal, packed.data(),
-                                      packed.size() * sizeof(uint32_t));
-                } else {
-                    uploadHostVisible(ctx->allocator(), rec.normal, nrmAttr->array().data(),
-                                      nrmAttr->array().size() * sizeof(float));
+                } else if (nCount > 0) {
+                    uploadHostVisible(ctx->allocator(), rec.normal,
+                                      nrmAttr->array().data() + static_cast<size_t>(nFirst) * 3u,
+                                      static_cast<VkDeviceSize>(nCount) * 3u * sizeof(float),
+                                      static_cast<VkDeviceSize>(nFirst) * 3u * sizeof(float));
                 }
+                const_cast<FloatBufferAttribute*>(nrmAttr)->updateRange.count = -1;
 
+                // uv/index keep the whole-array re-upload: they are static for
+                // every in-place-edited geometry threepp ships (positions and
+                // normals are what a dynamic surface rewrites), so there is no
+                // measured win to justify the extra range plumbing here.
+                const uint32_t vtxCount = static_cast<uint32_t>(posAttr->count());
                 if (auto* uvAttr = geom.getAttribute<float>("uv");
                     uvAttr && rec.uv.handle != VK_NULL_HANDLE) {
                     if (rec.packedMask & 2u) {
