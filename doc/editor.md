@@ -152,6 +152,39 @@ on read, so a document written by a newer editor still loads. A disabled body
 removes the entry entirely rather than writing `enabled=false`, so turning
 physics off leaves no trace in the file.
 
+### Animations in `userData`
+
+Animation clips themselves already round-trip through the three.js JSON
+(`ObjectExporter`/`ObjectLoader` serialize `Object3D::animations`), and every
+model loader attaches a file's clips to the imported root group. The editor
+adds authoring on top, in `object.userData["animation"]`, same flat format as
+physics:
+
+```
+autoplay=1;loop=1;speed=1.25;clip=Walk
+```
+
+`AnimationConfig` owns the format. The **Animation** inspector section appears
+on any object that carries clips: pick the clip, toggle *Play on Start* and
+*Loop*, set the speed, and *Preview* it right in the viewport — preview records
+every node transform (and morph influences) up front and restores them on stop,
+so it never dirties the document or the undo stack.
+
+During Play, `AnimationPlaySession` (always registered) walks the scene and
+plays the authored clip on every object with `autoplay` on — the default for
+anything that has clips, so an imported character moves the first time you
+press Play. The play snapshot restores all poses on Stop.
+
+### Async model import
+
+`Import Model…` and file drops never block the UI: loads run one at a time on
+a worker thread, with a spinner toast (bottom-left) showing the file and queue
+depth. Success selects the new group and flashes a summary in the status bar;
+failure opens a dialog with the loader's error. An import that finishes during
+Play is parked until Stop, so it cannot be swallowed by the snapshot restore.
+Passing a model path on the command line (`threepp_editor model.glb`) imports
+it into a fresh template scene.
+
 ### One library fix this shook out
 
 `Object3D::copy()` did not copy `userData`, so `clone()` silently dropped it —

@@ -68,6 +68,13 @@ void EditorApp::drawStatusBar() {
                                "%s  %.1fs", play_.paused() ? "PAUSED" : "PLAYING", play_.elapsed());
         }
 
+        if (!statusFlash_.empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(theme::muted(), "|");
+            ImGui::SameLine();
+            ImGui::TextColored(theme::accent(), "%s", statusFlash_.c_str());
+        }
+
         // Right-aligned document state.
         const auto title = document_.title();
         const float width = ImGui::CalcTextSize(title.c_str()).x;

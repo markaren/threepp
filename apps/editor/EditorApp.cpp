@@ -2,9 +2,14 @@
 #include "EditorApp.hpp"
 
 #include "EditorTheme.hpp"
+#include "PanelLayout.hpp"
 
+#include "threepp/extras/editor/AnimationConfig.hpp"
+#include "threepp/extras/editor/AnimationPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
+
+#include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
@@ -31,7 +36,9 @@
 #include "threepp/scenes/Scene.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 
 // GLFW's window-title setter. Declared rather than included: the GLFW headers
@@ -151,6 +158,9 @@ EditorApp::EditorApp(const Options& options)
     // A restored or reloaded scene is a different Scene object; everything that
     // pointed into the old one has to be re-resolved.
     document_.onSceneReplaced([this](Scene& scene) {
+        // The previewed nodes lived in the old scene; restoring would write
+        // through dangling pointers. Discard only.
+        stopAnimationPreview(false);
         const auto uuid = selection_.uuid();
         selection_.set(nullptr);
         gizmo_->detach();
@@ -172,16 +182,23 @@ EditorApp::EditorApp(const Options& options)
 #ifdef THREEPP_EDITOR_WITH_PHYSX
     play_.addSession(std::make_shared<PhysicsPlaySession>());
 #endif
+    play_.addSession(std::make_shared<AnimationPlaySession>());
 
     loadSettings();
 
     assetDir_ = settings_.sceneDir.empty() ? std::filesystem::current_path()
                                            : std::filesystem::path(settings_.sceneDir);
 
-    if (!options_.openOnStart.empty()) {
+    if (!options_.openOnStart.empty() && options_.openOnStart.extension() == ".json") {
         openScene(options_.openOnStart);
     } else {
         buildTemplateScene();
+        // Any other startup path goes through the same dispatch as a file
+        // drop, so `threepp_editor model.glb` imports into the template scene.
+        // The self-test drives its own import instead (with assertions).
+        if (!options_.openOnStart.empty() && !options_.selfTest) {
+            handleFileDrop({options_.openOnStart.string()});
+        }
     }
 
     log("threepp editor ready");
@@ -293,6 +310,20 @@ int EditorApp::runSelfTest() {
     step();
     check(!inScene(box), "redo removes Box again");
 
+    // With a model path on the command line, exercise the async import path
+    // end to end: queue -> worker -> finalize -> selected group in the scene.
+    if (!options_.openOnStart.empty() && options_.openOnStart.extension() != ".json") {
+        const auto childrenBefore = document_.scene().children.size();
+        importModel(options_.openOnStart);
+        int budget = 3000;// frames; the worker is genuinely asynchronous
+        while ((activeImport_ || !importQueue_.empty()) && budget-- > 0) step();
+        check(budget > 0, "import completed in time");
+        check(importError_.empty(), "import reported no error");
+        check(document_.scene().children.size() == childrenBefore + 1,
+              "import added one group to the scene");
+        check(selection_.get() != nullptr, "import selected the new group");
+    }
+
     std::cout << "[selftest] " << (failed == 0 ? "ALL PASS" : "FAILED") << std::endl;
     return failed == 0 ? 0 : 1;
 }
@@ -300,6 +331,8 @@ int EditorApp::runSelfTest() {
 void EditorApp::frame(float dt) {
 
     play_.update(dt);
+    pollImports(dt);
+    if (animPreview_) animPreview_->mixer->update(dt);
     orbit_.update();
 
     refreshSelectionHelpers();
@@ -343,6 +376,7 @@ void EditorApp::drawUi() {
     drawBottomPanel();
     drawStatusBar();
     drawPlayBanner();
+    drawImportToast();
 
     if (preview_.active) {
         auto* draw = ImGui::GetForegroundDrawList();
@@ -422,6 +456,19 @@ void EditorApp::drawUi() {
         ImGui::SameLine();
         if (ImGui::Button("Cancel", {110 * contentScale_, 0})) {
             pendingAction_ = PendingAction::None;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (!importError_.empty() && !ImGui::IsPopupOpen("Import failed")) {
+        ImGui::OpenPopup("Import failed");
+    }
+    if (ImGui::BeginPopupModal("Import failed", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(importError_.c_str());
+        ImGui::Spacing();
+        if (ImGui::Button("OK", {110 * contentScale_, 0})) {
+            importError_.clear();
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -543,23 +590,116 @@ void EditorApp::saveSceneAs(const std::filesystem::path& path) {
 
 void EditorApp::importModel(const std::filesystem::path& path) {
 
-    ModelLoader loader;
+    // Loading happens on a worker so the UI never freezes; pollImports picks
+    // the queue up, shows the toast and finalizes on the main thread.
+    importQueue_.push_back(path);
+    log("import queued: " + path.filename().string());
+}
+
+void EditorApp::pollImports(float dt) {
+
+    uiTime_ += dt;
+    if (statusFlashRemaining_ > 0.f && (statusFlashRemaining_ -= dt) <= 0.f) statusFlash_.clear();
+
+    if (!activeImport_ && !importQueue_.empty()) {
+        auto path = importQueue_.front();
+        importQueue_.pop_front();
+        activeImport_ = std::make_unique<ActiveImport>();
+        activeImport_->path = path;
+        // Loader exceptions surface through the future and are rethrown on
+        // the main thread in the get() below.
+        activeImport_->future = std::async(std::launch::async, [path] {
+            ModelLoader loader;
+            return loader.load(path);
+        });
+    }
+    if (!activeImport_) return;
+    activeImport_->elapsed += dt;
+
+    // Finishing during play would add into a scene the stop-restore throws
+    // away (and leave a dangling undo entry); park the result until stopped.
+    if (isPlaying()) return;
+    if (activeImport_->future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+
+    const auto path = activeImport_->path;
+    const auto elapsed = activeImport_->elapsed;
     std::shared_ptr<Group> group;
+    std::string error;
     try {
-        group = loader.load(path);
+        group = activeImport_->future.get();
+        if (!group || group->children.empty()) error = "no importable content in the file";
     } catch (const std::exception& e) {
-        log("import failed: " + std::string(e.what()));
+        error = e.what();
+    }
+    activeImport_.reset();
+
+    if (!error.empty()) {
+        log("import failed: " + path.filename().string() + " - " + error);
+        importError_ = path.filename().string() + "\n\n" + error;
         return;
     }
-    if (!group) {
-        log("import failed: " + path.filename().string());
-        return;
-    }
+
+    std::size_t nodes = 0;
+    group->traverse([&nodes](Object3D&) { ++nodes; });
 
     group->name = ObjectFactory::uniqueName(document_.scene(), path.stem().string());
     addObject(group, document_.scene(), "Import " + path.filename().string());
     settings_.modelDir = path.parent_path().string();
-    log("imported " + path.filename().string());
+
+    char message[192];
+    std::snprintf(message, sizeof(message), "Imported %s (%zu nodes, %.1fs)",
+                  path.filename().string().c_str(), nodes, elapsed);
+    log(message);
+    flashStatus(message);
+}
+
+void EditorApp::flashStatus(std::string message) {
+
+    statusFlash_ = std::move(message);
+    statusFlashRemaining_ = 4.f;
+}
+
+void EditorApp::drawImportToast() {
+
+    if (!activeImport_ && importQueue_.empty()) return;
+
+    const auto* viewport = ImGui::GetMainViewport();
+    const float s = contentScale_;
+
+    std::string text = activeImport_
+                               ? "Importing " + activeImport_->path.filename().string()
+                               : std::string("Import pending");
+    if (activeImport_ && activeImport_->elapsed >= 1.f) {
+        char suffix[32];
+        std::snprintf(suffix, sizeof(suffix), "  (%.0fs)", activeImport_->elapsed);
+        text += suffix;
+    }
+    if (!importQueue_.empty()) text += "  +" + std::to_string(importQueue_.size()) + " queued";
+
+    const float radius = 7.f * s;
+    const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
+    const float height = std::max(textSize.y, radius * 2) + 16 * s;
+    const float width = textSize.x + radius * 2 + 34 * s;
+
+    // Bottom-left of the viewport (the camera preview owns the bottom-right).
+    const float bottom = viewport->Size.y - statusHeight_ - (bottomPanelOpen_ ? kBottomHeight * s : 0.f);
+    ImGui::SetNextWindowPos({viewport->Pos.x + kHierarchyWidth * s + 12 * s,
+                             viewport->Pos.y + bottom - height - 12 * s});
+    ImGui::SetNextWindowSize({width, height});
+    ImGui::SetNextWindowBgAlpha(0.9f);
+
+    if (ImGui::Begin("##importToast", nullptr,
+                     layout::barFlags | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing)) {
+        auto* draw = ImGui::GetWindowDrawList();
+        const ImVec2 pos = ImGui::GetWindowPos();
+        const ImVec2 center(pos.x + 10 * s + radius, pos.y + height * 0.5f);
+        const float t = uiTime_ * 6.f;
+        draw->PathArcTo(center, radius, t, t + 4.7f, 24);
+        draw->PathStroke(ImGui::GetColorU32(theme::accent()), 0, 2.5f * s);
+        ImGui::SetCursorPos({10 * s + radius * 2 + 8 * s, (height - textSize.y) * 0.5f});
+        ImGui::TextUnformatted(text.c_str());
+    }
+    ImGui::End();
 }
 
 void EditorApp::setEnvironment(const std::filesystem::path& path, bool alsoBackground) {
@@ -765,6 +905,10 @@ void EditorApp::selectObject(Object3D* object) {
 
     if (object && document_.isEditorOnly(*object)) object = nullptr;
 
+    // A preview belongs to the inspector of the object it runs on; changing
+    // the selection (including deleting the object) ends it, pose restored.
+    if (animPreview_ && animPreview_->root != object) stopAnimationPreview();
+
     selection_.set(object);
 
     // Always drop the previous outline first: the overlay group co-owns it, so
@@ -784,6 +928,65 @@ void EditorApp::selectObject(Object3D* object) {
         gizmo_->detach();
     }
     applyGizmoMode();
+}
+
+void EditorApp::startAnimationPreview(Object3D& root, const std::string& clipName,
+                                      bool loop, float speed) {
+
+    stopAnimationPreview();
+    if (isPlaying()) return;
+
+    auto clip = clipName.empty()
+                        ? (root.animations.empty() ? nullptr : root.animations.front())
+                        : AnimationClip::findByName(root.animations, clipName);
+    if (!clip && !root.animations.empty()) clip = root.animations.front();
+    if (!clip) return;
+
+    animPreview_ = std::make_unique<AnimPreview>();
+    animPreview_->root = &root;
+    animPreview_->clip = clip->name();
+
+    root.traverse([this](Object3D& node) {
+        animPreview_->saved.push_back({&node, node.position, node.quaternion, node.scale});
+        if (auto* morph = dynamic_cast<ObjectWithMorphTargetInfluences*>(&node)) {
+            animPreview_->savedMorphs.emplace_back(morph, morph->morphTargetInfluences());
+        }
+    });
+
+    animPreview_->mixer = std::make_unique<AnimationMixer>(root);
+    auto* action = animPreview_->mixer->clipAction(clip);
+    if (!action) {
+        animPreview_.reset();
+        return;
+    }
+    action->setLoop(loop ? Loop::Repeat : Loop::Once);
+    action->setClampWhenFinished(true);
+    action->setEffectiveTimeScale(speed);
+    action->play();
+}
+
+void EditorApp::stopAnimationPreview(bool restore) {
+
+    if (!animPreview_) return;
+
+    if (restore) {
+        animPreview_->mixer->stopAllAction();
+        for (const auto& s : animPreview_->saved) {
+            s.node->position.copy(s.position);
+            s.node->quaternion.copy(s.quaternion);
+            s.node->scale.copy(s.scale);
+            s.node->updateMatrix();
+        }
+        for (auto& [object, values] : animPreview_->savedMorphs) {
+            object->morphTargetInfluences() = values;
+        }
+    }
+    animPreview_.reset();
+}
+
+bool EditorApp::isPreviewing(const Object3D& root) const {
+
+    return animPreview_ && animPreview_->root == &root;
 }
 
 void EditorApp::renderCameraPreview() {
@@ -939,6 +1142,9 @@ void EditorApp::startPlay() {
         play_.resume();
         return;
     }
+
+    // The play snapshot must capture the authored pose, not the preview's.
+    stopAnimationPreview();
 
     std::string error;
     if (!play_.play(document_, &error)) {

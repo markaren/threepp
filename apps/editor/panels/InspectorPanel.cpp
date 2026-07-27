@@ -3,6 +3,7 @@
 #include "../EditorTheme.hpp"
 #include "../PanelLayout.hpp"
 
+#include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
@@ -211,6 +212,7 @@ void EditorApp::drawInspector() {
         drawGeometrySection(*selected);
         drawLightSection(*selected);
         drawCameraSection(*selected);
+        drawAnimationSection(*selected);
         drawPhysicsSection(*selected);
 
         if (locked) ImGui::EndDisabled();
@@ -729,6 +731,102 @@ void EditorApp::drawCameraSection(Object3D& object) {
                });
 
     ImGui::PopItemWidth();
+    ImGui::TreePop();
+}
+
+
+// ----------------------------------------------------------------- animation
+
+void EditorApp::drawAnimationSection(Object3D& object) {
+
+    // Clips live on the import root (that is where every loader puts them),
+    // so the section appears there — which is also what the picker selects.
+    if (object.animations.empty()) return;
+    if (!section("Animation", false)) return;
+
+    auto* target = &object;
+    auto config = AnimationConfig::read(object).value_or(AnimationConfig{});
+    const auto before = config;
+
+    const auto commit = [&](AnimationConfig after, const char* label) {
+        commands_.execute(makeProperty<AnimationConfig>(
+                label, "animation:" + object.uuid,
+                [target](const AnimationConfig& value) { value.write(*target); },
+                before, after));
+        document_.setDirty(true);
+    };
+
+    const auto& clips = object.animations;
+
+    ImGui::PushItemWidth(-100 * contentScale_);
+
+    {
+        int index = 0;
+        for (int i = 0; i < static_cast<int>(clips.size()); ++i) {
+            if (clips[i]->name() == config.clip) index = i;
+        }
+        char current[160];
+        std::snprintf(current, sizeof(current), "%s (%.2fs)",
+                      clips[index]->name().c_str(), clips[index]->getDuration());
+        if (ImGui::BeginCombo("Clip", current)) {
+            for (int i = 0; i < static_cast<int>(clips.size()); ++i) {
+                char label[160];
+                std::snprintf(label, sizeof(label), "%s (%.2fs)",
+                              clips[i]->name().c_str(), clips[i]->getDuration());
+                if (ImGui::Selectable(label, i == index)) {
+                    auto after = config;
+                    after.clip = clips[i]->name();
+                    commit(after, "Animation Clip");
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    bool autoplay = config.autoplay;
+    if (ImGui::Checkbox("Play on Start", &autoplay)) {
+        auto after = config;
+        after.autoplay = autoplay;
+        commit(after, autoplay ? "Enable Autoplay" : "Disable Autoplay");
+    }
+
+    bool loop = config.loop;
+    if (ImGui::Checkbox("Loop", &loop)) {
+        auto after = config;
+        after.loop = loop;
+        commit(after, "Animation Loop");
+    }
+
+    {
+        float speed = config.speed;
+        const bool changed = ImGui::DragFloat("Speed", &speed, 0.01f, 0.05f, 5.f, "%.2fx");
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.speed = speed;
+            commit(after, "Animation Speed");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+
+    ImGui::PopItemWidth();
+    ImGui::Spacing();
+
+    const bool previewing = isPreviewing(object);
+    if (ImGui::Button(previewing ? "Stop Preview" : "Preview", {110 * contentScale_, 0})) {
+        if (previewing) {
+            stopAnimationPreview();
+        } else {
+            startAnimationPreview(object, config.clip, config.loop, config.speed);
+        }
+    }
+    if (previewing) {
+        ImGui::SameLine();
+        ImGui::TextColored(theme::playing(), "playing %s", animPreview_->clip.c_str());
+    }
+
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"animation\"]");
+
     ImGui::TreePop();
 }
 

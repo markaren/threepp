@@ -25,6 +25,7 @@
 #include "threepp/extras/editor/SceneDocument.hpp"
 #include "threepp/extras/editor/Selection.hpp"
 
+#include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/controls/OrbitControls.hpp"
@@ -37,6 +38,7 @@
 
 #include <deque>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -46,6 +48,7 @@ class ImguiContext;
 namespace threepp {
 
     class Material;
+    class ObjectWithMorphTargetInfluences;
     class Texture;
 
 }// namespace threepp
@@ -101,6 +104,7 @@ namespace threepp::editor {
         void drawGeometrySection(Object3D& object);
         void drawLightSection(Object3D& object);
         void drawCameraSection(Object3D& object);
+        void drawAnimationSection(Object3D& object);
         void drawPhysicsSection(Object3D& object);
         void drawTextureSlot(Material& material, const char* label,
                              const std::shared_ptr<Texture>& current,
@@ -143,6 +147,24 @@ namespace threepp::editor {
         void togglePause();
         void stopPlay();
         [[nodiscard]] bool isPlaying() const;
+
+        // --- animation preview ---------------------------------------------
+        // Edit-mode preview of one clip on one subtree. Every touched value
+        // is recorded up front and put back on stop; no undo entries appear.
+        void startAnimationPreview(Object3D& root, const std::string& clipName,
+                                   bool loop, float speed);
+        // restore = false discards without writing (the nodes are gone, e.g.
+        // after a scene replace).
+        void stopAnimationPreview(bool restore = true);
+        [[nodiscard]] bool isPreviewing(const Object3D& root) const;
+
+        // --- async import --------------------------------------------------
+        // importModel only enqueues; pollImports runs one background load at
+        // a time (the loaders share global image-decoder state) and finalizes
+        // finished ones on the main thread.
+        void pollImports(float dt);
+        void drawImportToast();
+        void flashStatus(std::string message);
 
         // --- misc ----------------------------------------------------------
         int runSelfTest();
@@ -252,6 +274,38 @@ namespace threepp::editor {
         float fps_ = 0.f;
         std::size_t objectCount_ = 0;
         std::string lastWindowTitle_;
+        // Edit-mode animation preview state.
+        struct AnimPreview {
+            Object3D* root = nullptr;
+            std::string clip;
+            std::unique_ptr<AnimationMixer> mixer;
+            struct SavedNode {
+                Object3D* node;
+                Vector3 position;
+                Quaternion quaternion;
+                Vector3 scale;
+            };
+            std::vector<SavedNode> saved;
+            std::vector<std::pair<ObjectWithMorphTargetInfluences*, std::vector<float>>> savedMorphs;
+        };
+        std::unique_ptr<AnimPreview> animPreview_;
+
+        // Async model imports. One worker at a time; the rest wait in the
+        // queue. importError_ non-empty keeps the failure modal open.
+        struct ActiveImport {
+            std::filesystem::path path;
+            std::future<std::shared_ptr<Group>> future;
+            float elapsed = 0.f;
+        };
+        std::deque<std::filesystem::path> importQueue_;
+        std::unique_ptr<ActiveImport> activeImport_;
+        std::string importError_;
+        // Transient status-bar message (import results and similar).
+        std::string statusFlash_;
+        float statusFlashRemaining_ = 0.f;
+        // Accumulated frame time driving the import spinner.
+        float uiTime_ = 0.f;
+
         // Camera-preview inset, filled by renderCameraPreview each frame and
         // read by drawUi to draw the border and label on top.
         struct {
