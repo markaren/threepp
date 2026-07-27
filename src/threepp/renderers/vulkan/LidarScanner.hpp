@@ -10,19 +10,10 @@
 // shared TLAS + geom/mat buffers into LidarScanner's descriptor set just
 // before each scan() call.
 //
-// Dispatch is split into submit() + collect() so the caller never blocks on
-// the GPU: submit() records and submits, collect() picks the results up on a
-// LATER call (in practice the next scan, a frame later, by which point the
-// fence has long since signalled). The old single synchronous scan() paid a
-// vkQueueSubmit + vkWaitForFences round trip inline — and, worse, the caller
-// had to drain the whole device first to keep the TLAS stable, which
-// serialised CPU and GPU and cost ~19 ms on every scan frame of a 60 Hz app.
-//
-// The caller is responsible for one ordering rule: a submitted scan reads the
-// renderer's TLAS and descriptor buffers, so it must complete before anything
-// rebuilds them. waitPending() is the hook for that — call it once per frame
-// before touching acceleration structures; in steady state the fence is
-// already signalled and it costs nothing.
+// `scan()` is synchronous: submits the RT dispatch on a private command
+// buffer + fence, waits, copies results device→host, returns. Cost is a
+// vkQueueSubmit + vkWaitForFences round trip — acceptable for the
+// typical 10-30 Hz scan cadence a real LIDAR runs at.
 
 #ifndef THREEPP_VULKAN_LIDAR_SCANNER_HPP
 #define THREEPP_VULKAN_LIDAR_SCANNER_HPP
@@ -47,44 +38,27 @@ namespace threepp::vulkan {
         LidarScanner(const LidarScanner&) = delete;
         LidarScanner& operator=(const LidarScanner&) = delete;
 
-        // Record + submit an RT dispatch of `numBeams` invocations. Returns as
-        // soon as the work is queued; nothing is read back here. Returns false
-        // (and submits nothing) when the scene is not yet built
-        // (tlas == VK_NULL_HANDLE or buffers null/empty), so the first frame
-        // after construction is safe to call.
-        //
-        // The result slot count is remembered for the matching collect().
-        bool submit(VkQueue queue,
-                    VkAccelerationStructureKHR tlas,
-                    VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
-                    VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
-                    VkBuffer fogUbo, VkDeviceSize fogUboSize,
-                    const vulkan_lidar::LidarPushConstants& pc,
-                    const vulkan_lidar::LidarBeam* beams, uint32_t numBeams);
-
-        // Copy the results of the outstanding submit() into `outResults`,
-        // waiting on its fence first (already signalled in steady state).
-        // Returns the number of result SLOTS written, or 0 when nothing was
-        // pending. Slot layout: outResults[beamIdx * maxReturns + returnSlot];
-        // unused slots carry miss sentinels (hitInstanceId = -1) so the host
-        // iterates a fixed-stride array and filters.
+        // Synchronous scan. Submits an RT dispatch of `numBeams` invocations,
+        // waits for completion, and writes up to `pc.maxReturns` per-beam
+        // results into outResults[0 .. numBeams * pc.maxReturns - 1]. Slot
+        // layout: outResults[beamIdx * maxReturns + returnSlot]. Unused
+        // slots are filled with miss sentinels (hitInstanceId = -1) so the
+        // host iterates a fixed-stride array and filters.
         //
         // The caller owns the storage and must size it for at least
-        // pendingSlots() LidarResult entries.
-        uint32_t collect(vulkan_lidar::LidarResult* outResults);
-
-        // Result slots the outstanding submit will produce (0 when idle) —
-        // lets the caller size its buffer before calling collect().
-        [[nodiscard]] uint32_t pendingSlots() const { return pending_ ? pendingSlots_ : 0u; }
-        [[nodiscard]] uint32_t pendingBeams() const { return pending_ ? pendingBeams_ : 0u; }
-        [[nodiscard]] bool pending() const { return pending_; }
-
-        // Block until an outstanding submit has completed, WITHOUT reading it
-        // back (it stays pending for the next collect()). The renderer calls
-        // this before it rebuilds the TLAS / descriptor buffers the in-flight
-        // scan is reading. Free in steady state — the fence signalled a frame
-        // ago.
-        void waitPending();
+        // numBeams * max(pc.maxReturns, 1) LidarResult entries.
+        //
+        // Bails out gracefully (writes all-miss results) when the scene is
+        // not yet built (tlas == VK_NULL_HANDLE or buffers null/empty) so
+        // the first frame after construction can call scan() safely.
+        void scan(VkQueue queue,
+                  VkAccelerationStructureKHR tlas,
+                  VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
+                  VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
+                  VkBuffer fogUbo, VkDeviceSize fogUboSize,
+                  const vulkan_lidar::LidarPushConstants& pc,
+                  const vulkan_lidar::LidarBeam* beams, uint32_t numBeams,
+                  vulkan_lidar::LidarResult* outResults);
 
     private:
         VulkanContext& ctx_;
@@ -119,12 +93,6 @@ namespace threepp::vulkan {
         Buffer   readbackBuf_{};
         uint32_t capacityBeams_   = 0;// beam-buffer rows
         uint32_t capacityResults_ = 0;// result-buffer rows (= beams × maxReturns)
-
-        // Outstanding submit() state, consumed by collect()/waitPending().
-        bool     pending_        = false;
-        bool     pendingWaited_  = false;// fence already observed signalled
-        uint32_t pendingSlots_   = 0;
-        uint32_t pendingBeams_   = 0;
 
         void createDescriptorLayout();
         void createPipeline();
