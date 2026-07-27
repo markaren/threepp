@@ -18,6 +18,7 @@ Command line:
 | --- | --- |
 | `scene.json` | open this document on start |
 | `--vulkan` | use the Vulkan backend (OpenGL is the default and the supported path) |
+| `--urdf=<file>` | selftest only: also exercise the URDF import and round trip |
 | `--frames=N` | render N frames and exit — for smoke tests |
 
 ---
@@ -188,6 +189,33 @@ During Play, `AnimationPlaySession` (always registered) walks the scene and
 plays the authored clip on every object with `autoplay` on — the default for
 anything that has clips, so an imported character moves the first time you
 press Play. The play snapshot restores all poses on Stop.
+
+### Robots (URDF) in `userData`
+
+Importing a `.urdf` / `.xacro` routes to `URDFLoader` instead of `ModelLoader`
+and yields a `Robot` — an `Object3D` that additionally owns a joint table. The
+inspector shows a **Joints** section with one slider per articulated DOF,
+labelled with the joint's URDF name, clamped to its limits, in degrees for
+revolute joints and metres for prismatic ones. Edits are undoable and coalesce
+per drag; **Home** returns every joint to zero as a single undo entry.
+
+None of that articulation can go into the three.js JSON, which knows only about
+transforms — a saved robot would come back correctly posed but frozen. So the
+document stores a reference instead:
+
+```
+userData["urdf"]        C:/models/lbr_iiwa_14_r820.urdf
+userData["jointValues"] 0.3,0,-1.2,0,0,0,0
+```
+
+Joint values are always radians/metres regardless of what the slider displays.
+On load — including the play snapshot restore — `EditorApp::rearticulateRobots`
+re-imports each referenced URDF and transplants the live `Robot` over the frozen
+placeholder, keeping its uuid, name and placement so selection and undo
+rebinding still resolve, then reapplies the stored pose. The geometry is still
+written to the document, so a scene whose URDF has moved away (or one opened by
+another tool) renders exactly as saved — it just cannot be re-jointed, and says
+so in the console.
 
 ### Async model import
 

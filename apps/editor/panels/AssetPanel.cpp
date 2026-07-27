@@ -1,5 +1,6 @@
 
 #include "../EditorApp.hpp"
+#include "../ImportFormats.hpp"
 #include "../EditorTheme.hpp"
 #include "../PanelLayout.hpp"
 
@@ -29,15 +30,9 @@ namespace {
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
         if (extension == ".json") return AssetKind::Scene;
-        if (extension == ".obj" || extension == ".dae" || extension == ".gltf" ||
-            extension == ".glb" || extension == ".stl" || extension == ".fbx") {
-            return AssetKind::Model;
-        }
+        if (formats::contains(formats::importable(), extension)) return AssetKind::Model;
         if (extension == ".hdr") return AssetKind::Environment;
-        if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
-            extension == ".bmp" || extension == ".tga" || extension == ".gif") {
-            return AssetKind::Image;
-        }
+        if (formats::isImage(extension)) return AssetKind::Image;
         return AssetKind::Other;
     }
 

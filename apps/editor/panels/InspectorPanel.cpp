@@ -5,6 +5,9 @@
 
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
+#include "threepp/extras/editor/RobotConfig.hpp"
+
+#include "threepp/objects/Robot.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
@@ -213,6 +216,7 @@ void EditorApp::drawInspector() {
         drawLightSection(*selected);
         drawCameraSection(*selected);
         drawAnimationSection(*selected);
+        drawJointsSection(*selected);
         drawPhysicsSection(*selected);
 
         if (locked) ImGui::EndDisabled();
@@ -829,6 +833,82 @@ void EditorApp::drawAnimationSection(Object3D& object) {
     }
 
     ImGui::TextColored(theme::muted(), "Stored in userData[\"animation\"]");
+
+    ImGui::TreePop();
+}
+
+
+// -------------------------------------------------------------------- joints
+
+void EditorApp::drawJointsSection(Object3D& object) {
+
+    auto* robot = object.as<Robot>();
+    if (!robot || robot->numDOF() == 0) return;
+    if (!section("Joints")) return;
+
+    const auto info = robot->getArticulatedJointInfo();
+
+    ImGui::PushItemWidth(-110 * contentScale_);
+
+    for (std::size_t i = 0; i < robot->numDOF(); ++i) {
+
+        const bool revolute = info[i].type == Robot::JointType::Revolute;
+        // Revolute joints read in degrees, prismatic in metres. The document
+        // always stores radians; only this widget converts.
+        const auto range = robot->getJointRange(i, revolute);
+
+        // An unlimited joint (a continuous revolute, say) reports an infinite
+        // range, which a slider cannot use — fall back to a turn either way.
+        const float fallbackMin = revolute ? -360.f : -1.f;
+        const float fallbackMax = revolute ? 360.f : 1.f;
+        const float min = std::isfinite(range.min) ? range.min : fallbackMin;
+        const float max = std::isfinite(range.max) ? range.max : fallbackMax;
+
+        float shown = robot->getJointValue(i, revolute);
+
+        const auto label = info[i].name.empty() ? "joint " + std::to_string(i + 1) : info[i].name;
+        const bool changed = ImGui::SliderFloat(label.c_str(), &shown, min, max,
+                                                revolute ? "%.1f deg" : "%.3f m");
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto* target = robot;
+            const float before = robot->getJointValue(i);
+            const float after = revolute ? math::degToRad(shown) : shown;
+            commands_.execute(makeProperty<float>(
+                    "Joint " + label, "joint:" + object.uuid + ":" + std::to_string(i),
+                    [this, target, i](const float& value) { setJointValue(*target, i, value); },
+                    before, after));
+            document_.setDirty(true);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+
+    ImGui::PopItemWidth();
+    ImGui::Spacing();
+
+    if (ImGui::Button("Home", {110 * contentScale_, 0})) {
+        // One undo entry for the whole pose, not one per joint.
+        commands_.beginTransaction();
+        for (std::size_t i = 0; i < robot->numDOF(); ++i) {
+            auto* target = robot;
+            const float before = robot->getJointValue(i);
+            if (before == 0.f) continue;
+            commands_.execute(makeProperty<float>(
+                    "Home Joints", "home:" + object.uuid + ":" + std::to_string(i),
+                    [this, target, i](const float& value) { setJointValue(*target, i, value); },
+                    before, 0.f));
+        }
+        commands_.endTransaction();
+        document_.setDirty(true);
+    }
+    ImGui::SameLine();
+    ImGui::TextColored(theme::muted(), "%zu DOF", robot->numDOF());
+
+    if (const auto config = RobotConfig::read(object)) {
+        ImGui::TextColored(theme::muted(), "%s",
+                           std::filesystem::path(config->urdf).filename().string().c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", config->urdf.c_str());
+    }
 
     ImGui::TreePop();
 }

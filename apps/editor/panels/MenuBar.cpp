@@ -1,5 +1,6 @@
 
 #include "../EditorApp.hpp"
+#include "../ImportFormats.hpp"
 #include "../EditorTheme.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
@@ -57,11 +58,10 @@ void EditorApp::drawMenuBar() {
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem("Import Model...")) {
+            if (ImGui::MenuItem("Import Model or Robot...")) {
                 pendingDialog_ = PendingDialog::ImportModel;
-                fileBrowser_.open("Import Model", FileBrowser::Mode::Open,
-                                  settings_.modelDir,
-                                  {".obj", ".dae", ".gltf", ".glb", ".stl"});
+                fileBrowser_.open("Import", FileBrowser::Mode::Open,
+                                  settings_.modelDir, formats::importable());
             }
 
             ImGui::Separator();

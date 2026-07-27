@@ -2,11 +2,13 @@
 #include "EditorApp.hpp"
 
 #include "EditorTheme.hpp"
+#include "ImportFormats.hpp"
 #include "PanelLayout.hpp"
 
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/AnimationPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
+#include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
@@ -27,12 +29,14 @@
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
+#include "threepp/loaders/URDFLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/ObjectWithMaterials.hpp"
+#include "threepp/objects/Robot.hpp"
 #include "threepp/renderers/RendererFactory.hpp"
 #include "threepp/scenes/Scene.hpp"
 
@@ -194,6 +198,10 @@ EditorApp::EditorApp(const Options& options)
             selectionBox_->removeFromParent();
             selectionBox_.reset();
         }
+
+        // Before rebinding: this replaces nodes, and the command stack should
+        // resolve its targets against the final graph.
+        rearticulateRobots(scene);
 
         commands_.rebind(scene);
         if (!uuid.empty()) {
@@ -466,6 +474,50 @@ int EditorApp::runSelfTest() {
             check(pose() == rest, "stopping preview restores the authored pose");
             check(commands_.undoCount() == undosBefore, "preview pushes no undo entries");
             step(5);
+        }
+    }
+
+    // URDF: import, drive a joint, and prove the pose survives a full document
+    // round trip. Play/Stop is that round trip — it serialises the scene and
+    // rebuilds it — so this covers re-articulation as the user meets it.
+    if (!options_.urdf.empty()) {
+
+        importModel(options_.urdf);
+        int budget = 6000;
+        while ((activeImport_ || !importQueue_.empty()) && budget-- > 0) step();
+        check(budget > 0, "urdf import completed in time");
+        check(importError_.empty(), "urdf import reported no error");
+
+        auto* robot = selection_.get() ? selection_.get()->as<Robot>() : nullptr;
+        check(robot != nullptr, "urdf import yields a Robot");
+
+        if (robot) {
+            check(robot->numDOF() > 0, "the robot has articulated joints");
+            const auto uuid = robot->uuid;
+            const auto config = RobotConfig::read(*robot);
+            check(config && !config->urdf.empty(), "the robot records its source file");
+
+            setJointValue(*robot, 0, 0.3f);
+            step();
+            check(std::abs(robot->getJointValue(0) - 0.3f) < 1e-3f, "a joint value applies");
+            const auto posed = RobotConfig::read(*robot);
+            check(posed && !posed->joints.empty() && std::abs(posed->joints[0] - 0.3f) < 1e-3f,
+                  "the pose is recorded for the document");
+
+            startPlay();
+            step(3);
+            stopPlay();
+            step();
+
+            Object3D* found = nullptr;
+            document_.scene().traverse([&](Object3D& o) {
+                if (!found && o.uuid == uuid) found = &o;
+            });
+            check(found != nullptr, "the robot survives the round trip");
+            auto* live = found ? found->as<Robot>() : nullptr;
+            check(live != nullptr, "it comes back articulated, not frozen");
+            check(live && std::abs(live->getJointValue(0) - 0.3f) < 1e-3f,
+                  "the joint pose survives the round trip");
         }
     }
 
@@ -753,7 +805,14 @@ void EditorApp::pollImports(float dt) {
         activeImport_->path = path;
         // Loader exceptions surface through the future and are rethrown on
         // the main thread in the get() below.
-        activeImport_->future = std::async(std::launch::async, [path] {
+        activeImport_->future = std::async(std::launch::async, [path]() -> std::shared_ptr<Object3D> {
+            auto extension = path.extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (extension == ".urdf" || extension == ".xacro") {
+                URDFLoader loader;
+                return loader.load(path);
+            }
             ModelLoader loader;
             return loader.load(path);
         });
@@ -768,7 +827,7 @@ void EditorApp::pollImports(float dt) {
 
     const auto path = activeImport_->path;
     const auto elapsed = activeImport_->elapsed;
-    std::shared_ptr<Group> group;
+    std::shared_ptr<Object3D> group;
     std::string error;
     try {
         group = activeImport_->future.get();
@@ -787,13 +846,29 @@ void EditorApp::pollImports(float dt) {
     std::size_t nodes = 0;
     group->traverse([&nodes](Object3D&) { ++nodes; });
 
+    // A robot records where it came from: the joint table cannot be
+    // serialised, so the document keeps a reference and rebuilds on load.
+    std::size_t dof = 0;
+    if (auto* robot = group->as<Robot>()) {
+        dof = robot->numDOF();
+        RobotConfig config;
+        config.urdf = path.string();
+        config.joints = robot->jointValues();
+        config.write(*robot);
+    }
+
     group->name = ObjectFactory::uniqueName(document_.scene(), path.stem().string());
     addObject(group, document_.scene(), "Import " + path.filename().string());
     settings_.modelDir = path.parent_path().string();
 
     char message[192];
-    std::snprintf(message, sizeof(message), "Imported %s (%zu nodes, %.1fs)",
-                  path.filename().string().c_str(), nodes, elapsed);
+    if (dof > 0) {
+        std::snprintf(message, sizeof(message), "Imported %s (%zu nodes, %zu joints, %.1fs)",
+                      path.filename().string().c_str(), nodes, dof, elapsed);
+    } else {
+        std::snprintf(message, sizeof(message), "Imported %s (%zu nodes, %.1fs)",
+                      path.filename().string().c_str(), nodes, elapsed);
+    }
     log(message);
     flashStatus(message);
 }
@@ -1080,6 +1155,71 @@ void EditorApp::selectObject(Object3D* object) {
         gizmo_->detach();
     }
     applyGizmoMode();
+}
+
+void EditorApp::setJointValue(Robot& robot, std::size_t index, float radians) {
+
+    if (index >= robot.numDOF()) return;
+    robot.setJointValue(index, radians);
+
+    // Keep the document's copy in step with what is on screen, so a save
+    // captures the pose the user is looking at.
+    auto config = RobotConfig::read(robot).value_or(RobotConfig{});
+    config.joints = robot.jointValues();
+    if (!config.urdf.empty()) config.write(robot);
+}
+
+void EditorApp::rearticulateRobots(Scene& scene) {
+
+    // A document round trip flattens a Robot into a plain Object3D: the pose
+    // survives, the joint table does not. Rebuild from the referenced URDF and
+    // transplant, keeping the placeholder's identity and placement so uuid
+    // lookups (selection, undo rebinding) still resolve.
+    std::vector<Object3D*> placeholders;
+    scene.traverse([&placeholders](Object3D& object) {
+        if (object.as<Robot>()) return;// already live
+        if (RobotConfig::read(object)) placeholders.push_back(&object);
+    });
+
+    for (auto* placeholder : placeholders) {
+
+        auto* parent = placeholder->parent;
+        if (!parent) continue;
+
+        const auto config = *RobotConfig::read(*placeholder);
+
+        std::shared_ptr<Robot> robot;
+        std::string error;
+        try {
+            URDFLoader loader;
+            robot = loader.load(config.urdf);
+        } catch (const std::exception& e) {
+            error = e.what();
+        }
+        if (!robot) {
+            // The geometry is still in the document, so the scene renders as
+            // saved — it just cannot be re-jointed until the file is back.
+            log("robot not re-articulated (" + std::filesystem::path(config.urdf).filename().string() +
+                (error.empty() ? ")" : "): " + error));
+            continue;
+        }
+
+        robot->name = placeholder->name;
+        robot->uuid = placeholder->uuid;
+        robot->position.copy(placeholder->position);
+        robot->quaternion.copy(placeholder->quaternion);
+        robot->scale.copy(placeholder->scale);
+        robot->visible = placeholder->visible;
+        robot->userData = placeholder->userData;
+
+        for (std::size_t i = 0; i < config.joints.size() && i < robot->numDOF(); ++i) {
+            robot->setJointValue(i, config.joints[i]);
+        }
+
+        const auto index = childIndex(*parent, *placeholder);
+        placeholder->removeFromParent();
+        insertChildAt(*parent, robot, index);
+    }
 }
 
 void EditorApp::startAnimationPreview(Object3D& root, const std::string& clipName,
@@ -1407,9 +1547,7 @@ void EditorApp::handleFileDrop(const std::vector<std::string>& paths) {
 
     for (const auto& entry : paths) {
         std::filesystem::path path(entry);
-        auto extension = path.extension().string();
-        std::transform(extension.begin(), extension.end(), extension.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const auto extension = formats::extensionOf(path);
 
         if (extension == ".json") {
             if (document_.dirty()) {
@@ -1420,8 +1558,7 @@ void EditorApp::handleFileDrop(const std::vector<std::string>& paths) {
             }
         } else if (extension == ".hdr") {
             setEnvironment(path, true);
-        } else if (extension == ".obj" || extension == ".dae" || extension == ".gltf" ||
-                   extension == ".glb" || extension == ".stl" || extension == ".fbx") {
+        } else if (formats::contains(formats::importable(), extension)) {
             importModel(path);
         } else if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
                    extension == ".bmp" || extension == ".tga" || extension == ".gif") {

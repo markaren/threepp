@@ -51,6 +51,7 @@ namespace threepp {
     class Material;
     class MeshBasicMaterial;
     class ObjectWithMorphTargetInfluences;
+    class Robot;
     class Texture;
 
 }// namespace threepp
@@ -69,6 +70,8 @@ namespace threepp::editor {
             // Drive select/delete/undo through the UI code paths and exit
             // non-zero on failure. Diagnostic, not part of the test suite.
             bool selfTest = false;
+            // Optional robot for the selftest's URDF pass.
+            std::filesystem::path urdf;
         };
 
         explicit EditorApp(const Options& options);
@@ -107,6 +110,7 @@ namespace threepp::editor {
         void drawLightSection(Object3D& object);
         void drawCameraSection(Object3D& object);
         void drawAnimationSection(Object3D& object);
+        void drawJointsSection(Object3D& object);
         void drawPhysicsSection(Object3D& object);
         void drawTextureSlot(Material& material, const char* label,
                              const std::shared_ptr<Texture>& current,
@@ -142,6 +146,13 @@ namespace threepp::editor {
         // --- viewport markers ----------------------------------------------
         // Billboarded SVG icons standing in for objects that draw nothing
         // (cameras, lights), plus the frustum helper for a selected camera.
+        // Rebuilds live Robots over the frozen placeholders a loaded document
+        // leaves behind. See RobotConfig.
+        void rearticulateRobots(Scene& scene);
+        // Drives one joint and records the new pose in userData, so the scene
+        // carries the pose it is showing.
+        void setJointValue(Robot& robot, std::size_t index, float radians);
+
         void syncViewportMarkers();
         void syncCameraHelper();
         void clearViewportMarkers();
@@ -318,9 +329,11 @@ namespace threepp::editor {
 
         // Async model imports. One worker at a time; the rest wait in the
         // queue. importError_ non-empty keeps the failure modal open.
+        // Object3D rather than Group: a URDF import yields a Robot, which is not
+        // a Group.
         struct ActiveImport {
             std::filesystem::path path;
-            std::future<std::shared_ptr<Group>> future;
+            std::future<std::shared_ptr<Object3D>> future;
             float elapsed = 0.f;
         };
         std::deque<std::filesystem::path> importQueue_;
