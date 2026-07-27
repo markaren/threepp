@@ -413,8 +413,14 @@ namespace threepp {
         // elements[8]/[9] are the frustum skew, non-zero under filmOffset /
         // setViewOffset — carrying them is what keeps the principal point
         // honest for an off-centre sensor.
-        projP0_ = camera.projectionMatrix.elements[0];
-        projP5_ = camera.projectionMatrix.elements[5];
+        // Multiplying the overscan factor back out recovers the OUTPUT camera:
+        // render() widened proj[0]/proj[5] by 1/overscan for this frame, and
+        // the intrinsics must describe the lens the user configured, not the
+        // wider frustum we rendered to fill its corners. Overscan does not move
+        // the principal point, so the skew terms need no correction.
+        const float osc = effectiveOverscan();
+        projP0_ = camera.projectionMatrix.elements[0] * osc;
+        projP5_ = camera.projectionMatrix.elements[5] * osc;
         projP8_ = camera.projectionMatrix.elements[8];
         projP9_ = camera.projectionMatrix.elements[9];
 

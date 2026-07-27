@@ -518,6 +518,20 @@ private:
             // k1 > 0 pushes them out (pincushion). Naming the sign here saves
             // the usual round of confusion.
             ImGui::TextDisabled(lens.k1 < 0.f ? "k1 < 0: barrel" : (lens.k1 > 0.f ? "k1 > 0: pincushion" : ""));
+
+            // Overscan is the cure for the smeared frame border: barrel
+            // distortion pulls scene points inward, so the output corners need
+            // geometry from outside the nominal field, and without a wider
+            // render there is none to gather.
+            float overscan = vk_->lensOverscan();
+            if (ImGui::SliderFloat("Overscan", &overscan, 1.f, 2.f, "%.2fx")) {
+                vk_->setLensOverscan(overscan);
+            }
+            if (lens.k1 < 0.f && overscan < 1.02f) {
+                ImGui::TextDisabled("Barrel without overscan smears the border");
+            } else if (overscan > 1.02f) {
+                ImGui::TextDisabled("Renders %.0f%% wider into the same pixels", (overscan - 1.f) * 100.f);
+            }
         }
 
         if (changed) vk_->setLensDistortion(lens);

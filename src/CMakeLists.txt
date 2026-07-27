@@ -659,6 +659,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/BloomPass.cpp"
             "threepp/renderers/vulkan/PostComposite.cpp"
             "threepp/renderers/vulkan/DofPass.cpp"
+            "threepp/renderers/vulkan/SensorPass.cpp"
             "threepp/renderers/vulkan/DeferredShade.cpp"
             "threepp/renderers/vulkan/ProbeGI.cpp"
             "threepp/renderers/vulkan/HiZPyramid.cpp"
@@ -923,6 +924,13 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/post_composite.comp"
         kPostCompositeCompSpv
         _post_composite_spv_h)
+    # Camera image formation: lens distortion + sensor noise on the FINISHED
+    # frame, after the overlay pass so it covers everything the camera sees.
+    # See vulkan/SensorPass.{hpp,cpp}.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/sensor_image.comp"
+        kSensorImageCompSpv
+        _sensor_image_spv_h)
     # Thin-lens depth of field (CoC prefilter → tile max/dilate → near/far
     # scatter-as-gather → full-res combine). See vulkan/DofPass.{hpp,cpp}.
     compile_vulkan_shader(threepp

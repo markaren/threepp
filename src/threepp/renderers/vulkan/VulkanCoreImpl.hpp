@@ -26,6 +26,7 @@
 #include "BloomPass.hpp"
 #include "PostComposite.hpp"
 #include "DofPass.hpp"
+#include "SensorPass.hpp"
 #include "DeferredShade.hpp"
 #include "HiZPyramid.hpp"
 #include "OcclusionCull.hpp"
@@ -141,6 +142,7 @@ namespace threepp {
     using vulkan::TP_ShadeB;
     using vulkan::TP_Dof;
     using vulkan::TP_Froxel;
+    using vulkan::TP_SensorImage;
 
     namespace {
         // Frames-in-flight depth. Bumped from 2 → 3 to deepen CPU/GPU
@@ -2578,6 +2580,10 @@ namespace threepp {
         // film gauge (filmHeightM_ below), focus plane at focusDistance_.
         // OFF by default (the whole pass is skipped; zero cost).
         std::unique_ptr<vulkan::DofPass> dof_;
+        // Final image formation (lens warp + sensor noise). Runs after the
+        // overlay pass so it applies to everything the camera sees, not just
+        // the parts of the frame that existed before the overlay composited.
+        std::unique_ptr<vulkan::SensorPass> sensorPass_;
         bool  dofEnabled_    = false;
         float focusDistance_ = 10.f;
         float tanHalfFovY_   = 0.4142f;// stashed in updateCameraUbo (45° default)
@@ -2604,22 +2610,28 @@ namespace threepp {
         // seed replays the same sequence from the top of an episode.
         uint32_t sensorNoiseFrame_ = 0u;
 
-        // Does the final (RCAS) stage have work beyond sharpening? Both the
-        // lens warp and the sensor noise live there, so either one forces the
-        // pass to run even at sharpenStrength 0 — which is why the shader
-        // needs an explicit sharpen flag (its "0" is still a -1/8 kernel).
+        // Overscan factor for the lens warp: the scene is rendered with the
+        // frustum widened by this much so barrel distortion has real geometry
+        // to gather into the output corners. 1 = off.
+        float lensOverscan_ = 1.f;
+
+        // Is there any image formation left to do after the overlay pass?
         [[nodiscard]] bool sensorStageActive() const {
             return lens_.active() || sensorNoise_.enabled;
         }
+        // Overscan only means anything with a lens: without one the warp is
+        // identity and a widened frustum would just silently crop the view.
+        [[nodiscard]] float effectiveOverscan() const {
+            return lens_.active() ? lensOverscan_ : 1.f;
+        }
 
-        // Pack this frame's lens + sensor state for the RCAS stage. Intrinsics
-        // go over NORMALIZED (fx/W, fy/H, cx/W, cy/H) so the same numbers are
-        // correct in that pass, which runs at DISPLAY extent, as they are at
-        // the render extent they were measured on. Advances the noise frame
-        // counter, so call exactly once per recorded frame.
-        [[nodiscard]] vulkan::TaaResolve::SensorParams buildSensorParams() {
-            vulkan::TaaResolve::SensorParams p{};
-            p.applySharpen  = sharpenStrength_ > 0.f;
+        // Pack this frame's lens + sensor state for the final SensorPass.
+        // Intrinsics go over NORMALIZED (fx/W, fy/H, cx/W, cy/H) so the same
+        // numbers are correct in that pass, which runs at DISPLAY extent, as
+        // they are at the render extent they were measured on. Advances the
+        // noise frame counter, so call exactly once per recorded frame.
+        [[nodiscard]] vulkan::SensorPass::Params buildSensorParams() {
+            vulkan::SensorPass::Params p{};
             p.distortActive = lens_.active();
             p.noiseActive   = sensorNoise_.enabled;
 
@@ -2633,11 +2645,15 @@ namespace threepp {
                 p.tangential[1] = lens_.p2;
                 // (fx/W, fy/H) = 0.5·proj[0], 0.5·proj[5]; (cx/W, cy/H) =
                 // 0.5·(1∓skew). Same derivation as cameraIntrinsics(), with
-                // the extent divided out.
+                // the extent divided out. projP0_/projP5_ are the OUTPUT
+                // intrinsics — updateCameraUbo stashes them before applying
+                // overscan, so the lens is described by the camera the user
+                // configured, not by the widened one we rendered.
                 p.normK[0] = 0.5f * projP0_;
                 p.normK[1] = 0.5f * projP5_;
                 p.normK[2] = 0.5f * (1.f - projP8_);
                 p.normK[3] = 0.5f * (1.f + projP9_);
+                p.overscan = effectiveOverscan();
             }
 
             if (p.noiseActive) {
@@ -3045,6 +3061,10 @@ namespace threepp {
             post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
             // Thin-lens DoF (images/descriptors fitted in rewriteBloomDescriptors).
             dof_ = std::make_unique<vulkan::DofPass>(*ctx, cmdPool, kFramesInFlight);
+            // Lens distortion + sensor noise, applied to the FINISHED frame at
+            // the very end of recording (after the overlay pass — see
+            // SensorPass.hpp). Allocates nothing until a lens or noise is set.
+            sensorPass_ = std::make_unique<vulkan::SensorPass>(*ctx, cmdPool, kFramesInFlight);
             // Raster-first deferred lighting pass. Writes bloom_->sceneHdr, so
             // it must exist after bloom_; its descriptors reference the camera /
             // lights UBOs, the env image, the raster gbuffer and sceneHdr — all

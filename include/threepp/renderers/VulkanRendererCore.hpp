@@ -426,16 +426,37 @@ namespace threepp {
         // NEAREST — interpolating an instance id invents objects, and
         // interpolating depth across a silhouette invents surfaces.
         //
-        // The warp is a gather over what was actually rendered: the frustum
-        // still comes from the camera, so a pixel whose ideal ray falls
-        // outside the rendered frame clamps to the frame edge. Barrel
-        // distortion (k1 < 0) gathers inward and is unaffected; pincushion
-        // and wide fisheye stretch the border, so render with a wider FOV
-        // than the lens' nominal one if you need the corners to be real.
+        // BORDER: the warp is a gather over what was actually rendered, and
+        // the frustum still comes from the camera, so a pixel whose ideal ray
+        // falls outside the rendered frame clamps to the frame edge and
+        // smears. BARREL distortion (k1 < 0) is the case that hits this: it
+        // maps scene points inward, so filling the output corners needs
+        // content from OUTSIDE the rendered field (measured: k1 = -0.1 on a
+        // 384x256 frame wants pixel (398, 265) at the corner). Pincushion
+        // (k1 > 0) gathers inward and is unaffected. Until overscan exists,
+        // render with a wider FOV than the lens' nominal one and accept the
+        // reframing, or crop the smeared border, if the corners must be real.
         //
         // OFF by default (LensModel::None) — zero cost, output unchanged.
         void setLensDistortion(const LensDistortion& distortion);
         [[nodiscard]] LensDistortion lensDistortion() const;
+
+        // Render the scene with the frustum widened by this factor so the warp
+        // has real geometry to gather into the output corners, instead of the
+        // clamped, smeared edge described above. 1 (default) = off.
+        //
+        // This is the fix for the barrel-distortion border: 1.15-1.3 covers
+        // typical wide-lens coefficients. The cost is rendering a wider field
+        // at the same resolution, so effective detail drops by roughly the
+        // factor (a 1.25 overscan renders 1.25x the field into the same
+        // pixels). Only meaningful with a lens set; ignored otherwise.
+        //
+        // The widened frustum applies to EVERYTHING this frame — culling,
+        // motion vectors and the G-buffer AOVs included — so colour and labels
+        // keep describing one camera. cameraIntrinsics() still reports the
+        // OUTPUT camera (the one you configured), not the widened one.
+        void setLensOverscan(float factor);
+        [[nodiscard]] float lensOverscan() const;
 
         // ── Image-sensor noise ───────────────────────────────────────────
         // Photon and electronic noise, applied last (post-TAA/upscale — see
