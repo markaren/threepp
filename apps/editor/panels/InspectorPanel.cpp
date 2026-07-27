@@ -843,8 +843,36 @@ void EditorApp::drawAnimationSection(Object3D& object) {
 void EditorApp::drawJointsSection(Object3D& object) {
 
     auto* robot = object.as<Robot>();
-    if (!robot || robot->numDOF() == 0) return;
-    if (!section("Joints")) return;
+    if (!robot) return;
+    if (!section("Robot")) return;
+
+    // Collision hulls are wireframe stand-ins drawn on top of the visual
+    // meshes; useful when checking a URDF, noise the rest of the time.
+    {
+        auto config = RobotConfig::read(object).value_or(RobotConfig{});
+        bool show = config.showColliders;
+        if (ImGui::Checkbox("Show Colliders", &show)) {
+            auto* target = robot;
+            commands_.execute(makeProperty<bool>(
+                    show ? "Show Colliders" : "Hide Colliders", "colliders:" + object.uuid,
+                    [target](const bool& value) {
+                        target->showColliders(value);
+                        auto updated = RobotConfig::read(*target).value_or(RobotConfig{});
+                        updated.showColliders = value;
+                        if (!updated.urdf.empty()) updated.write(*target);
+                    },
+                    config.showColliders, show));
+            document_.setDirty(true);
+        }
+    }
+
+    if (robot->numDOF() == 0) {
+        ImGui::TextColored(theme::muted(), "No articulated joints.");
+        ImGui::TreePop();
+        return;
+    }
+
+    ImGui::Spacing();
 
     const auto info = robot->getArticulatedJointInfo();
 

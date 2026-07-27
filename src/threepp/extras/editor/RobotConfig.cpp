@@ -34,6 +34,14 @@ namespace {
         return std::any_cast<const std::string&>(it->second);
     }
 
+    bool readBool(const Object3D& object, const char* key, bool fallback) {
+
+        const auto it = object.userData.find(key);
+        if (it == object.userData.end()) return fallback;
+        if (it->second.type() != typeid(bool)) return fallback;
+        return std::any_cast<bool>(it->second);
+    }
+
 }// namespace
 
 
@@ -78,6 +86,7 @@ std::optional<RobotConfig> RobotConfig::read(const Object3D& object) {
     RobotConfig config;
     config.urdf = urdf;
     config.joints = decodeJoints(readString(object, jointsKey));
+    config.showColliders = readBool(object, collidersKey, false);
     return config;
 }
 
@@ -89,10 +98,18 @@ void RobotConfig::write(Object3D& object) const {
     }
     object.userData[urdfKey] = urdf;
     object.userData[jointsKey] = encodeJoints(joints);
+    // Only written when on: hidden is the default, and a default should leave
+    // no trace in the document.
+    if (showColliders) {
+        object.userData[collidersKey] = true;
+    } else {
+        object.userData.erase(collidersKey);
+    }
 }
 
 void RobotConfig::erase(Object3D& object) {
 
     object.userData.erase(urdfKey);
     object.userData.erase(jointsKey);
+    object.userData.erase(collidersKey);
 }

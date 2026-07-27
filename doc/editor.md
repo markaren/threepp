@@ -194,18 +194,27 @@ press Play. The play snapshot restores all poses on Stop.
 
 Importing a `.urdf` / `.xacro` routes to `URDFLoader` instead of `ModelLoader`
 and yields a `Robot` — an `Object3D` that additionally owns a joint table. The
-inspector shows a **Joints** section with one slider per articulated DOF,
+inspector shows a **Robot** section with one slider per articulated DOF,
 labelled with the joint's URDF name, clamped to its limits, in degrees for
 revolute joints and metres for prismatic ones. Edits are undoable and coalesce
 per drag; **Home** returns every joint to zero as a single undo entry.
+
+A URDF also describes collision geometry, which `URDFLoader` builds as white
+wireframe hulls sitting directly on top of the visual meshes — and leaves
+visible. The editor hides them on import and offers **Show Colliders** to bring
+them back. That choice is stored rather than treated as a transient view
+setting, because Play rebuilds the robot from its URDF: a non-persisted toggle
+would reset itself exactly when you wanted to watch the hulls. Hidden is the
+default, so the key is only written when the toggle is on.
 
 None of that articulation can go into the three.js JSON, which knows only about
 transforms — a saved robot would come back correctly posed but frozen. So the
 document stores a reference instead:
 
 ```
-userData["urdf"]        C:/models/lbr_iiwa_14_r820.urdf
-userData["jointValues"] 0.3,0,-1.2,0,0,0,0
+userData["urdf"]          C:/models/lbr_iiwa_14_r820.urdf
+userData["jointValues"]   0.3,0,-1.2,0,0,0,0
+userData["showColliders"] true      (omitted when hidden, which is the default)
 ```
 
 Joint values are always radians/metres regardless of what the slider displays.

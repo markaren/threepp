@@ -518,6 +518,37 @@ int EditorApp::runSelfTest() {
             check(live != nullptr, "it comes back articulated, not frozen");
             check(live && std::abs(live->getJointValue(0) - 0.3f) < 1e-3f,
                   "the joint pose survives the round trip");
+
+            // Collision hulls: hidden on import, and the opt-in has to outlive
+            // the rebuild or it would reset every time play is pressed.
+            const auto colliderVisible = [](Object3D& root) {
+                bool visible = false;
+                root.traverse([&visible](Object3D& node) {
+                    if (node.userData.contains("collider") && node.visible) visible = true;
+                });
+                return visible;
+            };
+            if (live) {
+                check(!colliderVisible(*live), "collision geometry is hidden by default");
+
+                live->showColliders(true);
+                auto shown = RobotConfig::read(*live).value_or(RobotConfig{});
+                shown.showColliders = true;
+                shown.write(*live);
+                step();
+                check(colliderVisible(*live), "collision geometry can be shown");
+
+                startPlay();
+                step(3);
+                stopPlay();
+                step();
+                Object3D* again = nullptr;
+                document_.scene().traverse([&](Object3D& o) {
+                    if (!again && o.uuid == uuid) again = &o;
+                });
+                check(again && colliderVisible(*again),
+                      "the collider toggle survives the round trip");
+            }
         }
     }
 
@@ -855,6 +886,9 @@ void EditorApp::pollImports(float dt) {
         config.urdf = path.string();
         config.joints = robot->jointValues();
         config.write(*robot);
+        // URDFLoader builds the collision hulls visible; they are wireframe
+        // duplicates sitting on the visual meshes, so start them hidden.
+        robot->showColliders(config.showColliders);
     }
 
     group->name = ObjectFactory::uniqueName(document_.scene(), path.stem().string());
@@ -1215,6 +1249,7 @@ void EditorApp::rearticulateRobots(Scene& scene) {
         for (std::size_t i = 0; i < config.joints.size() && i < robot->numDOF(); ++i) {
             robot->setJointValue(i, config.joints[i]);
         }
+        robot->showColliders(config.showColliders);
 
         const auto index = childIndex(*parent, *placeholder);
         placeholder->removeFromParent();

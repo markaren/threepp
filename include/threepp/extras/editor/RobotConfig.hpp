@@ -40,9 +40,17 @@ namespace threepp::editor {
         // native unit — so the file does not depend on the inspector's choice
         // of degrees for display.
         std::vector<float> joints;
+        // URDF ships collision geometry alongside the visual meshes, and
+        // URDFLoader builds both. The collision hulls are wireframe stand-ins
+        // that sit right on top of the real meshes, so they start hidden and
+        // this is the per-robot opt-in. Persisted because a play/stop cycle
+        // rebuilds the robot, and an inspection aid that vanishes when you
+        // press play is worse than useless.
+        bool showColliders = false;
 
         static constexpr const char* urdfKey = "urdf";
         static constexpr const char* jointsKey = "jointValues";
+        static constexpr const char* collidersKey = "showColliders";
 
         [[nodiscard]] static std::string encodeJoints(const std::vector<float>& values);
         [[nodiscard]] static std::vector<float> decodeJoints(const std::string& text);
