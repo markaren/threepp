@@ -3,8 +3,8 @@
 
 namespace threepp {
 
-void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
 
+void VulkanRenderer::Impl::updatePaneRegion() {
             // ── Split-screen pane region ───────────────────────────────────
             // When scissorTest is on, clip the deferred-render pane to the
             // scissor sub-rect: render region-sized at the image origin
@@ -40,7 +40,9 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
                                                  static_cast<double>(sh) * fullRender.height / fullSwap.height)))};
                 }
             }
+}
 
+void VulkanRenderer::Impl::recordDeformAndTlas(VkCommandBuffer cb) {
             // ── Skinned-mesh GPU pipeline ──────────────────────────────────
             // ensureSceneBuilt populated pendingSkinnedRebuilds_ with the
             // states whose bones changed this frame and uploaded the new
@@ -365,7 +367,9 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
                 vkCmdPipelineBarrier2(cb, &dep);
                 pendingTlasRefit_ = false;
             }
+}
 
+bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t imageIndex) {
             // ── Hybrid raster G-buffer pass ─────────────────────────────────
             // Runs ahead of any ray-query work so the gbuffer is ready when
             // the deferred shade wants to read primary visibility. In
@@ -711,10 +715,14 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
                     // (which expects PRESENT_SRC) consistent and avoids the
                     // double vkEndCommandBuffer the bespoke finalize used to do.
                     recordHybridDebugResolve(cb, imageIndex, currentFrame);
-                    return;
+                    return true;
                 }
             }
 
+            return false;
+}
+
+bool VulkanRenderer::Impl::recordEventsOnlyFrame(VkCommandBuffer cb, uint32_t imageIndex) {
             // ── Events-only render mode early-return ───────────────────────
             // High-rate event-camera path (~500 Hz target): the gbuf prepass
             // above wrote everything event_shade needs to produce a clean
@@ -800,10 +808,14 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
                 dVis.pImageMemoryBarriers = &visBar;
                 vkCmdPipelineBarrier2(cb, &dVis);
 
-                return;
+                return true;
             }
             // ── End events-only render mode ─────────────────────────────────
 
+            return false;
+}
+
+void VulkanRenderer::Impl::recordSwapchainPrepare(VkCommandBuffer cb, uint32_t imageIndex) {
             const VkImage img = ctx->swapchainImages()[imageIndex];
 
             // UNDEFINED -> GENERAL. Swapchain is now written by either the
@@ -903,37 +915,9 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
                 clrDep.pImageMemoryBarriers    = &clrBar;
                 vkCmdPipelineBarrier2(cb, &clrDep);
             }
+}
 
-            // Per-frame set index (unused by the deferred leaf, which drives
-            // DeferredShade from currentFrame; kept for the dispatch signature).
-            const uint32_t setIdx = currentFrame * imageCount_ + imageIndex;
-
-            // Extents + exposure are shared by both render modes and by the
-            // bloom/TAA tail below, so hoist them out of the mode branch.
-            const VkExtent2D ext   = ctx->swapchainExtent();
-            // Deferred render extent — equals `ext` unless
-            // renderScale_ < 1, in which case TAA upsamples to the swapchain.
-            const VkExtent2D ptExt = renderExtent();
-            const float exposure   = currentExposure();
-            uint32_t exposureBits;
-            std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
-            // Pre-exposure (physical camera mode; 1.0 otherwise — every
-            // consumer's multiply/divide is then an exact no-op). Stash this
-            // frame-in-flight's value so the exposure meter can un-bake it
-            // (see VulkanRenderer.cpp's readback of preExpHist_[currentFrame]).
-            const float preExp     = preExposure();
-            preExpHist_[currentFrame] = preExp;
-            std::memcpy(&preExpBits_, &preExp, sizeof(preExpBits_));
-
-            // Gather this frame's particle centers + base indices BEFORE the
-            // scene dispatch — the hook tail runs particle_light.comp over them
-            // (lit billboards; the overlay loop below consumes the bases).
-            prepareParticleLighting();
-
-            // Dispatch the deferred shade compute (VulkanRenderer::Impl);
-            // bloom + TAA below are shared.
-            recordSceneDispatch(cb, setIdx, ext, ptExt, exposureBits);
-
+void VulkanRenderer::Impl::recordDepthOfField(VkCommandBuffer cb) {
             // ── Thin-lens depth of field (opt-in) ──────────────────────────────
             // Defocus the linear-HDR scene BEFORE bloom/composite/TAA so
             // bright bokeh still blooms and tone-maps as HDR. CoC from the
@@ -955,7 +939,11 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
                              cocScale, S, kMaxCocPx);
                 gpuTimings_->end(cb, TP_Dof, currentFrame);
             }
+}
 
+void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t imageIndex,
+                                                VkExtent2D ext, VkExtent2D ptExt,
+                                                uint32_t exposureBits, float preExp) {
             // Frame-rate-aware history blend: keep the ghost-decay time constant in
             // wall-clock seconds, not frames (see taaPrevTimeSec_). taaBlendAlpha_ is
             // authored to look good at kTaaRefFps; at or above that rate this is a
@@ -1263,6 +1251,11 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
                 gpuTimings_->end(cb, TP_TAA, currentFrame);
             }
             // ── End post stack / TAA ────────────────────────────────────────────
+}
+
+void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imageIndex) {
+            const VkImage img    = ctx->swapchainImages()[imageIndex];
+            const VkExtent2D ext = ctx->swapchainExtent();
 
             // ── Hybrid raster overlay pass ─────────────────────────────────────
             // Wireframe-flagged meshes (any material with wireframe == true)
@@ -2056,6 +2049,74 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
                 }
             }
             // ── End hybrid raster overlay pass ─────────────────────────────────
+}
+
+void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
+
+            // The frame, stage by stage. ORDER IS THE CONTRACT — every
+            // cross-stage barrier lives inside the stage that needs it, so
+            // reordering these calls reorders the frame's synchronization.
+            // Each stage carries its own full commentary; this function is
+            // the table of contents.
+            updatePaneRegion();
+
+            // Deformers (skinned / tet / displaced / grass) + the per-frame
+            // TLAS refit, all recorded into the frame cb.
+            recordDeformAndTlas(cb);
+
+            // Raster G-buffer prepass (+ occlusion culling, MSAA resolve,
+            // overlay depth prepass). True → the hybrid debug view blitted
+            // straight to the swapchain and the frame is finished.
+            if (recordGbufferStage(cb, imageIndex)) return;
+
+            // Events-only mode (~500 Hz event camera): clear the swapchain,
+            // skip shade/post entirely. True → the frame is finished.
+            if (recordEventsOnlyFrame(cb, imageIndex)) return;
+
+            // Swapchain → GENERAL, ReSTIR reservoir visibility, optional
+            // split-screen clear.
+            recordSwapchainPrepare(cb, imageIndex);
+
+            // Per-frame set index (unused by the deferred leaf, which drives
+            // DeferredShade from currentFrame; kept for the dispatch signature).
+            const uint32_t setIdx = currentFrame * imageCount_ + imageIndex;
+
+            // Extents + exposure are shared by both render modes and by the
+            // bloom/TAA tail below, so hoist them out of the mode branch.
+            const VkExtent2D ext   = ctx->swapchainExtent();
+            // Deferred render extent — equals `ext` unless
+            // renderScale_ < 1, in which case TAA upsamples to the swapchain.
+            const VkExtent2D ptExt = renderExtent();
+            const float exposure   = currentExposure();
+            uint32_t exposureBits;
+            std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
+            // Pre-exposure (physical camera mode; 1.0 otherwise — every
+            // consumer's multiply/divide is then an exact no-op). Stash this
+            // frame-in-flight's value so the exposure meter can un-bake it
+            // (see VulkanRenderer.cpp's readback of preExpHist_[currentFrame]).
+            const float preExp     = preExposure();
+            preExpHist_[currentFrame] = preExp;
+            std::memcpy(&preExpBits_, &preExp, sizeof(preExpBits_));
+
+            // Gather this frame's particle centers + base indices BEFORE the
+            // scene dispatch — the hook tail runs particle_light.comp over them
+            // (lit billboards; the overlay loop below consumes the bases).
+            prepareParticleLighting();
+
+            // Dispatch the deferred shade compute (VulkanRenderer::Impl);
+            // bloom + TAA below are shared.
+            recordSceneDispatch(cb, setIdx, ext, ptExt, exposureBits);
+
+            // Thin-lens depth of field (opt-in): defocus the linear-HDR
+            // scene before bloom/composite/TAA.
+            recordDepthOfField(cb);
+
+            // Bloom + tonemap + temporal resolve — exactly one of DLSS /
+            // FSR / built-in TAA runs (see recordUpscaleAndPost).
+            recordUpscaleAndPost(cb, imageIndex, ext, ptExt, exposureBits, preExp);
+
+            // Post-TAA wireframe / line / particle / sprite overlays.
+            recordHybridOverlay(cb, imageIndex);
 
             // ── Camera image formation: lens distortion + sensor noise ─────────
             // Deliberately LAST. The overlay pass above composites particle

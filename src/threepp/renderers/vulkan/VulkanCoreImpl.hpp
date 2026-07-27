@@ -6945,6 +6945,22 @@ namespace threepp {
             return envSunPolicy_ == VulkanRenderer::EnvSunPolicy::Auto;
         }
 
+        // Frame recording, split along the frame's own stage seams (bodies in
+        // VulkanCoreRecord.cpp). recordCommandBuffer is the narrative — it
+        // calls the stages in order; every cross-stage barrier lives INSIDE
+        // the stage that needs it, so the call order is the synchronization
+        // contract. The two bool stages return true when they FINISHED the
+        // frame (hybrid-debug blit / events-only mode) and recording stops.
+        void updatePaneRegion();
+        void recordDeformAndTlas(VkCommandBuffer cb);
+        [[nodiscard]] bool recordGbufferStage(VkCommandBuffer cb, uint32_t imageIndex);
+        [[nodiscard]] bool recordEventsOnlyFrame(VkCommandBuffer cb, uint32_t imageIndex);
+        void recordSwapchainPrepare(VkCommandBuffer cb, uint32_t imageIndex);
+        void recordDepthOfField(VkCommandBuffer cb);
+        void recordUpscaleAndPost(VkCommandBuffer cb, uint32_t imageIndex,
+                                  VkExtent2D ext, VkExtent2D ptExt,
+                                  uint32_t exposureBits, float preExp);
+        void recordHybridOverlay(VkCommandBuffer cb, uint32_t imageIndex);
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex);
 
         // Records the ImGui (or any overlay) callback inside a dynamic render
