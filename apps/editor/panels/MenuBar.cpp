@@ -118,6 +118,9 @@ void EditorApp::drawMenuBar() {
             ImGui::Separator();
             if (grid_) ImGui::MenuItem("Grid", nullptr, &grid_->visible);
             if (axes_) ImGui::MenuItem("Origin Axes", nullptr, &axes_->visible);
+            // Only draws anything while playing — the colliders do not exist
+            // before that — but the toggle is a preference, not a play state.
+            ImGui::MenuItem("Physics Colliders", nullptr, &physicsDebug_);
             ImGui::MenuItem("Bottom Panel", nullptr, &bottomPanelOpen_);
             ImGui::Separator();
             ImGui::MenuItem("Renderer Settings", nullptr, &showRendererSettings);

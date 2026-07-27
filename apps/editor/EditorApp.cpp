@@ -38,6 +38,7 @@
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/ObjectWithMaterials.hpp"
 #include "threepp/objects/Robot.hpp"
@@ -50,6 +51,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <limits>
 
 // GLFW's window-title setter. Declared rather than included: the GLFW headers
 // are private to the threepp target, but the symbol is linked into it and the
@@ -184,6 +186,10 @@ EditorApp::EditorApp(const Options& options)
         // gone.
         clearViewportMarkers();
         clearSplineOverlays();
+        // The collider lines are world-space and belong to a world that stop()
+        // has already destroyed; the node itself is parented to the surviving
+        // overlay, so it has to be taken down explicitly.
+        clearPhysicsDebug();
         if (cameraHelper_) {
             cameraHelper_->removeFromParent();
             cameraHelper_.reset();
@@ -233,7 +239,9 @@ EditorApp::EditorApp(const Options& options)
     });
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-    play_.addSession(std::make_shared<PhysicsPlaySession>());
+    // Kept as a member too: the collider overlay reads the world it builds.
+    physics_ = std::make_shared<PhysicsPlaySession>();
+    play_.addSession(physics_);
 #endif
     play_.addSession(std::make_shared<AnimationPlaySession>());
 #ifdef THREEPP_EDITOR_WITH_PYTHON
@@ -339,6 +347,7 @@ int EditorApp::runSelfTest() {
         for (auto* child : overlay_->children) {
             if (child == grid_.get() || child == axes_.get() ||
                 child == markers_.get() || child == splines_.get() ||
+                child == static_cast<Object3D*>(physicsDebugLines_.get()) ||
                 child == static_cast<Object3D*>(cameraHelper_.get()) ||
                 child == static_cast<Object3D*>(gizmo_.get())) continue;
             ++n;
@@ -1262,9 +1271,19 @@ int EditorApp::runSelfTest() {
             if (auto* asMesh = reloadedMesh ? reloadedMesh->as<Mesh>() : nullptr) {
                 const auto* position = asMesh->geometry()->getAttribute<float>("position");
                 if (position && position->count() >= 2) {
-                    const Vector3 left(position->getX(0), position->getY(0), position->getZ(0));
-                    const Vector3 right(position->getX(1), position->getY(1), position->getZ(1));
-                    narrowed = std::abs(left.distanceTo(right) - authored.width) < 1e-3f;
+                    // The NARROWEST cross-section. Each one is the authored
+                    // width times its miter factor, which is exactly 1 where
+                    // the ribbon runs straight and a little over it wherever a
+                    // sampled curve bends — including at a closed loop's seam,
+                    // which is a corner like any other.
+                    float narrowest = std::numeric_limits<float>::max();
+                    for (int i = 0; i + 1 < position->count(); i += 2) {
+                        const Vector3 left(position->getX(i), position->getY(i), position->getZ(i));
+                        const Vector3 right(position->getX(i + 1), position->getY(i + 1), position->getZ(i + 1));
+                        narrowest = std::min(narrowest, left.distanceTo(right));
+                    }
+                    narrowed = narrowest >= authored.width - 1e-3f &&
+                               narrowest < authored.width * 1.05f;
                 }
             }
             check(narrowed, "rebuilt to the width the reloaded config asks for");
@@ -1509,6 +1528,67 @@ int EditorApp::runSelfTest() {
             }
         }
     }
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    // The physics collider overlay. It exists because a body resting on nothing
+    // and a body whose collider is somewhere else look identical, so the checks
+    // are about the buffer being there, being emptied, and surviving the scene
+    // replace that Stop performs under it.
+    {
+        newScene();
+        step(2);
+
+        for (const char* name : {"Ground", "Box"}) {
+            auto* object = document_.scene().getObjectByName(name);
+            if (!object) continue;
+            PhysicsConfig config;
+            config.enabled = true;
+            config.body = std::string(name) == "Box" ? PhysicsConfig::Body::Dynamic
+                                                     : PhysicsConfig::Body::Static;
+            config.write(*object);
+        }
+
+        const auto colliderVertices = [this] {
+            return physicsDebugLines_ ? physicsDebugLines_->geometry()->drawRange.count : 0;
+        };
+
+        physicsDebug_ = true;
+        step(2);
+        check(physicsDebugLines_ == nullptr, "the collider overlay stays off while stopped");
+
+        startPlay();
+        // PhysX fills the render buffer during simulate(), so the lines arrive
+        // one substep after the parameter is set.
+        step(8);
+        check(physicsDebugLines_ != nullptr, "toggling Physics Colliders on while playing draws an overlay");
+        check(physicsDebugLines_ && physicsDebugLines_->visible, "which is visible");
+        check(colliderVertices() > 0, "with a non-empty line buffer");
+
+        physicsDebug_ = false;
+        step(2);
+        check(physicsDebugLines_ == nullptr, "toggling it off clears the overlay");
+
+        // Back on, then Stop: that is a full scene replace with live world
+        // pointers in the overlay, which is the shape of every scar this file
+        // carries.
+        physicsDebug_ = true;
+        step(5);
+        check(colliderVertices() > 0, "toggling it back on refills the buffer");
+        stopPlay();
+        step(2);
+        check(physicsDebugLines_ == nullptr, "stopping play clears it, scene replace and all");
+
+        // And once more across an explicit document replace while playing.
+        startPlay();
+        step(5);
+        check(colliderVertices() > 0, "the overlay comes back on the next play");
+        stopPlay();
+        newScene();
+        step(2);
+        check(physicsDebugLines_ == nullptr, "a new scene with the toggle on leaves nothing behind");
+        physicsDebug_ = false;
+    }
+#endif
 
     std::cout << "[selftest] " << (failed == 0 ? "ALL PASS" : "FAILED") << std::endl;
     return failed == 0 ? 0 : 1;
@@ -2562,6 +2642,7 @@ void EditorApp::refreshSelectionHelpers() {
 
     syncViewportMarkers();
     syncSplineOverlays();
+    syncPhysicsDebug();
     syncCameraHelper();
 
     // Snap is a hold-to-engage modifier, exactly like the transform example.
@@ -2676,6 +2757,10 @@ void EditorApp::togglePause() {
 void EditorApp::stopPlay() {
 
     if (!isPlaying()) return;
+
+    // Before the sessions go: the lines describe a PhysX world that stop() is
+    // about to destroy.
+    clearPhysicsDebug();
 
     std::string error;
     if (!play_.stop(document_, &error)) {
