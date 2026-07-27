@@ -209,7 +209,8 @@ void Lights::setup(std::vector<Light*>& lights) {
         hash.hemiLength != hemiLength ||
         hash.numDirectionalShadows != numDirectionalShadows ||
         hash.numPointShadows != numPointShadows ||
-        hash.numSpotShadows != numSpotShadows) {
+        hash.numSpotShadows != numSpotShadows ||
+        hash.ambient != state.ambient) {
 
         state.directional.resize(directionalLength);
         state.spot.resize(spotLength);
@@ -236,6 +237,7 @@ void Lights::setup(std::vector<Light*>& lights) {
         hash.numDirectionalShadows = numDirectionalShadows;
         hash.numPointShadows = numPointShadows;
         hash.numSpotShadows = numSpotShadows;
+        hash.ambient = state.ambient;
 
         state.version = nextVersion++;
     }

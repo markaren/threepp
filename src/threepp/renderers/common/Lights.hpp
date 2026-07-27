@@ -141,6 +141,14 @@ namespace threepp {
                 int numDirectionalShadows = -1;
                 int numPointShadows = -1;
                 int numSpotShadows = -1;
+
+                // Ambient light contributes no entry to any of the counts
+                // above — it collapses into a single summed colour. Without it
+                // here, adding, removing or recolouring an AmbientLight left
+                // the version unchanged, so the uniform was never re-uploaded
+                // and the viewport kept the old ambient term until some
+                // unrelated change forced a program switch.
+                Color ambient{-1.f, -1.f, -1.f};
             };
 
             unsigned int version = 0;
