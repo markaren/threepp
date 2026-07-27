@@ -40,6 +40,7 @@ namespace threepp::editor {
         std::string modelDir;
         std::string textureDir;
         std::string environmentDir;
+        std::string scriptDir;
 
         bool bottomPanelOpen = true;
 

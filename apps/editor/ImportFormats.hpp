@@ -41,6 +41,14 @@ namespace threepp::editor::formats {
         return list;
     }
 
+    // Behaviour scripts. Not importable — a script is attached to an existing
+    // object rather than added to the scene, so it is its own category.
+    inline const std::vector<std::string>& scripts() {
+
+        static const std::vector<std::string> list{".py"};
+        return list;
+    }
+
     // Everything the Import action accepts, mesh and robot alike.
     inline const std::vector<std::string>& importable() {
 

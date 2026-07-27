@@ -17,6 +17,10 @@
 
 #include "FileBrowser.hpp"
 
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+#include "Scripting.hpp"
+#endif
+
 #include "threepp/extras/editor/Command.hpp"
 #include "threepp/extras/editor/EditorCommands.hpp"
 #include "threepp/extras/editor/EditorSettings.hpp"
@@ -41,6 +45,7 @@
 #include <future>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class ImguiContext;
@@ -111,6 +116,7 @@ namespace threepp::editor {
         void drawCameraSection(Object3D& object);
         void drawAnimationSection(Object3D& object);
         void drawJointsSection(Object3D& object);
+        void drawScriptSection(Object3D& object);
         void drawPhysicsSection(Object3D& object);
         void drawTextureSlot(Material& material, const char* label,
                              const std::shared_ptr<Texture>& current,
@@ -132,6 +138,9 @@ namespace threepp::editor {
         void clearEnvironment();
         void assignTextureToSelection(const std::filesystem::path& path);
         void assignTextureToSlot(const std::filesystem::path& path);
+        // Attaches (or clears, with an empty path) a .py on `object`, as one
+        // undoable step. Field values already stored for the same file are kept.
+        void assignScript(Object3D& object, const std::filesystem::path& path);
 
         void addObject(const std::shared_ptr<Object3D>& object, Object3D& parent, const std::string& label);
         void deleteSelected();
@@ -279,10 +288,15 @@ namespace threepp::editor {
             SaveAs,
             ImportModel,
             Environment,
-            Texture
+            Texture,
+            Script
         };
         PendingDialog pendingDialog_ = PendingDialog::None;
         bool environmentAsBackground_ = true;
+        // Which object a script file dialog is filling. Resolved by uuid rather
+        // than pointer: the dialog spans frames, and a Play/Stop in between
+        // replaces the whole graph.
+        std::string scriptTargetUuid_;
 
         // Which material slot a "Load..." button in the inspector is filling.
         // The file dialog resolves a frame or more later, so the target has to
@@ -341,6 +355,25 @@ namespace threepp::editor {
             std::vector<std::pair<ObjectWithMorphTargetInfluences*, std::vector<float>>> savedMorphs;
         };
         std::unique_ptr<AnimPreview> animPreview_;
+
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+        // Registered with the play controller; also the inspector's source for
+        // "what went wrong in this script last session".
+        std::shared_ptr<ScriptPlaySession> scripts_;
+
+        // Discovering a script's fields means importing the file, which the
+        // inspector cannot do sixty times a second. Cached per path and
+        // invalidated by the file's write time, so saving the .py in an editor
+        // refreshes the section without any reload button being pressed.
+        struct CachedInspection {
+            std::filesystem::file_time_type stamp{};
+            scripting::Inspection inspection;
+        };
+        std::unordered_map<std::string, CachedInspection> scriptInspections_;
+        // Returns the cached inspection for `path`, re-running it when the file
+        // changed on disk.
+        const scripting::Inspection& inspectScript(const std::string& path);
+#endif
 
         // Async model imports. One worker at a time; the rest wait in the
         // queue. importError_ non-empty keeps the failure modal open.

@@ -111,10 +111,6 @@ if (Python3_FOUND AND TARGET pybind11::headers)
     endif ()
 
     target_link_libraries(threepp_editor PRIVATE threepp_editor_scripting)
-
-    add_executable(threepp_script_spike scripting/spike_main.cpp)
-    target_link_libraries(threepp_script_spike PRIVATE threepp_editor_scripting)
-
     message(STATUS "threepp_editor: Python scripting enabled (${Python3_VERSION})")
 else ()
     message(STATUS "threepp_editor: Python3 Development.Embed not found, scripting disabled")

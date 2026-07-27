@@ -19,29 +19,40 @@ namespace {
     // reflection is. Kept as one string so there is no file to find at runtime —
     // the editor must work from any working directory.
     constexpr const char* kHelperSource = R"PY(
-import importlib.util, inspect, os, sys
+import inspect, os, sys, types
 
 _PREFIX = "_threepp_editor_script_"
 
 def load(path):
-    """Import `path` with fresh module state and return (module, stem)."""
+    """Compile and run `path` in a brand-new module, and return (module, stem).
+
+    Deliberately NOT importlib: the source loader validates its __pycache__
+    entry against (mtime, size), both of which survive a same-second edit that
+    happens not to change the length. Editing a script and pressing Play again
+    would then re-run the OLD bytecode, which is the one failure this feature
+    cannot have. Reading and compiling the file ourselves has no cache to be
+    stale.
+    """
     path = os.path.abspath(path)
     stem = os.path.splitext(os.path.basename(path))[0]
     name = _PREFIX + stem
-    # Every Play re-imports from scratch: editing the .py and pressing Play
-    # again has to pick up the change. That is the whole point of the feature.
-    sys.modules.pop(name, None)
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError("not a loadable Python file: " + path)
-    mod = importlib.util.module_from_spec(spec)
+    with open(path, "rb") as handle:
+        source = handle.read()
+    # compile() before touching sys.modules, so a syntax error leaves nothing
+    # half-registered behind it.
+    code = compile(source, path, "exec")
+
+    mod = types.ModuleType(name)
+    mod.__file__ = path
+    # Registered while it runs: a class defined here has to be picklable, and
+    # anything doing `sys.modules[__name__]` has to find itself.
     sys.modules[name] = mod
     folder = os.path.dirname(path)
     added = bool(folder) and folder not in sys.path
     if added:
         sys.path.insert(0, folder)
     try:
-        spec.loader.exec_module(mod)
+        exec(code, mod.__dict__)
     except BaseException:
         sys.modules.pop(name, None)
         raise

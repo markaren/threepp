@@ -9,6 +9,7 @@
 #include "threepp/extras/editor/AnimationPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
+#include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
@@ -225,6 +226,13 @@ EditorApp::EditorApp(const Options& options)
     play_.addSession(std::make_shared<PhysicsPlaySession>());
 #endif
     play_.addSession(std::make_shared<AnimationPlaySession>());
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    // Last, so a script's transform edits are the final word for the frame —
+    // physics and the animation player have already had their say.
+    scripts_ = std::make_shared<ScriptPlaySession>();
+    scripts_->setLogger([this](const std::string& message) { log(message); });
+    play_.addSession(scripts_);
+#endif
 
     loadSettings();
 
@@ -246,6 +254,9 @@ EditorApp::EditorApp(const Options& options)
     log("threepp editor ready");
 #ifndef THREEPP_EDITOR_WITH_PHYSX
     log("built without PhysX - Play runs with no physics session");
+#endif
+#ifndef THREEPP_EDITOR_WITH_PYTHON
+    log("built without Python scripting - scripts are authored and saved, not run");
 #endif
 }
 
@@ -656,6 +667,17 @@ void EditorApp::drawUi() {
             case PendingDialog::Texture:
                 settings_.textureDir = fileBrowser_.directory().string();
                 assignTextureToSlot(path);
+                break;
+            case PendingDialog::Script:
+                settings_.scriptDir = fileBrowser_.directory().string();
+                // The dialog spans frames; the object it was opened for may be
+                // gone (deleted, or replaced by a play/stop) by now.
+                if (auto* target = findByUuid(document_.scene(), scriptTargetUuid_)) {
+                    assignScript(*target, path);
+                } else {
+                    log("script not attached - the object is no longer in the scene");
+                }
+                scriptTargetUuid_.clear();
                 break;
             case PendingDialog::None:
                 break;
@@ -1113,6 +1135,57 @@ void EditorApp::assignTextureToSelection(const std::filesystem::path& path) {
     settings_.textureDir = path.parent_path().string();
     log("map set from " + path.filename().string());
 }
+
+void EditorApp::assignScript(Object3D& object, const std::filesystem::path& path) {
+
+    const auto before = ScriptConfig::read(object).value_or(ScriptConfig{});
+
+    ScriptConfig after;
+    if (!path.empty()) {
+        // Store forward slashes: a saved document should not read differently
+        // depending on which platform wrote it.
+        auto text = path.generic_string();
+        after.path = text;
+        // Re-attaching the same file keeps whatever the user had dialled in;
+        // a different file starts clean, since its parameters are its own.
+        if (before.path == text) after.fields = before.fields;
+    }
+
+    auto* target = &object;
+    commands_.execute(makeProperty<ScriptConfig>(
+            path.empty() ? "Clear Script" : "Set Script", "script:" + object.uuid,
+            [target](const ScriptConfig& value) { value.write(*target); },
+            before, after));
+    document_.setDirty(true);
+
+    if (path.empty()) {
+        log("script cleared on " + (object.name.empty() ? object.type() : object.name));
+        return;
+    }
+    settings_.scriptDir = path.parent_path().string();
+    log("script " + path.filename().string() + " attached to " +
+        (object.name.empty() ? object.type() : object.name));
+}
+
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+const scripting::Inspection& EditorApp::inspectScript(const std::string& path) {
+
+    // Keyed on the file's write time, so saving the .py in another editor is
+    // picked up on the next inspector frame — the same expectation Play sets.
+    std::filesystem::file_time_type stamp{};
+    std::error_code ec;
+    const auto written = std::filesystem::last_write_time(path, ec);
+    if (!ec) stamp = written;
+
+    auto it = scriptInspections_.find(path);
+    if (it != scriptInspections_.end() && it->second.stamp == stamp) return it->second.inspection;
+
+    CachedInspection entry;
+    entry.stamp = stamp;
+    entry.inspection = scripting::inspect(path);
+    return (scriptInspections_[path] = std::move(entry)).inspection;
+}
+#endif
 
 
 // ------------------------------------------------------------- graph editing
@@ -1658,6 +1731,13 @@ void EditorApp::handleFileDrop(const std::vector<std::string>& paths) {
             setEnvironment(path, true);
         } else if (formats::contains(formats::importable(), extension)) {
             importModel(path);
+        } else if (formats::contains(formats::scripts(), extension)) {
+            // Same rule as an image drop: it lands on whatever is selected.
+            if (auto* selected = selection_.get()) {
+                assignScript(*selected, path);
+            } else {
+                log("no selection to attach " + path.filename().string() + " to");
+            }
         } else if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
                    extension == ".bmp" || extension == ".tga" || extension == ".gif") {
             assignTextureToSelection(path);
