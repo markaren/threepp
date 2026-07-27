@@ -186,6 +186,7 @@ TEST_CASE("Object JSON round-trip preserves a mixed scene") {
 
     auto line = Line::create(makeDataGeometry(), LineBasicMaterial::create());
     line->name = "line";
+    line->renderOrder = -2;
     scene->add(line);
 
     auto points = Points::create(makeDataGeometry(), PointsMaterial::create());
@@ -282,6 +283,10 @@ TEST_CASE("Object JSON round-trip preserves a mixed scene") {
         CHECK_THAT(parsedGroup->position.z, WithinAbs(3.f, 1e-5));
         CHECK_THAT(parsedGroup->scale.x, WithinAbs(2.f, 1e-5));
         CHECK(parsedGroup->renderOrder == 3);
+
+        auto* parsedLine = parsed->getObjectByName("line");
+        REQUIRE(parsedLine != nullptr);
+        CHECK(parsedLine->renderOrder == -2);
 
         auto* parsedBox = findByUuid<Mesh>(*parsed, boxUuid);
         REQUIRE(parsedBox != nullptr);

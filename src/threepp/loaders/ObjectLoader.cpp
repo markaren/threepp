@@ -1123,8 +1123,7 @@ namespace {
         object->receiveShadow = value(j, "receiveShadow", false);
         object->visible = value(j, "visible", true);
         object->frustumCulled = value(j, "frustumCulled", true);
-        // three.js allows a negative renderOrder; threepp's field is unsigned.
-        object->renderOrder = static_cast<unsigned int>(std::max(0, value(j, "renderOrder", 0)));
+        object->renderOrder = value(j, "renderOrder", 0);
 
         if (j.contains("layers") && j["layers"].is_number()) {
             applyLayers(*object, static_cast<unsigned int>(j["layers"].get<std::int64_t>()));
