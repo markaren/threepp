@@ -1028,6 +1028,11 @@ int EditorApp::runSelfTest() {
 
         std::string derivedUuid;
         if (spline) {
+            // Selected throughout, so the inspector's Geometry block is drawn
+            // for every mesh kind this exercises rather than for none of them.
+            selectObject(spline);
+            step();
+
             const auto pointsBefore = SplineConfig::controlPoints(*spline).size();
             const auto markersBefore2 = viewportMarkers_.size();
 
