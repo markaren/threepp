@@ -72,6 +72,7 @@ set(publicHeaders
         "threepp/extras/editor/SceneDocument.hpp"
         "threepp/extras/editor/SceneSnapshot.hpp"
         "threepp/extras/editor/ScriptConfig.hpp"
+        "threepp/extras/editor/ScriptWorkspace.hpp"
         "threepp/extras/editor/Selection.hpp"
         "threepp/extras/imgui/ImguiContext.hpp"
 
@@ -371,6 +372,7 @@ set(sources
         "threepp/extras/editor/SceneDocument.cpp"
         "threepp/extras/editor/SceneSnapshot.cpp"
         "threepp/extras/editor/ScriptConfig.cpp"
+        "threepp/extras/editor/ScriptWorkspace.cpp"
         "threepp/extras/editor/Selection.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"
