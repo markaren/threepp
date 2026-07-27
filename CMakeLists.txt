@@ -42,6 +42,12 @@ cmake_dependent_option(THREEPP_WITH_GLFW "Build with GLFW frontend" ON "NOT DEFI
 # Force THREEPP_USE_EXTERNAL_GLFW OFF if NOT THREEPP_WITH_GLFW
 cmake_dependent_option(THREEPP_USE_EXTERNAL_GLFW "Use externally supplied GLFW" OFF "THREEPP_WITH_GLFW" OFF)
 
+# The scene editor application (apps/editor). Needs a window, so it follows
+# THREEPP_WITH_GLFW; otherwise it defaults on for anyone building the project
+# itself, exactly like the examples.
+cmake_dependent_option(THREEPP_BUILD_EDITOR "Build the threepp scene editor"
+        ${PROJECT_IS_TOP_LEVEL} "THREEPP_WITH_GLFW AND NOT DEFINED EMSCRIPTEN" OFF)
+
 cmake_dependent_option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" ON "THREEPP_BUILD_EXAMPLES" OFF)
 cmake_dependent_option(THREEPP_FETCH_ASSIMP "Make assimp available for examples" OFF "THREEPP_BUILD_EXAMPLES" OFF)
 
@@ -108,6 +114,10 @@ endif ()
 
 if (THREEPP_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif ()
+
+if (THREEPP_BUILD_EDITOR)
+    add_subdirectory(apps/editor)
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN AND THREEPP_BUILD_TESTS)
