@@ -286,6 +286,13 @@ the one whose name matches it (`spinner.py` → `Spinner`, case-insensitively), 
 — failing that — the single class in the file that defines `update()`. Anything
 else is reported rather than guessed at.
 
+`start` may also ask for the scene — `def start(self, obj, scene):` — and the
+editor passes it only when the signature does (`*args` counts as asking), so the
+one-argument form keeps working untouched. The scene handle is the ordinary
+`threepp.Scene`: `scene.get_object_by_name("Ground")`, `scene.children`, and so
+on. The same lifetime rule as every handle applies — resolve neighbours in
+`start`, use them during the session, never stash them across Play sessions.
+
 **Exposed parameters** are the class's plain `int` / `float` / `bool` / `str`
 attributes: no leading underscore, not callable, no properties or descriptors.
 They appear in the inspector as real widgets, undoable and coalescing per drag,

@@ -659,6 +659,33 @@ int EditorApp::runSelfTest() {
                     step();
                 }
 
+                // start(self, obj, scene): the scene arrives only when the
+                // signature asks for it, and it is a real handle — this script
+                // ignores its own object and drives Ground through a lookup.
+                if (auto* target = document_.scene().getObjectByName("Box")) {
+                    setInlineScript(*target,
+                                    "class Reacher:\n"
+                                    "    def start(self, obj, scene):\n"
+                                    "        self.other = scene.get_object_by_name('Ground')\n"
+                                    "    def update(self, dt):\n"
+                                    "        self.other.position.y += dt\n",
+                                    "Scene-Reaching Script");
+                    step();
+                    const float groundBefore =
+                            document_.scene().getObjectByName("Ground")->position.y;
+                    startPlay();
+                    step(30);
+                    auto* ground = document_.scene().getObjectByName("Ground");
+                    check(ground && ground->position.y > groundBefore + 1e-3f,
+                          "a two-argument start receives the scene and reaches other objects");
+                    stopPlay();
+                    step();
+                    auto* groundRestored = document_.scene().getObjectByName("Ground");
+                    check(groundRestored &&
+                                  std::abs(groundRestored->position.y - groundBefore) < 1e-4f,
+                          "stop restores what a scene-reaching script moved");
+                }
+
                 if (auto* clear = document_.scene().getObjectByName("Box")) {
                     assignScript(*clear, {});
                     step();

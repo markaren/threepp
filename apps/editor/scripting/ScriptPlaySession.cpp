@@ -33,6 +33,33 @@ namespace {
         return std::filesystem::path(config.path).filename().string();
     }
 
+    // A script declares start(self, obj) or start(self, obj, scene); the scene
+    // is passed only when asked for, so every existing script keeps working.
+    // `start` arrives as a bound method, so `self` is already hidden and the
+    // counts here are one positional versus two. *args reads as wanting it.
+    bool startWantsScene(const py::object& start) {
+
+        try {
+            const auto inspect = py::module_::import("inspect");
+            const auto parameters =
+                    inspect.attr("signature")(start).attr("parameters").attr("values")();
+            std::size_t positional = 0;
+            for (auto parameter : parameters) {
+                const auto kind = parameter.attr("kind");
+                if (kind.equal(parameter.attr("VAR_POSITIONAL"))) return true;
+                if (kind.equal(parameter.attr("POSITIONAL_ONLY")) ||
+                    kind.equal(parameter.attr("POSITIONAL_OR_KEYWORD"))) {
+                    ++positional;
+                }
+            }
+            return positional >= 2;
+        } catch (py::error_already_set&) {
+            // signature() balks at some exotic callables; the safe reading is
+            // the one every script had before this feature existed.
+            return false;
+        }
+    }
+
 }// namespace
 
 
@@ -211,7 +238,12 @@ void ScriptPlaySession::start(Scene& scene) {
             // All three methods are optional; a script that only wants update()
             // is a perfectly good script.
             if (py::hasattr(self, "start")) {
-                self.attr("start")(scripting::handleFor(*entry.object));
+                const auto start = self.attr("start");
+                if (startWantsScene(start)) {
+                    start(scripting::handleFor(*entry.object), scripting::handleFor(scene));
+                } else {
+                    start(scripting::handleFor(*entry.object));
+                }
             }
         } catch (py::error_already_set& e) {
             impl_->fail(instance, "start", scripting::describeError(e));
