@@ -112,6 +112,7 @@ if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
             "${PROJECT_SOURCE_DIR}/python/src/bind_core.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_geometries.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_curves.cpp"
+            "${PROJECT_SOURCE_DIR}/python/src/bind_editor.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_materials.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_objects.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_animation.cpp"

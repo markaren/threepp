@@ -1271,14 +1271,14 @@ int EditorApp::runSelfTest() {
         }
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
-        // The documented FollowSpline script: it resolves the spline by name,
-        // reads the authored config out of userData["spline"] through
-        // get_user_data, and builds the threepp.CatmullRomCurve3 the document
-        // describes. If this stops working, doc/editor.md is handing users a
-        // script that does not run. One deviation from the doc: u advances a
-        // fixed 0.03 per update instead of speed * dt, so after step(30) it
-        // sits at a deterministic u ~= 0.9 — deep in the closing span that
-        // exists only when the authored closed=1 reaches the script.
+        // The documented FollowSpline script: spline_from_object hands it a
+        // SplinePath honoring the authored config — no child filtering, no
+        // userData parsing in the script. If this stops working, doc/editor.md
+        // is handing users a script that does not run. One deviation from the
+        // doc: u advances a fixed 0.03 per update instead of speed * dt, so
+        // after step(30) it sits at a deterministic u ~= 0.9 — deep in the
+        // closing span that exists only when the authored closed=1 reaches the
+        // script.
         if (auto* follower = document_.scene().getObjectByName("Box")) {
 
             const auto followerUuid = follower->uuid;
@@ -1292,36 +1292,14 @@ int EditorApp::runSelfTest() {
                             "    def start(self, obj, scene):\n"
                             "        self.obj = obj\n"
                             "        self.u = 0.0\n"
-                            "        self.curve = None\n"
-                            "        spline = scene.get_object_by_name(self.spline_name)\n"
-                            "        if spline is None:\n"
-                            "            return\n"
-                            "        points = [\n"
-                            "            spline.local_to_world(p.position)\n"
-                            "            for p in spline.children\n"
-                            "            if p.get_user_data(\"splineDerived\") is None\n"
-                            "        ]\n"
-                            "        if len(points) < 2:\n"
-                            "            return\n"
-                            "        config = dict(\n"
-                            "            item.split(\"=\", 1)\n"
-                            "            for item in (spline.get_user_data(\"spline\") or \"\").split(\";\")\n"
-                            "            if \"=\" in item\n"
-                            "        )\n"
-                            "        self.curve = threepp.CatmullRomCurve3(\n"
-                            "            points,\n"
-                            "            closed=config.get(\"closed\") == \"1\",\n"
-                            "            curve_type=getattr(threepp.CatmullRomCurve3.CurveType,\n"
-                            "                               config.get(\"type\", \"\"),\n"
-                            "                               threepp.CatmullRomCurve3.centripetal),\n"
-                            "            tension=float(config.get(\"tension\", \"0.5\")),\n"
-                            "        )\n"
+                            "        self.path = threepp.editor.spline_from_object(\n"
+                            "            scene.get_object_by_name(self.spline_name))\n"
                             "\n"
                             "    def update(self, dt):\n"
-                            "        if self.curve is None:\n"
+                            "        if self.path is None:\n"
                             "            return\n"
                             "        self.u = (self.u + 0.03) % 1.0\n"
-                            "        self.obj.position.copy(self.curve.get_point_at(self.u))\n",
+                            "        self.obj.position.copy(self.path.get_point_at(self.u))\n",
                             "Follow Spline");
             step();
 
@@ -1334,9 +1312,9 @@ int EditorApp::runSelfTest() {
             check(driven && driven->position.distanceTo(rest) > 1e-3f,
                   "the FollowSpline script drives the object along the curve");
             // On the AUTHORED curve, not the defaults: the document says
-            // closed=1, catmullrom, tension=0.25, and get_user_data is how
-            // that reaches the script. At u ~= 0.9 the follower is inside the
-            // closing span, so the same parameters with closed=0 must NOT
+            // closed=1, catmullrom, tension=0.25, and spline_from_object is
+            // how that reaches the script. At u ~= 0.9 the follower is inside
+            // the closing span, so the same parameters with closed=0 must NOT
             // contain the position — if they do, the config never arrived.
             bool onAuthored = false;
             bool offOpen = true;

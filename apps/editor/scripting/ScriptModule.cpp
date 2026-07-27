@@ -58,6 +58,7 @@ PYBIND11_EMBEDDED_MODULE(threepp, m) {
     tp::init_core(m);
     tp::init_geometries(m);
     tp::init_curves(m);// CatmullRomCurve3 — what an authored spline reads back as
+    tp::init_editor(m);// threepp.editor — SplinePath, the no-boilerplate way to read one
     tp::init_materials(m);
     tp::init_objects(m);
     tp::init_animation(m);
