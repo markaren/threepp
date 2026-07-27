@@ -24,6 +24,13 @@ namespace threepp {
         float maxCorrespondenceDistance = 0.5f;// starting gate; decays each iteration
         float minCorrespondenceDistance = 0.2f;// floor for the decaying gate
         float robustSigma = 0.3f;              // Geman-McClure scale (metres)
+        // Converged when one iteration's increment drops below BOTH. The defaults
+        // (0.1 mm / 0.1 mrad) mean "iterate until numerically still" — right for
+        // offline alignment, wasteful in a real-time loop, where sub-noise-floor
+        // iterations refine nothing. A 2 cm-noise LIDAR registering every frame
+        // does the same job at 1e-3 in roughly half the iterations.
+        float translationTolerance = 1e-4f;// metres
+        float rotationTolerance = 1e-4f;   // radians
     };
 
     struct IcpResult {
@@ -95,10 +102,15 @@ namespace threepp {
 
         const double s2 = static_cast<double>(opts.robustSigma) * opts.robustSigma;
 
+        // One non-zero entry of a Jacobian row: which column, and its coefficient.
+        struct Term {
+            int col;
+            double val;
+        };
+
         for (int iter = 0; iter < opts.maxIterations; ++iter) {
             const float corr = std::max(opts.minCorrespondenceDistance,
                                         opts.maxCorrespondenceDistance * std::pow(0.9f, static_cast<float>(iter)));
-            const float corr2 = corr * corr;
 
             double A[6][6] = {{0}};
             double g[6] = {0};
@@ -112,24 +124,36 @@ namespace threepp {
 
                 const double dx = m.x - q.x, dy = m.y - q.y, dz = m.z - q.z;
                 const double d2 = dx * dx + dy * dy + dz * dz;
-                if (d2 > corr2) continue;
+                // No gate check here: nearest() already rejects anything beyond
+                // `corr`, so a re-test only ever fires on a match sitting exactly
+                // on the gate (float vs double rounding), where the robust weight
+                // is negligible anyway.
 
                 // Geman-McClure robust weight.
                 double w = s2 / (s2 + d2);
                 w *= w;
 
                 // Residual model: m - q = (-[q]x) * omega + I * t.
-                // Jacobian J (3x6), columns = [omega(3) | t(3)].
+                // Jacobian J (3x6), columns = [omega(3) | t(3)]:
+                //     row x: {  0,  qz, -qy, 1, 0, 0 }
+                //     row y: {-qz,   0,  qx, 0, 1, 0 }
+                //     row z: { qy, -qx,   0, 0, 0, 1 }
+                // Only three of the six columns are non-zero per row, so the outer
+                // products below touch 3x3 entries of A instead of 6x6 — this runs
+                // once per correspondence per iteration, which is hot enough to be
+                // worth spelling the sparsity out.
                 const double qx = q.x, qy = q.y, qz = q.z;
-                const double J[3][6] = {
-                        {0, qz, -qy, 1, 0, 0},
-                        {-qz, 0, qx, 0, 1, 0},
-                        {qy, -qx, 0, 0, 0, 1}};
+                const Term J[3][3] = {
+                        {{1, qz}, {2, -qy}, {3, 1.0}},
+                        {{0, -qz}, {2, qx}, {4, 1.0}},
+                        {{0, qy}, {1, -qx}, {5, 1.0}}};
                 const double dv[3] = {dx, dy, dz};
                 for (int r = 0; r < 3; ++r) {
-                    for (int a = 0; a < 6; ++a) {
-                        g[a] += w * J[r][a] * dv[r];
-                        for (int b = 0; b < 6; ++b) A[a][b] += w * J[r][a] * J[r][b];
+                    const double wd = w * dv[r];
+                    for (const auto& a : J[r]) {
+                        g[a.col] += a.val * wd;
+                        const double wa = w * a.val;
+                        for (const auto& b : J[r]) A[a.col][b.col] += wa * b.val;
                     }
                 }
                 ++count;
@@ -158,7 +182,7 @@ namespace threepp {
             pose.premultiply(inc);
 
             result.iterations = iter + 1;
-            if (trans.length() < 1e-4f && ang < 1e-4f) {
+            if (trans.length() < opts.translationTolerance && ang < opts.rotationTolerance) {
                 result.converged = true;
                 break;
             }

@@ -14,31 +14,33 @@
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
 
+#include <cstring>
+#include <type_traits>
+
 using namespace threepp;
 namespace py = pybind11;
 
 namespace {
 
+    // A contiguous (N,3) float32 buffer and a std::vector<Vector3> have the same
+    // bytes, so both conversions below are a single memcpy. Clouds crossing this
+    // boundary run to hundreds of thousands of points.
+    static_assert(sizeof(Vector3) == 3 * sizeof(float) && std::is_standard_layout_v<Vector3>,
+                  "Vector3 must be three tightly packed floats for the memcpy conversions below");
+
     // (N,3) float32 numpy array → std::vector<Vector3>
     std::vector<Vector3> numpyToPoints(const py::array_t<float, py::array::c_style | py::array::forcecast>& arr) {
         if (arr.ndim() != 2 || arr.shape(1) != 3)
             throw std::invalid_argument("point array must be shape (N, 3)");
-        auto r = arr.unchecked<2>();
-        std::vector<Vector3> pts(static_cast<std::size_t>(r.shape(0)));
-        for (py::ssize_t i = 0; i < r.shape(0); ++i)
-            pts[i] = Vector3(r(i, 0), r(i, 1), r(i, 2));
+        std::vector<Vector3> pts(static_cast<std::size_t>(arr.shape(0)));
+        if (!pts.empty()) std::memcpy(pts.data(), arr.data(), pts.size() * sizeof(Vector3));
         return pts;
     }
 
     // std::vector<Vector3> → (N,3) float32 numpy array
     py::array_t<float> pointsToNumpy(const std::vector<Vector3>& pts) {
         py::array_t<float> arr({static_cast<py::ssize_t>(pts.size()), static_cast<py::ssize_t>(3)});
-        auto r = arr.mutable_unchecked<2>();
-        for (std::size_t i = 0; i < pts.size(); ++i) {
-            r(static_cast<py::ssize_t>(i), 0) = pts[i].x;
-            r(static_cast<py::ssize_t>(i), 1) = pts[i].y;
-            r(static_cast<py::ssize_t>(i), 2) = pts[i].z;
-        }
+        if (!pts.empty()) std::memcpy(arr.mutable_data(), pts.data(), pts.size() * sizeof(Vector3));
         return arr;
     }
 
@@ -65,6 +67,11 @@ namespace threepp_py {
                      "Insert a single Vector3. Returns True if stored (passed cap + spacing).")
                 .def("insert_array", [](VoxelGrid& self, const py::array_t<float, py::array::c_style | py::array::forcecast>& arr) {
                          auto pts = numpyToPoints(arr);
+                         // GIL released for the insert loop (matches splat/marching
+                         // below). Contract: don't touch the same VoxelGrid from
+                         // another Python thread concurrently — the GIL no longer
+                         // serialises it for you.
+                         py::gil_scoped_release release;
                          std::size_t n = 0;
                          for (const auto& p : pts) n += self.insert(p) ? 1 : 0;
                          return n;
@@ -102,7 +109,9 @@ namespace threepp_py {
                 .def_readwrite("max_iterations", &IcpOptions::maxIterations)
                 .def_readwrite("max_correspondence_distance", &IcpOptions::maxCorrespondenceDistance)
                 .def_readwrite("min_correspondence_distance", &IcpOptions::minCorrespondenceDistance)
-                .def_readwrite("robust_sigma", &IcpOptions::robustSigma);
+                .def_readwrite("robust_sigma", &IcpOptions::robustSigma)
+                .def_readwrite("translation_tolerance", &IcpOptions::translationTolerance)
+                .def_readwrite("rotation_tolerance", &IcpOptions::rotationTolerance);
 
         py::class_<IcpResult>(m, "IcpResult")
                 .def_readonly("iterations", &IcpResult::iterations)
@@ -119,6 +128,9 @@ namespace threepp_py {
               [](const py::array_t<float, py::array::c_style | py::array::forcecast>& source,
                  const VoxelGrid& target, Matrix4& pose, const IcpOptions& opts) {
                   auto pts = numpyToPoints(source);
+                  // GIL released for the solve. Contract: `target` and `pose` must
+                  // not be touched from other Python threads while this runs.
+                  py::gil_scoped_release release;
                   return icpPointToPoint(pts, target, pose, opts);
               },
               py::arg("source"), py::arg("target"), py::arg("pose"), py::arg("opts") = IcpOptions{},

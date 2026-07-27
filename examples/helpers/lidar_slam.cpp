@@ -65,13 +65,25 @@ namespace {
     constexpr float kSensorHeight = 1.0f;       // mount height above the floor
     constexpr float kSelfReturnRange = 0.7f;    // drop returns nearer than this
 
-    constexpr float kMapVoxel = 0.5f;           // map / NN resolution (>= ICP corr dist so NN is exact)
-    constexpr size_t kMapVoxelCap = 20;         // max points kept per map voxel
+    constexpr float kMapVoxel = 0.5f;           // map / NN resolution
+    constexpr size_t kMapVoxelCap = 20;         // max points kept per map voxel (display density)
     constexpr float kMapMinSpacing = 0.08f;     // dedup spacing within a voxel
     constexpr float kRegVoxel = 0.4f;           // ICP registration source (coarse = fast ICP)
     constexpr float kDownsampleVoxel = 0.25f;   // map insertion + display (dense = good map)
-    // ICP itself uses threepp::IcpOptions defaults (20 iters, 0.5 m start corr,
-    // 0.2 m min corr, 0.3 m robust sigma) — they match this map resolution.
+    // The registration NN target is a second, lean grid over the same points.
+    // The display map's ~17 points per voxel (cap 20 / 0.08 m) are clumps of
+    // per-scan noise: ICP's inner loop scans every clump member per query, and
+    // correspondences into a clump pull the pose toward the map's own
+    // accumulated error. Few well-spread points per voxel register 3x faster
+    // AND drift less (measured: mean drift 0.121 -> 0.024 m on the loop).
+    constexpr size_t kRegMapCap = 4;            // points per voxel in the NN target
+    constexpr float kRegMapMinSpacing = 0.15f;  // spread them out
+    // ICP: corr gates / sigma are the IcpOptions defaults (0.5 m start, 0.2 m
+    // floor, 0.3 m sigma) — matched to this map resolution. Iterations and
+    // convergence tolerance are relaxed from the "iterate until numerically
+    // still" defaults: refining a 2 cm-noise scan below 1 mm is wasted frames.
+    constexpr int kIcpMaxIterations = 10;
+    constexpr float kIcpTolerance = 1e-3f;      // metres / radians
 
     // Robot eases in from rest over this long; keeps inter-frame motion tiny
     // while the map is still sparse so bootstrap orientation stays accurate.
@@ -111,7 +123,12 @@ namespace {
     // -----------------------------------------------------------------------
     class IcpSlam {
     public:
-        IcpSlam() : map_(kMapVoxel, kMapVoxelCap, kMapMinSpacing) {}
+        IcpSlam() : map_(kMapVoxel, kMapVoxelCap, kMapMinSpacing),
+                    regMap_(kMapVoxel, kRegMapCap, kRegMapMinSpacing) {
+            opts_.maxIterations = kIcpMaxIterations;
+            opts_.translationTolerance = kIcpTolerance;
+            opts_.rotationTolerance = kIcpTolerance;
+        }
 
         const VoxelGrid& map() const { return map_; }
         const Matrix4& pose() const { return t_; }
@@ -121,16 +138,18 @@ namespace {
         // trajectories overlay (their divergence is then pure drift).
         void reset(const Matrix4& initPose) {
             map_.clear();
+            regMap_.clear();
             t_.copy(initPose);
             prev_.copy(initPose);
             prev2_.copy(initPose);
             first_ = true;
         }
 
-        // Register `regSrc` (coarse, for a cheap ICP) against the map, then
-        // insert `mapSrc` (dense, for a good map + display). Both are local-frame
-        // points; the same estimated pose maps them into the map frame. Appends
-        // genuinely new map points to `addedOut`. Returns the estimated pose.
+        // Register `regSrc` (coarse, for a cheap ICP) against the lean
+        // registration grid, then insert `mapSrc` (dense, for a good map +
+        // display) into both grids. Both are local-frame points; the same
+        // estimated pose maps them into the map frame. Appends genuinely new
+        // map points to `addedOut`. Returns the estimated pose.
         const Matrix4& process(const std::vector<Vector3>& regSrc,
                                const std::vector<Vector3>& mapSrc,
                                std::vector<Vector3>& addedOut) {
@@ -144,7 +163,7 @@ namespace {
                 deltaBody.multiplyMatrices(inv, prev_);
                 t_.multiplyMatrices(prev_, deltaBody);
 
-                icpPointToPoint(regSrc, map_, t_);
+                icpPointToPoint(regSrc, regMap_, t_, opts_);
             }
 
             prev2_.copy(prev_);
@@ -155,12 +174,15 @@ namespace {
                 gp = sp;
                 gp.applyMatrix4(t_);
                 if (map_.insert(gp)) addedOut.push_back(gp);
+                regMap_.insert(gp);// its own cap/spacing picks a sparser subset
             }
             return t_;
         }
 
     private:
-        VoxelGrid map_;
+        VoxelGrid map_;   // dense: display + meshing
+        VoxelGrid regMap_;// lean: ICP nearest-neighbour target
+        IcpOptions opts_;
         Matrix4 t_;    // current estimated pose (local -> map)
         Matrix4 prev_; // pose at k-1
         Matrix4 prev2_;// pose at k-2
@@ -376,7 +398,7 @@ int main(int argc, char** argv) {
         return runSelfTest();
     }
 
-    Canvas canvas("Lidar SLAM", {{"antialiasing", 4}});
+    Canvas canvas("Lidar SLAM", {{"antialiasing", 4}, {"vsync", false}});
     auto renderer = createRenderer(canvas);
     renderer->setScissorTest(true);
     renderer->shadowMap().enabled = false;
@@ -387,7 +409,7 @@ int main(int argc, char** argv) {
     // so the SLAM + meshing is identical on both.
     bool isVulkan = false;
 #ifdef THREEPP_WITH_VULKAN
-    VulkanRenderer* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
+    auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
     isVulkan = (vk != nullptr);
 #endif
 
@@ -769,8 +791,10 @@ int main(int argc, char** argv) {
         // drop its near hits (the path stays >1.5 m from real geometry).
         const float selfRange = isVulkan ? 1.1f : kSelfReturnRange;
         const auto localScan = deframeScan(cloud, mInv, selfRange);
-        const auto regSrc = voxelDownsample(localScan, kRegVoxel);
         const auto mapSrc = voxelDownsample(localScan, kDownsampleVoxel);
+        // Chained: decimating the 0.25 m result at 0.4 m ≈ decimating the raw
+        // ~50k-point scan at 0.4 m, minus one full pass over it.
+        const auto regSrc = voxelDownsample(mapSrc, kRegVoxel);
 
         // --- SLAM update ---
         const float slamT0 = clock.getElapsedTime();

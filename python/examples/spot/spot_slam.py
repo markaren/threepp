@@ -512,18 +512,6 @@ def v2_obs(art, last_act, cmd, ahead, h_here, phi):
                            clk, [float(rs[2]) - h_here], ahead]).astype(np.float32)
 
 
-def _scanner_pts(scanner):
-    """Convert the accumulated elevation map H → world-space 3-D points for the SLAM mapper."""
-    valid = ~np.isnan(scanner.H)
-    if not valid.any():
-        return np.empty((0, 3), np.float32)
-    ix = np.where(valid)[0].astype(np.float32)
-    iy = np.where(valid)[1].astype(np.float32)
-    return np.stack([ix * scanner.cell + scanner.x0,
-                     iy * scanner.cell + scanner.y0,
-                     scanner.H[valid]], axis=1).astype(np.float32)
-
-
 # ── SLAM mapper ────────────────────────────────────────────────────────────────
 class SlamMapper:
     """Accumulates scan hits → VoxelGrid → marching-cubes surface (background thread)."""
@@ -540,11 +528,31 @@ class SlamMapper:
         self._pending= [None]
         self._busy   = [False]
         self._visible= [True]
+        self._sent   = None      # scanner cells already pushed into the grid
         self._lock   = threading.Lock()
 
-    def insert(self, pts):
-        if pts.shape[0] > 0:
-            self.grid.insert_array(pts)
+    def insert_scanner(self, scanner):
+        """Push the cells the scanner has newly filled in since the last call.
+
+        The scanner's H is the *accumulated* elevation map — 535x535 cells over the
+        80 m world here — so converting all of it every scan means walking a third
+        of a million cells and re-offering tens of thousands of points the voxel
+        grid then rejects. Only a first-time cell can add a voxel: later EMA nudges
+        move a cell by centimetres, far inside VOXEL / min_spacing. So track which
+        cells have been sent and hand over just the delta, which is bounded by the
+        depth camera's footprint instead of growing with everything explored.
+        """
+        valid = ~np.isnan(scanner.H)
+        if self._sent is None:
+            self._sent = np.zeros_like(valid)
+        new = valid & ~self._sent
+        if not new.any():
+            return
+        self._sent |= new
+        ix, iy = np.nonzero(new)
+        self.grid.insert_array(np.stack([ix * scanner.cell + scanner.x0,
+                                         iy * scanner.cell + scanner.y0,
+                                         scanner.H[new]], axis=1).astype(np.float32))
 
     def trigger_rebuild(self):
         with self._lock:
@@ -590,6 +598,7 @@ class SlamMapper:
         with self._lock:
             self._pending[0] = None
         self.grid.clear()
+        self._sent = None
         if self._surf[0] is not None:
             self.scene.remove(self._surf[0])
             self._surf[0] = None
@@ -887,7 +896,7 @@ def main():
         for _ in range(20):
             rend.render(scene, camera)
             ahead, h_here = scanner.scan(rs)
-        slam.insert(_scanner_pts(scanner))
+        slam.insert_scanner(scanner)
         slam.trigger_rebuild()
         time.sleep(1.2)
         slam.apply_pending()
@@ -1026,7 +1035,7 @@ def main():
                 for o, _ in _extra: o.visible = False
                 ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
                 for o, v in _extra: o.visible = v
-            slam.insert(_scanner_pts(scanner))
+            slam.insert_scanner(scanner)
 
         grass.time = time.perf_counter() - t0  # advance GPU wind (Vulkan)
         rend.render(scene, camera)             # single render per frame — no flicker

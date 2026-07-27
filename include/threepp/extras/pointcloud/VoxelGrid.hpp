@@ -10,6 +10,7 @@
 
 #include "threepp/math/Vector3.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -59,9 +60,9 @@ namespace threepp {
      * A voxel-hash spatial index for 3D points.
      *
      * Offers O(1) amortised insertion with an optional per-voxel capacity and a
-     * minimum-spacing dedup filter, plus nearest-neighbour queries over the 27
-     * voxels surrounding a query point. It doubles as an incremental point map
-     * and as a general proximity structure for point clouds.
+     * minimum-spacing dedup filter, plus nearest-neighbour queries over the
+     * voxels around a query point. It doubles as an incremental point map and as
+     * a general proximity structure for point clouds.
      */
     class VoxelGrid {
 
@@ -100,18 +101,39 @@ namespace threepp {
         }
 
         /**
-         * Nearest stored point to `query` within `maxDist`. The search covers the
-         * 27 voxels around the query, so the result is exact when
-         * `maxDist <= voxelSize`. Returns false if no point is within range.
+         * Nearest stored point to `query` within `maxDist`. Exact for any
+         * `maxDist`: the search visits every voxel the query ball overlaps.
+         * Returns false if no point is within range.
+         *
+         * Each visited voxel costs a hash lookup plus a scan of its points, and
+         * this is the inner loop of ICP (millions of calls per registration), so
+         * the visit set is kept as tight as possible: only the voxels spanned by
+         * the ball's bounding box, and of those only the ones whose nearest corner
+         * is closer than the best candidate found so far. For the common
+         * `maxDist <= voxelSize` case that is a handful of cells rather than the
+         * full 3x3x3 neighbourhood the earlier version always walked.
          */
         bool nearest(const Vector3& query, float maxDist, Vector3& out) const {
-            const detail::VoxelHashKey c = detail::voxelHashKey(query, inv_);
+            if (cells_.empty() || maxDist <= 0.f) return false;
+
+            const detail::VoxelHashKey lo = detail::voxelHashKey(
+                    Vector3(query.x - maxDist, query.y - maxDist, query.z - maxDist), inv_);
+            const detail::VoxelHashKey hi = detail::voxelHashKey(
+                    Vector3(query.x + maxDist, query.y + maxDist, query.z + maxDist), inv_);
+
             float best = maxDist * maxDist;
             bool found = false;
-            for (int dx = -1; dx <= 1; ++dx)
-                for (int dy = -1; dy <= 1; ++dy)
-                    for (int dz = -1; dz <= 1; ++dz) {
-                        const auto it = cells_.find({c.x + dx, c.y + dy, c.z + dz});
+            for (int x = lo.x; x <= hi.x; ++x) {
+                // Distance from the query to this voxel's x-slab (0 when inside).
+                const float sx = axisGap(query.x, x);
+                if (sx * sx >= best) continue;
+                for (int y = lo.y; y <= hi.y; ++y) {
+                    const float sy = axisGap(query.y, y);
+                    if (sx * sx + sy * sy >= best) continue;
+                    for (int z = lo.z; z <= hi.z; ++z) {
+                        const float sz = axisGap(query.z, z);
+                        if (sx * sx + sy * sy + sz * sz >= best) continue;
+                        const auto it = cells_.find({x, y, z});
                         if (it == cells_.end()) continue;
                         for (const auto& q : it->second) {
                             const float ex = q.x - query.x, ey = q.y - query.y, ez = q.z - query.z;
@@ -123,6 +145,8 @@ namespace threepp {
                             }
                         }
                     }
+                }
+            }
             return found;
         }
 
@@ -149,6 +173,14 @@ namespace threepp {
         }
 
     private:
+        /// Gap between coordinate `c` and voxel index `i` along one axis (0 if `c`
+        /// falls inside the slab). Squared and summed, these give the squared
+        /// distance from a point to a voxel's box — the pruning bound in nearest().
+        [[nodiscard]] float axisGap(float c, int i) const {
+            const float lo = static_cast<float>(i) * voxelSize_;
+            return std::max({lo - c, c - (lo + voxelSize_), 0.f});
+        }
+
         float inv_;
         float voxelSize_;
         float minSpacing2_;

@@ -84,28 +84,35 @@ namespace threepp {
         const float invC = 1.f / cellSize;
         const int r = std::max(1, static_cast<int>(std::ceil(radius * invC)));
         const float invR = 1.f / radius;
+        const float radius2 = radius * radius;
+        const auto slice = static_cast<std::size_t>(f.nx) * static_cast<std::size_t>(f.ny);
 
         for (const auto& p : points) {
             const int cxn = static_cast<int>(std::floor((p.x - f.origin.x) * invC));
             const int cyn = static_cast<int>(std::floor((p.y - f.origin.y) * invC));
             const int czn = static_cast<int>(std::floor((p.z - f.origin.z) * invC));
-            for (int dz = -r; dz <= r + 1; ++dz) {
-                const int Z = czn + dz;
-                if (Z < 0 || Z >= f.nz) continue;
-                for (int dy = -r; dy <= r + 1; ++dy) {
-                    const int Y = cyn + dy;
-                    if (Y < 0 || Y >= f.ny) continue;
-                    for (int dx = -r; dx <= r + 1; ++dx) {
-                        const int X = cxn + dx;
-                        if (X < 0 || X >= f.nx) continue;
+            // Clip the splat box to the grid once, rather than range-testing every
+            // node inside the loops.
+            const int z0 = std::max(czn - r, 0), z1 = std::min(czn + r + 1, f.nz - 1);
+            const int y0 = std::max(cyn - r, 0), y1 = std::min(cyn + r + 1, f.ny - 1);
+            const int x0 = std::max(cxn - r, 0), x1 = std::min(cxn + r + 1, f.nx - 1);
+            for (int Z = z0; Z <= z1; ++Z) {
+                const float wz = f.origin.z + Z * cellSize - p.z;
+                const float d2z = wz * wz;
+                if (d2z >= radius2) continue;
+                for (int Y = y0; Y <= y1; ++Y) {
+                    const float wy = f.origin.y + Y * cellSize - p.y;
+                    const float d2zy = d2z + wy * wy;
+                    if (d2zy >= radius2) continue;
+                    const std::size_t row = static_cast<std::size_t>(Y) * f.nx + static_cast<std::size_t>(Z) * slice;
+                    for (int X = x0; X <= x1; ++X) {
                         const float wx = f.origin.x + X * cellSize - p.x;
-                        const float wy = f.origin.y + Y * cellSize - p.y;
-                        const float wz = f.origin.z + Z * cellSize - p.z;
-                        const float d = std::sqrt(wx * wx + wy * wy + wz * wz);
-                        if (d >= radius) continue;
-                        const float v = 1.f - d * invR;
-                        float& cell = f.data[static_cast<std::size_t>(X) + static_cast<std::size_t>(Y) * f.nx +
-                                             static_cast<std::size_t>(Z) * f.nx * f.ny];
+                        const float d2 = d2zy + wx * wx;
+                        // Reject in squared distance; only nodes actually inside
+                        // the ball pay for the square root.
+                        if (d2 >= radius2) continue;
+                        const float v = 1.f - std::sqrt(d2) * invR;
+                        float& cell = f.data[row + static_cast<std::size_t>(X)];
                         if (v > cell) cell = v;
                     }
                 }
@@ -455,21 +462,38 @@ namespace threepp {
         Vector3 cpos[8], cgrad[8];
         Vector3 vpos[12], vnrm[12];
 
+        // Flat-index offsets of the 8 cube corners from the (x,y,z) corner, in
+        // the cx/cy/cz order above — the classification pass below runs for every
+        // cube in the grid, so it reads through these instead of recomputing
+        // x + y*nx + z*nx*ny eight times.
+        const auto nxs = static_cast<std::size_t>(nx);
+        const auto slice = nxs * static_cast<std::size_t>(ny);
+        const std::size_t cOff[8] = {0, 1, 1 + nxs, nxs, slice, slice + 1, slice + 1 + nxs, slice + nxs};
+
         for (int z = 0; z < nz - 1; ++z) {
             for (int y = 0; y < ny - 1; ++y) {
                 for (int x = 0; x < nx - 1; ++x) {
 
+                    // Classify first: on a typical splat field the surface touches
+                    // a small minority of cubes, and corner positions/gradients
+                    // (6 extra field reads each) are only needed once a cube is
+                    // known to be crossed.
+                    const std::size_t base = static_cast<std::size_t>(x) + static_cast<std::size_t>(y) * nxs +
+                                             static_cast<std::size_t>(z) * slice;
                     int cubeindex = 0;
                     for (int i = 0; i < 8; ++i) {
-                        const int X = x + cx[i], Y = y + cy[i], Z = z + cz[i];
-                        cval[i] = value(X, Y, Z);
-                        cpos[i] = Vector3(f.origin.x + X * cs, f.origin.y + Y * cs, f.origin.z + Z * cs);
-                        cgrad[i] = gradient(X, Y, Z);
+                        cval[i] = f.data[base + cOff[i]];
                         if (cval[i] > isolevel) cubeindex |= (1 << i);
                     }
 
                     const int edges = edgeTable[cubeindex];
                     if (edges == 0) continue;
+
+                    for (int i = 0; i < 8; ++i) {
+                        const int X = x + cx[i], Y = y + cy[i], Z = z + cz[i];
+                        cpos[i] = Vector3(f.origin.x + X * cs, f.origin.y + Y * cs, f.origin.z + Z * cs);
+                        cgrad[i] = gradient(X, Y, Z);
+                    }
 
                     for (int e = 0; e < 12; ++e) {
                         if (!(edges & (1 << e))) continue;
