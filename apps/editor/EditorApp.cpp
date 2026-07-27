@@ -183,7 +183,8 @@ EditorApp::EditorApp(const Options& options)
         // Recorded commands point into the old scene too. Re-resolve their
         // targets by uuid against the new graph; commands that cannot (raw
         // captures in property setters) are dropped rather than left dangling.
-        commands_.rebind(scene);
+        // Everything below points into the outgoing graph, so note what has to
+        // come back before letting go of it.
         const auto uuid = selection_.uuid();
         selection_.set(nullptr);
         gizmo_->detach();
@@ -193,6 +194,8 @@ EditorApp::EditorApp(const Options& options)
             selectionBox_->removeFromParent();
             selectionBox_.reset();
         }
+
+        commands_.rebind(scene);
         if (!uuid.empty()) {
             Object3D* found = nullptr;
             scene.traverse([&](Object3D& o) {
@@ -200,6 +203,20 @@ EditorApp::EditorApp(const Options& options)
             });
             if (found) selectObject(found);
         }
+    });
+
+    // Undoing an "Add" deletes the object it created, and undoing a paste or a
+    // reparent can move it out from under the selection. Anything still
+    // pointing at a node that left the scene has to let go — otherwise the
+    // gizmo drives a detached object and TransformControls rightly complains.
+    commands_.onChange([this] {
+        auto* selected = selection_.get();
+        if (!selected) return;
+        bool present = false;
+        document_.scene().traverse([&](Object3D& object) {
+            if (&object == selected) present = true;
+        });
+        if (!present) selectObject(nullptr);
     });
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
@@ -392,6 +409,25 @@ int EditorApp::runSelfTest() {
     check(cameraHelper_ == nullptr, "deleting the camera drops the frustum helper");
     commands_.undo();// leave the scene as we found it
     step();
+
+    // Every light kind carries its own icon, and each is a separate SVG. One
+    // marker per added light is what proves all of them parse — a broken path
+    // set would silently produce no marker for just that kind.
+    {
+        const LightKind kinds[] = {LightKind::Directional, LightKind::Point, LightKind::Spot,
+                                   LightKind::Ambient, LightKind::Hemisphere};
+        const auto baseline = viewportMarkers_.size();
+        for (auto kind : kinds) {
+            addObject(ObjectFactory::createLight(kind, document_.scene()),
+                      document_.scene(), "Add Light");
+        }
+        step();
+        check(viewportMarkers_.size() == baseline + std::size(kinds),
+              "every light kind gets its own marker icon");
+        for (std::size_t i = 0; i < std::size(kinds); ++i) commands_.undo();
+        step();
+        check(viewportMarkers_.size() == baseline, "removing the lights drops their markers");
+    }
 
     // With a model path on the command line, exercise the async import path
     // end to end: queue -> worker -> finalize -> selected group in the scene.

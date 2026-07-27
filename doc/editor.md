@@ -62,6 +62,9 @@ subtree to drill down to the exact node.
 
 **Markers.** Cameras and lights render nothing, so each one gets a billboarded
 icon at a constant screen size, tinted with the accent colour while selected.
+Every kind has its own shape — a camera body, a sun for directional, a bulb for
+point, a beam for spot, a ringed core for ambient, a dome over ground for
+hemisphere — so a scene reads without clicking anything.
 Clicking an icon selects its owner, and it wins over geometry behind it — the
 icons draw on top, so picking follows what you see rather than raw depth order.
 The artwork is SVG parsed at startup by threepp's `SVGLoader` and embedded as
