@@ -98,7 +98,14 @@ namespace threepp {
         // seed reproduces — iterate beams in a stable order.
         [[nodiscard]] float applyRangeNoise(float range) {
             if (!rangeNoise.active()) return range;
-            const float sigma = std::hypot(rangeNoise.stddev, range * rangeNoise.stddevPerMetre);
+            // hypot() guards against intermediate overflow, which range sigmas in
+            // metres never come near, and it costs an order of magnitude more than
+            // the arithmetic — measurable at 65k returns per scan. Take it only
+            // when there is genuinely a second term; hypot(a, 0) is exactly |a|,
+            // so the common range-independent model is bit-identical.
+            const float perMetre = range * rangeNoise.stddevPerMetre;
+            const float sigma = perMetre == 0.f ? std::abs(rangeNoise.stddev)
+                                                : std::hypot(rangeNoise.stddev, perMetre);
             float out = range + rangeNoise.bias;
             if (sigma != 0.f) out += sigma * static_cast<float>(rng_.nextGaussian());
             return out;

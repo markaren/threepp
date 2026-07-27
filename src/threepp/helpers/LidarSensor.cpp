@@ -272,6 +272,14 @@ void LidarSensor::scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn
 void LidarSensor::renderFaces(Renderer& renderer, Scene& scene) {
     if (!parent) updateMatrixWorld();
 
+    // All twelve passes (six scene renders + six depth-linearize posts) are
+    // submitted before the first readback. copyTextureToImage is a GPU->CPU sync
+    // point that drains the pipeline, so reading each face right after drawing it
+    // stalled the GPU six times per scan and left it idle while the CPU waited.
+    // Batched, the driver has the whole cube to work through and the scan pays one
+    // stall instead of six. (The readback reads the texture object, not the bound
+    // framebuffer, but the target is still set per face so the call sees exactly
+    // the state it did before.)
     for (int f = 0; f < kNumFaces; ++f) {
         renderer.setRenderTarget(sceneTargets_[f].get());
         renderer.render(scene, *cameras_[f]);
@@ -279,7 +287,10 @@ void LidarSensor::renderFaces(Renderer& renderer, Scene& scene) {
         postMaterial_->uniforms.at("tDepth").setValue(sceneTargets_[f]->depthTexture.get());
         renderer.setRenderTarget(readbackTargets_[f].get());
         renderer.render(postScene_, postCamera_);
+    }
 
+    for (int f = 0; f < kNumFaces; ++f) {
+        renderer.setRenderTarget(readbackTargets_[f].get());
         renderer.copyTextureToImage(*readbackTargets_[f]->texture);
     }
 
