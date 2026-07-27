@@ -1222,7 +1222,14 @@ std::shared_ptr<Object3D> ObjectLoader::load(const std::filesystem::path& path) 
 
     const std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 
+    // Default the base directory to this document's, without clobbering an
+    // explicit setResourcePath() or leaking into the next load().
+    const auto configured = resourcePath_;
     if (resourcePath_.empty()) resourcePath_ = path.parent_path();
 
-    return parse(text);
+    auto object = parse(text);
+
+    resourcePath_ = configured;
+
+    return object;
 }
