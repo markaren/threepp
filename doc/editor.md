@@ -45,7 +45,7 @@ front end (a Qt tool, a Python binding, a batch script) would build on:
 | `PlaySession`, `PlayController` | the play-mode state machine |
 | `PhysicsConfig` | per-object rigid-body authoring, stored in `userData` |
 | `PhysicsPlaySession` | the PhysX runtime (header-only, PhysX-gated) |
-| `ScriptConfig` | per-object Python script reference + parameters, stored in `userData` |
+| `ScriptConfig` | per-object Python script — a file path or inline source — plus its parameters, stored in `userData` |
 | `EditorSettings` | recent files and last-used directories |
 
 **`apps/editor/*` — the application.** `EditorApp` owns the canvas, renderer,
@@ -246,10 +246,22 @@ so in the console.
 
 ### Scripts in `userData`
 
-Attach a `.py` file to any object and it becomes a behaviour, MonoBehaviour
-style. On Play the editor instantiates the class and drives it; on Stop it calls
+Attach a script to any object and it becomes a behaviour, MonoBehaviour style.
+On Play the editor instantiates the class and drives it; on Stop it calls
 `stop()` and throws the instance away, and the usual snapshot restore puts the
 scene back.
+
+The code comes in one of two forms, never both: a `.py` **file** referenced by
+path, or **inline source** stored in the scene itself and edited in the editor's
+Script Editor window. A file is shared between objects and scenes and editable
+in whatever tooling you already have; inline source travels with the scene, so a
+`.json` handed to somebody else is complete.
+
+**Opening a scene never runs anything.** Neither form executes on load, on
+import, or on selection: scripts run when you press Play, and the inspector
+imports a script's module only when it draws that object's parameters (a class
+body has to execute for its attributes to exist). The Script Editor's Apply
+compiles the source without executing it. A scene file is data, not a program.
 
 ```python
 class Spinner:
@@ -265,9 +277,9 @@ class Spinner:
         pass
 ```
 
-All three methods are optional; missing ones are skipped. The class is the one
-whose name matches the file (`spinner.py` → `Spinner`, case-insensitively), or —
-failing that — the single class in the file that defines `update()`. Anything
+All three methods are optional; missing ones are skipped. In a file, the class is
+the one whose name matches it (`spinner.py` → `Spinner`, case-insensitively), or
+— failing that — the single class in the file that defines `update()`. Anything
 else is reported rather than guessed at.
 
 **Exposed parameters** are the class's plain `int` / `float` / `bool` / `str`
@@ -278,12 +290,21 @@ field the document has no value for shows the class attribute, which is exactly
 what the script will see.
 
 Like the URDF reference, this does not pack into one `key=value` string — a
-Windows path contains the delimiters — so the path gets its own entry:
+Windows path contains the delimiters, and source text contains everything — so
+each gets its own entry:
 
 ```
 userData["script"]        C:/projects/scripts/spinner.py
+userData["scriptSource"]  class Spinner:\n    speed = 1.5\n ...
 userData["scriptFields"]  speed=1.5;clockwise=1;label=spin
 ```
+
+`script` and `scriptSource` are mutually exclusive: assigning one clears the
+other, and a document carrying both (hand-edited, or merged) is read as inline —
+the scene's own copy of the code beats a path into someone else's disk — and
+rewritten with one form the next time it is saved. `scriptFields` works
+identically for both: the parameters belong to the class, not to where the class
+came from.
 
 Values are stored as text and typed on the way in, from the class attribute they
 correspond to. That is what lets a build with no Python at all still round-trip a
@@ -295,6 +316,45 @@ whose `__pycache__` entry is validated against `(mtime, size)` — both of which
 survive a same-second edit that happens not to change the file's length. That
 one case is exactly the edit-run-edit loop this feature exists for, so there is
 no bytecode cache to go stale.
+
+#### The Script Editor
+
+`New Inline Script` in the Script section writes a template into the object and
+opens a floating **Script Editor** window on it — movable, resizable, closable,
+and one instance: it edits the selected object's inline script, following the
+selection while there is nothing to lose and **staying on the object it was
+opened for whenever the buffer has unsaved edits**, because retargeting text
+somebody is still typing would drop it without a word. `Edit…` reopens it, and
+the title carries an asterisk while the buffer differs from the document.
+
+* **Apply** (or `Ctrl+Enter`) commits the buffer as one undoable step, keyed per
+  object so it lands in the undo stack next to every other inspector edit.
+* Tabs become four spaces on the way in. The box takes real tabs — a Python
+  editor that cannot indent is not one — and Python raises `TabError` on source
+  that mixes them, so normalizing makes the failure impossible instead of
+  diagnosing it later.
+* The source is `compile()`d, never executed. A syntax error appears in red with
+  its line number and is written to the console — but it does **not** block
+  Apply: half-written code is a normal thing to want to save, and an editor that
+  refuses to let go of what you typed is a worse editor.
+* **Revert** reloads the committed text; **Clear** in the inspector removes the
+  script and closes the window (one `Ctrl+Z` away, and the buffer is still there
+  if you reopen the object).
+* It is read-only while playing, like the inspector: the snapshot restore on Stop
+  would throw the edit away.
+
+Inline source is compiled **fresh on every Play** — it is inherently hot, with no
+file, no cache and no stamp anywhere in the path. Each object's source gets its
+own synthetic module named after its uuid, so two objects whose scripts both
+define `class Behaviour` do not overwrite each other, and tracebacks are filed
+under `<inline:Box>` — which object the code belongs to, since there is no file
+name to point at. With no file stem to match, the class is the only one the
+module defines, or failing that the single one defining `update()`; several
+candidates is reported against the object, not guessed at.
+
+Plain text, deliberately: no highlighting, no completion, no third-party editor
+widget and no new dependency. Editing an external `.py` in this window is out of
+scope — that file already has an editor.
 
 **Errors are never fatal.** Every call into Python is wrapped; a traceback goes
 to the console, the offending instance is disabled for the rest of the session,
@@ -433,9 +493,14 @@ their say.
   under Windows, measured with a bare `scoped_interpreter` and no bindings at
   all — so the process exits with Python still up. Nothing leaks that the OS
   does not reclaim.
-* **One script per object.** `userData["script"]` is a single path. Several
-  behaviours on one object means several child objects, or one script that
-  composes them.
+* **One script per object, in one form.** `userData["script"]` is a single path
+  and `userData["scriptSource"]` a single body of source, and an object carries
+  one or the other. Several behaviours on one object means several child
+  objects, or one script that composes them.
+* **The Script Editor is a text box.** No syntax highlighting, no completion, no
+  find-and-replace, and it edits inline source only — an external `.py` already
+  has an editor. The one thing it adds over one is the compile check, and that
+  is the deliberate scope of v1.
 * **Duplicate shares geometry.** `Object3D::clone()` shares both geometry and
   materials; the editor clones the materials afterwards so recolouring a copy
   does not recolour the original, but geometry stays shared. That is intentional
