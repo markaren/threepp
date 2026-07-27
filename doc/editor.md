@@ -796,6 +796,14 @@ their say.
   reordering of control points beyond dragging them in the hierarchy. A spline
   is also not a path anything follows by itself: it is data, and a script (or
   your own `PlaySession`) is what walks it.
+* **Generated geometry is derived, so removing it is destructive.** Setting
+  **Mesh** back to None deletes the node; undoing that config edit re-derives a
+  *new* mesh rather than restoring the old one, and the material, physics and
+  name you had put on it are gone with the node. Undo covers the config edit,
+  which is all it claims to. Nothing else loses that state — dragging points,
+  switching Tube to Road, reloading the document all rebuild through the same
+  node. There is also one generated mesh per spline: no per-span materials, no
+  varying width, and a road tunnels straight through whatever it crosses.
 * **Duplicate shares geometry.** `Object3D::clone()` shares both geometry and
   materials; the editor clones the materials afterwards so recolouring a copy
   does not recolour the original, but geometry stays shared. That is intentional

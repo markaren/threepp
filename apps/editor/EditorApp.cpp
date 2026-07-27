@@ -1003,6 +1003,200 @@ int EditorApp::runSelfTest() {
             check(spline && spline->children.size() == count, "and the delete is undoable");
         }
 
+        // Generated geometry. The mesh is a REAL child of the spline — saved,
+        // materialled, physics-configurable — and the only thing separating it
+        // from a control point is its tag, which makes every count and index
+        // above the part of this feature most likely to be off by one.
+        const auto derivedCount = [](const Object3D& owner) {
+            std::size_t n = 0;
+            for (const auto* child : owner.children) {
+                if (SplineConfig::isDerived(*child)) ++n;
+            }
+            return n;
+        };
+        // The inspector's edit path: a PropertyCommand carrying the encoded
+        // config, so undo below goes through the same stack the UI uses.
+        const auto setConfig = [&](const SplineConfig& after, const char* label) {
+            auto* target = splineNow(splineUuid);
+            if (!target) return;
+            const auto before = SplineConfig::read(*target).value_or(SplineConfig{});
+            commands_.execute(makeProperty<SplineConfig>(
+                    label, "spline:" + target->uuid,
+                    [target](const SplineConfig& value) { value.write(*target); },
+                    before, after));
+        };
+
+        std::string derivedUuid;
+        if (spline) {
+            const auto pointsBefore = SplineConfig::controlPoints(*spline).size();
+            const auto markersBefore2 = viewportMarkers_.size();
+
+            auto config = SplineConfig::read(*spline).value_or(SplineConfig{});
+            config.mesh = SplineConfig::MeshKind::Tube;
+            config.radius = 0.4f;
+            setConfig(config, "Spline Mesh");
+            step();
+            spline = splineNow(splineUuid);
+
+            check(spline && derivedCount(*spline) == 1,
+                  "enabling a tube adds exactly one derived child");
+            auto* derived = spline ? SplineConfig::derivedMesh(*spline) : nullptr;
+            auto* mesh = derived ? derived->as<Mesh>() : nullptr;
+            check(mesh != nullptr, "which is a Mesh, and part of the document");
+            check(spline && SplineConfig::controlPoints(*spline).size() == pointsBefore,
+                  "while the control point count is what it was");
+            check(viewportMarkers_.size() == markersBefore2,
+                  "and no control-point marker appears for it");
+            check(derived && SplineConfig::splineOf(*derived) == nullptr,
+                  "the tag, not the parent link, is what says it is not a point");
+
+            if (mesh) {
+                derivedUuid = mesh->uuid;
+
+                // Everything a user may have configured on the mesh, set here
+                // so the regeneration below has something to lose.
+                mesh->userData["physics"] = std::string("enabled=1;type=static;shape=trimesh");
+                if (auto* standard = mesh->materialAs<MeshStandardMaterial>()) {
+                    standard->color.setHex(0x3366aa);
+                }
+
+                const auto geometry = mesh->geometry();
+                const auto material = mesh->material();
+                bool disposed = false;
+                LambdaEventListener watcher{[&disposed](Event&) { disposed = true; }};
+                geometry->addEventListener("dispose", watcher);
+
+                auto* dragged = SplineConfig::controlPointNodes(*spline).front();
+                dragged->position.y += 2.f;
+                step();
+                spline = splineNow(splineUuid);
+
+                check(spline && SplineConfig::derivedMesh(*spline) == mesh &&
+                              mesh->uuid == derivedUuid,
+                      "dragging a point regenerates through the SAME mesh node");
+                check(mesh->geometry() != geometry, "swapping in a new geometry");
+                check(disposed, "and disposing the one it orphaned");
+                check(mesh->material() == material, "the material it carries is untouched");
+                check(mesh->materialAs<MeshStandardMaterial>() &&
+                              mesh->materialAs<MeshStandardMaterial>()->color.getHex() == 0x3366aa,
+                      "down to what was edited on it");
+                check(mesh->userData.contains("physics"),
+                      "and the physics a user attached survives the rebuild");
+
+                geometry->removeEventListener("dispose", watcher);
+                dragged->position.y -= 2.f;
+                step();
+            }
+
+            // Tube to road: same node, different geometry, and the width the
+            // config asks for is the width the mesh has.
+            if (mesh) {
+                const auto geometry = mesh->geometry();
+                config.mesh = SplineConfig::MeshKind::Road;
+                config.width = 7.f;
+                setConfig(config, "Spline Mesh");
+                step();
+                spline = splineNow(splineUuid);
+
+                check(spline && SplineConfig::derivedMesh(*spline) == mesh,
+                      "switching tube to road keeps the node");
+                check(mesh->geometry() != geometry, "and rebuilds its geometry");
+
+                // The ribbon emits the two vertices of a cross-section back to
+                // back, so the first pair spans the full width.
+                const auto* position = mesh->geometry()->getAttribute<float>("position");
+                bool wide = false;
+                if (position && position->count() >= 2) {
+                    const Vector3 left(position->getX(0), position->getY(0), position->getZ(0));
+                    const Vector3 right(position->getX(1), position->getY(1), position->getZ(1));
+                    wide = std::abs(left.distanceTo(right) - 7.f) < 1e-3f;
+                }
+                check(wide, "with the road exactly as wide as the config says");
+            }
+
+            // mesh=none removes it — and undoing that config edit brings it
+            // back on the next sync, without an undo entry of its own.
+            config.mesh = SplineConfig::MeshKind::None;
+            setConfig(config, "Spline Mesh");
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && derivedCount(*spline) == 0, "mesh=none removes the derived child");
+            check(spline && SplineConfig::controlPoints(*spline).size() == pointsBefore,
+                  "taking no control point with it");
+
+            commands_.undo();
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && derivedCount(*spline) == 1,
+                  "undoing the config edit brings the mesh back on the next sync");
+
+            // As a NEW node, though: mesh=none destroys the old one, and the
+            // sync re-derives rather than restores. Whatever was configured on
+            // the removed mesh is gone with it — undo covers the config edit,
+            // which is all it ever claimed to. Re-applied here because the
+            // round trip below is about surviving REGENERATION, not deletion.
+            if (auto* back = spline ? SplineConfig::derivedMesh(*spline) : nullptr) {
+                check(!derivedUuid.empty() && back->uuid != derivedUuid,
+                      "though as a fresh node - removal destroys, and undo re-derives");
+                derivedUuid = back->uuid;
+                back->userData["physics"] = std::string("enabled=1;type=static;shape=trimesh");
+                if (auto* standard = back->materialAs<MeshStandardMaterial>()) {
+                    standard->color.setHex(0x3366aa);
+                }
+            }
+        }
+
+        // Insert and delete with a derived child present: the point index and
+        // the child index are different numbers now, and this is where mixing
+        // them up shows.
+        if (spline) {
+            const auto before = SplineConfig::controlPoints(*spline);
+            addSplinePoint(*spline, 1, "Insert Spline Point");
+            step();
+            spline = splineNow(splineUuid);
+            const auto after = SplineConfig::controlPoints(*spline);
+            check(after.size() == before.size() + 1,
+                  "Insert Before still adds one control point with a mesh in the way");
+            Vector3 midpoint;
+            if (before.size() > 1) midpoint.copy(before[0]).add(before[1]).multiplyScalar(0.5f);
+            check(after.size() > 2 && before.size() > 1 &&
+                          after[1].distanceTo(midpoint) < 1e-4f &&
+                          after[0].distanceTo(before[0]) < 1e-4f &&
+                          after[2].distanceTo(before[1]) < 1e-4f,
+                  "at the point index asked for, not the child index");
+            check(spline && derivedCount(*spline) == 1, "and the mesh is still the only derived child");
+
+            addSplinePoint(*spline, AddObjectCommand::atEnd, "Add Spline Point");
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && !spline->children.empty() &&
+                          SplineConfig::isDerived(*spline->children.back()),
+                  "appending a point puts it before the mesh, which stays last");
+
+            // The ordinary delete on "the last point" — the trap being that
+            // the last CHILD is the mesh.
+            const auto points = SplineConfig::controlPointNodes(*spline);
+            if (!points.empty()) {
+                selectObject(points.back());
+                deleteSelected();
+                step();
+                spline = splineNow(splineUuid);
+                check(spline && SplineConfig::controlPoints(*spline).size() == points.size() - 1,
+                      "Del on the last control point takes the point");
+                check(spline && derivedCount(*spline) == 1, "and never the generated mesh");
+                commands_.undo();
+                step();
+                spline = splineNow(splineUuid);
+            }
+            commands_.undo();// the append
+            step();
+            commands_.undo();// the insert
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && SplineConfig::controlPoints(*spline).size() == before.size(),
+                  "and both edits undo back to the point count they started from");
+        }
+
         // Save and reload: the config and every control point have to survive
         // the document round trip, since neither is anything but userData and
         // ordinary child transforms.
@@ -1013,13 +1207,19 @@ int EditorApp::runSelfTest() {
         authored.closed = true;
         authored.tension = 0.25f;
         authored.samples = 12;
+        // With a generated mesh, so the round trip proves the document carries
+        // the geometry too — and that reloading ADOPTS it rather than adding a
+        // second one beside it.
+        authored.mesh = SplineConfig::MeshKind::Road;
+        authored.width = 5.f;
+        authored.uvLength = 3.f;
         std::vector<Vector3> authoredPoints;
 
         if (spline) {
             authored.write(*spline);
             // A moved point, so the round trip is proving positions and not
             // just the factory's defaults twice.
-            spline->children.front()->position.y += 1.5f;
+            SplineConfig::controlPointNodes(*spline).front()->position.y += 1.5f;
             authoredPoints = SplineConfig::controlPoints(*spline);
             saveSceneAs(splinePath);
             openScene(splinePath);
@@ -1029,7 +1229,7 @@ int EditorApp::runSelfTest() {
             check(reloaded != nullptr, "the spline survives save and reload");
             check(reloaded && SplineConfig::read(*reloaded) == authored,
                   "its config round-trips through the document");
-            check(reloaded && reloaded->children.size() == authoredPoints.size(),
+            check(reloaded && SplineConfig::controlPoints(*reloaded).size() == authoredPoints.size(),
                   "and so does the control point count");
             bool positionsMatch = reloaded != nullptr;
             if (reloaded) {
@@ -1040,6 +1240,29 @@ int EditorApp::runSelfTest() {
             }
             check(positionsMatch, "with every control point where it was left");
             check(splineOverlays_.size() == 1, "and a curve overlay rebuilt on the new graph");
+
+            // The document already contains the generated mesh, so the first
+            // sync has to ADOPT it. Adding one of its own would leave two.
+            check(reloaded && derivedCount(*reloaded) == 1,
+                  "the reloaded document has exactly one derived child, adopted not duplicated");
+            auto* reloadedMesh = reloaded ? SplineConfig::derivedMesh(*reloaded) : nullptr;
+            check(reloadedMesh && reloadedMesh->uuid == derivedUuid,
+                  "the same mesh node, by uuid, as the one that was saved");
+            check(reloadedMesh && reloadedMesh->userData.contains("physics"),
+                  "with the physics config a user put on it");
+            check(reloadedMesh && reloadedMesh->materialAs<MeshStandardMaterial>() &&
+                          reloadedMesh->materialAs<MeshStandardMaterial>()->color.getHex() == 0x3366aa,
+                  "and the material they edited, both surviving the regeneration");
+            bool narrowed = false;
+            if (auto* asMesh = reloadedMesh ? reloadedMesh->as<Mesh>() : nullptr) {
+                const auto* position = asMesh->geometry()->getAttribute<float>("position");
+                if (position && position->count() >= 2) {
+                    const Vector3 left(position->getX(0), position->getY(0), position->getZ(0));
+                    const Vector3 right(position->getX(1), position->getY(1), position->getZ(1));
+                    narrowed = std::abs(left.distanceTo(right) - authored.width) < 1e-3f;
+                }
+            }
+            check(narrowed, "rebuilt to the width the reloaded config asks for");
         }
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
@@ -1134,6 +1357,13 @@ int EditorApp::runSelfTest() {
             }
             check(onAuthored, "and it lands on the authored closed curve");
             check(offOpen, "in the closing span an open curve does not have");
+            // The generated mesh is a child too, and at the spline's origin.
+            // Counting it as a control point would bend the curve the script
+            // builds away from the one the editor draws, so the two checks
+            // above are also the test that the documented list comprehension
+            // skips it.
+            check(splineNow(splineUuid) && derivedCount(*splineNow(splineUuid)) == 1,
+                  "with the generated mesh present, which the script has to skip");
 
             stopPlay();
             step();
@@ -1151,9 +1381,19 @@ int EditorApp::runSelfTest() {
             selectObject(live);
             step();
             check(splineOverlays_.size() == 1, "the selected spline still has its curve");
-            if (!live->children.empty()) selectObject(live->children.front());
+            const auto points = SplineConfig::controlPointNodes(*live);
+            if (!points.empty()) selectObject(points.front());
             step();
             check(selection_.get() != nullptr, "a control point is selectable");
+            // The generated mesh is picked and inspected like any other mesh —
+            // that is the whole point of it being a document node.
+            if (auto* generated = SplineConfig::derivedMesh(*live)) {
+                selectObject(generated);
+                step();
+                check(selection_.get() == generated, "and so is the generated mesh");
+                check(resolveSelectable(generated) == generated,
+                      "a click on it drills down to it while its spline is the selection");
+            }
         }
 
         openScene(splinePath);
