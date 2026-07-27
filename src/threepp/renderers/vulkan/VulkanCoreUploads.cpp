@@ -4,7 +4,7 @@
 
 namespace threepp {
 
-    void VulkanRendererCore::CoreImpl::createCameraUbos() {
+    void VulkanRenderer::Impl::createCameraUbos() {
         for (auto& b : cameraUbos) {
             b = createBuffer(
                     ctx->allocator(), ctx->device(),
@@ -72,7 +72,7 @@ namespace threepp {
     // emissive count exceeds capacity. Returns true when the buffer
     // handle changed so the caller can rewrite binding 14. 2× headroom
     // matches motionMatBuffers.
-    bool VulkanRendererCore::CoreImpl::ensureEmissiveTriCapacity(uint32_t frame, uint32_t needed) {
+    bool VulkanRenderer::Impl::ensureEmissiveTriCapacity(uint32_t frame, uint32_t needed) {
         if (needed <= emissiveTriBufferCapacity[frame]) return false;
         const uint32_t newCap = std::max<uint32_t>(needed, emissiveTriBufferCapacity[frame] * 2u);
         destroyBuffer(ctx->allocator(), emissiveTriBuffers[frame]);
@@ -95,7 +95,7 @@ namespace threepp {
     // its own motion delta. Caller must have already waited the
     // inFlight[frame] fence — we write a buffer the GPU may have been
     // reading on the previous use of `frame`.
-    void VulkanRendererCore::CoreImpl::computeAndUploadMotionMatrices(uint32_t frame,
+    void VulkanRenderer::Impl::computeAndUploadMotionMatrices(uint32_t frame,
                                         const std::vector<MeshEntry>& entries) {
         const uint32_t count = static_cast<uint32_t>(entries.size());
         if (count == 0) return;
@@ -181,7 +181,7 @@ namespace threepp {
 
     // Upload meshMovedBits_ to meshMovedBitsBuffers[frame]. Caller must have
     // already waited the inFlight[frame] fence.
-    void VulkanRendererCore::CoreImpl::uploadMeshMovedBits(uint32_t frame) {
+    void VulkanRenderer::Impl::uploadMeshMovedBits(uint32_t frame) {
         if (meshMovedBits_.empty()) return;
         const VkDeviceSize bytes = meshMovedBits_.size() * sizeof(uint32_t);
         const VkDeviceSize cap   = meshMovedBitsBufferCapacity[frame] * sizeof(uint32_t);
@@ -201,7 +201,7 @@ namespace threepp {
     //
     // Returns true when the buffer handle changed (capacity grew); caller
     // must then rewrite descriptor binding 14 for this frame's sets.
-    bool VulkanRendererCore::CoreImpl::buildAndUploadEmissiveTris(uint32_t frame,
+    bool VulkanRenderer::Impl::buildAndUploadEmissiveTris(uint32_t frame,
                                     const std::vector<MeshEntry>& entries) {
         emissiveTriCountThisFrame_ = 0;
         emissiveTotalPowerThisFrame_ = 0.0f;
@@ -349,7 +349,7 @@ namespace threepp {
     // instance count exceeds capacity. Returns true when the buffer
     // handle changed so the caller can rewrite binding 10. We grow with
     // 2× headroom to avoid thrashing on incremental scene growth.
-    bool VulkanRendererCore::CoreImpl::ensureMotionMatCapacity(uint32_t frame, uint32_t needed) {
+    bool VulkanRenderer::Impl::ensureMotionMatCapacity(uint32_t frame, uint32_t needed) {
         if (needed <= motionMatBufferCapacity[frame]) return false;
         const uint32_t newCap = std::max<uint32_t>(needed, motionMatBufferCapacity[frame] * 2u);
         destroyBuffer(ctx->allocator(), motionMatBuffers[frame]);
@@ -369,7 +369,7 @@ namespace threepp {
     // Same dance as ensureMotionMatCapacity, but for the per-mesh
     // moved-bitmask SSBO at binding 21. `neededWords` is the number of
     // 32-bit words required to address every visible TLAS instance.
-    bool VulkanRendererCore::CoreImpl::ensureMeshMovedBitsCapacity(uint32_t frame, uint32_t neededWords) {
+    bool VulkanRenderer::Impl::ensureMeshMovedBitsCapacity(uint32_t frame, uint32_t neededWords) {
         if (neededWords <= meshMovedBitsBufferCapacity[frame]) return false;
         const uint32_t newCap = std::max<uint32_t>(
                 neededWords,
@@ -386,7 +386,7 @@ namespace threepp {
         return true;
     }
 
-    void VulkanRendererCore::CoreImpl::updateCameraUbo(uint32_t frame, Camera& camera) {
+    void VulkanRenderer::Impl::updateCameraUbo(uint32_t frame, Camera& camera) {
         camera.updateMatrixWorld(true);
 
         // Stash tan(fovY/2) for the DoF focal-length derivation —
@@ -568,7 +568,7 @@ namespace threepp {
         uploadHostVisible(ctx->allocator(), cameraUbos[frame], data, sizeof(data));
     }
 
-    void VulkanRendererCore::CoreImpl::uploadRasterCameraUbo(uint32_t frame, Camera& camera) {
+    void VulkanRenderer::Impl::uploadRasterCameraUbo(uint32_t frame, Camera& camera) {
         camera.updateMatrixWorld(true);
 
         // VP_unjittered = projection * view, view = matrixWorldInverse.
@@ -851,7 +851,7 @@ namespace threepp {
         vkUpdateDescriptorSets(ctx->device(), writeCount, writes, 0, nullptr);
     }
 
-    void VulkanRendererCore::CoreImpl::createLightsUbos() {
+    void VulkanRenderer::Impl::createLightsUbos() {
         for (auto& b : lightsUbos) {
             b = createBuffer(
                     ctx->allocator(), ctx->device(),
@@ -887,7 +887,7 @@ namespace threepp {
     // light's world-space position toward its (possibly defaulted) target,
     // mirroring three.js's DirectionalLight.target convention. The shader
     // expects the L vector (toward the light), so we negate.
-    void VulkanRendererCore::CoreImpl::updateLightsUbo(uint32_t frame, Object3D& scene) {
+    void VulkanRenderer::Impl::updateLightsUbo(uint32_t frame, Object3D& scene) {
         // force=false: ensureSceneBuilt already brought the graph current
         // this frame — the forced variant here was a SECOND full
         // world-multiply pass over every node, every frame.
@@ -1103,7 +1103,7 @@ namespace threepp {
         uploadHostVisible(ctx->allocator(), lightsUbos[frame], &ubo, sizeof(ubo));
     }
 
-    void VulkanRendererCore::CoreImpl::createFogUbos() {
+    void VulkanRenderer::Impl::createFogUbos() {
         for (auto& b : fogUbos) {
             b = createBuffer(
                     ctx->allocator(), ctx->device(),
@@ -1120,7 +1120,7 @@ namespace threepp {
     // to sigma_t; linear Fog reaches ~63% extinction at farPlane via
     // sigma = 1 / (far - near). Hash detect changes so the per-pixel motion
     // path halves FC and the new fog state converges quickly.
-    void VulkanRendererCore::CoreImpl::updateFogUbo(uint32_t frame, Object3D& scene, Camera& camera) {
+    void VulkanRenderer::Impl::updateFogUbo(uint32_t frame, Object3D& scene, Camera& camera) {
         GpuFogUbo ubo{};
         // World up (for the sky aerial-perspective fog band) — these scenes set
         // camera.up to the world up (Z-up for the Spot stack, Y-up elsewhere).
@@ -1221,7 +1221,7 @@ namespace threepp {
         uploadHostVisible(ctx->allocator(), fogUbos[frame], &ubo, sizeof(ubo));
     }
 
-    void VulkanRendererCore::CoreImpl::createCloudUbos() {
+    void VulkanRenderer::Impl::createCloudUbos() {
         for (auto& b : cloudUbos) {
             b = createBuffer(
                     ctx->allocator(), ctx->device(),
@@ -1236,7 +1236,7 @@ namespace threepp {
     // Pack the setClouds state into the per-frame cloud UBO. timeSec is
     // wall-clock (frame-rate-independent) so wind drift + shape evolution run
     // at a fixed real-world speed. Disabled → enabled=0 → cloudMarch() no-ops.
-    void VulkanRendererCore::CoreImpl::updateCloudUbo(uint32_t frame) {
+    void VulkanRenderer::Impl::updateCloudUbo(uint32_t frame) {
         GpuCloudUbo ubo{};
         ubo.enabled     = cloudsEnabled_ ? 1.0f : 0.0f;
         ubo.coverage    = cloudCoverage_;
@@ -1269,7 +1269,7 @@ namespace threepp {
         uploadHostVisible(ctx->allocator(), cloudUbos[frame], &ubo, sizeof(ubo));
     }
 
-    void VulkanRendererCore::CoreImpl::createRasterCameraUbos() {
+    void VulkanRenderer::Impl::createRasterCameraUbos() {
         for (auto& b : rasterCameraUbos) {
             if (b.handle != VK_NULL_HANDLE) continue;
             b = createBuffer(

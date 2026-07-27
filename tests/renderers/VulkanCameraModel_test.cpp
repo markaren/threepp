@@ -4,7 +4,7 @@
 // The camera model's claim is that a threepp camera configured the way you
 // configure a real one — sensor size via PerspectiveCamera::filmGauge, lens via
 // setFocalLength — projects like that real camera, and that
-// VulkanRendererCore::cameraIntrinsics() reports the fx/fy/cx/cy an OpenCV
+// VulkanRenderer::cameraIntrinsics() reports the fx/fy/cx/cy an OpenCV
 // calibration of it would. That is a numeric claim, so test it numerically:
 // project known 3D points through the renderer's own camera and check they land
 // where the reported intrinsics say they should.
@@ -52,7 +52,7 @@ namespace {
     // Project a camera-space point (threepp/GL convention: +X right, +Y up,
     // −Z forward) to a pixel with top-left origin, using ONLY the reported
     // intrinsics in OpenCV's convention (+X right, +Y down, +Z forward).
-    void projectWithIntrinsics(const VulkanRendererCore::CameraIntrinsics& k,
+    void projectWithIntrinsics(const VulkanRenderer::CameraIntrinsics& k,
                                const Vector3& camSpace, float& u, float& v) {
         const float zCv = -camSpace.z;// OpenCV looks down +Z
         u = k.fx * (camSpace.x / zCv) + k.cx;
@@ -413,7 +413,7 @@ int main() {
 
         std::vector<uint8_t> ids;
         int aw = 0, ah = 0, abpp = 0;
-        const bool gotIds = renderer.readGBufferAOV(VulkanRendererCore::GBufferAOV::Ids,
+        const bool gotIds = renderer.readGBufferAOV(VulkanRenderer::GBufferAOV::Ids,
                                                     ids, aw, ah, abpp);
         check(gotIds && aw == kW && ah == kH && abpp == 8, "ids AOV readback at the render extent");
         if (gotIds && nRgb > 0 && aw == kW && ah == kH && abpp == 8) {
@@ -665,7 +665,7 @@ int main() {
             return true;
         };
 
-        VulkanRendererCore::SensorNoise sn;
+        VulkanRenderer::SensorNoise sn;
         sn.enabled = true;
         sn.fullWellElectrons = kFullWell;
         sn.readNoiseElectrons = 0.f;         // isolate shot noise

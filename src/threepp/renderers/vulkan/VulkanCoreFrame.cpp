@@ -2,7 +2,7 @@
 
 namespace threepp {
 
-void VulkanRendererCore::CoreImpl::createCommandResources() {
+void VulkanRenderer::Impl::createCommandResources() {
             VkCommandPoolCreateInfo pci{};
             pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
             pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -30,7 +30,7 @@ void VulkanRendererCore::CoreImpl::createCommandResources() {
             createRenderFinishedSemaphores();
         }
 
-void VulkanRendererCore::CoreImpl::createRenderFinishedSemaphores() {
+void VulkanRenderer::Impl::createRenderFinishedSemaphores() {
             for (auto s : renderFinished)
                 if (s) vkDestroySemaphore(ctx->device(), s, nullptr);
             renderFinished.assign(ctx->swapchainImages().size(), VK_NULL_HANDLE);
@@ -40,7 +40,7 @@ void VulkanRendererCore::CoreImpl::createRenderFinishedSemaphores() {
                 check(vkCreateSemaphore(ctx->device(), &sci, nullptr, &s), "vkCreateSemaphore B");
         }
 
-VkCommandBuffer VulkanRendererCore::CoreImpl::beginOneShot() {
+VkCommandBuffer VulkanRenderer::Impl::beginOneShot() {
             // Batch mode: every caller records into ONE shared, already-open
             // command buffer; the submit is deferred to flushOneShotBatch.
             if (oneShotBatch_) {
@@ -62,7 +62,7 @@ VkCommandBuffer VulkanRendererCore::CoreImpl::beginOneShot() {
             return cb;
         }
 
-void VulkanRendererCore::CoreImpl::endAndSubmitOneShot(VkCommandBuffer cb, const char* label) {
+void VulkanRenderer::Impl::endAndSubmitOneShot(VkCommandBuffer cb, const char* label) {
             // Batch mode: leave the shared cb open; flushOneShotBatch submits it
             // once for the whole batch. The caller's transient resources are
             // parked (destroyBufferMaybeBatched) until the flush's wait.
@@ -83,7 +83,7 @@ void VulkanRendererCore::CoreImpl::endAndSubmitOneShot(VkCommandBuffer cb, const
             vkFreeCommandBuffers(ctx->device(), cmdPool, 1, &cb);
         }
 
-void VulkanRendererCore::CoreImpl::flushOneShotBatch() {
+void VulkanRenderer::Impl::flushOneShotBatch() {
             // Close the batch window. Any later one-shot returns to immediate
             // submit even if there is nothing to flush here.
             oneShotBatch_ = false;
@@ -112,7 +112,7 @@ void VulkanRendererCore::CoreImpl::flushOneShotBatch() {
             oneShotBatchGarbage_.clear();
         }
 
-void VulkanRendererCore::CoreImpl::createReservoirImages() {
+void VulkanRenderer::Impl::createReservoirImages() {
             // Render extent, not swapchain extent — the per-pixel ReSTIR DI
             // reservoir images are sized to the resolution the deferred shade
             // launches at. Equal to the swapchain extent unless renderScale_ < 1.
@@ -136,7 +136,7 @@ void VulkanRendererCore::CoreImpl::createReservoirImages() {
             prevWorldMats.clear();
         }
 
-void VulkanRendererCore::CoreImpl::resetAccumulation() {
+void VulkanRenderer::Impl::resetAccumulation() {
             sampleIndex = 0;
             prevCameraValid = false;
             prevWorldMats.clear();
@@ -151,7 +151,7 @@ void VulkanRendererCore::CoreImpl::resetAccumulation() {
             clearGbufImages();
         }
 
-void VulkanRendererCore::CoreImpl::scanLidar(const std::vector<LidarBeam>& beams,
+void VulkanRenderer::Impl::scanLidar(const std::vector<LidarBeam>& beams,
                        std::vector<LidarReturn>& outResults,
                        const LidarParams& params) {
             outResults.clear();
@@ -255,7 +255,7 @@ void VulkanRendererCore::CoreImpl::scanLidar(const std::vector<LidarBeam>& beams
             }
         }
 
-void VulkanRendererCore::CoreImpl::reallocateRenderExtentResources() {
+void VulkanRenderer::Impl::reallocateRenderExtentResources() {
             // Every caller (setRenderScale, setGbufMsaa, the beginDeferredFrame
             // pending-realloc path, recreateSwapchain) has already device-idled
             // before reaching here, so the whole device is quiescent — reclaim
@@ -330,7 +330,7 @@ void VulkanRendererCore::CoreImpl::reallocateRenderExtentResources() {
             rewriteDeferredDescriptors();// raster gbuf + sceneHdr views changed
         }
 
-void VulkanRendererCore::CoreImpl::recreateSwapchainAndDescriptors() {
+void VulkanRenderer::Impl::recreateSwapchainAndDescriptors() {
             ctx->recreateSwapchain();// device-idles internally
             createRenderFinishedSemaphores();
             reallocateRenderExtentResources();
@@ -338,7 +338,7 @@ void VulkanRendererCore::CoreImpl::recreateSwapchainAndDescriptors() {
                               static_cast<int>(ctx->swapchainExtent().height)};
         }
 
-void VulkanRendererCore::CoreImpl::setRenderScale(float scale) {
+void VulkanRenderer::Impl::setRenderScale(float scale) {
             const float clamped = scale < 0.25f ? 0.25f
                                 : (scale > 1.0f ? 1.0f : scale);
             if (clamped == renderScale_) return;
@@ -351,7 +351,7 @@ void VulkanRendererCore::CoreImpl::setRenderScale(float scale) {
             reallocateRenderExtentResources();
         }
 
-void VulkanRendererCore::CoreImpl::setGbufferMsaa(uint32_t samples) {
+void VulkanRenderer::Impl::setGbufferMsaa(uint32_t samples) {
             const uint32_t clamped = samples >= 4 ? 4u : (samples >= 2 ? 2u : 1u);
             if (clamped == gbufMsaaSamples_) return;
             gbufMsaaSamples_ = clamped;
@@ -367,14 +367,14 @@ void VulkanRendererCore::CoreImpl::setGbufferMsaa(uint32_t samples) {
             reallocateRenderExtentResources();
         }
 
-void VulkanRendererCore::CoreImpl::beginCommandRecording(VkCommandBuffer cb) {
+void VulkanRenderer::Impl::beginCommandRecording(VkCommandBuffer cb) {
             VkCommandBufferBeginInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer");
             gpuTimings_->beginFrame(cb, currentFrame);
         }
 
-bool VulkanRendererCore::CoreImpl::beginDeferredFrame(Object3D& scene, Camera& camera) {
+bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
             // Fence signaled ⇒ frame (frameSerial_ - kFramesInFlight) is
@@ -588,7 +588,7 @@ bool VulkanRendererCore::CoreImpl::beginDeferredFrame(Object3D& scene, Camera& c
             return true;
         }
 
-bool VulkanRendererCore::CoreImpl::beginFrameOrthoOnly() {
+bool VulkanRenderer::Impl::beginFrameOrthoOnly() {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
             // Same retire reclaim as beginDeferredFrame (the ortho-only frame
@@ -681,7 +681,7 @@ bool VulkanRendererCore::CoreImpl::beginFrameOrthoOnly() {
             return true;
         }
 
-void VulkanRendererCore::CoreImpl::endFrame() {
+void VulkanRenderer::Impl::endFrame() {
             if (frameState_ == FrameState::Idle) return;
 
             const uint32_t imageIndex = frameImageIndex_;
@@ -760,7 +760,7 @@ void VulkanRendererCore::CoreImpl::endFrame() {
             frameState_   = FrameState::Idle;
         }
 
-void VulkanRendererCore::CoreImpl::renderFrame(Object3D& scene, Camera& camera) {
+void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
             const bool isOrtho = camera.is<OrthographicCamera>();
 
             if (frameState_ == FrameState::Idle) {

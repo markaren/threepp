@@ -59,7 +59,7 @@ namespace threepp::vulkan {
 
         // Hands a stale sprite-atlas Image2D back to the renderer's frame-serial
         // retire queue instead of a per-swap vkDeviceWaitIdle. The lambda
-        // captures CoreImpl and forwards to CoreImpl::retire. Optional: if unset,
+        // captures Impl and forwards to Impl::retire. Optional: if unset,
         // ensureSpriteAtlasTexture falls back to drain+destroy.
         using RetireImageFn = std::function<void(Image2D&&)>;
 

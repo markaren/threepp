@@ -191,7 +191,7 @@ int main(int argc, char** argv) {
     // measured sun (Auto defers to scene lights) with this hand-tuned
     // approximation — hide it there so the env IS the sun. GL keeps it: raster
     // cannot cast shadows from an env map.
-    if (dynamic_cast<VulkanRendererCore*>(renderer.get())) sun->visible = false;
+    if (dynamic_cast<VulkanRenderer*>(renderer.get())) sun->visible = false;
 
     // ===== audio ============================================================
     SoundBank sfx;

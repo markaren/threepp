@@ -1,4 +1,4 @@
-﻿// Private implementation header — the shared CoreImpl for VulkanRenderer.cpp.
+﻿// Private implementation header — the shared Impl for VulkanRenderer.cpp.
 // Never include from public API headers.
 // VMA_IMPLEMENTATION must be #defined in VulkanRenderer.cpp BEFORE including this file.
 #pragma once
@@ -175,7 +175,7 @@ namespace threepp {
         constexpr uint32_t kFramesInFlight = 2;
     }// namespace
 
-    struct VulkanRendererCore::CoreImpl {
+    struct VulkanRenderer::Impl {
         Canvas& canvas;
         WindowSize size;
         Color clearColor{0.f, 0.f, 0.f};
@@ -1382,7 +1382,7 @@ namespace threepp {
         // mutex+condvar job queue. Jobs snapshot (copy) position/index data
         // at enqueue time, so the worker never touches live BufferGeometry /
         // Vulkan state — no lifetime races with a scene the main thread
-        // mutates or tears down while a job runs. Joined in ~CoreImpl before
+        // mutates or tears down while a job runs. Joined in ~Impl before
         // anything Vulkan-related is torn down (the worker is pure CPU).
         std::thread lodWorker_;
         std::mutex lodJobMutex_;
@@ -1433,7 +1433,7 @@ namespace threepp {
         // at enqueue/drain time — surfaced via autoLodStats().
         uint32_t lodChainsReadyCount_  = 0;
         uint32_t lodChainsQueuedCount_ = 0;
-        VulkanRendererCore::AutoLodStats autoLodStats_{};
+        VulkanRenderer::AutoLodStats autoLodStats_{};
 
         void ensureLodWorkerStarted() {
             if (lodWorker_.joinable()) return;
@@ -2604,7 +2604,7 @@ namespace threepp {
         // Both default to inactive, and while inactive the RCAS stage keeps
         // its original texelFetch/CAS path → byte-identical output.
         LensDistortion lens_{};
-        VulkanRendererCore::SensorNoise sensorNoise_{};
+        VulkanRenderer::SensorNoise sensorNoise_{};
         // Frame counter driving the noise seed. Advances once per recorded
         // frame while noise is on; resetSensorNoise() rewinds it so the same
         // seed replays the same sequence from the top of an episode.
@@ -2966,7 +2966,7 @@ namespace threepp {
         // so it reuses the exact same idle-gate as renderScale.
         uint32_t gbufMsaaSamples_        = 1;
 
-        explicit CoreImpl(Canvas& c) : canvas(c), size(c.size()) {
+        explicit Impl(Canvas& c) : canvas(c), size(c.size()) {
             ctx = std::make_unique<VulkanContext>(
                     static_cast<GLFWwindow*>(canvas.windowPtr()),
                     /*enableRayTracing*/ true,
@@ -3149,7 +3149,7 @@ namespace threepp {
             std::fflush(stderr);
         }
 
-        ~CoreImpl() {
+        ~Impl() {
             // Stop the auto-LOD background worker first — it's pure CPU (no
             // Vulkan handles touched), so this is safe even when ctx is
             // null. Must happen before the blasCache teardown below, which
@@ -6843,55 +6843,106 @@ namespace threepp {
 
         [[nodiscard]] uint32_t gbufferMsaa() const { return gbufMsaaSamples_; }
 
-        // Scene shade hook. Called from recordCommandBuffer between the shared
-        // G-buffer/AS head and the shared bloom/TAA tail. VulkanRenderer::Impl
-        // overrides it to dispatch the analytic deferred shade.
-        virtual void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
-                                         VkExtent2D ext, VkExtent2D ptExt,
-                                         uint32_t exposureBits) = 0;
+        // ── Auto-exposure state ───────────────────────────────────────────────
+        std::unique_ptr<vulkan::AutoExposure> autoExposure_;
+        bool   autoExposureEnabled_ = false;
+        float  autoExpSpeed_        = 2.0f;
+        float  autoExpMinEV_        = -3.0f;
+        float  autoExpMaxEV_        =  3.0f;
 
-        // True when decal meshes (layer-tagged as decals) should be drawn
-        // into the raster G-buffer. The deferred renderer renders decals.
-        virtual bool decalsEnabled() const = 0;
+        // MSAA dispatch B (per-sample shading at complex/edge pixels) master
+        // switch. OFF by default: measured on rock_flicker (msaa=4), dispatch
+        // B's fallback variant (single largest non-dominant cluster, cheap
+        // env-only diffuse — no RT gather/reflections/ReSTIR, to keep cost
+        // proportional to edge-pixel count) made the static-camera flicker
+        // metric WORSE (mean ~4600-4800 px/frame) than Phase 1 (dominant-
+        // sample resolve) alone (~3700-3900), which was itself already below
+        // the msaa=1 baseline (~4000-4030). Root cause: dispatch B's cheap
+        // shading model disagrees with dispatch A's full model enough that
+        // the disagreement is itself a new, comparably-sized noise source at
+        // every edge pixel — trading one flicker mechanism for another
+        // instead of removing it. The code compiles, is wired end-to-end,
+        // and is architecturally sound (see deferred_shade.comp's shadeMode
+        // branches) for a future attempt with a closer-matching per-sample
+        // shading model; it just isn't a net win yet, so it stays off.
+        // ON by default: under the UNJITTERED msaa raster (see
+        // uploadRasterCameraUbo) dispatch B no longer regresses temporal
+        // stability (static 23 vs 11 px/frame on the rock harness), and with
+        // the corrected coverage accounting (dispatch A blends sky-minority
+        // coverage itself; B fills the geometry-minority weight it reserves)
+        // it supplies the spatial edge AA the dominant-pick resolve alone
+        // lacks. Only consulted when gbufMsaaSamples_ > 1.
+        bool gbufShadeBEnabled_ = true;
 
-        // HDRI sun extraction (deferred only). When true,
-        // refreshEnvTextureFromScene detects the env's dominant compact bright
-        // source, prefilters PMREM mips 1+ from a sun-clamped copy (no glossy /
-        // rough env lookup ever integrates the raw ~10⁴:1 disc — the "bright
-        // spec blobs in reflections" artifact), and updateLightsUbo re-injects
-        // the removed energy as an analytic directional light (sharp correct
-        // sun highlight, jittered soft RT shadows, GI bounce, water glints).
-        // (The now-removed path tracer kept the raw env instead: its env-CDF
-        // NEE + MIS already handled HDRI suns without fireflies.)
-        virtual bool envSunExtractionWanted() const { return false; }
+        // Deferred scene dispatch: shades the raster material G-buffer into
+        // bloom_->sceneHdr (direct analytic lights + split-sum specular IBL +
+        // approximate diffuse IBL + ray-query accents). Called from
+        // recordCommandBuffer between the shared G-buffer/AS head and the
+        // shared bloom/TAA tail; defined in VulkanRenderer.cpp.
+        void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
+                                 VkExtent2D ext, VkExtent2D ptExt,
+                                 uint32_t exposureBits);
 
-        // ONE-SUN POLICY (consulted only when extraction is wanted): when true
-        // (VulkanRenderer::EnvSunPolicy::Auto), the extracted env sun is
-        // injected only while the scene has NO visible DirectionalLight of its
-        // own — an explicit scene light claims the sun role (scenes authored
-        // for raster renderers carry a stand-in sun light because raster can't
-        // shadow from an env map; injecting the env sun on top lights and
-        // shadows the scene with TWO suns). false = Always inject.
-        virtual bool envSunDefersToSceneSun() const { return true; }
+        // Called once after bloom_->createImages(); wires sceneHdr views.
+        void onAfterBloomCreateImages() {
+            if (!autoExposure_) return;
+            VkImageView views[kFramesInFlight];
+            for (uint32_t f = 0; f < kFramesInFlight; ++f)
+                views[f] = bloom_->sceneHdrView(f);
+            autoExposure_->rewriteDescriptors(views);
+        }
 
-        // Called once after bloom_->createImages() (initial creation and resize).
-        // Implementations that hold references to sceneHdr views (e.g. auto-exposure)
-        // override to rewire their descriptor sets.
-        virtual void onAfterBloomCreateImages() {}
-
-        // Called from beginDeferredFrame() after the per-frame fence wait and all
-        // CPU-side setup, immediately before recordCommandBuffer(). Implementations
-        // can do per-frame CPU readbacks here (histograms, timings) since the prior
-        // GPU slot for this frame index is guaranteed retired.
-        // dt = seconds since the last call to this function (0 on first call).
-        virtual void onBeginDeferredFrame(uint32_t /*frame*/, float /*dt*/) {}
+        // CPU per-frame tick: lazy-init, then read histogram + advance EMA.
+        void onBeginDeferredFrame(uint32_t frame, float dt) {
+            if (!autoExposureEnabled_) return;
+            if (!autoExposure_) {
+                autoExposure_ = std::make_unique<vulkan::AutoExposure>(*ctx, kFramesInFlight);
+                autoExposure_->adaptSpeed = autoExpSpeed_;
+                autoExposure_->minEV      = autoExpMinEV_;
+                autoExposure_->maxEV      = autoExpMaxEV_;
+                VkImageView views[kFramesInFlight];
+                for (uint32_t f = 0; f < kFramesInFlight; ++f)
+                    views[f] = bloom_->sceneHdrView(f);
+                autoExposure_->rewriteDescriptors(views);
+            }
+            // Physical camera: the EMA adapts an EV COMPENSATION around the
+            // EV100-derived exposure instead of an absolute multiplier
+            // around 1.0 (the histogram/EMA machinery is reused unchanged).
+            autoExposure_->baseExposure = physicalCamera_ ? physicalExposure() : 1.f;
+            autoExposure_->tick(frame, dt);
+        }
 
         // Exposure value used for this frame's composite push constant.
-        // Physical camera mode derives it from aperture/shutter/ISO;
-        // overridden by VulkanRenderer::Impl when auto-exposure is active
-        // (which composes the physical exposure as its base there).
-        [[nodiscard]] virtual float currentExposure() const {
+        // Auto-exposure wins when active (AutoExposure::exposure() composes
+        // the physical-camera base it was handed in onBeginDeferredFrame);
+        // otherwise physical camera mode derives it from aperture/shutter/ISO.
+        [[nodiscard]] float currentExposure() const {
+            if (autoExposureEnabled_ && autoExposure_)
+                return autoExposure_->exposure();
             return physicalCamera_ ? physicalExposure() : toneMappingExposure_;
+        }
+
+        // HDRI sun extraction. refreshEnvTextureFromScene detects the env's
+        // dominant compact bright source, prefilters PMREM mips 1+ from a
+        // sun-clamped copy (no glossy / rough env lookup ever integrates the
+        // raw ~10⁴:1 disc — the "bright spec blobs in reflections" artifact),
+        // and updateLightsUbo re-injects the removed energy as an analytic
+        // directional light (sharp correct sun highlight, jittered soft RT
+        // shadows, GI bounce, water glints).
+        //
+        // ONE-SUN POLICY (consulted only when extraction is wanted): Auto
+        // injects the extracted sun only while the scene has NO visible
+        // DirectionalLight of its own — an explicit scene light claims the sun
+        // role (scenes authored for raster renderers carry a stand-in sun light
+        // because raster can't shadow from an env map; injecting the env sun on
+        // top lights and shadows the scene with TWO suns). Always injects
+        // regardless; Off skips extraction entirely.
+        VulkanRenderer::EnvSunPolicy envSunPolicy_ = VulkanRenderer::EnvSunPolicy::Auto;
+        [[nodiscard]] bool envSunExtractionWanted() const {
+            return envSunPolicy_ != VulkanRenderer::EnvSunPolicy::Off;
+        }
+        [[nodiscard]] bool envSunDefersToSceneSun() const {
+            return envSunPolicy_ == VulkanRenderer::EnvSunPolicy::Auto;
         }
 
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex);

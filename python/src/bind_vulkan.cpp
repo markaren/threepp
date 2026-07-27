@@ -14,7 +14,7 @@
 //
 //   * Lossless (float / int): read_depth, read_normals_float, read_instance_ids,
 //     read_motion and read_aovs_typed copy the native G-buffer attachment
-//     straight to host memory via VulkanRendererCore::readGBufferAOV — full-
+//     straight to host memory via VulkanRenderer::readGBufferAOV — full-
 //     precision depth (f32), world normals (f32), RECOVERABLE integer instance
 //     ids (u32, no hashing) and metric motion (f32). This is the material an ML
 //     / sensor pipeline actually trains on.
@@ -128,7 +128,7 @@ namespace {
 
         // ── Native G-buffer AOV readback (lossless float / int) ──────────
         // These decode the *last rendered frame's* G-buffer attachment straight
-        // from its native GPU format via VulkanRendererCore::readGBufferAOV — no
+        // from its native GPU format via VulkanRenderer::readGBufferAOV — no
         // 8-bit swapchain round-trip, no id hashing. The *_last() helpers assume a
         // frame is already on screen (call render()/drive first); the public
         // read_* wrappers below drive a frame themselves for one-shot use.
@@ -504,7 +504,7 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r, float v) { r.native().setBloomClamp(v); },
                               "Bloom input clamp to stabilise flickery ultra-bright highlights. <=0 disables (default); typical 8-32.")
                 // Per-frame CPU/GPU pass timings (milliseconds) — see
-                // VulkanRendererCore::FrameTimings. For perf triage from python.
+                // VulkanRenderer::FrameTimings. For perf triage from python.
                 .def_property_readonly("frame_timings",
                                        [](PyVulkanRenderer& r) {
                                            const auto t = r.native().lastFrameTimings();
@@ -621,7 +621,7 @@ namespace threepp_py {
                 .def("set_sensor_noise",
                      [](PyVulkanRenderer& r, bool enabled, float full_well, float read_noise,
                         float dark_current, float prnu_percent, uint32_t seed) {
-                         VulkanRendererCore::SensorNoise n;
+                         VulkanRenderer::SensorNoise n;
                          n.enabled = enabled;
                          n.fullWellElectrons = full_well;
                          n.readNoiseElectrons = read_noise;
@@ -685,7 +685,7 @@ namespace threepp_py {
                 .def("set_color_grade",
                      [](PyVulkanRenderer& r, const Vector3& lift, const Vector3& gamma,
                         const Vector3& gain, float saturation, float contrast) {
-                         VulkanRendererCore::ColorGrade g;
+                         VulkanRenderer::ColorGrade g;
                          g.lift = lift;
                          g.gamma = gamma;
                          g.gain = gain;

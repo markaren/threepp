@@ -2,7 +2,7 @@
 
 namespace threepp {
 
-void VulkanRendererCore::CoreImpl::rewriteTaaDescriptors() {
+void VulkanRenderer::Impl::rewriteTaaDescriptors() {
             std::array<VkImageView, kFramesInFlight> motionViews{};
             std::array<VkImageView, kFramesInFlight> idsViews{};
             std::array<VkImageView, kFramesInFlight> depthViews{};
@@ -21,7 +21,7 @@ void VulkanRendererCore::CoreImpl::rewriteTaaDescriptors() {
             taa_->rewriteDescriptors(in);
         }
 
-void VulkanRendererCore::CoreImpl::rewriteBloomDescriptors() {
+void VulkanRenderer::Impl::rewriteBloomDescriptors() {
             bloom_->rewriteDescriptors();
             // PostComposite's display-extent HDR output scratch (hdrOut_) is
             // VRAM-costing and only needed when an external upscaler (FSR 3.1 /
@@ -96,7 +96,7 @@ void VulkanRendererCore::CoreImpl::rewriteBloomDescriptors() {
 
         }
 
-void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors(int onlyFrame) {
+void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             // onlyFrame >= 0: rewrite only that FIF slot's sets (fence-proven
             // idle at frame start — the per-FIF deferred refresh that replaced
             // the material-texture-swap vkDeviceWaitIdle). onlyFrame < 0:
@@ -296,7 +296,7 @@ void VulkanRendererCore::CoreImpl::rewriteDeferredDescriptors(int onlyFrame) {
             }
         }
 
-void VulkanRendererCore::CoreImpl::fitProbeGridToScene() {
+void VulkanRenderer::Impl::fitProbeGridToScene() {
             if (!probeGI_ || lastVisibleEntries_.empty()) return;
             Box3 sceneBox;
             for (const auto& en : lastVisibleEntries_) {
@@ -317,7 +317,7 @@ void VulkanRendererCore::CoreImpl::fitProbeGridToScene() {
             probeGI_->setGridBounds(mn, mx);
         }
 
-void VulkanRendererCore::CoreImpl::ensureGbufDummyMS() {
+void VulkanRenderer::Impl::ensureGbufDummyMS() {
             if (gbufDummyMSCreated_) return;
             const VkFormat fmts[5] = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT,
                                       VK_FORMAT_R16G16B16A16_UINT, VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -363,7 +363,7 @@ void VulkanRendererCore::CoreImpl::ensureGbufDummyMS() {
             gbufDummyMSCreated_ = true;
         }
 
-void VulkanRendererCore::CoreImpl::ensureHybridResources() {
+void VulkanRenderer::Impl::ensureHybridResources() {
             ensureGbufDummyMS();
             if (dummyUvBuffer_.handle == VK_NULL_HANDLE) {
                 // 1 MB of zeros = 131,072 vec2 vertices. Bound to vertex input

@@ -1,12 +1,13 @@
-﻿// VulkanRenderer — deferred G-buffer renderer (VulkanRenderer::Impl leaf).
+﻿// VulkanRenderer — deferred G-buffer renderer.
 //
 // Translation-unit layout:
-//   vulkan/VulkanCoreImpl.hpp  — CoreImpl struct (shared infra: TLAS/BLAS, scene
-//                                fingerprint, raster G-buffer, TAA/bloom, fog, lights,
-//                                skinning, ocean/water, LIDAR, env-PMREM, camera UBOs).
-//   VulkanRenderer.cpp (this)  — VulkanRenderer::Impl override (DeferredShade +
-//                                auto-exposure) + VulkanRendererCore/VulkanRenderer
-//                                public method bodies.
+//   vulkan/VulkanCoreImpl.hpp  — VulkanRenderer::Impl, the whole pImpl (TLAS/BLAS,
+//                                scene fingerprint, raster G-buffer, deferred shade,
+//                                TAA/bloom, fog, lights, skinning, ocean/water, LIDAR,
+//                                env-PMREM, camera UBOs). Bodies live in the
+//                                vulkan/VulkanCore*.cpp TUs.
+//   VulkanRenderer.cpp (this)  — Impl::recordSceneDispatch (DeferredShade +
+//                                auto-exposure) + the public method bodies.
 //
 // VulkanRenderer (deferred): the raster G-buffer supplies primary visibility;
 //   deferred_shade.comp lights it analytically and adds ray-query accents
@@ -22,275 +23,231 @@
 namespace threepp {
 
 
-    // Deferred renderer's pImpl — adds DeferredShade and deferred-specific state
-    // atop the shared VulkanRendererCore::CoreImpl infrastructure.
-    struct VulkanRenderer::Impl : VulkanRendererCore::CoreImpl {
-        using CoreImpl::CoreImpl;
-
-        // ── Auto-exposure state ───────────────────────────────────────────────
-        std::unique_ptr<vulkan::AutoExposure> autoExposure_;
-        bool   autoExposureEnabled_ = false;
-        float  autoExpSpeed_        = 2.0f;
-        float  autoExpMinEV_        = -3.0f;
-        float  autoExpMaxEV_        =  3.0f;
-
-        // MSAA dispatch B (per-sample shading at complex/edge pixels) master
-        // switch. OFF by default: measured on rock_flicker (msaa=4), dispatch
-        // B's fallback variant (single largest non-dominant cluster, cheap
-        // env-only diffuse — no RT gather/reflections/ReSTIR, to keep cost
-        // proportional to edge-pixel count) made the static-camera flicker
-        // metric WORSE (mean ~4600-4800 px/frame) than Phase 1 (dominant-
-        // sample resolve) alone (~3700-3900), which was itself already below
-        // the msaa=1 baseline (~4000-4030). Root cause: dispatch B's cheap
-        // shading model disagrees with dispatch A's full model enough that
-        // the disagreement is itself a new, comparably-sized noise source at
-        // every edge pixel — trading one flicker mechanism for another
-        // instead of removing it. The code compiles, is wired end-to-end,
-        // and is architecturally sound (see deferred_shade.comp's shadeMode
-        // branches) for a future attempt with a closer-matching per-sample
-        // shading model; it just isn't a net win yet, so it stays off.
-        // ON by default: under the UNJITTERED msaa raster (see
-        // uploadRasterCameraUbo) dispatch B no longer regresses temporal
-        // stability (static 23 vs 11 px/frame on the rock harness), and with
-        // the corrected coverage accounting (dispatch A blends sky-minority
-        // coverage itself; B fills the geometry-minority weight it reserves)
-        // it supplies the spatial edge AA the dominant-pick resolve alone
-        // lacks. Only consulted when gbufMsaaSamples_ > 1.
-        bool gbufShadeBEnabled_ = true;
-
-        // Called once after bloom_->createImages(); wires sceneHdr views.
-        void onAfterBloomCreateImages() override {
-            if (!autoExposure_) return;
-            VkImageView views[kFramesInFlight];
-            for (uint32_t f = 0; f < kFramesInFlight; ++f)
-                views[f] = bloom_->sceneHdrView(f);
-            autoExposure_->rewriteDescriptors(views);
+    // Deferred scene dispatch. Called from recordCommandBuffer between the
+    // shared G-buffer/AS head and the shared bloom/TAA tail.
+    void VulkanRenderer::Impl::recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
+                                                   VkExtent2D ext, VkExtent2D ptExt,
+                                                   uint32_t exposureBits) {
+        // ── VulkanRenderer deferred dispatch ───────────────────────────
+        // Shade the raster material G-buffer (direct analytic lights +
+        // split-sum specular IBL + approximate diffuse IBL) straight
+        // into bloom_->sceneHdr. No path tracing, no denoise — the base
+        // is noise-free. The raster G-buffer pass already ran and its
+        // render-pass dependency makes it visible to COMPUTE; bloom's
+        // leading barrier makes this write visible to the composite.
+        // Per-frame BLAS refits (skinned / deformable meshes) are fenced
+        // only to the RT pipeline stage by the build barriers above. The
+        // deferred pass traverses the same acceleration structures via
+        // ray query from COMPUTE, so add an AS-build → compute fence here.
+        // No-op for static scenes (no pending AS write this frame).
+        // ALSO carries the GI-reproject cross-frame dependency: this
+        // frame's deferred shade SAMPLES the OTHER frame-in-flight's
+        // indirect image (last frame's accumulated GI history). Make the
+        // prev frame's COMPUTE write to it visible to this frame's COMPUTE
+        // read (the GPU executes frames sequentially per queue, so this is a
+        // cache-visibility barrier, not ordering).
+        {
+            VkMemoryBarrier2 asbar{};
+            asbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            asbar.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            asbar.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
+                                  VK_ACCESS_2_SHADER_WRITE_BIT;
+            asbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            asbar.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                  VK_ACCESS_2_SHADER_READ_BIT;
+            VkDependencyInfo asdep{};
+            asdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            asdep.memoryBarrierCount = 1;
+            asdep.pMemoryBarriers = &asbar;
+            vkCmdPipelineBarrier2(cb, &asdep);
         }
-
-        // CPU per-frame tick: lazy-init, then read histogram + advance EMA.
-        void onBeginDeferredFrame(uint32_t frame, float dt) override {
-            if (!autoExposureEnabled_) return;
-            if (!autoExposure_) {
-                autoExposure_ = std::make_unique<vulkan::AutoExposure>(*ctx, kFramesInFlight);
-                autoExposure_->adaptSpeed = autoExpSpeed_;
-                autoExposure_->minEV      = autoExpMinEV_;
-                autoExposure_->maxEV      = autoExpMaxEV_;
-                VkImageView views[kFramesInFlight];
-                for (uint32_t f = 0; f < kFramesInFlight; ++f)
-                    views[f] = bloom_->sceneHdrView(f);
-                autoExposure_->rewriteDescriptors(views);
-            }
-            // Physical camera: the EMA adapts an EV COMPENSATION around the
-            // EV100-derived exposure instead of an absolute multiplier
-            // around 1.0 (the histogram/EMA machinery is reused unchanged).
-            autoExposure_->baseExposure = physicalCamera_ ? physicalExposure() : 1.f;
-            autoExposure_->tick(frame, dt);
-        }
-
-        // Return adapted exposure when auto-exposure is active (composes the
-        // physical-camera base inside AutoExposure::exposure()).
-        [[nodiscard]] float currentExposure() const override {
-            if (autoExposureEnabled_ && autoExposure_)
-                return autoExposure_->exposure();
-            return CoreImpl::currentExposure();
-        }
-
-        bool decalsEnabled() const override { return true; }
-
-        // HDRI sun → analytic light (see CoreImpl::envSunExtractionWanted).
-        // ONE-SUN POLICY: Auto extracts (mip clamp) but injects the analytic
-        // sun only while the scene carries no visible DirectionalLight — an
-        // explicit scene light claims the sun role (the raster stand-in
-        // convention); injecting anyway lit and shadowed the scene with TWO
-        // suns (the reported double directional shadow).
-        VulkanRenderer::EnvSunPolicy envSunPolicy_ = VulkanRenderer::EnvSunPolicy::Auto;
-        bool envSunExtractionWanted() const override {
-            return envSunPolicy_ != VulkanRenderer::EnvSunPolicy::Off;
-        }
-        bool envSunDefersToSceneSun() const override {
-            return envSunPolicy_ == VulkanRenderer::EnvSunPolicy::Auto;
-        }
-
-        void recordSceneDispatch(VkCommandBuffer cb, uint32_t setIdx,
-                                 VkExtent2D ext, VkExtent2D ptExt,
-                                 uint32_t exposureBits) override {
-            // ── VulkanRenderer deferred dispatch ───────────────────────────
-            // Shade the raster material G-buffer (direct analytic lights +
-            // split-sum specular IBL + approximate diffuse IBL) straight
-            // into bloom_->sceneHdr. No path tracing, no denoise — the base
-            // is noise-free. The raster G-buffer pass already ran and its
-            // render-pass dependency makes it visible to COMPUTE; bloom's
-            // leading barrier makes this write visible to the composite.
-            // Per-frame BLAS refits (skinned / deformable meshes) are fenced
-            // only to the RT pipeline stage by the build barriers above. The
-            // deferred pass traverses the same acceleration structures via
-            // ray query from COMPUTE, so add an AS-build → compute fence here.
-            // No-op for static scenes (no pending AS write this frame).
-            // ALSO carries the GI-reproject cross-frame dependency: this
-            // frame's deferred shade SAMPLES the OTHER frame-in-flight's
-            // indirect image (last frame's accumulated GI history). Make the
-            // prev frame's COMPUTE write to it visible to this frame's COMPUTE
-            // read (the GPU executes frames sequentially per queue, so this is a
-            // cache-visibility barrier, not ordering).
-            {
-                VkMemoryBarrier2 asbar{};
-                asbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                asbar.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                asbar.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
-                                      VK_ACCESS_2_SHADER_WRITE_BIT;
-                asbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                asbar.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                      VK_ACCESS_2_SHADER_READ_BIT;
-                VkDependencyInfo asdep{};
-                asdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                asdep.memoryBarrierCount = 1;
-                asdep.pMemoryBarriers = &asbar;
-                vkCmdPipelineBarrier2(cb, &asdep);
-            }
-            // ── Probe-GI update (opt-in) ─────────────────────────────────────
-            // Refresh a round-robin window of world-space irradiance probes
-            // BEFORE the shade so this frame's gather taps a current grid.
-            // Runs after the AS barrier above (the probe rays traverse the
-            // same TLAS/BLAS). The grid UBO is re-uploaded every frame — its
-            // `enabled` flag is what the shader-side sampling gates on.
-            if (probeGI_) {
-                probeGI_->updateGridUbo(currentFrame, probeGIEnabled_);
-                if (probeGIEnabled_) {
-                    if (probeGridDirty_) {
-                        fitProbeGridToScene();
-                        probeGridDirty_ = false;
-                        // Grid moved → the UBO written above is stale; rewrite.
-                        probeGI_->updateGridUbo(currentFrame, true);
-                    }
-                    probeGI_->recordDispatch(cb, currentFrame,
-                                             emissiveTriCountThisFrame_,
-                                             emissiveTotalPowerThisFrame_,
-                                             /*shadows=*/true, envImage.mipLevels);
-                    // Probe SH writes → deferred shade reads (compute→compute).
-                    VkMemoryBarrier2 pbar{};
-                    pbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                    pbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    pbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    pbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    pbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-                    VkDependencyInfo pdep{};
-                    pdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    pdep.memoryBarrierCount = 1;
-                    pdep.pMemoryBarriers = &pbar;
-                    vkCmdPipelineBarrier2(cb, &pdep);
+        // ── Probe-GI update (opt-in) ─────────────────────────────────────
+        // Refresh a round-robin window of world-space irradiance probes
+        // BEFORE the shade so this frame's gather taps a current grid.
+        // Runs after the AS barrier above (the probe rays traverse the
+        // same TLAS/BLAS). The grid UBO is re-uploaded every frame — its
+        // `enabled` flag is what the shader-side sampling gates on.
+        if (probeGI_) {
+            probeGI_->updateGridUbo(currentFrame, probeGIEnabled_);
+            if (probeGIEnabled_) {
+                if (probeGridDirty_) {
+                    fitProbeGridToScene();
+                    probeGridDirty_ = false;
+                    // Grid moved → the UBO written above is stale; rewrite.
+                    probeGI_->updateGridUbo(currentFrame, true);
                 }
+                probeGI_->recordDispatch(cb, currentFrame,
+                                         emissiveTriCountThisFrame_,
+                                         emissiveTotalPowerThisFrame_,
+                                         /*shadows=*/true, envImage.mipLevels);
+                // Probe SH writes → deferred shade reads (compute→compute).
+                VkMemoryBarrier2 pbar{};
+                pbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                pbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                pbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                pbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                pbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                VkDependencyInfo pdep{};
+                pdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                pdep.memoryBarrierCount = 1;
+                pdep.pMemoryBarriers = &pbar;
+                vkCmdPipelineBarrier2(cb, &pdep);
             }
-            // Dispatch A always sees the TRUE sample count: even with
-            // dispatch B off it must blend SKY-minority coverage itself
-            // (every geometry/sky silhouette — the most visible edges).
-            // shadeBActive (flags bit 7) tells it whether to additionally
-            // reserve the geometry-minority weight for dispatch B or fold
-            // it into the dominant surface.
-            const bool shadeBActive = gbufMsaaSamples_ > 1 && gbufShadeBEnabled_;
-            // Clustered light culling: per-cell light lists for the shade's
-            // analytic split (all point/spot lights, no 8-per-type cap).
-            // Barrier: cull's grid writes → shade's reads (compute→compute).
-            if (clusterLightCountThisFrame_ > 0) {
-                deferredShade_->recordClusterBuild(cb, currentFrame,
-                                                   clusterLightCountThisFrame_,
-                                                   regionRenderExt_.width, regionRenderExt_.height);
-                VkMemoryBarrier2 cbar{};
-                cbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                cbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                cbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                cbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                cbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-                VkDependencyInfo cdep{};
-                cdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                cdep.memoryBarrierCount = 1;
-                cdep.pMemoryBarriers = &cbar;
-                vkCmdPipelineBarrier2(cb, &cdep);
-            }
-            // Cloud shadow map: top-down cloud transmittance regenerated each
-            // frame, sampled by the surface/froxel/water sun terms below (moving
-            // cloud shadows on the ground). Runs before the froxel + shade
-            // passes; the barrier makes its write visible to their sampled reads.
-            // Only when clouds are on (off = free / image-identical).
-            if (cloudsEnabled_) {
-                deferredShade_->recordCloudShadow(cb, currentFrame, sampleIndex);
-                VkMemoryBarrier2 csBar{};
-                csBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                csBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                csBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                csBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                csBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                VkDependencyInfo csDep{};
-                csDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                csDep.memoryBarrierCount = 1;
-                csDep.pMemoryBarriers = &csBar;
-                vkCmdPipelineBarrier2(cb, &csDep);
-            }
-            // Froxel volumetrics: inject (RT sun shafts + clustered-light
-            // beams, temporal EMA) + integrate (front-to-back LUT), whenever
-            // a medium exists this frame. Runs AFTER the cluster barrier
-            // (inject reads the cluster grid); the barrier below makes the
-            // LUT visible to the shade's trilinear sample.
-            // Phase 2: the froxels run whenever the unified AIR medium exists
-            // (scene.fog OR setHeightFog — resolved into mediumActiveThisFrame_ by
-            // updateFogUbo) or the explicit clear-air beam density is set.
-            // …AND there is at least one clustered light: froxel_inject only ever
-            // accumulates inside `if (pc.clusterLightCount > 0u)` (the sun term was
-            // deliberately removed — it is owned by deferred_shade's per-pixel
-            // volumetricDirScatter), so with a medium but no point/spot lights the
-            // two dispatches converge the EMA onto an all-zero LUT. The same bool
-            // feeds recordDispatch / recordParticleLight and clears shade flag bit
-            // 256, whose froxelInscatter helpers already early-out to vec3(0) —
-            // so skipping the passes is image-identical, not just cheap.
-            const bool froxelsActive = (mediumActiveThisFrame_ || deferredVolDensity_ > 0.f) &&
-                                       clusterLightCountThisFrame_ > 0;
-            if (froxelsActive) {
-                gpuTimings_->begin(cb, TP_Froxel, currentFrame);
-                deferredShade_->recordFroxels(cb, currentFrame,
-                                              regionRenderExt_.width, regionRenderExt_.height,
-                                              deferredVolFog_, deferredVolDensity_, deferredVolAniso_,
-                                              sampleIndex,
-                                              deferredCamDeltaLen_, deferredCamRotAngle_,
-                                              clusterLightCountThisFrame_);
-                gpuTimings_->end(cb, TP_Froxel, currentFrame);
-                VkMemoryBarrier2 fbar{};
-                fbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                fbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                fbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                fbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                fbar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
-                                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-                VkDependencyInfo fdep{};
-                fdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                fdep.memoryBarrierCount = 1;
-                fdep.pMemoryBarriers = &fbar;
-                vkCmdPipelineBarrier2(cb, &fdep);
-            }
-            // Half-res volumetric cloud march (cloud_march.comp): raymarch the
-            // cloud deck + temporally reproject at half res, off the per-pixel
-            // shade critical path. Only when clouds are enabled (off = free /
-            // image-identical). Reads the resolved G-buffer depth/ids (already
-            // COMPUTE-visible via the raster pass dependency); the barrier below
-            // makes its cloudColor + cloudAux writes visible to the shade's
-            // depth-aware upsample.
-            if (cloudsEnabled_) {
-                deferredShade_->recordCloudMarch(cb, currentFrame,
-                                                 regionRenderExt_.width, regionRenderExt_.height,
-                                                 envImage.mipLevels, sampleIndex,
-                                                 deferredCamDeltaLen_, deferredCamRotAngle_);
-                VkMemoryBarrier2 cldBar{};
-                cldBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                cldBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                cldBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                cldBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                cldBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                VkDependencyInfo cldDep{};
-                cldDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                cldDep.memoryBarrierCount = 1;
-                cldDep.pMemoryBarriers = &cldBar;
-                vkCmdPipelineBarrier2(cb, &cldDep);
-            }
-            gpuTimings_->begin(cb, TP_DeferredShade, currentFrame);
+        }
+        // Dispatch A always sees the TRUE sample count: even with
+        // dispatch B off it must blend SKY-minority coverage itself
+        // (every geometry/sky silhouette — the most visible edges).
+        // shadeBActive (flags bit 7) tells it whether to additionally
+        // reserve the geometry-minority weight for dispatch B or fold
+        // it into the dominant surface.
+        const bool shadeBActive = gbufMsaaSamples_ > 1 && gbufShadeBEnabled_;
+        // Clustered light culling: per-cell light lists for the shade's
+        // analytic split (all point/spot lights, no 8-per-type cap).
+        // Barrier: cull's grid writes → shade's reads (compute→compute).
+        if (clusterLightCountThisFrame_ > 0) {
+            deferredShade_->recordClusterBuild(cb, currentFrame,
+                                               clusterLightCountThisFrame_,
+                                               regionRenderExt_.width, regionRenderExt_.height);
+            VkMemoryBarrier2 cbar{};
+            cbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            cbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            cbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            cbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            cbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+            VkDependencyInfo cdep{};
+            cdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            cdep.memoryBarrierCount = 1;
+            cdep.pMemoryBarriers = &cbar;
+            vkCmdPipelineBarrier2(cb, &cdep);
+        }
+        // Cloud shadow map: top-down cloud transmittance regenerated each
+        // frame, sampled by the surface/froxel/water sun terms below (moving
+        // cloud shadows on the ground). Runs before the froxel + shade
+        // passes; the barrier makes its write visible to their sampled reads.
+        // Only when clouds are on (off = free / image-identical).
+        if (cloudsEnabled_) {
+            deferredShade_->recordCloudShadow(cb, currentFrame, sampleIndex);
+            VkMemoryBarrier2 csBar{};
+            csBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            csBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            csBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            csBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            csBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            VkDependencyInfo csDep{};
+            csDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            csDep.memoryBarrierCount = 1;
+            csDep.pMemoryBarriers = &csBar;
+            vkCmdPipelineBarrier2(cb, &csDep);
+        }
+        // Froxel volumetrics: inject (RT sun shafts + clustered-light
+        // beams, temporal EMA) + integrate (front-to-back LUT), whenever
+        // a medium exists this frame. Runs AFTER the cluster barrier
+        // (inject reads the cluster grid); the barrier below makes the
+        // LUT visible to the shade's trilinear sample.
+        // Phase 2: the froxels run whenever the unified AIR medium exists
+        // (scene.fog OR setHeightFog — resolved into mediumActiveThisFrame_ by
+        // updateFogUbo) or the explicit clear-air beam density is set.
+        // …AND there is at least one clustered light: froxel_inject only ever
+        // accumulates inside `if (pc.clusterLightCount > 0u)` (the sun term was
+        // deliberately removed — it is owned by deferred_shade's per-pixel
+        // volumetricDirScatter), so with a medium but no point/spot lights the
+        // two dispatches converge the EMA onto an all-zero LUT. The same bool
+        // feeds recordDispatch / recordParticleLight and clears shade flag bit
+        // 256, whose froxelInscatter helpers already early-out to vec3(0) —
+        // so skipping the passes is image-identical, not just cheap.
+        const bool froxelsActive = (mediumActiveThisFrame_ || deferredVolDensity_ > 0.f) &&
+                                   clusterLightCountThisFrame_ > 0;
+        if (froxelsActive) {
+            gpuTimings_->begin(cb, TP_Froxel, currentFrame);
+            deferredShade_->recordFroxels(cb, currentFrame,
+                                          regionRenderExt_.width, regionRenderExt_.height,
+                                          deferredVolFog_, deferredVolDensity_, deferredVolAniso_,
+                                          sampleIndex,
+                                          deferredCamDeltaLen_, deferredCamRotAngle_,
+                                          clusterLightCountThisFrame_);
+            gpuTimings_->end(cb, TP_Froxel, currentFrame);
+            VkMemoryBarrier2 fbar{};
+            fbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            fbar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            fbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            fbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            fbar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+                                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+            VkDependencyInfo fdep{};
+            fdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            fdep.memoryBarrierCount = 1;
+            fdep.pMemoryBarriers = &fbar;
+            vkCmdPipelineBarrier2(cb, &fdep);
+        }
+        // Half-res volumetric cloud march (cloud_march.comp): raymarch the
+        // cloud deck + temporally reproject at half res, off the per-pixel
+        // shade critical path. Only when clouds are enabled (off = free /
+        // image-identical). Reads the resolved G-buffer depth/ids (already
+        // COMPUTE-visible via the raster pass dependency); the barrier below
+        // makes its cloudColor + cloudAux writes visible to the shade's
+        // depth-aware upsample.
+        if (cloudsEnabled_) {
+            deferredShade_->recordCloudMarch(cb, currentFrame,
+                                             regionRenderExt_.width, regionRenderExt_.height,
+                                             envImage.mipLevels, sampleIndex,
+                                             deferredCamDeltaLen_, deferredCamRotAngle_);
+            VkMemoryBarrier2 cldBar{};
+            cldBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            cldBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            cldBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            cldBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            cldBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            VkDependencyInfo cldDep{};
+            cldDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            cldDep.memoryBarrierCount = 1;
+            cldDep.pMemoryBarriers = &cldBar;
+            vkCmdPipelineBarrier2(cb, &cldDep);
+        }
+        gpuTimings_->begin(cb, TP_DeferredShade, currentFrame);
+        deferredShade_->recordDispatch(cb, currentFrame,
+                                       regionRenderExt_.width, regionRenderExt_.height,
+                                       envImage.mipLevels, /*shadows=*/true,
+                                       /*ao=*/deferredAO_, sampleIndex,
+                                       emissiveTriCountThisFrame_,
+                                       emissiveTotalPowerThisFrame_,
+                                       fireflyClamp_,
+                                       oceanFineTileSize, oceanFoamTileSize,
+                                       denoiseEnabled_, restirDIEnabled_, deferredVolFog_,
+                                       deferredVolDensity_, deferredVolAniso_,
+                                       deferredStarIntensity_,
+                                       deferredCamDeltaLen_, deferredCamRotAngle_,
+                                       static_cast<float>(glfwGetTime()),
+                                       std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
+                                       gbufMsaaSamples_, /*shadeMode=*/0u, shadeBActive,
+                                       clusterLightCountThisFrame_, froxelsActive,
+                                       preExpBits_, envIsBgColor);
+        gpuTimings_->end(cb, TP_DeferredShade, currentFrame);// pathTraceMs = deferred SHADE only
+
+        // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
+        // Opt-in (gbufShadeBEnabled_, default false) and only when
+        // setGbufferMsaa(2|4) is active. Reads dispatch A's outImage
+        // write (imageLoad accumulate) and the raw MS G-buffer; needs a
+        // compute->compute barrier on outImage between the two
+        // dispatches (RAW: B reads what A just wrote) plus visibility for
+        // the MS attachments (already satisfied — they've been
+        // SHADER_READ_ONLY since the MSAA render pass's own subpass
+        // dependency, unchanged since dispatch A started).
+        if (gbufMsaaSamples_ > 1 && gbufShadeBEnabled_) {
+            VkMemoryBarrier2 shadeBar{};
+            shadeBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            shadeBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            shadeBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            shadeBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            shadeBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            VkDependencyInfo shadeDep{};
+            shadeDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            shadeDep.memoryBarrierCount = 1;
+            shadeDep.pMemoryBarriers    = &shadeBar;
+            vkCmdPipelineBarrier2(cb, &shadeDep);
+
+            gpuTimings_->begin(cb, TP_ShadeB, currentFrame);
             deferredShade_->recordDispatch(cb, currentFrame,
                                            regionRenderExt_.width, regionRenderExt_.height,
                                            envImage.mipLevels, /*shadows=*/true,
@@ -305,164 +262,112 @@ namespace threepp {
                                            deferredCamDeltaLen_, deferredCamRotAngle_,
                                            static_cast<float>(glfwGetTime()),
                                            std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
-                                           gbufMsaaSamples_, /*shadeMode=*/0u, shadeBActive,
+                                           gbufMsaaSamples_, /*shadeMode=*/1u, /*shadeBActive=*/true,
                                            clusterLightCountThisFrame_, froxelsActive,
                                            preExpBits_, envIsBgColor);
-            gpuTimings_->end(cb, TP_DeferredShade, currentFrame);// pathTraceMs = deferred SHADE only
+            gpuTimings_->end(cb, TP_ShadeB, currentFrame);
 
-            // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
-            // Opt-in (gbufShadeBEnabled_, default false) and only when
-            // setGbufferMsaa(2|4) is active. Reads dispatch A's outImage
-            // write (imageLoad accumulate) and the raw MS G-buffer; needs a
-            // compute->compute barrier on outImage between the two
-            // dispatches (RAW: B reads what A just wrote) plus visibility for
-            // the MS attachments (already satisfied — they've been
-            // SHADER_READ_ONLY since the MSAA render pass's own subpass
-            // dependency, unchanged since dispatch A started).
-            if (gbufMsaaSamples_ > 1 && gbufShadeBEnabled_) {
-                VkMemoryBarrier2 shadeBar{};
-                shadeBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                shadeBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                shadeBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                shadeBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                shadeBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                VkDependencyInfo shadeDep{};
-                shadeDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                shadeDep.memoryBarrierCount = 1;
-                shadeDep.pMemoryBarriers    = &shadeBar;
-                vkCmdPipelineBarrier2(cb, &shadeDep);
-
-                gpuTimings_->begin(cb, TP_ShadeB, currentFrame);
-                deferredShade_->recordDispatch(cb, currentFrame,
-                                               regionRenderExt_.width, regionRenderExt_.height,
-                                               envImage.mipLevels, /*shadows=*/true,
-                                               /*ao=*/deferredAO_, sampleIndex,
-                                               emissiveTriCountThisFrame_,
-                                               emissiveTotalPowerThisFrame_,
-                                               fireflyClamp_,
-                                               oceanFineTileSize, oceanFoamTileSize,
-                                               denoiseEnabled_, restirDIEnabled_, deferredVolFog_,
-                                               deferredVolDensity_, deferredVolAniso_,
-                                               deferredStarIntensity_,
-                                               deferredCamDeltaLen_, deferredCamRotAngle_,
-                                               static_cast<float>(glfwGetTime()),
-                                               std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f),
-                                               gbufMsaaSamples_, /*shadeMode=*/1u, /*shadeBActive=*/true,
-                                               clusterLightCountThisFrame_, froxelsActive,
-                                               preExpBits_, envIsBgColor);
-                gpuTimings_->end(cb, TP_ShadeB, currentFrame);
-
-                // Dispatch B's outImage write -> bloom/composite's read.
-                VkMemoryBarrier2 postBar{};
-                postBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                postBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                postBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                postBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                postBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                VkDependencyInfo postDep{};
-                postDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                postDep.memoryBarrierCount = 1;
-                postDep.pMemoryBarriers    = &postBar;
-                vkCmdPipelineBarrier2(cb, &postDep);
-            }
-            // Filter the demodulated lighting channels (GI SVGF + shadow ratio,
-            // reflection gloss reconstruction) and composite them into sceneHdr.
-            // Barrier: the shade wrote sceneHdr + the indirect image (both
-            // GENERAL storage); the filter reads the indirect 5×5 neighbourhood
-            // and read-modify-writes sceneHdr — compute→compute RAW/WAR.
-            if (denoiseEnabled_) {
-                VkMemoryBarrier2 denoiseBar{};
-                denoiseBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                denoiseBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                denoiseBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                denoiseBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                denoiseBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                           VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                VkDependencyInfo denoiseDep{};
-                denoiseDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                denoiseDep.memoryBarrierCount = 1;
-                denoiseDep.pMemoryBarriers = &denoiseBar;
-                vkCmdPipelineBarrier2(cb, &denoiseDep);
-                gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
-                deferredShade_->recordFilterAndComposite(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
-                                                         gbufMsaaSamples_, shadeBActive, preExpBits_);
-                gpuTimings_->end(cb, TP_Denoise, currentFrame);
-            }
-            // Auto-exposure: histogram over the final sceneHdr. sceneHdr writes
-            // (deferred shade + optional denoise) are already visible via the
-            // barriers above; bloom's leading barrier will also make them visible,
-            // so this fits naturally in the gap. recordDispatch() inserts its own
-            // fill→compute barrier to zero the SSBO before sampling.
-            if (autoExposureEnabled_ && autoExposure_) {
-                VkMemoryBarrier2 lumBar{};
-                lumBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                lumBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                lumBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                lumBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                lumBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                VkDependencyInfo lumDep{};
-                lumDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                lumDep.memoryBarrierCount = 1;
-                lumDep.pMemoryBarriers    = &lumBar;
-                vkCmdPipelineBarrier2(cb, &lumDep);
-                autoExposure_->recordDispatch(cb, currentFrame,
-                                             regionRenderExt_.width, regionRenderExt_.height,
-                                             preExpHist_[currentFrame]);// meter un-bakes this
-            }
-            // ── Particle billboard lighting (particle_light.comp) ─────────
-            // One thread per live overlay particle: the deferred light field
-            // at the particle center + the camera→particle fog leg, written
-            // to the per-FIF results SSBO the billboard pass reads. Every
-            // input (TLAS, cluster grid, cloud shadow, froxel LUT, probe SH)
-            // is already compute-visible via the barriers above. The leading
-            // barrier orders this frame's write against the PREVIOUS frame's
-            // vertex-stage reads of the same FIF slot buffer (WAR — cache-
-            // visibility-free execution dependency would do, but keep the
-            // access masks explicit); the trailing one hands the results to
-            // the overlay pass's vertex fetches.
-            if (particleLightCount_ > 0) {
-                VkMemoryBarrier2 preBar{};
-                preBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                preBar.srcStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-                preBar.srcAccessMask = 0;// WAR: execution ordering suffices
-                preBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                preBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                VkDependencyInfo preDep{};
-                preDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                preDep.memoryBarrierCount = 1;
-                preDep.pMemoryBarriers    = &preBar;
-                vkCmdPipelineBarrier2(cb, &preDep);
-
-                deferredShade_->recordParticleLight(
-                        cb, currentFrame, particleIoDescSets_[currentFrame],
-                        particleLightCount_, /*centerBase=*/0u,
-                        clusterLightCountThisFrame_, froxelsActive,
-                        envImage.mipLevels);
-
-                VkMemoryBarrier2 postBar{};
-                postBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                postBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                postBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                postBar.dstStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-                postBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-                VkDependencyInfo postDep{};
-                postDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                postDep.memoryBarrierCount = 1;
-                postDep.pMemoryBarriers    = &postBar;
-                vkCmdPipelineBarrier2(cb, &postDep);
-            }
+            // Dispatch B's outImage write -> bloom/composite's read.
+            VkMemoryBarrier2 postBar{};
+            postBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            postBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            postBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            postBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            postBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            VkDependencyInfo postDep{};
+            postDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            postDep.memoryBarrierCount = 1;
+            postDep.pMemoryBarriers    = &postBar;
+            vkCmdPipelineBarrier2(cb, &postDep);
         }
-    };
+        // Filter the demodulated lighting channels (GI SVGF + shadow ratio,
+        // reflection gloss reconstruction) and composite them into sceneHdr.
+        // Barrier: the shade wrote sceneHdr + the indirect image (both
+        // GENERAL storage); the filter reads the indirect 5×5 neighbourhood
+        // and read-modify-writes sceneHdr — compute→compute RAW/WAR.
+        if (denoiseEnabled_) {
+            VkMemoryBarrier2 denoiseBar{};
+            denoiseBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            denoiseBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            denoiseBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            denoiseBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            denoiseBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            VkDependencyInfo denoiseDep{};
+            denoiseDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            denoiseDep.memoryBarrierCount = 1;
+            denoiseDep.pMemoryBarriers = &denoiseBar;
+            vkCmdPipelineBarrier2(cb, &denoiseDep);
+            gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
+            deferredShade_->recordFilterAndComposite(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
+                                                     gbufMsaaSamples_, shadeBActive, preExpBits_);
+            gpuTimings_->end(cb, TP_Denoise, currentFrame);
+        }
+        // Auto-exposure: histogram over the final sceneHdr. sceneHdr writes
+        // (deferred shade + optional denoise) are already visible via the
+        // barriers above; bloom's leading barrier will also make them visible,
+        // so this fits naturally in the gap. recordDispatch() inserts its own
+        // fill→compute barrier to zero the SSBO before sampling.
+        if (autoExposureEnabled_ && autoExposure_) {
+            VkMemoryBarrier2 lumBar{};
+            lumBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            lumBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            lumBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            lumBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            lumBar.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            VkDependencyInfo lumDep{};
+            lumDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            lumDep.memoryBarrierCount = 1;
+            lumDep.pMemoryBarriers    = &lumBar;
+            vkCmdPipelineBarrier2(cb, &lumDep);
+            autoExposure_->recordDispatch(cb, currentFrame,
+                                         regionRenderExt_.width, regionRenderExt_.height,
+                                         preExpHist_[currentFrame]);// meter un-bakes this
+        }
+        // ── Particle billboard lighting (particle_light.comp) ─────────
+        // One thread per live overlay particle: the deferred light field
+        // at the particle center + the camera→particle fog leg, written
+        // to the per-FIF results SSBO the billboard pass reads. Every
+        // input (TLAS, cluster grid, cloud shadow, froxel LUT, probe SH)
+        // is already compute-visible via the barriers above. The leading
+        // barrier orders this frame's write against the PREVIOUS frame's
+        // vertex-stage reads of the same FIF slot buffer (WAR — cache-
+        // visibility-free execution dependency would do, but keep the
+        // access masks explicit); the trailing one hands the results to
+        // the overlay pass's vertex fetches.
+        if (particleLightCount_ > 0) {
+            VkMemoryBarrier2 preBar{};
+            preBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            preBar.srcStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+            preBar.srcAccessMask = 0;// WAR: execution ordering suffices
+            preBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            preBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            VkDependencyInfo preDep{};
+            preDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            preDep.memoryBarrierCount = 1;
+            preDep.pMemoryBarriers    = &preBar;
+            vkCmdPipelineBarrier2(cb, &preDep);
 
-    VulkanRendererCore::CoreImpl* VulkanRenderer::coreImpl() const {
-        return pimpl_.get();
+            deferredShade_->recordParticleLight(
+                    cb, currentFrame, particleIoDescSets_[currentFrame],
+                    particleLightCount_, /*centerBase=*/0u,
+                    clusterLightCountThisFrame_, froxelsActive,
+                    envImage.mipLevels);
+
+            VkMemoryBarrier2 postBar{};
+            postBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            postBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            postBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            postBar.dstStageMask  = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+            postBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+            VkDependencyInfo postDep{};
+            postDep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            postDep.memoryBarrierCount = 1;
+            postDep.pMemoryBarriers    = &postBar;
+            vkCmdPipelineBarrier2(cb, &postDep);
+        }
     }
-
-    void VulkanRenderer::disposeImpl() { pimpl_.reset(); }
-
-    VulkanRendererCore::~VulkanRendererCore() = default;
 
     VulkanRenderer::VulkanRenderer(Canvas& canvas) {
         canvas.initWindow(GraphicsAPI::Vulkan);
@@ -480,7 +385,7 @@ namespace threepp {
 
     VulkanRenderer::~VulkanRenderer() = default;
 
-    void VulkanRendererCore::render(Object3D& scene, Camera& camera) {
+    void VulkanRenderer::render(Object3D& scene, Camera& camera) {
         const auto frameStart = std::chrono::high_resolution_clock::now();
 
         // ── Lens overscan ───────────────────────────────────────────────────
@@ -541,7 +446,7 @@ namespace threepp {
         // at the next buildTlas one-shot. OverlayPass::record updates the
         // scene/camera matrices itself, so skipping the build here is matrix-safe.
         const bool secondaryOverlayPane =
-                core()->frameState_ != CoreImpl::FrameState::Idle &&
+                core()->frameState_ != Impl::FrameState::Idle &&
                 core()->scissorTest &&
                 core()->scissor.z >= 1.f && core()->scissor.w >= 1.f;
         // Only the deferred-render-bound (perspective-camera) primary
@@ -574,16 +479,16 @@ namespace threepp {
                         .count());
     }
 
-    WindowSize VulkanRendererCore::size() const { return core()->size; }
+    WindowSize VulkanRenderer::size() const { return core()->size; }
 
-    WindowSize VulkanRendererCore::framebufferSize() const {
+    WindowSize VulkanRenderer::framebufferSize() const {
         auto* ctx = core()->ctx.get();
         if (!ctx || ctx->swapchainImages().empty()) return core()->size;
         const VkExtent2D ext = ctx->swapchainExtent();
         return {static_cast<int>(ext.width), static_cast<int>(ext.height)};
     }
 
-    void VulkanRendererCore::setSize(const std::pair<int, int>& s) {
+    void VulkanRenderer::setSize(const std::pair<int, int>& s) {
         core()->size = WindowSize{s.first, s.second};
         core()->needsResize = true;
     }
@@ -593,8 +498,8 @@ namespace threepp {
     // is no logical domain to scale — the ratio is always 1 and the setter is
     // a warned no-op rather than misleading mutable state. Resolution scaling
     // goes through setRenderScale, the one supported lever.
-    float VulkanRendererCore::getTargetPixelRatio() const { return 1.f; }
-    void VulkanRendererCore::setPixelRatio(float) {
+    float VulkanRenderer::getTargetPixelRatio() const { return 1.f; }
+    void VulkanRenderer::setPixelRatio(float) {
         static bool warned = false;
         if (!warned) {
             warned = true;
@@ -604,28 +509,28 @@ namespace threepp {
         }
     }
 
-    void VulkanRendererCore::setViewport(const Vector4& v) { core()->viewport = v; }
-    void VulkanRendererCore::setViewport(int x, int y, int w, int h) {
+    void VulkanRenderer::setViewport(const Vector4& v) { core()->viewport = v; }
+    void VulkanRenderer::setViewport(int x, int y, int w, int h) {
         core()->viewport.set(static_cast<float>(x), static_cast<float>(y),
                              static_cast<float>(w), static_cast<float>(h));
     }
 
-    void VulkanRendererCore::setScissor(const Vector4& v) { core()->scissor = v; }
-    void VulkanRendererCore::setScissor(int x, int y, int w, int h) {
+    void VulkanRenderer::setScissor(const Vector4& v) { core()->scissor = v; }
+    void VulkanRenderer::setScissor(int x, int y, int w, int h) {
         core()->scissor.set(static_cast<float>(x), static_cast<float>(y),
                             static_cast<float>(w), static_cast<float>(h));
     }
-    void VulkanRendererCore::setScissorTest(bool b) { core()->scissorTest = b; }
+    void VulkanRenderer::setScissorTest(bool b) { core()->scissorTest = b; }
 
-    void VulkanRendererCore::setClearColor(const Color& c, float a) {
+    void VulkanRenderer::setClearColor(const Color& c, float a) {
         core()->clearColor = c;
         core()->clearAlpha = a;
     }
-    void VulkanRendererCore::getClearColor(Color& target) const { target = core()->clearColor; }
-    float VulkanRendererCore::getClearAlpha() const { return core()->clearAlpha; }
-    void VulkanRendererCore::setClearAlpha(float a) { core()->clearAlpha = a; }
+    void VulkanRenderer::getClearColor(Color& target) const { target = core()->clearColor; }
+    float VulkanRenderer::getClearAlpha() const { return core()->clearAlpha; }
+    void VulkanRenderer::setClearAlpha(float a) { core()->clearAlpha = a; }
 
-    void VulkanRendererCore::clear(bool, bool, bool) {
+    void VulkanRenderer::clear(bool, bool, bool) {
         static bool warned = false;
         if (!warned) {
             warned = true;
@@ -636,8 +541,8 @@ namespace threepp {
 
     // nullptr = "rendering to the default framebuffer" in three.js semantics —
     // accurate here, the swapchain is the only target this renderer has.
-    RenderTarget* VulkanRendererCore::getRenderTarget() { return nullptr; }
-    void VulkanRendererCore::setRenderTarget(RenderTarget* renderTarget, int, int) {
+    RenderTarget* VulkanRenderer::getRenderTarget() { return nullptr; }
+    void VulkanRenderer::setRenderTarget(RenderTarget* renderTarget, int, int) {
         if (!renderTarget) return;// null = default framebuffer — already the only mode
         static bool warned = false;
         if (!warned) {
@@ -648,15 +553,15 @@ namespace threepp {
         }
     }
 
-    void VulkanRendererCore::writeFramebuffer(const std::filesystem::path& filename) {
+    void VulkanRenderer::writeFramebuffer(const std::filesystem::path& filename) {
         auto ext = filename.extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".bmp") {
-            throw std::runtime_error("VulkanRendererCore::writeFramebuffer: unsupported format " + ext);
+            throw std::runtime_error("VulkanRenderer::writeFramebuffer: unsupported format " + ext);
         }
         const auto pixels = readRGBPixels();
         if (pixels.empty()) {
-            throw std::runtime_error("VulkanRendererCore::writeFramebuffer: no readable framebuffer");
+            throw std::runtime_error("VulkanRenderer::writeFramebuffer: no readable framebuffer");
         }
         const auto sz = size();
         const int  w  = sz.width();
@@ -678,7 +583,7 @@ namespace threepp {
         }
     }
 
-    std::vector<unsigned char> VulkanRendererCore::readRGBPixels() {
+    std::vector<unsigned char> VulkanRenderer::readRGBPixels() {
         auto& impl = *core();
         auto* ctx  = impl.ctx.get();
         if (!ctx || ctx->swapchainImages().empty()) return {};
@@ -819,7 +724,7 @@ namespace threepp {
         return rgb;
     }
 
-    void VulkanRendererCore::setSceneCaptureEnabled(bool enabled) {
+    void VulkanRenderer::setSceneCaptureEnabled(bool enabled) {
         // Scene capture copies the mid-frame swapchain image into a staging
         // buffer (recordSceneCapture) — same TRANSFER_SRC precondition as
         // readRGBPixels. ctx may not exist yet (pre-first-render enable);
@@ -833,11 +738,11 @@ namespace threepp {
         core()->sceneCaptureEnabled_ = enabled;
     }
 
-    bool VulkanRendererCore::sceneCaptureEnabled() const {
+    bool VulkanRenderer::sceneCaptureEnabled() const {
         return core()->sceneCaptureEnabled_;
     }
 
-    std::vector<unsigned char> VulkanRendererCore::readSceneRGBPixels() {
+    std::vector<unsigned char> VulkanRenderer::readSceneRGBPixels() {
         auto& impl = *core();
         if (!impl.sceneCaptureEnabled_ || impl.sceneCaptureBuf_.handle == VK_NULL_HANDLE) {
             return {};
@@ -943,7 +848,7 @@ namespace threepp {
 
     }// namespace
 
-    bool VulkanRendererCore::readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
+    bool VulkanRenderer::readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
                                             int& width, int& height, int& bytesPerPixel) {
         auto& impl = *core();
         auto* ctx  = impl.ctx.get();
@@ -1106,15 +1011,15 @@ namespace threepp {
         return true;
     }
 
-    void VulkanRendererCore::setObjectInstanceId(const Object3D& obj, uint32_t instanceId) {
+    void VulkanRenderer::setObjectInstanceId(const Object3D& obj, uint32_t instanceId) {
         core()->instanceIdOverride_[obj.id] = static_cast<uint16_t>(instanceId & 0xFFFFu);
     }
 
-    void VulkanRendererCore::setObjectClassId(const Object3D& obj, uint32_t classId) {
+    void VulkanRenderer::setObjectClassId(const Object3D& obj, uint32_t classId) {
         core()->classIds_[obj.id] = static_cast<uint16_t>(classId > 255u ? 255u : classId);
     }
 
-    void VulkanRendererCore::setEventCameraEnabled(bool enabled) {
+    void VulkanRenderer::setEventCameraEnabled(bool enabled) {
         auto& impl = *core();
         if (enabled == impl.eventCamEnabled_) return;
         impl.eventCamEnabled_ = enabled;
@@ -1147,11 +1052,11 @@ namespace threepp {
         }
     }
 
-    bool VulkanRendererCore::eventCameraEnabled() const {
+    bool VulkanRenderer::eventCameraEnabled() const {
         return core()->eventCamEnabled_;
     }
 
-    void VulkanRendererCore::setEventCameraParams(const EventCameraParams& p) {
+    void VulkanRenderer::setEventCameraParams(const EventCameraParams& p) {
         auto& impl = *core();
         impl.eventCamParams_.threshold         = p.threshold;
         impl.eventCamParams_.decay             = p.decay;
@@ -1160,7 +1065,7 @@ namespace threepp {
         impl.eventCamParams_.frameTimeUs       = p.frameTimeUs;
     }
 
-    VulkanRendererCore::EventCameraParams VulkanRendererCore::eventCameraParams() const {
+    VulkanRenderer::EventCameraParams VulkanRenderer::eventCameraParams() const {
         const auto& src = core()->eventCamParams_;
         EventCameraParams p{};
         p.threshold         = src.threshold;
@@ -1171,19 +1076,19 @@ namespace threepp {
         return p;
     }
 
-    std::vector<unsigned char> VulkanRendererCore::readEventCameraVisualisation() const {
+    std::vector<unsigned char> VulkanRenderer::readEventCameraVisualisation() const {
         const auto& impl = *core();
         if (!impl.eventCamEnabled_ || !impl.eventCam_) return {};
         return impl.eventCam_->readVisualisation();
     }
 
-    size_t VulkanRendererCore::readEventCameraVisualisationInto(unsigned char* dst, size_t cap) const {
+    size_t VulkanRenderer::readEventCameraVisualisationInto(unsigned char* dst, size_t cap) const {
         const auto& impl = *core();
         if (!impl.eventCamEnabled_ || !impl.eventCam_) return 0;
         return impl.eventCam_->readVisualisationInto(dst, cap);
     }
 
-    size_t VulkanRendererCore::readEventStreamInto(Event* dst, size_t cap,
+    size_t VulkanRenderer::readEventStreamInto(Event* dst, size_t cap,
                                                bool* overflowed) const {
         const auto& impl = *core();
         if (!impl.eventCamEnabled_ || !impl.eventCam_) {
@@ -1200,15 +1105,15 @@ namespace threepp {
                 cap, overflowed);
     }
 
-    void VulkanRendererCore::setEventsOnlyMode(bool enabled) {
+    void VulkanRenderer::setEventsOnlyMode(bool enabled) {
         core()->eventsOnlyMode_ = enabled;
     }
 
-    bool VulkanRendererCore::eventsOnlyMode() const {
+    bool VulkanRenderer::eventsOnlyMode() const {
         return core()->eventsOnlyMode_;
     }
 
-    void VulkanRendererCore::setEventCameraResolution(uint32_t width, uint32_t height) {
+    void VulkanRenderer::setEventCameraResolution(uint32_t width, uint32_t height) {
         auto& impl = *core();
         impl.eventCamUserW_ = width;
         impl.eventCamUserH_ = height;
@@ -1226,128 +1131,128 @@ namespace threepp {
         impl.allocateEventLumaBuffer(w, h);
     }
 
-    std::pair<uint32_t, uint32_t> VulkanRendererCore::eventCameraResolution() const {
+    std::pair<uint32_t, uint32_t> VulkanRenderer::eventCameraResolution() const {
         const auto& impl = *core();
         if (!impl.eventCam_) return {impl.eventCamUserW_, impl.eventCamUserH_};
         return {impl.eventCam_->width(), impl.eventCam_->height()};
     }
 
-    void VulkanRendererCore::dispose() { disposeImpl(); }
+    void VulkanRenderer::dispose() { pimpl_.reset(); }
 
-    void* VulkanRendererCore::nativeInstance() const {
+    void* VulkanRenderer::nativeInstance() const {
         return static_cast<void*>(core()->ctx->instance());
     }
-    void* VulkanRendererCore::nativePhysicalDevice() const {
+    void* VulkanRenderer::nativePhysicalDevice() const {
         return static_cast<void*>(core()->ctx->physicalDevice());
     }
-    void* VulkanRendererCore::nativeDevice() const {
+    void* VulkanRenderer::nativeDevice() const {
         return static_cast<void*>(core()->ctx->device());
     }
-    void* VulkanRendererCore::nativeGraphicsQueue() const {
+    void* VulkanRenderer::nativeGraphicsQueue() const {
         return static_cast<void*>(core()->ctx->graphicsQueue());
     }
-    uint32_t VulkanRendererCore::graphicsQueueFamily() const {
+    uint32_t VulkanRenderer::graphicsQueueFamily() const {
         return core()->ctx->queueFamilies().graphics;
     }
-    uint32_t VulkanRendererCore::nativeSwapchainFormat() const {
+    uint32_t VulkanRenderer::nativeSwapchainFormat() const {
         return static_cast<uint32_t>(core()->ctx->swapchainFormat());
     }
-    uint32_t VulkanRendererCore::imageCount() const {
+    uint32_t VulkanRenderer::imageCount() const {
         return static_cast<uint32_t>(core()->ctx->swapchainImages().size());
     }
 
-    void VulkanRendererCore::setOverlayCallback(std::function<void(void*)> callback) {
+    void VulkanRenderer::setOverlayCallback(std::function<void(void*)> callback) {
         core()->overlayCallback = std::move(callback);
     }
 
-    void VulkanRendererCore::setFogAnisotropy(float g) {
+    void VulkanRenderer::setFogAnisotropy(float g) {
         g = std::max(-0.95f, std::min(g, 0.95f));
         if (g != core()->fogAnisotropy_) {
             core()->fogAnisotropy_ = g;
         }
     }
 
-    float VulkanRendererCore::getFogAnisotropy() const {
+    float VulkanRenderer::getFogAnisotropy() const {
         return core()->fogAnisotropy_;
     }
 
-    void VulkanRendererCore::setFogWaterSurfaceY(float y) {
+    void VulkanRenderer::setFogWaterSurfaceY(float y) {
         core()->fogWaterSurfaceY_ = y;
     }
 
-    void VulkanRendererCore::setUnderwaterMurk(float density, const Color& color) {
+    void VulkanRenderer::setUnderwaterMurk(float density, const Color& color) {
         core()->murkDensity_  = density < 0.f ? 0.f : density;
         core()->murkColor_[0] = color.r;
         core()->murkColor_[1] = color.g;
         core()->murkColor_[2] = color.b;
     }
 
-    std::pair<float, Color> VulkanRendererCore::underwaterMurk() const {
+    std::pair<float, Color> VulkanRenderer::underwaterMurk() const {
         return {core()->murkDensity_,
                 Color(core()->murkColor_[0], core()->murkColor_[1], core()->murkColor_[2])};
     }
 
-    void VulkanRendererCore::setRenderScale(float scale) {
+    void VulkanRenderer::setRenderScale(float scale) {
         core()->setRenderScale(scale);
     }
 
-    float VulkanRendererCore::renderScale() const {
+    float VulkanRenderer::renderScale() const {
         return core()->renderScale_;
     }
 
-    void VulkanRendererCore::setFsr(bool enabled) {
+    void VulkanRenderer::setFsr(bool enabled) {
         core()->setFsr(enabled);
     }
 
-    bool VulkanRendererCore::fsr() const {
+    bool VulkanRenderer::fsr() const {
         return core()->useFsr();
     }
 
-    bool VulkanRendererCore::fsrAvailable() const {
+    bool VulkanRenderer::fsrAvailable() const {
         return core()->fsrAvailable();
     }
 
-    void VulkanRendererCore::setDlss(bool enabled) {
+    void VulkanRenderer::setDlss(bool enabled) {
         core()->setDlss(enabled);
     }
 
-    bool VulkanRendererCore::dlss() const {
+    bool VulkanRenderer::dlss() const {
         return core()->useDlss();
     }
 
-    bool VulkanRendererCore::dlssAvailable() const {
+    bool VulkanRenderer::dlssAvailable() const {
         return core()->dlssAvailable();
     }
 
-    void VulkanRendererCore::setTextureAnisotropy(float aniso) {
+    void VulkanRenderer::setTextureAnisotropy(float aniso) {
         core()->setTextureAnisotropy(aniso);
     }
 
-    float VulkanRendererCore::textureAnisotropy() const {
+    float VulkanRenderer::textureAnisotropy() const {
         return core()->textureAnisoOverride_;
     }
 
-    void VulkanRendererCore::setDenoise(bool enabled) {
+    void VulkanRenderer::setDenoise(bool enabled) {
         core()->denoiseEnabled_ = enabled;
     }
 
-    bool VulkanRendererCore::denoise() const {
+    bool VulkanRenderer::denoise() const {
         return core()->denoiseEnabled_;
     }
 
-    void VulkanRendererCore::setBloomIntensity(float intensity) {
+    void VulkanRenderer::setBloomIntensity(float intensity) {
         core()->bloomIntensity_ = intensity < 0.f ? 0.f : intensity;
     }
 
-    float VulkanRendererCore::bloomIntensity() const {
+    float VulkanRenderer::bloomIntensity() const {
         return core()->bloomIntensity_;
     }
 
-    void VulkanRendererCore::setDeferredDenoise(bool enabled) {
+    void VulkanRenderer::setDeferredDenoise(bool enabled) {
         core()->denoiseEnabled_ = enabled;
     }
 
-    bool VulkanRendererCore::deferredDenoise() const {
+    bool VulkanRenderer::deferredDenoise() const {
         return core()->denoiseEnabled_;
     }
 
@@ -1383,68 +1288,68 @@ namespace threepp {
         return pimpl_->gbufferMsaa();
     }
 
-    void VulkanRendererCore::setBloomThreshold(float threshold) {
+    void VulkanRenderer::setBloomThreshold(float threshold) {
         core()->bloomThreshold_ = threshold < 0.f ? 0.f : threshold;
     }
 
-    float VulkanRendererCore::bloomThreshold() const {
+    float VulkanRenderer::bloomThreshold() const {
         return core()->bloomThreshold_;
     }
 
-    void VulkanRendererCore::setBloomClamp(float clampMax) {
+    void VulkanRenderer::setBloomClamp(float clampMax) {
         core()->bloomClamp_ = clampMax < 0.f ? 0.f : clampMax;
     }
 
-    float VulkanRendererCore::bloomClamp() const {
+    float VulkanRenderer::bloomClamp() const {
         return core()->bloomClamp_;
     }
 
-    void VulkanRendererCore::setSharpenStrength(float amount) {
+    void VulkanRenderer::setSharpenStrength(float amount) {
         core()->sharpenStrength_ = amount < 0.f ? 0.f : amount;
     }
 
-    float VulkanRendererCore::sharpenStrength() const {
+    float VulkanRenderer::sharpenStrength() const {
         return core()->sharpenStrength_;
     }
 
-    void VulkanRendererCore::setMotionBlur(float shutterFraction) {
+    void VulkanRenderer::setMotionBlur(float shutterFraction) {
         auto* c = core();
         const float clamped = std::clamp(shutterFraction, 0.f, 1.f);
         if (c->motionBlurAmount_ == clamped) return;
         c->motionBlurAmount_ = clamped;
     }
 
-    float VulkanRendererCore::motionBlur() const {
+    float VulkanRenderer::motionBlur() const {
         return core()->motionBlurAmount_;
     }
 
-    void VulkanRendererCore::setPhysicalCamera(bool enabled) {
+    void VulkanRenderer::setPhysicalCamera(bool enabled) {
         core()->physicalCamera_ = enabled;
     }
 
-    bool VulkanRendererCore::physicalCamera() const {
+    bool VulkanRenderer::physicalCamera() const {
         return core()->physicalCamera_;
     }
 
-    void VulkanRendererCore::setCameraExposure(float aperture, float shutterSeconds, float iso) {
+    void VulkanRenderer::setCameraExposure(float aperture, float shutterSeconds, float iso) {
         core()->camAperture_ = std::max(aperture, 0.1f);
         core()->camShutter_  = std::max(shutterSeconds, 1e-6f);
         core()->camIso_      = std::max(iso, 1.f);
     }
 
-    VulkanRendererCore::CameraExposure VulkanRendererCore::cameraExposure() const {
+    VulkanRenderer::CameraExposure VulkanRenderer::cameraExposure() const {
         return {core()->camAperture_, core()->camShutter_, core()->camIso_};
     }
 
-    void VulkanRendererCore::setExposureCompensation(float ev) {
+    void VulkanRenderer::setExposureCompensation(float ev) {
         core()->camEvComp_ = std::clamp(ev, -20.f, 20.f);
     }
 
-    float VulkanRendererCore::exposureCompensation() const {
+    float VulkanRenderer::exposureCompensation() const {
         return core()->camEvComp_;
     }
 
-    VulkanRendererCore::CameraIntrinsics VulkanRendererCore::cameraIntrinsics() const {
+    VulkanRenderer::CameraIntrinsics VulkanRenderer::cameraIntrinsics() const {
         auto& impl = *core();
         if (!impl.ctx) return {};
         const VkExtent2D ext = impl.renderExtent();
@@ -1471,25 +1376,25 @@ namespace threepp {
         return k;
     }
 
-    void VulkanRendererCore::setLensDistortion(const LensDistortion& distortion) {
+    void VulkanRenderer::setLensDistortion(const LensDistortion& distortion) {
         core()->lens_ = distortion;
     }
 
-    LensDistortion VulkanRendererCore::lensDistortion() const {
+    LensDistortion VulkanRenderer::lensDistortion() const {
         return core()->lens_;
     }
 
-    void VulkanRendererCore::setLensOverscan(float factor) {
+    void VulkanRenderer::setLensOverscan(float factor) {
         // Below 1 would CROP the rendered field, which no lens does and which
         // would silently discard geometry the user asked to see.
         core()->lensOverscan_ = std::clamp(factor, 1.f, 4.f);
     }
 
-    float VulkanRendererCore::lensOverscan() const {
+    float VulkanRenderer::lensOverscan() const {
         return core()->lensOverscan_;
     }
 
-    void VulkanRendererCore::setSensorNoise(const SensorNoise& noise) {
+    void VulkanRenderer::setSensorNoise(const SensorNoise& noise) {
         auto* c = core();
         // Re-seeding restarts the sequence; changing the sigmas alone must NOT
         // (an interactive slider would otherwise replay frame 0 forever). Same
@@ -1498,39 +1403,39 @@ namespace threepp {
         c->sensorNoise_ = noise;
     }
 
-    VulkanRendererCore::SensorNoise VulkanRendererCore::sensorNoise() const {
+    VulkanRenderer::SensorNoise VulkanRenderer::sensorNoise() const {
         return core()->sensorNoise_;
     }
 
-    void VulkanRendererCore::resetSensorNoise() {
+    void VulkanRenderer::resetSensorNoise() {
         core()->sensorNoiseFrame_ = 0u;
     }
 
-    void VulkanRendererCore::setPhysicalLightUnits(bool enabled) {
+    void VulkanRenderer::setPhysicalLightUnits(bool enabled) {
         core()->physicalLightUnits_ = enabled;
     }
 
-    bool VulkanRendererCore::physicalLightUnits() const {
+    bool VulkanRenderer::physicalLightUnits() const {
         return core()->physicalLightUnits_;
     }
 
-    void VulkanRendererCore::setDepthOfField(bool enabled) {
+    void VulkanRenderer::setDepthOfField(bool enabled) {
         core()->dofEnabled_ = enabled;
     }
 
-    bool VulkanRendererCore::depthOfField() const {
+    bool VulkanRenderer::depthOfField() const {
         return core()->dofEnabled_;
     }
 
-    void VulkanRendererCore::setFocusDistance(float meters) {
+    void VulkanRenderer::setFocusDistance(float meters) {
         core()->focusDistance_ = std::max(meters, 0.01f);
     }
 
-    float VulkanRendererCore::focusDistance() const {
+    float VulkanRenderer::focusDistance() const {
         return core()->focusDistance_;
     }
 
-    void VulkanRendererCore::setOcclusionCulling(bool enabled) {
+    void VulkanRenderer::setOcclusionCulling(bool enabled) {
         auto* c = core();
         if (c->occlusionCullingEnabled_ == enabled) return;
         c->occlusionCullingEnabled_ = enabled;
@@ -1540,21 +1445,21 @@ namespace threepp {
         // idle-wait guarantees), so enabling mid-run engages one frame later.
     }
 
-    bool VulkanRendererCore::occlusionCulling() const {
+    bool VulkanRenderer::occlusionCulling() const {
         return core()->occlusionCullingEnabled_;
     }
 
-    void VulkanRendererCore::setWhiteBalance(float temperatureK, float tint) {
+    void VulkanRenderer::setWhiteBalance(float temperatureK, float tint) {
         core()->wbTemperatureK_ = temperatureK;
         core()->wbTint_ = tint;
         if (core()->post_) core()->post_->setWhiteBalance(temperatureK, tint);
     }
 
-    std::pair<float, float> VulkanRendererCore::whiteBalance() const {
+    std::pair<float, float> VulkanRenderer::whiteBalance() const {
         return {core()->wbTemperatureK_, core()->wbTint_};
     }
 
-    void VulkanRendererCore::setColorGrade(const ColorGrade& grade) {
+    void VulkanRenderer::setColorGrade(const ColorGrade& grade) {
         if (!core()->post_) return;
         vulkan::PostComposite::ColorGrade g;
         g.lift[0]  = grade.lift.x;  g.lift[1]  = grade.lift.y;  g.lift[2]  = grade.lift.z;
@@ -1565,25 +1470,25 @@ namespace threepp {
         core()->post_->setColorGrade(g);
     }
 
-    void VulkanRendererCore::setFireflyClamp(float cap) {
+    void VulkanRenderer::setFireflyClamp(float cap) {
         core()->fireflyClamp_ = (cap <= 0.0f) ? 1e30f : cap;
     }
 
-    float VulkanRendererCore::fireflyClamp() const {
+    float VulkanRenderer::fireflyClamp() const {
         const float v = core()->fireflyClamp_;
         return (v > 1e20f) ? 0.0f : v;
     }
 
-    void VulkanRendererCore::setSunAngularRadius(float degrees) {
+    void VulkanRenderer::setSunAngularRadius(float degrees) {
         core()->sunAngularRadiusDeg_ = std::max(0.f, degrees);
     }
 
-    float VulkanRendererCore::sunAngularRadius() const {
+    float VulkanRenderer::sunAngularRadius() const {
         return core()->sunAngularRadiusDeg_;
     }
 
-    VulkanRendererCore::SoftBodyInteropHandle
-    VulkanRendererCore::enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy) {
+    VulkanRenderer::SoftBodyInteropHandle
+    VulkanRenderer::enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy) {
         return core()->enableSoftBodyInterop(mesh, std::move(deviceCopy));
     }
 
@@ -1755,11 +1660,11 @@ namespace threepp {
         }
     }
 
-    void VulkanRendererCore::disableSoftBodyInterop(const Mesh& mesh) {
+    void VulkanRenderer::disableSoftBodyInterop(const Mesh& mesh) {
         core()->disableSoftBodyInterop(mesh);
     }
 
-    void VulkanRendererCore::setRestirDIEnabled(bool enabled) {
+    void VulkanRenderer::setRestirDIEnabled(bool enabled) {
         if (core()->restirDIEnabled_ == enabled) return;
         core()->restirDIEnabled_ = enabled;
         // ReSTIR is unbiased, so toggling it changes the convergence rate, not
@@ -1771,58 +1676,58 @@ namespace threepp {
         if (core()->sceneBuilt_) core()->resetAccumulation();
     }
 
-    bool VulkanRendererCore::restirDIEnabled() const {
+    bool VulkanRenderer::restirDIEnabled() const {
         return core()->restirDIEnabled_;
     }
 
-    void VulkanRendererCore::setNormalMapToksvig(bool enabled) {
+    void VulkanRenderer::setNormalMapToksvig(bool enabled) {
         core()->normalMapToksvig_ = enabled;
     }
 
-    bool VulkanRendererCore::normalMapToksvig() const {
+    bool VulkanRenderer::normalMapToksvig() const {
         return core()->normalMapToksvig_;
     }
 
-    void VulkanRendererCore::setAutoLod(bool enabled) {
+    void VulkanRenderer::setAutoLod(bool enabled) {
         core()->autoLod_ = enabled;
     }
 
-    bool VulkanRendererCore::autoLod() const {
+    bool VulkanRenderer::autoLod() const {
         return core()->autoLod_;
     }
 
-    void VulkanRendererCore::setAutoLodError(float px) {
+    void VulkanRenderer::setAutoLodError(float px) {
         core()->lodErrorPx_ = std::clamp(px, 0.1f, 8.f);
     }
 
-    float VulkanRendererCore::autoLodError() const {
+    float VulkanRenderer::autoLodError() const {
         return core()->lodErrorPx_;
     }
 
-    VulkanRendererCore::AutoLodStats VulkanRendererCore::autoLodStats() const {
+    VulkanRenderer::AutoLodStats VulkanRenderer::autoLodStats() const {
         return core()->autoLodStats_;
     }
 
-    VulkanRendererCore::FrameTimings VulkanRendererCore::lastFrameTimings() const {
+    VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {
         return core()->gpuTimings_->timings();
     }
 
-    void VulkanRendererCore::scanLidar(const std::vector<LidarBeam>& beams,
+    void VulkanRenderer::scanLidar(const std::vector<LidarBeam>& beams,
                                    std::vector<LidarReturn>& results,
                                    const LidarParams& params) {
         core()->scanLidar(beams, results, params);
     }
 
-    void VulkanRendererCore::setOverlayLayer(int channel) {
+    void VulkanRenderer::setOverlayLayer(int channel) {
         core()->overlayLayer_ = (channel < 0 || channel > 31) ? -1 : channel;
     }
 
-    int VulkanRendererCore::overlayLayer() const {
+    int VulkanRenderer::overlayLayer() const {
         return core()->overlayLayer_;
     }
 
-    void VulkanRendererCore::setHybridDebugView(int view) {
-        using V = CoreImpl::HybridDebugView;
+    void VulkanRenderer::setHybridDebugView(int view) {
+        using V = Impl::HybridDebugView;
         switch (view) {
             case 1:  core()->hybridDebugView_ = V::Normal; break;
             case 2:  core()->hybridDebugView_ = V::Motion; break;
@@ -1833,8 +1738,8 @@ namespace threepp {
         }
     }
 
-    int VulkanRendererCore::hybridDebugView() const {
-        using V = CoreImpl::HybridDebugView;
+    int VulkanRenderer::hybridDebugView() const {
+        using V = Impl::HybridDebugView;
         switch (core()->hybridDebugView_) {
             case V::Normal: return 1;
             case V::Motion: return 2;

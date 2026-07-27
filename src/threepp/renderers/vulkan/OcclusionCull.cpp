@@ -221,7 +221,7 @@ namespace threepp::vulkan {
             retireFn_(std::move(b));
         } else {
             // No queue wired (defensive fallback): a full device drain makes the
-            // inline free safe. CoreImpl always wires the callback in practice.
+            // inline free safe. Impl always wires the callback in practice.
             vkDeviceWaitIdle(ctx_.device());
             destroyBuffer(ctx_.allocator(), b);
         }

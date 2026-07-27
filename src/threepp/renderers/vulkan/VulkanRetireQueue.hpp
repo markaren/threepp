@@ -20,7 +20,7 @@
 // this device (VulkanContext.cpp), a descriptor SET referencing a resource may
 // not be updated while a command buffer using it is in flight either; the
 // retire queue only covers RESOURCE lifetime — descriptor-set rewrites are
-// deferred separately via per-frame dirty flags in CoreImpl.
+// deferred separately via per-frame dirty flags in Impl.
 //
 // ── Shutdown / teardown ──────────────────────────────────────────────────────
 // Every remaining vkDeviceWaitIdle in the renderer (shutdown, swapchain

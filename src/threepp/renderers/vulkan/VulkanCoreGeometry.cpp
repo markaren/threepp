@@ -64,7 +64,7 @@ namespace {
 
 namespace threepp {
 
-std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::CoreImpl::buildBlasFor(const BufferGeometry& geom, bool allowPacked) {
+std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::buildBlasFor(const BufferGeometry& geom, bool allowPacked) {
             // Escape hatch for A/B triage: THREEPP_NO_PACK=1 forces every
             // attribute buffer back to tightly-packed float, same binary.
             static const bool noPack = std::getenv("THREEPP_NO_PACK") != nullptr;
@@ -416,7 +416,7 @@ std::unique_ptr<VulkanRendererCore::CoreImpl::BlasRecord> VulkanRendererCore::Co
 // keyed lookup the shaders already do). The build itself is DEFERRED into
 // `pending` — drainLodResults batches a whole frame's builds into one
 // one-shot submit via flushLodLevelBuilds.
-bool VulkanRendererCore::CoreImpl::buildLodLevelFor(BlasRecord& rec,
+bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
                                                      const geometrylod::Level& level,
                                                      BlasRecord::LodLevel& out,
                                                      std::vector<LodPendingBuild>& pending) {
@@ -537,7 +537,7 @@ bool VulkanRendererCore::CoreImpl::buildLodLevelFor(BlasRecord& rec,
             return true;
         }
 
-void VulkanRendererCore::CoreImpl::flushLodLevelBuilds(std::vector<LodPendingBuild>& pending) {
+void VulkanRenderer::Impl::flushLodLevelBuilds(std::vector<LodPendingBuild>& pending) {
             if (pending.empty()) return;
             const uint32_t N = static_cast<uint32_t>(pending.size());
             // The build-info structs must stay pointer-stable until the GPU
@@ -596,7 +596,7 @@ void VulkanRendererCore::CoreImpl::flushLodLevelBuilds(std::vector<LodPendingBui
 // so a fresh job gets queued next time the (now-different) geometry is seen
 // as eligible. Stale/failed results don't count against the budget — they
 // create no resources.
-void VulkanRendererCore::CoreImpl::drainLodResults() {
+void VulkanRenderer::Impl::drainLodResults() {
             constexpr uint32_t kMaxGeomsPerFrame = 16;
             constexpr uint64_t kMaxNewBytesPerFrame = 8ull * 1024ull * 1024ull;
 
@@ -678,7 +678,7 @@ void VulkanRendererCore::CoreImpl::drainLodResults() {
             flushLodLevelBuilds(pending);
         }
 
-void VulkanRendererCore::CoreImpl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState& st) {
+void VulkanRenderer::Impl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState& st) {
             if (!st.blas || !sm.skeleton || st.boneCount == 0) return;
 
             // Recompute per-bone matrix = bones[b]->matrixWorld * boneInverse[b].
@@ -726,7 +726,7 @@ void VulkanRendererCore::CoreImpl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMe
             pendingSkinnedRebuilds_.push_back(&st);
         }
 
-void VulkanRendererCore::CoreImpl::refreshTetBlas(Mesh& m, TetMeshState& st) {
+void VulkanRenderer::Impl::refreshTetBlas(Mesh& m, TetMeshState& st) {
             if (!st.blas) return;
             // Zero-copy interop: the registered CUDA device→device copy writes the
             // deformed tet positions straight into the exported binding-6 buffer —
@@ -748,7 +748,7 @@ void VulkanRendererCore::CoreImpl::refreshTetBlas(Mesh& m, TetMeshState& st) {
             pendingTetRebuilds_.push_back(&st);
         }
 
-void VulkanRendererCore::CoreImpl::rewriteTetPosBinding(TetMeshState& st, VkBuffer buf) {
+void VulkanRenderer::Impl::rewriteTetPosBinding(TetMeshState& st, VkBuffer buf) {
             VkDescriptorBufferInfo bi{};
             bi.buffer = buf;
             bi.offset = 0;
@@ -763,7 +763,7 @@ void VulkanRendererCore::CoreImpl::rewriteTetPosBinding(TetMeshState& st, VkBuff
             vkUpdateDescriptorSets(ctx->device(), 1, &wr, 0, nullptr);
         }
 
-void VulkanRendererCore::CoreImpl::disableSoftBodyInterop(const Mesh& mesh) {
+void VulkanRenderer::Impl::disableSoftBodyInterop(const Mesh& mesh) {
             auto it = tetMeshStates.find(&mesh);
             if (it == tetMeshStates.end()) return;
             auto& st = *it->second;
@@ -779,7 +779,7 @@ void VulkanRendererCore::CoreImpl::disableSoftBodyInterop(const Mesh& mesh) {
             st.tetPosExternalCopy = nullptr;
         }
 
-void VulkanRendererCore::CoreImpl::refreshGeomBlasBatch(const std::vector<VulkanRendererCore::CoreImpl::GeomRefreshOp>& ops) {
+void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer::Impl::GeomRefreshOp>& ops) {
             if (ops.empty()) return;
 
             // Phase A — validate positions are finite. Non-finite values cause
@@ -999,7 +999,7 @@ void VulkanRendererCore::CoreImpl::refreshGeomBlasBatch(const std::vector<Vulkan
             endAndSubmitOneShot(cb, "refreshGeomBlasBatch (BLAS)");
         }
 
-void VulkanRendererCore::CoreImpl::refreshMorphedBlas(Mesh& mesh, MorphedMeshState& st) {
+void VulkanRenderer::Impl::refreshMorphedBlas(Mesh& mesh, MorphedMeshState& st) {
             cpuMorphBlend(mesh, st.blendedPositions, st.blendedNormals);
             if (st.blendedPositions.empty() || !st.blas) return;
 
@@ -1083,7 +1083,7 @@ void VulkanRendererCore::CoreImpl::refreshMorphedBlas(Mesh& mesh, MorphedMeshSta
             if (morphObj) st.prevInfluences = morphObj->morphTargetInfluences();
         }
 
-void VulkanRendererCore::CoreImpl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds) {
+void VulkanRenderer::Impl::recordDisplacedDeform(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds) {
 
             // (0) Live wind. The Phillips h0 pass is normally one-shot, but
             // windSpeed/windTheta are plain Params fields — when they drift
@@ -1460,7 +1460,7 @@ void VulkanRendererCore::CoreImpl::recordDisplacedDeform(VkCommandBuffer cb, Dis
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &build, &pRange);
         }
 
-void VulkanRendererCore::CoreImpl::mirrorDisplacedHeightfields(DisplacedMesh& dm, DisplacedMeshState& st) {
+void VulkanRenderer::Impl::mirrorDisplacedHeightfields(DisplacedMesh& dm, DisplacedMeshState& st) {
             // Nothing has ever called sampleHeight() on this mesh → the GPU
             // copies were skipped and there is nothing (correct) to mirror.
             // heightCopiesEverRecorded additionally guards the first opted-in
@@ -1491,14 +1491,14 @@ void VulkanRendererCore::CoreImpl::mirrorDisplacedHeightfields(DisplacedMesh& dm
             }
         }
 
-void VulkanRendererCore::CoreImpl::refreshDisplacedBlas(DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds) {
+void VulkanRenderer::Impl::refreshDisplacedBlas(DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds) {
             VkCommandBuffer cb = beginOneShot();
             recordDisplacedDeform(cb, dm, st, elapsedSeconds);
             endAndSubmitOneShot(cb);
             mirrorDisplacedHeightfields(dm, st);
         }
 
-void VulkanRendererCore::CoreImpl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, GrassMeshState& st) {
+void VulkanRenderer::Impl::recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, GrassMeshState& st) {
             vulkan::GrassWindPipeline::PushConstants pc{};
             pc.posOut       = st.blas->vertex.address;
             pc.restIn       = st.restPos.address;
@@ -1598,13 +1598,13 @@ void VulkanRendererCore::CoreImpl::recordGrassDeform(VkCommandBuffer cb, GrassMe
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &build, &pRange);
         }
 
-void VulkanRendererCore::CoreImpl::refreshGrassBlas(GrassMesh& gm, GrassMeshState& st, float /*elapsedSeconds*/) {
+void VulkanRenderer::Impl::refreshGrassBlas(GrassMesh& gm, GrassMeshState& st, float /*elapsedSeconds*/) {
             VkCommandBuffer cb = beginOneShot();
             recordGrassDeform(cb, gm, st);
             endAndSubmitOneShot(cb, "grass prime");
         }
 
-void VulkanRendererCore::CoreImpl::buildTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances) {
+void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances) {
             const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
             const VkDeviceSize instBytes = std::max<VkDeviceSize>(
                     instanceCount * sizeof(VkAccelerationStructureInstanceKHR),
@@ -1683,7 +1683,7 @@ void VulkanRendererCore::CoreImpl::buildTlas(const std::vector<VkAccelerationStr
             destroyBuffer(ctx->allocator(), scratch);
         }
 
-void VulkanRendererCore::CoreImpl::recordTlasRefit(VkCommandBuffer cb,
+void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
                              const std::vector<VkAccelerationStructureInstanceKHR>& instances,
                              bool fullBuild) {
             const uint32_t instanceCount = static_cast<uint32_t>(instances.size());

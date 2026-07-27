@@ -4,7 +4,7 @@
 
 namespace threepp {
 
-void VulkanRendererCore::CoreImpl::ensureParticleWhiteTexture() {
+void VulkanRenderer::Impl::ensureParticleWhiteTexture() {
             if (particleWhiteTex_.view != VK_NULL_HANDLE) return;
             const uint8_t white[4] = {255, 255, 255, 255};
             particleWhiteTex_ = createSampledImage2D(
@@ -15,7 +15,7 @@ void VulkanRendererCore::CoreImpl::ensureParticleWhiteTexture() {
                     "particleWhiteDefault");
         }
 
-void VulkanRendererCore::CoreImpl::destroyParticleGeomRec(ParticleGeomRec& rec) {
+void VulkanRenderer::Impl::destroyParticleGeomRec(ParticleGeomRec& rec) {
             destroyBuffer(ctx->allocator(), rec.position);
             destroyBuffer(ctx->allocator(), rec.normal);
             destroyBuffer(ctx->allocator(), rec.uv);
@@ -23,7 +23,7 @@ void VulkanRendererCore::CoreImpl::destroyParticleGeomRec(ParticleGeomRec& rec) 
             destroyBuffer(ctx->allocator(), rec.index);
         }
 
-void VulkanRendererCore::CoreImpl::createDefaultEnvImage() {
+void VulkanRenderer::Impl::createDefaultEnvImage() {
             const float pixels[4] = {0.f, 0.f, 0.f, 1.f};
             envImage = createSampledImage2D(
                     1, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
@@ -62,7 +62,7 @@ static VkSampler createMaterialSamplerWithAniso(VkDevice device, float aniso,
             return out;
         }
 
-void VulkanRendererCore::CoreImpl::createTextureSampler() {
+void VulkanRenderer::Impl::createTextureSampler() {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
             const float maxAniso = std::min(16.0f, props.limits.maxSamplerAnisotropy);
@@ -83,7 +83,7 @@ void VulkanRendererCore::CoreImpl::createTextureSampler() {
             }
         }
 
-VkSampler VulkanRendererCore::CoreImpl::materialSampler(bool clampUV) {
+VkSampler VulkanRenderer::Impl::materialSampler(bool clampUV) {
             // AUTO policy: 16x anisotropic, jittered or not. An earlier policy
             // dropped to isotropic under a jittered raster (TAA/DLSS/FSR) on
             // the theory that aniso re-sharpened grazing-angle content into
@@ -113,14 +113,14 @@ VkSampler VulkanRendererCore::CoreImpl::materialSampler(bool clampUV) {
             return clampUV ? textureSamplerCustomClamp_ : textureSamplerCustom_;
         }
 
-void VulkanRendererCore::CoreImpl::setTextureAnisotropy(float aniso) {
+void VulkanRenderer::Impl::setTextureAnisotropy(float aniso) {
             const float clamped = aniso <= 0.f ? 0.f : std::clamp(aniso, 1.0f, 16.0f);
             if (clamped == textureAnisoOverride_) return;
             textureAnisoOverride_ = clamped;
             markMaterialSamplerDirty();
         }
 
-void VulkanRendererCore::CoreImpl::createDefaultMaterialTexture() {
+void VulkanRenderer::Impl::createDefaultMaterialTexture() {
             const uint8_t white[4] = {255, 255, 255, 255};
             Image2D tex = createSampledImage2D(
                     1, 1, VK_FORMAT_R8G8B8A8_UNORM,
@@ -134,7 +134,7 @@ void VulkanRendererCore::CoreImpl::createDefaultMaterialTexture() {
             materialTextures.push_back(tex);
         }
 
-int32_t VulkanRendererCore::CoreImpl::ensureMaterialTexture(const std::shared_ptr<Texture>& texSp) {
+int32_t VulkanRenderer::Impl::ensureMaterialTexture(const std::shared_ptr<Texture>& texSp) {
             if (!texSp) return -1;
             const Texture* tex = texSp.get();
             if (auto it = textureCache.find(tex); it != textureCache.end()) {
@@ -180,7 +180,7 @@ int32_t VulkanRendererCore::CoreImpl::ensureMaterialTexture(const std::shared_pt
             return static_cast<int32_t>(slot);
         }
 
-void VulkanRendererCore::CoreImpl::refreshDirtyMaterialTextures() {
+void VulkanRenderer::Impl::refreshDirtyMaterialTextures() {
             bool any = false;
             for (auto& kv : textureCache) {
                 const auto sp = kv.second.ref.lock();
@@ -221,7 +221,7 @@ void VulkanRendererCore::CoreImpl::refreshDirtyMaterialTextures() {
             rasterMatTexValid_.fill(0);
         }
 
-std::vector<uint8_t> VulkanRendererCore::CoreImpl::generateBlueNoiseTile_() {
+std::vector<uint8_t> VulkanRenderer::Impl::generateBlueNoiseTile_() {
             constexpr int N = 64;
             constexpr int M = N * N;
             constexpr float kSigma = 1.5f;
@@ -346,7 +346,7 @@ std::vector<uint8_t> VulkanRendererCore::CoreImpl::generateBlueNoiseTile_() {
             return tile;
         }
 
-void VulkanRendererCore::CoreImpl::createBlueNoiseImage_() {
+void VulkanRenderer::Impl::createBlueNoiseImage_() {
             const auto tile = generateBlueNoiseTile_();
             blueNoiseImage = createSampledImage2D(
                     /*w*/ 64u, /*h*/ 64u,
@@ -358,7 +358,7 @@ void VulkanRendererCore::CoreImpl::createBlueNoiseImage_() {
                     "blueNoiseImage (64x64 void-and-cluster tile)");
         }
 
-std::vector<unsigned char> VulkanRendererCore::CoreImpl::generateFoamDetailTile_(int res) {
+std::vector<unsigned char> VulkanRenderer::Impl::generateFoamDetailTile_(int res) {
             auto hashf = [](int x, int y) {
                 uint32_t h = static_cast<uint32_t>(x) * 374761393u +
                              static_cast<uint32_t>(y) * 668265263u;
@@ -404,7 +404,7 @@ std::vector<unsigned char> VulkanRendererCore::CoreImpl::generateFoamDetailTile_
             return px;
         }
 
-void VulkanRendererCore::CoreImpl::createFoamDetailImage_() {
+void VulkanRenderer::Impl::createFoamDetailImage_() {
             constexpr int kRes = 512;
             const auto tile = generateFoamDetailTile_(kRes);
             // LINEAR + size>1 → createSampledImage2D builds the full mip
@@ -419,7 +419,7 @@ void VulkanRendererCore::CoreImpl::createFoamDetailImage_() {
                     "foamDetail (512x512 RG8 bubbles+lace, mipped)");
         }
 
-void VulkanRendererCore::CoreImpl::createOceanFineDummy_() {
+void VulkanRenderer::Impl::createOceanFineDummy_() {
             const float zero = 0.0f;
             oceanFineHeightDummy = createSampledImage2D(
                     /*w*/ 1u, /*h*/ 1u,
@@ -455,7 +455,7 @@ void VulkanRendererCore::CoreImpl::createOceanFineDummy_() {
             oceanFineTileSize      = 0.0f;
         }
 
-void VulkanRendererCore::CoreImpl::createOceanFoamDummy_() {
+void VulkanRenderer::Impl::createOceanFoamDummy_() {
             const float zero = 0.0f;
             oceanFoamDummy = createSampledImage2D(
                     /*w*/ 1u, /*h*/ 1u,
@@ -490,7 +490,7 @@ void VulkanRendererCore::CoreImpl::createOceanFoamDummy_() {
             oceanFoamTileSize = 0.0f;
         }
 
-bool VulkanRendererCore::CoreImpl::refreshEnvTextureFromScene(Object3D& scene) {
+bool VulkanRenderer::Impl::refreshEnvTextureFromScene(Object3D& scene) {
             auto* sc = dynamic_cast<Scene*>(&scene);
             std::shared_ptr<Texture> tex;
             if (sc) {

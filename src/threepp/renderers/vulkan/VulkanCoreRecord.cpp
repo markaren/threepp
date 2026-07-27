@@ -3,7 +3,7 @@
 
 namespace threepp {
 
-void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
+void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
 
             // ── Split-screen pane region ───────────────────────────────────
             // When scissorTest is on, clip the deferred-render pane to the
@@ -2085,7 +2085,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
             // closes the command buffer, and submits.
         }
 
-void VulkanRendererCore::CoreImpl::recordSceneCapture(VkCommandBuffer cb, uint32_t imageIndex) {
+void VulkanRenderer::Impl::recordSceneCapture(VkCommandBuffer cb, uint32_t imageIndex) {
             const VkExtent2D ext = ctx->swapchainExtent();
             if (ext.width == 0 || ext.height == 0) return;
             // Copying out of the swapchain requires it to have been created
@@ -2159,7 +2159,7 @@ void VulkanRendererCore::CoreImpl::recordSceneCapture(VkCommandBuffer cb, uint32
                                  0, 0, nullptr, 0, nullptr, 1, &toGeneral);
         }
 
-void VulkanRendererCore::CoreImpl::createEventShadePipeline() {
+void VulkanRenderer::Impl::createEventShadePipeline() {
             if (eventShadePipeline_ != VK_NULL_HANDLE) return;
 
             // 5 bindings: gbufNormal, gbufIds (combined image samplers),
@@ -2267,7 +2267,7 @@ void VulkanRendererCore::CoreImpl::createEventShadePipeline() {
                   "vkAllocateDescriptorSets(event_shade)");
         }
 
-void VulkanRendererCore::CoreImpl::allocateEventLumaBuffer(uint32_t w, uint32_t h) {
+void VulkanRenderer::Impl::allocateEventLumaBuffer(uint32_t w, uint32_t h) {
             if (eventLumaW_ == w && eventLumaH_ == h && eventLumaBuf_.handle != VK_NULL_HANDLE) return;
             destroyBuffer(ctx->allocator(), eventLumaBuf_);
             const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
@@ -2280,7 +2280,7 @@ void VulkanRendererCore::CoreImpl::allocateEventLumaBuffer(uint32_t w, uint32_t 
             eventLumaH_ = h;
         }
 
-void VulkanRendererCore::CoreImpl::recordEventShade(VkCommandBuffer cb, uint32_t frame) {
+void VulkanRenderer::Impl::recordEventShade(VkCommandBuffer cb, uint32_t frame) {
             if (eventShadePipeline_ == VK_NULL_HANDLE ||
                 eventLumaBuf_.handle == VK_NULL_HANDLE) return;
 
@@ -2388,7 +2388,7 @@ void VulkanRendererCore::CoreImpl::recordEventShade(VkCommandBuffer cb, uint32_t
                                   0, 0, nullptr, 1, &toDetect, 0, nullptr);
         }
 
-void VulkanRendererCore::CoreImpl::recordOverlayAndPresentTransition(VkCommandBuffer cb, uint32_t imageIndex) {
+void VulkanRenderer::Impl::recordOverlayAndPresentTransition(VkCommandBuffer cb, uint32_t imageIndex) {
             const VkImage    img = ctx->swapchainImages()[imageIndex];
             const VkExtent2D ext = ctx->swapchainExtent();
             VkDependencyInfo dep{};

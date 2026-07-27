@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    bool VulkanRendererCore::CoreImpl::ensureDrawInfoCapacity(uint32_t frame, VkDeviceSize neededBytes) {
+    bool VulkanRenderer::Impl::ensureDrawInfoCapacity(uint32_t frame, VkDeviceSize neededBytes) {
         if (neededBytes <= drawInfoBufferCapacity[frame]) return false;
         const VkDeviceSize newCap = std::max<VkDeviceSize>(
                 neededBytes, drawInfoBufferCapacity[frame] * 2u);
@@ -25,7 +25,7 @@ namespace threepp {
         return true;
     }
 
-    bool VulkanRendererCore::CoreImpl::ensureIndirectCmdCapacity(uint32_t frame, VkDeviceSize neededBytes) {
+    bool VulkanRenderer::Impl::ensureIndirectCmdCapacity(uint32_t frame, VkDeviceSize neededBytes) {
         if (neededBytes <= indirectCmdBufferCapacity[frame]) return false;
         const VkDeviceSize newCap = std::max<VkDeviceSize>(
                 neededBytes, indirectCmdBufferCapacity[frame] * 2u);
@@ -59,7 +59,7 @@ namespace threepp {
     // so the shader fetches `draws[gl_InstanceIndex]`. This trick
     // sidesteps the gl_DrawIDARB-resets-per-call issue without
     // needing dynamic-offset descriptors or per-call push constants.
-    void VulkanRendererCore::CoreImpl::buildIndirectDrawData(uint32_t frame) {
+    void VulkanRenderer::Impl::buildIndirectDrawData(uint32_t frame) {
         for (auto& g : indirectGroups_) { g.offset = 0; g.count = 0; }
         indirectTotalDraws_ = 0;
 
@@ -141,8 +141,7 @@ namespace threepp {
             // Blend decals (alphaCutoff == -2 sentinel from materialFromMesh)
             // go to bucket [3]: drawn last, with the albedo-blend pipeline.
             // The deferred shade reads the blended albedo attachment.
-            const bool isDecal = decalsEnabled() &&
-                                 (i < matDescsCached_.size()) &&
+            const bool isDecal = (i < matDescsCached_.size()) &&
                                  (matDescsCached_[i].alphaCutoff == -2.0f);
             const int b = isDecal ? 3 : bucketOf(wantCull);
 
@@ -381,7 +380,7 @@ namespace threepp {
     // albedo-blend pipeline). Replaces the prior per-mesh draw loop —
     // see buildIndirectDrawData above for how the GPU buffers are
     // populated.
-    void VulkanRendererCore::CoreImpl::recordRasterGbufPass(VkCommandBuffer cb, uint32_t frame) {
+    void VulkanRenderer::Impl::recordRasterGbufPass(VkCommandBuffer cb, uint32_t frame) {
         const auto& g = rasterGbufs[frame];
         // MSAA path: rasterize into the MS framebuffer/render pass/
         // pipelines (RasterGbufImages::*MS + rasterGbufRenderPassMS);
@@ -403,7 +402,7 @@ namespace threepp {
     // `indirectBuffer` supplies the VkDrawIndirectCommand records the
     // bucket groups index into (the two-phase path swaps in the compute-
     // written phase buffers; offsets/counts are identical by design).
-    void VulkanRendererCore::CoreImpl::recordRasterGbufPassInternal(VkCommandBuffer cb, uint32_t frame,
+    void VulkanRenderer::Impl::recordRasterGbufPassInternal(VkCommandBuffer cb, uint32_t frame,
                                       VkRenderPass renderPass, VkFramebuffer fb,
                                       bool useMsaa, VkBuffer indirectBuffer,
                                       bool clear) {
@@ -495,7 +494,7 @@ namespace threepp {
     }
 
     // Lazily create the debug_resolve compute pipeline + descriptor set.
-    void VulkanRendererCore::CoreImpl::createDebugResolvePipeline() {
+    void VulkanRenderer::Impl::createDebugResolvePipeline() {
         if (debugResolvePipeline_ != VK_NULL_HANDLE) return;
 
         // 6 bindings: normal/motion/ids/albedo (combined image samplers;
@@ -594,7 +593,7 @@ namespace threepp {
     // freshly-acquired swapchain image to GENERAL for the storage write
     // and leave it there, the exact exit contract the full deferred path
     // uses so endFrame()'s shared overlay/present finalize is unchanged.
-    void VulkanRendererCore::CoreImpl::recordHybridDebugResolve(VkCommandBuffer cb, uint32_t imageIndex, uint32_t frame) {
+    void VulkanRenderer::Impl::recordHybridDebugResolve(VkCommandBuffer cb, uint32_t imageIndex, uint32_t frame) {
         if (hybridDebugView_ == HybridDebugView::Off) return;
         createDebugResolvePipeline();
 

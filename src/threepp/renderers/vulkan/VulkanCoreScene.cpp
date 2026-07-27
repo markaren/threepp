@@ -2,7 +2,7 @@
 
 namespace threepp {
 
-uint32_t VulkanRendererCore::CoreImpl::snapMeshFlags(Mesh& m, const MaterialWithWireframe* wf) const {
+uint32_t VulkanRenderer::Impl::snapMeshFlags(Mesh& m, const MaterialWithWireframe* wf) const {
             uint32_t fl = kSnapKindMesh;
             if (auto geom = m.geometry()) {
                 if (geom->hasAttribute("position")) fl |= kSnapHasPos;
@@ -29,7 +29,7 @@ uint32_t VulkanRendererCore::CoreImpl::snapMeshFlags(Mesh& m, const MaterialWith
             return fl;
         }
 
-bool VulkanRendererCore::CoreImpl::sceneSnapshotMatches(Object3D& scene, Camera& camera) {
+bool VulkanRenderer::Impl::sceneSnapshotMatches(Object3D& scene, Camera& camera) {
             if (!sceneBuilt_ || sceneSnapshot_.empty()) return false;
             if (prevSceneFingerprint.size() != lastVisibleEntries_.size()) return false;
             size_t cur = 0;
@@ -105,7 +105,7 @@ bool VulkanRendererCore::CoreImpl::sceneSnapshotMatches(Object3D& scene, Camera&
             return ok && cur == sceneSnapshot_.size();
         }
 
-void VulkanRendererCore::CoreImpl::flushMaterialDescsIfDirty(uint32_t frame) {
+void VulkanRenderer::Impl::flushMaterialDescsIfDirty(uint32_t frame) {
             if (!matDescsDirty_[frame]) return;
             matDescsDirty_[frame] = false;
             if (matDescsCached_.empty()) return;
@@ -114,7 +114,7 @@ void VulkanRendererCore::CoreImpl::flushMaterialDescsIfDirty(uint32_t frame) {
                               matDescsCached_.size() * sizeof(MaterialDesc));
         }
 
-void VulkanRendererCore::CoreImpl::flushGeometryDescsIfDirty(uint32_t frame) {
+void VulkanRenderer::Impl::flushGeometryDescsIfDirty(uint32_t frame) {
             if (!geomDescsDirty_[frame]) return;
             geomDescsDirty_[frame] = false;
             if (geomDescsCached_.empty()) return;
@@ -124,7 +124,7 @@ void VulkanRendererCore::CoreImpl::flushGeometryDescsIfDirty(uint32_t frame) {
                               geomDescsCached_.size() * sizeof(GeometryDesc));
         }
 
-void VulkanRendererCore::CoreImpl::cullEntriesAgainstFrustum(Camera& camera) {
+void VulkanRenderer::Impl::cullEntriesAgainstFrustum(Camera& camera) {
             if (lastVisibleEntries_.empty()) return;
             // Combine projection * matrixWorldInverse to extract the world-
             // space frustum (Three.js convention; Camera::updateMatrixWorld
@@ -167,7 +167,7 @@ void VulkanRendererCore::CoreImpl::cullEntriesAgainstFrustum(Camera& camera) {
             }
         }
 
-void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
+void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             // force=false (matching GLRenderer): with
             // updateMatrix()'s change-detection early-out, only subtrees whose
             // transforms actually moved pay the world-matrix multiplies — a
@@ -466,7 +466,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
             lodChangedThisFrame_ = false;
             if (autoLod_) drainLodResults();// budget: 16 geoms / 8 MiB of new levels per frame
             {
-                VulkanRendererCore::AutoLodStats stats{};
+                VulkanRenderer::AutoLodStats stats{};
                 stats.indexBytes   = lodIndexBytes_;
                 stats.blasBytes    = lodBlasBytes_;
                 stats.chainsReady  = lodChainsReadyCount_;
@@ -2131,7 +2131,7 @@ void VulkanRendererCore::CoreImpl::ensureSceneBuilt(Object3D& scene, Camera& cam
             }
         }
 
-void VulkanRendererCore::CoreImpl::cacheCullFlags(const std::vector<MaterialDesc>& mds) {
+void VulkanRenderer::Impl::cacheCullFlags(const std::vector<MaterialDesc>& mds) {
             lastVisibleCullMode_.resize(mds.size());
             for (size_t i = 0; i < mds.size(); ++i) {
                 switch (mds[i].sideMode) {
@@ -2142,7 +2142,7 @@ void VulkanRendererCore::CoreImpl::cacheCullFlags(const std::vector<MaterialDesc
             }
         }
 
-void VulkanRendererCore::CoreImpl::collectWorldSprites(Object3D& scene) {
+void VulkanRenderer::Impl::collectWorldSprites(Object3D& scene) {
             lastVisibleSprites_.clear();
             scene.traverseVisible([&](Object3D& o) {
                 auto* sp = dynamic_cast<Sprite*>(&o);

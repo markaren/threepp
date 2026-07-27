@@ -39,7 +39,7 @@
 #ifdef THREEPP_WITH_VULKAN
 #include "threepp/objects/Ocean.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
-#include "threepp/renderers/VulkanRendererCore.hpp"
+#include "threepp/renderers/VulkanRenderer.hpp"
 #endif
 
 #include <algorithm>

@@ -51,7 +51,7 @@ namespace threepp::vulkan {
         SensorPass& operator=(const SensorPass&) = delete;
 
         // Lens + sensor state for one frame. Filled by the caller from the
-        // renderer's lens/noise settings (CoreImpl::buildSensorParams).
+        // renderer's lens/noise settings (Impl::buildSensorParams).
         struct Params {
             bool     distortActive = false;
             bool     noiseActive   = false;

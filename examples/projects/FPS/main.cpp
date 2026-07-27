@@ -236,7 +236,7 @@ int main(int argc, char** argv) {
     scene->add(sun);
     // ONE-SUN: the Vulkan deferred resolves the HDR env's sun itself; the
     // raster stand-in would override the measured one (see tps_shooter).
-    if (dynamic_cast<VulkanRendererCore*>(renderer.get())) sun->visible = false;
+    if (dynamic_cast<VulkanRenderer*>(renderer.get())) sun->visible = false;
 
     // ===== audio =============================================================
     SoundBank sfx;
@@ -1477,7 +1477,7 @@ int main(int argc, char** argv) {
                       << " ammo=" << ammo << (reloading ? " RELOAD" : "")
                       << " casings=" << casings.size()
                       << " decals=" << std::count_if(decalSlots.begin(), decalSlots.end(), [](const auto& d) { return d.target != nullptr; });
-            if (auto* vk = dynamic_cast<VulkanRendererCore*>(renderer.get()))
+            if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get()))
                 std::cout << " overlayMs=" << vk->lastFrameTimings().overlayMs;
             // Bot state machine, one token per live enemy: <state><range>/<aim>.
             // A/E/R = Advance/Engage/Reposition — a column of frozen tokens is

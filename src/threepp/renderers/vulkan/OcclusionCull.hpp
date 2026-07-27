@@ -1,7 +1,7 @@
 // OcclusionCull — the compute side of two-phase GPU occlusion culling.
 //
 // Frame flow (recordCommandBuffer, gated on setOcclusionCulling; the raster
-// pass itself is split by CoreImpl into a STORE variant + a LOAD variant of
+// pass itself is split by Impl into a STORE variant + a LOAD variant of
 // the same framebuffer/pipelines — load/store ops don't break render-pass
 // compatibility, so nothing graphics-side is duplicated):
 //
@@ -52,7 +52,7 @@ namespace threepp::vulkan {
         // Matches occl_cull.comp's CullMeta (std430, 32 B).
         struct CullMeta {
             float    aabbMin[3];
-            uint32_t cullBit;// per-INSTANCE visBits index (CoreImpl::occlCullBitFor)
+            uint32_t cullBit;// per-INSTANCE visBits index (Impl::occlCullBitFor)
             float    aabbMax[3];
             uint32_t flags;// bit 0 = always draw (deformers / missing bounds)
         };
@@ -62,7 +62,7 @@ namespace threepp::vulkan {
         // grows these SINGLE (non-per-fif) buffers mid-record, when the sibling
         // frame-in-flight may still reference the old handle on the GPU; retiring
         // defers the free until its fence has provably signaled (VulkanRetireQueue).
-        // The lambda captures CoreImpl and forwards to CoreImpl::retire. Optional:
+        // The lambda captures Impl and forwards to Impl::retire. Optional:
         // if unset, ensureCapacity falls back to vkDeviceWaitIdle + destroy.
         using RetireBufferFn = std::function<void(Buffer&&)>;
 

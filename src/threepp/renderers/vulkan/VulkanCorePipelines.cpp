@@ -20,7 +20,7 @@
 
 namespace threepp {
 
-void VulkanRendererCore::CoreImpl::clearGbufImages() {
+void VulkanRenderer::Impl::clearGbufImages() {
             VkCommandBuffer cb = beginOneShot();
 
             // Clears the ReSTIR DI reservoir ping-pong (pos + W) so M=0 on
@@ -87,7 +87,7 @@ void VulkanRendererCore::CoreImpl::clearGbufImages() {
             endAndSubmitOneShot(cb);
         }
 
-void VulkanRendererCore::CoreImpl::destroyRasterGbufImages() {
+void VulkanRenderer::Impl::destroyRasterGbufImages() {
             if (!ctx) return;
             VkDevice d = ctx->device();
             for (auto& g : rasterGbufs) {
@@ -132,7 +132,7 @@ void VulkanRendererCore::CoreImpl::destroyRasterGbufImages() {
             }
         }
 
-void VulkanRendererCore::CoreImpl::createRasterGbufRenderPass() {
+void VulkanRenderer::Impl::createRasterGbufRenderPass() {
             VkAttachmentDescription attachments[6]{};
             // 0: world-space normal (rgba16f). FragShader writes; deferred shade samples.
             attachments[0].format         = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -211,7 +211,7 @@ void VulkanRendererCore::CoreImpl::createRasterGbufRenderPass() {
                   "vkCreateRenderPass(rasterGbuf)");
         }
 
-void VulkanRendererCore::CoreImpl::createOcclRenderPasses(VkSampleCountFlagBits samples,
+void VulkanRenderer::Impl::createOcclRenderPasses(VkSampleCountFlagBits samples,
                             VkRenderPass& outA, VkRenderPass& outB) {
             auto build = [&](bool phaseA, VkRenderPass& out) {
                 VkAttachmentDescription attachments[6]{};
@@ -295,7 +295,7 @@ void VulkanRendererCore::CoreImpl::createOcclRenderPasses(VkSampleCountFlagBits 
             build(false, outB);
         }
 
-void VulkanRendererCore::CoreImpl::createRasterGbufRenderPassMS(VkSampleCountFlagBits samples) {
+void VulkanRenderer::Impl::createRasterGbufRenderPassMS(VkSampleCountFlagBits samples) {
             if (rasterGbufRenderPassMS != VK_NULL_HANDLE) {
                 vkDestroyRenderPass(ctx->device(), rasterGbufRenderPassMS, nullptr);
                 rasterGbufRenderPassMS = VK_NULL_HANDLE;
@@ -365,7 +365,7 @@ void VulkanRendererCore::CoreImpl::createRasterGbufRenderPassMS(VkSampleCountFla
                   "vkCreateRenderPass(rasterGbufMS)");
         }
 
-void VulkanRendererCore::CoreImpl::createRasterGbufImages(uint32_t w, uint32_t h) {
+void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
             destroyRasterGbufImages();
             // STORAGE is added to the resolve-target colour images only when
             // MSAA is active — gbuf_resolve.comp (a compute pass) imageStores
@@ -374,7 +374,7 @@ void VulkanRendererCore::CoreImpl::createRasterGbufImages(uint32_t w, uint32_t h
             // as they were (byte-identical guarantee — no behavioural surface
             // added when the feature is off).
             // TRANSFER_SRC is added so the AOV readback path
-            // (VulkanRendererCore::readGBufferAOV) can vkCmdCopyImageToBuffer the
+            // (VulkanRenderer::readGBufferAOV) can vkCmdCopyImageToBuffer the
             // resolved single-sample attachments to a host staging buffer. It is
             // a pure capability flag (no render-pass / layout / perf effect); the
             // STORAGE bit below stays MSAA-gated for its byte-identical guarantee.
@@ -685,7 +685,7 @@ void VulkanRendererCore::CoreImpl::createRasterGbufImages(uint32_t w, uint32_t h
             endAndSubmitOneShot(initCb, "rasterGbuf init layouts");
         }
 
-void VulkanRendererCore::CoreImpl::createRasterDsLayoutAndPool() {
+void VulkanRenderer::Impl::createRasterDsLayoutAndPool() {
             // binding 0: per-frame CameraUbo (vertex + fragment — gbuffer.frag
             //            reads cam.jitter for the alpha-hash cutout discard)
             // binding 1: motionMat[] storage (vertex; same VkBuffer as the
@@ -753,7 +753,7 @@ void VulkanRendererCore::CoreImpl::createRasterDsLayoutAndPool() {
                   "vkAllocateDescriptorSets(raster)");
         }
 
-void VulkanRendererCore::CoreImpl::createRasterGbufPipeline() {
+void VulkanRenderer::Impl::createRasterGbufPipeline() {
             VkShaderModuleCreateInfo vsmci{};
             vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
             vsmci.codeSize = sizeof(kGbufferVertSpv);
@@ -1010,7 +1010,7 @@ void VulkanRendererCore::CoreImpl::createRasterGbufPipeline() {
             vkDestroyShaderModule(ctx->device(), fragIndModule, nullptr);
         }
 
-void VulkanRendererCore::CoreImpl::createRasterGbufPipelineMS(VkSampleCountFlagBits samples) {
+void VulkanRenderer::Impl::createRasterGbufPipelineMS(VkSampleCountFlagBits samples) {
             if (rasterGbufPipelineMS != VK_NULL_HANDLE) {
                 vkDestroyPipeline(ctx->device(), rasterGbufPipelineMS, nullptr);
                 rasterGbufPipelineMS = VK_NULL_HANDLE;
@@ -1235,7 +1235,7 @@ void VulkanRendererCore::CoreImpl::createRasterGbufPipelineMS(VkSampleCountFlagB
             vkDestroyShaderModule(ctx->device(), fragIndModule, nullptr);
         }
 
-void VulkanRendererCore::CoreImpl::createOverlayPipeline() {
+void VulkanRenderer::Impl::createOverlayPipeline() {
             VkShaderModuleCreateInfo vsmci{};
             vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
             vsmci.codeSize = sizeof(kOverlayVertSpv);
@@ -1849,7 +1849,7 @@ void VulkanRendererCore::CoreImpl::createOverlayPipeline() {
             }
         }
 
-void VulkanRendererCore::CoreImpl::createParticlePipeline() {
+void VulkanRenderer::Impl::createParticlePipeline() {
             if (particlePipelineNormal_ != VK_NULL_HANDLE) return;
 
             // set 0, binding 0: combined image sampler (particle texture).
@@ -2152,7 +2152,7 @@ void VulkanRendererCore::CoreImpl::createParticlePipeline() {
             createSpriteWorldPipeline();
         }
 
-void VulkanRendererCore::CoreImpl::createSpriteWorldPipeline() {
+void VulkanRenderer::Impl::createSpriteWorldPipeline() {
             if (spriteWorldPipeline_ != VK_NULL_HANDLE) return;
 
             // Shared canonical quad: 4 interleaved (pos.xyz, uv.xy) verts +

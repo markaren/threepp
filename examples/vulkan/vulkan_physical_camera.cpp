@@ -115,7 +115,7 @@ int main() {
     float gradeSat = 1.f, gradeContrast = 1.f;
 
     auto applyGrade = [&] {
-        VulkanRendererCore::ColorGrade g;
+        VulkanRenderer::ColorGrade g;
         g.saturation = gradeSat;
         g.contrast = gradeContrast;
         renderer.setColorGrade(g);
