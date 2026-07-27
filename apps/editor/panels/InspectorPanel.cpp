@@ -179,7 +179,7 @@ void EditorApp::drawInspector() {
                                                            : ImGui::GetFrameHeight() + 6 * s);
 
     ImGui::SetNextWindowPos({viewport->Pos.x + viewport->Size.x - width, viewport->Pos.y + top});
-    ImGui::SetNextWindowSize({width, viewport->Size.y - top - bottom});
+    ImGui::SetNextWindowSize({width, std::max(viewport->Size.y - top - bottom, 40.f * s)});
 
     if (ImGui::Begin("Inspector", nullptr, layout::panelFlags)) {
 

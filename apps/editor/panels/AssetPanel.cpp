@@ -208,7 +208,7 @@ void EditorApp::drawBottomPanel() {
 
     ImGui::SetNextWindowPos({viewport->Pos.x + left,
                              viewport->Pos.y + viewport->Size.y - statusHeight_ - height});
-    ImGui::SetNextWindowSize({viewport->Size.x - left - right, height});
+    ImGui::SetNextWindowSize({std::max(viewport->Size.x - left - right, 120.f * s), height});
 
     if (ImGui::Begin("##bottom", nullptr, layout::barFlags)) {
 

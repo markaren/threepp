@@ -212,7 +212,8 @@ void EditorApp::drawHierarchy() {
                                                            : ImGui::GetFrameHeight() + 6 * s);
 
     ImGui::SetNextWindowPos({viewport->Pos.x, viewport->Pos.y + top});
-    ImGui::SetNextWindowSize({width, viewport->Size.y - top - bottom});
+    // A window shrunk below the chrome would otherwise ask for a negative size.
+    ImGui::SetNextWindowSize({width, std::max(viewport->Size.y - top - bottom, 40.f * s)});
 
     if (ImGui::Begin("Hierarchy", nullptr, layout::panelFlags)) {
 

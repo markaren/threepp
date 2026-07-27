@@ -247,6 +247,11 @@ void EditorApp::drawUi() {
     const ImGuiIO& io = ImGui::GetIO();
     fps_ = io.Framerate;
 
+    // The side panels size themselves against the status bar, which is drawn
+    // after them. Seeding the height here (the status bar recomputes the same
+    // value) keeps the very first frame from being laid out against zero.
+    statusHeight_ = ImGui::GetFrameHeight() + 4 * contentScale_;
+
     objectCount_ = 0;
     document_.scene().traverse([&](Object3D& o) {
         if (!document_.isEditorOnly(o) && &o != &document_.scene()) ++objectCount_;
