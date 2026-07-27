@@ -52,16 +52,24 @@ else ()
 endif ()
 
 # --- Python scripting -------------------------------------------------------
-# MonoBehaviour-style .py scripts attached to scene objects. Gated exactly like
-# PhysX above: found here so the editor configures standalone, and the editor
-# still builds and runs without it (the inspector then authors ScriptConfig but
-# cannot discover a class's fields).
+# MonoBehaviour-style .py scripts attached to scene objects. Gated like PhysX
+# above: everything is found here so the editor configures standalone, and the
+# editor still builds and runs without it (the inspector then authors
+# ScriptConfig but cannot discover a class's fields).
 #
-# Development.Embed, not Development.Module: the editor EMBEDS CPython rather
-# than being imported by it, so it needs the interpreter library itself.
-find_package(Python3 QUIET COMPONENTS Interpreter Development.Embed)
+# ON by default and quietly self-disabling, so nobody has to opt in to get it —
+# but explicit, because embedding CPython is a deployment decision: the binary
+# then needs that exact Python installation on every machine it runs on.
+option(THREEPP_EDITOR_WITH_PYTHON "Build the editor's Python scripting support" ON)
 
-if (Python3_FOUND)
+if (THREEPP_EDITOR_WITH_PYTHON)
+    # Development.Embed, not Development.Module: the editor EMBEDS CPython
+    # rather than being imported by it, so it needs the interpreter library
+    # itself, not just the headers an extension module gets.
+    find_package(Python3 QUIET COMPONENTS Interpreter Development.Embed)
+endif ()
+
+if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND)
     # pybind11 is already fetched by python/CMakeLists.txt when
     # -DTHREEPP_WITH_PYTHON=ON; reuse it rather than fetching a second copy.
     if (NOT TARGET pybind11::headers)
@@ -78,7 +86,7 @@ if (Python3_FOUND)
     endif ()
 endif ()
 
-if (Python3_FOUND AND TARGET pybind11::headers)
+if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
 
     # Its own library so the headless test can link the same code the editor
     # runs. The bind_*.cpp files are the SAME translation units the Python wheel
@@ -112,6 +120,8 @@ if (Python3_FOUND AND TARGET pybind11::headers)
 
     target_link_libraries(threepp_editor PRIVATE threepp_editor_scripting)
     message(STATUS "threepp_editor: Python scripting enabled (${Python3_VERSION})")
-else ()
+elseif (THREEPP_EDITOR_WITH_PYTHON)
     message(STATUS "threepp_editor: Python3 Development.Embed not found, scripting disabled")
+else ()
+    message(STATUS "threepp_editor: Python scripting disabled by option")
 endif ()

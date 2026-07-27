@@ -45,6 +45,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <iostream>
 
 // GLFW's window-title setter. Declared rather than included: the GLFW headers
@@ -441,6 +442,103 @@ int EditorApp::runSelfTest() {
         step();
         check(viewportMarkers_.size() == baseline, "removing the lights drops their markers");
     }
+
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    // Python scripting, through the paths a user actually takes: attach a file,
+    // let the inspector discover its fields, play, stop. Plus a script that
+    // raises every frame, because the one thing scripting must never do is take
+    // the editor down with it.
+    {
+        const auto dir = std::filesystem::current_path();
+        const auto spinnerPath = dir / "spinner.py";
+        const auto throwerPath = dir / "thrower.py";
+        {
+            std::ofstream out(spinnerPath, std::ios::trunc);
+            out << "class Spinner:\n"
+                << "    speed = 1.5\n"
+                << "\n"
+                << "    def start(self, obj):\n"
+                << "        self.obj = obj\n"
+                << "\n"
+                << "    def update(self, dt):\n"
+                << "        self.obj.rotation.y += self.speed * dt\n"
+                << "\n"
+                << "    def stop(self):\n"
+                << "        pass\n";
+        }
+        {
+            std::ofstream out(throwerPath, std::ios::trunc);
+            out << "class Thrower:\n"
+                << "    def update(self, dt):\n"
+                << "        raise RuntimeError('selftest: this must not be fatal')\n";
+        }
+
+        auto* scripted = document_.scene().getObjectByName("Box");
+        check(scripted != nullptr, "Box available for the scripting drive");
+
+        if (scripted) {
+            assignScript(*scripted, spinnerPath);
+            // Draw the section: this is what discovers the class and its fields.
+            selectObject(scripted);
+            step(2);
+
+            const auto stored = ScriptConfig::read(*scripted);
+            check(stored && !stored->path.empty(), "the script is recorded in userData");
+
+            const auto inspection = scripting::inspect(spinnerPath);
+            check(inspection.error.empty() && inspection.className == "Spinner",
+                  "the script class is discovered");
+            check(inspection.fields.size() == 1 && inspection.fields.front().name == "speed",
+                  "the exposed parameter is discovered");
+
+            const float restY = scripted->rotation.y;
+            const auto undosBefore = commands_.undoCount();
+
+            startPlay();
+            check(isPlaying(), "play starts with a script attached");
+            step(30);
+
+            auto* live = document_.scene().getObjectByName("Box");
+            check(live && live->rotation.y > restY + 1e-3f, "the script drives the object");
+            // Measured before the stop: a scene replace drops commands that
+            // cannot rebind, so afterwards the count is not comparable.
+            check(commands_.undoCount() == undosBefore, "a running script pushes no undo entries");
+
+            stopPlay();
+            step();
+
+            auto* restored = document_.scene().getObjectByName("Box");
+            check(restored != nullptr, "the object survives the round trip");
+            check(restored && std::abs(restored->rotation.y - restY) < 1e-4f,
+                  "stop restores the pose the script changed");
+            check(restored && ScriptConfig::read(*restored).has_value(),
+                  "the script reference survives the round trip");
+
+            // A script that raises every single frame: reported once, disabled,
+            // and the editor plays on.
+            if (restored) {
+                assignScript(*restored, throwerPath);
+                const auto uuid = restored->uuid;
+                startPlay();
+                step(10);
+                check(isPlaying(), "a raising script does not abort play");
+                stopPlay();
+                step();
+                check(scripts_ && !scripts_->errorFor(uuid).empty(),
+                      "the failure is recorded against the object");
+
+                if (auto* clear = document_.scene().getObjectByName("Box")) {
+                    assignScript(*clear, {});
+                    check(!ScriptConfig::read(*clear).has_value(), "clearing removes the script");
+                }
+            }
+        }
+
+        std::error_code ec;
+        std::filesystem::remove(spinnerPath, ec);
+        std::filesystem::remove(throwerPath, ec);
+    }
+#endif
 
     // With a model path on the command line, exercise the async import path
     // end to end: queue -> worker -> finalize -> selected group in the scene.
