@@ -13,6 +13,13 @@ namespace {
     // way is sideways — the curve is running straight up or straight down.
     constexpr float kDegenerate = 1e-4f;
 
+    // Below this |cross(up, tangent)| the horizontal part of the tangent is
+    // noise, not signal — sin of about six degrees. The kDegenerate this used
+    // to share only tripped within 0.006 degrees of vertical, so any merely
+    // steep stretch renormalized numerical noise into the side vector and its
+    // azimuth spun freely ring to ring: a fan of inside-out quads on screen.
+    constexpr float kLevelable = 0.1f;
+
     // Ceiling on the miter widening. 1/cos(theta/2) diverges as a corner
     // approaches a hairpin, and a cross-section that spikes to infinity is a
     // worse artefact than the notch it was widening to cover.
@@ -47,13 +54,25 @@ RibbonGeometry::RibbonGeometry(const Curve3& path, const Params& params)
     {
         Vector3 dir{0, 0, 1};
         Vector3 side{1, 0, 0};
+        bool sideLocked = false;
         Vector3 delta;
         Vector3 candidate;
         for (unsigned int i = 0; i < spans; ++i) {
             delta.copy(centers[i + 1]).sub(centers[i]);
             if (delta.length() > kDegenerate) dir.copy(delta).normalize();
             candidate.copy(up).cross(dir);
-            if (candidate.length() > kDegenerate) side.copy(candidate).normalize();
+            if (candidate.length() > kLevelable) {
+                candidate.normalize();
+                // Continuity outranks azimuth: coming out of a vertical stretch
+                // or past a cusp the recomputed side can point anywhere,
+                // including mirrored — and a left edge that swaps to the right
+                // builds every quad between those rings inside out. The first
+                // real side is exempt: the seed above is arbitrary, not a
+                // preference to preserve.
+                if (sideLocked && candidate.dot(side) < 0.f) candidate.negate();
+                side.copy(candidate);
+                sideLocked = true;
+            }
             dirs[i].copy(dir);
             sides[i].copy(side);
         }

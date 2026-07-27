@@ -204,6 +204,51 @@ TEST_CASE("the miter widening is clamped at a hairpin", "[extras]") {
     }
 }
 
+TEST_CASE("a pass near vertical does not fan", "[extras]") {
+
+    // Climbs steeply while its horizontal drift REVERSES (+z going up, -z
+    // coming over the top). Near the apex the tangent is close to vertical, so
+    // cross(up, tangent) is all noise; renormalizing that noise let the side
+    // vector's azimuth spin freely ring to ring, and every quad between two
+    // spun rings was built inside out — the fan of flipped spikes this pins.
+    CatmullRomCurve3 curve({Vector3(0, 0, 0), Vector3(0, 6, 1), Vector3(0, 12, 0)});
+    auto geometry = RibbonGeometry::create(curve, RibbonGeometry::Params(2.f, 24, 4.f));
+
+    Vector3 previous, current;
+    for (unsigned int i = 0; i < 24; ++i) {
+        const auto [leftA, rightA] = ring(*geometry, i);
+        const auto [leftB, rightB] = ring(*geometry, i + 1);
+        previous.copy(rightA).sub(leftA).normalize();
+        current.copy(rightB).sub(leftB).normalize();
+        // Adjacent cross-sections never reverse: a left edge that swaps to the
+        // right between two rings is exactly the flipped-winding artefact.
+        CHECK(previous.dot(current) > 0.f);
+        // And the miter clamp still bounds every ring.
+        CHECK(leftB.distanceTo(rightB) <= 2.f * 2.f + 1e-4f);
+    }
+}
+
+TEST_CASE("a horizontal cusp mirrors instead of fanning", "[extras]") {
+
+    // A near-reversal sampled DENSELY: unlike the two-span hairpin above, the
+    // curve's about-turn now falls across many rings, and the recomputed side
+    // vector comes back mirrored on the far side. Without sign continuity the
+    // rings on the two arms disagree about which edge is left, and the quads
+    // spanning the cusp cross.
+    CatmullRomCurve3 curve({Vector3(-6, 0, 0), Vector3(0, 0, 0), Vector3(-6, 0, 0.4f)});
+    auto geometry = RibbonGeometry::create(curve, RibbonGeometry::Params(2.f, 16, 4.f));
+
+    Vector3 previous, current;
+    for (unsigned int i = 0; i < 16; ++i) {
+        const auto [leftA, rightA] = ring(*geometry, i);
+        const auto [leftB, rightB] = ring(*geometry, i + 1);
+        previous.copy(rightA).sub(leftA).normalize();
+        current.copy(rightB).sub(leftB).normalize();
+        CHECK(previous.dot(current) > 0.f);
+        CHECK(leftB.distanceTo(rightB) <= 2.f * 2.f + 1e-4f);
+    }
+}
+
 TEST_CASE("a climbing ribbon stays level side to side", "[extras]") {
 
     // A curve that rises as it runs: the two vertices of every cross-section
