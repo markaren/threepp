@@ -91,6 +91,7 @@ namespace threepp {
 
             auto m = material.as<MeshMatcapMaterial>();
 
+            m->defines = defines;
             m->defines["MATCAP"] = "";
 
             m->color.copy(color);

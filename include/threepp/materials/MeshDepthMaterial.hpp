@@ -78,10 +78,8 @@ namespace threepp {
             m->displacementScale = displacementScale;
             m->displacementBias = displacementBias;
 
-            m->wireframe = false;
-            m->wireframeLinewidth = 1;
-
-            m->fog = false;
+            m->wireframe = wireframe;
+            m->wireframeLinewidth = wireframeLinewidth;
         }
 
         static std::shared_ptr<MeshDepthMaterial> create() {

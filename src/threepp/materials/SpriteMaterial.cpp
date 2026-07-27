@@ -28,6 +28,7 @@ void SpriteMaterial::copyInto(Material& material) const {
 
     m->rotation = rotation;
 
+    m->size = size;
     m->sizeAttenuation = sizeAttenuation;
 }
 

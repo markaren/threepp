@@ -27,6 +27,9 @@ void PointsMaterial::copyInto(Material& material) const {
 
     m->size = size;
     m->sizeAttenuation = sizeAttenuation;
+
+    m->morphTargets = morphTargets;
+    m->morphNormals = morphNormals;
 }
 
 std::shared_ptr<Material> PointsMaterial::createDefault() const {

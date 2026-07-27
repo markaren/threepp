@@ -61,6 +61,7 @@ void MeshPhongMaterial::copyInto(threepp::Material& material) const {
     m->alphaMap = alphaMap;
 
     m->envMap = envMap;
+    m->envMapIntensity = envMapIntensity;
     m->combine = combine;
     m->reflectivity = reflectivity;
     m->refractionRatio = refractionRatio;
@@ -69,6 +70,9 @@ void MeshPhongMaterial::copyInto(threepp::Material& material) const {
     m->wireframeLinewidth = wireframeLinewidth;
 
     m->flatShading = flatShading;
+
+    m->morphTargets = morphTargets;
+    m->morphNormals = morphNormals;
 }
 
 std::shared_ptr<Material> MeshPhongMaterial::createDefault() const {

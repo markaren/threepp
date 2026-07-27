@@ -38,6 +38,37 @@ std::shared_ptr<Material> ShaderMaterial::createDefault() const {
     return std::shared_ptr<ShaderMaterial>(new ShaderMaterial());
 }
 
+void ShaderMaterial::copyInto(Material& material) const {
+
+    Material::copyInto(material);
+
+    auto m = material.as<ShaderMaterial>();
+
+    m->defines = defines;
+
+    m->clipping = clipping;
+    m->lights = lights;
+
+    m->wireframe = wireframe;
+    m->wireframeLinewidth = wireframeLinewidth;
+
+    m->linewidth = linewidth;
+
+    m->envMap = envMap;
+    m->envMapIntensity = envMapIntensity;
+
+    m->vertexShader = vertexShader;
+    m->fragmentShader = fragmentShader;
+
+    // Shallow, like three.js cloneUniforms: texture pointers are shared, the
+    // map itself is not.
+    m->uniforms = uniforms;
+    m->customTextures = customTextures;
+
+    m->index0AttributeName = index0AttributeName;
+    m->uniformsNeedUpdate = uniformsNeedUpdate;
+}
+
 bool ShaderMaterial::setValue(const std::string& key, const MaterialValue& value) {
 
     if (key == "vertexShader") {

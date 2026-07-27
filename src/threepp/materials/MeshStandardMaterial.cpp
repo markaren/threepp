@@ -98,6 +98,7 @@ void MeshStandardMaterial::copyInto(Material& material) const {
 
     auto m = material.as<MeshStandardMaterial>();
 
+    m->defines = defines;
     m->defines["STANDARD"] = "";
 
     m->color.copy(color);
@@ -115,6 +116,9 @@ void MeshStandardMaterial::copyInto(Material& material) const {
     m->detailMap = detailMap;
     m->detailRepeat = detailRepeat;
     m->detailStrength = detailStrength;
+    m->detailNormalMap = detailNormalMap;
+    m->detailNormalScale = detailNormalScale;
+    m->detailRoughStrength = detailRoughStrength;
 
     m->translucency = translucency;
     m->translucencyColor.copy(translucencyColor);
@@ -152,6 +156,8 @@ void MeshStandardMaterial::copyInto(Material& material) const {
 
     m->vertexTangents = vertexTangents;
 
+    m->morphTargets = morphTargets;
+    m->morphNormals = morphNormals;
 }
 
 bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue& value) {

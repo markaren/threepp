@@ -110,6 +110,9 @@ namespace threepp {
 
             auto m = material.as<MeshToonMaterial>();
 
+            m->defines = defines;
+            m->defines["TOON"] = "";
+
             m->color.copy(color);
 
             m->map = map;

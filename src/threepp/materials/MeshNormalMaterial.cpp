@@ -67,6 +67,9 @@ void MeshNormalMaterial::copyInto(Material& material) const {
 
     auto m = material.as<MeshNormalMaterial>();
 
+    m->bumpMap = bumpMap;
+    m->bumpScale = bumpScale;
+
     m->normalMap = normalMap;
     m->normalMapType = normalMapType;
     m->normalScale.copy(normalScale);

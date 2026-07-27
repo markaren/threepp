@@ -38,12 +38,16 @@ void MeshBasicMaterial::copyInto(Material& material) const {
     m->alphaMap = alphaMap;
 
     m->envMap = envMap;
+    m->envMapIntensity = envMapIntensity;
     m->combine = combine;
     m->reflectivity = reflectivity;
     m->refractionRatio = refractionRatio;
 
     m->wireframe = wireframe;
     m->wireframeLinewidth = wireframeLinewidth;
+
+    m->morphTargets = morphTargets;
+    m->morphNormals = morphNormals;
 }
 
 std::shared_ptr<MeshBasicMaterial> MeshBasicMaterial::create(const std::unordered_map<std::string, MaterialValue>& values) {

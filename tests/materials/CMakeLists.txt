@@ -1,0 +1,2 @@
+
+add_test_executable(MaterialClone_test)

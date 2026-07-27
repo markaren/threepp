@@ -52,6 +52,10 @@ void Material::copyInto(Material& m) const {
     m.vertexColors = vertexColors;
     m.textureAnimatedHint = textureAnimatedHint;
 
+    m.tetSkinning = tetSkinning;
+    m.tetTexture = tetTexture;
+    m.tetTextureSize = tetTextureSize;
+
     m.opacity = opacity;
     m.transparent = transparent;
 
@@ -92,6 +96,9 @@ void Material::copyInto(Material& m) const {
     m.clippingPlanes = dstPlanes;
     m.clipIntersection = clipIntersection;
     m.clipShadows = clipShadows;
+    // NOTE: subclasses deriving MaterialWithClipping shadow this member with
+    // their own; that one is round-tripped by their copyInto/copyCompatibleFrom.
+    m.clipping = clipping;
 
     m.shadowSide = shadowSide;
 
@@ -110,6 +117,8 @@ void Material::copyInto(Material& m) const {
     m.visible = visible;
 
     m.toneMapped = toneMapped;
+
+    m.defaultAttributeValues = defaultAttributeValues;
 }
 
 void Material::copyCompatibleFrom(const Material& other) {
@@ -172,6 +181,16 @@ void Material::copyCompatibleFrom(const Material& other) {
                    d->normalMap = s->normalMap;
                    d->normalMapType = s->normalMapType;
                    d->normalScale = s->normalScale;);
+    TPP_COPY_MIXIN(MaterialWithDetailMap,
+                   d->detailMap = s->detailMap;
+                   d->detailRepeat = s->detailRepeat;
+                   d->detailStrength = s->detailStrength;
+                   d->detailNormalMap = s->detailNormalMap;
+                   d->detailNormalScale = s->detailNormalScale;
+                   d->detailRoughStrength = s->detailRoughStrength;);
+    TPP_COPY_MIXIN(MaterialWithTranslucency,
+                   d->translucency = s->translucency;
+                   d->translucencyColor = s->translucencyColor;);
     TPP_COPY_MIXIN(MaterialWithMatCap, d->matcap = s->matcap;);
     TPP_COPY_MIXIN(MaterialWithRoughness,
                    d->roughness = s->roughness;
@@ -181,7 +200,8 @@ void Material::copyCompatibleFrom(const Material& other) {
                    d->metalnessMap = s->metalnessMap;);
     TPP_COPY_MIXIN(MaterialWithThickness,
                    d->thickness = s->thickness;
-                   d->thicknessMap = s->thicknessMap;);
+                   d->thicknessMap = s->thicknessMap;
+                   d->thinWalled = s->thinWalled;);
     TPP_COPY_MIXIN(MaterialWithClearcoat,
                    d->clearcoat = s->clearcoat;
                    d->clearcoatMap = s->clearcoatMap;
@@ -201,6 +221,10 @@ void Material::copyCompatibleFrom(const Material& other) {
                    d->sheenColor = s->sheenColor;
                    d->sheenRoughness = s->sheenRoughness;
                    d->sheen = s->sheen;);
+    TPP_COPY_MIXIN(MaterialWithIridescence,
+                   d->iridescence = s->iridescence;
+                   d->iridescenceIOR = s->iridescenceIOR;
+                   d->iridescenceThicknessNm = s->iridescenceThicknessNm;);
     TPP_COPY_MIXIN(MaterialWithPbrSpecular,
                    d->specularIntensity = s->specularIntensity;
                    d->specularColor = s->specularColor;);

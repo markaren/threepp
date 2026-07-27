@@ -123,6 +123,11 @@ void MeshPhysicalMaterial::copyInto(Material& material) const {
     m->defines["PHYSICAL"] = "";
 
     m->reflectivity = reflectivity;
+    // MeshPhysicalMaterial inherits MaterialWithRefractionRatio twice (once via
+    // MeshStandardMaterial, once via MaterialWithReflectivity), so it holds two
+    // distinct refractionRatio members. MeshStandardMaterial::copyInto handled
+    // the Standard one; this is the other.
+    m->MaterialWithReflectivity::refractionRatio = MaterialWithReflectivity::refractionRatio;
 
     m->clearcoat = clearcoat;
     m->clearcoatMap = clearcoatMap;
@@ -131,14 +136,18 @@ void MeshPhysicalMaterial::copyInto(Material& material) const {
     m->clearcoatNormalScale.copy(clearcoatNormalScale);
     m->clearcoatNormalMap = clearcoatNormalMap;
 
+    m->sheenColor.copy(sheenColor);
+    m->sheenRoughness = sheenRoughness;
     m->sheen = sheen;
 
     m->transmission = transmission;
     m->transmissionMap = transmissionMap;
+    m->ior = ior;
     m->dispersion = dispersion;
 
     m->thickness = thickness;
     m->thicknessMap = thicknessMap;
+    m->thinWalled = thinWalled;
 
     m->attenuationDistance = attenuationDistance;
     m->attenuationColor.copy(attenuationColor);
@@ -146,6 +155,9 @@ void MeshPhysicalMaterial::copyInto(Material& material) const {
     m->iridescence = iridescence;
     m->iridescenceIOR = iridescenceIOR;
     m->iridescenceThicknessNm = iridescenceThicknessNm;
+
+    m->specularIntensity = specularIntensity;
+    m->specularColor.copy(specularColor);
 }
 
 bool MeshPhysicalMaterial::setValue(const std::string& key, const MaterialValue& value) {

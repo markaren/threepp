@@ -73,6 +73,15 @@ namespace threepp {
             return std::shared_ptr<ShadowMaterial>(new ShadowMaterial());
         }
 
+        void copyInto(Material& material) const override {
+
+            Material::copyInto(material);
+
+            auto m = material.as<ShadowMaterial>();
+
+            m->color.copy(color);
+        }
+
         bool setValue(const std::string& key, const MaterialValue& value) override {
 
             if (key == "color") {
