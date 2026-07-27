@@ -126,9 +126,14 @@ void PathTracedLidarSensor::scan(VulkanRenderer& renderer, std::vector<LidarRetu
         beamScratch_[i].direction = d;
     }
 
+    // Queues these beams and returns the PREVIOUS submit's results, so the
+    // returns must be perturbed about the origin they were traced from.
     renderer.scanLidar(beamScratch_, out, params);
 
-    applyNoise(out, origin);
+    if (haveInFlight_) applyNoise(out, inFlightOrigin_);
+    else out.clear();// nothing was in flight ⇒ nothing to hand back
+    inFlightOrigin_ = origin;
+    haveInFlight_   = true;
 }
 
 // Perturb each return along its own beam. Applied CPU-side rather than in the

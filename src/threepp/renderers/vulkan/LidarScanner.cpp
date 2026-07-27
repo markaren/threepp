@@ -38,6 +38,9 @@ namespace threepp::vulkan {
 
     LidarScanner::~LidarScanner() {
         VkDevice d = ctx_.device();
+        // A submit may still be in flight (the owner is torn down without a
+        // final collect) — its command buffer and buffers are about to go away.
+        waitPending();
         if (fence_)    vkDestroyFence(d, fence_, nullptr);
         if (cmdPool_)  vkDestroyCommandPool(d, cmdPool_, nullptr);
         destroyBuffer(ctx_.allocator(), readbackBuf_);
@@ -400,39 +403,31 @@ namespace threepp::vulkan {
                                0, nullptr);
     }
 
-    void LidarScanner::scan(VkQueue queue,
-                            VkAccelerationStructureKHR tlas,
-                            VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
-                            VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
-                            VkBuffer fogUbo, VkDeviceSize fogUboSize,
-                            const vulkan_lidar::LidarPushConstants& pc,
-                            const vulkan_lidar::LidarBeam* beams, uint32_t numBeams,
-                            vulkan_lidar::LidarResult* outResults) {
-        if (numBeams == 0 || outResults == nullptr || beams == nullptr) return;
+    bool LidarScanner::submit(VkQueue queue,
+                              VkAccelerationStructureKHR tlas,
+                              VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
+                              VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
+                              VkBuffer fogUbo, VkDeviceSize fogUboSize,
+                              const vulkan_lidar::LidarPushConstants& pc,
+                              const vulkan_lidar::LidarBeam* beams, uint32_t numBeams) {
+        if (numBeams == 0 || beams == nullptr) return false;
 
         const uint32_t maxReturns   = std::max(pc.maxReturns, 1u);
         const uint32_t samples      = std::max(pc.samplesPerBeam, 1u);
         const uint32_t slotsPerBeam = maxReturns * samples;
         const uint32_t totalSlots   = numBeams * slotsPerBeam;
 
-        // Bail out gracefully if the scene isn't ready — write all misses.
         const bool sceneReady = (tlas != VK_NULL_HANDLE) &&
                                 (geomDescsBuffer != VK_NULL_HANDLE) &&
                                 (matDescsBuffer != VK_NULL_HANDLE) &&
                                 (fogUbo != VK_NULL_HANDLE);
-        if (!sceneReady) {
-            for (uint32_t i = 0; i < totalSlots; ++i) {
-                vulkan_lidar::LidarResult& r = outResults[i];
-                r.position[0] = r.position[1] = r.position[2] = 0.f;
-                r.normal[0]   = r.normal[1]   = r.normal[2]   = 0.f;
-                r.distance    = 0.f;
-                r.intensity   = 0.f;
-                r.instanceId  = -1;
-                r.returnNo    = 0;
-                r._pad[0] = r._pad[1] = 0.f;
-            }
-            return;
-        }
+        if (!sceneReady) return false;
+
+        // A previous submit must be fully retired before its command buffer,
+        // fence and result buffers are reused. Steady state never gets here
+        // with work outstanding (the renderer collects each frame), but a
+        // caller that submits twice without collecting would.
+        if (pending_) waitPending();
 
         ensureCapacity(numBeams, slotsPerBeam);
 
@@ -510,19 +505,41 @@ namespace threepp::vulkan {
         si.pCommandBuffers = &cmdBuf_;
         check(vkQueueSubmit(queue, 1, &si, fence_), "vkQueueSubmit(lidar)");
 
+        pending_       = true;
+        pendingWaited_ = false;
+        pendingSlots_  = totalSlots;
+        pendingBeams_  = numBeams;
+        return true;
+    }
+
+    void LidarScanner::waitPending() {
+        if (!pending_ || pendingWaited_) return;
         check(vkWaitForFences(ctx_.device(), 1, &fence_, VK_TRUE, UINT64_MAX),
               "vkWaitForFences(lidar)");
+        pendingWaited_ = true;
+    }
 
+    uint32_t LidarScanner::collect(vulkan_lidar::LidarResult* outResults) {
+        if (!pending_ || outResults == nullptr) return 0;
+        waitPending();
+
+        const uint32_t slots = pendingSlots_;
         // Memcpy from mapped readback buffer. VMA HOST_ACCESS_RANDOM keeps it
         // mapped continuously, but the spec requires an invalidate before
         // reading non-coherent host-visible memory; a no-op when coherent.
         invalidateHostReads(ctx_.allocator(), readbackBuf_.alloc, 0,
-                            static_cast<VkDeviceSize>(totalSlots) * sizeof(vulkan_lidar::LidarResult));
+                            static_cast<VkDeviceSize>(slots) * sizeof(vulkan_lidar::LidarResult));
         void* mapped = nullptr;
         check(vmaMapMemory(ctx_.allocator(), readbackBuf_.alloc, &mapped),
               "vmaMapMemory(lidar readback)");
-        std::memcpy(outResults, mapped, totalSlots * sizeof(vulkan_lidar::LidarResult));
+        std::memcpy(outResults, mapped, slots * sizeof(vulkan_lidar::LidarResult));
         vmaUnmapMemory(ctx_.allocator(), readbackBuf_.alloc);
+
+        pending_       = false;
+        pendingWaited_ = false;
+        pendingSlots_  = 0;
+        pendingBeams_  = 0;
+        return slots;
     }
 
 }// namespace threepp::vulkan

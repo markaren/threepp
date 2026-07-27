@@ -600,9 +600,18 @@ namespace threepp {
         [[nodiscard]] int hybridDebugView() const;
 
         // ── Path-traced LIDAR scanner ─────────────────────────────────────
-        // Synchronously trace beams against the same TLAS, evaluate a back-scatter
-        // LIDAR equation at the first hit, and return per-beam tuples. Submits its
-        // own command buffer + fence and blocks until results come back.
+        // Trace beams against the same TLAS, evaluate a back-scatter LIDAR
+        // equation at the first hit, and return per-beam tuples.
+        //
+        // PIPELINED, one call deep: this queues `beams` and returns the results
+        // of the PREVIOUS call. Nothing here waits on GPU work submitted now, so
+        // a scan no longer serialises the frame — it used to drain the whole
+        // device to keep the TLAS stable, which cost ~19 ms per scan on a 60 Hz
+        // app and made every third frame miss vblank. `outResults` therefore
+        // lags the pose passed in by one call (~one frame at a typical scan
+        // cadence), and comes back EMPTY on the first scan and whenever the beam
+        // count changes — callers already treat an empty cloud as "no data this
+        // scan", so a warm-up scan or two is all that is needed.
         void scanLidar(const std::vector<LidarBeam>& beams,
                        std::vector<LidarReturn>& results,
                        const LidarParams& params = {});

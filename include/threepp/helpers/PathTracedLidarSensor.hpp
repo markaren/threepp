@@ -74,6 +74,14 @@ namespace threepp {
          * Run one scan. Beams are derived from the current world matrix
          * (composed from `position` / `rotation`) and the cached
          * sensor-local direction table.
+         *
+         * Pipelined one call deep (see VulkanRenderer::scanLidar): the beams for
+         * the CURRENT pose are queued and `out` receives the previous call's
+         * returns, so the frame never blocks on the GPU. `out` is empty on the
+         * first scan and after any beam-count change; scan twice at startup if
+         * the first reading has to be populated. Noise is applied to the returns
+         * being handed back, from the sensor's own stream, so a replay still
+         * reproduces exactly.
          */
         void scan(VulkanRenderer& renderer, std::vector<LidarReturn>& out);
 
@@ -85,6 +93,12 @@ namespace threepp {
         std::vector<Vector3> directions_;
         // Scratch buffer reused across scans so we don't reallocate.
         std::vector<LidarBeam> beamScratch_;
+        // World origin of the beams currently in flight. The returns a scan
+        // hands back belong to the PREVIOUS submit, and applyNoise rescales each
+        // one along its own beam — using this frame's origin instead would drag
+        // every point toward the sensor's new position whenever it moved.
+        Vector3 inFlightOrigin_{};
+        bool    haveInFlight_ = false;
 
         void buildDenseBeams(unsigned int hRes, unsigned int vRes);
         void buildModelBeams(const LidarModel& model);

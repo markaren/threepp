@@ -161,18 +161,15 @@ void VulkanRenderer::Impl::scanLidar(const std::vector<LidarBeam>& beams,
             // never calls scanLidar, the pipeline + SBT cost is never paid.
             if (!lidar_) lidar_ = std::make_unique<vulkan::LidarScanner>(*ctx);
 
-            // Drain all in-flight frames so the TLAS + geom/mat buffers
-            // are stable while we read them.
-            vkDeviceWaitIdle(ctx->device());
-
-            // Force-flush Material/GeometryDescs into buffer slot 0 — gives us
-            // a known-good frame target without having to chase `currentFrame`
-            // semantics across render() calls. (Safe: the device-wide drain
-            // above means nothing is reading either slot.)
-            matDescsDirty_[0] = true;
-            flushMaterialDescsIfDirty(0);
-            geomDescsDirty_[0] = true;
-            flushGeometryDescsIfDirty(0);
+            // Pick up the PREVIOUS scan (submitted on an earlier call, a frame
+            // or more ago) before queueing this one. This is why the scan no
+            // longer stalls: nothing here waits on GPU work submitted in this
+            // call. The cost is that a caller receives the beams it handed in
+            // LAST time — see VulkanRenderer::scanLidar's contract.
+            const uint32_t readySlots = lidar_->pendingSlots();
+            std::vector<vulkan_lidar::LidarResult> ready(readySlots);
+            const uint32_t readyBeams = lidar_->pendingBeams();
+            const uint32_t got = readySlots ? lidar_->collect(ready.data()) : 0u;
 
             // Push constants encode the LIDAR equation parameters. The
             // shader multiplies the raw `laserPower · f_back · cos θ · η / r²`
@@ -219,32 +216,38 @@ void VulkanRenderer::Impl::scanLidar(const std::vector<LidarBeam>& beams,
                 packed[i]._pad1        = 0.f;
             }
 
-            // results[(beam * samplesPerBeam + sample) * maxReturns + slot]
-            const size_t totalSlots = beams.size() * pc.samplesPerBeam * pc.maxReturns;
-            std::vector<vulkan_lidar::LidarResult> raw(totalSlots);
+            // The scan reads the descriptor buffers rather than rewriting them:
+            // the slot the LAST render() used is already flushed and current,
+            // and (with kFramesInFlight slots) the next frame writes the OTHER
+            // one — so nothing races. The old code force-dirtied slot 0 and
+            // re-flushed it, which is only safe behind a device-wide drain.
+            // Same reasoning as the fog slot below.
+            const uint32_t lastSlot = (currentFrame + kFramesInFlight - 1) % kFramesInFlight;
+            const uint32_t fogSlot  = lastSlot;// updateFogUbo runs every render()
 
-            // Pick the most recently uploaded fog slot. render() bumps
-            // currentFrame at the end, so the just-used slot is
-            // (currentFrame - 1) mod N. The slot's contents reflect the
-            // scene's current fog state because updateFogUbo runs every
-            // frame from render().
-            const uint32_t fogSlot = (currentFrame + kFramesInFlight - 1) % kFramesInFlight;
+            lidar_->submit(ctx->graphicsQueue(),
+                           tlas,
+                           geometryDescsBuffers[lastSlot].handle, geometryDescsBuffers[lastSlot].size,
+                           materialDescsBuffers[lastSlot].handle, materialDescsBuffers[lastSlot].size,
+                           fogUbos[fogSlot].handle, fogUbos[fogSlot].size,
+                           pc,
+                           packed.data(), static_cast<uint32_t>(packed.size()));
 
-            lidar_->scan(ctx->graphicsQueue(),
-                         tlas,
-                         geometryDescsBuffers[0].handle, geometryDescsBuffers[0].size,
-                         materialDescsBuffers[0].handle, materialDescsBuffers[0].size,
-                         fogUbos[fogSlot].handle, fogUbos[fogSlot].size,
-                         pc,
-                         packed.data(), static_cast<uint32_t>(packed.size()),
-                         raw.data());
-
-            // Unpack into the public LidarReturn struct. We preserve the
-            // fixed-stride layout (numBeams * maxReturns) — caller filters
-            // entries with hitInstanceId < 0.
-            outResults.resize(totalSlots);
-            for (size_t i = 0; i < totalSlots; ++i) {
-                const auto& r = raw[i];
+            // Unpack the results collected above into the public LidarReturn
+            // struct, preserving the fixed-stride layout (beams * maxReturns) —
+            // the caller filters entries with hitInstanceId < 0. Empty on the
+            // very first scan, and whenever the beam count changed (the stride
+            // the caller expects would not match what the previous submit
+            // produced), which the sensors treat as "no data this scan".
+            const bool usable = got == readySlots && readySlots > 0 &&
+                                readyBeams == static_cast<uint32_t>(beams.size());
+            if (!usable) {
+                outResults.clear();
+                return;
+            }
+            outResults.resize(readySlots);
+            for (uint32_t i = 0; i < readySlots; ++i) {
+                const auto& r = ready[i];
                 auto& o = outResults[i];
                 o.position.set(r.position[0], r.position[1], r.position[2]);
                 o.normal.set(r.normal[0], r.normal[1], r.normal[2]);
@@ -377,6 +380,12 @@ void VulkanRenderer::Impl::beginCommandRecording(VkCommandBuffer cb) {
 bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+            // An asynchronously submitted LIDAR/depth scan reads the TLAS and
+            // the descriptor buffers this frame is about to rebuild, so it has
+            // to be done first. It was submitted at least a frame ago, so the
+            // fence is already signalled and this is free — it is the ordering
+            // guarantee that lets scanLidar skip its old device-wide drain.
+            if (lidar_) lidar_->waitPending();
             // Fence signaled ⇒ frame (frameSerial_ - kFramesInFlight) is
             // GPU-complete (this slot's previous occupant). Reclaim every
             // resource retired by that frame or earlier before touching this
