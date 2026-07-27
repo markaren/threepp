@@ -8,6 +8,7 @@ add_test_executable(EditorScriptWorkspace_test)
 add_test_executable(EditorSpline_test)
 add_test_executable(EditorUndoRebind_test)
 add_test_executable(PointCloud_test)
+add_test_executable(RibbonGeometry_test)
 add_test_executable(Sensor_test)
 add_test_executable(VisionSensor_test)
 
