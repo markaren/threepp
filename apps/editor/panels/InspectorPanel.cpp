@@ -820,7 +820,10 @@ void EditorApp::drawAnimationSection(Object3D& object) {
             startAnimationPreview(object, config.clip, config.loop, config.speed);
         }
     }
-    if (previewing) {
+    // Re-query rather than reusing the flag above: the button just ran, and
+    // either branch changes what it described. isPreviewing() is also what
+    // makes the dereference safe — it is false whenever there is no preview.
+    if (isPreviewing(object)) {
         ImGui::SameLine();
         ImGui::TextColored(theme::playing(), "playing %s", animPreview_->clip.c_str());
     }

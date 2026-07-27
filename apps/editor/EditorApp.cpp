@@ -360,6 +360,32 @@ int EditorApp::runSelfTest() {
         check(document_.scene().children.size() == childrenBefore + 1,
               "import added one group to the scene");
         check(selection_.get() != nullptr, "import selected the new group");
+
+        // Animation preview lifecycle, on the model just imported. Frames run
+        // in both states so the inspector draws each branch.
+        auto* imported = selection_.get();
+        if (imported && !imported->animations.empty()) {
+
+            const auto pose = [imported] {
+                std::vector<Vector3> out;
+                imported->traverse([&out](Object3D& node) { out.push_back(node.position); });
+                return out;
+            };
+            const auto rest = pose();
+            const auto undosBefore = commands_.undoCount();
+
+            startAnimationPreview(*imported, "", true, 1.f);
+            check(isPreviewing(*imported), "preview started");
+            step(20);
+            const auto moved = pose();
+            check(moved != rest, "preview actually animates the subtree");
+
+            stopAnimationPreview();
+            check(!isPreviewing(*imported), "preview stopped");
+            check(pose() == rest, "stopping preview restores the authored pose");
+            check(commands_.undoCount() == undosBefore, "preview pushes no undo entries");
+            step(5);
+        }
     }
 
     std::cout << "[selftest] " << (failed == 0 ? "ALL PASS" : "FAILED") << std::endl;
