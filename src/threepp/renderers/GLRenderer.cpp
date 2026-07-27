@@ -48,6 +48,8 @@
 // stb_image_write - implementation is compiled in utils/StbImageWrite.cpp.
 #include "stb_image_write.h"
 
+#include <cmath>
+
 
 using namespace threepp;
 
