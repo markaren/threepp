@@ -193,20 +193,40 @@ install(TARGETS threepp_py
         RUNTIME DESTINATION threepp COMPONENT python_module)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/threepp/__init__.py"
               "${CMAKE_CURRENT_SOURCE_DIR}/threepp/urdf.py"
+              "${CMAKE_CURRENT_SOURCE_DIR}/threepp/utils.py"
         DESTINATION threepp COMPONENT python_module)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp/rl"
         DESTINATION threepp COMPONENT python_module
         FILES_MATCHING PATTERN "*.py")
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/threepp/threepp.pyi"
-        DESTINATION threepp COMPONENT python_module OPTIONAL)
 
-# Optional: generate IDE type stubs into the package (threepp/threepp.pyi). Needs `pip
-# install pybind11-stubgen`. Build with: cmake --build <dir> --target threepp_stubs
+# Type information (PEP 561). `py.typed` is the marker that tells type checkers
+# to honour this package's types once it is installed from a wheel — without it
+# the stubs below are ignored outside the source tree.
+#
+# The stubs are a stub *package* (threepp/threepp/{__init__,imgui}.pyi) rather
+# than a single flat threepp.pyi, because the native module has a submodule
+# (threepp.threepp.imgui) that a flat file cannot express. The dir does not
+# shadow the extension module at import: it has no __init__.py, so it is only a
+# namespace-package candidate and the .pyd/.so loader wins. Regenerate with the
+# threepp_stubs target below. OPTIONAL so a wheel can still be built in a tree
+# where the stubs have not been generated.
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/threepp/py.typed"
+        DESTINATION threepp COMPONENT python_module)
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/threepp/threepp"
+        DESTINATION threepp COMPONENT python_module OPTIONAL
+        FILES_MATCHING PATTERN "*.pyi")
+
+# Optional: regenerate the IDE type stubs in the source tree
+# (threepp/threepp/*.pyi). Needs the pinned generator:
+#   pip install -r python/requirements-stubs.txt
+#   cmake --build <dir> --target threepp_stubs
+# scripts/gen_stubs.py wraps pybind11-stubgen so the result is reproducible: it
+# normalises the flags, drops the one member the tool cannot express, and fails
+# the build if the emitted stub does not parse (the bare CLI exits 0 either way).
 if (DEFINED Python_EXECUTABLE)
     add_custom_target(threepp_stubs
-            COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}"
-            ${Python_EXECUTABLE} -m pybind11_stubgen threepp.threepp
-            --output-dir ${CMAKE_CURRENT_SOURCE_DIR}
+            COMMAND ${Python_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/gen_stubs.py"
+            --package-dir "${CMAKE_CURRENT_SOURCE_DIR}"
             DEPENDS threepp_py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
             COMMENT "Generating threepp type stubs (requires pybind11-stubgen)")

@@ -1,0 +1,5623 @@
+"""
+threepp — a cross-platform C++ 3D library with the high-level API of three.js, exposed to Python (scene graph, geometries, materials, cameras, lights, OpenGL renderer + headless render-to-numpy).
+"""
+from __future__ import annotations
+import collections.abc
+import numpy
+import numpy.typing
+import typing
+from . import imgui
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'Ellipsoid', 'ErosionType', 'Euler', 'FBXLoader', 'Filter', 'Fog', 'FogExp2', 'Font', 'FontLoader', 'ForceTorqueSensor', 'Frond', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxWorld', 'PlaneGeometry', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'Sphere', 'SphereGeometry', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'deg_to_rad', 'euclidean_modulo', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'write_wav']
+class AmbientLight(Light):
+    def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        ...
+class AnimationAction:
+    blend_mode: AnimationBlendMode
+    def cross_fade_to(self, other: AnimationAction, duration: typing.SupportsFloat | typing.SupportsIndex, warp: bool = False) -> AnimationAction:
+        ...
+    def fade_in(self, duration: typing.SupportsFloat | typing.SupportsIndex) -> AnimationAction:
+        ...
+    def fade_out(self, duration: typing.SupportsFloat | typing.SupportsIndex) -> AnimationAction:
+        ...
+    def get_effective_time_scale(self) -> float:
+        ...
+    def get_effective_weight(self) -> float:
+        ...
+    def halt(self, duration: typing.SupportsFloat | typing.SupportsIndex) -> AnimationAction:
+        ...
+    def is_running(self) -> bool:
+        ...
+    def is_scheduled(self) -> bool:
+        ...
+    def play(self) -> AnimationAction:
+        ...
+    def reset(self) -> AnimationAction:
+        ...
+    def set_duration(self, duration: typing.SupportsFloat | typing.SupportsIndex) -> AnimationAction:
+        ...
+    def set_effective_time_scale(self, time_scale: typing.SupportsFloat | typing.SupportsIndex) -> AnimationAction:
+        ...
+    def set_effective_weight(self, weight: typing.SupportsFloat | typing.SupportsIndex) -> AnimationAction:
+        ...
+    def set_loop(self, mode: Loop, repetitions: typing.SupportsInt | typing.SupportsIndex = -1) -> AnimationAction:
+        ...
+    def start_at(self, time: typing.SupportsFloat | typing.SupportsIndex) -> AnimationAction:
+        ...
+    def stop(self) -> AnimationAction:
+        ...
+    def stop_fading(self) -> AnimationAction:
+        ...
+    def stop_warping(self) -> AnimationAction:
+        ...
+    def sync_with(self, action: AnimationAction) -> AnimationAction:
+        ...
+    def warp(self, start_time_scale: typing.SupportsFloat | typing.SupportsIndex, end_time_scale: typing.SupportsFloat | typing.SupportsIndex, duration: typing.SupportsFloat | typing.SupportsIndex) -> AnimationAction:
+        ...
+class AnimationBlendMode:
+    """
+    Members:
+    
+      NORMAL
+    
+      ADDITIVE
+    """
+    ADDITIVE: typing.ClassVar[AnimationBlendMode]  # value = <AnimationBlendMode.ADDITIVE: 1>
+    NORMAL: typing.ClassVar[AnimationBlendMode]  # value = <AnimationBlendMode.NORMAL: 0>
+    __members__: typing.ClassVar[dict[str, AnimationBlendMode]]  # value = {'NORMAL': <AnimationBlendMode.NORMAL: 0>, 'ADDITIVE': <AnimationBlendMode.ADDITIVE: 1>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class AnimationClip:
+    blend_mode: AnimationBlendMode
+    @staticmethod
+    def find_by_name(clips: collections.abc.Sequence[AnimationClip], name: str) -> AnimationClip:
+        ...
+    def __init__(self, name: str, duration: typing.SupportsFloat | typing.SupportsIndex = 1.0, tracks: collections.abc.Sequence[KeyframeTrack] = [], blend_mode: AnimationBlendMode = AnimationBlendMode.NORMAL) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def make_additive(self) -> None:
+        """
+        Convert every track to additive form and mark the clip Additive.
+        """
+    def reset_duration(self) -> None:
+        """
+        Recompute duration as the maximum track end time.
+        """
+    @property
+    def duration(self) -> float:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def uuid(self) -> str:
+        ...
+class AnimationMixer:
+    def __init__(self, root: typing.Any) -> None:
+        ...
+    def clip_action(self, clip: AnimationClip, blend_mode: threepp.threepp.AnimationBlendMode | None = None) -> AnimationAction:
+        """
+        Return (creating if needed) the AnimationAction for a clip on this mixer's root.
+        """
+    def stop_all_action(self) -> None:
+        ...
+    def update(self, dt: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Advance all active actions by dt seconds and write the result into the scene graph.
+        """
+    @property
+    def time(self) -> float:
+        ...
+    @time.setter
+    def time(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def time_scale(self) -> float:
+        ...
+    @time_scale.setter
+    def time_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class ArrowHelper(Object3D):
+    def __init__(self, dir: Vector3 = ..., origin: Vector3 = ..., length: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: Color = ..., head_length: typing.SupportsFloat | typing.SupportsIndex | None = None, head_width: typing.SupportsFloat | typing.SupportsIndex | None = None) -> None:
+        ...
+    def set_color(self, color: Color) -> None:
+        ...
+    def set_direction(self, dir: Vector3) -> None:
+        ...
+    def set_length(self, length: typing.SupportsFloat | typing.SupportsIndex, head_length: typing.SupportsFloat | typing.SupportsIndex | None = None, head_width: typing.SupportsFloat | typing.SupportsIndex | None = None) -> None:
+        ...
+class Articulation:
+    """
+    A reduced-coordinate articulation (robot): a tree of links joined by motorized revolute joints. Build with add_link (root first), then finalize(); stepping the world drives the bound meshes.
+    """
+    def add_link(self, mesh: Mesh, parent: typing.Any = None, density: typing.SupportsFloat | typing.SupportsIndex = 1000.0, axis: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 1.0], anchor: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], lower: typing.Any = None, upper: typing.Any = None, stiffness: typing.SupportsFloat | typing.SupportsIndex = 0.0, damping: typing.SupportsFloat | typing.SupportsIndex = 0.0, max_force: typing.SupportsFloat | typing.SupportsIndex = 1000000.0, drive_target: typing.SupportsFloat | typing.SupportsIndex = 0.0, joint_type: str = 'revolute', joint_friction: typing.SupportsFloat | typing.SupportsIndex = 0.0, material: typing.Any = None) -> ArticulationLink:
+        """
+        Add a link. parent=None → the fixed/free root; otherwise attach an inbound joint at world-space `anchor` along world-space `axis`. joint_type='revolute' (hinge about axis) or 'prismatic' (slider along axis). lower/upper set the joint limits (radians for revolute, metres for prismatic; omit both for a free axis); stiffness/damping/max_force configure the PD drive (stiffness>0 motorizes it; leave 0 for a passive/force-controlled joint). Shape is inferred from the mesh (Box/Sphere/Capsule). `material` (from world.create_material) overrides the contact friction/restitution for this link's shape — e.g. a grippy, restitution-0 foot, or a per-env material for friction domain randomization; default uses the world's shared material. Returns an ArticulationLink.
+        """
+    def dof_order(self) -> numpy.typing.NDArray[numpy.int32]:
+        """
+        Per add-order joint, its low-level DOF slot in the direct-GPU joint buffers (PhysX cache order != add-order). Use to map a GPU-trained policy back to the CPU getters: obs_gpu[dof_order[i]] = cpu[i]; cpu_target[i] = gpu_target[dof_order[i]].
+        """
+    def finalize(self) -> None:
+        """
+        Add the finished articulation to the scene. No links may be added afterwards.
+        """
+    def joint_positions(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        All revolute joint angles (radians) as one numpy array, in add_link order.
+        """
+    def joint_velocities(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        All revolute joint angular velocities (rad/s) as one numpy array.
+        """
+    def reset(self, position: Vector3, quaternion: Quaternion = ...) -> None:
+        """
+        Episode reset: teleport the root to `position` with optional `quaternion` orientation (default upright/identity), zero velocity, and zero all joint positions/velocities.
+        """
+    def root_state(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Root link world pose as numpy [px,py,pz, qx,qy,qz,qw] in one call.
+        """
+    def root_velocity(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Root link world-frame velocity as numpy [vx,vy,vz, wx,wy,wz] — the base linear + angular velocity a locomotion observation needs.
+        """
+    def set_drive_targets(self, targets: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> None:
+        """
+        Set every joint's PD drive target from one numpy array — the batched hot path for vectorized stepping (one call instead of one per joint).
+        """
+    def set_joint_positions(self, positions: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> None:
+        """
+        Set all joint positions (DOF order) and zero velocities — e.g. place a cart-pole hanging straight down for a swing-up demo.
+        """
+class ArticulationLink:
+    """
+    A link of an Articulation plus its inbound revolute joint (the root has none). Valid while its Articulation/world live.
+    """
+    def add_force(self, force: Vector3) -> None:
+        """
+        Apply an external force (N) to this link.
+        """
+    def add_impulse(self, impulse: Vector3) -> None:
+        """
+        Apply an external impulse (kg·m/s) — e.g. a random shove.
+        """
+    def set_drive_target(self, target: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Set the PD drive's target angle (radians).
+        """
+    def set_drive_velocity(self, velocity: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def is_root(self) -> bool:
+        ...
+    @property
+    def joint_position(self) -> float:
+        """
+        Joint angle (radians).
+        """
+    @property
+    def joint_velocity(self) -> float:
+        """
+        Joint angular velocity (rad/s).
+        """
+    @property
+    def position(self) -> Vector3:
+        ...
+    @property
+    def quaternion(self) -> Quaternion:
+        ...
+class Audio:
+    def __init__(self, listener: AudioListener, file: str) -> None:
+        ...
+    def play(self) -> None:
+        ...
+    def seek_to_start(self) -> None:
+        ...
+    def set_looping(self, loop: bool) -> None:
+        ...
+    def set_playback_rate(self, rate: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_volume(self, volume: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def stop(self) -> None:
+        ...
+    def toggle_play(self) -> None:
+        ...
+    @property
+    def is_playing(self) -> bool:
+        ...
+class AudioDistanceModel:
+    """
+    Members:
+    
+      NONE
+    
+      INVERSE
+    
+      LINEAR
+    
+      EXPONENTIAL
+    """
+    EXPONENTIAL: typing.ClassVar[AudioDistanceModel]  # value = <AudioDistanceModel.EXPONENTIAL: 3>
+    INVERSE: typing.ClassVar[AudioDistanceModel]  # value = <AudioDistanceModel.INVERSE: 1>
+    LINEAR: typing.ClassVar[AudioDistanceModel]  # value = <AudioDistanceModel.LINEAR: 2>
+    NONE: typing.ClassVar[AudioDistanceModel]  # value = <AudioDistanceModel.NONE: 0>
+    __members__: typing.ClassVar[dict[str, AudioDistanceModel]]  # value = {'NONE': <AudioDistanceModel.NONE: 0>, 'INVERSE': <AudioDistanceModel.INVERSE: 1>, 'LINEAR': <AudioDistanceModel.LINEAR: 2>, 'EXPONENTIAL': <AudioDistanceModel.EXPONENTIAL: 3>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class AudioListener(Object3D):
+    def __init__(self) -> None:
+        ...
+    @property
+    def master_volume(self) -> float:
+        ...
+    @master_volume.setter
+    def master_volume(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class AxesHelper(LineSegments):
+    def __init__(self, size: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        ...
+class Background:
+    @typing.overload
+    def __init__(self, color: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @typing.overload
+    def __init__(self, color: Color) -> None:
+        ...
+    @typing.overload
+    def __init__(self, texture: Texture) -> None:
+        ...
+    def is_color(self) -> bool:
+        ...
+    def is_texture(self) -> bool:
+        ...
+class Blending:
+    """
+    Members:
+    
+      None
+    
+      Normal
+    
+      Additive
+    
+      Subtractive
+    
+      Multiply
+    
+      Custom
+    """
+    Additive: typing.ClassVar[Blending]  # value = <Blending.Additive: 2>
+    Custom: typing.ClassVar[Blending]  # value = <Blending.Custom: 5>
+    Multiply: typing.ClassVar[Blending]  # value = <Blending.Multiply: 4>
+    # None: typing.ClassVar[Blending]  # value = <Blending.None: 0>
+    # NOTE: 'None' is a Python keyword — unusable as an attribute and
+    # not expressible in a stub. Reach it via getattr() if you need it.
+    Normal: typing.ClassVar[Blending]  # value = <Blending.Normal: 1>
+    Subtractive: typing.ClassVar[Blending]  # value = <Blending.Subtractive: 3>
+    __members__: typing.ClassVar[dict[str, Blending]]  # value = {'None': <Blending.None: 0>, 'Normal': <Blending.Normal: 1>, 'Additive': <Blending.Additive: 2>, 'Subtractive': <Blending.Subtractive: 3>, 'Multiply': <Blending.Multiply: 4>, 'Custom': <Blending.Custom: 5>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class Box3:
+    @typing.overload
+    def __init__(self) -> None:
+        ...
+    @typing.overload
+    def __init__(self, min: Vector3, max: Vector3) -> None:
+        ...
+    def contains_point(self, point: Vector3) -> bool:
+        ...
+    def get_center(self) -> Vector3:
+        ...
+    def get_size(self) -> Vector3:
+        ...
+    def is_empty(self) -> bool:
+        ...
+    def max(self) -> Vector3:
+        ...
+    def min(self) -> Vector3:
+        ...
+    def set_from_object(self, object: typing.Any, precise: bool = False) -> Box3:
+        ...
+class Box3Helper(LineSegments):
+    def __init__(self, box: Box3, color: Color = ...) -> None:
+        ...
+class BoxGeometry(BufferGeometry):
+    def __init__(self, width: typing.SupportsFloat | typing.SupportsIndex = 1.0, height: typing.SupportsFloat | typing.SupportsIndex = 1.0, depth: typing.SupportsFloat | typing.SupportsIndex = 1.0, width_segments: typing.SupportsInt | typing.SupportsIndex = 1, height_segments: typing.SupportsInt | typing.SupportsIndex = 1, depth_segments: typing.SupportsInt | typing.SupportsIndex = 1) -> None:
+        ...
+    @property
+    def depth(self) -> float:
+        ...
+    @property
+    def height(self) -> float:
+        ...
+    @property
+    def width(self) -> float:
+        ...
+class BoxHelper(LineSegments):
+    def __init__(self, object: typing.Any, color: Color = ...) -> None:
+        ...
+    def set_from_object(self, object: typing.Any) -> BoxHelper:
+        ...
+    def update(self) -> None:
+        ...
+class BranchingMode:
+    """
+    Members:
+    
+      Colonise
+    
+      Whorl
+    """
+    Colonise: typing.ClassVar[BranchingMode]  # value = <BranchingMode.Colonise: 0>
+    Whorl: typing.ClassVar[BranchingMode]  # value = <BranchingMode.Whorl: 1>
+    __members__: typing.ClassVar[dict[str, BranchingMode]]  # value = {'Colonise': <BranchingMode.Colonise: 0>, 'Whorl': <BranchingMode.Whorl: 1>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class BufferGeometry:
+    name: str
+    def __init__(self) -> None:
+        ...
+    def center(self) -> BufferGeometry:
+        ...
+    def compute_bounding_box(self) -> None:
+        ...
+    def compute_bounding_sphere(self) -> None:
+        ...
+    def compute_vertex_normals(self) -> None:
+        ...
+    def dispose(self) -> None:
+        ...
+    def rotate_x(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> BufferGeometry:
+        ...
+    def rotate_y(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> BufferGeometry:
+        ...
+    def rotate_z(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> BufferGeometry:
+        ...
+    def scale(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> BufferGeometry:
+        ...
+    def set_attribute(self, name: str, data: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> BufferGeometry:
+        ...
+    def set_draw_range(self, start: typing.SupportsInt | typing.SupportsIndex, count: typing.SupportsInt | typing.SupportsIndex) -> BufferGeometry:
+        """
+        Render only vertices [start, start+count). Use with a fixed-capacity attribute + update_attribute.
+        """
+    def set_from_points(self, points: collections.abc.Sequence[Vector3]) -> BufferGeometry:
+        ...
+    def translate(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> BufferGeometry:
+        ...
+    def update_attribute(self, name: str, data: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> BufferGeometry:
+        ...
+class Camera(Object3D):
+    def update_projection_matrix(self) -> None:
+        ...
+    @property
+    def far(self) -> float:
+        ...
+    @far.setter
+    def far(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def far_plane(self) -> float:
+        ...
+    @far_plane.setter
+    def far_plane(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def matrix_world_inverse(self) -> Matrix4:
+        ...
+    @property
+    def near(self) -> float:
+        ...
+    @near.setter
+    def near(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def near_plane(self) -> float:
+        ...
+    @near_plane.setter
+    def near_plane(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def projection_matrix(self) -> Matrix4:
+        ...
+    @property
+    def projection_matrix_inverse(self) -> Matrix4:
+        ...
+    @property
+    def zoom(self) -> float:
+        ...
+    @zoom.setter
+    def zoom(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class CameraHelper(LineSegments):
+    def __init__(self, camera: Camera) -> None:
+        ...
+    def update(self) -> None:
+        ...
+class Canvas:
+    def __init__(self, title: str = 'threepp', width: typing.SupportsInt | typing.SupportsIndex = -1, height: typing.SupportsInt | typing.SupportsIndex = -1, antialiasing: typing.SupportsInt | typing.SupportsIndex = 4, vsync: bool = True, resizable: bool = True, headless: bool = False) -> None:
+        ...
+    def animate(self, callback: collections.abc.Callable[[], None]) -> None:
+        """
+        Run the render loop, calling callback() every frame until the window closes.
+        """
+    def animate_once(self, callback: collections.abc.Callable[[], None]) -> bool:
+        """
+        Render a single frame; returns False when the app should quit.
+        """
+    def aspect(self) -> float:
+        ...
+    def close(self) -> None:
+        ...
+    def is_key_down(self, key: str) -> bool:
+        """
+        Poll whether a key is currently held — e.g. 'W','A','S','D','SPACE','UP','LEFT'. Query per-frame for continuous controls (WASD driving); never sticks.
+        """
+    def is_open(self) -> bool:
+        ...
+    def on_window_resize(self, callback: collections.abc.Callable[[typing.SupportsInt | typing.SupportsIndex, typing.SupportsInt | typing.SupportsIndex], None]) -> None:
+        """
+        Register callback(width, height), called when the window is resized. Use it to update the camera aspect (+ update_projection_matrix) and the renderer size.
+        """
+    def set_size(self, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def size(self) -> tuple[int, int]:
+        ...
+    @property
+    def graphics_api(self) -> str:
+        ...
+class CapsuleGeometry(BufferGeometry):
+    def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 0.5, length: typing.SupportsFloat | typing.SupportsIndex = 1.0, cap_segments: typing.SupportsInt | typing.SupportsIndex = 8, radial_segments: typing.SupportsInt | typing.SupportsIndex = 16) -> None:
+        ...
+    @property
+    def length(self) -> float:
+        ...
+    @property
+    def radius(self) -> float:
+        ...
+class CircleGeometry(BufferGeometry):
+    def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, segments: typing.SupportsInt | typing.SupportsIndex = 16, theta_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, theta_length: typing.SupportsFloat | typing.SupportsIndex = 6.2831854820251465) -> None:
+        ...
+class Clock:
+    running: bool
+    def __init__(self, auto_start: bool = True) -> None:
+        ...
+    def get_delta(self) -> float:
+        ...
+    def get_elapsed_time(self) -> float:
+        ...
+    def start(self) -> None:
+        ...
+    def stop(self) -> None:
+        ...
+    @property
+    def elapsed_time(self) -> float:
+        ...
+    @elapsed_time.setter
+    def elapsed_time(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class Color:
+    __hash__: typing.ClassVar[None] = None
+    def __eq__(self, arg0: Color) -> bool:
+        ...
+    @typing.overload
+    def __init__(self) -> None:
+        ...
+    @typing.overload
+    def __init__(self, hex: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @typing.overload
+    def __init__(self, r: typing.SupportsFloat | typing.SupportsIndex, g: typing.SupportsFloat | typing.SupportsIndex, b: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @typing.overload
+    def __init__(self, style: str) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def clone(self) -> Color:
+        ...
+    def copy(self, color: Color) -> Color:
+        ...
+    def get_hex(self) -> int:
+        ...
+    def get_hex_string(self) -> str:
+        ...
+    def lerp(self, color: Color, alpha: typing.SupportsFloat | typing.SupportsIndex) -> Color:
+        ...
+    def set_hex(self, hex: typing.SupportsInt | typing.SupportsIndex) -> Color:
+        ...
+    def set_rgb(self, r: typing.SupportsFloat | typing.SupportsIndex, g: typing.SupportsFloat | typing.SupportsIndex, b: typing.SupportsFloat | typing.SupportsIndex) -> Color:
+        ...
+    def set_style(self, style: str) -> Color:
+        ...
+    @property
+    def b(self) -> float:
+        ...
+    @b.setter
+    def b(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def g(self) -> float:
+        ...
+    @g.setter
+    def g(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def r(self) -> float:
+        ...
+    @r.setter
+    def r(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class ColorKeyframeTrack(KeyframeTrack):
+    def __init__(self, name: str, times: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], interpolation: threepp.threepp.Interpolation | None = None) -> None:
+        ...
+class ColorSpace:
+    """
+    Members:
+    
+      NoColorSpace
+    
+      Linear
+    
+      SRGB
+    """
+    Linear: typing.ClassVar[ColorSpace]  # value = <ColorSpace.Linear: 3000>
+    NoColorSpace: typing.ClassVar[ColorSpace]  # value = <ColorSpace.NoColorSpace: -1>
+    SRGB: typing.ClassVar[ColorSpace]  # value = <ColorSpace.SRGB: 3001>
+    __members__: typing.ClassVar[dict[str, ColorSpace]]  # value = {'NoColorSpace': <ColorSpace.NoColorSpace: -1>, 'Linear': <ColorSpace.Linear: 3000>, 'SRGB': <ColorSpace.SRGB: 3001>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class CombineOperation:
+    """
+    Members:
+    
+      Multiply
+    
+      Mix
+    
+      Add
+    """
+    Add: typing.ClassVar[CombineOperation]  # value = <CombineOperation.Add: 2>
+    Mix: typing.ClassVar[CombineOperation]  # value = <CombineOperation.Mix: 1>
+    Multiply: typing.ClassVar[CombineOperation]  # value = <CombineOperation.Multiply: 0>
+    __members__: typing.ClassVar[dict[str, CombineOperation]]  # value = {'Multiply': <CombineOperation.Multiply: 0>, 'Mix': <CombineOperation.Mix: 1>, 'Add': <CombineOperation.Add: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class ConeGeometry(BufferGeometry):
+    def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, height: typing.SupportsFloat | typing.SupportsIndex = 1.0, radial_segments: typing.SupportsInt | typing.SupportsIndex = 16, height_segments: typing.SupportsInt | typing.SupportsIndex = 1, open_ended: bool = False, theta_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, theta_length: typing.SupportsFloat | typing.SupportsIndex = 6.2831854820251465) -> None:
+        ...
+class ContactPoint:
+    """
+    One manifold point, world space.
+    """
+    @property
+    def impulse(self) -> float:
+        """
+        Normal impulse magnitude at this point over the substep (N*s).
+        """
+    @property
+    def normal(self) -> Vector3:
+        """
+        Unit normal pointing INTO the sensor's body.
+        """
+    @property
+    def position(self) -> Vector3:
+        ...
+class ContactSample:
+    """
+    One contact reading.
+    """
+    def __repr__(self) -> str:
+        ...
+    @property
+    def force(self) -> Vector3:
+        """
+        Mean contact force over the interval (N). Zero while asleep.
+        """
+    @property
+    def in_contact(self) -> bool:
+        """
+        Latched touch state — stays true while resting, including after the contact pair falls asleep and stops producing points.
+        """
+    @property
+    def observed_points(self) -> int:
+        """
+        Manifold points seen this interval, before the report cap.
+        """
+    @property
+    def points(self) -> list[ContactPoint]:
+        """
+        Reported manifold points (capped; see observed_points).
+        """
+    @property
+    def t(self) -> float:
+        ...
+    @property
+    def touch_began(self) -> bool:
+        ...
+    @property
+    def touch_ended(self) -> bool:
+        ...
+class ContactSensor(Sensor):
+    """
+    Reports whether the attached body is touching anything, where, and how hard — a bumper, a foot-contact switch, a grasp detector.
+    """
+    def __init__(self, node: typing.Any, rate_hz: typing.SupportsFloat | typing.SupportsIndex = 0.0, buffer_capacity: typing.SupportsInt | typing.SupportsIndex = 256) -> None:
+        """
+        Attach to `node`; the rigid body in its ancestry is the one whose contacts are reported.
+        """
+    def drain(self) -> list[ContactSample]:
+        """
+        Move all buffered ContactSamples (oldest-first) out as a list; empties the buffer.
+        """
+    def latest(self) -> threepp.threepp.ContactSample | None:
+        """
+        The most recent ContactSample, or None. Survives drain().
+        """
+    def reset(self) -> None:
+        """
+        Re-arm: clear the buffer, latch and pending observations.
+        """
+    @property
+    def attached(self) -> bool:
+        """
+        True while bound to a live rigid body.
+        """
+    @property
+    def available(self) -> int:
+        """
+        Number of buffered samples.
+        """
+    @property
+    def in_contact(self) -> bool:
+        """
+        Current latched touch state — the cheap read for a control loop that only wants a foot-down boolean.
+        """
+    @property
+    def rate_hz(self) -> float:
+        ...
+    @rate_hz.setter
+    def rate_hz(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def touch_count(self) -> int:
+        """
+        How many distinct bodies are currently being touched.
+        """
+class ConvexGeometry(BufferGeometry):
+    def __init__(self, points: collections.abc.Sequence[Vector3]) -> None:
+        ...
+    def contains_point(self, point: Vector3, tolerance: typing.SupportsFloat | typing.SupportsIndex = -1.0) -> bool:
+        ...
+class CrownShape:
+    """
+    Members:
+    
+      Sphere
+    
+      Ellipsoid
+    
+      Cone
+    
+      Hemisphere
+    
+      Cylinder
+    """
+    Cone: typing.ClassVar[CrownShape]  # value = <CrownShape.Cone: 2>
+    Cylinder: typing.ClassVar[CrownShape]  # value = <CrownShape.Cylinder: 4>
+    Ellipsoid: typing.ClassVar[CrownShape]  # value = <CrownShape.Ellipsoid: 1>
+    Hemisphere: typing.ClassVar[CrownShape]  # value = <CrownShape.Hemisphere: 3>
+    Sphere: typing.ClassVar[CrownShape]  # value = <CrownShape.Sphere: 0>
+    __members__: typing.ClassVar[dict[str, CrownShape]]  # value = {'Sphere': <CrownShape.Sphere: 0>, 'Ellipsoid': <CrownShape.Ellipsoid: 1>, 'Cone': <CrownShape.Cone: 2>, 'Hemisphere': <CrownShape.Hemisphere: 3>, 'Cylinder': <CrownShape.Cylinder: 4>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class CylinderGeometry(BufferGeometry):
+    def __init__(self, radius_top: typing.SupportsFloat | typing.SupportsIndex = 1.0, radius_bottom: typing.SupportsFloat | typing.SupportsIndex = 1.0, height: typing.SupportsFloat | typing.SupportsIndex = 1.0, radial_segments: typing.SupportsInt | typing.SupportsIndex = 16, height_segments: typing.SupportsInt | typing.SupportsIndex = 1, open_ended: bool = False, theta_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, theta_length: typing.SupportsFloat | typing.SupportsIndex = 6.2831854820251465) -> None:
+        ...
+class DepthPacking:
+    """
+    Members:
+    
+      Basic
+    
+      RGBA
+    """
+    Basic: typing.ClassVar[DepthPacking]  # value = <DepthPacking.Basic: 3200>
+    RGBA: typing.ClassVar[DepthPacking]  # value = <DepthPacking.RGBA: 3201>
+    __members__: typing.ClassVar[dict[str, DepthPacking]]  # value = {'Basic': <DepthPacking.Basic: 3200>, 'RGBA': <DepthPacking.RGBA: 3201>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class DepthSensor(Object3D, Sensor):
+    def __init__(self, fov_y: typing.SupportsFloat | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex, near: typing.SupportsFloat | typing.SupportsIndex = 0.10000000149011612, far: typing.SupportsFloat | typing.SupportsIndex = 100.0) -> None:
+        """
+        Depth sensor with a vertical FOV (deg), output resolution, and near/far clip (m).
+        """
+    def reset_noise(self) -> None:
+        """
+        Re-seed the noise stream from noise.seed and clear last_scan_time — call between episodes so two runs with the same seed produce the same clouds.
+        """
+    def scan(self, renderer: typing.Any, scene: Scene) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Depth scan -> (N,3) float32 world-space hit points (N = points that hit within far). Works with a GLRenderer (raster depth) or a VulkanRenderer (path-traced through the renderer's acceleration structure -- render() the scene at least once first).
+        """
+    def scan_rgbd(self, renderer: typing.Any, scene: Scene) -> tuple[numpy.typing.NDArray[numpy.float32], numpy.typing.NDArray[numpy.float32]]:
+        """
+        RGB-D scan -> (points (N,3) float32 world-space, colors (N,3) float32 in [0,1]). On GL the colors are sampled sRGB; on Vulkan they are LIDAR intensity as greyscale.
+        """
+    @property
+    def far(self) -> float:
+        ...
+    @property
+    def fov(self) -> float:
+        ...
+    @property
+    def height(self) -> int:
+        ...
+    @property
+    def last_scan_time(self) -> float:
+        """
+        Sim time (s) stamped on the most recent scan — the timestamp to record alongside the cloud. Register the sensor with a PhysxWorld or drive `sim_time` yourself; see threepp.Sensor.
+        """
+    @property
+    def near(self) -> float:
+        ...
+    @property
+    def noise(self) -> RangeNoiseModel:
+        """
+        The full RangeNoiseModel (stddev, stddev_per_metre, bias, seed). Set `seed` to make a captured dataset replayable; the stream re-seeds on the next scan when the seed changes.
+        """
+    @noise.setter
+    def noise(self, arg0: RangeNoiseModel) -> None:
+        ...
+    @property
+    def range_noise(self) -> float:
+        """
+        Gaussian range-noise std-dev in metres (0 = perfect sensor). Shorthand for noise.stddev.
+        """
+    @range_noise.setter
+    def range_noise(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def scan_due(self) -> bool:
+        """
+        True when the rate gate says a scan is due (always true unless rate_hz is set and the sensor is registered with a PhysxWorld).
+        """
+    @property
+    def width(self) -> int:
+        ...
+class DirectionalLight(Light):
+    def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        ...
+    def get_target(self) -> Object3D:
+        ...
+    def set_shadow_bias(self, bias: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        ...
+    def set_shadow_frustum(self, left: typing.SupportsFloat | typing.SupportsIndex = -10.0, right: typing.SupportsFloat | typing.SupportsIndex = 10.0, top: typing.SupportsFloat | typing.SupportsIndex = 10.0, bottom: typing.SupportsFloat | typing.SupportsIndex = -10.0) -> None:
+        """
+        Resize the directional-light shadow ortho frustum. Call after creation; default ±1 clips almost everything.
+        """
+    def set_target(self, target: Object3D) -> None:
+        ...
+class DirectionalLightHelper(Object3D):
+    def __init__(self, light: DirectionalLight, size: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: threepp.threepp.Color | None = None) -> None:
+        ...
+    def update(self) -> None:
+        ...
+class DisplacedMesh(Mesh):
+    class MeshWarp:
+        @property
+        def center_x(self) -> float:
+            ...
+        @center_x.setter
+        def center_x(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def center_z(self) -> float:
+            ...
+        @center_z.setter
+        def center_z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def coef_a(self) -> float:
+            """
+            1 = uniform; lower = denser centre (~0.1 ≈ 10 cm centre / 2.7 m edge).
+            """
+        @coef_a.setter
+        def coef_a(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def half_range(self) -> float:
+            """
+            Half-extent the warp covers; 0 = uniform grid (disabled).
+            """
+        @half_range.setter
+        def half_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+    class Params:
+        @property
+        def choppiness(self) -> float:
+            """
+            Horizontal pull / crest sharpness; ~0.45 realistic, >=0.8 folds crests.
+            """
+        @choppiness.setter
+        def choppiness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def foam_amount(self) -> float:
+            """
+            Natural whitecap foam scale, live-tunable (1 = ocean whitewater, 0 = none; wake/disturbance foam unaffected). Ocean auto-derives ~size/300.
+            """
+        @foam_amount.setter
+        def foam_amount(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def texture_size_0(self) -> int:
+            """
+            Cascade-0 FFT resolution (power of two).
+            """
+        @texture_size_0.setter
+        def texture_size_0(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def texture_size_1(self) -> int:
+            """
+            Cascade-1 FFT resolution (power of two).
+            """
+        @texture_size_1.setter
+        def texture_size_1(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def texture_size_2(self) -> int:
+            """
+            Cascade-2 FFT resolution (power of two).
+            """
+        @texture_size_2.setter
+        def texture_size_2(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def tile_size_0(self) -> float:
+            """
+            Cascade-0 world tile (m); the largest swell wavelength. Must be > 0.
+            """
+        @tile_size_0.setter
+        def tile_size_0(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def tile_size_1(self) -> float:
+            """
+            Cascade-1 tile (m); 0 disables.
+            """
+        @tile_size_1.setter
+        def tile_size_1(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def tile_size_2(self) -> float:
+            """
+            Cascade-2 tile (m); 0 disables.
+            """
+        @tile_size_2.setter
+        def tile_size_2(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def wave_scale(self) -> float:
+            """
+            Global wave-height multiplier; 1.0 = physical.
+            """
+        @wave_scale.setter
+        def wave_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def wind_speed(self) -> float:
+            """
+            Wind speed (m/s); the dominant wave-height lever (Phillips amplitude ~ V^4).
+            """
+        @wind_speed.setter
+        def wind_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def wind_theta(self) -> float:
+            """
+            Wind direction (radians, 0 = +X).
+            """
+        @wind_theta.setter
+        def wind_theta(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+    def __init__(self, geometry: BufferGeometry, material: typing.Any) -> None:
+        """
+        Low-level constructor. Most callers want Ocean instead, which builds the plane + water material + cascade defaults for you.
+        """
+    def add_foam_disturbance(self, world_x: typing.SupportsFloat | typing.SupportsIndex, world_z: typing.SupportsFloat | typing.SupportsIndex, radius: typing.SupportsFloat | typing.SupportsIndex, intensity: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Splat a gaussian foam blob at a world XZ (radius m, intensity in [0,1]).
+        """
+    def clear_foam_disturbances(self) -> None:
+        ...
+    def sample_height(self, world_x: typing.SupportsFloat | typing.SupportsIndex, world_z: typing.SupportsFloat | typing.SupportsIndex, cascade_mask: typing.SupportsInt | typing.SupportsIndex = 7) -> float:
+        """
+        Combined wave height (m) at a world XZ. cascade_mask selects cascades (bit i = cascade i). Returns 0 until a Vulkan render() has run.
+        """
+    @property
+    def params(self) -> DisplacedMesh.Params:
+        ...
+    @property
+    def warp(self) -> DisplacedMesh.MeshWarp:
+        ...
+class ErosionType:
+    """
+    Members:
+    
+      Off
+    
+      Hydraulic
+    
+      Thermal
+    
+      Both
+    """
+    Both: typing.ClassVar[ErosionType]  # value = <ErosionType.Both: 3>
+    Hydraulic: typing.ClassVar[ErosionType]  # value = <ErosionType.Hydraulic: 1>
+    Off: typing.ClassVar[ErosionType]  # value = <ErosionType.Off: 0>
+    Thermal: typing.ClassVar[ErosionType]  # value = <ErosionType.Thermal: 2>
+    __members__: typing.ClassVar[dict[str, ErosionType]]  # value = {'Off': <ErosionType.Off: 0>, 'Hydraulic': <ErosionType.Hydraulic: 1>, 'Thermal': <ErosionType.Thermal: 2>, 'Both': <ErosionType.Both: 3>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class Euler:
+    order: RotationOrder
+    def __init__(self, x: typing.SupportsFloat | typing.SupportsIndex = 0.0, y: typing.SupportsFloat | typing.SupportsIndex = 0.0, z: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def set(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> Euler:
+        ...
+    @property
+    def x(self) -> float:
+        ...
+    @x.setter
+    def x(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def y(self) -> float:
+        ...
+    @y.setter
+    def y(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def z(self) -> float:
+        ...
+    @z.setter
+    def z(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class FBXLoader:
+    class MaterialMode:
+        """
+        Members:
+        
+          Auto
+        
+          Phong
+        
+          PBR
+        """
+        Auto: typing.ClassVar[FBXLoader.MaterialMode]  # value = <MaterialMode.Auto: 0>
+        PBR: typing.ClassVar[FBXLoader.MaterialMode]  # value = <MaterialMode.PBR: 2>
+        Phong: typing.ClassVar[FBXLoader.MaterialMode]  # value = <MaterialMode.Phong: 1>
+        __members__: typing.ClassVar[dict[str, FBXLoader.MaterialMode]]  # value = {'Auto': <MaterialMode.Auto: 0>, 'Phong': <MaterialMode.Phong: 1>, 'PBR': <MaterialMode.PBR: 2>}
+        def __eq__(self, other: typing.Any) -> bool:
+            ...
+        def __getstate__(self) -> int:
+            ...
+        def __hash__(self) -> int:
+            ...
+        def __index__(self) -> int:
+            ...
+        def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __int__(self) -> int:
+            ...
+        def __ne__(self, other: typing.Any) -> bool:
+            ...
+        def __repr__(self) -> str:
+            ...
+        def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __str__(self) -> str:
+            ...
+        @property
+        def name(self) -> str:
+            ...
+        @property
+        def value(self) -> int:
+            ...
+    def __init__(self) -> None:
+        ...
+    def load(self, path: str) -> Group:
+        """
+        Load an .fbx file as a Group.
+        """
+    @property
+    def emissive_scale(self) -> float:
+        """
+        Multiplier on every emissive material's intensity (1.0 = file values).
+        """
+    @emissive_scale.setter
+    def emissive_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def material_mode(self) -> FBXLoader.MaterialMode:
+        """
+        How the FBX SPECULAR slot is interpreted (Auto/Phong/PBR).
+        """
+    @material_mode.setter
+    def material_mode(self, arg0: FBXLoader.MaterialMode) -> None:
+        ...
+class Filter:
+    """
+    Members:
+    
+      Nearest
+    
+      NearestMipmapNearest
+    
+      NearestMipmapLinear
+    
+      Linear
+    
+      LinearMipmapNearest
+    
+      LinearMipmapLinear
+    """
+    Linear: typing.ClassVar[Filter]  # value = <Filter.Linear: 1006>
+    LinearMipmapLinear: typing.ClassVar[Filter]  # value = <Filter.LinearMipmapLinear: 1008>
+    LinearMipmapNearest: typing.ClassVar[Filter]  # value = <Filter.LinearMipmapNearest: 1007>
+    Nearest: typing.ClassVar[Filter]  # value = <Filter.Nearest: 1003>
+    NearestMipmapLinear: typing.ClassVar[Filter]  # value = <Filter.NearestMipmapLinear: 1005>
+    NearestMipmapNearest: typing.ClassVar[Filter]  # value = <Filter.NearestMipmapNearest: 1004>
+    __members__: typing.ClassVar[dict[str, Filter]]  # value = {'Nearest': <Filter.Nearest: 1003>, 'NearestMipmapNearest': <Filter.NearestMipmapNearest: 1004>, 'NearestMipmapLinear': <Filter.NearestMipmapLinear: 1005>, 'Linear': <Filter.Linear: 1006>, 'LinearMipmapNearest': <Filter.LinearMipmapNearest: 1007>, 'LinearMipmapLinear': <Filter.LinearMipmapLinear: 1008>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class Fog:
+    color: Color
+    def __init__(self, color: Color, near: typing.SupportsFloat | typing.SupportsIndex = 1.0, far: typing.SupportsFloat | typing.SupportsIndex = 1000.0) -> None:
+        ...
+    @property
+    def far(self) -> float:
+        ...
+    @far.setter
+    def far(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def near(self) -> float:
+        ...
+    @near.setter
+    def near(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class FogExp2:
+    color: Color
+    def __init__(self, color: Color, density: typing.SupportsFloat | typing.SupportsIndex = 0.0002500000118743628) -> None:
+        """
+        Exponential (Beer-Lambert) participating-media fog. density = σ_t (extinction per metre). On Vulkan this drives full volumetric single-scattering; on GL it falls back to GL_EXP2.
+        """
+    @property
+    def density(self) -> float:
+        ...
+    @density.setter
+    def density(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class Font:
+    def __repr__(self) -> str:
+        ...
+    @property
+    def family_name(self) -> str:
+        ...
+class FontLoader:
+    def __init__(self) -> None:
+        ...
+    def default_font(self) -> Font:
+        """
+        The built-in embedded font (no file needed).
+        """
+    def load(self, path: str) -> typing.Any:
+        """
+        Load a typeface (.json) or TrueType (.ttf) font; None on failure.
+        """
+class ForceTorqueSensor(Sensor):
+    """
+    Load cell on an articulation joint: the wrench the parent link transmits to the child through their joint, as the solver computed it. The input to force control, admittance control and payload estimation.
+    """
+    def __init__(self, node: typing.Any, articulation: ..., link: ..., rate_hz: typing.SupportsFloat | typing.SupportsIndex = 0.0, buffer_capacity: typing.SupportsInt | typing.SupportsIndex = 2048) -> None:
+        """
+        Measure `link`'s inbound joint. Raises if `link` is the root, or if the articulation has not been finalized.
+        """
+    def drain(self) -> list[WrenchSample]:
+        """
+        Move all buffered WrenchSamples (oldest-first) out as a list; empties the buffer.
+        """
+    def drain_array(self) -> numpy.typing.NDArray[numpy.float64]:
+        """
+        Drain all buffered samples as a (N, 7) float64 numpy array with columns [t, fx, fy, fz, tx, ty, tz]. Empties the buffer.
+        """
+    def latest(self) -> threepp.threepp.WrenchSample | None:
+        """
+        The most recent WrenchSample, or None. Survives drain().
+        """
+    def reset(self) -> None:
+        """
+        Re-arm: clear the buffer and re-seed the noise.
+        """
+    @property
+    def available(self) -> int:
+        """
+        Number of buffered samples.
+        """
+    @property
+    def force_noise(self) -> NoiseModel:
+        """
+        NoiseModel for the force channel (N). Change then call reset().
+        """
+    @force_noise.setter
+    def force_noise(self, arg0: NoiseModel) -> None:
+        ...
+    @property
+    def torque_noise(self) -> NoiseModel:
+        """
+        NoiseModel for the torque channel (N*m). Change then call reset().
+        """
+    @torque_noise.setter
+    def torque_noise(self, arg0: NoiseModel) -> None:
+        ...
+class GLRenderer:
+    auto_clear: bool
+    check_shader_errors: bool
+    shadow_map_enabled: bool
+    sort_objects: bool
+    tone_mapping: ToneMapping
+    def __init__(self, canvas: Canvas) -> None:
+        ...
+    def clear(self, color: bool = True, depth: bool = True, stencil: bool = True) -> None:
+        ...
+    def read_pixels(self, flip: bool = True) -> numpy.typing.NDArray[numpy.uint8]:
+        ...
+    def render(self, scene: Object3D, camera: Camera) -> None:
+        ...
+    def save_frame(self, path: str) -> None:
+        ...
+    def set_clear_color(self, color: Color, alpha: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        ...
+    def set_pixel_ratio(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_scissor(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def set_scissor_test(self, enabled: bool) -> None:
+        ...
+    def set_size(self, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def set_viewport(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def size(self) -> tuple[int, int]:
+        ...
+    @property
+    def tone_mapping_exposure(self) -> float:
+        ...
+    @tone_mapping_exposure.setter
+    def tone_mapping_exposure(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class GLTFLoader:
+    def __init__(self) -> None:
+        ...
+    def load(self, path: str) -> GLTFResult:
+        ...
+class GLTFResult:
+    def __repr__(self) -> str:
+        ...
+    @property
+    def animations(self) -> list[AnimationClip]:
+        """
+        All AnimationClips in the file.
+        """
+    @property
+    def scene(self) -> Group:
+        """
+        Root Group of the loaded model.
+        """
+    @property
+    def scenes(self) -> list[Group]:
+        """
+        All scenes in the file.
+        """
+class GrassMesh(Mesh):
+    wind_dir: Vector2
+    def __init__(self, geometry: BufferGeometry, material: typing.Any) -> None:
+        ...
+    @property
+    def time(self) -> float:
+        """
+        Animation clock (seconds); set per frame to advance the wind.
+        """
+    @time.setter
+    def time(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def wind_strength(self) -> float:
+        ...
+    @wind_strength.setter
+    def wind_strength(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class GridHelper(LineSegments):
+    def __init__(self, size: typing.SupportsInt | typing.SupportsIndex = 10, divisions: typing.SupportsInt | typing.SupportsIndex = 10, color1: Color = ..., color2: Color = ...) -> None:
+        ...
+class Group(Object3D):
+    def __init__(self) -> None:
+        ...
+class HemisphereLight(Light):
+    ground_color: Color
+    def __init__(self, sky_color: Color = ..., ground_color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        ...
+class HemisphereLightHelper(Object3D):
+    color: threepp.threepp.Color | None
+    def __init__(self, light: HemisphereLight, size: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: threepp.threepp.Color | None = None) -> None:
+        ...
+    def update(self) -> None:
+        ...
+class HorizontalAlignment:
+    """
+    Members:
+    
+      Left
+    
+      Center
+    
+      Right
+    """
+    Center: typing.ClassVar[HorizontalAlignment]  # value = <HorizontalAlignment.Center: 1>
+    Left: typing.ClassVar[HorizontalAlignment]  # value = <HorizontalAlignment.Left: 0>
+    Right: typing.ClassVar[HorizontalAlignment]  # value = <HorizontalAlignment.Right: 2>
+    __members__: typing.ClassVar[dict[str, HorizontalAlignment]]  # value = {'Left': <HorizontalAlignment.Left: 0>, 'Center': <HorizontalAlignment.Center: 1>, 'Right': <HorizontalAlignment.Right: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class IcosahedronGeometry(BufferGeometry):
+    def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, detail: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
+        ...
+class IcpOptions:
+    def __init__(self) -> None:
+        ...
+    @property
+    def max_correspondence_distance(self) -> float:
+        ...
+    @max_correspondence_distance.setter
+    def max_correspondence_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_iterations(self) -> int:
+        ...
+    @max_iterations.setter
+    def max_iterations(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def min_correspondence_distance(self) -> float:
+        ...
+    @min_correspondence_distance.setter
+    def min_correspondence_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def robust_sigma(self) -> float:
+        ...
+    @robust_sigma.setter
+    def robust_sigma(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class IcpResult:
+    def __repr__(self) -> str:
+        ...
+    @property
+    def converged(self) -> bool:
+        ...
+    @property
+    def correspondences(self) -> int:
+        ...
+    @property
+    def iterations(self) -> int:
+        ...
+class ImguiContext:
+    def __init__(self, canvas: Canvas, renderer: typing.Any) -> None:
+        """
+        Dear ImGui UI. Pass the renderer (GLRenderer or VulkanRenderer); create the context AFTER the renderer. The same call works on both backends.
+        """
+    def render(self, draw: collections.abc.Callable[[], None]) -> None:
+        """
+        Build + draw one UI frame; call inside animate() after renderer.render().
+        """
+    @property
+    def want_capture_keyboard(self) -> bool:
+        ...
+    @property
+    def want_capture_mouse(self) -> bool:
+        """
+        True when the pointer is over UI — gate OrbitControls on `not ui.want_capture_mouse`.
+        """
+class Imu(Sensor):
+    """
+    Gyroscope + accelerometer attached to an Object3D. Its measurement frame is that node's world frame; register it with a PhysxWorld (world.register_sensor) AFTER adding the body it rides. Each substep it measures the body's angular velocity (rad/s) and the specific force at the sensor point (m/s^2, gravity reaction + lever-arm terms), in the sensor frame. A level body at rest reads accel (0, +9.81, 0); free fall reads ~0.
+    """
+    def __init__(self, node: typing.Any, rate_hz: typing.SupportsFloat | typing.SupportsIndex = 0.0, buffer_capacity: typing.SupportsInt | typing.SupportsIndex = 2048) -> None:
+        """
+        Attach an IMU to `node` (its world frame is the sensor frame). rate_hz=0 samples every physics substep; buffer_capacity is the ring depth (oldest dropped on overflow).
+        """
+    def drain(self) -> list[ImuSample]:
+        """
+        Move all buffered ImuSamples (oldest-first) out as a list; empties the buffer.
+        """
+    def drain_array(self) -> numpy.typing.NDArray[numpy.float64]:
+        """
+        Drain all buffered samples as a (N, 7) float64 numpy array with columns [t, gx, gy, gz, ax, ay, az]. Empties the buffer.
+        """
+    def latest(self) -> threepp.threepp.ImuSample | None:
+        """
+        The most recent ImuSample, or None. Survives drain().
+        """
+    def reset(self) -> None:
+        """
+        Re-arm after an episode reset or a noise change: clears the finite-difference history + buffer and re-seeds the noise from the current configs.
+        """
+    @property
+    def accel_noise(self) -> NoiseModel:
+        """
+        NoiseModel for the accelerometer (m/s^2 units). Change then call reset().
+        """
+    @accel_noise.setter
+    def accel_noise(self, arg0: NoiseModel) -> None:
+        ...
+    @property
+    def attached(self) -> bool:
+        """
+        True while bound to a live rigid body. False before registering, after unregistering, and after the body was removed from the world (remove_actor) — sampling is a silent no-op in all three cases.
+        """
+    @property
+    def available(self) -> int:
+        """
+        Number of buffered samples.
+        """
+    @property
+    def gyro_noise(self) -> NoiseModel:
+        """
+        NoiseModel for the gyroscope (rad/s units). Change then call reset().
+        """
+    @gyro_noise.setter
+    def gyro_noise(self, arg0: NoiseModel) -> None:
+        ...
+    @property
+    def rate_hz(self) -> float:
+        ...
+    @rate_hz.setter
+    def rate_hz(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class ImuSample:
+    """
+    One IMU measurement. t: sim time (s). angular_velocity: rad/s. linear_acceleration: specific force (m/s^2). Both in the sensor frame.
+    """
+    def __repr__(self) -> str:
+        ...
+    @property
+    def angular_velocity(self) -> Vector3:
+        ...
+    @property
+    def linear_acceleration(self) -> Vector3:
+        ...
+    @property
+    def t(self) -> float:
+        ...
+class InstancedMesh(Mesh):
+    def __init__(self, geometry: BufferGeometry, material: typing.Any, count: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def get_matrix_at(self, index: typing.SupportsInt | typing.SupportsIndex) -> Matrix4:
+        ...
+    def instance_color_needs_update(self) -> None:
+        ...
+    def instance_matrix_needs_update(self) -> None:
+        ...
+    def set_color_at(self, index: typing.SupportsInt | typing.SupportsIndex, color: Color) -> None:
+        ...
+    def set_count(self, count: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def set_matrix_at(self, index: typing.SupportsInt | typing.SupportsIndex, matrix: Matrix4) -> None:
+        ...
+    @property
+    def count(self) -> int:
+        ...
+class Interpolation:
+    """
+    Keyframe interpolation mode.
+    
+    Members:
+    
+      DISCRETE
+    
+      LINEAR
+    
+      SMOOTH
+    """
+    DISCRETE: typing.ClassVar[Interpolation]  # value = <Interpolation.DISCRETE: 0>
+    LINEAR: typing.ClassVar[Interpolation]  # value = <Interpolation.LINEAR: 1>
+    SMOOTH: typing.ClassVar[Interpolation]  # value = <Interpolation.SMOOTH: 2>
+    __members__: typing.ClassVar[dict[str, Interpolation]]  # value = {'DISCRETE': <Interpolation.DISCRETE: 0>, 'LINEAR': <Interpolation.LINEAR: 1>, 'SMOOTH': <Interpolation.SMOOTH: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class IsoMesh:
+    def __init__(self) -> None:
+        ...
+    @property
+    def empty(self) -> bool:
+        ...
+    @property
+    def normals(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        (N,3) float32 per-vertex normals.
+        """
+    @property
+    def positions(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        (N,3) float32 vertex positions (3 per triangle, unwelded).
+        """
+class JointEncoder(Sensor):
+    """
+    Joint position/velocity encoder on an articulation link's inbound joint. Adds what a real encoder has and Articulation.joint_positions does not: tick quantization, noise, rate gating and buffering.
+    """
+    def __init__(self, node: typing.Any, link: ..., rate_hz: typing.SupportsFloat | typing.SupportsIndex = 0.0, buffer_capacity: typing.SupportsInt | typing.SupportsIndex = 2048) -> None:
+        """
+        Attach to `node` (normally the mesh bound to the joint's child link) and measure `link`'s inbound joint. Raises if `link` is the root.
+        """
+    def drain(self) -> list[JointSample]:
+        """
+        Move all buffered JointSamples (oldest-first) out as a list; empties the buffer.
+        """
+    def drain_array(self) -> numpy.typing.NDArray[numpy.float64]:
+        """
+        Drain all buffered samples as a (N, 3) float64 numpy array with columns [t, position, velocity]. Empties the buffer.
+        """
+    def latest(self) -> threepp.threepp.JointSample | None:
+        """
+        The most recent JointSample, or None. Survives drain().
+        """
+    def reset(self) -> None:
+        """
+        Re-arm after an episode reset: clear the buffer and differentiation history and re-seed the noise.
+        """
+    def set_counts_per_rev(self, counts: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Set `resolution` from a rotary encoder's counts per revolution.
+        """
+    @property
+    def available(self) -> int:
+        """
+        Number of buffered samples.
+        """
+    @property
+    def differentiate_velocity(self) -> bool:
+        """
+        True (default): differentiate the quantized, noisy position, as a real encoder-fed controller does. False: report the simulator's true velocity.
+        """
+    @differentiate_velocity.setter
+    def differentiate_velocity(self, arg0: bool) -> None:
+        ...
+    @property
+    def position_noise(self) -> NoiseModel:
+        """
+        Position noise; only the X component of each Vector3 is used.
+        """
+    @position_noise.setter
+    def position_noise(self, arg0: NoiseModel) -> None:
+        ...
+    @property
+    def rate_hz(self) -> float:
+        ...
+    @rate_hz.setter
+    def rate_hz(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def resolution(self) -> float:
+        """
+        Quantization step: rad (revolute) or m (prismatic) per tick. 0 = ideal continuous encoder.
+        """
+    @resolution.setter
+    def resolution(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def velocity_noise(self) -> NoiseModel:
+        """
+        Velocity noise; applied only when differentiate_velocity is False.
+        """
+    @velocity_noise.setter
+    def velocity_noise(self, arg0: NoiseModel) -> None:
+        ...
+class JointInfo:
+    def __repr__(self) -> str:
+        ...
+    @property
+    def axis(self) -> Vector3:
+        ...
+    @property
+    def child(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def parent(self) -> str:
+        ...
+    @property
+    def range(self) -> typing.Any:
+        ...
+    @property
+    def type(self) -> JointType:
+        ...
+class JointRange:
+    def __repr__(self) -> str:
+        ...
+    def clamp(self, value: typing.SupportsFloat | typing.SupportsIndex) -> float:
+        ...
+    def mid(self) -> float:
+        ...
+    @property
+    def max(self) -> float:
+        ...
+    @property
+    def min(self) -> float:
+        ...
+class JointSample:
+    """
+    One encoder reading. Units follow the joint: rad and rad/s for a revolute joint, m and m/s for a prismatic one.
+    """
+    def __repr__(self) -> str:
+        ...
+    @property
+    def position(self) -> float:
+        ...
+    @property
+    def t(self) -> float:
+        ...
+    @property
+    def velocity(self) -> float:
+        ...
+class JointType:
+    """
+    Members:
+    
+      Revolute
+    
+      Prismatic
+    
+      Fixed
+    """
+    Fixed: typing.ClassVar[JointType]  # value = <JointType.Fixed: 2>
+    Prismatic: typing.ClassVar[JointType]  # value = <JointType.Prismatic: 1>
+    Revolute: typing.ClassVar[JointType]  # value = <JointType.Revolute: 0>
+    __members__: typing.ClassVar[dict[str, JointType]]  # value = {'Revolute': <JointType.Revolute: 0>, 'Prismatic': <JointType.Prismatic: 1>, 'Fixed': <JointType.Fixed: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class KeyframeTrack:
+    def make_additive(self) -> None:
+        """
+        Convert this track's values to deltas from its first frame (for additive layering).
+        """
+    def set_interpolation(self, interpolation: Interpolation) -> None:
+        ...
+    @property
+    def interpolation(self) -> Interpolation:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def times(self) -> list[float]:
+        ...
+    @property
+    def value_type_name(self) -> str:
+        ...
+    @property
+    def values(self) -> list[float]:
+        ...
+class LeafStyle:
+    """
+    Members:
+    
+      Quad
+    
+      Cluster
+    
+      CrossQuad
+    
+      Blob
+    
+      Frond
+    """
+    Blob: typing.ClassVar[LeafStyle]  # value = <LeafStyle.Blob: 3>
+    Cluster: typing.ClassVar[LeafStyle]  # value = <LeafStyle.Cluster: 1>
+    CrossQuad: typing.ClassVar[LeafStyle]  # value = <LeafStyle.CrossQuad: 2>
+    Frond: typing.ClassVar[LeafStyle]  # value = <LeafStyle.Frond: 4>
+    Quad: typing.ClassVar[LeafStyle]  # value = <LeafStyle.Quad: 0>
+    __members__: typing.ClassVar[dict[str, LeafStyle]]  # value = {'Quad': <LeafStyle.Quad: 0>, 'Cluster': <LeafStyle.Cluster: 1>, 'CrossQuad': <LeafStyle.CrossQuad: 2>, 'Blob': <LeafStyle.Blob: 3>, 'Frond': <LeafStyle.Frond: 4>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class LidarBeam:
+    direction: Vector3
+    origin: Vector3
+    def __init__(self, origin: Vector3 = ..., direction: Vector3 = ...) -> None:
+        ...
+class LidarModel:
+    @staticmethod
+    def hdl32e() -> LidarModel:
+        """
+        Velodyne HDL-32E: 32 beams, -30.67..+10.67deg.
+        """
+    @staticmethod
+    def os0_128() -> LidarModel:
+        """
+        Ouster OS0-128: 128 beams, +/-45deg elevation.
+        """
+    @staticmethod
+    def os1_64() -> LidarModel:
+        """
+        Ouster OS1-64: 64 beams, +/-22.5deg elevation.
+        """
+    @staticmethod
+    def vlp16() -> LidarModel:
+        """
+        Velodyne VLP-16: 16 beams, +/-15deg elevation.
+        """
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    @property
+    def azimuth_max(self) -> float:
+        ...
+    @azimuth_max.setter
+    def azimuth_max(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def azimuth_min(self) -> float:
+        ...
+    @azimuth_min.setter
+    def azimuth_min(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def azimuth_resolution(self) -> float:
+        ...
+    @azimuth_resolution.setter
+    def azimuth_resolution(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def elevation_angles(self) -> list[float]:
+        ...
+    @elevation_angles.setter
+    def elevation_angles(self, arg0: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
+        ...
+class LidarParams:
+    def __init__(self) -> None:
+        ...
+    @property
+    def atmospheric_extinction(self) -> float:
+        ...
+    @atmospheric_extinction.setter
+    def atmospheric_extinction(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def beam_divergence_mrad(self) -> float:
+        ...
+    @beam_divergence_mrad.setter
+    def beam_divergence_mrad(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def detector_threshold(self) -> float:
+        ...
+    @detector_threshold.setter
+    def detector_threshold(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def laser_power(self) -> float:
+        ...
+    @laser_power.setter
+    def laser_power(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_range(self) -> float:
+        ...
+    @max_range.setter
+    def max_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_returns(self) -> int:
+        ...
+    @max_returns.setter
+    def max_returns(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def medium_albedo(self) -> float:
+        ...
+    @medium_albedo.setter
+    def medium_albedo(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def medium_anisotropy(self) -> float:
+        ...
+    @medium_anisotropy.setter
+    def medium_anisotropy(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def medium_extinction(self) -> float:
+        ...
+    @medium_extinction.setter
+    def medium_extinction(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def medium_surface_y(self) -> float:
+        ...
+    @medium_surface_y.setter
+    def medium_surface_y(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def reference_range(self) -> float:
+        ...
+    @reference_range.setter
+    def reference_range(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def samples_per_beam(self) -> int:
+        ...
+    @samples_per_beam.setter
+    def samples_per_beam(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+class LidarReturn:
+    normal: Vector3
+    position: Vector3
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    @property
+    def distance(self) -> float:
+        ...
+    @distance.setter
+    def distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def hit_instance_id(self) -> int:
+        ...
+    @hit_instance_id.setter
+    def hit_instance_id(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def intensity(self) -> float:
+        ...
+    @intensity.setter
+    def intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def return_no(self) -> int:
+        ...
+    @return_no.setter
+    def return_no(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+class Light(Object3D):
+    color: Color
+    @property
+    def intensity(self) -> float:
+        ...
+    @intensity.setter
+    def intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class Line(Object3D):
+    cast_shadow: bool
+    frustum_culled: bool
+    matrix_auto_update: bool
+    name: str
+    position: Vector3
+    quaternion: Quaternion
+    receive_shadow: bool
+    rotation: Euler
+    scale: Vector3
+    up: Vector3
+    visible: bool
+    def __init__(self, geometry: BufferGeometry = None, material: typing.Any = None) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def add(self, *args) -> None:
+        ...
+    def clear(self) -> None:
+        ...
+    def compute_line_distances(self) -> None:
+        ...
+    def get_object_by_name(self, name: str) -> Object3D:
+        ...
+    def get_world_direction(self) -> Vector3:
+        ...
+    def get_world_position(self) -> Vector3:
+        ...
+    def get_world_quaternion(self) -> Quaternion:
+        ...
+    def get_world_scale(self) -> Vector3:
+        ...
+    def local_to_world(self, vector: Vector3) -> Vector3:
+        ...
+    @typing.overload
+    def look_at(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @typing.overload
+    def look_at(self, vector: Vector3) -> None:
+        ...
+    def remove(self, object: typing.Any) -> None:
+        ...
+    def remove_from_parent(self) -> None:
+        ...
+    def rotate_on_axis(self, axis: Vector3, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rotate_x(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rotate_y(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rotate_z(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def translate_x(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def translate_y(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def translate_z(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def traverse(self, callback: collections.abc.Callable[[typing.Any], None]) -> None:
+        ...
+    def update_matrix(self) -> None:
+        ...
+    def update_matrix_world(self, force: bool = False) -> None:
+        ...
+    def world_to_local(self, vector: Vector3) -> Vector3:
+        ...
+    @property
+    def children(self) -> list[Object3D]:
+        ...
+    @property
+    def geometry(self) -> BufferGeometry:
+        ...
+    @property
+    def id(self) -> int:
+        ...
+    @property
+    def material(self) -> typing.Any:
+        ...
+    @property
+    def matrix_world(self) -> Matrix4:
+        ...
+    @property
+    def parent(self) -> Object3D:
+        ...
+    @property
+    def render_order(self) -> int:
+        ...
+    @render_order.setter
+    def render_order(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def uuid(self) -> str:
+        ...
+class LineBasicMaterial(Material):
+    blending: Blending
+    color: Color
+    depth_test: bool
+    depth_write: bool
+    fog: bool
+    name: str
+    premultiplied_alpha: bool
+    side: Side
+    tone_mapped: bool
+    transparent: bool
+    vertex_colors: bool
+    visible: bool
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def dispose(self) -> None:
+        ...
+    def needs_update(self) -> None:
+        ...
+    @property
+    def alpha_test(self) -> float:
+        ...
+    @alpha_test.setter
+    def alpha_test(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def linewidth(self) -> float:
+        ...
+    @linewidth.setter
+    def linewidth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def opacity(self) -> float:
+        ...
+    @opacity.setter
+    def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class LineSegments(Line):
+    def __init__(self, geometry: BufferGeometry = None, material: typing.Any = None) -> None:
+        ...
+class Loop:
+    """
+    Looping mode for an AnimationAction.
+    
+    Members:
+    
+      ONCE
+    
+      REPEAT
+    
+      PING_PONG
+    """
+    ONCE: typing.ClassVar[Loop]  # value = <Loop.ONCE: 2200>
+    PING_PONG: typing.ClassVar[Loop]  # value = <Loop.PING_PONG: 2202>
+    REPEAT: typing.ClassVar[Loop]  # value = <Loop.REPEAT: 2201>
+    __members__: typing.ClassVar[dict[str, Loop]]  # value = {'ONCE': <Loop.ONCE: 2200>, 'REPEAT': <Loop.REPEAT: 2201>, 'PING_PONG': <Loop.PING_PONG: 2202>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class Mapping:
+    """
+    Members:
+    
+      UV
+    
+      CubeReflection
+    
+      CubeRefraction
+    
+      EquirectangularReflection
+    
+      EquirectangularRefraction
+    """
+    CubeReflection: typing.ClassVar[Mapping]  # value = <Mapping.CubeReflection: 301>
+    CubeRefraction: typing.ClassVar[Mapping]  # value = <Mapping.CubeRefraction: 302>
+    EquirectangularReflection: typing.ClassVar[Mapping]  # value = <Mapping.EquirectangularReflection: 303>
+    EquirectangularRefraction: typing.ClassVar[Mapping]  # value = <Mapping.EquirectangularRefraction: 304>
+    UV: typing.ClassVar[Mapping]  # value = <Mapping.UV: 300>
+    __members__: typing.ClassVar[dict[str, Mapping]]  # value = {'UV': <Mapping.UV: 300>, 'CubeReflection': <Mapping.CubeReflection: 301>, 'CubeRefraction': <Mapping.CubeRefraction: 302>, 'EquirectangularReflection': <Mapping.EquirectangularReflection: 303>, 'EquirectangularRefraction': <Mapping.EquirectangularRefraction: 304>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class Material:
+    pass
+class Matrix3:
+    def __init__(self) -> None:
+        ...
+    def determinant(self) -> float:
+        ...
+    def elements(self) -> list[float]:
+        ...
+    def identity(self) -> Matrix3:
+        ...
+    def invert(self) -> Matrix3:
+        ...
+    def to_numpy(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    def transpose(self) -> Matrix3:
+        ...
+class Matrix4:
+    def __init__(self) -> None:
+        ...
+    def compose(self, position: Vector3, quaternion: Quaternion, scale: Vector3) -> Matrix4:
+        ...
+    def copy(self, m: Matrix4) -> Matrix4:
+        ...
+    def determinant(self) -> float:
+        ...
+    def elements(self) -> list[float]:
+        ...
+    def identity(self) -> Matrix4:
+        ...
+    def invert(self) -> Matrix4:
+        ...
+    def make_rotation_x(self, theta: typing.SupportsFloat | typing.SupportsIndex) -> Matrix4:
+        ...
+    def make_rotation_y(self, theta: typing.SupportsFloat | typing.SupportsIndex) -> Matrix4:
+        ...
+    def make_rotation_z(self, theta: typing.SupportsFloat | typing.SupportsIndex) -> Matrix4:
+        ...
+    def make_scale(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> Matrix4:
+        ...
+    def make_translation(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> Matrix4:
+        ...
+    def set_position(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> Matrix4:
+        ...
+    def to_numpy(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    def transpose(self) -> Matrix4:
+        ...
+class Mesh(Object3D):
+    cast_shadow: bool
+    frustum_culled: bool
+    matrix_auto_update: bool
+    name: str
+    position: Vector3
+    quaternion: Quaternion
+    receive_shadow: bool
+    rotation: Euler
+    scale: Vector3
+    up: Vector3
+    visible: bool
+    def __init__(self, geometry: BufferGeometry = None, material: typing.Any = None) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def add(self, *args) -> None:
+        ...
+    def clear(self) -> None:
+        ...
+    def get_object_by_name(self, name: str) -> Object3D:
+        ...
+    def get_world_direction(self) -> Vector3:
+        ...
+    def get_world_position(self) -> Vector3:
+        ...
+    def get_world_quaternion(self) -> Quaternion:
+        ...
+    def get_world_scale(self) -> Vector3:
+        ...
+    def local_to_world(self, vector: Vector3) -> Vector3:
+        ...
+    @typing.overload
+    def look_at(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @typing.overload
+    def look_at(self, vector: Vector3) -> None:
+        ...
+    def remove(self, object: typing.Any) -> None:
+        ...
+    def remove_from_parent(self) -> None:
+        ...
+    def rotate_on_axis(self, axis: Vector3, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rotate_x(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rotate_y(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rotate_z(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_geometry(self, geometry: BufferGeometry) -> None:
+        ...
+    def set_material(self, material: typing.Any) -> None:
+        ...
+    def translate_x(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def translate_y(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def translate_z(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def traverse(self, callback: collections.abc.Callable[[typing.Any], None]) -> None:
+        ...
+    def update_matrix(self) -> None:
+        ...
+    def update_matrix_world(self, force: bool = False) -> None:
+        ...
+    def world_to_local(self, vector: Vector3) -> Vector3:
+        ...
+    @property
+    def children(self) -> list[Object3D]:
+        ...
+    @property
+    def geometry(self) -> BufferGeometry:
+        ...
+    @property
+    def id(self) -> int:
+        ...
+    @property
+    def material(self) -> typing.Any:
+        ...
+    @property
+    def matrix_world(self) -> Matrix4:
+        ...
+    @property
+    def parent(self) -> Object3D:
+        ...
+    @property
+    def render_order(self) -> int:
+        ...
+    @render_order.setter
+    def render_order(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def uuid(self) -> str:
+        ...
+class MeshBasicMaterial(Material):
+    alpha_map: Texture
+    ao_map: Texture
+    blending: Blending
+    color: Color
+    combine: CombineOperation
+    depth_test: bool
+    depth_write: bool
+    env_map: Texture
+    fog: bool
+    map: Texture
+    name: str
+    premultiplied_alpha: bool
+    side: Side
+    specular_map: Texture
+    tone_mapped: bool
+    transparent: bool
+    vertex_colors: bool
+    visible: bool
+    wireframe: bool
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def dispose(self) -> None:
+        ...
+    def needs_update(self) -> None:
+        ...
+    @property
+    def alpha_test(self) -> float:
+        ...
+    @alpha_test.setter
+    def alpha_test(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def opacity(self) -> float:
+        ...
+    @opacity.setter
+    def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def reflectivity(self) -> float:
+        ...
+    @reflectivity.setter
+    def reflectivity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def refraction_ratio(self) -> float:
+        ...
+    @refraction_ratio.setter
+    def refraction_ratio(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def wireframe_linewidth(self) -> float:
+        ...
+    @wireframe_linewidth.setter
+    def wireframe_linewidth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class MeshDepthMaterial(Material):
+    alpha_map: Texture
+    blending: Blending
+    depth_packing: DepthPacking
+    depth_test: bool
+    depth_write: bool
+    displacement_map: Texture
+    fog: bool
+    map: Texture
+    name: str
+    premultiplied_alpha: bool
+    side: Side
+    tone_mapped: bool
+    transparent: bool
+    vertex_colors: bool
+    visible: bool
+    wireframe: bool
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def dispose(self) -> None:
+        ...
+    def needs_update(self) -> None:
+        ...
+    @property
+    def alpha_test(self) -> float:
+        ...
+    @alpha_test.setter
+    def alpha_test(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def displacement_bias(self) -> float:
+        ...
+    @displacement_bias.setter
+    def displacement_bias(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def displacement_scale(self) -> float:
+        ...
+    @displacement_scale.setter
+    def displacement_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def opacity(self) -> float:
+        ...
+    @opacity.setter
+    def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def wireframe_linewidth(self) -> float:
+        ...
+    @wireframe_linewidth.setter
+    def wireframe_linewidth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class MeshLambertMaterial(Material):
+    alpha_map: Texture
+    ao_map: Texture
+    blending: Blending
+    color: Color
+    depth_test: bool
+    depth_write: bool
+    emissive: Color
+    emissive_map: Texture
+    env_map: Texture
+    fog: bool
+    map: Texture
+    name: str
+    premultiplied_alpha: bool
+    side: Side
+    tone_mapped: bool
+    transparent: bool
+    vertex_colors: bool
+    visible: bool
+    wireframe: bool
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def dispose(self) -> None:
+        ...
+    def needs_update(self) -> None:
+        ...
+    @property
+    def alpha_test(self) -> float:
+        ...
+    @alpha_test.setter
+    def alpha_test(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def emissive_intensity(self) -> float:
+        ...
+    @emissive_intensity.setter
+    def emissive_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def opacity(self) -> float:
+        ...
+    @opacity.setter
+    def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def reflectivity(self) -> float:
+        ...
+    @reflectivity.setter
+    def reflectivity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class MeshNormalMaterial(Material):
+    blending: Blending
+    bump_map: Texture
+    depth_test: bool
+    depth_write: bool
+    displacement_map: Texture
+    flat_shading: bool
+    fog: bool
+    name: str
+    normal_map: Texture
+    normal_scale: Vector2
+    premultiplied_alpha: bool
+    side: Side
+    tone_mapped: bool
+    transparent: bool
+    vertex_colors: bool
+    visible: bool
+    wireframe: bool
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def dispose(self) -> None:
+        ...
+    def needs_update(self) -> None:
+        ...
+    @property
+    def alpha_test(self) -> float:
+        ...
+    @alpha_test.setter
+    def alpha_test(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def opacity(self) -> float:
+        ...
+    @opacity.setter
+    def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class MeshPhongMaterial(Material):
+    alpha_map: Texture
+    ao_map: Texture
+    blending: Blending
+    bump_map: Texture
+    color: Color
+    combine: CombineOperation
+    depth_test: bool
+    depth_write: bool
+    emissive: Color
+    emissive_map: Texture
+    env_map: Texture
+    flat_shading: bool
+    fog: bool
+    map: Texture
+    name: str
+    normal_map: Texture
+    premultiplied_alpha: bool
+    side: Side
+    specular: Color
+    specular_map: Texture
+    tone_mapped: bool
+    transparent: bool
+    vertex_colors: bool
+    visible: bool
+    wireframe: bool
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def dispose(self) -> None:
+        ...
+    def needs_update(self) -> None:
+        ...
+    @property
+    def alpha_test(self) -> float:
+        ...
+    @alpha_test.setter
+    def alpha_test(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def emissive_intensity(self) -> float:
+        ...
+    @emissive_intensity.setter
+    def emissive_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def opacity(self) -> float:
+        ...
+    @opacity.setter
+    def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def reflectivity(self) -> float:
+        ...
+    @reflectivity.setter
+    def reflectivity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def shininess(self) -> float:
+        ...
+    @shininess.setter
+    def shininess(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class MeshPhysicalMaterial(MeshStandardMaterial):
+    def __init__(self) -> None:
+        ...
+    @property
+    def attenuation_color(self) -> Color:
+        """
+        Beer-Lambert tint per attenuation_distance of travel — the water colour lever.
+        """
+    @attenuation_color.setter
+    def attenuation_color(self, arg0: Color) -> None:
+        ...
+    @property
+    def attenuation_distance(self) -> float:
+        """
+        Distance (m) over which attenuation_color is applied once; smaller = murkier.
+        """
+    @attenuation_distance.setter
+    def attenuation_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def clearcoat(self) -> float:
+        ...
+    @clearcoat.setter
+    def clearcoat(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def clearcoat_roughness(self) -> float:
+        ...
+    @clearcoat_roughness.setter
+    def clearcoat_roughness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def dispersion(self) -> float:
+        ...
+    @dispersion.setter
+    def dispersion(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ior(self) -> float:
+        ...
+    @ior.setter
+    def ior(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def iridescence(self) -> float:
+        ...
+    @iridescence.setter
+    def iridescence(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def iridescence_ior(self) -> float:
+        ...
+    @iridescence_ior.setter
+    def iridescence_ior(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def iridescence_thickness_nm(self) -> float:
+        ...
+    @iridescence_thickness_nm.setter
+    def iridescence_thickness_nm(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def thickness(self) -> float:
+        """
+        Thin-shell in-medium proxy distance (m) for Beer-Lambert; also scales the water body veil (attenuation_color^(2*thickness/attenuation_distance)).
+        """
+    @thickness.setter
+    def thickness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def thin_walled(self) -> bool:
+        """
+        Surface is a thin shell (ocean plane, lens), not a closed volume.
+        """
+    @thin_walled.setter
+    def thin_walled(self, arg0: bool) -> None:
+        ...
+    @property
+    def transmission(self) -> float:
+        """
+        0 = opaque, 1 = fully transmissive (water/glass).
+        """
+    @transmission.setter
+    def transmission(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class MeshStandardMaterial(Material):
+    alpha_map: Texture
+    ao_map: Texture
+    blending: Blending
+    bump_map: Texture
+    color: Color
+    depth_test: bool
+    depth_write: bool
+    displacement_map: Texture
+    emissive: Color
+    emissive_map: Texture
+    env_map: Texture
+    flat_shading: bool
+    fog: bool
+    map: Texture
+    metalness_map: Texture
+    name: str
+    normal_map: Texture
+    normal_scale: Vector2
+    premultiplied_alpha: bool
+    roughness_map: Texture
+    side: Side
+    tone_mapped: bool
+    translucency_color: Color
+    transparent: bool
+    vertex_colors: bool
+    visible: bool
+    wireframe: bool
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def dispose(self) -> None:
+        ...
+    def needs_update(self) -> None:
+        ...
+    @property
+    def alpha_test(self) -> float:
+        ...
+    @alpha_test.setter
+    def alpha_test(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def emissive_intensity(self) -> float:
+        ...
+    @emissive_intensity.setter
+    def emissive_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def env_map_intensity(self) -> float:
+        ...
+    @env_map_intensity.setter
+    def env_map_intensity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def metalness(self) -> float:
+        ...
+    @metalness.setter
+    def metalness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def opacity(self) -> float:
+        ...
+    @opacity.setter
+    def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def roughness(self) -> float:
+        ...
+    @roughness.setter
+    def roughness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def translucency(self) -> float:
+        ...
+    @translucency.setter
+    def translucency(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def wireframe_linewidth(self) -> float:
+        ...
+    @wireframe_linewidth.setter
+    def wireframe_linewidth(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class ModelLoader:
+    def __init__(self) -> None:
+        ...
+    def load(self, path: str) -> Group:
+        """
+        Load a model (.obj/.gltf/.glb/.stl/.dae) as a Group.
+        """
+    def set_ignore_up_direction(self, ignore: bool) -> None:
+        ...
+class NoiseModel:
+    """
+    Per-axis Gaussian noise config shared by every sensor. Densities are continuous-time so the noise is invariant to sample rate: white_noise_density [X/sqrt(Hz)] -> per-sample stddev density/sqrt(dt); random_walk [X/(s*sqrt(Hz))] -> bias increment stddev random_walk*sqrt(dt); constant_bias [X] is a fixed turn-on offset. Same seed + call sequence is deterministic. All-zero = a perfect sensor.
+    """
+    constant_bias: Vector3
+    random_walk: Vector3
+    white_noise_density: Vector3
+    def __init__(self, white_noise_density: Vector3 = ..., random_walk: Vector3 = ..., constant_bias: Vector3 = ..., seed: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    @property
+    def seed(self) -> int:
+        ...
+    @seed.setter
+    def seed(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+class NoiseType:
+    """
+    Members:
+    
+      fBm
+    
+      Ridged
+    
+      Hybrid
+    """
+    Hybrid: typing.ClassVar[NoiseType]  # value = <NoiseType.Hybrid: 2>
+    Ridged: typing.ClassVar[NoiseType]  # value = <NoiseType.Ridged: 1>
+    __members__: typing.ClassVar[dict[str, NoiseType]]  # value = {'fBm': <NoiseType.fBm: 0>, 'Ridged': <NoiseType.Ridged: 1>, 'Hybrid': <NoiseType.Hybrid: 2>}
+    fBm: typing.ClassVar[NoiseType]  # value = <NoiseType.fBm: 0>
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class NumberKeyframeTrack(KeyframeTrack):
+    def __init__(self, name: str, times: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], interpolation: threepp.threepp.Interpolation | None = None) -> None:
+        ...
+class OBJLoader:
+    def __init__(self) -> None:
+        ...
+    def load(self, path: str, try_load_mtl: bool = True) -> Group:
+        ...
+class Object3D:
+    cast_shadow: bool
+    frustum_culled: bool
+    matrix_auto_update: bool
+    name: str
+    position: Vector3
+    quaternion: Quaternion
+    receive_shadow: bool
+    rotation: Euler
+    scale: Vector3
+    up: Vector3
+    visible: bool
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def add(self, *args) -> None:
+        ...
+    def clear(self) -> None:
+        ...
+    def clone(self, recursive: bool = True) -> Object3D:
+        ...
+    def copy(self, source: typing.Any, recursive: bool = True) -> None:
+        ...
+    def get_object_by_name(self, name: str) -> Object3D:
+        ...
+    def get_world_direction(self) -> Vector3:
+        ...
+    def get_world_position(self) -> Vector3:
+        ...
+    def get_world_quaternion(self) -> Quaternion:
+        ...
+    def get_world_scale(self) -> Vector3:
+        ...
+    def local_to_world(self, vector: Vector3) -> Vector3:
+        ...
+    @typing.overload
+    def look_at(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @typing.overload
+    def look_at(self, vector: Vector3) -> None:
+        ...
+    def remove(self, object: typing.Any) -> None:
+        ...
+    def remove_from_parent(self) -> None:
+        ...
+    def rotate_on_axis(self, axis: Vector3, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rotate_x(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rotate_y(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rotate_z(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def translate_x(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def translate_y(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def translate_z(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def traverse(self, callback: collections.abc.Callable[[typing.Any], None]) -> None:
+        ...
+    def update_matrix(self) -> None:
+        ...
+    def update_matrix_world(self, force: bool = False) -> None:
+        ...
+    def world_to_local(self, vector: Vector3) -> Vector3:
+        ...
+    @property
+    def children(self) -> list[Object3D]:
+        ...
+    @property
+    def id(self) -> int:
+        ...
+    @property
+    def matrix_world(self) -> Matrix4:
+        ...
+    @property
+    def parent(self) -> Object3D:
+        ...
+    @property
+    def render_order(self) -> int:
+        ...
+    @render_order.setter
+    def render_order(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def uuid(self) -> str:
+        ...
+class Ocean(DisplacedMesh):
+    def __init__(self, size: typing.SupportsFloat | typing.SupportsIndex = 1000.0, resolution: typing.SupportsInt | typing.SupportsIndex = 512, wind_speed: typing.SupportsFloat | typing.SupportsIndex = 10.0, wind_theta: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579, choppiness: typing.SupportsFloat | typing.SupportsIndex = 0.550000011920929, wave_scale: typing.SupportsFloat | typing.SupportsIndex = 1.0, tile_size_1: typing.SupportsFloat | typing.SupportsIndex = -1.0, tile_size_2: typing.SupportsFloat | typing.SupportsIndex = -1.0, fft_size: typing.SupportsInt | typing.SupportsIndex = 1024, size_z: typing.SupportsFloat | typing.SupportsIndex = 0.0, resolution_z: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
+        """
+        A ready-to-use FFT ocean. Add it to a Scene and render with the Vulkan renderer. size is the local-X extent (m); size_z=0 makes a square, >0 a rectangle (vertices only where the water is — the wave field is unaffected). resolution is the vertex grid along X; resolution_z=0 keeps cells square-ish. fft_size caps the per-cascade FFT resolutions (band-passed cascades auto-size below it). tile_size_1/2 default to -1 = auto: scaled from the larger extent (a 1000 m ocean gets the classic 127/9.3 bands, a 16 m pond gets dm-scale ripples); 0 disables a cascade, >0 pins it. Ponds also want wind_speed 2-5.
+        """
+    def set_wind(self, speed: typing.SupportsFloat | typing.SupportsIndex, theta: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Set wind speed (m/s) and direction (radians). Live: the renderer regenerates the spectra next frame and the sea morphs smoothly into the new state.
+        """
+    def warp_toward(self, world_x: typing.SupportsFloat | typing.SupportsIndex, world_z: typing.SupportsFloat | typing.SupportsIndex, coef_a: typing.SupportsFloat | typing.SupportsIndex = 0.10000000149011612) -> None:
+        """
+        Pack vertex density toward a world-space focus point (e.g. the camera). Call each frame before render().
+        """
+class OctahedronGeometry(BufferGeometry):
+    def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, detail: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
+        ...
+class OrbitControls:
+    auto_rotate: bool
+    enable_damping: bool
+    enable_pan: bool
+    enable_rotate: bool
+    enable_zoom: bool
+    enabled: bool
+    target: Vector3
+    def __init__(self, camera: Camera, canvas: Canvas) -> None:
+        ...
+    def update(self) -> bool:
+        ...
+    @property
+    def auto_rotate_speed(self) -> float:
+        ...
+    @auto_rotate_speed.setter
+    def auto_rotate_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def damping_factor(self) -> float:
+        ...
+    @damping_factor.setter
+    def damping_factor(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_distance(self) -> float:
+        ...
+    @max_distance.setter
+    def max_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def min_distance(self) -> float:
+        ...
+    @min_distance.setter
+    def min_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rotate_speed(self) -> float:
+        ...
+    @rotate_speed.setter
+    def rotate_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def zoom_speed(self) -> float:
+        ...
+    @zoom_speed.setter
+    def zoom_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class OrthographicCamera(Camera):
+    def __init__(self, left: typing.SupportsFloat | typing.SupportsIndex = -1.0, right: typing.SupportsFloat | typing.SupportsIndex = 1.0, top: typing.SupportsFloat | typing.SupportsIndex = 1.0, bottom: typing.SupportsFloat | typing.SupportsIndex = -1.0, near: typing.SupportsFloat | typing.SupportsIndex = 0.10000000149011612, far: typing.SupportsFloat | typing.SupportsIndex = 2000.0) -> None:
+        ...
+    def update_projection_matrix(self) -> None:
+        ...
+    @property
+    def bottom(self) -> float:
+        ...
+    @bottom.setter
+    def bottom(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def left(self) -> float:
+        ...
+    @left.setter
+    def left(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def right(self) -> float:
+        ...
+    @right.setter
+    def right(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def top(self) -> float:
+        ...
+    @top.setter
+    def top(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class PerspectiveCamera(Camera):
+    def __init__(self, fov: typing.SupportsFloat | typing.SupportsIndex = 60.0, aspect: typing.SupportsFloat | typing.SupportsIndex = 1.0, near: typing.SupportsFloat | typing.SupportsIndex = 0.10000000149011612, far: typing.SupportsFloat | typing.SupportsIndex = 2000.0) -> None:
+        ...
+    def get_focal_length(self) -> float:
+        ...
+    def set_focal_length(self, focal_length: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def update_projection_matrix(self) -> None:
+        ...
+    @property
+    def aspect(self) -> float:
+        ...
+    @aspect.setter
+    def aspect(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def film_gauge(self) -> float:
+        ...
+    @film_gauge.setter
+    def film_gauge(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def film_offset(self) -> float:
+        ...
+    @film_offset.setter
+    def film_offset(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def focus(self) -> float:
+        ...
+    @focus.setter
+    def focus(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def fov(self) -> float:
+        ...
+    @fov.setter
+    def fov(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class PhysxGpuBatch:
+    """
+    Batched GPU-resident state I/O over many reduced-coordinate articulations in one direct-GPU scene. The read_*/write_* methods take a torch CUDA tensor (validated for cuda/float32/contiguous/correct-size) and move ALL robots' state in one call with no CPU readback; *_host variants stage through numpy for debugging. All articulations in a batch must share a DOF count. Requires PhysxWorld(direct_gpu=True) and finalized articulations.
+    """
+    def __init__(self, world: PhysxWorld, articulations: collections.abc.Iterable) -> None:
+        """
+        world must be created with direct_gpu=True and outlive this batch.
+        """
+    def gpu_indices(self) -> numpy.typing.NDArray[numpy.uint32]:
+        """
+        The K articulation GPU indices as a uint32 numpy array (upload once to build subset-index buffers for resets).
+        """
+    def read_joint_pos(self, tensor: typing.Any) -> None:
+        """
+        Fill the [n, max_dofs] float32 cuda tensor with joint positions.
+        """
+    def read_joint_pos_host(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    def read_joint_vel(self, tensor: typing.Any) -> None:
+        """
+        Fill the [n, max_dofs] float32 cuda tensor with joint velocities.
+        """
+    def read_joint_vel_host(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    def read_link_angvel(self, tensor: typing.Any) -> None:
+        """
+        Fill the [n, max_links*3] float32 cuda tensor with per-link angular velocities (world frame).
+        """
+    def read_link_angvel_host(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    def read_link_linvel(self, tensor: typing.Any) -> None:
+        """
+        Fill the [n, max_links*3] float32 cuda tensor with per-link linear velocities (world frame).
+        """
+    def read_link_linvel_host(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    def read_link_pose(self, tensor: typing.Any) -> None:
+        """
+        Fill the [n, max_links*7] float32 cuda tensor with per-link poses [qx,qy,qz,qw,px,py,pz].
+        """
+    def read_link_pose_host(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    def read_root_angvel(self, tensor: typing.Any) -> None:
+        """
+        Fill the [n, 3] float32 cuda tensor with root angular velocity.
+        """
+    def read_root_angvel_host(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    def read_root_linvel(self, tensor: typing.Any) -> None:
+        """
+        Fill the [n, 3] float32 cuda tensor with root linear velocity.
+        """
+    def read_root_linvel_host(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    def read_root_pose(self, tensor: typing.Any) -> None:
+        """
+        Fill the [n, 7] float32 cuda tensor with root pose [qx,qy,qz,qw,px,py,pz].
+        """
+    def read_root_pose_host(self) -> numpy.typing.NDArray[numpy.float32]:
+        ...
+    def step(self, dt: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Advance every articulation one substep on the GPU (no binding sync).
+        """
+    def write_joint_force(self, tensor: typing.Any) -> None:
+        """
+        Apply per-DOF joint forces/torques (effort control) from the [n, max_dofs] float32 cuda tensor. Re-apply each step (forces don't persist). Use for force-controlled joints.
+        """
+    def write_joint_pos(self, tensor: typing.Any) -> None:
+        """
+        Overwrite ALL joints' positions from the [n, max_dofs] float32 cuda tensor (full-batch reset).
+        """
+    def write_joint_target_pos(self, tensor: typing.Any) -> None:
+        """
+        Set all joints' PD position targets from the [n, max_dofs] float32 cuda tensor.
+        """
+    def write_joint_target_vel(self, tensor: typing.Any) -> None:
+        """
+        Set all joints' PD velocity targets from the [n, max_dofs] float32 cuda tensor.
+        """
+    def write_joint_vel(self, tensor: typing.Any) -> None:
+        """
+        Overwrite ALL joints' velocities from the [n, max_dofs] float32 cuda tensor (full-batch reset).
+        """
+    def write_subset_joint_pos(self, src: typing.Any, indices: typing.Any) -> None:
+        ...
+    def write_subset_joint_vel(self, src: typing.Any, indices: typing.Any) -> None:
+        ...
+    def write_subset_root_angvel(self, src: typing.Any, indices: typing.Any) -> None:
+        ...
+    def write_subset_root_linvel(self, src: typing.Any, indices: typing.Any) -> None:
+        ...
+    def write_subset_root_pose(self, src: typing.Any, indices: typing.Any) -> None:
+        ...
+    @property
+    def count(self) -> int:
+        ...
+    @property
+    def max_dofs(self) -> int:
+        ...
+    @property
+    def max_links(self) -> int:
+        ...
+class PhysxMaterial:
+    """
+    A contact material (surface friction + restitution). Create via world.create_material(...), pass to add_link/add/add_static. The static_friction / dynamic_friction / restitution properties are mutable at runtime — re-roll them each reset for per-env friction domain randomization (a key sim-to-real robustness lever).
+    """
+    def set(self, static_friction: typing.SupportsFloat | typing.SupportsIndex, dynamic_friction: typing.SupportsFloat | typing.SupportsIndex, restitution: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Set all three coefficients at once (the domain-randomization hot path).
+        """
+    @property
+    def dynamic_friction(self) -> float:
+        ...
+    @dynamic_friction.setter
+    def dynamic_friction(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def restitution(self) -> float:
+        ...
+    @restitution.setter
+    def restitution(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def static_friction(self) -> float:
+        ...
+    @static_friction.setter
+    def static_friction(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class PhysxWorld:
+    """
+    A PhysX rigid-body world wired to the threepp scene graph. Add meshes as bodies, then call step(dt) each frame; every bound mesh's position/quaternion follows the simulation. Pure CPU — no canvas or renderer required.
+    """
+    def __init__(self, gravity: Vector3 = ..., fixed_timestep: typing.SupportsFloat | typing.SupportsIndex = 0.01666666753590107, max_substeps: typing.SupportsInt | typing.SupportsIndex = 4, num_threads: typing.SupportsInt | typing.SupportsIndex = 2, gpu_dynamics: bool = False, direct_gpu: bool = False, tgs_pcm: bool = False, cuda_context: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
+        """
+        gpu_dynamics requires a CUDA GPU (needed for soft bodies). direct_gpu also enables the PhysX direct-GPU API for batched GPU-resident articulation state I/O (PhysxGpuBatch) — the basis for GPU vectorized RL. Under direct_gpu the per-actor CPU getters and the binding-sync step() are NOT valid. tgs_pcm makes a CPU world use the TGS solver + PCM + stabilization (the GPU path always does) so its contact model MATCHES a GPU-trained policy for sim-to-sim deploy. cuda_context (an existing CUcontext as an int, e.g. torch's primary context) makes PhysX share that context instead of creating its own — required to mix PhysX GPU work with the framework's cuBLAS/cuDNN on the same device.
+        """
+    def add(self, mesh: Mesh, density: typing.SupportsFloat | typing.SupportsIndex = 1000.0, material: typing.Any = None) -> RigidBody:
+        """
+        Add a dynamic body whose shape is inferred from the mesh's Box/Sphere/Capsule geometry; the mesh is bound so it follows the sim. `material` (from create_material) overrides the contact friction/restitution. Returns a RigidBody.
+        """
+    def add_dynamic_convex(self, mesh: Mesh, density: typing.SupportsFloat | typing.SupportsIndex = 1000.0) -> RigidBody:
+        """
+        Add a dynamic body as the convex hull of the mesh's vertices (arbitrary shapes).
+        """
+    def add_instanced(self, mesh: InstancedMesh, density: typing.SupportsFloat | typing.SupportsIndex = 1000.0) -> list[RigidBody]:
+        """
+        Add one dynamic body per instance of an InstancedMesh. Returns a list of RigidBody.
+        """
+    def add_static(self, mesh: Mesh, material: typing.Any = None) -> RigidBody:
+        """
+        Add a static collider inferred from the mesh's Box/Sphere/Capsule geometry. `material` (from create_material) sets its friction/restitution — e.g. a grippy floor.
+        """
+    def add_static_trimesh(self, mesh: Mesh) -> RigidBody:
+        """
+        Add a static collider matching the mesh triangles exactly (static/kinematic only).
+        """
+    def add_static_trimesh_tree(self, root: typing.Any) -> list[RigidBody]:
+        """
+        Add every Mesh under `root` as its own static trimesh collider — e.g. turn an imported glTF environment straight into collision geometry. Returns a list.
+        """
+    def create_articulation(self, fixed_base: bool = False, solver_position_iterations: typing.SupportsInt | typing.SupportsIndex = 8, disable_self_collision: bool = False) -> Articulation:
+        """
+        Create a reduced-coordinate articulation (robot). fixed_base pins the root to the world (use for arms; leave false for free-floating bodies like a walking robot). Add links, then call finalize().
+        """
+    def create_material(self, static_friction: typing.SupportsFloat | typing.SupportsIndex = 0.5, dynamic_friction: typing.SupportsFloat | typing.SupportsIndex = 0.5, restitution: typing.SupportsFloat | typing.SupportsIndex = 0.0, friction_combine: str = 'average', restitution_combine: str = 'average') -> PhysxMaterial:
+        """
+        Create a contact material. Defaults: friction 0.5/0.5, restitution 0 (no bounce — right for feet/locomotion, unlike the world's shared 0.2 default). combine modes ('average'|'min'|'multiply'|'max') control how two contacting materials' coefficients mix — use 'min' so a clean material governs a contact against a different one. The returned PhysxMaterial is mutable (per-env friction randomization). Keeps the world alive.
+        """
+    def load_articulation(self, path: str, fixed_base: bool = False, base_position: typing.Annotated[collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], "FixedSize(3)"] = [0.0, 0.0, 0.0], default_density: typing.SupportsFloat | typing.SupportsIndex = 1000.0, stiffness: typing.SupportsFloat | typing.SupportsIndex = 0.0, damping: typing.SupportsFloat | typing.SupportsIndex = 0.0, max_force: typing.SupportsFloat | typing.SupportsIndex = 1000000.0, self_collision: bool = False, solver_position_iterations: typing.SupportsInt | typing.SupportsIndex = 12, render_visuals: bool = True) -> tuple[Articulation, list[Mesh], list[str]]:
+        """
+        Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ URDFLoader — xacro supported). Returns (articulation, meshes, joint_names): the collider meshes are bound to the sim (add them to a scene to render), joint_names lists the actuated joints in drive-target order. Collision is primitive/bbox, mass from <inertial> (else default_density x volume); fixed joints are collapsed. stiffness/damping/max_force set a PD drive on every joint.
+        """
+    def on_post_substep(self, callback: collections.abc.Callable) -> int:
+        """
+        Register callback(dt) fired after each fixed substep. Returns a handle for remove_substep_callback().
+        """
+    def on_pre_substep(self, callback: collections.abc.Callable) -> int:
+        """
+        Register callback(dt) fired before each fixed substep. Returns a handle for remove_substep_callback().
+        """
+    def register_sensor(self, sensor: Sensor) -> None:
+        """
+        Register a sensor (Imu, JointEncoder, ContactSensor, ...) to be sampled from the step loop once per fixed substep, the instant body states are fresh. Call AFTER adding the body the sensor is attached to; raises if the attachment has no managed rigid body. The world keeps the sensor alive.
+        """
+    def remove(self, body: RigidBody) -> None:
+        """
+        Remove a body (from add / add_static / add_dynamic_convex / add_static_trimesh) from the world and release it — e.g. to rebuild geometry without recreating the world. Any mesh binding is dropped; the RigidBody handle is INVALID afterwards (don't reuse it).
+        """
+    def remove_substep_callback(self, handle: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Unregister a pre/post substep callback by its handle. A stale or already-removed handle is a no-op.
+        """
+    def set_gravity(self, gravity: Vector3) -> None:
+        ...
+    def step(self, dt: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Advance the simulation by dt seconds (variable-rate caller, fixed-rate physics). After it returns, every bound mesh's transform reflects the new state.
+        """
+    def unregister_sensor(self, sensor: Sensor) -> None:
+        """
+        Stop sampling a previously registered sensor.
+        """
+    @property
+    def sim_time(self) -> float:
+        """
+        Accumulated fixed-substep simulation time (s) — the clock stamped onto sensor samples.
+        """
+class PlaneGeometry(BufferGeometry):
+    def __init__(self, width: typing.SupportsFloat | typing.SupportsIndex = 1.0, height: typing.SupportsFloat | typing.SupportsIndex = 1.0, width_segments: typing.SupportsInt | typing.SupportsIndex = 1, height_segments: typing.SupportsInt | typing.SupportsIndex = 1) -> None:
+        ...
+    @property
+    def height(self) -> float:
+        ...
+    @property
+    def width(self) -> float:
+        ...
+class PointLight(Light):
+    def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0, distance: typing.SupportsFloat | typing.SupportsIndex = 0.0, decay: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        ...
+    def get_power(self) -> float:
+        ...
+    def set_power(self, power: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def decay(self) -> float:
+        ...
+    @decay.setter
+    def decay(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def distance(self) -> float:
+        ...
+    @distance.setter
+    def distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class PointLightHelper(Mesh):
+    def __init__(self, light: PointLight, sphere_size: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: threepp.threepp.Color | None = None) -> None:
+        ...
+    def update(self) -> None:
+        ...
+class Points(Object3D):
+    cast_shadow: bool
+    frustum_culled: bool
+    matrix_auto_update: bool
+    name: str
+    position: Vector3
+    quaternion: Quaternion
+    receive_shadow: bool
+    rotation: Euler
+    scale: Vector3
+    up: Vector3
+    visible: bool
+    def __init__(self, geometry: BufferGeometry = None, material: typing.Any = None) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def add(self, *args) -> None:
+        ...
+    def clear(self) -> None:
+        ...
+    def get_object_by_name(self, name: str) -> Object3D:
+        ...
+    def get_world_direction(self) -> Vector3:
+        ...
+    def get_world_position(self) -> Vector3:
+        ...
+    def get_world_quaternion(self) -> Quaternion:
+        ...
+    def get_world_scale(self) -> Vector3:
+        ...
+    def local_to_world(self, vector: Vector3) -> Vector3:
+        ...
+    @typing.overload
+    def look_at(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @typing.overload
+    def look_at(self, vector: Vector3) -> None:
+        ...
+    def remove(self, object: typing.Any) -> None:
+        ...
+    def remove_from_parent(self) -> None:
+        ...
+    def rotate_on_axis(self, axis: Vector3, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rotate_x(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rotate_y(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def rotate_z(self, angle: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def translate_x(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def translate_y(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def translate_z(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def traverse(self, callback: collections.abc.Callable[[typing.Any], None]) -> None:
+        ...
+    def update_matrix(self) -> None:
+        ...
+    def update_matrix_world(self, force: bool = False) -> None:
+        ...
+    def world_to_local(self, vector: Vector3) -> Vector3:
+        ...
+    @property
+    def children(self) -> list[Object3D]:
+        ...
+    @property
+    def geometry(self) -> BufferGeometry:
+        ...
+    @property
+    def id(self) -> int:
+        ...
+    @property
+    def material(self) -> typing.Any:
+        ...
+    @property
+    def matrix_world(self) -> Matrix4:
+        ...
+    @property
+    def parent(self) -> Object3D:
+        ...
+    @property
+    def render_order(self) -> int:
+        ...
+    @render_order.setter
+    def render_order(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def uuid(self) -> str:
+        ...
+class PointsMaterial(Material):
+    alpha_map: Texture
+    blending: Blending
+    color: Color
+    depth_test: bool
+    depth_write: bool
+    fog: bool
+    map: Texture
+    name: str
+    premultiplied_alpha: bool
+    side: Side
+    size_attenuation: bool
+    tone_mapped: bool
+    transparent: bool
+    vertex_colors: bool
+    visible: bool
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def dispose(self) -> None:
+        ...
+    def needs_update(self) -> None:
+        ...
+    @property
+    def alpha_test(self) -> float:
+        ...
+    @alpha_test.setter
+    def alpha_test(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def opacity(self) -> float:
+        ...
+    @opacity.setter
+    def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def size(self) -> float:
+        ...
+    @size.setter
+    def size(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class PolarGridHelper(LineSegments):
+    def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 10.0, sectors: typing.SupportsInt | typing.SupportsIndex = 16, rings: typing.SupportsInt | typing.SupportsIndex = 8, divisions: typing.SupportsInt | typing.SupportsIndex = 64, color1: Color = ..., color2: Color = ...) -> None:
+        ...
+class PositionalAudio(Object3D):
+    def __init__(self, listener: AudioListener, file: str) -> None:
+        ...
+    def play(self) -> None:
+        ...
+    def seek_to_start(self) -> None:
+        ...
+    def set_distance_model(self, model: AudioDistanceModel) -> None:
+        ...
+    def set_looping(self, loop: bool) -> None:
+        ...
+    def set_max_distance(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_min_distance(self, distance: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_playback_rate(self, rate: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_rolloff_factor(self, rolloff: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_volume(self, volume: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def stop(self) -> None:
+        ...
+    def toggle_play(self) -> None:
+        ...
+    @property
+    def is_playing(self) -> bool:
+        ...
+class Quaternion:
+    def __init__(self, x: typing.SupportsFloat | typing.SupportsIndex = 0.0, y: typing.SupportsFloat | typing.SupportsIndex = 0.0, z: typing.SupportsFloat | typing.SupportsIndex = 0.0, w: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def invert(self) -> Quaternion:
+        ...
+    def normalize(self) -> Quaternion:
+        ...
+    def set(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, w: typing.SupportsFloat | typing.SupportsIndex) -> Quaternion:
+        ...
+    def set_from_axis_angle(self, axis: Vector3, angle: typing.SupportsFloat | typing.SupportsIndex) -> Quaternion:
+        ...
+    def set_from_euler(self, euler: Euler) -> Quaternion:
+        ...
+    def slerp(self, qb: Quaternion, t: typing.SupportsFloat | typing.SupportsIndex) -> Quaternion:
+        ...
+    @property
+    def w(self) -> float:
+        ...
+    @w.setter
+    def w(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def x(self) -> float:
+        ...
+    @x.setter
+    def x(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def y(self) -> float:
+        ...
+    @y.setter
+    def y(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def z(self) -> float:
+        ...
+    @z.setter
+    def z(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class QuaternionKeyframeTrack(KeyframeTrack):
+    def __init__(self, name: str, times: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], interpolation: threepp.threepp.Interpolation | None = None) -> None:
+        ...
+class RGBELoader:
+    def __init__(self) -> None:
+        ...
+    def load(self, path: str, flip_y: bool = True) -> Texture:
+        """
+        Load a Radiance .hdr equirectangular environment as a float Texture.
+        """
+class RangeNoiseModel:
+    """
+    Range noise for a ranging sensor (LIDAR / depth camera). Per RETURN, not per second: sigma = hypot(stddev, r * stddev_per_metre) metres, plus a fixed `bias`. `seed` makes a scan reproducible — same seed and same beam order gives the same cloud on every run and machine. All-zero = a perfect sensor (clean ranges pass through untouched).
+    """
+    def __init__(self, stddev: typing.SupportsFloat | typing.SupportsIndex = 0.0, stddev_per_metre: typing.SupportsFloat | typing.SupportsIndex = 0.0, bias: typing.SupportsFloat | typing.SupportsIndex = 0.0, seed: typing.SupportsInt | typing.SupportsIndex = 0) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    @property
+    def bias(self) -> float:
+        """
+        Fixed offset [m]; positive reads long.
+        """
+    @bias.setter
+    def bias(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def seed(self) -> int:
+        ...
+    @seed.setter
+    def seed(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stddev(self) -> float:
+        """
+        Constant sigma [m].
+        """
+    @stddev.setter
+    def stddev(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def stddev_per_metre(self) -> float:
+        """
+        Range-proportional sigma [m/m], added in quadrature.
+        """
+    @stddev_per_metre.setter
+    def stddev_per_metre(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class RectAreaLight(Light):
+    def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0, width: typing.SupportsFloat | typing.SupportsIndex = 1.0, height: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        ...
+    @property
+    def height(self) -> float:
+        ...
+    @property
+    def width(self) -> float:
+        ...
+class RigidBody:
+    """
+    Handle to a PhysX actor created via PhysxWorld. Valid only while its world is alive. Velocity/force/kinematic operations require a dynamic body.
+    """
+    angular_velocity: Vector3
+    linear_velocity: Vector3
+    def add_force(self, force: Vector3) -> None:
+        """
+        Apply a continuous force (N), consumed by the next step().
+        """
+    def add_impulse(self, impulse: Vector3) -> None:
+        """
+        Apply an instantaneous impulse (kg·m/s).
+        """
+    def set_angular_damping(self, d: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_angular_velocity(self, v: Vector3) -> None:
+        ...
+    def set_kinematic(self, kinematic: bool) -> None:
+        """
+        Toggle kinematic mode: the body is driven by set_kinematic_target and ignores forces/gravity.
+        """
+    def set_kinematic_target(self, position: Vector3, quaternion: Quaternion = ...) -> None:
+        ...
+    def set_linear_damping(self, d: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_linear_velocity(self, v: Vector3) -> None:
+        ...
+    def set_pose(self, position: Vector3, quaternion: Quaternion = ...) -> None:
+        ...
+    def wake_up(self) -> None:
+        ...
+    @property
+    def is_dynamic(self) -> bool:
+        ...
+    @property
+    def mass(self) -> float:
+        ...
+    @property
+    def position(self) -> Vector3:
+        ...
+    @property
+    def quaternion(self) -> Quaternion:
+        ...
+class RingGeometry(BufferGeometry):
+    def __init__(self, inner_radius: typing.SupportsFloat | typing.SupportsIndex = 0.5, outer_radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, theta_segments: typing.SupportsInt | typing.SupportsIndex = 16, phi_segments: typing.SupportsInt | typing.SupportsIndex = 2, theta_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, theta_length: typing.SupportsFloat | typing.SupportsIndex = 6.2831854820251465) -> None:
+        ...
+class Robot(Object3D):
+    def __init__(self) -> None:
+        ...
+    def compute_end_effector_transform(self, values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], deg: bool = False, enforce_limits: bool = True) -> Matrix4:
+        ...
+    def get_articulated_joint_info(self) -> list[JointInfo]:
+        ...
+    def get_end_effector_transform(self) -> Matrix4:
+        ...
+    def get_joint_range(self, index: typing.SupportsInt | typing.SupportsIndex, deg: bool = False) -> JointRange:
+        ...
+    def get_joint_ranges(self, deg: bool = False) -> list[JointRange]:
+        ...
+    def get_joint_value(self, index: typing.SupportsInt | typing.SupportsIndex, deg: bool = False) -> float:
+        ...
+    def joint_values(self, deg: bool = False) -> list[float]:
+        ...
+    def set_joint_value(self, index: typing.SupportsInt | typing.SupportsIndex, value: typing.SupportsFloat | typing.SupportsIndex, deg: bool = False) -> None:
+        ...
+    def set_joint_values(self, values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], deg: bool = False) -> None:
+        ...
+    def show_colliders(self, flag: bool) -> None:
+        ...
+    @property
+    def num_dof(self) -> int:
+        ...
+class RotationOrder:
+    """
+    Members:
+    
+      XYZ
+    
+      YZX
+    
+      ZXY
+    
+      XZY
+    
+      YXZ
+    
+      ZYX
+    """
+    XYZ: typing.ClassVar[RotationOrder]  # value = <RotationOrder.XYZ: 0>
+    XZY: typing.ClassVar[RotationOrder]  # value = <RotationOrder.XZY: 3>
+    YXZ: typing.ClassVar[RotationOrder]  # value = <RotationOrder.YXZ: 4>
+    YZX: typing.ClassVar[RotationOrder]  # value = <RotationOrder.YZX: 1>
+    ZXY: typing.ClassVar[RotationOrder]  # value = <RotationOrder.ZXY: 2>
+    ZYX: typing.ClassVar[RotationOrder]  # value = <RotationOrder.ZYX: 5>
+    __members__: typing.ClassVar[dict[str, RotationOrder]]  # value = {'XYZ': <RotationOrder.XYZ: 0>, 'YZX': <RotationOrder.YZX: 1>, 'ZXY': <RotationOrder.ZXY: 2>, 'XZY': <RotationOrder.XZY: 3>, 'YXZ': <RotationOrder.YXZ: 4>, 'ZYX': <RotationOrder.ZYX: 5>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class STLLoader:
+    def __init__(self) -> None:
+        ...
+    def load(self, path: str) -> BufferGeometry:
+        ...
+class SVGLoader:
+    def __init__(self) -> None:
+        ...
+    def load(self, path: str) -> Group:
+        """
+        Load an .svg file as a Group of filled meshes.
+        """
+    def parse(self, text: str) -> Group:
+        """
+        Parse SVG XML into a Group of filled meshes.
+        """
+class ScalarField:
+    def __init__(self) -> None:
+        ...
+    def at(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex, z: typing.SupportsInt | typing.SupportsIndex) -> float:
+        ...
+    def data_numpy(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Return field data as (nz, ny, nx) float32 numpy array.
+        """
+    @property
+    def cell_size(self) -> float:
+        ...
+    @property
+    def empty(self) -> bool:
+        ...
+    @property
+    def nx(self) -> int:
+        ...
+    @property
+    def ny(self) -> int:
+        ...
+    @property
+    def nz(self) -> int:
+        ...
+    @property
+    def origin(self) -> Vector3:
+        ...
+class Scene(Object3D):
+    auto_update: bool
+    environment: Texture
+    override_material: Material
+    def __init__(self) -> None:
+        ...
+    def clear_fog(self) -> None:
+        ...
+    def set_fog(self, color: Color, near: typing.SupportsFloat | typing.SupportsIndex = 1.0, far: typing.SupportsFloat | typing.SupportsIndex = 1000.0) -> None:
+        ...
+    def set_fog_exp2(self, color: Color, density: typing.SupportsFloat | typing.SupportsIndex = 0.019999999552965164) -> None:
+        """
+        Exponential participating-media fog. On Vulkan: Beer-Lambert + volumetric scattering. Call renderer.fog_anisotropy to tune the Henyey-Greenstein phase (0 = isotropic, +0.9 = forward god-rays, -0.9 = back-scatter halo).
+        """
+    @property
+    def background(self) -> Background:
+        ...
+    @background.setter
+    def background(self, arg1: typing.Any) -> None:
+        ...
+class Sensor:
+    """
+    Abstract base of the sensor suite. Register a concrete sensor with PhysxWorld.register_sensor to have it sampled from the step loop.
+    """
+    def advance_clock(self, dt: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Advance the sensor clock by dt seconds.
+        """
+    @property
+    def rate_hz(self) -> float:
+        """
+        Target sample rate (Hz); 0 = every physics substep.
+        """
+    @rate_hz.setter
+    def rate_hz(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def sim_time(self) -> float:
+        """
+        The sensor's clock (s) — the time base every measurement is stamped with. Latched from the world automatically while registered with a PhysxWorld; drive it yourself (advance_clock / sim_time = t) for a sensor pulled from a render loop. Always sim time, never wall time, so a replayed run reproduces its timestamps.
+        """
+    @sim_time.setter
+    def sim_time(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class ShadowMaterial(Material):
+    blending: Blending
+    color: Color
+    depth_test: bool
+    depth_write: bool
+    fog: bool
+    name: str
+    premultiplied_alpha: bool
+    side: Side
+    tone_mapped: bool
+    transparent: bool
+    vertex_colors: bool
+    visible: bool
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def dispose(self) -> None:
+        ...
+    def needs_update(self) -> None:
+        ...
+    @property
+    def alpha_test(self) -> float:
+        ...
+    @alpha_test.setter
+    def alpha_test(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def opacity(self) -> float:
+        ...
+    @opacity.setter
+    def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class Side:
+    """
+    Members:
+    
+      Front
+    
+      Back
+    
+      Double
+    """
+    Back: typing.ClassVar[Side]  # value = <Side.Back: 1>
+    Double: typing.ClassVar[Side]  # value = <Side.Double: 2>
+    Front: typing.ClassVar[Side]  # value = <Side.Front: 0>
+    __members__: typing.ClassVar[dict[str, Side]]  # value = {'Front': <Side.Front: 0>, 'Back': <Side.Back: 1>, 'Double': <Side.Double: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class SkeletonHelper(LineSegments):
+    def __init__(self, skeleton: typing.Any) -> None:
+        ...
+class SphereGeometry(BufferGeometry):
+    def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, width_segments: typing.SupportsInt | typing.SupportsIndex = 16, height_segments: typing.SupportsInt | typing.SupportsIndex = 12, phi_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, phi_length: typing.SupportsFloat | typing.SupportsIndex = 6.2831854820251465, theta_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, theta_length: typing.SupportsFloat | typing.SupportsIndex = 3.1415927410125732) -> None:
+        ...
+    @property
+    def radius(self) -> float:
+        ...
+class SpotLight(Light):
+    def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0, distance: typing.SupportsFloat | typing.SupportsIndex = 0.0, angle: typing.SupportsFloat | typing.SupportsIndex = 1.0471975803375244, penumbra: typing.SupportsFloat | typing.SupportsIndex = 0.0, decay: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        ...
+    def get_target(self) -> Object3D:
+        ...
+    def set_target(self, target: Object3D) -> None:
+        ...
+    @property
+    def angle(self) -> float:
+        ...
+    @angle.setter
+    def angle(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def decay(self) -> float:
+        ...
+    @decay.setter
+    def decay(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def distance(self) -> float:
+        ...
+    @distance.setter
+    def distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def penumbra(self) -> float:
+        ...
+    @penumbra.setter
+    def penumbra(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class SpotLightHelper(Object3D):
+    def __init__(self, light: SpotLight, color: threepp.threepp.Color | None = None) -> None:
+        ...
+    def update(self) -> None:
+        ...
+class Sprite(Object3D):
+    center: Vector2
+    screen_anchor: Vector2
+    screen_space: bool
+    def __init__(self, material: SpriteMaterial = None) -> None:
+        ...
+    @property
+    def material(self) -> typing.Any:
+        ...
+class SpriteMaterial(Material):
+    alpha_map: Texture
+    blending: Blending
+    color: Color
+    depth_test: bool
+    depth_write: bool
+    fog: bool
+    map: Texture
+    name: str
+    premultiplied_alpha: bool
+    side: Side
+    size_attenuation: bool
+    tone_mapped: bool
+    transparent: bool
+    vertex_colors: bool
+    visible: bool
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def dispose(self) -> None:
+        ...
+    def needs_update(self) -> None:
+        ...
+    @property
+    def alpha_test(self) -> float:
+        ...
+    @alpha_test.setter
+    def alpha_test(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def opacity(self) -> float:
+        ...
+    @opacity.setter
+    def opacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rotation(self) -> float:
+        ...
+    @rotation.setter
+    def rotation(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def size(self) -> float:
+        ...
+    @size.setter
+    def size(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class TerrainFalloff:
+    """
+    Members:
+    
+      Off
+    
+      Radial
+    """
+    Off: typing.ClassVar[TerrainFalloff]  # value = <TerrainFalloff.Off: 0>
+    Radial: typing.ClassVar[TerrainFalloff]  # value = <TerrainFalloff.Radial: 1>
+    __members__: typing.ClassVar[dict[str, TerrainFalloff]]  # value = {'Off': <TerrainFalloff.Off: 0>, 'Radial': <TerrainFalloff.Radial: 1>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class TerrainGenerator:
+    def __init__(self, seed: typing.SupportsInt | typing.SupportsIndex = 1337) -> None:
+        ...
+    def bake_splat_colors(self, params: TerrainParams) -> numpy.typing.NDArray[numpy.uint8]:
+        """
+        Bake slope/altitude splat into RGBA8 numpy array of shape (dim, dim, 4).
+        """
+    def bake_splat_texture(self, params: TerrainParams) -> Texture:
+        """
+        Bake splat colours into a sRGB DataTexture ready for material.map.
+        """
+    def build_field(self, params: TerrainParams) -> None:
+        ...
+    def create_geometry(self, params: TerrainParams, with_erosion: bool = False) -> BufferGeometry:
+        ...
+    def displace_to(self, geometry: BufferGeometry, params: TerrainParams) -> None:
+        ...
+    def erode(self, params: TerrainParams) -> None:
+        ...
+    def get_field(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Height field as float32 numpy array of shape (dim, dim), values in [0,1].
+        """
+    def height_at(self, wx: typing.SupportsFloat | typing.SupportsIndex, wz: typing.SupportsFloat | typing.SupportsIndex, params: TerrainParams) -> float:
+        ...
+    def make_geometry(self, params: TerrainParams) -> BufferGeometry:
+        ...
+    def reseed(self, seed: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def dim(self) -> int:
+        ...
+    @property
+    def seed(self) -> int:
+        ...
+class TerrainParams:
+    erosion: ErosionType
+    falloff: TerrainFalloff
+    noise_type: NoiseType
+    def __init__(self) -> None:
+        ...
+    @property
+    def amplitude(self) -> float:
+        ...
+    @amplitude.setter
+    def amplitude(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ao_max(self) -> float:
+        ...
+    @ao_max.setter
+    def ao_max(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ao_strength(self) -> float:
+        ...
+    @ao_strength.setter
+    def ao_strength(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def band_edge(self) -> float:
+        ...
+    @band_edge.setter
+    def band_edge(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def deposit_speed(self) -> float:
+        ...
+    @deposit_speed.setter
+    def deposit_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def droplet_lifetime(self) -> int:
+        ...
+    @droplet_lifetime.setter
+    def droplet_lifetime(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def droplets(self) -> int:
+        ...
+    @droplets.setter
+    def droplets(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def erode_speed(self) -> float:
+        ...
+    @erode_speed.setter
+    def erode_speed(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def erosion_radius(self) -> int:
+        ...
+    @erosion_radius.setter
+    def erosion_radius(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def evaporation(self) -> float:
+        ...
+    @evaporation.setter
+    def evaporation(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def falloff_start(self) -> float:
+        ...
+    @falloff_start.setter
+    def falloff_start(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def feature_scale(self) -> float:
+        ...
+    @feature_scale.setter
+    def feature_scale(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def gain(self) -> float:
+        ...
+    @gain.setter
+    def gain(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def grass_color(self) -> list[float]:
+        ...
+    @grass_color.setter
+    def grass_color(self, arg1: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
+        ...
+    @property
+    def gravity(self) -> float:
+        ...
+    @gravity.setter
+    def gravity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def height_exponent(self) -> float:
+        ...
+    @height_exponent.setter
+    def height_exponent(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def inertia(self) -> float:
+        ...
+    @inertia.setter
+    def inertia(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def lacunarity(self) -> float:
+        ...
+    @lacunarity.setter
+    def lacunarity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def min_slope(self) -> float:
+        ...
+    @min_slope.setter
+    def min_slope(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def octaves(self) -> int:
+        ...
+    @octaves.setter
+    def octaves(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def resolution(self) -> int:
+        ...
+    @resolution.setter
+    def resolution(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def ridge_sharpness(self) -> float:
+        ...
+    @ridge_sharpness.setter
+    def ridge_sharpness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rock_color(self) -> list[float]:
+        ...
+    @rock_color.setter
+    def rock_color(self, arg1: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
+        ...
+    @property
+    def scree_color(self) -> list[float]:
+        ...
+    @scree_color.setter
+    def scree_color(self, arg1: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
+        ...
+    @property
+    def sediment_capacity(self) -> float:
+        ...
+    @sediment_capacity.setter
+    def sediment_capacity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def seed(self) -> int:
+        ...
+    @seed.setter
+    def seed(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def slope_grass_max(self) -> float:
+        ...
+    @slope_grass_max.setter
+    def slope_grass_max(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def slope_rock_min(self) -> float:
+        ...
+    @slope_rock_min.setter
+    def slope_rock_min(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def snow_color(self) -> list[float]:
+        ...
+    @snow_color.setter
+    def snow_color(self, arg1: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
+        ...
+    @property
+    def snow_line(self) -> float:
+        ...
+    @snow_line.setter
+    def snow_line(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def snow_noise_amp(self) -> float:
+        ...
+    @snow_noise_amp.setter
+    def snow_noise_amp(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def snow_slope_max(self) -> float:
+        ...
+    @snow_slope_max.setter
+    def snow_slope_max(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def talus_angle(self) -> float:
+        ...
+    @talus_angle.setter
+    def talus_angle(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def terraces(self) -> int:
+        ...
+    @terraces.setter
+    def terraces(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def thermal_iterations(self) -> int:
+        ...
+    @thermal_iterations.setter
+    def thermal_iterations(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def thermal_rate(self) -> float:
+        ...
+    @thermal_rate.setter
+    def thermal_rate(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def warp(self) -> float:
+        ...
+    @warp.setter
+    def warp(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def world_size(self) -> float:
+        ...
+    @world_size.setter
+    def world_size(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class Text2D(Mesh):
+    def __init__(self, font: Font, text: str = '', size: typing.SupportsFloat | typing.SupportsIndex = 1.0, curve_segments: typing.SupportsInt | typing.SupportsIndex = 3, material: typing.Any = None) -> None:
+        ...
+    def set_color(self, color: Color) -> None:
+        ...
+    def set_text(self, text: str) -> None:
+        ...
+class Text3D(Mesh):
+    def __init__(self, font: Font, text: str = '', size: typing.SupportsFloat | typing.SupportsIndex = 1.0, height: typing.SupportsFloat | typing.SupportsIndex = 0.20000000298023224, bevel: bool = False, material: typing.Any = None) -> None:
+        ...
+    def set_color(self, color: Color) -> None:
+        ...
+class TextSprite(Sprite):
+    def __init__(self, font: Font, world_scale: typing.Any = None) -> None:
+        ...
+    def get_text(self) -> str:
+        ...
+    def set_color(self, color: Color) -> None:
+        ...
+    def set_horizontal_alignment(self, alignment: HorizontalAlignment) -> None:
+        ...
+    def set_text(self, text: str) -> None:
+        ...
+    def set_vertical_alignment(self, alignment: VerticalAlignment) -> None:
+        ...
+    def set_world_scale(self, scale: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class Texture:
+    center: Vector2
+    color_space: ColorSpace
+    generate_mipmaps: bool
+    mag_filter: Filter
+    mapping: Mapping
+    min_filter: Filter
+    name: str
+    offset: Vector2
+    repeat: Vector2
+    wrap_s: TextureWrapping
+    wrap_t: TextureWrapping
+    def __init__(self) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def dispose(self) -> None:
+        ...
+    def needs_update(self) -> None:
+        ...
+    def update_matrix(self) -> None:
+        ...
+    @property
+    def anisotropy(self) -> int:
+        ...
+    @anisotropy.setter
+    def anisotropy(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rotation(self) -> float:
+        ...
+    @rotation.setter
+    def rotation(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class TextureLoader:
+    def __init__(self, use_cache: bool = True) -> None:
+        ...
+    def clear_cache(self) -> None:
+        ...
+    @typing.overload
+    def load(self, path: str, flip_y: bool = True) -> Texture:
+        ...
+    @typing.overload
+    def load(self, path: str, color_space: ColorSpace, flip_y: bool = True) -> Texture:
+        ...
+class TextureWrapping:
+    """
+    Members:
+    
+      Repeat
+    
+      ClampToEdge
+    
+      MirroredRepeat
+    """
+    ClampToEdge: typing.ClassVar[TextureWrapping]  # value = <TextureWrapping.ClampToEdge: 1001>
+    MirroredRepeat: typing.ClassVar[TextureWrapping]  # value = <TextureWrapping.MirroredRepeat: 1002>
+    Repeat: typing.ClassVar[TextureWrapping]  # value = <TextureWrapping.Repeat: 1000>
+    __members__: typing.ClassVar[dict[str, TextureWrapping]]  # value = {'Repeat': <TextureWrapping.Repeat: 1000>, 'ClampToEdge': <TextureWrapping.ClampToEdge: 1001>, 'MirroredRepeat': <TextureWrapping.MirroredRepeat: 1002>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class ToneMapping:
+    """
+    Members:
+    
+      NoToneMapping
+    
+      Linear
+    
+      Reinhard
+    
+      Cineon
+    
+      ACESFilmic
+    
+      Neutral
+    
+      AgX
+    """
+    ACESFilmic: typing.ClassVar[ToneMapping]  # value = <ToneMapping.ACESFilmic: 4>
+    AgX: typing.ClassVar[ToneMapping]  # value = <ToneMapping.AgX: 7>
+    Cineon: typing.ClassVar[ToneMapping]  # value = <ToneMapping.Cineon: 3>
+    Linear: typing.ClassVar[ToneMapping]  # value = <ToneMapping.Linear: 1>
+    Neutral: typing.ClassVar[ToneMapping]  # value = <ToneMapping.Neutral: 6>
+    NoToneMapping: typing.ClassVar[ToneMapping]  # value = <ToneMapping.NoToneMapping: 0>
+    Reinhard: typing.ClassVar[ToneMapping]  # value = <ToneMapping.Reinhard: 2>
+    __members__: typing.ClassVar[dict[str, ToneMapping]]  # value = {'NoToneMapping': <ToneMapping.NoToneMapping: 0>, 'Linear': <ToneMapping.Linear: 1>, 'Reinhard': <ToneMapping.Reinhard: 2>, 'Cineon': <ToneMapping.Cineon: 3>, 'ACESFilmic': <ToneMapping.ACESFilmic: 4>, 'Neutral': <ToneMapping.Neutral: 6>, 'AgX': <ToneMapping.AgX: 7>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class TorusGeometry(BufferGeometry):
+    def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, tube: typing.SupportsFloat | typing.SupportsIndex = 0.4000000059604645, radial_segments: typing.SupportsInt | typing.SupportsIndex = 20, tubular_segments: typing.SupportsInt | typing.SupportsIndex = 64, arc: typing.SupportsFloat | typing.SupportsIndex = 6.2831854820251465) -> None:
+        ...
+class TorusKnotGeometry(BufferGeometry):
+    def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, tube: typing.SupportsFloat | typing.SupportsIndex = 0.4000000059604645, tubular_segments: typing.SupportsInt | typing.SupportsIndex = 64, radial_segments: typing.SupportsInt | typing.SupportsIndex = 16, p: typing.SupportsInt | typing.SupportsIndex = 2, q: typing.SupportsInt | typing.SupportsIndex = 3) -> None:
+        ...
+class TransformControls(Object3D):
+    enabled: bool
+    show_x: bool
+    show_y: bool
+    show_z: bool
+    def __init__(self, camera: Camera, canvas: Canvas) -> None:
+        ...
+    def attach(self, object: typing.Any) -> TransformControls:
+        """
+        Attach the gizmo to an Object3D. Add the TransformControls itself to the scene.
+        """
+    def detach(self) -> TransformControls:
+        ...
+    def get_space(self) -> str:
+        ...
+    def set_mode(self, mode: str) -> None:
+        """
+        Mode: 'translate' | 'rotate' | 'scale'
+        """
+    def set_rotation_snap(self, snap: typing.SupportsFloat | typing.SupportsIndex | None) -> None:
+        ...
+    def set_scale_snap(self, snap: typing.SupportsFloat | typing.SupportsIndex | None) -> None:
+        ...
+    def set_size(self, size: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def set_space(self, space: str) -> None:
+        """
+        Space: 'world' | 'local'
+        """
+    def set_translation_snap(self, snap: typing.SupportsFloat | typing.SupportsIndex | None) -> None:
+        ...
+    @property
+    def dragging(self) -> bool:
+        """
+        True while the user is actively dragging the gizmo.
+        """
+class TreeGenerator:
+    def __init__(self, seed: typing.SupportsInt | typing.SupportsIndex = 1337) -> None:
+        ...
+    def build_skeleton(self, params: TreeParams) -> None:
+        ...
+    def create_leaf_geometry(self, params: TreeParams) -> BufferGeometry:
+        ...
+    def create_trunk_geometry(self, params: TreeParams) -> BufferGeometry:
+        ...
+    def make_leaf_geometry(self, params: TreeParams) -> BufferGeometry:
+        ...
+    def make_trunk_geometry(self, params: TreeParams) -> BufferGeometry:
+        ...
+    def reseed(self, seed: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def node_count(self) -> int:
+        ...
+    @property
+    def seed(self) -> int:
+        ...
+class TreeParams:
+    branching_mode: BranchingMode
+    crown_shape: CrownShape
+    leaf_style: LeafStyle
+    def __init__(self) -> None:
+        ...
+    @property
+    def attractor_count(self) -> int:
+        ...
+    @attractor_count.setter
+    def attractor_count(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def bark_bump_amp(self) -> float:
+        ...
+    @bark_bump_amp.setter
+    def bark_bump_amp(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def bark_bump_amp2(self) -> float:
+        ...
+    @bark_bump_amp2.setter
+    def bark_bump_amp2(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def bark_bump_lobes(self) -> int:
+        ...
+    @bark_bump_lobes.setter
+    def bark_bump_lobes(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def bark_bump_lobes2(self) -> int:
+        ...
+    @bark_bump_lobes2.setter
+    def bark_bump_lobes2(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def bark_color(self) -> list[float]:
+        ...
+    @bark_color.setter
+    def bark_color(self, arg1: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
+        ...
+    @property
+    def branch_droop(self) -> float:
+        ...
+    @branch_droop.setter
+    def branch_droop(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def branch_length(self) -> float:
+        ...
+    @branch_length.setter
+    def branch_length(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def branch_tip_upturn(self) -> float:
+        ...
+    @branch_tip_upturn.setter
+    def branch_tip_upturn(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def branches_per_whorl(self) -> int:
+        ...
+    @branches_per_whorl.setter
+    def branches_per_whorl(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def crown_height(self) -> float:
+        ...
+    @crown_height.setter
+    def crown_height(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def crown_profile_exponent(self) -> float:
+        ...
+    @crown_profile_exponent.setter
+    def crown_profile_exponent(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def crown_radius_x(self) -> float:
+        ...
+    @crown_radius_x.setter
+    def crown_radius_x(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def crown_radius_z(self) -> float:
+        ...
+    @crown_radius_z.setter
+    def crown_radius_z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def influence_distance(self) -> float:
+        ...
+    @influence_distance.setter
+    def influence_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def kill_distance(self) -> float:
+        ...
+    @kill_distance.setter
+    def kill_distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def leaf_clumping(self) -> float:
+        ...
+    @leaf_clumping.setter
+    def leaf_clumping(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def leaf_color(self) -> list[float]:
+        ...
+    @leaf_color.setter
+    def leaf_color(self, arg1: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
+        ...
+    @property
+    def leaf_density(self) -> float:
+        ...
+    @leaf_density.setter
+    def leaf_density(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def leaf_size(self) -> float:
+        ...
+    @leaf_size.setter
+    def leaf_size(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def leaf_spread(self) -> float:
+        ...
+    @leaf_spread.setter
+    def leaf_spread(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def leaves_per_cluster(self) -> int:
+        ...
+    @leaves_per_cluster.setter
+    def leaves_per_cluster(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def max_iterations(self) -> int:
+        ...
+    @max_iterations.setter
+    def max_iterations(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def min_branch_radius(self) -> float:
+        ...
+    @min_branch_radius.setter
+    def min_branch_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def radial_segments(self) -> int:
+        ...
+    @radial_segments.setter
+    def radial_segments(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def radius_exponent(self) -> float:
+        ...
+    @radius_exponent.setter
+    def radius_exponent(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def randomness(self) -> float:
+        ...
+    @randomness.setter
+    def randomness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def root_flare_asym(self) -> float:
+        ...
+    @root_flare_asym.setter
+    def root_flare_asym(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def seed(self) -> int:
+        ...
+    @seed.setter
+    def seed(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def segment_length(self) -> float:
+        ...
+    @segment_length.setter
+    def segment_length(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def side_twig_density(self) -> float:
+        ...
+    @side_twig_density.setter
+    def side_twig_density(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def tropism(self) -> float:
+        ...
+    @tropism.setter
+    def tropism(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def trunk_bend(self) -> float:
+        ...
+    @trunk_bend.setter
+    def trunk_bend(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def trunk_height(self) -> float:
+        ...
+    @trunk_height.setter
+    def trunk_height(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def trunk_lean(self) -> float:
+        ...
+    @trunk_lean.setter
+    def trunk_lean(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def trunk_radius(self) -> float:
+        ...
+    @trunk_radius.setter
+    def trunk_radius(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def trunk_twist(self) -> float:
+        ...
+    @trunk_twist.setter
+    def trunk_twist(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def whorl_jitter(self) -> float:
+        ...
+    @whorl_jitter.setter
+    def whorl_jitter(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def whorl_spacing(self) -> float:
+        ...
+    @whorl_spacing.setter
+    def whorl_spacing(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class URDFLoader:
+    def __init__(self) -> None:
+        ...
+    def load(self, path: str) -> Robot:
+        """
+        Load a .urdf/.xacro file into a Robot (meshes via ModelLoader).
+        """
+    def parse(self, base_dir: str, xml: str) -> Robot:
+        """
+        Parse URDF XML from a string; base_dir resolves relative mesh paths.
+        """
+    def set_args(self, args: collections.abc.Mapping[str, str]) -> None:
+        """
+        xacro arg overrides (equivalent to name:=value on the xacro CLI).
+        """
+class Vector2:
+    __hash__: typing.ClassVar[None] = None
+    def __add__(self, arg0: Vector2) -> Vector2:
+        ...
+    def __eq__(self, arg0: Vector2) -> bool:
+        ...
+    def __init__(self, x: typing.SupportsFloat | typing.SupportsIndex = 0.0, y: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        ...
+    def __mul__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Vector2:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __sub__(self, arg0: Vector2) -> Vector2:
+        ...
+    def add(self, v: Vector2) -> Vector2:
+        ...
+    def clone(self) -> Vector2:
+        ...
+    def copy(self, v: Vector2) -> Vector2:
+        ...
+    def distance_to(self, v: Vector2) -> float:
+        ...
+    def dot(self, v: Vector2) -> float:
+        ...
+    def length(self) -> float:
+        ...
+    def multiply_scalar(self, s: typing.SupportsFloat | typing.SupportsIndex) -> Vector2:
+        ...
+    def normalize(self) -> Vector2:
+        ...
+    def set(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex) -> Vector2:
+        ...
+    def sub(self, v: Vector2) -> Vector2:
+        ...
+    @property
+    def x(self) -> float:
+        ...
+    @x.setter
+    def x(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def y(self) -> float:
+        ...
+    @y.setter
+    def y(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class Vector3:
+    __hash__: typing.ClassVar[None] = None
+    def __add__(self, arg0: Vector3) -> Vector3:
+        ...
+    def __eq__(self, arg0: Vector3) -> bool:
+        ...
+    def __init__(self, x: typing.SupportsFloat | typing.SupportsIndex = 0.0, y: typing.SupportsFloat | typing.SupportsIndex = 0.0, z: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        ...
+    def __mul__(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __sub__(self, arg0: Vector3) -> Vector3:
+        ...
+    def add(self, v: Vector3) -> Vector3:
+        ...
+    def add_scaled_vector(self, v: Vector3, s: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
+        ...
+    def apply_matrix4(self, m: ...) -> Vector3:
+        ...
+    def apply_quaternion(self, q: ...) -> Vector3:
+        ...
+    def clone(self) -> Vector3:
+        ...
+    def copy(self, v: Vector3) -> Vector3:
+        ...
+    def cross(self, v: Vector3) -> Vector3:
+        ...
+    def distance_to(self, v: Vector3) -> float:
+        ...
+    def dot(self, v: Vector3) -> float:
+        ...
+    def length(self) -> float:
+        ...
+    def length_sq(self) -> float:
+        ...
+    def lerp(self, v: Vector3, alpha: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
+        ...
+    def multiply_scalar(self, s: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
+        ...
+    def negate(self) -> Vector3:
+        ...
+    def normalize(self) -> Vector3:
+        ...
+    def project(self, camera: ...) -> Vector3:
+        ...
+    def set(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex) -> Vector3:
+        ...
+    def sub(self, v: Vector3) -> Vector3:
+        ...
+    def unproject(self, camera: ...) -> Vector3:
+        ...
+    @property
+    def x(self) -> float:
+        ...
+    @x.setter
+    def x(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def y(self) -> float:
+        ...
+    @y.setter
+    def y(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def z(self) -> float:
+        ...
+    @z.setter
+    def z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class Vector4:
+    def __init__(self, x: typing.SupportsFloat | typing.SupportsIndex = 0.0, y: typing.SupportsFloat | typing.SupportsIndex = 0.0, z: typing.SupportsFloat | typing.SupportsIndex = 0.0, w: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def set(self, x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, z: typing.SupportsFloat | typing.SupportsIndex, w: typing.SupportsFloat | typing.SupportsIndex) -> Vector4:
+        ...
+    @property
+    def w(self) -> float:
+        ...
+    @w.setter
+    def w(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def x(self) -> float:
+        ...
+    @x.setter
+    def x(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def y(self) -> float:
+        ...
+    @y.setter
+    def y(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def z(self) -> float:
+        ...
+    @z.setter
+    def z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class VectorKeyframeTrack(KeyframeTrack):
+    def __init__(self, name: str, times: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], interpolation: threepp.threepp.Interpolation | None = None) -> None:
+        ...
+class VerticalAlignment:
+    """
+    Members:
+    
+      Above
+    
+      Center
+    
+      Below
+    """
+    Above: typing.ClassVar[VerticalAlignment]  # value = <VerticalAlignment.Above: 0>
+    Below: typing.ClassVar[VerticalAlignment]  # value = <VerticalAlignment.Below: 2>
+    Center: typing.ClassVar[VerticalAlignment]  # value = <VerticalAlignment.Center: 1>
+    __members__: typing.ClassVar[dict[str, VerticalAlignment]]  # value = {'Above': <VerticalAlignment.Above: 0>, 'Center': <VerticalAlignment.Center: 1>, 'Below': <VerticalAlignment.Below: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class VoxelGrid:
+    """
+    Voxel-hash spatial index. O(1) insert, nearest-neighbour queries over the 27 surrounding voxels. Use voxelSize >= search radius for exact results.
+    """
+    def __init__(self, voxel_size: typing.SupportsFloat | typing.SupportsIndex, max_points_per_voxel: typing.SupportsInt | typing.SupportsIndex = 20, min_spacing: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        ...
+    def clear(self) -> None:
+        ...
+    def collect(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Return all stored points as (N,3) float32 numpy array.
+        """
+    def collect_voxel_centers(self) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Return one centre point per occupied voxel as (N,3) float32 numpy array.
+        """
+    def insert(self, point: Vector3) -> bool:
+        """
+        Insert a single Vector3. Returns True if stored (passed cap + spacing).
+        """
+    def insert_array(self, points: typing.Annotated[numpy.typing.ArrayLike, numpy.float32]) -> int:
+        """
+        Insert an (N,3) float32 array. Returns number of points actually stored.
+        """
+    def nearest(self, query: Vector3, max_dist: typing.SupportsFloat | typing.SupportsIndex) -> typing.Any:
+        """
+        Nearest stored point within max_dist. Returns Vector3 or None.
+        """
+    @property
+    def empty(self) -> bool:
+        ...
+    @property
+    def size(self) -> int:
+        ...
+    @property
+    def voxel_count(self) -> int:
+        ...
+    @property
+    def voxel_size(self) -> float:
+        ...
+class VulkanRenderer:
+    shadow_map_enabled: bool
+    tone_mapping: ToneMapping
+    volumetric_fog: bool
+    def __init__(self, canvas: Canvas, flush_frames: typing.SupportsInt | typing.SupportsIndex = 3) -> None:
+        """
+        Deferred (RasterFirst) Vulkan renderer. Pass a headless Canvas created with vsync=False.
+        """
+    def disable_clouds(self) -> None:
+        """
+        Turn the volumetric cloud layer off (default).
+        """
+    def disable_height_fog(self) -> None:
+        """
+        Turn near-field height fog off (default).
+        """
+    def read_albedo(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.uint8]:
+        ...
+    def read_aovs_typed(self, scene: Object3D, camera: Camera, aovs: collections.abc.Sequence[str] = ['rgb', 'depth', 'normals', 'instance_ids']) -> dict:
+        """
+        Render ONCE and read every requested AOV from that same frame, each as its natural dtype: depth (H,W) f32 · normals (H,W,3) f32 · instance_ids (H,W) u32 · motion (H,W,2) f32 · rgb (H,W,3) u8 · albedo (H,W,4) u8 (linear rgb + metalness). The efficient multi-AOV entry point.
+        """
+    def read_class_ids(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.uint32]:
+        """
+        Semantic class ids as (H, W) uint32 (0..255; 0 = unset). Tag objects with set_class_id() to get semantic segmentation alongside the instance ids.
+        """
+    def read_depth(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Metric depth as (H, W) float32 — distance from the camera in scene units. Background reads as the camera far plane. Full 32-bit precision (native D32 read; supersedes the old 24-bit-packed path).
+        """
+    def read_instance_ids(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.uint32]:
+        """
+        Stable per-pixel instance ids as (H, W) uint32. 0 = sky / no hit; otherwise a per-object id that persists across frames and visible-set changes (no hashing, no collisions). Auto-assigned; override with set_instance_id().
+        """
+    def read_motion(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        Screen-space motion vectors as (H, W, 2) float32, in pixels (previous - current surface position; +x rightward, y down-positive).
+        """
+    def read_normals(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.uint8]:
+        ...
+    def read_normals_float(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.float32]:
+        """
+        World-space unit normals as (H, W, 3) float32, components in [-1, 1] (full precision; read_normals() stays the 8-bit visualisation).
+        """
+    def read_pixels(self) -> numpy.typing.NDArray[numpy.uint8]:
+        """
+        Final shaded RGB of the last render as (H, W, 3) uint8.
+        """
+    def read_scene_pixels(self) -> numpy.typing.NDArray[numpy.uint8]:
+        """
+        Last captured scene-only RGB (post-TAA, pre-overlay; no sprite/ImGui) as (H, W, 3) uint8. Requires scene_capture=True.
+        """
+    def read_segmentation(self, scene: Object3D, camera: Camera) -> numpy.typing.NDArray[numpy.uint8]:
+        ...
+    def render(self, scene: Object3D, camera: Camera) -> None:
+        ...
+    def render_aov(self, scene: Object3D, camera: Camera, aov: str) -> numpy.typing.NDArray[numpy.uint8]:
+        """
+        Render and return a G-buffer AOV as (H, W, 3) uint8: 'rgb' | 'normals' | 'segmentation' | 'albedo' | 'motion'.
+        """
+    def render_aovs(self, scene: Object3D, camera: Camera, aovs: collections.abc.Sequence[str] = ['rgb', 'normals', 'segmentation']) -> dict:
+        """
+        Render the requested AOVs and return {name: (H, W, 3) uint8}.
+        """
+    def reset_sensor_noise(self) -> None:
+        """
+        Restart the noise sequence -- call on episode reset so two episodes with the same seed produce the same frames.
+        """
+    def save_frame(self, scene: Object3D, camera: Camera, path: str) -> None:
+        ...
+    def set_auto_exposure_range(self, min_ev: typing.SupportsFloat | typing.SupportsIndex, max_ev: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        EV clamp for auto-exposure relative to linear 1.0 (default -3 to +3).
+        """
+    def set_auto_exposure_speed(self, ev_per_second: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Adaptation speed in EV/s (default 2.0). Darkening is applied at 0.5× speed.
+        """
+    def set_camera_exposure(self, aperture: typing.SupportsFloat | typing.SupportsIndex = 16.0, shutter: typing.SupportsFloat | typing.SupportsIndex = 0.00800000037997961, iso: typing.SupportsFloat | typing.SupportsIndex = 100.0) -> None:
+        """
+        Camera exposure triplet (used while physical_camera is on): f-number, shutter seconds, ISO.
+        """
+    def set_class_id(self, object: Object3D, class_id: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Tag an object with a semantic class id (0..255) for read_class_ids(). Objects sharing a class id share a semantic label.
+        """
+    def set_clear_color(self, color: Color, alpha: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        ...
+    def set_clouds(self, coverage: typing.SupportsFloat | typing.SupportsIndex = 0.44999998807907104, density: typing.SupportsFloat | typing.SupportsIndex = 1.0, bottom_y: typing.SupportsFloat | typing.SupportsIndex = 600.0, top_y: typing.SupportsFloat | typing.SupportsIndex = 1400.0, wind: Vector3 = ..., evolve_speed: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        """
+        Enable the volumetric cloud layer. coverage 0..1 (0=clear, 1=overcast); density multiplier; bottom_y/top_y world-Y shell; wind m/s xz drift; evolve_speed shape churn rate.
+        """
+    def set_color_grade(self, lift: Vector3 = ..., gamma: Vector3 = ..., gain: Vector3 = ..., saturation: typing.SupportsFloat | typing.SupportsIndex = 1.0, contrast: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
+        """
+        Lift/gamma/gain wheels + saturation + contrast, baked into a 33^3 LUT applied after the tone map. Defaults = identity = off.
+        """
+    def set_flush_frames(self, n: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Frames driven per render() to flush the MAILBOX swapchain (default 3; raise to 4+ for fast-moving dynamic scenes).
+        """
+    def set_height_fog(self, density: typing.SupportsFloat | typing.SupportsIndex = 0.019999999552965164, base_y: typing.SupportsFloat | typing.SupportsIndex = 0.0, falloff: typing.SupportsFloat | typing.SupportsIndex = 80.0, noise_amount: typing.SupportsFloat | typing.SupportsIndex = 0.6000000238418579) -> None:
+        """
+        Enable near-field heterogeneous height fog. density = sigma_t at base_y; base_y world-Y; falloff exponential height scale (m); noise_amount 0=smooth..1=fully noise-modulated.
+        """
+    def set_instance_id(self, object: Object3D, instance_id: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Assign a specific stable instance id (0..65535) to an object for the ids AOV. Overrides the auto-assigned id. Takes effect on the next render.
+        """
+    def set_lens_distortion(self, model: str = 'none', k1: typing.SupportsFloat | typing.SupportsIndex = 0.0, k2: typing.SupportsFloat | typing.SupportsIndex = 0.0, k3: typing.SupportsFloat | typing.SupportsIndex = 0.0, k4: typing.SupportsFloat | typing.SupportsIndex = 0.0, p1: typing.SupportsFloat | typing.SupportsIndex = 0.0, p2: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        """
+        OpenCV-compatible lens distortion. 'brown_conrady' takes cv2's (k1, k2, p1, p2, k3); 'fisheye' takes cv2.fisheye's (k1..k4). Applied to BOTH the displayed image and the AOV readback, so segmentation/depth labels stay aligned with the distorted pixels. Default 'none' (pinhole, zero cost).
+        """
+    def set_scissor(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def set_scissor_test(self, enabled: bool) -> None:
+        ...
+    def set_sensor_noise(self, enabled: bool = True, full_well: typing.SupportsFloat | typing.SupportsIndex = 20000.0, read_noise: typing.SupportsFloat | typing.SupportsIndex = 3.0, dark_current: typing.SupportsFloat | typing.SupportsIndex = 5.0, prnu_percent: typing.SupportsFloat | typing.SupportsIndex = 0.5, seed: typing.SupportsInt | typing.SupportsIndex = 1) -> None:
+        """
+        Shot/read/dark-current/PRNU sensor noise, in ELECTRONS, applied after the temporal resolve (TAA would otherwise average it away). Noise scales with the ISO from set_camera_exposure, as on a real sensor. Deterministic: the same seed replays the same frames. Default off.
+        """
+    def set_size(self, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """
+        Resize the renderer's framebuffer/swapchain — call this from canvas.on_window_resize together with updating the camera aspect.
+        """
+    def set_underwater_murk(self, density: typing.SupportsFloat | typing.SupportsIndex, color: Color = ...) -> None:
+        """
+        Enable underwater murk (below fog_water_surface_y). density = sigma_t (1/m; 0 disables); color = inscatter tint.
+        """
+    def set_viewport(self, x: typing.SupportsInt | typing.SupportsIndex, y: typing.SupportsInt | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def set_white_balance(self, temperature: typing.SupportsFloat | typing.SupportsIndex = 6500.0, tint: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> None:
+        """
+        Scene-illuminant white balance: Kelvin on the Planckian locus (6500 = neutral = off), tint green(-)/magenta(+).
+        """
+    def size(self) -> tuple[int, int]:
+        ...
+    @property
+    def auto_exposure(self) -> bool:
+        """
+        Toggle automatic exposure / eye adaptation (default off). Drives tone-mapping exposure toward 18% gray for the scene's weighted-average luminance. tone_mapping_exposure is ignored while this is True.
+        """
+    @auto_exposure.setter
+    def auto_exposure(self, arg1: bool) -> None:
+        ...
+    @property
+    def bloom_clamp(self) -> float:
+        """
+        Bloom input clamp to stabilise flickery ultra-bright highlights. <=0 disables (default); typical 8-32.
+        """
+    @bloom_clamp.setter
+    def bloom_clamp(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def bloom_intensity(self) -> float:
+        """
+        Bloom strength. 0 disables; typical 0.2-0.8.
+        """
+    @bloom_intensity.setter
+    def bloom_intensity(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def bloom_threshold(self) -> float:
+        """
+        Bright-pass cutoff (linear-HDR luma); higher = only the brightest glow. Typical 0.8-2.0.
+        """
+    @bloom_threshold.setter
+    def bloom_threshold(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def camera_intrinsics(self) -> dict:
+        """
+        Pinhole intrinsics in RENDER-extent pixels (top-left origin, OpenCV convention) as a dict fx/fy/cx/cy/width/height. Derived from the camera's own film gauge and focal length -- set a real camera with `cam.film_gauge = 6.3; cam.set_focal_length(4.8)`. Valid after the first render.
+        """
+    @property
+    def deferred_ao(self) -> bool:
+        """
+        Toggle ray-traced ambient occlusion / diffuse GI. Default on.
+        """
+    @deferred_ao.setter
+    def deferred_ao(self, arg1: bool) -> None:
+        ...
+    @property
+    def denoise(self) -> bool:
+        """
+        Toggle the deferred denoiser (SVGF + temporal). Default on. Off uses the deterministic 64-ray AO (noise-free, no GI colour).
+        """
+    @denoise.setter
+    def denoise(self, arg1: bool) -> None:
+        ...
+    @property
+    def depth_of_field(self) -> bool:
+        """
+        Thin-lens bokeh on the HDR scene (before bloom/TAA). CoC comes from the camera: set_camera_exposure's f-number (independent of physical_camera), FOV-derived focal length, focus_distance. Default off (zero cost).
+        """
+    @depth_of_field.setter
+    def depth_of_field(self, arg1: bool) -> None:
+        ...
+    @property
+    def env_sun_color(self) -> typing.Annotated[list[float], "FixedSize(3)"]:
+        """
+        Integrated sun-disc energy (linear RGB irradiance, valid when env_sun_found).
+        """
+    @property
+    def env_sun_direction(self) -> typing.Annotated[list[float], "FixedSize(3)"]:
+        """
+        Unit direction TOWARD the detected env sun (valid when env_sun_found). Use to align an explicit DirectionalLight with the HDRI.
+        """
+    @property
+    def env_sun_extraction(self) -> bool:
+        """
+        Extract the HDRI sun into an analytic light (default on). Toggling rebuilds the environment on the next frame.
+        """
+    @env_sun_extraction.setter
+    def env_sun_extraction(self, arg1: bool) -> None:
+        ...
+    @property
+    def env_sun_found(self) -> bool:
+        """
+        True when the current environment has a detected sun disc.
+        """
+    @property
+    def env_sun_policy(self) -> str:
+        """
+        'auto' (a scene DirectionalLight claims the sun role), 'always', or 'off'.
+        """
+    @env_sun_policy.setter
+    def env_sun_policy(self, arg1: str) -> None:
+        ...
+    @property
+    def exposure_compensation(self) -> float:
+        """
+        EV compensation while physical_camera is on (+1 doubles brightness).
+        """
+    @exposure_compensation.setter
+    def exposure_compensation(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def focus_distance(self) -> float:
+        """
+        Focus plane distance in scene units/meters (default 10).
+        """
+    @focus_distance.setter
+    def focus_distance(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def fog_anisotropy(self) -> float:
+        ...
+    @fog_anisotropy.setter
+    def fog_anisotropy(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def frame_timings(self) -> dict:
+        ...
+    @property
+    def fsr(self) -> bool:
+        """
+        AMD FSR 3.1 upscaler on/off (no-op / False if unavailable — see fsr_available).
+        """
+    @fsr.setter
+    def fsr(self, arg1: bool) -> None:
+        ...
+    @property
+    def fsr_available(self) -> bool:
+        """
+        True when FSR was compiled in and its context created on this GPU.
+        """
+    @property
+    def gbuffer_msaa(self) -> int:
+        """
+        G-buffer MSAA sample count (1, 2 or 4; default 1 = off). Stabilizes silhouette/edge flicker in the deferred renderer.
+        """
+    @gbuffer_msaa.setter
+    def gbuffer_msaa(self, arg1: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def lens_distortion(self) -> dict:
+        """
+        Current lens distortion as a dict (see set_lens_distortion).
+        """
+    @property
+    def occlusion_culling(self) -> bool:
+        """
+        Two-phase GPU occlusion culling: hidden objects stop paying raster cost (phase-2 same-frame recovery, no popping). Works with gbuffer_msaa. Wins scale with occlusion (interiors, city blocks). Default off.
+        """
+    @occlusion_culling.setter
+    def occlusion_culling(self, arg1: bool) -> None:
+        ...
+    @property
+    def physical_camera(self) -> bool:
+        """
+        Derive exposure from aperture/shutter/ISO (EV100) instead of tone_mapping_exposure; the HDR target is pre-exposed so 100k-lux daylight survives fp16. Defaults = sunny-16 (f/16, 1/125 s, ISO 100). Pair with physical_light_units. Default off.
+        """
+    @physical_camera.setter
+    def physical_camera(self, arg1: bool) -> None:
+        ...
+    @property
+    def physical_light_units(self) -> bool:
+        """
+        Interpret light intensities photometrically: directional = lux (sun ~100000), point/spot = lumens, rect/emissive = nits. Default off.
+        """
+    @physical_light_units.setter
+    def physical_light_units(self, arg1: bool) -> None:
+        ...
+    @property
+    def probe_gi(self) -> bool:
+        """
+        Toggle the world-space irradiance probe grid (multi-bounce GI + occlusion-correct ambient). Default ON; needs deferred_ao + denoise on. Interiors read physically dark — pair with auto_exposure or a raised tone_mapping_exposure. False restores the legacy cosmetic ambient.
+        """
+    @probe_gi.setter
+    def probe_gi(self, arg1: bool) -> None:
+        ...
+    @property
+    def render_scale(self) -> float:
+        ...
+    @render_scale.setter
+    def render_scale(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def scene_capture(self) -> bool:
+        """
+        Toggle scene-only swapchain capture (post-TAA, pre-overlay). When on, read it via read_scene_pixels(); off = no cost.
+        """
+    @scene_capture.setter
+    def scene_capture(self, arg1: bool) -> None:
+        ...
+    @property
+    def sensor_noise(self) -> dict:
+        """
+        Current sensor-noise settings as a dict.
+        """
+    @property
+    def sun_angular_radius(self) -> float:
+        """
+        Directional-light angular radius in degrees for soft sun shadows (default 0.5; 0 = hard shadow).
+        """
+    @sun_angular_radius.setter
+    def sun_angular_radius(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def tone_mapping_exposure(self) -> float:
+        ...
+    @tone_mapping_exposure.setter
+    def tone_mapping_exposure(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+class WrenchSample:
+    """
+    One six-component wrench reading, in the measured joint's child frame. force is N, torque is N*m.
+    """
+    def __repr__(self) -> str:
+        ...
+    @property
+    def force(self) -> Vector3:
+        ...
+    @property
+    def t(self) -> float:
+        ...
+    @property
+    def torque(self) -> Vector3:
+        ...
+def apply_terrain_preset(preset: typing.SupportsInt | typing.SupportsIndex, params: TerrainParams) -> None:
+    """
+    Apply named preset: 0=Alpine, 1=Rolling Hills, 2=Desert Mesa, 3=Volcanic.
+    """
+def apply_tree_preset(preset: typing.SupportsInt | typing.SupportsIndex, params: TreeParams) -> None:
+    """
+    Apply species preset: 0=Oak, 1=Pine/Spruce (whorl conifer, Frond leaves), 2=Birch, 3=Willow.
+    """
+def clamp(value: typing.SupportsFloat | typing.SupportsIndex, low: typing.SupportsFloat | typing.SupportsIndex, high: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    ...
+def damp(x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, lambda_: typing.SupportsFloat | typing.SupportsIndex, /, dt: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    ...
+def deg_to_rad(degrees: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    ...
+def euclidean_modulo(n: typing.SupportsFloat | typing.SupportsIndex, m: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    ...
+def generate_uuid() -> str:
+    ...
+def icp_point_to_point(source: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], target: VoxelGrid, pose: Matrix4, opts: IcpOptions = ...) -> IcpResult:
+    """
+    Register source (N,3) float32 array against a VoxelGrid target. pose (Matrix4) is updated in place; seed it with an initial guess first.
+    """
+def inverse_lerp(x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, value: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    ...
+def is_power_of_two(value: typing.SupportsInt | typing.SupportsIndex) -> bool:
+    ...
+def iso_mesh_to_geometry(iso_mesh: IsoMesh) -> BufferGeometry:
+    """
+    Convert an IsoMesh to a BufferGeometry ready for tp.Mesh(geom, material).
+    """
+def lerp(x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, t: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    ...
+def make_bark_textures(size: typing.SupportsInt | typing.SupportsIndex = 256, seed: typing.SupportsInt | typing.SupportsIndex = 1337, base_color: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] = [0.3400000035762787, 0.23999999463558197, 0.1599999964237213]) -> tuple:
+    """
+    Returns (albedo, normal) tiling bark Textures.
+    """
+def make_flower_texture(size: typing.SupportsInt | typing.SupportsIndex = 128, seed: typing.SupportsInt | typing.SupportsIndex = 1337) -> Texture:
+    """
+    RGBA wildflower alpha-cutout Texture. seed % 5 selects petal colour.
+    """
+def make_leaf_texture(size: typing.SupportsInt | typing.SupportsIndex = 256, seed: typing.SupportsInt | typing.SupportsIndex = 1337, base_color: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] = [0.25999999046325684, 0.44999998807907104, 0.14000000059604645]) -> Texture:
+    """
+    RGBA leaf-cluster alpha-cutout DataTexture. Use mat.alpha_test = 0.5.
+    """
+def make_needle_frond_texture(size: typing.SupportsInt | typing.SupportsIndex = 256, seed: typing.SupportsInt | typing.SupportsIndex = 1337, base_color: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] = [0.10999999940395355, 0.28999999165534973, 0.10000000149011612]) -> Texture:
+    """
+    RGBA conifer needle-frond alpha-cutout DataTexture. Pair with LeafStyle.Frond + BranchingMode.Whorl. Use mat.alpha_test = 0.5.
+    """
+def map_linear(x: typing.SupportsFloat | typing.SupportsIndex, a1: typing.SupportsFloat | typing.SupportsIndex, a2: typing.SupportsFloat | typing.SupportsIndex, b1: typing.SupportsFloat | typing.SupportsIndex, b2: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    ...
+def marching_cubes(field: ScalarField, isolevel: typing.SupportsFloat | typing.SupportsIndex = 0.5) -> IsoMesh:
+    """
+    Extract an isosurface mesh from a ScalarField. Returns an IsoMesh.
+    """
+def merge_buffer_geometries(geometries: collections.abc.Sequence[BufferGeometry], use_groups: bool = False) -> BufferGeometry:
+    ...
+def merge_vertices(geometry: BufferGeometry, tolerance: typing.SupportsFloat | typing.SupportsIndex = 9.999999747378752e-05) -> BufferGeometry:
+    ...
+def rad_to_deg(radians: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    ...
+def rand_float() -> float:
+    ...
+def rand_float_range(min: typing.SupportsFloat | typing.SupportsIndex, max: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    ...
+def rand_float_spread(range: typing.SupportsFloat | typing.SupportsIndex) -> float:
+    ...
+def rand_int(low: typing.SupportsInt | typing.SupportsIndex, high: typing.SupportsInt | typing.SupportsIndex) -> int:
+    ...
+def rotate_equirect(texture: Texture, x_deg: typing.SupportsFloat | typing.SupportsIndex = 0.0, y_deg: typing.SupportsFloat | typing.SupportsIndex = 0.0, z_deg: typing.SupportsFloat | typing.SupportsIndex = 0.0) -> Texture:
+    """
+    Resample an equirect float texture by a 3D rotation (Euler XYZ degrees). For a Z-up scene with a Y-up HDRI: rotate_equirect(env, -90, 0, 0).
+    """
+def simplify_geometry(geometry: BufferGeometry, ratio: typing.SupportsFloat | typing.SupportsIndex, error: typing.SupportsFloat | typing.SupportsIndex = 0.009999999776482582) -> BufferGeometry:
+    ...
+def splat_points_to_field(points: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], cell_size: typing.SupportsFloat | typing.SupportsIndex, radius: typing.SupportsFloat | typing.SupportsIndex, max_nodes: typing.SupportsInt | typing.SupportsIndex = 8000000) -> ScalarField:
+    """
+    Build a union-of-balls scalar field from an (N,3) point array.
+    """
+def terrain_from_json(json: str, params: TerrainParams) -> bool:
+    """
+    Deserialise TerrainParams from a JSON string. Unknown keys keep current value.
+    """
+def terrain_load_config(path: str, params: TerrainParams) -> bool:
+    ...
+def terrain_save_config(path: str, params: TerrainParams) -> bool:
+    ...
+def terrain_to_json(params: TerrainParams) -> str:
+    """
+    Serialise TerrainParams to a JSON string.
+    """
+def voxel_downsample(points: typing.Annotated[numpy.typing.ArrayLike, numpy.float32], voxel_size: typing.SupportsFloat | typing.SupportsIndex) -> numpy.typing.NDArray[numpy.float32]:
+    """
+    Voxel-downsample an (N,3) float32 point array. Returns (M,3) float32.
+    """
+def write_wav(path: str, samples: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], sample_rate: typing.SupportsInt | typing.SupportsIndex = 44100) -> None:
+    """
+    Write a mono 16-bit PCM WAV file from normalised float samples in [-1, 1].
+    """
+Blob: LeafStyle  # value = <LeafStyle.Blob: 3>
+Cluster: LeafStyle  # value = <LeafStyle.Cluster: 1>
+Colonise: BranchingMode  # value = <BranchingMode.Colonise: 0>
+Cone: CrownShape  # value = <CrownShape.Cone: 2>
+CrossQuad: LeafStyle  # value = <LeafStyle.CrossQuad: 2>
+Cylinder: CrownShape  # value = <CrownShape.Cylinder: 4>
+EXPONENTIAL: AudioDistanceModel  # value = <AudioDistanceModel.EXPONENTIAL: 3>
+Ellipsoid: CrownShape  # value = <CrownShape.Ellipsoid: 1>
+Frond: LeafStyle  # value = <LeafStyle.Frond: 4>
+HAS_AUDIO: bool = True
+HAS_IMGUI: bool = True
+HAS_PHYSX: bool = True
+HAS_VULKAN: bool = True
+Hemisphere: CrownShape  # value = <CrownShape.Hemisphere: 3>
+INVERSE: AudioDistanceModel  # value = <AudioDistanceModel.INVERSE: 1>
+LINEAR: AudioDistanceModel  # value = <AudioDistanceModel.LINEAR: 2>
+NONE: AudioDistanceModel  # value = <AudioDistanceModel.NONE: 0>
+Quad: LeafStyle  # value = <LeafStyle.Quad: 0>
+Sphere: CrownShape  # value = <CrownShape.Sphere: 0>
+Whorl: BranchingMode  # value = <BranchingMode.Whorl: 1>

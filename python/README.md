@@ -206,13 +206,61 @@ standalone alternative that prints `ALL OK`.
 
 ### Type stubs (IDE autocomplete)
 
-`threepp.pyi` ships alongside the module. Regenerate it after changing the
-bindings with:
+Stubs ship alongside the module as a PEP 561 stub *package*, mirroring the
+native module's own structure:
+
+```
+threepp/py.typed                 # PEP 561 marker (makes the types count once installed)
+threepp/threepp/__init__.pyi     # the threepp.threepp extension module
+threepp/threepp/imgui.pyi        # the threepp.threepp.imgui submodule
+```
+
+This replaces the old flat `threepp/threepp.pyi`, which could not describe the
+`imgui` submodule. The `threepp/threepp/` directory sits next to
+`threepp.<abi>.pyd` / `.so` but does **not** shadow it at import time: it has no
+`__init__.py`, so it is only a namespace-package candidate, and Python's import
+machinery prefers the extension-module loader within the same directory.
+
+Regenerate after changing the bindings:
 
 ```sh
-pip install pybind11-stubgen
+pip install -r python/requirements-stubs.txt
 cmake --build build --target threepp_stubs
 ```
+
+Or, once the module is built into the package dir, standalone:
+
+```sh
+python python/scripts/gen_stubs.py
+```
+
+`pybind11-stubgen` is **pinned** in
+[`requirements-stubs.txt`](requirements-stubs.txt) because its output layout and
+formatting change between releases — an unpinned upgrade is what silently
+reshaped the stubs from a flat file into this package. Bump the pin
+deliberately, regenerate, and review the diff.
+
+[`scripts/gen_stubs.py`](scripts/gen_stubs.py) wraps the generator so the result
+is reproducible: it fixes the flags, repairs the keyword-named bindings noted
+below, and **fails the build if the emitted stub does not parse**. The bare
+`pybind11-stubgen` CLI exits 0 even when it writes a stub no type checker can
+read, which is how the previous stubs went stale unnoticed.
+
+#### Keyword-named bindings
+
+Two bound names are Python keywords, so they cannot be written literally in
+Python source *or* in a stub. `gen_stubs.py` repairs both; the underlying
+`py::arg` / `.value` names are worth renaming in the bindings:
+
+| Binding | Effect in Python | Stub repair |
+| --- | --- | --- |
+| `Blending.None` (`bind_materials.cpp`) | not reachable as an attribute — use `getattr(tp.Blending, "None")` or `tp.Blending(0)` | member dropped, with a comment |
+| `damp(..., lambda=...)` (`bind_math.cpp`) | not passable by keyword — positional only | renamed `lambda_` and marked positional-only (`/`) |
+
+A few signatures also show `...` instead of a real parameter type (e.g.
+`Vector3.apply_matrix4`). That is pybind11 baking a signature before the
+argument's C++ type was registered; the fix is binding declaration order, not
+the stub generator.
 
 ## Vulkan deferred AOVs (synthetic data)
 
