@@ -46,6 +46,7 @@ front end (a Qt tool, a Python binding, a batch script) would build on:
 | `PhysicsConfig` | per-object rigid-body authoring, stored in `userData` |
 | `PhysicsPlaySession` | the PhysX runtime (header-only, PhysX-gated) |
 | `ScriptConfig` | per-object Python script — a file path or inline source — plus its parameters, stored in `userData` |
+| `ScriptWorkspace` | the `.vscode/settings.json` that teaches Pylance about `threepp`, and the text normalization an external edit round-trips through |
 | `EditorSettings` | recent files and last-used directories |
 
 **`apps/editor/*` — the application.** `EditorApp` owns the canvas, renderer,
@@ -354,7 +355,120 @@ candidates is reported against the object, not guessed at.
 
 Plain text, deliberately: no highlighting, no completion, no third-party editor
 widget and no new dependency. Editing an external `.py` in this window is out of
-scope — that file already has an editor.
+scope — that file already has an editor, and so, now, does inline source: see
+below.
+
+#### Edit in VS Code
+
+`Edit in VS Code` in the Script section opens the script in a real editor, with
+completion for the `threepp` API. It works on both forms, and what it does
+differs because what they are differs.
+
+**A file script is simply handed over.** VS Code opens on the folder, the file
+is revealed, and nothing is watched: Play recompiles the `.py` from source every
+time, so the file was already hot. Edit, save, press Play.
+
+**Inline source has no file, so one is made.** The committed source is exported
+to `<temp>/threepp-editor/scripts/<uuid8>_<name>.py`, VS Code opens on it, and
+the editor polls that file about once a second from the frame loop. Every save
+comes back in through the Script Editor's own **Apply** — the same tab and
+line-ending normalization, the same compile check, the same undoable commit —
+and the window shows the source read-only with a banner and a **Stop external
+edit** button for as long as the session lives.
+
+Details that are not incidental:
+
+* **Content decides, not the write time.** Two saves a millisecond apart can
+  carry the same `last_write_time`; a watcher that misses one of those has
+  silently lost work. The file is read and compared instead — and compared
+  *normalized*, because otherwise every save from a Windows editor would look
+  like a change to every line in the file.
+* **Ten saves are one undo step.** The session holds a command-stack transaction
+  open, so saves after the first merge into the same entry. The first still
+  starts a fresh one: a transaction never merges into what preceded it.
+* **The session survives a play/stop.** It holds the object's uuid, not a
+  pointer, and re-resolves it on every poll — so the graph can be replaced
+  underneath it and external editing simply carries on. Iterating on Play with
+  VS Code open is the point of the whole feature.
+* **A save that arrives while playing is parked.** Committing then would be
+  swallowed by the snapshot restore on Stop, so nothing is consumed, the banner
+  says the save applies on Stop, and the poll after Stop applies that same file
+  to the restored object. (An async import that lands during Play is parked the
+  same way.)
+* It ends on **Stop external edit**, on the script being cleared, on the object
+  leaving the scene, on the file being deleted, or when the editor closes — and
+  the scratch file goes with it. One session at a time, the same rule the Script
+  Editor window follows.
+* Polling, not `ReadDirectoryChangesW`/`inotify`: a watcher means a thread, and a
+  thread means a callback arriving mid-frame with the scene half-rebuilt. This
+  lands in a frame, on the main thread, where every other editor mutation lands.
+* Launching is `ShellExecute`/`CreateProcess`, never `std::system`: detached,
+  non-blocking, and without the console flash a `.cmd` on the PATH would produce
+  (`code` *is* a `.cmd`, so the real `Code.exe` beside it is preferred). With no
+  `code` on the PATH at all, the file opens in whatever the OS uses for `.py`
+  and the console says so — that editor knows nothing about the stubs.
+
+##### The generated workspace
+
+Both tiers first write `.vscode/settings.json` in the folder being opened, if —
+and only if — there is not one there already. Your own settings are never
+overwritten; delete the file and the editor writes a fresh one.
+
+```jsonc
+{
+    "python.analysis.stubPath": "C:/dev/threepp/python/threepp",
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingModuleSource": "none"
+    },
+    // "python.defaultInterpreterPath": "C:/Users/you/mambaforge/envs/robostack/python.exe",
+    "files.eol": "\n",
+    "editor.insertSpaces": true,
+    "editor.tabSize": 4
+}
+```
+
+`stubPath`, not `extraPaths`, and the difference is worth knowing. The stub
+package is `python/threepp/threepp/__init__.pyi`, so a `stubPath` of
+`python/threepp` resolves `import threepp` straight onto it — the **native**
+module, which is what the editor's embedded interpreter actually serves. An
+`extraPaths` of `python/` also resolves (both were checked with pyright against
+the real tree), but it lands on the wheel's Python package first and would offer
+`flush_material`, `threepp.rl` and friends, none of which exist inside the
+editor. The cost of the stub route is `reportMissingModuleSource` — the stubs
+have no `.py` beside them, because the module is compiled into the editor — and
+the generated file turns that one diagnostic off.
+
+The path is absolute and baked in at build time (`THREEPP_EDITOR_PYTHON_STUBS`,
+from `PROJECT_SOURCE_DIR`); `THREEPP_PYTHON_STUBS` in the environment overrides
+it, which is what an installed binary that has moved away from its source tree
+needs. The commented-out `defaultInterpreterPath` is the other half: point it at
+your own interpreter — a RoboStack environment, say — and VS Code will also
+resolve `numpy`, `rclpy` and anything else that interpreter has. Scripts still
+*run* in the editor's embedded interpreter; that line only changes what VS Code
+understands.
+
+Handles are yours to annotate. The editor passes the object's concrete type, and
+saying so is what turns completion on for it:
+
+```python
+import threepp
+
+class Spinner:
+
+    speed = 1.5
+
+    def start(self, obj: threepp.Mesh) -> None:   # or threepp.Robot, threepp.Light, ...
+        self.obj = obj
+        self.obj.material.color.set_hex(0xff8844)  # completes, and is checked
+
+    def update(self, dt: float) -> None:
+        self.obj.rotation.y += self.speed * dt
+```
+
+The stubs are a *superset* of what the editor serves: they are generated from
+the full wheel module, which also binds the renderers, loaders, physics and
+sensors that the script host deliberately leaves out. `threepp.Mesh` completes
+and works; `threepp.GLTFLoader` completes and raises `AttributeError` at Play.
 
 **Errors are never fatal.** Every call into Python is wrapped; a traceback goes
 to the console, the offending instance is disabled for the rest of the session,
@@ -498,9 +612,16 @@ their say.
   one or the other. Several behaviours on one object means several child
   objects, or one script that composes them.
 * **The Script Editor is a text box.** No syntax highlighting, no completion, no
-  find-and-replace, and it edits inline source only — an external `.py` already
-  has an editor. The one thing it adds over one is the compile check, and that
-  is the deliberate scope of v1.
+  find-and-replace, and it edits inline source only. The one thing it adds over
+  Notepad is the compile check — for anything more, `Edit in VS Code` hands the
+  same source to an editor that has all of it.
+* **External editing syncs one way.** The scratch file is the source of truth
+  while a session is live: an undo in the editor moves the document out from
+  under it without touching the file, and the next save puts the file's version
+  back. Undo what you did in VS Code, or stop the session before undoing here.
+  The stubs are also a superset of what a script can reach — they come from the
+  full wheel module, while the script host binds ten areas of it — so a name
+  that completes is not proof that it exists at Play.
 * **Duplicate shares geometry.** `Object3D::clone()` shares both geometry and
   materials; the editor clones the materials afterwards so recolouring a copy
   does not recolour the original, but geometry stays shared. That is intentional
