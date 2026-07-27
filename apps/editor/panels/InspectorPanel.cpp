@@ -1,11 +1,13 @@
 
 #include "../EditorApp.hpp"
 #include "../EditorTheme.hpp"
+#include "../ImportFormats.hpp"
 #include "../PanelLayout.hpp"
 
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
+#include "threepp/extras/editor/ScriptConfig.hpp"
 
 #include "threepp/objects/Robot.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
@@ -218,6 +220,7 @@ void EditorApp::drawInspector() {
         drawCameraSection(*selected);
         drawAnimationSection(*selected);
         drawJointsSection(*selected);
+        drawScriptSection(*selected);
         drawPhysicsSection(*selected);
 
         if (locked) ImGui::EndDisabled();
@@ -943,6 +946,196 @@ void EditorApp::drawJointsSection(Object3D& object) {
                            std::filesystem::path(config->urdf).filename().string().c_str());
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", config->urdf.c_str());
     }
+
+    ImGui::TreePop();
+}
+
+
+// -------------------------------------------------------------------- script
+
+void EditorApp::drawScriptSection(Object3D& object) {
+
+    if (!section("Script", false)) return;
+
+    auto* target = &object;
+    const auto config = ScriptConfig::read(object).value_or(ScriptConfig{});
+
+    const auto commit = [&](ScriptConfig after, const std::string& label) {
+        commands_.execute(makeProperty<ScriptConfig>(
+                label, "script:" + object.uuid,
+                [target](const ScriptConfig& value) { value.write(*target); },
+                config, std::move(after)));
+        document_.setDirty(true);
+    };
+
+    // --- the file ----------------------------------------------------------
+    const float buttonWidth = 90 * contentScale_;
+
+    if (ImGui::Button(config.path.empty() ? "Attach..." : "Change...", {buttonWidth, 0})) {
+        // The dialog resolves a frame or more later; remember the object by
+        // uuid, since a play/stop in between replaces the whole graph.
+        scriptTargetUuid_ = object.uuid;
+        pendingDialog_ = PendingDialog::Script;
+        fileBrowser_.open("Attach Script", FileBrowser::Mode::Open,
+                          settings_.scriptDir.empty() ? assetDir_ : std::filesystem::path(settings_.scriptDir),
+                          formats::scripts());
+    }
+    if (!config.path.empty()) {
+        ImGui::SameLine();
+        if (ImGui::Button("Clear", {buttonWidth * 0.7f, 0})) {
+            commit(ScriptConfig{}, "Clear Script");
+        }
+        // Filename with the full path on hover, same as the Robot section: the
+        // inspector is too narrow for a real path and too useful to truncate.
+        ImGui::TextColored(theme::accent(), "%s",
+                           std::filesystem::path(config.path).filename().string().c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", config.path.c_str());
+    }
+
+    if (config.path.empty()) {
+        ImGui::TextColored(theme::muted(), "No script attached.");
+        ImGui::TextWrapped("A class named after the file, with any of "
+                           "start(obj) / update(dt) / stop().");
+        ImGui::TreePop();
+        return;
+    }
+
+    // --- what went wrong last time ------------------------------------------
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    if (scripts_) {
+        const auto error = scripts_->errorFor(object.uuid);
+        if (!error.empty()) {
+            ImGui::Spacing();
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::danger());
+            // The traceback's first line is the summary; the rest is on hover,
+            // because a section is not a console.
+            const auto firstLine = error.substr(0, error.find('\n'));
+            ImGui::TextWrapped("%s", firstLine.c_str());
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", error.c_str());
+        }
+    }
+#endif
+
+    ImGui::Spacing();
+
+    std::error_code ec;
+    const bool onDisk = std::filesystem::exists(config.path, ec);
+    if (!onDisk) {
+        ImGui::TextColored(theme::danger(), "File not found.");
+    }
+
+    // --- parameters ----------------------------------------------------------
+    // Rendered from the class when Python can tell us the types, and read-only
+    // from the document otherwise, so the values are never silently dropped.
+    const auto drawStored = [&] {
+        if (config.fields.empty()) {
+            ImGui::TextColored(theme::muted(), "No stored parameters.");
+            return;
+        }
+        for (const auto& field : config.fields) {
+            ImGui::TextColored(theme::muted(), "%s", field.name.c_str());
+            ImGui::SameLine(140 * contentScale_);
+            ImGui::TextUnformatted(field.value.c_str());
+        }
+    };
+
+    bool drewFields = false;
+
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    if (onDisk) {
+        const auto& inspection = inspectScript(config.path);
+        if (!inspection.error.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::danger());
+            ImGui::TextWrapped("%s", inspection.error.substr(0, inspection.error.find('\n')).c_str());
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", inspection.error.c_str());
+            ImGui::Spacing();
+        } else {
+            ImGui::TextColored(theme::muted(), "class %s", inspection.className.c_str());
+
+            // Values the class no longer exposes are pruned on the next edit,
+            // so a renamed attribute does not linger in the document forever.
+            std::vector<std::string> live;
+            live.reserve(inspection.fields.size());
+            for (const auto& field : inspection.fields) live.push_back(field.name);
+
+            const auto edited = [&](const std::string& name, const std::string& value) {
+                auto after = config;
+                after.retainFields(live);
+                after.setField(name, value);
+                return after;
+            };
+
+            ImGui::PushItemWidth(-120 * contentScale_);
+            for (const auto& field : inspection.fields) {
+
+                // The document's override if there is one, the class attribute
+                // otherwise — which is exactly what the script would see.
+                const auto stored = config.field(field.name).value_or(field.defaultValue);
+                const auto label = field.name;
+
+                switch (field.type) {
+                    case ScriptField::Type::Bool: {
+                        bool value = ScriptConfig::toBool(stored);
+                        if (ImGui::Checkbox(label.c_str(), &value)) {
+                            commit(edited(field.name, ScriptConfig::toText(value)), "Script " + label);
+                        }
+                        break;
+                    }
+                    case ScriptField::Type::Int: {
+                        int value = ScriptConfig::toInt(stored);
+                        const bool changed = ImGui::DragInt(label.c_str(), &value, 0.1f);
+                        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+                        if (changed) {
+                            commit(edited(field.name, ScriptConfig::toText(value)), "Script " + label);
+                        }
+                        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+                        break;
+                    }
+                    case ScriptField::Type::Float: {
+                        float value = ScriptConfig::toFloat(stored);
+                        const bool changed = ImGui::DragFloat(label.c_str(), &value, 0.01f);
+                        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+                        if (changed) {
+                            commit(edited(field.name, ScriptConfig::toText(value)), "Script " + label);
+                        }
+                        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+                        break;
+                    }
+                    case ScriptField::Type::String: {
+                        char buffer[256];
+                        const auto n = std::min(stored.size(), sizeof(buffer) - 1);
+                        std::memcpy(buffer, stored.data(), n);
+                        buffer[n] = '\0';
+                        // Committed on Enter or focus loss, not per keystroke —
+                        // otherwise every letter is an undo entry.
+                        ImGui::InputText(label.c_str(), buffer, sizeof(buffer));
+                        if (ImGui::IsItemDeactivatedAfterEdit() && stored != buffer) {
+                            commit(edited(field.name, ScriptConfig::sanitized(buffer)), "Script " + label);
+                        }
+                        break;
+                    }
+                }
+            }
+            ImGui::PopItemWidth();
+
+            if (inspection.fields.empty()) {
+                ImGui::TextColored(theme::muted(), "No exposed parameters.");
+            }
+            drewFields = true;
+        }
+    }
+#else
+    ImGui::TextColored(theme::muted(), "Built without Python scripting.");
+    ImGui::TextWrapped("Scripts are still authored and saved; a build with "
+                       "Python will run them.");
+    ImGui::Spacing();
+#endif
+
+    if (!drewFields) drawStored();
+
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"script\"]");
 
     ImGui::TreePop();
 }
