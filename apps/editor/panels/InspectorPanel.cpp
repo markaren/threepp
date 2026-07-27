@@ -1010,6 +1010,36 @@ void EditorApp::drawScriptSection(Object3D& object) {
         commit(ScriptConfig{}, "Clear Script");
     }
 
+    // --- the same script, in a real code editor ------------------------------
+    // A file is simply handed over (every Play recompiles it, so it is already
+    // hot). Inline source has no file, so one is exported and watched — see
+    // apps/editor/ExternalScriptEdit.cpp.
+    if (externalEditActive(object)) {
+        if (ImGui::Button("Stop external edit", {buttonWidth * 1.9f, 0})) {
+            stopExternalEdit("stopped from the inspector");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Stop watching the exported file and delete it.\n"
+                              "Everything saved so far is already in the scene.");
+        }
+    } else if (ImGui::Button("Edit in VS Code", {buttonWidth * 1.9f, 0})) {
+        if (config.isInline()) {
+            startExternalEdit(object);
+        } else {
+            openScriptFileExternally(config.path);
+        }
+    }
+    if (!externalEditActive(object) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip(config.isInline()
+                                  ? "Export the source to a file, open it in VS Code, and take\n"
+                                    "every save back into the scene while the window is open.\n"
+                                    "A .vscode/settings.json is written beside it so Pylance\n"
+                                    "completes `import threepp`."
+                                  : "Open the script's folder in VS Code, with a\n"
+                                    ".vscode/settings.json that completes `import threepp`.\n"
+                                    "Press Play to run whatever you saved.");
+    }
+
     if (config.isInline()) {
         // No file name to show, so say what it is instead. The first line of
         // the source on hover is usually the template's header comment or the

@@ -10,6 +10,7 @@ add_executable(threepp_editor
         main.cpp
         EditorApp.cpp
         EditorTheme.cpp
+        ExternalScriptEdit.cpp
         FileBrowser.cpp
         ViewportMarkers.cpp
         panels/AssetPanel.cpp
@@ -23,6 +24,14 @@ add_executable(threepp_editor
 
 target_link_libraries(threepp_editor PRIVATE threepp imgui::imgui)
 target_include_directories(threepp_editor PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# Where "Edit in VS Code" points Pylance: the PEP 561 stub package that ships
+# with the Python bindings (python/threepp/threepp/*.pyi). Baked in at build
+# time because the editor has no other way to know where it came from; a binary
+# that has moved away from its source tree is put right with the environment
+# variable THREEPP_PYTHON_STUBS, which wins over this.
+target_compile_definitions(threepp_editor
+        PRIVATE THREEPP_EDITOR_PYTHON_STUBS="${PROJECT_SOURCE_DIR}/python/threepp")
 
 # PhysX is an optional vcpkg dependency (feature "physx"). Found here rather
 # than relying on the examples having looked for it, so the editor configures

@@ -10,6 +10,7 @@
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
+#include "threepp/extras/editor/ScriptWorkspace.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
@@ -264,6 +265,10 @@ EditorApp::EditorApp(const Options& options)
 EditorApp::~EditorApp() {
 
     canvas_.setIOCapture(nullptr);
+
+    // Stops the poll and takes the scratch .py with it. Whatever was saved is
+    // already in the document; what is left on disk is a copy nobody will read.
+    stopExternalEdit("the editor is closing");
 
     // Tear the overlay down before the members it points at (the gizmo owns a
     // pimpl that unregisters canvas listeners in its destructor).
@@ -643,6 +648,162 @@ int EditorApp::runSelfTest() {
     }
 #endif
 
+    // "Edit in VS Code", end to end and without VS Code: the export, the
+    // workspace, the poll, the sync back through the Script Editor's Apply, and
+    // every way a session ends. The launch itself is the one thing gated out —
+    // a test run must not open windows on the machine running it.
+    //
+    // Outside the Python guard on purpose: none of this needs an interpreter.
+    // The compile check is the only part that does, and it is not what a file
+    // watcher is for.
+    {
+        const auto pump = [&](float seconds) {
+            const auto deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(static_cast<int>(seconds * 1000));
+            while (std::chrono::steady_clock::now() < deadline) step();
+        };
+        // Frame rate is whatever the machine gives us, so wait on the event
+        // rather than on a frame count — with a bound, so a failure is a
+        // failure rather than a hang.
+        const auto pumpUntilSync = [&](int target, float seconds = 10.f) {
+            const auto deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(static_cast<int>(seconds * 1000));
+            while (externalEdit_.syncs < target && std::chrono::steady_clock::now() < deadline) step();
+            return externalEdit_.syncs >= target;
+        };
+
+        std::error_code ec;
+        // The scratch directory outlives the process, so start from nothing —
+        // otherwise "was the settings file created" is answered by a previous
+        // run.
+        std::filesystem::remove_all(ScriptWorkspace::scratchDir(), ec);
+
+        // Tier 1: a .py already on disk. Nothing is watched (every Play
+        // recompiles it), but the workspace still has to appear beside it.
+        {
+            const auto dir = std::filesystem::temp_directory_path() / "threepp-editor-selftest";
+            std::filesystem::remove_all(dir, ec);
+            std::filesystem::create_directories(dir, ec);
+            const auto file = dir / "external.py";
+            ScriptWorkspace::writeSource(file, "class External:\n    pass\n");
+
+            openScriptFileExternally(file);
+            check(std::filesystem::exists(dir / ".vscode" / "settings.json"),
+                  "opening a file script generates a workspace beside it");
+            std::filesystem::remove_all(dir, ec);
+        }
+
+        if (auto* box = document_.scene().getObjectByName("Box")) {
+
+            const auto uuid = box->uuid;
+            const std::string source = "class External:\n"
+                                       "    speed = 1.0\n"
+                                       "\n"
+                                       "    def update(self, dt):\n"
+                                       "        pass\n";
+            setInlineScript(*box, source, "Inline Script");
+            step();
+
+            startExternalEdit(*box);
+            check(externalEdit_.active, "an external session starts on an inline script");
+            const auto scratch = externalEdit_.file;
+            check(std::filesystem::exists(scratch), "the source is exported to a scratch file");
+            check(ScriptWorkspace::readSource(scratch) == source,
+                  "the export is the committed source, byte for byte");
+            check(scriptEditor_.open, "the Script Editor comes along to show the session");
+
+            // The workspace: written once, carrying this build's stub path, and
+            // never written over the top of what the user made of it.
+            const auto settings = scratch.parent_path() / ".vscode" / "settings.json";
+            check(std::filesystem::exists(settings), "a workspace is generated for the scratch folder");
+            const auto generated = ScriptWorkspace::readSource(settings);
+            check(generated.find("python.analysis.stubPath") != std::string::npos,
+                  "the generated settings carry a stub path");
+            check(generated.find(pythonStubDir().generic_string()) != std::string::npos,
+                  "and it is this build's own stub directory");
+
+            const std::string sentinel = "{ \"mine\": true }\n";
+            ScriptWorkspace::writeSource(settings, sentinel);
+            ensureScriptWorkspace(scratch.parent_path());
+            check(ScriptWorkspace::readSource(settings) == sentinel,
+                  "regenerating never overwrites an existing settings.json");
+
+            // A save from another program: CRLF endings and a tab-indented
+            // line, which is what an editor that is not this one produces.
+            const auto undosBefore = commands_.undoCount();
+            ScriptWorkspace::writeSource(scratch, "class External:\r\n"
+                                                  "    speed = 2.5\r\n"
+                                                  "\r\n"
+                                                  "    def update(self, dt):\r\n"
+                                                  "\t\tpass\r\n");
+            check(pumpUntilSync(1), "a save is picked up by the poll");
+
+            const auto stored = [&] {
+                auto* live = findByUuid(document_.scene(), uuid);
+                return live ? ScriptConfig::read(*live).value_or(ScriptConfig{}) : ScriptConfig{};
+            };
+            check(stored().source.find("speed = 2.5") != std::string::npos,
+                  "the external edit reaches userData");
+            check(stored().source.find('\r') == std::string::npos, "CRLF is normalized away");
+            check(stored().source.find('\t') == std::string::npos, "tabs are normalized away");
+            check(commands_.undoCount() == undosBefore + 1, "the first sync is its own undo entry");
+
+            commands_.undo();
+            step();
+            check(stored().source == source, "an external sync is undoable");
+            commands_.redo();
+            step();
+            check(stored().source.find("speed = 2.5") != std::string::npos, "and redoable");
+
+            // Ten saves must not be ten undo steps: the session holds one
+            // transaction open, so everything after the first merges into it.
+            const auto undosAfterFirst = commands_.undoCount();
+            ScriptWorkspace::writeSource(scratch, "class External:\n    speed = 3.5\n");
+            check(pumpUntilSync(2), "a second save syncs too");
+            check(commands_.undoCount() == undosAfterFirst,
+                  "successive saves coalesce into one undo step");
+            check(stored().source.find("speed = 3.5") != std::string::npos,
+                  "and the document holds the newest text");
+
+            // The same text saved again, CRLF-terminated: a new write time,
+            // nothing new to say. Without normalizing before comparing, every
+            // save in VS Code would land as an edit.
+            const auto syncsBefore = externalEdit_.syncs;
+            const auto undosBeforeIdle = commands_.undoCount();
+            ScriptWorkspace::writeSource(scratch, "class External:\r\n    speed = 3.5\r\n");
+            pump(ExternalEditState::pollSeconds * 2.5f);
+            check(externalEdit_.syncs == syncsBefore, "a save that changed nothing is not a sync");
+            check(commands_.undoCount() == undosBeforeIdle, "and pushes no undo entry");
+
+            // Play, and a save while playing: parked, because Stop puts the
+            // snapshot back and would swallow the commit with it.
+            startPlay();
+            step(5);
+            ScriptWorkspace::writeSource(scratch, "class External:\n    speed = 4.5\n");
+            pump(ExternalEditState::pollSeconds * 1.5f);
+            check(externalEdit_.active, "the session survives Play");
+            check(externalEdit_.waiting, "a save during Play is parked rather than committed");
+            check(externalEdit_.syncs == syncsBefore, "and nothing is committed while playing");
+
+            stopPlay();
+            step();
+            check(pumpUntilSync(syncsBefore + 1), "the parked save applies after Stop");
+            check(stored().source.find("speed = 4.5") != std::string::npos,
+                  "on the object the snapshot restore rebuilt, found by uuid");
+            check(externalEdit_.active, "and the session is still live after the round trip");
+
+            // Clearing the script is the end of it: nothing to watch, and the
+            // scratch file goes with the session.
+            if (auto* clear = findByUuid(document_.scene(), uuid)) {
+                assignScript(*clear, {});
+                step();
+                pump(ExternalEditState::pollSeconds * 1.5f);
+                check(!externalEdit_.active, "clearing the script ends the session");
+                check(!std::filesystem::exists(scratch), "and takes the scratch file with it");
+            }
+        }
+    }
+
     // With a model path on the command line, exercise the async import path
     // end to end: queue -> worker -> finalize -> selected group in the scene.
     if (!options_.openOnStart.empty() && options_.openOnStart.extension() != ".json") {
@@ -766,6 +927,7 @@ void EditorApp::frame(float dt) {
 
     play_.update(dt);
     pollImports(dt);
+    pollExternalEdit(dt);
     if (animPreview_) animPreview_->mixer->update(dt);
     orbit_.update();
 
@@ -1890,6 +2052,11 @@ void EditorApp::stopPlay() {
         return;
     }
     log("play stopped, scene restored");
+
+    // A save that arrived while playing was parked rather than committed; the
+    // scene it belongs to exists again now, so take the poll off its accumulator
+    // and let the next frame apply it.
+    if (externalEdit_.active) externalEdit_.poll = ExternalEditState::pollSeconds;
 }
 
 

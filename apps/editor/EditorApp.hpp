@@ -137,6 +137,28 @@ namespace threepp::editor {
         // Normalizes, syntax-checks and commits the buffer as one undo step.
         void applyScriptEditor();
 
+        // --- external editing (apps/editor/ExternalScriptEdit.cpp) ----------
+        // Tier 1: hand a .py to VS Code. No watcher — every Play recompiles the
+        // file, so a file script is already hot.
+        void openScriptFileExternally(const std::filesystem::path& file);
+        // Tier 2: export the inline source to a scratch .py, open it, and poll
+        // it back in through applyScriptEditor() on every save.
+        void startExternalEdit(Object3D& object);
+        void stopExternalEdit(const std::string& why = {});
+        void pollExternalEdit(float dt);
+        [[nodiscard]] bool externalEditActive() const { return externalEdit_.active; }
+        [[nodiscard]] bool externalEditActive(const Object3D& object) const;
+        // Writes `<dir>/.vscode/settings.json` when it is absent, so Pylance
+        // completes `import threepp` in whatever folder the script lives in.
+        void ensureScriptWorkspace(const std::filesystem::path& dir);
+        // Where the threepp type stubs are: $THREEPP_PYTHON_STUBS, else the
+        // source tree this binary was built from.
+        [[nodiscard]] static std::filesystem::path pythonStubDir();
+        // Detached, non-blocking and without a console flash. Suppressed in the
+        // self-test, which drives everything else about a session.
+        void launchExternalEditor(const std::filesystem::path& dir,
+                                  const std::filesystem::path& file);
+
         // --- editing operations --------------------------------------------
         void newScene();
         void buildTemplateScene();
@@ -397,6 +419,40 @@ namespace threepp::editor {
             bool focus = false;
         };
         ScriptEditorState scriptEditor_;
+
+        // "Edit in VS Code" on an inline script. The source is exported to a
+        // scratch .py, VS Code is pointed at it, and the file is polled once a
+        // second from the frame loop — no thread, no watcher API, nothing that
+        // can call back into the editor from anywhere but a frame.
+        //
+        // The object is held by UUID and re-resolved on every poll: a play/stop
+        // replaces the whole graph, and surviving exactly that is what makes
+        // "edit externally while iterating on Play" work at all.
+        struct ExternalEditState {
+
+            static constexpr float pollSeconds = 1.f;
+
+            bool active = false;
+            std::string uuid;
+            std::string label;
+            std::filesystem::path file;
+            // The normalized text last committed, and the only thing a poll
+            // compares against — write times tie between two quick saves, and a
+            // save that only rewrote the line endings (which is every save from
+            // a Windows editor) must not become an undo entry either way.
+            std::string synced;
+            float poll = 0.f;
+            // Open for the session's life. Coalescing is the command stack's
+            // transactions: ten saves collapse into one undo step, and the
+            // first still starts a fresh entry, because a transaction never
+            // merges into what was on the stack before it opened.
+            bool transaction = false;
+            // A save arrived while playing and is waiting for Stop.
+            bool waiting = false;
+            // Syncs applied this session (the self-test's counter).
+            int syncs = 0;
+        };
+        ExternalEditState externalEdit_;
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
         // Registered with the play controller; also the inspector's source for

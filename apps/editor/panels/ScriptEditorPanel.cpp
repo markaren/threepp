@@ -18,6 +18,7 @@
 
 #include "threepp/extras/editor/EditorCommands.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
+#include "threepp/extras/editor/ScriptWorkspace.hpp"
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
@@ -30,28 +31,6 @@ using namespace threepp;
 using namespace threepp::editor;
 
 namespace {
-
-    // Tabs become four spaces, carriage returns are dropped.
-    //
-    // The text box takes real tabs (AllowTabInput, because a Python editor
-    // that cannot indent is not one), and Python raises TabError on source
-    // that mixes them with spaces — which is exactly what happens when a user
-    // types Tab on one line and the editor's own template supplied spaces on
-    // the next. Normalizing on Apply makes that impossible instead of
-    // diagnosing it later.
-    std::string normalized(const std::string& text) {
-
-        std::string out;
-        out.reserve(text.size());
-        for (const char c : text) {
-            if (c == '\t') {
-                out.append(4, ' ');
-            } else if (c != '\r') {
-                out.push_back(c);
-            }
-        }
-        return out;
-    }
 
     // std::string-backed InputText, the way misc/cpp/imgui_stdlib does it (not
     // vendored here). ImGui asks for the buffer to grow and we hand back the
@@ -122,7 +101,11 @@ void EditorApp::applyScriptEditor() {
     auto* target = findByUuid(document_.scene(), state.uuid);
     if (!target || isPlaying()) return;
 
-    state.buffer = normalized(state.buffer);
+    // Tabs become four spaces, carriage returns are dropped — see
+    // ScriptWorkspace::normalize. The box takes real tabs (a Python editor that
+    // cannot indent is not one) and Python raises TabError on source that mixes
+    // them, and an external save arrives CRLF-terminated.
+    state.buffer = ScriptWorkspace::normalize(state.buffer);
     state.status.clear();
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
@@ -146,10 +129,16 @@ void EditorApp::drawScriptEditor() {
 
     const float s = contentScale_;
 
+    // The object this window is showing is being edited in VS Code: the buffer
+    // is a mirror of that file, and the window is where the session announces
+    // itself and can be stopped.
+    const bool external = externalEdit_.active && externalEdit_.uuid == state.uuid;
+
     // Follow the selection — but only with nothing to lose. Retargeting a
     // buffer someone is still typing into would silently drop it, so an unsaved
     // window stays on the object it was opened for however the selection moves.
-    if (state.buffer == state.committed) {
+    // An external session pins it outright: it is that object's file on screen.
+    if (state.buffer == state.committed && !external) {
         if (auto* selected = selection_.get(); selected && selected->uuid != state.uuid) {
             if (const auto config = ScriptConfig::read(*selected); config && config->isInline()) {
                 openScriptEditor(*selected);
@@ -198,15 +187,36 @@ void EditorApp::drawScriptEditor() {
 
         const bool missing = target == nullptr;
         const bool playing = isPlaying();
-        const bool locked = missing || playing;
+        // Read-only during an external session too, and for the same reason as
+        // during Play: the next save would overwrite whatever was typed here.
+        const bool locked = missing || playing || external;
         const float buttonWidth = 110 * s;
 
         if (missing) {
             ImGui::TextColored(theme::danger(), "The object is no longer in the scene.");
+        } else if (external) {
+            ImGui::TextColored(theme::accent(), "Editing externally - syncing on save");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", externalEdit_.file.generic_string().c_str());
+            }
+            if (playing) {
+                ImGui::TextColored(theme::warning(),
+                                   "Playing - a save is applied when you press Stop.");
+            }
         } else if (playing) {
             // Same rule as the inspector: the play snapshot is put back on
             // Stop, so an edit made now would be thrown away without a word.
             ImGui::TextColored(theme::warning(), "Read-only while playing");
+        }
+
+        if (external) {
+            if (ImGui::Button("Stop external edit", {buttonWidth * 1.7f, 0})) {
+                stopExternalEdit("stopped from the Script Editor");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Stop watching the file and delete it. Everything saved so far\n"
+                                  "is already in the scene, and the box becomes editable again.");
+            }
         }
 
         ImGui::BeginDisabled(locked);
