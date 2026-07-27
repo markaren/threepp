@@ -241,23 +241,43 @@ reshaped the stubs from a flat file into this package. Bump the pin
 deliberately, regenerate, and review the diff.
 
 [`scripts/gen_stubs.py`](scripts/gen_stubs.py) wraps the generator so the result
-is reproducible: it fixes the flags, repairs the keyword-named bindings noted
-below, and **fails the build if the emitted stub does not parse**. The bare
+is reproducible: it fixes the flags, repairs any keyword-named binding (see
+below), **fails if the emitted stub does not parse**, and **fails if
+regeneration dropped symbols the committed stubs declare**. The bare
 `pybind11-stubgen` CLI exits 0 even when it writes a stub no type checker can
 read, which is how the previous stubs went stale unnoticed.
 
+#### Regenerate from a full-featured build
+
+The stubs describe whatever the *built* module exposes, so regenerate from a
+build with the same features as the last one — Vulkan, PhysX, FSR. A default or
+GL-only rebuild drops `VulkanRenderer`, the PhysX world and every sensor
+binding, and the result still parses, so nothing else would catch it.
+
+`gen_stubs.py` guards this: it snapshots the committed stubs' symbols before
+regenerating and **fails if any disappeared**, naming them. If a reduction is
+genuinely intended, say so:
+
+```sh
+python python/scripts/gen_stubs.py --allow-removals
+```
+
 #### Keyword-named bindings
 
-Two bound names are Python keywords, so they cannot be written literally in
-Python source *or* in a stub. `gen_stubs.py` repairs both; the underlying
-`py::arg` / `.value` names are worth renaming in the bindings:
+A bound name that is a Python keyword cannot be written in Python source *or* in
+a stub, and one is enough to make the whole stub unparseable. Two such names
+have been renamed at the binding site:
 
-| Binding | Effect in Python | Stub repair |
+| Was | Now | Why |
 | --- | --- | --- |
-| `Blending.None` (`bind_materials.cpp`) | not reachable as an attribute — use `getattr(tp.Blending, "None")` or `tp.Blending(0)` | member dropped, with a comment |
-| `damp(..., lambda=...)` (`bind_math.cpp`) | not passable by keyword — positional only | renamed `lambda_` and marked positional-only (`/`) |
+| `Blending.None` | `Blending.NoBlending` | `tp.Blending.None` is a SyntaxError; `NoBlending` is also the three.js name |
+| `damp(..., lambda=...)` | `damp(..., lambda_=...)` | `lambda` is unusable as a keyword argument; PEP 8's trailing underscore |
 
-A few signatures also show `...` instead of a real parameter type (e.g.
+No binding needs repair today. `gen_stubs.py` keeps a general repair pass as a
+standing guard, since pybind11 will emit the same breakage from any future C++
+identifier that collides with a Python keyword.
+
+A few signatures show `...` instead of a real parameter type (e.g.
 `Vector3.apply_matrix4`). That is pybind11 baking a signature before the
 argument's C++ type was registered; the fix is binding declaration order, not
 the stub generator.

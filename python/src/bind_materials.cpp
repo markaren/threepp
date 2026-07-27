@@ -91,7 +91,10 @@ namespace threepp_py {
                 .value("Double", Side::Double);
 
         py::enum_<Blending>(m, "Blending")
-                .value("None", Blending::None)
+                // "NoBlending" (the three.js name), not "None": a Python keyword
+                // cannot be spelled as an attribute, so `tp.Blending.None` would
+                // be a SyntaxError and unrepresentable in the type stubs.
+                .value("NoBlending", Blending::None)
                 .value("Normal", Blending::Normal)
                 .value("Additive", Blending::Additive)
                 .value("Subtractive", Blending::Subtractive)

@@ -57,10 +57,12 @@ IGNORE_INVALID_EXPRESSIONS = r"threepp::|<threepp\.threepp\."
 # infer where the enum class lives; point it at the right module.
 ENUM_CLASS_LOCATIONS = f"AnimationBlendMode:{MODULE}"
 
-# A handful of bound names are Python keywords, so they cannot appear literally
-# in a stub (or in user code). Today: the `Blending.None` enum value and
-# `damp()`'s `lambda` parameter — see the "keyword-named bindings" note in
-# ../README.md. Repaired here rather than left to break the whole file.
+# A bound name that is a Python keyword cannot appear literally in a stub (or in
+# user code), and one such name makes the whole file unparseable. No binding
+# needs this today — `Blending.None` and `damp()`'s `lambda` were renamed at the
+# py::arg/.value site — so this is a standing guard against the next one, which
+# pybind11 will happily emit from any C++ identifier that collides with a Python
+# keyword (`from`, `in`, `is`, `lambda`, `None`, ...).
 _ANNOTATED_MEMBER = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:\s")
 _DEF_LINE = re.compile(r"^(\s*def\s+[A-Za-z_][A-Za-z0-9_]*\()(.*)(\).*:)\s*$")
 
@@ -108,7 +110,8 @@ def _repair_keyword_names(path: Path) -> int:
     """Repair bound names that are Python keywords.
 
     Members (`None: ClassVar[Blending]`) are commented out; parameters
-    (`lambda`) are renamed and made positional-only.
+    (`lambda`) are renamed and made positional-only. Expected to be a no-op
+    against the current bindings — see the note by `_ANNOTATED_MEMBER`.
 
     Line-based, because the file does not parse yet — that is the whole point.
     Triple-quote state is tracked so a docstring that happens to contain a
@@ -170,10 +173,13 @@ def _param_name(param: str) -> str:
 def _fix_keyword_params(line: str) -> str | None:
     """Rename keyword-named parameters and make them positional-only.
 
-    `def damp(x, y, lambda, dt)` cannot be written in Python. Renaming alone
-    would lie — `damp(lambda_=...)` is a TypeError at runtime — so a PEP 570 `/`
-    is inserted after the offending parameter. That is exactly the truth: the
-    argument can only ever be passed positionally.
+    A signature like `def f(x, lambda, dt)` cannot be written in Python. Renaming
+    alone would lie — `f(lambda_=...)` raises TypeError when the binding really
+    is `py::arg("lambda")` — so a PEP 570 `/` is inserted after the offending
+    parameter. That is exactly the truth: it can only be passed positionally.
+
+    The honest fix is at the binding site (`py::arg("lambda_")`), which makes the
+    argument keyword-callable and leaves nothing here to repair.
     """
     m = _DEF_LINE.match(line)
     if not m:
@@ -204,6 +210,88 @@ def _validate(path: Path) -> None:
         raise SystemExit(f"error: generated stub {path} does not parse: line {e.lineno}: {e.msg}")
 
 
+def _symbols(path: Path) -> set[str] | None:
+    """Qualified names a stub declares: `Class`, `Class.member`, `function`.
+
+    None if the file is absent or unparseable (nothing to compare against).
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return None
+
+    def bound(body) -> set[str]:
+        out = set()
+        for node in body:
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                out.add(node.name)
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                out.add(node.target.id)
+            elif isinstance(node, ast.Assign):
+                out.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        return out
+
+    names = bound(tree.body)
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            names.update(f"{node.name}.{n}" for n in bound(node.body))
+    return names
+
+
+def _snapshot(stub_dir: Path) -> dict[str, set[str]]:
+    return {p.name: s for p in stub_dir.glob("*.pyi") if (s := _symbols(p)) is not None}
+
+
+def _check_no_regression(before: dict[str, set[str]], stub_dir: Path, allow_removals: bool) -> None:
+    """Fail if regeneration dropped symbols the committed stubs already had.
+
+    The trap this exists for: the stubs must be generated from a module built
+    with the SAME feature set as the one they were generated from last time. A
+    default or GL-only rebuild drops VulkanRenderer, the PhysX world and every
+    sensor binding — and the result still parses, so every other check here is
+    happy while the committed stubs silently lose thousands of symbols.
+
+    Comparing against what is already committed keeps this feature-set agnostic:
+    a deliberate reduction is fine, it just has to be stated with
+    --allow-removals.
+    """
+    removed: dict[str, set[str]] = {}
+    added = 0
+    for name, old in before.items():
+        new = _symbols(stub_dir / name)
+        if new is None:
+            removed[name] = old
+            continue
+        if gone := old - new:
+            removed[name] = gone
+        added += len(new - old)
+
+    if removed and not allow_removals:
+        lines = [
+            "error: regeneration REMOVED symbols that the committed stubs declare.",
+            "",
+            "       This usually means the module was rebuilt with a smaller feature",
+            "       set than the stubs were last generated from (e.g. a GL-only build",
+            "       dropping Vulkan/PhysX/sensor bindings). Rebuild threepp_py with",
+            "       the full feature set and regenerate.",
+            "",
+        ]
+        for name, gone in sorted(removed.items()):
+            shown = sorted(gone)
+            lines.append(f"       {name}: {len(gone)} removed")
+            lines.extend(f"         - {s}" for s in shown[:15])
+            if len(shown) > 15:
+                lines.append(f"         ... and {len(shown) - 15} more")
+        lines += ["", "       If the reduction is intended, re-run with --allow-removals."]
+        raise SystemExit("\n".join(lines))
+
+    if removed:
+        total = sum(len(g) for g in removed.values())
+        print(f"  (--allow-removals: {total} symbol(s) dropped)")
+    if added:
+        print(f"  ({added} symbol(s) added)")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -212,12 +300,20 @@ def main() -> int:
         default=Path(__file__).resolve().parent.parent,
         help="the directory containing the `threepp` package (default: <repo>/python)",
     )
+    parser.add_argument(
+        "--allow-removals",
+        action="store_true",
+        help="permit regeneration to drop symbols the committed stubs declare "
+        "(needed only when deliberately generating from a reduced-feature build)",
+    )
     args = parser.parse_args()
 
     pkg_dir: Path = args.package_dir.resolve()
     stub_dir = pkg_dir / "threepp" / "threepp"
 
     _check_version()
+    # Snapshot before stubgen overwrites, so a feature-set regression is visible.
+    before = _snapshot(stub_dir) if stub_dir.is_dir() else {}
     _run_stubgen(pkg_dir)
 
     produced = {p.name for p in stub_dir.glob("*.pyi")} if stub_dir.is_dir() else set()
@@ -233,6 +329,9 @@ def main() -> int:
         _validate(path)
         note = f" ({repaired} keyword-named binding(s) repaired)" if repaired else ""
         print(f"  {path.relative_to(pkg_dir)}: {len(path.read_text(encoding='utf-8').splitlines())} lines{note}")
+
+    # After repair/validation: compare only stubs that are known to parse.
+    _check_no_regression(before, stub_dir, args.allow_removals)
 
     legacy = pkg_dir / "threepp" / "threepp.pyi"
     if legacy.exists():

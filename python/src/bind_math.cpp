@@ -266,7 +266,11 @@ namespace threepp_py {
         m.def("map_linear", &math::mapLinear, py::arg("x"), py::arg("a1"), py::arg("a2"), py::arg("b1"), py::arg("b2"));
         m.def("inverse_lerp", &math::inverseLerp, py::arg("x"), py::arg("y"), py::arg("value"));
         m.def("lerp", &math::lerp, py::arg("x"), py::arg("y"), py::arg("t"));
-        m.def("damp", &math::damp, py::arg("x"), py::arg("y"), py::arg("lambda"), py::arg("dt"));
+        // "lambda_" (PEP 8's trailing-underscore convention), not "lambda": a
+        // Python keyword cannot be used as a keyword argument, so py::arg("lambda")
+        // made the parameter positional-only in practice and unrepresentable in
+        // the type stubs.
+        m.def("damp", &math::damp, py::arg("x"), py::arg("y"), py::arg("lambda_"), py::arg("dt"));
         m.def("euclidean_modulo", &math::euclideanModulo, py::arg("n"), py::arg("m"));
         // clamp has no MathUtils equivalent; provide it via std::clamp.
         m.def("clamp", [](float value, float low, float high) { return std::clamp(value, low, high); },

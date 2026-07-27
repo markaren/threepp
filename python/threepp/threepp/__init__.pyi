@@ -324,7 +324,7 @@ class Blending:
     """
     Members:
     
-      None
+      NoBlending
     
       Normal
     
@@ -339,12 +339,10 @@ class Blending:
     Additive: typing.ClassVar[Blending]  # value = <Blending.Additive: 2>
     Custom: typing.ClassVar[Blending]  # value = <Blending.Custom: 5>
     Multiply: typing.ClassVar[Blending]  # value = <Blending.Multiply: 4>
-    # None: typing.ClassVar[Blending]  # value = <Blending.None: 0>
-    # NOTE: 'None' is a Python keyword — unusable as an attribute and
-    # not expressible in a stub. Reach it via getattr() if you need it.
+    NoBlending: typing.ClassVar[Blending]  # value = <Blending.NoBlending: 0>
     Normal: typing.ClassVar[Blending]  # value = <Blending.Normal: 1>
     Subtractive: typing.ClassVar[Blending]  # value = <Blending.Subtractive: 3>
-    __members__: typing.ClassVar[dict[str, Blending]]  # value = {'None': <Blending.None: 0>, 'Normal': <Blending.Normal: 1>, 'Additive': <Blending.Additive: 2>, 'Subtractive': <Blending.Subtractive: 3>, 'Multiply': <Blending.Multiply: 4>, 'Custom': <Blending.Custom: 5>}
+    __members__: typing.ClassVar[dict[str, Blending]]  # value = {'NoBlending': <Blending.NoBlending: 0>, 'Normal': <Blending.Normal: 1>, 'Additive': <Blending.Additive: 2>, 'Subtractive': <Blending.Subtractive: 3>, 'Multiply': <Blending.Multiply: 4>, 'Custom': <Blending.Custom: 5>}
     def __eq__(self, other: typing.Any) -> bool:
         ...
     def __getstate__(self) -> int:
@@ -5424,6 +5422,14 @@ class VulkanRenderer:
         Current lens distortion as a dict (see set_lens_distortion).
         """
     @property
+    def lens_overscan(self) -> float:
+        """
+        Render the scene with the frustum widened by this factor so the lens warp has real geometry for the output corners instead of a clamped, smeared border. Barrel distortion (k1 < 0) needs it; 1.15-1.3 covers typical wide lenses. Costs effective resolution (the same pixels cover a wider field). camera_intrinsics still reports the OUTPUT camera. Default 1 (off).
+        """
+    @lens_overscan.setter
+    def lens_overscan(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def occlusion_culling(self) -> bool:
         """
         Two-phase GPU occlusion culling: hidden objects stop paying raster cost (phase-2 same-frame recovery, no popping). Works with gbuffer_msaa. Wins scale with occlusion (interiors, city blocks). Default off.
@@ -5513,7 +5519,7 @@ def apply_tree_preset(preset: typing.SupportsInt | typing.SupportsIndex, params:
     """
 def clamp(value: typing.SupportsFloat | typing.SupportsIndex, low: typing.SupportsFloat | typing.SupportsIndex, high: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
-def damp(x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, lambda_: typing.SupportsFloat | typing.SupportsIndex, /, dt: typing.SupportsFloat | typing.SupportsIndex) -> float:
+def damp(x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, lambda_: typing.SupportsFloat | typing.SupportsIndex, dt: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
 def deg_to_rad(degrees: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
