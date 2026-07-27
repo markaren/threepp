@@ -899,10 +899,40 @@ int EditorApp::runSelfTest() {
         check(viewportMarkers_.size() == markersBefore + 4,
               "every control point gets a marker icon");
 
+        // The live-update contract (what examples/.../spline_editor.cpp always
+        // did): dragging a point rewrites the SAME position attribute in place
+        // and bumps its version. A fresh attribute per move is the bug this
+        // pins down — the renderer keys GPU buffers on attribute identity, so a
+        // recycled pointer read as already uploaded and the drawn curve froze
+        // until play/stop rebuilt the whole line.
+        if (spline && splineOverlays_.size() == 1) {
+            const auto geometry = splineOverlays_.front().line->geometry();
+            auto* attribute = geometry->getAttribute<float>("position");
+            const auto version = attribute->version;
+            auto* dragged = spline->children.back();
+            dragged->position.y += 5;
+            step();
+            check(splineOverlays_.front().line->geometry() == geometry &&
+                          geometry->getAttribute<float>("position") == attribute,
+                  "moving a point keeps the same curve buffer");
+            check(attribute->version > version,
+                  "and re-uploads it, so the drawn curve follows the drag");
+            const auto count = geometry->drawRange.count;
+            const Vector3 end(attribute->getX(count - 1), attribute->getY(count - 1),
+                              attribute->getZ(count - 1));
+            check(count > 0 && end.distanceTo(dragged->position) < 1e-3f,
+                  "with the curve's end sitting on the moved point");
+            dragged->position.y -= 5;
+            step();
+        }
+
         // Add Point: appended, undoable, and the curve is longer for it.
         if (spline) {
             const auto config = SplineConfig::read(*spline).value_or(SplineConfig{});
             const float lengthBefore = config.curve(*spline)->getLength();
+            const auto overlayGeometry = splineOverlays_.empty()
+                                                 ? std::shared_ptr<BufferGeometry>{}
+                                                 : splineOverlays_.front().line->geometry();
 
             addSplinePoint(*spline, AddObjectCommand::atEnd, "Add Spline Point");
             step();
@@ -910,6 +940,9 @@ int EditorApp::runSelfTest() {
             check(spline && spline->children.size() == 5, "Add Point appends a control point");
             check(spline && config.curve(*spline)->getLength() > lengthBefore + 1e-3f,
                   "and the point lands past the end, so the curve extends");
+            check(!splineOverlays_.empty() &&
+                          splineOverlays_.front().line->geometry() != overlayGeometry,
+                  "a longer curve swaps in a bigger buffer instead of writing past the old one");
             check(selection_.get() == (spline ? spline->children.back() : nullptr),
                   "the new point is selected, ready to drag");
 

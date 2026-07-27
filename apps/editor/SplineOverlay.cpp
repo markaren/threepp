@@ -46,6 +46,36 @@ namespace {
         }
     }
 
+    // Writes the samples into the line IN PLACE, the way
+    // examples/extras/curves/spline_editor.cpp always has: the renderer caches
+    // GPU buffers by attribute identity, so replacing the attribute on every
+    // rebuild (what setFromPoints does) can hand it a recycled pointer with the
+    // same fresh version count — which reads as already uploaded, and the drawn
+    // curve freezes at its first shape until something destroys the whole line.
+    // The attribute is only replaced when the curve OUTGROWS it, and then the
+    // whole geometry is swapped and the old one disposed, so the renderer
+    // provably lets go of the stale buffers.
+    void writeSamples(Line& line, int& capacity, const std::vector<Vector3>& sampled) {
+
+        const auto count = static_cast<int>(sampled.size());
+        if (count > capacity) {
+            const auto old = line.geometry();
+            auto geometry = BufferGeometry::create();
+            geometry->setAttribute("position", FloatBufferAttribute::create(
+                                                       std::vector<float>(sampled.size() * 3), 3));
+            line.setGeometry(geometry);
+            if (old) old->dispose();
+            capacity = count;
+        }
+        auto* position = line.geometry()->getAttribute<float>("position");
+        for (int i = 0; i < count; ++i) {
+            position->setXYZ(i, sampled[i].x, sampled[i].y, sampled[i].z);
+        }
+        position->needsUpdate();
+        // The tail beyond `count` still holds whatever a longer curve left there.
+        line.geometry()->drawRange = {0, count};
+    }
+
     // Everything the sampled line is a function of. Float bytes rather than
     // values: a position that did not move hashes identically, and one that did
     // cannot collide with it however small the move was.
@@ -100,6 +130,9 @@ void EditorApp::syncSplineOverlays() {
                                                               .toneMapped(false));
             auto line = Line::create(BufferGeometry::create(), material);
             line->renderOrder = kCurveRenderOrder;
+            // In-place updates never refresh cached bounds, and a curve that
+            // outgrew the bounds it was born with must not vanish at the edges.
+            line->frustumCulled = false;
             // The curve is authored in the spline's space; the overlay is not
             // under it, so the spline's world matrix is adopted outright rather
             // than reproduced as position/rotation/scale.
@@ -126,7 +159,7 @@ void EditorApp::syncSplineOverlays() {
             // A spline down to one point is legal while it is being authored;
             // it just has no curve to draw yet.
             it->line->visible = !sampled.empty();
-            if (!sampled.empty()) it->line->geometry()->setFromPoints(sampled);
+            if (!sampled.empty()) writeSamples(*it->line, it->capacity, sampled);
         }
 
         owner->updateMatrixWorld();

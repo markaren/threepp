@@ -335,6 +335,9 @@ namespace threepp::editor {
             std::shared_ptr<Line> line;
             std::shared_ptr<LineBasicMaterial> material;
             std::size_t hash = 0;
+            // Vertices the position attribute can hold. The attribute is only
+            // replaced when the curve outgrows it — see writeSamples().
+            int capacity = 0;
         };
         std::shared_ptr<Group> splines_;
         std::vector<SplineOverlay> splineOverlays_;
