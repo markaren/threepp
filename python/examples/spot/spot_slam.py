@@ -858,6 +858,7 @@ def main():
     scanner = ForwardDepthScanner(rend, scene, meshes,
                                   bounds=(-half, half, -half, half),
                                   cell=0.15, far=SENSOR_FAR,
+                                  width=SENSOR_W, height=SENSOR_H,
                                   mount_fwd=0.95, mount_up=-0.10,
                                   pitch_deg=40.0, fov_y=90.0)
     if is_vulkan:
