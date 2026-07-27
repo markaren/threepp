@@ -3,6 +3,12 @@
 // Every one of them stores BOTH sides of the change up front. None of them
 // reads live scene state inside undo()/redo(), which is what makes them safe to
 // replay in any order the stack chooses.
+//
+// A play-stop restore (or reload) replaces the WHOLE graph with an equivalent
+// one, leaving stored Object3D pointers dangling. Uuids survive that round
+// trip, so the commands here that target scene nodes re-resolve themselves in
+// rebind(); the ones that cannot (type-erased setters capturing raw pointers)
+// keep the base-class default and are dropped by CommandStack::rebind().
 
 #ifndef THREEPP_EDITOR_EDITORCOMMANDS_HPP
 #define THREEPP_EDITOR_EDITORCOMMANDS_HPP
@@ -43,6 +49,11 @@ namespace threepp::editor {
     // reparent operations against building a cycle.
     [[nodiscard]] bool isDescendantOf(const Object3D& candidate, const Object3D& object);
 
+    // Depth-first search for the node carrying `uuid`, or nullptr. Uuids are
+    // stable across the play snapshot round trip, which makes them the one
+    // usable identity after a scene replace.
+    [[nodiscard]] Object3D* findByUuid(Object3D& root, const std::string& uuid);
+
 
     // ---------------------------------------------------------------- transform
 
@@ -68,11 +79,13 @@ namespace threepp::editor {
         [[nodiscard]] std::string name() const override { return label_; }
         [[nodiscard]] std::string mergeKey() const override { return mergeKey_; }
         bool mergeWith(const Command& newer) override;
+        [[nodiscard]] bool rebind(Object3D& root) override;
 
     private:
         void apply(const Trs& trs);
 
         Object3D* object_;
+        std::string uuid_;
         Trs before_;
         Trs after_;
         std::string label_;
@@ -88,6 +101,9 @@ namespace threepp::editor {
     //
     // The setter is what makes this generic — it also carries any side effect the
     // field needs (material->needsUpdate(), camera->updateProjectionMatrix()).
+    // It is also what ties the command to one scene: the lambda captures raw
+    // pointers that cannot be re-resolved by uuid, so this command keeps the
+    // default rebind() and is dropped when the scene is replaced.
     template<class T>
     class PropertyCommand: public Command {
 
@@ -151,12 +167,15 @@ namespace threepp::editor {
 
         [[nodiscard]] std::string name() const override { return label_; }
         bool mergeWith(const Command&) override { return false; }
+        [[nodiscard]] bool rebind(Object3D& root) override;
 
         [[nodiscard]] Object3D* object() const { return object_.get(); }
 
     private:
         Object3D* parent_;
         std::shared_ptr<Object3D> object_;
+        std::string parentUuid_;
+        std::string objectUuid_;
         std::string label_;
         std::size_t index_;
     };
@@ -173,6 +192,7 @@ namespace threepp::editor {
 
         [[nodiscard]] std::string name() const override { return label_; }
         bool mergeWith(const Command&) override { return false; }
+        [[nodiscard]] bool rebind(Object3D& root) override;
 
         [[nodiscard]] Object3D* object() const { return raw_; }
         // Checked before execution: object_ (the retained ownership) is only
@@ -182,6 +202,8 @@ namespace threepp::editor {
     private:
         Object3D* parent_;
         Object3D* raw_;
+        std::string parentUuid_;
+        std::string objectUuid_;
         std::shared_ptr<Object3D> object_;
         std::size_t index_;
         std::string label_;
@@ -199,6 +221,7 @@ namespace threepp::editor {
 
         [[nodiscard]] std::string name() const override { return label_; }
         bool mergeWith(const Command&) override { return false; }
+        [[nodiscard]] bool rebind(Object3D& root) override;
 
         // False when the move is impossible (no parent, or the target is a
         // descendant of the object). Callers must not push an invalid command.
@@ -209,6 +232,9 @@ namespace threepp::editor {
         std::shared_ptr<Object3D> owned_;
         Object3D* oldParent_;
         Object3D* newParent_;
+        std::string objectUuid_;
+        std::string oldParentUuid_;
+        std::string newParentUuid_;
         std::size_t oldIndex_;
         Vector3 oldPosition_, newPosition_;
         Quaternion oldQuaternion_, newQuaternion_;
@@ -222,7 +248,9 @@ namespace threepp::editor {
 
     // Assign or clear one texture slot of a material. Kept separate from
     // PropertyCommand so the "which slot" name survives into the undo label and
-    // the material's needsUpdate() is never forgotten.
+    // the material's needsUpdate() is never forgotten. Like PropertyCommand it
+    // holds raw pointers a scene replace invalidates, keeps the default
+    // rebind(), and is dropped from the stack when that happens.
     class SetMaterialMapCommand: public Command {
 
     public:

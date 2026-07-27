@@ -17,6 +17,12 @@
 #include <string>
 #include <vector>
 
+namespace threepp {
+
+    class Object3D;
+
+}// namespace threepp
+
 namespace threepp::editor {
 
     class Command {
@@ -45,6 +51,15 @@ namespace threepp::editor {
         // Keep this command's "before" state and adopt `newer`'s "after" state.
         // Returning false makes the stack push `newer` separately.
         virtual bool mergeWith(const Command& newer) = 0;
+
+        // The scene graph this command was recorded against has been swapped
+        // for an equivalent one (play-stop snapshot restore) and every pointer
+        // into the old graph is dangling. Re-resolve the targets by uuid
+        // against `root` and return true; return false if that is impossible
+        // and the stack must drop this command instead. Dropping is the
+        // default: a command type that cannot name its targets by uuid must
+        // not survive the swap.
+        [[nodiscard]] virtual bool rebind(Object3D& root) { return false; }
     };
 
 
@@ -81,6 +96,12 @@ namespace threepp::editor {
         [[nodiscard]] std::string redoName() const;
 
         void clear();
+
+        // The document's scene was replaced by an equivalent graph (play-stop
+        // restore). Ask every recorded command to re-resolve itself against
+        // the new root and drop the ones that cannot — the alternative is an
+        // undo that writes through dangling pointers.
+        void rebind(Object3D& root);
 
         [[nodiscard]] std::size_t undoCount() const { return undo_.size(); }
         [[nodiscard]] std::size_t redoCount() const { return redo_.size(); }

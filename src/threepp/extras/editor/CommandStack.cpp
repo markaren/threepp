@@ -88,6 +88,22 @@ std::string CommandStack::redoName() const {
     return redo_.empty() ? std::string{} : redo_.back()->name();
 }
 
+void CommandStack::rebind(Object3D& root) {
+
+    const auto prune = [&root](std::vector<std::unique_ptr<Command>>& stack) {
+        std::erase_if(stack, [&root](const std::unique_ptr<Command>& command) {
+            return !command->rebind(root);
+        });
+    };
+    prune(undo_);
+    prune(redo_);
+
+    // The watermark indexes into undo_, which may just have shrunk.
+    if (transactionStart_ > undo_.size()) transactionStart_ = undo_.size();
+
+    notify();
+}
+
 void CommandStack::clear() {
 
     undo_.clear();

@@ -161,6 +161,10 @@ EditorApp::EditorApp(const Options& options)
         // The previewed nodes lived in the old scene; restoring would write
         // through dangling pointers. Discard only.
         stopAnimationPreview(false);
+        // Recorded commands point into the old scene too. Re-resolve their
+        // targets by uuid against the new graph; commands that cannot (raw
+        // captures in property setters) are dropped rather than left dangling.
+        commands_.rebind(scene);
         const auto uuid = selection_.uuid();
         selection_.set(nullptr);
         gizmo_->detach();
@@ -309,6 +313,34 @@ int EditorApp::runSelfTest() {
     commands_.redo();
     step();
     check(!inScene(box), "redo removes Box again");
+
+    // Undo across play: stop replaces the whole scene from the snapshot, so a
+    // pre-play edit must re-resolve by uuid instead of writing through a
+    // pointer into the destroyed graph. `box`/`ground` are stale after this
+    // block — every lookup below goes through the current scene.
+    commands_.undo();// Box back in the scene for the drive
+    step();
+    if (auto* target = document_.scene().getObjectByName("Box")) {
+        const auto before = SetTransformCommand::read(*target);
+        auto after = before;
+        after.position.x += 2.f;
+        commands_.execute(std::make_unique<SetTransformCommand>(*target, before, after, "Move"));
+        startPlay();
+        check(isPlaying(), "play starts for the undo-across-play drive");
+        step(3);
+        stopPlay();
+        step();
+        check(!isPlaying(), "play stops and restores the scene");
+        check(commands_.canUndo(), "pre-play edit survives the scene swap");
+        commands_.undo();
+        step();
+        auto* restored = document_.scene().getObjectByName("Box");
+        check(restored != nullptr, "Box exists after stop");
+        check(restored && std::abs(restored->position.x - before.position.x) < 1e-4f,
+              "undo after stop restores the pre-edit position");
+    } else {
+        check(false, "Box available for the undo-across-play drive");
+    }
 
     // With a model path on the command line, exercise the async import path
     // end to end: queue -> worker -> finalize -> selected group in the scene.

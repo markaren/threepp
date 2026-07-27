@@ -64,6 +64,15 @@ bool threepp::editor::isDescendantOf(const Object3D& candidate, const Object3D& 
     return false;
 }
 
+Object3D* threepp::editor::findByUuid(Object3D& root, const std::string& uuid) {
+
+    if (root.uuid == uuid) return &root;
+    for (auto* child : root.children) {
+        if (auto* found = findByUuid(*child, uuid)) return found;
+    }
+    return nullptr;
+}
+
 
 // ------------------------------------------------------------------ transform
 
@@ -78,6 +87,7 @@ SetTransformCommand::Trs SetTransformCommand::read(const Object3D& object) {
 
 SetTransformCommand::SetTransformCommand(Object3D& object, Trs before, Trs after, std::string label)
     : object_(&object),
+      uuid_(object.uuid),
       before_(before),
       after_(after),
       label_(std::move(label)),
@@ -113,12 +123,22 @@ bool SetTransformCommand::mergeWith(const Command& newer) {
     return true;
 }
 
+bool SetTransformCommand::rebind(Object3D& root) {
+
+    auto* found = findByUuid(root, uuid_);
+    if (!found) return false;
+    object_ = found;
+    return true;
+}
+
 
 // ----------------------------------------------------------------- graph edits
 
 AddObjectCommand::AddObjectCommand(Object3D& parent, std::shared_ptr<Object3D> object, std::string label)
     : parent_(&parent),
       object_(std::move(object)),
+      parentUuid_(parent.uuid),
+      objectUuid_(object_ ? object_->uuid : std::string{}),
       label_(std::move(label)),
       index_(parent.children.size()) {}
 
@@ -135,10 +155,31 @@ void AddObjectCommand::undo() {
     object_->removeFromParent();
 }
 
+bool AddObjectCommand::rebind(Object3D& root) {
+
+    auto* parent = findByUuid(root, parentUuid_);
+    if (!parent || !object_) return false;
+    parent_ = parent;
+
+    // The added object usually came back as a fresh instance carrying the same
+    // uuid; undo must remove THAT one. When it is absent from the new graph
+    // (the add is currently undone, or a later delete removed it again), the
+    // instance retained here stays the target — the shared_ptr keeps it alive
+    // and ~Object3D nulled its parent when the old scene died.
+    if (auto* live = findByUuid(root, objectUuid_)) {
+        auto owned = live->weak_from_this().lock();
+        if (!owned) return false;
+        object_ = std::move(owned);
+    }
+    return true;
+}
+
 
 RemoveObjectCommand::RemoveObjectCommand(Object3D& object, std::string label)
     : parent_(object.parent),
       raw_(&object),
+      parentUuid_(parent_ ? parent_->uuid : std::string{}),
+      objectUuid_(object.uuid),
       index_(0),
       label_(std::move(label)) {
 
@@ -164,6 +205,23 @@ void RemoveObjectCommand::undo() {
     } else {
         parent_->addRef(*raw_);
     }
+}
+
+bool RemoveObjectCommand::rebind(Object3D& root) {
+
+    auto* parent = findByUuid(root, parentUuid_);
+    if (!parent) return false;
+    parent_ = parent;
+
+    // Applied: the removed subtree is out of every scene and owned right here,
+    // so raw_ still points at a live node and undo reinserts it as-is.
+    if (object_) return true;
+
+    // Undone: the object is back in the (now replaced) graph.
+    auto* live = findByUuid(root, objectUuid_);
+    if (!live) return false;
+    raw_ = live;
+    return true;
 }
 
 
@@ -197,6 +255,10 @@ ReparentCommand::ReparentCommand(Object3D& object, Object3D& newParent, std::str
     Matrix4 local;
     local.multiplyMatrices(inverseParent, *object.matrixWorld);
     local.decompose(newPosition_, newQuaternion_, newScale_);
+
+    objectUuid_ = object.uuid;
+    oldParentUuid_ = oldParent_->uuid;
+    newParentUuid_ = newParent.uuid;
 
     valid_ = true;
 }
@@ -234,6 +296,27 @@ void ReparentCommand::undo() {
     object_->scale.copy(oldScale_);
     object_->updateMatrix();
     object_->matrixWorldNeedsUpdate = true;
+}
+
+bool ReparentCommand::rebind(Object3D& root) {
+
+    if (!valid_) return false;
+
+    // All three must be live in the new graph; the moved object cannot ride on
+    // a retained subtree here because this command never owns one itself.
+    auto* object = findByUuid(root, objectUuid_);
+    auto* oldParent = findByUuid(root, oldParentUuid_);
+    auto* newParent = findByUuid(root, newParentUuid_);
+    if (!object || !oldParent || !newParent) return false;
+
+    object_ = object;
+    oldParent_ = oldParent;
+    newParent_ = newParent;
+    // Any ownership held from before the swap refers to the dead graph's
+    // instance; redo/undo re-obtain it from the new parent via
+    // removeFromParent().
+    owned_.reset();
+    return true;
 }
 
 
