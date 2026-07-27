@@ -1317,8 +1317,10 @@ void EditorApp::drawSplineSection(Object3D& object) {
 
         if (!section("Spline Point")) return;
 
-        const auto index = childIndex(*spline, object);
-        const auto count = spline->children.size();
+        // Point index, NOT child index: a spline that generates geometry keeps
+        // that mesh among the same children without it being a point.
+        const auto index = SplineConfig::pointIndexOf(*spline, object);
+        const auto count = SplineConfig::controlPoints(*spline).size();
         ImGui::TextColored(theme::muted(), "Point %zu of %zu in \"%s\"",
                            index + 1, count, spline->name.c_str());
 
@@ -1404,20 +1406,79 @@ void EditorApp::drawSplineSection(Object3D& object) {
 
     {
         int samples = config.samples;
-        const bool changed = ImGui::DragInt("Samples/Segment", &samples, 0.25f, 1, 200);
+        const bool changed = ImGui::DragInt("Samples/Segment", &samples, 0.25f, 1,
+                                            SplineConfig::maxSamples);
         if (ImGui::IsItemActivated()) commands_.beginTransaction();
         if (changed) {
             auto after = config;
-            after.samples = std::clamp(samples, 1, 200);
+            after.samples = std::clamp(samples, 1, SplineConfig::maxSamples);
             commit(after, "Spline Samples");
         }
         if (ImGui::IsItemDeactivated()) commands_.endTransaction();
     }
 
+    // --- generated geometry ------------------------------------------------
+    // Only the config is edited here. The mesh itself is derived state that the
+    // per-frame sync adds, rebuilds and removes to follow it — see
+    // SplineOverlay.cpp.
+    ImGui::Spacing();
+    {
+        static const char* kinds[] = {"None", "Tube", "Road"};
+        int mesh = static_cast<int>(config.mesh);
+        if (ImGui::Combo("Mesh", &mesh, kinds, IM_ARRAYSIZE(kinds))) {
+            auto after = config;
+            after.mesh = static_cast<SplineConfig::MeshKind>(mesh);
+            commit(after, "Spline Mesh");
+        }
+    }
+
+    const auto floatField = [&](const char* label, float value, float step, float lo, float hi,
+                                void (*apply)(SplineConfig&, float), const char* undoLabel) {
+        const bool changed = ImGui::DragFloat(label, &value, step, lo, hi);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            apply(after, std::clamp(value, lo, hi));
+            commit(after, undoLabel);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    if (config.mesh == SplineConfig::MeshKind::Tube) {
+        floatField(
+                "Radius", config.radius, 0.005f, 0.001f, 100.f,
+                [](SplineConfig& c, float v) { c.radius = v; }, "Tube Radius");
+
+        int segments = config.radialSegments;
+        const bool changed = ImGui::DragInt("Radial Segments", &segments, 0.1f, 3, 64);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.radialSegments = std::clamp(segments, 3, 64);
+            commit(after, "Tube Radial Segments");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    } else if (config.mesh == SplineConfig::MeshKind::Road) {
+        floatField(
+                "Width", config.width, 0.02f, 0.001f, 200.f,
+                [](SplineConfig& c, float v) { c.width = v; }, "Road Width");
+    }
+
+    if (config.mesh != SplineConfig::MeshKind::None) {
+        floatField(
+                "UV Length", config.uvLength, 0.02f, 0.001f, 1000.f,
+                [](SplineConfig& c, float v) { c.uvLength = v; }, "Spline UV Length");
+    }
+
     ImGui::PopItemWidth();
     ImGui::Spacing();
 
-    const auto count = object.children.size();
+    if (config.mesh != SplineConfig::MeshKind::None) {
+        ImGui::TextColored(theme::muted(),
+                           "The generated mesh is a real child - saved, and physics-configurable.");
+    }
+
+    const auto count = SplineConfig::controlPoints(object).size();
     if (auto curve = config.curve(object)) {
         ImGui::Text("%zu control points, length %.2f", count, curve->getLength());
     } else {

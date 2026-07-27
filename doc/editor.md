@@ -529,7 +529,8 @@ no business creating a window, and the editor already owns the ones that exist.
 **Add ▸ Spline** creates a `Group` carrying `userData["spline"]`, with four
 control-point children forming an arc. The rule is one sentence:
 
-> **Every direct child of a spline is a control point, in child order.**
+> **Every direct child of a spline is a control point, in child order —
+> except the generated mesh, which is tagged.**
 
 Nothing else marks them. A control point is a plain `Object3D`, its local
 position is that point's position in the spline's space, and reordering,
@@ -542,7 +543,7 @@ The curve's own parameters ride in the same flat format as physics and
 animation:
 
 ```
-type=centripetal;closed=0;tension=0.5;samples=24
+type=centripetal;closed=0;tension=0.5;samples=24;mesh=none;radius=0.25;radialSegments=8;width=4;uvLength=4
 ```
 
 | key | values | meaning |
@@ -550,7 +551,12 @@ type=centripetal;closed=0;tension=0.5;samples=24
 | `type` | `centripetal`, `chordal`, `catmullrom` | three.js's parameterisations; centripetal avoids cusps |
 | `closed` | `0`, `1` | join the last point back to the first |
 | `tension` | `0`…`1` | `catmullrom` only — stored and inert for the other two, as in three.js |
-| `samples` | `1`…`200` | curve samples per segment, for the editor's overlay |
+| `samples` | `1`…`200` | curve samples per segment; drives the overlay *and* the generated mesh |
+| `mesh` | `none`, `tube`, `road` | what the spline generates as real geometry |
+| `radius` | metres | `tube` — cross-section radius |
+| `radialSegments` | `3`…`64` | `tube` — sides of the cross-section |
+| `width` | metres | `road` — ribbon width |
+| `uvLength` | metres | metres of curve per U tile, both kinds |
 
 `SplineConfig::encode()` / `decode()` own that format, unknown keys are ignored
 on read, and — unlike `PhysicsConfig` — `write()` never erases the entry: the
@@ -569,6 +575,35 @@ It is rebuilt when a hash over the point count, their positions and the encoded
 config changes, which is what makes dragging a point redraw the curve live.
 Control points additionally get a marker icon through the same machinery
 cameras and lights use, so they are clickable in the viewport at all.
+
+**The mesh you generate is.** Set **Mesh** to Tube or Road in the spline section
+and the spline grows one more child: a real `Mesh`, with a
+`MeshStandardMaterial`, shadows on, carrying `userData["splineDerived"] = "1"`.
+That tag is the only thing separating it from a control point — every count and
+index in the editor goes through `SplineConfig::controlPoints()` /
+`pointIndexOf()` rather than `children`, so adding geometry never shifts a point
+index. It is a document node in every other respect: it saves, it reloads, and
+a scene with a road in it renders and collides in a plain viewer with no editor
+present. Select it and the ordinary Material and **Physics** sections apply —
+put a static trimesh collider on a road and drive on it.
+
+Tube sweeps `TubeGeometry` along the curve. Road sweeps `RibbonGeometry`
+(`threepp/extras/curves/RibbonGeometry.hpp`) — two vertices per sample at
+±`width`/2 either side of the centreline, with the sideways direction taken as
+`cross((0,1,0), tangent)` **in the spline's own space**. So the ribbon stays
+level side to side and rises with the grade, and a rotated spline rotates its
+road with it rather than twisting it back to world level. `u` runs
+arc-length/`uvLength` along it, `v` runs 0…1 across.
+
+**Regeneration is derived state, not a command.** The undoable step is the
+config edit; the sync pass then adds, rebuilds or removes the mesh to follow
+whatever the config says — so undoing "Mesh = Tube" brings the mesh back on the
+next frame's sync, and there is never a second entry on the undo stack fighting
+the first. Rebuilds preserve the node: same object, same uuid, same material,
+same `userData`, with only the geometry swapped (and the orphaned one disposed).
+Anything you configure on the mesh survives dragging the control points around.
+A loaded document already has its mesh, and the first sync adopts that one
+rather than adding a second.
 
 **From a script.** `threepp.CatmullRomCurve3` is bound, so a play-mode script
 builds the same curve the editor draws. `FollowSpline` — resolve the spline by
@@ -592,11 +627,16 @@ class FollowSpline:
             print("FollowSpline: no object named", self.spline_name)
             return
 
-        # The control points ARE the spline's direct children, in order. Their
-        # positions are local to the spline, so lift them into world space --
-        # obj.position is world space too, as long as obj sits under the scene
-        # root rather than inside some other transformed group.
-        points = [spline.local_to_world(p.position) for p in spline.children]
+        # The control points ARE the spline's direct children, in order --
+        # every one but the generated mesh, which carries "splineDerived".
+        # Their positions are local to the spline, so lift them into world
+        # space -- obj.position is world space too, as long as obj sits under
+        # the scene root rather than inside some other transformed group.
+        points = [
+            spline.local_to_world(p.position)
+            for p in spline.children
+            if p.get_user_data("splineDerived") is None
+        ]
         if len(points) < 2:
             print("FollowSpline: a curve needs two control points")
             return

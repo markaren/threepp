@@ -1068,7 +1068,11 @@ int EditorApp::runSelfTest() {
                             "        spline = scene.get_object_by_name(self.spline_name)\n"
                             "        if spline is None:\n"
                             "            return\n"
-                            "        points = [spline.local_to_world(p.position) for p in spline.children]\n"
+                            "        points = [\n"
+                            "            spline.local_to_world(p.position)\n"
+                            "            for p in spline.children\n"
+                            "            if p.get_user_data(\"splineDerived\") is None\n"
+                            "        ]\n"
                             "        if len(points) < 2:\n"
                             "            return\n"
                             "        config = dict(\n"
@@ -1999,7 +2003,10 @@ void EditorApp::addSplinePoint(Object3D& spline, std::size_t index, const std::s
     point->position.copy(position);
 
     auto* raw = point.get();
-    commands_.execute(std::make_unique<AddObjectCommand>(spline, point, label, slot));
+    // `slot` is a POINT index; AddObjectCommand takes a CHILD index, and the
+    // generated mesh sits among the same children without being a point.
+    commands_.execute(std::make_unique<AddObjectCommand>(
+            spline, point, label, SplineConfig::childSlotForPointIndex(spline, slot)));
     document_.setDirty(true);
     selectObject(raw);
     scrollTo_ = raw;
