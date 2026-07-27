@@ -261,12 +261,21 @@ TEST_CASE("a bend tighter than the half-width pins the inner edge", "[extras]") 
                             Vector3(1, 0.5f, -1), Vector3(3, 0.5f, 1.5f)});
     auto geometry = RibbonGeometry::create(curve, RibbonGeometry::Params(4.f, 72, 4.f));
 
-    // No cross-section cuts through its neighbour...
+    // No cross-section cuts through its neighbour, and the road NARROWS
+    // through the tight bends instead of collapsing to a pivot: the inner
+    // offset is capped at the local curvature radius, which for these bends
+    // stays well over a metre. Straight stretches keep the full width.
+    float narrowest = std::numeric_limits<float>::max();
+    float widest = 0.f;
     for (unsigned int i = 0; i < 72; ++i) {
         const auto [leftA, rightA] = ring(*geometry, i);
         const auto [leftB, rightB] = ring(*geometry, i + 1);
         CHECK(!crossesXZ(leftA, rightA, leftB, rightB));
+        narrowest = std::min(narrowest, leftA.distanceTo(rightA));
+        widest = std::max(widest, leftA.distanceTo(rightA));
     }
+    CHECK(narrowest > 1.f);
+    CHECK(widest > 4.f - 1e-3f);
 
     // ...and no triangle faces down. Pinned rings make degenerate (zero-area)
     // triangles, which are fine — what is not fine is a face the winding has

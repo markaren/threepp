@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 using namespace threepp;
@@ -24,6 +25,22 @@ namespace {
     // approaches a hairpin, and a cross-section that spikes to infinity is a
     // worse artefact than the notch it was widening to cover.
     constexpr float kMaxMiter = 2.f;
+
+    // Radius of the circle through three consecutive centres — the local bend.
+    // Collinear (or degenerate) points read as straight.
+    float circumradius(const threepp::Vector3& a, const threepp::Vector3& b,
+                       const threepp::Vector3& c) {
+
+        threepp::Vector3 ab, ac, crossed;
+        ab.copy(b).sub(a);
+        ac.copy(c).sub(a);
+        crossed.copy(ab).cross(ac);
+        const float doubledArea = crossed.length();
+        if (doubledArea < 1e-8f) return std::numeric_limits<float>::infinity();
+        threepp::Vector3 bc;
+        bc.copy(c).sub(b);
+        return ab.length() * bc.length() * ac.length() / (2.f * doubledArea);
+    }
 
 }// namespace
 
@@ -137,8 +154,38 @@ RibbonGeometry::RibbonGeometry(const Curve3& path, const Params& params)
         }
 
         const float offset = half * miter;
-        lefts[i].copy(center).addScaledVector(side, -offset);
-        rights[i].copy(center).addScaledVector(side, offset);
+        float offsetLeft = offset;
+        float offsetRight = offset;
+
+        // The inner edge of a bend runs BACKWARD as soon as its offset exceeds
+        // the local curvature radius (its speed is the centre's times
+        // 1 - offset/radius), and everything past that radius is fold. So the
+        // INNER offset is capped at the radius: the road narrows smoothly
+        // through a bend it cannot carry at full width, hugging the outer side
+        // the way a real road squeezes through a tight corner. At the radius
+        // itself the inner edges of the two spans kiss — which is exactly the
+        // point the miter above aims for — so a corner that fits is untouched.
+        const bool interior = params.closed || (i > 0 && i < spans);
+        if (interior) {
+            const Vector3& before = centers[(i > 0) ? i - 1 : spans - 1];
+            const Vector3& after = centers[(i < spans) ? i + 1 : 1];
+            const float radius = circumradius(before, center, after);
+            if (offset > radius) {
+                // Which side is inside the bend: the one the curve caves
+                // toward. `rights` sits at +side.
+                Vector3 concave;
+                concave.copy(before).add(after).multiplyScalar(0.5f).sub(center);
+                const float caved = concave.dot(side);
+                if (caved > 0.f) {
+                    offsetRight = radius;
+                } else if (caved < 0.f) {
+                    offsetLeft = radius;
+                }
+            }
+        }
+
+        lefts[i].copy(center).addScaledVector(side, -offsetLeft);
+        rights[i].copy(center).addScaledVector(side, offsetRight);
         ringNormals[i].copy(normal);
         ringU[i] = arc / tile;
     }
