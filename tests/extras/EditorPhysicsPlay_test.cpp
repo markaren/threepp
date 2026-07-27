@@ -6,9 +6,16 @@
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
+#include "threepp/extras/editor/SplineConfig.hpp"
 
+#include "threepp/core/BufferGeometry.hpp"
+#include "threepp/extras/curves/CatmullRomCurve3.hpp"
+#include "threepp/extras/curves/RibbonGeometry.hpp"
+#include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
+
+#include <vector>
 
 using namespace threepp;
 using namespace threepp::editor;
@@ -54,6 +61,88 @@ namespace {
         for (int i = 0; i < steps; ++i) session.update(1.f / 60.f);
     }
 
+    // A spline that has generated its road, standing in for what the editor's
+    // sync pass produces: the Group carries SplineConfig, its plain children
+    // are the control points, and one tagged Mesh holds the ribbon. Generating
+    // that mesh is app code (SplineOverlay.cpp), so a test builds it by hand
+    // from the same curve and the same parameters.
+    struct Road {
+        std::shared_ptr<Group> spline;
+        std::shared_ptr<Mesh> mesh;
+    };
+
+    Road makeRoad(const Scene& scene, const std::vector<Vector3>& points, float width) {
+
+        auto spline = Group::create();
+        spline->name = ObjectFactory::uniqueName(scene, "Spline");
+
+        SplineConfig config;
+        config.mesh = SplineConfig::MeshKind::Road;
+        config.width = width;
+        config.write(*spline);
+
+        for (const auto& point : points) {
+            auto node = Object3D::create();
+            node->position.copy(point);
+            spline->add(node);
+        }
+
+        auto curve = config.curve(*spline);
+        REQUIRE(curve != nullptr);
+        auto mesh = Mesh::create(RibbonGeometry::create(
+                *curve, RibbonGeometry::Params(width, config.divisions(*spline),
+                                               config.uvLength, config.closed)));
+        mesh->name = "Road";
+        SplineConfig::markDerived(*mesh);
+        spline->add(mesh);
+
+        return {spline, mesh};
+    }
+
+    PhysicsConfig staticConfig(PhysicsConfig::Shape shape) {
+
+        PhysicsConfig config;
+        config.enabled = true;
+        config.body = PhysicsConfig::Body::Static;
+        config.shape = shape;
+        config.friction = 0.8f;
+        return config;
+    }
+
+    // Radius 0.5, so resting on a surface at y = 0 means a centre at y = 0.5.
+    std::shared_ptr<Mesh> makeFallingSphere(const Scene& scene, const Vector3& from) {
+
+        auto sphere = ObjectFactory::createPrimitive(Primitive::Sphere, scene);
+        sphere->name = "Ball";
+        sphere->position.copy(from);
+
+        PhysicsConfig config;
+        config.enabled = true;
+        config.body = PhysicsConfig::Body::Dynamic;
+        config.shape = PhysicsConfig::Shape::Auto;
+        config.mass = 2.f;
+        config.friction = 0.8f;
+        config.restitution = 0.f;
+        config.write(*sphere);
+        return sphere;
+    }
+
+    // Straight along X at y = 0, four metres wide.
+    Road makeStraightRoad(const Scene& scene) {
+
+        return makeRoad(scene, {Vector3(-10, 0, 0), Vector3(0, 0, 0), Vector3(10, 0, 0)}, 4.f);
+    }
+
+    void checkRestsOnRoad(PhysicsPlaySession& session, const Mesh& ball) {
+
+        run(session, 240);// 4 seconds
+
+        using Catch::Matchers::WithinAbs;
+        // Never below the surface, and settled at the radius on top of it.
+        CHECK(ball.position.y > 0.f);
+        CHECK_THAT(ball.position.y, WithinAbs(0.5f, 0.06f));
+    }
+
 }// namespace
 
 
@@ -90,6 +179,134 @@ TEST_CASE("PhysicsPlaySession simulates userData-authored bodies", "[editor][phy
 
     session.stop();
     CHECK(session.bodyCount() == 0);
+}
+
+TEST_CASE("a generated road holds a body up, on Auto", "[editor][physx]") {
+
+    // The report this exists for: a dynamic sphere dropped on a spline road
+    // fell straight through, because Shape::Auto resolved a ribbon to its
+    // BOUNDING BOX — a flat one at the minimum half-extent, i.e. a razor at the
+    // road's mid-height, and nowhere near where the ball came down.
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto road = makeStraightRoad(scene);
+    staticConfig(PhysicsConfig::Shape::Auto).write(*road.mesh);
+    scene.add(road.spline);
+
+    // Four metres out along the road, deliberately clear of the spline's origin
+    // where the old unit-box fallback put its phantom collider.
+    auto ball = makeFallingSphere(scene, Vector3(4.f, 3.f, 0.f));
+    scene.add(ball);
+
+    PhysicsPlaySession session;
+    session.start(scene);
+    CHECK(session.bodyCount() == 2);
+
+    checkRestsOnRoad(session, *ball);
+}
+
+TEST_CASE("a generated road holds a body up, on an explicit TriMesh", "[editor][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto road = makeStraightRoad(scene);
+    staticConfig(PhysicsConfig::Shape::TriMesh).write(*road.mesh);
+    scene.add(road.spline);
+
+    auto ball = makeFallingSphere(scene, Vector3(4.f, 3.f, 0.f));
+    scene.add(ball);
+
+    PhysicsPlaySession session;
+    session.start(scene);
+    CHECK(session.bodyCount() == 2);
+
+    checkRestsOnRoad(session, *ball);
+}
+
+TEST_CASE("physics authored on the spline itself collides as the road", "[editor][physx]") {
+
+    // Where the user actually put it: the spline IS the road as far as they are
+    // concerned. A Group has no geometry, so this used to fall through to the
+    // unit-box placeholder — a phantom 1 m cube at the spline's origin, which
+    // is exactly the "small collider somewhere in the centre" that got reported.
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto road = makeStraightRoad(scene);
+    staticConfig(PhysicsConfig::Shape::Auto).write(*road.spline);
+    scene.add(road.spline);
+
+    auto ball = makeFallingSphere(scene, Vector3(4.f, 3.f, 0.f));
+    scene.add(ball);
+
+    PhysicsPlaySession session;
+    session.start(scene);
+    // The spline counts as one body however many shapes its subtree came to.
+    CHECK(session.bodyCount() == 2);
+
+    checkRestsOnRoad(session, *ball);
+}
+
+TEST_CASE("a road collides through a corner", "[editor][physx]") {
+
+    // The whole point of a wedge chain rather than one hull per road: adjacent
+    // spans share their joint cross-section exactly, so a corner is covered at
+    // any angle with neither a gap to fall through nor an overlap to fight.
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto road = makeRoad(scene, {Vector3(-10, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 10)}, 4.f);
+    staticConfig(PhysicsConfig::Shape::Auto).write(*road.mesh);
+    scene.add(road.spline);
+
+    // Straight down onto the bend.
+    auto ball = makeFallingSphere(scene, Vector3(0.f, 3.f, 0.f));
+    scene.add(ball);
+
+    PhysicsPlaySession session;
+    session.start(scene);
+    CHECK(session.bodyCount() == 2);
+
+    checkRestsOnRoad(session, *ball);
+}
+
+TEST_CASE("a static mesh that is no primitive collides as its triangles", "[editor][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    // A 12 m plate at y = 0 with one 3 m spike off to the side. Auto used to
+    // mean "the AABB", and this geometry's AABB has its top face at the spike's
+    // tip: a ball dropped over the plate came to rest three metres in the air.
+    const std::vector<float> positions{
+            -6.f, 0.f, -6.f, 6.f, 0.f, -6.f, 6.f, 0.f, 6.f, -6.f, 0.f, 6.f,
+            -5.5f, 0.f, -0.5f, -4.5f, 0.f, -0.5f, -5.f, 3.f, 0.f};
+    const std::vector<unsigned int> indices{0, 2, 1, 0, 3, 2, 4, 5, 6};
+
+    auto geometry = BufferGeometry::create();
+    geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
+    geometry->setIndex(indices);
+
+    auto plate = Mesh::create(geometry);
+    plate->name = "Plate";
+    staticConfig(PhysicsConfig::Shape::Auto).write(*plate);
+    scene.add(plate);
+
+    auto ball = makeFallingSphere(scene, Vector3(2.f, 3.f, 2.f));
+    scene.add(ball);
+
+    PhysicsPlaySession session;
+    session.start(scene);
+    CHECK(session.bodyCount() == 2);
+
+    run(session, 240);
+
+    using Catch::Matchers::WithinAbs;
+    CHECK(ball->position.y > 0.f);           // not through the plate
+    CHECK(ball->position.y < 1.f);           // and not floating on the AABB slab
+    CHECK_THAT(ball->position.y, WithinAbs(0.5f, 0.06f));
 }
 
 TEST_CASE("play then stop leaves no trace of the simulation", "[editor][physx]") {
