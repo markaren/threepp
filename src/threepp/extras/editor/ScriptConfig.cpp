@@ -24,6 +24,18 @@ namespace {
 }// namespace
 
 
+void ScriptConfig::setPath(std::string value) {
+
+    path = std::move(value);
+    if (!path.empty()) source.clear();
+}
+
+void ScriptConfig::setSource(std::string value) {
+
+    source = std::move(value);
+    if (!source.empty()) path.clear();
+}
+
 std::string ScriptConfig::toText(float value) {
 
     char buffer[32];
@@ -154,22 +166,32 @@ std::vector<ScriptConfig::Field> ScriptConfig::decodeFields(const std::string& t
 
 std::optional<ScriptConfig> ScriptConfig::read(const Object3D& object) {
 
-    const auto path = readString(object, pathKey);
-    if (path.empty()) return std::nullopt;
-
     ScriptConfig config;
-    config.path = path;
+    // Inline first: a document that somehow carries both (hand-edited, or
+    // merged) is read as inline and drops the path, so the next write restores
+    // the one-form invariant instead of preserving the contradiction.
+    config.source = readString(object, sourceKey);
+    if (config.source.empty()) config.path = readString(object, pathKey);
+    if (config.empty()) return std::nullopt;
+
     config.fields = decodeFields(readString(object, fieldsKey));
     return config;
 }
 
 void ScriptConfig::write(Object3D& object) const {
 
-    if (path.empty()) {
+    if (empty()) {
         erase(object);
         return;
     }
-    object.userData[pathKey] = path;
+
+    if (isInline()) {
+        object.userData[sourceKey] = source;
+        object.userData.erase(pathKey);
+    } else {
+        object.userData[pathKey] = path;
+        object.userData.erase(sourceKey);
+    }
 
     // No fields means no entry: an untouched script leaves one line in the
     // document, not two.
@@ -184,5 +206,6 @@ void ScriptConfig::write(Object3D& object) const {
 void ScriptConfig::erase(Object3D& object) {
 
     object.userData.erase(pathKey);
+    object.userData.erase(sourceKey);
     object.userData.erase(fieldsKey);
 }

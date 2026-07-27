@@ -45,6 +45,78 @@ TEST_CASE("ScriptConfig round-trips through userData", "[editor]") {
     CHECK_FALSE(group->userData.contains(ScriptConfig::fieldsKey));
 }
 
+TEST_CASE("inline source round-trips through userData", "[editor]") {
+
+    auto group = Group::create();
+
+    const std::string source =
+            "class Spinner:\n"
+            "    speed = 1.5\n"
+            "\n"
+            "    def update(self, dt):\n"
+            "        pass\n";
+
+    ScriptConfig config;
+    config.source = source;
+    config.setField("speed", "2");
+    config.write(*group);
+
+    // Its own plain key, like the path: the source carries newlines and every
+    // character Python allows, none of which the flat field format survives.
+    CHECK(group->userData.contains(ScriptConfig::sourceKey));
+    CHECK_FALSE(group->userData.contains(ScriptConfig::pathKey));
+
+    const auto read = ScriptConfig::read(*group);
+    REQUIRE(read.has_value());
+    CHECK(*read == config);
+    // Verbatim, newlines and trailing newline included.
+    CHECK(read->source == source);
+    CHECK(read->isInline());
+    CHECK_FALSE(read->isFile());
+    REQUIRE(read->fields.size() == 1);
+    CHECK(read->fields[0].value == "2");
+
+    ScriptConfig{}.write(*group);
+    CHECK_FALSE(ScriptConfig::read(*group).has_value());
+    CHECK_FALSE(group->userData.contains(ScriptConfig::sourceKey));
+    CHECK_FALSE(group->userData.contains(ScriptConfig::fieldsKey));
+}
+
+TEST_CASE("an object carries a path or a source, never both", "[editor]") {
+
+    auto group = Group::create();
+
+    ScriptConfig config;
+    config.path = "C:/scripts/spinner.py";
+    config.write(*group);
+    CHECK(group->userData.contains(ScriptConfig::pathKey));
+
+    // Switching to inline drops the file reference, in the config and in the
+    // document both.
+    config.setSource("class S:\n    def update(self, dt): pass\n");
+    CHECK(config.path.empty());
+    config.write(*group);
+    CHECK(group->userData.contains(ScriptConfig::sourceKey));
+    CHECK_FALSE(group->userData.contains(ScriptConfig::pathKey));
+
+    // And back again.
+    config.setPath("C:/scripts/other.py");
+    CHECK(config.source.empty());
+    config.write(*group);
+    CHECK(group->userData.contains(ScriptConfig::pathKey));
+    CHECK_FALSE(group->userData.contains(ScriptConfig::sourceKey));
+
+    // A hand-edited document carrying both reads as inline and self-heals on
+    // the next write, rather than preserving the contradiction forever.
+    group->userData[ScriptConfig::sourceKey] = std::string("class S:\n    pass\n");
+    const auto read = ScriptConfig::read(*group);
+    REQUIRE(read.has_value());
+    CHECK(read->isInline());
+    CHECK(read->path.empty());
+    read->write(*group);
+    CHECK_FALSE(group->userData.contains(ScriptConfig::pathKey));
+}
+
 TEST_CASE("a script with no fields writes only the path", "[editor]") {
 
     auto group = Group::create();
@@ -137,7 +209,7 @@ TEST_CASE("a malformed fields entry loads what it can", "[editor]") {
     CHECK(read->fields[1].name == "ok");
 }
 
-TEST_CASE("fields without a path are not written", "[editor]") {
+TEST_CASE("fields without a script are not written", "[editor]") {
 
     auto group = Group::create();
 
@@ -148,5 +220,6 @@ TEST_CASE("fields without a path are not written", "[editor]") {
     config.write(*group);
 
     CHECK_FALSE(group->userData.contains(ScriptConfig::pathKey));
+    CHECK_FALSE(group->userData.contains(ScriptConfig::sourceKey));
     CHECK_FALSE(group->userData.contains(ScriptConfig::fieldsKey));
 }
