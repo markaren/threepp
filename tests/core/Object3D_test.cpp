@@ -755,3 +755,31 @@ TEST_CASE("moving a parent-owned node leaves the graph memory-safe") {
     parent->traverse([&](Object3D&) { ++visited; });
     CHECK(visited == 2);
 }
+
+TEST_CASE("copy carries userData onto the clone") {
+
+    auto source = Object3D::create();
+    source->name = "source";
+    source->userData["physics"] = std::string("body=dynamic;mass=4");
+    source->userData["tag"] = 7;
+
+    auto child = Object3D::create();
+    child->userData["childTag"] = true;
+    source->add(child);
+
+    // three.js copies userData in Object3D.copy; without it a duplicated object
+    // silently loses everything the application attached to it.
+    auto clone = source->clone();
+
+    REQUIRE(clone->userData.count("physics") == 1);
+    CHECK(std::any_cast<std::string>(clone->userData.at("physics")) == "body=dynamic;mass=4");
+    CHECK(std::any_cast<int>(clone->userData.at("tag")) == 7);
+
+    REQUIRE(clone->children.size() == 1);
+    REQUIRE(clone->children[0]->userData.count("childTag") == 1);
+    CHECK(std::any_cast<bool>(clone->children[0]->userData.at("childTag")));
+
+    // The copy is independent.
+    clone->userData["tag"] = 9;
+    CHECK(std::any_cast<int>(source->userData.at("tag")) == 7);
+}

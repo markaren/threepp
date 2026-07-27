@@ -555,6 +555,12 @@ void Object3D::copy(const Object3D& source, bool recursive) {
     this->frustumCulled = source.frustumCulled;
     this->renderOrder = source.renderOrder;
 
+    // three.js copies userData too (Object3D.copy deep-clones it). Without this
+    // a clone silently loses everything attached to the object by application
+    // code - physics setup, gameplay tags, editor annotations - which is
+    // exactly the data a duplicate is expected to carry.
+    this->userData = source.userData;
+
     if (recursive) {
 
         for (const auto& child : source.children) {
