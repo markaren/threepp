@@ -30,12 +30,21 @@ from spot_terrain_env import SCAN_GX, SCAN_GY, N_SCAN, scan_xy_np
 
 
 def _height_ramp(z, lo=0.0, hi=0.8):
-    """Map height z (m) to a blue(low)->green->red(high) ramp -> per-point colors [N,3] for the cloud."""
+    """Map height z (m) to a blue(low)->green->red(high) ramp -> per-point colors [N,3] for the cloud.
+
+    The ramp stops are authored as DISPLAY (sRGB) colors — (1, 0.25, 0) is meant
+    to READ as deep red. threepp vertex colors are linear and every renderer
+    output path applies the sRGB OETF (the Vulkan point overlay included, since
+    the overlay color-parity fix), so decode the stops to linear here; encoded
+    back at display they reproduce the authored ramp instead of washing the top
+    end to orange.
+    """
     t = np.clip((z - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
     r = np.clip(1.5 - np.abs(t - 1.0) * 2.0, 0.0, 1.0)
     g = np.clip(1.5 - np.abs(t - 0.5) * 2.5, 0.0, 1.0)
     b = np.clip(1.5 - np.abs(t - 0.0) * 2.0, 0.0, 1.0)
-    return np.stack([r, g, b], axis=1).astype(np.float32)
+    c = np.stack([r, g, b], axis=1)
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4).astype(np.float32)
 
 
 def _delta_color(d):
