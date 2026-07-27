@@ -59,10 +59,9 @@ namespace {
     constexpr int kDefaultWidth = 1600;
     constexpr int kDefaultHeight = 900;
 
-    // Pixel budgets at 100% DPI; everything is multiplied by the monitor
-    // content scale at draw time.
-    constexpr float kHierarchyWidth = 280.f;
-    constexpr float kInspectorWidth = 340.f;
+    // Pixel budget at 100% DPI; multiplied by the monitor content scale at
+    // draw time. The side panel widths are a user preference — see
+    // EditorApp::hierarchyPx() / inspectorPx().
     constexpr float kBottomHeight = 200.f;
 
     constexpr std::size_t kConsoleLimit = 400;
@@ -907,6 +906,54 @@ void EditorApp::pollImports(float dt) {
     flashStatus(message);
 }
 
+float EditorApp::hierarchyPx() const {
+
+    return settings_.hierarchyWidth * contentScale_;
+}
+
+float EditorApp::inspectorPx() const {
+
+    return settings_.inspectorWidth * contentScale_;
+}
+
+void EditorApp::drawSplitter(const char* id, float x, float top, float height,
+                             float& width, float sign) {
+
+    const float s = contentScale_;
+    const float thickness = layout::splitterThickness * s;
+
+    ImGui::SetNextWindowPos({x, top});
+    ImGui::SetNextWindowSize({thickness, height});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4{0.f, 0.f, 0.f, 0.f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.f, 0.f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+
+    if (ImGui::Begin(id, nullptr, layout::barFlags)) {
+
+        ImGui::InvisibleButton("##grip", {thickness, std::max(height, 1.f)});
+
+        const bool active = ImGui::IsItemActive();
+        if (active || ImGui::IsItemHovered()) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            // Only hint at the handle once the pointer finds it; an always-on
+            // divider would just be chrome.
+            auto* draw = ImGui::GetWindowDrawList();
+            const auto min = ImGui::GetWindowPos();
+            draw->AddRectFilled({min.x + thickness * 0.5f - 1.f * s, min.y},
+                                {min.x + thickness * 0.5f + 1.f * s, min.y + height},
+                                ImGui::GetColorU32(active ? theme::accent() : theme::muted()));
+        }
+        if (active) {
+            width = std::clamp(width + ImGui::GetIO().MouseDelta.x * sign / s,
+                               EditorSettings::minPanelWidth, EditorSettings::maxPanelWidth);
+        }
+    }
+    ImGui::End();
+
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+}
+
 void EditorApp::flashStatus(std::string message) {
 
     statusFlash_ = std::move(message);
@@ -937,7 +984,7 @@ void EditorApp::drawImportToast() {
 
     // Bottom-left of the viewport (the camera preview owns the bottom-right).
     const float bottom = viewport->Size.y - statusHeight_ - (bottomPanelOpen_ ? kBottomHeight * s : 0.f);
-    ImGui::SetNextWindowPos({viewport->Pos.x + kHierarchyWidth * s + 12 * s,
+    ImGui::SetNextWindowPos({viewport->Pos.x + hierarchyPx() + 12 * s,
                              viewport->Pos.y + bottom - height - 12 * s});
     ImGui::SetNextWindowSize({width, height});
     ImGui::SetNextWindowBgAlpha(0.9f);
@@ -1330,8 +1377,8 @@ void EditorApp::renderCameraPreview() {
 
     // The 3D viewport region, window coordinates (origin top-left).
     const float s = contentScale_;
-    const float left = kHierarchyWidth * s;
-    const float right = width - kInspectorWidth * s;
+    const float left = hierarchyPx();
+    const float right = width - inspectorPx();
     const float top = menuHeight_ + toolbarHeight_;
     const float bottom = height - statusHeight_ - (bottomPanelOpen_ ? kBottomHeight * s : 0.f);
     const float viewW = right - left;

@@ -73,6 +73,15 @@ bool EditorSettings::load(const std::filesystem::path& path) {
         bottomPanelOpen = j["bottomPanelOpen"].get<bool>();
     }
 
+    // Clamped on read: a settings file edited by hand (or written by a build
+    // with different limits) must not be able to push a panel off-screen.
+    const auto readWidth = [&j](const char* key, float fallback) {
+        if (!j.contains(key) || !j[key].is_number()) return fallback;
+        return std::clamp(j[key].get<float>(), minPanelWidth, maxPanelWidth);
+    };
+    hierarchyWidth = readWidth("hierarchyWidth", hierarchyWidth);
+    inspectorWidth = readWidth("inspectorWidth", inspectorWidth);
+
     recentFiles_.clear();
     if (j.contains("recentFiles") && j["recentFiles"].is_array()) {
         for (const auto& entry : j["recentFiles"]) {
@@ -100,6 +109,8 @@ bool EditorSettings::save(const std::filesystem::path& path) const {
     j["textureDir"] = textureDir;
     j["environmentDir"] = environmentDir;
     j["bottomPanelOpen"] = bottomPanelOpen;
+    j["hierarchyWidth"] = hierarchyWidth;
+    j["inspectorWidth"] = inspectorWidth;
     j["recentFiles"] = recentFiles_;
 
     std::ofstream file(path);

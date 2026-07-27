@@ -200,6 +200,17 @@ namespace threepp::editor {
         void persistSettings();
         [[nodiscard]] float scale() const { return contentScale_; }
 
+        // Side panel widths in device pixels. The unscaled values are a user
+        // preference (draggable, persisted); everything that lays out against
+        // a panel goes through these.
+        [[nodiscard]] float hierarchyPx() const;
+        [[nodiscard]] float inspectorPx() const;
+        // Drag handle along a panel edge. `x` is the strip's left edge and
+        // `sign` is +1 when dragging right widens the panel (left-hand panels),
+        // -1 when it narrows it (right-hand panels).
+        void drawSplitter(const char* id, float x, float top, float height,
+                          float& width, float sign);
+
         // Undo-friendly ImGui helpers: begin a transaction when a widget is
         // activated and close it when the edit finishes, so a drag collapses to
         // one undo step.

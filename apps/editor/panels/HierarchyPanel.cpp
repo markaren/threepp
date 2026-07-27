@@ -206,16 +206,20 @@ void EditorApp::drawHierarchy() {
     const auto* viewport = ImGui::GetMainViewport();
     const float s = contentScale_;
 
-    const float width = layout::hierarchyWidth * s;
+    const float width = hierarchyPx();
     const float top = menuHeight_ + toolbarHeight_;
     const float bottom = statusHeight_ + (bottomPanelOpen_ ? layout::bottomHeight * s
                                                            : ImGui::GetFrameHeight() + 6 * s);
+    const float height = std::max(viewport->Size.y - top - bottom, 40.f * s);
 
     ImGui::SetNextWindowPos({viewport->Pos.x, viewport->Pos.y + top});
     // A window shrunk below the chrome would otherwise ask for a negative size.
-    ImGui::SetNextWindowSize({width, std::max(viewport->Size.y - top - bottom, 40.f * s)});
+    ImGui::SetNextWindowSize({width, height});
 
-    if (ImGui::Begin("Hierarchy", nullptr, layout::panelFlags)) {
+    // A deep tree indents past the panel edge; without this the far end of the
+    // hierarchy is simply unreachable, since the panel cannot be widened past
+    // the screen either.
+    if (ImGui::Begin("Hierarchy", nullptr, layout::panelFlags | ImGuiWindowFlags_HorizontalScrollbar)) {
 
         auto& scene = document_.scene();
 
@@ -253,9 +257,12 @@ void EditorApp::drawHierarchy() {
 
         // Clicking empty space below the tree deselects — the same gesture as
         // clicking empty space in the viewport.
-        ImGui::InvisibleButton("##blank", {ImGui::GetContentRegionAvail().x,
+        ImGui::InvisibleButton("##blank", {std::max(ImGui::GetContentRegionAvail().x, 1.f),
                                            std::max(ImGui::GetContentRegionAvail().y, 1.f)});
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) selectObject(nullptr);
     }
     ImGui::End();
+
+    drawSplitter("##hierarchySplit", viewport->Pos.x + width, viewport->Pos.y + top,
+                 height, settings_.hierarchyWidth, 1.f);
 }

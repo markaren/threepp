@@ -43,6 +43,15 @@ namespace threepp::editor {
 
         bool bottomPanelOpen = true;
 
+        // Side panel widths, in pixels at 100% DPI (the content scale is
+        // applied at draw time). User-draggable, so a deep hierarchy or a long
+        // material name is a resize away rather than permanently clipped.
+        float hierarchyWidth = 280.f;
+        float inspectorWidth = 340.f;
+
+        static constexpr float minPanelWidth = 180.f;
+        static constexpr float maxPanelWidth = 720.f;
+
     private:
         std::vector<std::string> recentFiles_;
     };

@@ -177,13 +177,14 @@ void EditorApp::drawInspector() {
     const auto* viewport = ImGui::GetMainViewport();
     const float s = contentScale_;
 
-    const float width = layout::inspectorWidth * s;
+    const float width = inspectorPx();
     const float top = menuHeight_ + toolbarHeight_;
     const float bottom = statusHeight_ + (bottomPanelOpen_ ? layout::bottomHeight * s
                                                            : ImGui::GetFrameHeight() + 6 * s);
+    const float height = std::max(viewport->Size.y - top - bottom, 40.f * s);
 
     ImGui::SetNextWindowPos({viewport->Pos.x + viewport->Size.x - width, viewport->Pos.y + top});
-    ImGui::SetNextWindowSize({width, std::max(viewport->Size.y - top - bottom, 40.f * s)});
+    ImGui::SetNextWindowSize({width, height});
 
     if (ImGui::Begin("Inspector", nullptr, layout::panelFlags)) {
 
@@ -222,6 +223,11 @@ void EditorApp::drawInspector() {
         if (locked) ImGui::EndDisabled();
     }
     ImGui::End();
+
+    // Dragging right narrows a right-hand panel, hence the -1.
+    drawSplitter("##inspectorSplit",
+                 viewport->Pos.x + viewport->Size.x - width - layout::splitterThickness * s,
+                 viewport->Pos.y + top, height, settings_.inspectorWidth, -1.f);
 }
 
 

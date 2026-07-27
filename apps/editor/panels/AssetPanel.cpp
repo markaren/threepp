@@ -196,8 +196,8 @@ void EditorApp::drawBottomPanel() {
     const auto* viewport = ImGui::GetMainViewport();
     const float s = contentScale_;
 
-    const float left = layout::hierarchyWidth * s;
-    const float right = layout::inspectorWidth * s;
+    const float left = hierarchyPx();
+    const float right = inspectorPx();
     const float collapsedHeight = ImGui::GetFrameHeight() + 6 * s;
     const float height = bottomPanelOpen_ ? layout::bottomHeight * s : collapsedHeight;
 

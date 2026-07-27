@@ -89,6 +89,11 @@ undoable, and a drag collapses into a single undo step.
 **Bottom panel.** An asset browser (double-click a file to open/import/assign)
 and a console showing loader and exporter warnings. Collapsible.
 
+**Panel sizes.** The hierarchy and inspector are resized by dragging their inner
+edge, and the widths persist in the settings file. The hierarchy also scrolls
+horizontally, because a deep tree indents past any fixed width and the panel
+cannot be widened past the screen.
+
 **Files.** New / Open / Save / Save As, Import Model, Set Environment (.hdr),
 Recent Files. All dialogs are a first-party ImGui file browser — no native
 dialog library. Drag-and-drop onto the window works too: `.json` opens a scene,
