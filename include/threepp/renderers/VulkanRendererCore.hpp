@@ -11,6 +11,7 @@
 #ifndef THREEPP_VULKANRENDERERCORE_HPP
 #define THREEPP_VULKANRENDERERCORE_HPP
 
+#include "threepp/cameras/LensDistortion.hpp"
 #include "threepp/helpers/LidarTypes.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/renderers/Renderer.hpp"
@@ -383,6 +384,97 @@ namespace threepp {
         void setExposureCompensation(float ev);
         [[nodiscard]] float exposureCompensation() const;
 
+        // ── Camera intrinsics readout ────────────────────────────────────
+        // The pinhole intrinsics the renderer is currently projecting with,
+        // in PIXELS of the render extent — the same pixel grid readGBufferAOV
+        // returns, which under setRenderScale is smaller than
+        // framebufferSize(). Origin is top-left, matching both the AOV
+        // readback and OpenCV, so these drop straight into a projectPoints /
+        // undistort call.
+        //
+        // There is no setter: the sensor and lens live on the camera, where
+        // threepp already models them — set a real camera the real way,
+        //   cam.filmGauge = 6.3f;        // sensor WIDTH in mm (1/2.3")
+        //   cam.setFocalLength(4.8f);    // lens in mm  → drives fov
+        // and this reports back the fx/fy/cx/cy an OpenCV calibration of that
+        // camera would produce. The depth-of-field CoC reads the same film
+        // gauge, so exposure, framing and defocus finally share one sensor.
+        //
+        // Valid after the first render(); zero-sized before it.
+        struct CameraIntrinsics {
+            float fx = 0.f, fy = 0.f;// focal length in pixels
+            float cx = 0.f, cy = 0.f;// principal point in pixels, top-left origin
+            uint32_t width = 0, height = 0;
+        };
+        [[nodiscard]] CameraIntrinsics cameraIntrinsics() const;
+
+        // ── Lens distortion ──────────────────────────────────────────────
+        // Bend the image the way a real lens does, using the coefficients the
+        // real lens was calibrated with. Models and conventions are OpenCV's
+        // exactly (see cameras/LensDistortion.hpp), so the output of
+        // cv::calibrateCamera — or a ROS camera_info — drops straight in:
+        //
+        //   LensDistortion d;
+        //   d.model = LensModel::BrownConrady;
+        //   d.k1 = -0.28f; d.k2 = 0.09f; d.p1 = 0.0006f;
+        //   renderer.setLensDistortion(d);
+        //
+        // Applied to BOTH the displayed image and the sensor readback
+        // (readGBufferAOV / readSceneRGBPixels), because a distorted colour
+        // frame paired with undistorted depth/segmentation labels is worse
+        // than no distortion at all. Integer AOVs (Ids) and depth resample
+        // NEAREST — interpolating an instance id invents objects, and
+        // interpolating depth across a silhouette invents surfaces.
+        //
+        // The warp is a gather over what was actually rendered: the frustum
+        // still comes from the camera, so a pixel whose ideal ray falls
+        // outside the rendered frame clamps to the frame edge. Barrel
+        // distortion (k1 < 0) gathers inward and is unaffected; pincushion
+        // and wide fisheye stretch the border, so render with a wider FOV
+        // than the lens' nominal one if you need the corners to be real.
+        //
+        // OFF by default (LensModel::None) — zero cost, output unchanged.
+        void setLensDistortion(const LensDistortion& distortion);
+        [[nodiscard]] LensDistortion lensDistortion() const;
+
+        // ── Image-sensor noise ───────────────────────────────────────────
+        // Photon and electronic noise, applied last (post-TAA/upscale — see
+        // below). Modelling ISO as pure exposure gain, which is all the
+        // physical camera did on its own, gets the brightness of a high-ISO
+        // frame right and the character of it completely wrong; this closes
+        // that gap for synthetic training data.
+        //
+        // Parameters are in ELECTRONS, the sensor's own units, so a datasheet
+        // is enough to configure one: full-well capacity sets where shot
+        // noise sits relative to saturation, read noise is the floor, dark
+        // current is thermal, PRNU is the fixed pattern burned into the
+        // silicon. ISO gain (from setCameraExposure) divides the electron
+        // count, so higher ISO really does get noisier, by the physics rather
+        // than by a slider.
+        //
+        // Deterministic: the same seed replays the same noise, so an episode
+        // is reproducible. resetSensorNoise() restarts the sequence.
+        //
+        // Applied AFTER the temporal resolve by necessity — TAA and the
+        // upscalers average successive frames, so noise injected earlier is
+        // quietly filtered back out and the sim reports a noise model it is
+        // not producing.
+        //
+        // OFF by default — zero cost, output unchanged.
+        struct SensorNoise {
+            bool  enabled = false;
+            float fullWellElectrons = 20000.f;      // saturation capacity
+            float readNoiseElectrons = 3.0f;        // RMS floor
+            float darkCurrentElectronsPerSec = 5.0f;// × the exposure time
+            float prnuPercent = 0.5f;               // fixed-pattern gain sigma, %
+            uint32_t seed = 1u;
+        };
+        void setSensorNoise(const SensorNoise& noise);
+        [[nodiscard]] SensorNoise sensorNoise() const;
+        // Restart the noise sequence (call on episode reset so two episodes
+        // with the same seed produce the same frames).
+        void resetSensorNoise();
+
         // ── Physical light units ─────────────────────────────────────────
         // When enabled, analytic light intensities are photometric:
         //   DirectionalLight.intensity = lux (sunlight ≈ 100,000)
@@ -423,10 +515,14 @@ namespace threepp {
         // setCameraExposure's f-number (the aperture drives bokeh size even
         // while physicalCamera is off — exposure and DoF are independent
         // consumers of the same triplet), focal length comes from the
-        // camera's vertical FOV on a 24 mm full-frame sensor, and the focus
-        // plane sits at setFocusDistance. Wider aperture (smaller f-number)
-        // or a longer lens (narrower FOV) → shallower depth of field, as on
-        // a real camera. OFF by default (zero cost).
+        // camera's vertical FOV on the camera's OWN sensor
+        // (PerspectiveCamera::getFilmHeight — set filmGauge for anything
+        // other than 35 mm film; see cameraIntrinsics), and the focus plane
+        // sits at setFocusDistance. Wider aperture (smaller f-number) or a
+        // longer lens (narrower FOV) → shallower depth of field, as on a
+        // real camera; a SMALLER sensor at the same framing → deeper depth
+        // of field, also as on a real camera (which is why phone cameras
+        // need to fake it). OFF by default (zero cost).
         void setDepthOfField(bool enabled);
         [[nodiscard]] bool depthOfField() const;
 

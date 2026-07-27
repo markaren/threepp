@@ -106,7 +106,12 @@ int main() {
     controls.update();
 
     // ── UI state ─────────────────────────────────────────────────────────────
-    float lensMm = 29.f;// ≈ 45° vertical FOV on the 24 mm full-frame sensor
+    // Sensor + lens as a real camera would be specified; setFocalLength then
+    // derives the FOV, and the same film gauge feeds the DoF CoC and
+    // cameraIntrinsics().
+    float lensMm = 29.f;
+    camera.filmGauge = 36.f;// full frame
+    camera.setFocalLength(lensMm);
     float gradeSat = 1.f, gradeContrast = 1.f;
 
     auto applyGrade = [&] {
@@ -159,13 +164,38 @@ int main() {
         }
 
         ImGui::Separator();
-        // Focal length drives BOTH the framing (fov) and the CoC — the
-        // photographic control that makes depth of field readable. 12 mm =
-        // half the 24 mm full-frame sensor height.
-        if (ImGui::SliderFloat("Lens (mm)", &lensMm, 24.f, 135.f, "%.0f mm",
+        // Sensor + lens, specified the way a real camera is. filmGauge is the
+        // sensor WIDTH in mm and setFocalLength derives the FOV from it, so
+        // the framing, the depth-of-field CoC and the reported intrinsics all
+        // come from ONE description of the camera.
+        struct SensorPreset {
+            const char* label;
+            float widthMm;
+        };
+        static constexpr SensorPreset kSensors[] = {
+                {"Full frame (36 mm)", 36.f},
+                {"APS-C (23.6 mm)", 23.6f},
+                {"Micro 4/3 (17.3 mm)", 17.3f},
+                {"1/2.3\" robot cam (6.17 mm)", 6.17f},
+        };
+        const char* sensorPreview = "Custom";
+        for (const auto& s : kSensors) {
+            if (std::abs(camera.filmGauge - s.widthMm) < 0.01f) sensorPreview = s.label;
+        }
+        if (ImGui::BeginCombo("Sensor", sensorPreview)) {
+            for (const auto& s : kSensors) {
+                if (ImGui::Selectable(s.label, std::abs(camera.filmGauge - s.widthMm) < 0.01f)) {
+                    camera.filmGauge = s.widthMm;
+                    camera.setFocalLength(lensMm);// re-derive the FOV on the new sensor
+                }
+            }
+            ImGui::EndCombo();
+        }
+        // Focal length drives BOTH the framing and the CoC — the photographic
+        // control that makes depth of field readable.
+        if (ImGui::SliderFloat("Lens (mm)", &lensMm, 3.f, 135.f, "%.1f mm",
                                ImGuiSliderFlags_Logarithmic)) {
-            camera.fov = 2.f * std::atan(12.f / lensMm) * 180.f / math::PI;
-            camera.updateProjectionMatrix();
+            camera.setFocalLength(lensMm);
         }
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
@@ -174,11 +204,20 @@ int main() {
                               "shallow depth of field needs a LONG lens\n"
                               "AND a wide aperture, exactly like real\n"
                               "photography — at 24 mm nothing blurs, at\n"
-                              "85 mm f/2 the background melts. Opening\n"
-                              "the aperture also brightens the exposure\n"
-                              "(re-expose with EV comp / shutter / ISO,\n"
-                              "or enable auto exposure). Enable depth of\n"
-                              "field in the renderer settings below.");
+                              "85 mm f/2 the background melts. Shrink the\n"
+                              "SENSOR at the same framing and the blur goes\n"
+                              "away too, which is why a phone has to fake\n"
+                              "it. Opening the aperture also brightens the\n"
+                              "exposure (re-expose with EV comp / shutter /\n"
+                              "ISO, or enable auto exposure). Enable depth\n"
+                              "of field in the renderer settings below —\n"
+                              "along with Lens distortion and Sensor noise,\n"
+                              "which model the rest of a real camera.");
+        {
+            const auto k = renderer.cameraIntrinsics();
+            if (k.width > 0u)
+                ImGui::TextDisabled("intrinsics fx %.0f  cx %.0f  cy %.0f", k.fx, k.cx, k.cy);
+        }
 
         ImGui::Separator();
         ImGui::TextDisabled("Colour grade");

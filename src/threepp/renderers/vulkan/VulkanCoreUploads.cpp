@@ -395,6 +395,29 @@ namespace threepp {
         if (std::abs(camera.projectionMatrix.elements[5]) > 1e-6f)
             tanHalfFovY_ = 1.f / std::abs(camera.projectionMatrix.elements[5]);
 
+        // ...and the SENSOR that FOV was derived from. threepp's
+        // PerspectiveCamera already carries the film gauge (width, mm) and
+        // derives the height from the aspect, so a real camera is specified
+        // the real way — `cam.filmGauge = 6.3f; cam.setFocalLength(4.8f);`
+        // for a 1/2.3" sensor with a 4.8 mm lens — and the DoF CoC then
+        // agrees with the projection instead of assuming full frame.
+        if (auto* pcam = dynamic_cast<PerspectiveCamera*>(&camera)) {
+            const float filmH = pcam->getFilmHeight();// mm
+            if (filmH > 1e-4f) filmHeightM_ = filmH * 1e-3f;
+        }
+
+        // Pinhole intrinsics for cameraIntrinsics() — taken from the UNJITTERED
+        // projection (the TAA sub-pixel offset is applied to the UBO copy
+        // below, never to camera.projectionMatrix, so this is the lens the
+        // dataset should be labelled with, not this frame's dithered one).
+        // elements[8]/[9] are the frustum skew, non-zero under filmOffset /
+        // setViewOffset — carrying them is what keeps the principal point
+        // honest for an off-centre sensor.
+        projP0_ = camera.projectionMatrix.elements[0];
+        projP5_ = camera.projectionMatrix.elements[5];
+        projP8_ = camera.projectionMatrix.elements[8];
+        projP9_ = camera.projectionMatrix.elements[9];
+
         float data[36];
         std::memcpy(data + 0,  camera.matrixWorld->elements.data(), 64);
         // Reverse-Z projInverse (matches the reverse-Z VP the raster uses) so

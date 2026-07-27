@@ -22,4 +22,15 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
             PROJECT_FOLDER="${PROJECT_SOURCE_DIR}")
     add_test(NAME VulkanGolden_test COMMAND VulkanGolden_test)
     set_tests_properties(VulkanGolden_test PROPERTIES SKIP_RETURN_CODE 42)
+
+    # Camera-model geometry: film gauge / focal length round-trip and the
+    # reported cameraIntrinsics() checked against the renderer's own
+    # projection. Numeric (not pixel) claims, so unlike the goldens this is
+    # hardware-independent — but it still needs a device to construct the
+    # renderer, hence the same skip code.
+    add_executable(VulkanCameraModel_test VulkanCameraModel_test.cpp)
+    target_link_libraries(VulkanCameraModel_test PRIVATE threepp)
+    target_include_directories(VulkanCameraModel_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME VulkanCameraModel_test COMMAND VulkanCameraModel_test)
+    set_tests_properties(VulkanCameraModel_test PROPERTIES SKIP_RETURN_CODE 42)
 endif ()

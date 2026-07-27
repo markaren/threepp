@@ -925,6 +925,10 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
             preExpHist_[currentFrame] = preExp;
             std::memcpy(&preExpBits_, &preExp, sizeof(preExpBits_));
 
+            // Lens warp + sensor noise for the final (RCAS) stage — see
+            // rcas.comp for why both live at the very end of the chain.
+            if (taa_) taa_->setSensorParams(buildSensorParams());
+
             // Gather this frame's particle centers + base indices BEFORE the
             // scene dispatch — the hook tail runs particle_light.comp over them
             // (lit billboards; the overlay loop below consumes the bases).
@@ -940,10 +944,11 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
             // camera: aperture = camAperture_ (setCameraExposure — exposure
             // and DoF consume the triplet independently, so this works with
             // physicalCamera off too), focal length from the camera's FOV on
-            // a 24 mm full-frame sensor, focus plane at focusDistance_.
+            // the camera's OWN sensor (filmHeightM_, from PerspectiveCamera's
+            // film gauge), focus plane at focusDistance_.
             if (dofEnabled_ && dof_ && dof_->valid()) {
-                constexpr float kSensorH  = 0.024f;// full-frame sensor height (m)
-                constexpr float kMaxCocPx = 32.f;  // full-res radius clamp
+                const float     kSensorH  = filmHeightM_;// sensor height (m)
+                constexpr float kMaxCocPx = 32.f;        // full-res radius clamp
                 const float f = (kSensorH * 0.5f) / std::max(tanHalfFovY_, 1e-3f);
                 const float S = std::max(focusDistance_, f * 2.f);
                 const float cocScale = f * f / (std::max(camAperture_, 0.1f) * (S - f)) *
@@ -1108,7 +1113,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                 // Finalize hdrOut_ → swapchain (display-referred RCAS or plain copy).
                 taa_->recordPostFinalize(cb, currentFrame, imageIndex,
                                          regionSwapExt_.width, regionSwapExt_.height,
-                                         sharpenStrength_ > 0.0f, sharpenStrength_);
+                                         sharpenStrength_ > 0.0f || sensorStageActive(), sharpenStrength_);
             } else
 #endif
 #if defined(THREEPP_WITH_FSR)
@@ -1222,7 +1227,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                 // Finalize hdrOut_ → swapchain (display-referred RCAS or plain copy).
                 taa_->recordPostFinalize(cb, currentFrame, imageIndex,
                                          regionSwapExt_.width, regionSwapExt_.height,
-                                         sharpenStrength_ > 0.0f, sharpenStrength_);
+                                         sharpenStrength_ > 0.0f || sensorStageActive(), sharpenStrength_);
             } else
 #endif
             {
@@ -1253,7 +1258,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                 taa_->recordResolve(cb, currentFrame, imageIndex,
                                     regionRenderExt_.width, regionRenderExt_.height,
                                     regionSwapExt_.width, regionSwapExt_.height, effAlpha, taaDtFrames,
-                                    sharpenStrength_ > 0.0f, sharpenStrength_,
+                                    sharpenStrength_ > 0.0f || sensorStageActive(), sharpenStrength_,
                                     taaSkyReproj_.data(),
                                     static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
                                     ptExt.width, ptExt.height, ext.width, ext.height,

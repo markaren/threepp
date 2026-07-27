@@ -2574,13 +2574,86 @@ namespace threepp {
         // Thin-lens depth of field on sceneHdr, recorded between the scene
         // dispatch and the bloom pyramid so bokeh still blooms + tone-maps
         // as HDR (see vulkan/DofPass.hpp). CoC is camera-derived: aperture
-        // from camAperture_, focal length from tanHalfFovY_ on a 24 mm
-        // sensor, focus plane at focusDistance_. OFF by default (the whole
-        // pass is skipped; zero cost).
+        // from camAperture_, focal length + sensor size from the camera's own
+        // film gauge (filmHeightM_ below), focus plane at focusDistance_.
+        // OFF by default (the whole pass is skipped; zero cost).
         std::unique_ptr<vulkan::DofPass> dof_;
         bool  dofEnabled_    = false;
         float focusDistance_ = 10.f;
         float tanHalfFovY_   = 0.4142f;// stashed in updateCameraUbo (45° default)
+        // Sensor height in METRES, stashed in updateCameraUbo from
+        // PerspectiveCamera::getFilmHeight() (filmGauge is the film WIDTH in
+        // mm; the height follows from the camera's aspect). This is the one
+        // sensor the whole camera model shares: FOV comes from it via
+        // setFocalLength, and the DoF CoC + cameraIntrinsics() read it back.
+        // 0.0197 = the default 35 mm gauge at 16:9. Non-perspective cameras
+        // keep whatever the last perspective camera left here.
+        float filmHeightM_ = 0.035f / 1.7777778f;
+        // Unjittered projection terms stashed in updateCameraUbo, consumed by
+        // cameraIntrinsics(): [0]/[5] = 2n/(r-l), 2n/(t-b); [8]/[9] = frustum
+        // skew (non-zero under filmOffset / setViewOffset).
+        float projP0_ = 1.f, projP5_ = 1.f, projP8_ = 0.f, projP9_ = 0.f;
+
+        // ── Lens + sensor (the non-pinhole half of the camera) ──────────────
+        // Both default to inactive, and while inactive the RCAS stage keeps
+        // its original texelFetch/CAS path → byte-identical output.
+        LensDistortion lens_{};
+        VulkanRendererCore::SensorNoise sensorNoise_{};
+        // Frame counter driving the noise seed. Advances once per recorded
+        // frame while noise is on; resetSensorNoise() rewinds it so the same
+        // seed replays the same sequence from the top of an episode.
+        uint32_t sensorNoiseFrame_ = 0u;
+
+        // Does the final (RCAS) stage have work beyond sharpening? Both the
+        // lens warp and the sensor noise live there, so either one forces the
+        // pass to run even at sharpenStrength 0 — which is why the shader
+        // needs an explicit sharpen flag (its "0" is still a -1/8 kernel).
+        [[nodiscard]] bool sensorStageActive() const {
+            return lens_.active() || sensorNoise_.enabled;
+        }
+
+        // Pack this frame's lens + sensor state for the RCAS stage. Intrinsics
+        // go over NORMALIZED (fx/W, fy/H, cx/W, cy/H) so the same numbers are
+        // correct in that pass, which runs at DISPLAY extent, as they are at
+        // the render extent they were measured on. Advances the noise frame
+        // counter, so call exactly once per recorded frame.
+        [[nodiscard]] vulkan::TaaResolve::SensorParams buildSensorParams() {
+            vulkan::TaaResolve::SensorParams p{};
+            p.applySharpen  = sharpenStrength_ > 0.f;
+            p.distortActive = lens_.active();
+            p.noiseActive   = sensorNoise_.enabled;
+
+            if (p.distortActive) {
+                p.lensModel     = static_cast<uint32_t>(lens_.model);
+                p.radial[0]     = lens_.k1;
+                p.radial[1]     = lens_.k2;
+                p.radial[2]     = lens_.k3;
+                p.radial[3]     = lens_.k4;
+                p.tangential[0] = lens_.p1;
+                p.tangential[1] = lens_.p2;
+                // (fx/W, fy/H) = 0.5·proj[0], 0.5·proj[5]; (cx/W, cy/H) =
+                // 0.5·(1∓skew). Same derivation as cameraIntrinsics(), with
+                // the extent divided out.
+                p.normK[0] = 0.5f * projP0_;
+                p.normK[1] = 0.5f * projP5_;
+                p.normK[2] = 0.5f * (1.f - projP8_);
+                p.normK[3] = 0.5f * (1.f + projP9_);
+            }
+
+            if (p.noiseActive) {
+                p.frameSeed      = sensorNoise_.seed * 2654435761u + sensorNoiseFrame_;
+                p.fullWell       = sensorNoise_.fullWellElectrons;
+                p.readNoise      = sensorNoise_.readNoiseElectrons;
+                // Dark current is a rate; the exposure time turns it into a
+                // count. A long exposure is noisier for the same reason a real
+                // long exposure is.
+                p.darkElectrons  = sensorNoise_.darkCurrentElectronsPerSec * camShutter_;
+                p.prnu           = sensorNoise_.prnuPercent * 0.01f;
+                p.isoGain        = camIso_ / 100.f;
+                ++sensorNoiseFrame_;
+            }
+            return p;
+        }
         float bloomIntensity_ = 0.0f;
         // Deferred GI path: ON activates stochastic 1-bounce GI (colour bleed) +
         // temporal accumulation + à-trous. OFF falls back to the deterministic

@@ -548,6 +548,103 @@ namespace threepp_py {
                               [](PyVulkanRenderer& r, bool v) { r.native().setPhysicalLightUnits(v); },
                               "Interpret light intensities photometrically: directional = lux "
                               "(sun ~100000), point/spot = lumens, rect/emissive = nits. Default off.")
+                // ── Camera intrinsics readout ─────────────────────────────────
+                .def_property_readonly("camera_intrinsics",
+                                       [](PyVulkanRenderer& r) {
+                                           const auto k = r.native().cameraIntrinsics();
+                                           py::dict d;
+                                           d["fx"] = k.fx;
+                                           d["fy"] = k.fy;
+                                           d["cx"] = k.cx;
+                                           d["cy"] = k.cy;
+                                           d["width"] = k.width;
+                                           d["height"] = k.height;
+                                           return d;
+                                       },
+                                       "Pinhole intrinsics in RENDER-extent pixels (top-left "
+                                       "origin, OpenCV convention) as a dict fx/fy/cx/cy/width/"
+                                       "height. Derived from the camera's own film gauge and "
+                                       "focal length -- set a real camera with "
+                                       "`cam.film_gauge = 6.3; cam.set_focal_length(4.8)`. "
+                                       "Valid after the first render.")
+                // ── Lens distortion ───────────────────────────────────────────
+                .def("set_lens_distortion",
+                     [](PyVulkanRenderer& r, const std::string& model, float k1, float k2,
+                        float k3, float k4, float p1, float p2) {
+                         LensDistortion d;
+                         if (model == "none") {
+                             d.model = LensModel::None;
+                         } else if (model == "brown_conrady") {
+                             d.model = LensModel::BrownConrady;
+                         } else if (model == "fisheye") {
+                             d.model = LensModel::Fisheye;
+                         } else {
+                             throw std::invalid_argument(
+                                     "set_lens_distortion: model must be 'none', "
+                                     "'brown_conrady' or 'fisheye'");
+                         }
+                         d.k1 = k1; d.k2 = k2; d.k3 = k3; d.k4 = k4;
+                         d.p1 = p1; d.p2 = p2;
+                         r.native().setLensDistortion(d);
+                     },
+                     py::arg("model") = "none", py::arg("k1") = 0.f, py::arg("k2") = 0.f,
+                     py::arg("k3") = 0.f, py::arg("k4") = 0.f, py::arg("p1") = 0.f,
+                     py::arg("p2") = 0.f,
+                     "OpenCV-compatible lens distortion. 'brown_conrady' takes cv2's "
+                     "(k1, k2, p1, p2, k3); 'fisheye' takes cv2.fisheye's (k1..k4). "
+                     "Applied to BOTH the displayed image and the AOV readback, so "
+                     "segmentation/depth labels stay aligned with the distorted pixels. "
+                     "Default 'none' (pinhole, zero cost).")
+                .def_property_readonly("lens_distortion",
+                                       [](PyVulkanRenderer& r) {
+                                           const auto d = r.native().lensDistortion();
+                                           py::dict o;
+                                           o["model"] = d.model == LensModel::BrownConrady
+                                                                ? "brown_conrady"
+                                                                : (d.model == LensModel::Fisheye ? "fisheye" : "none");
+                                           o["k1"] = d.k1; o["k2"] = d.k2;
+                                           o["k3"] = d.k3; o["k4"] = d.k4;
+                                           o["p1"] = d.p1; o["p2"] = d.p2;
+                                           return o;
+                                       },
+                                       "Current lens distortion as a dict (see set_lens_distortion).")
+                // ── Image-sensor noise ────────────────────────────────────────
+                .def("set_sensor_noise",
+                     [](PyVulkanRenderer& r, bool enabled, float full_well, float read_noise,
+                        float dark_current, float prnu_percent, uint32_t seed) {
+                         VulkanRendererCore::SensorNoise n;
+                         n.enabled = enabled;
+                         n.fullWellElectrons = full_well;
+                         n.readNoiseElectrons = read_noise;
+                         n.darkCurrentElectronsPerSec = dark_current;
+                         n.prnuPercent = prnu_percent;
+                         n.seed = seed;
+                         r.native().setSensorNoise(n);
+                     },
+                     py::arg("enabled") = true, py::arg("full_well") = 20000.f,
+                     py::arg("read_noise") = 3.f, py::arg("dark_current") = 5.f,
+                     py::arg("prnu_percent") = 0.5f, py::arg("seed") = 1u,
+                     "Shot/read/dark-current/PRNU sensor noise, in ELECTRONS, applied after "
+                     "the temporal resolve (TAA would otherwise average it away). Noise scales "
+                     "with the ISO from set_camera_exposure, as on a real sensor. "
+                     "Deterministic: the same seed replays the same frames. Default off.")
+                .def("reset_sensor_noise",
+                     [](PyVulkanRenderer& r) { r.native().resetSensorNoise(); },
+                     "Restart the noise sequence -- call on episode reset so two episodes with "
+                     "the same seed produce the same frames.")
+                .def_property_readonly("sensor_noise",
+                                       [](PyVulkanRenderer& r) {
+                                           const auto n = r.native().sensorNoise();
+                                           py::dict o;
+                                           o["enabled"] = n.enabled;
+                                           o["full_well"] = n.fullWellElectrons;
+                                           o["read_noise"] = n.readNoiseElectrons;
+                                           o["dark_current"] = n.darkCurrentElectronsPerSec;
+                                           o["prnu_percent"] = n.prnuPercent;
+                                           o["seed"] = n.seed;
+                                           return o;
+                                       },
+                                       "Current sensor-noise settings as a dict.")
                 // ── Two-phase GPU occlusion culling ───────────────────────────
                 .def_property("occlusion_culling",
                               [](PyVulkanRenderer& r) { return r.native().occlusionCulling(); },

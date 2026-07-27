@@ -15,17 +15,60 @@
 // (Replaces an earlier min/max-clamped unsharp that clamped the center back
 //  to itself at every local extremum — i.e. exactly at the edges it was meant
 //  to sharpen — making it a near no-op on smooth content.)
+//
+// THE SENSOR STAGE. This pass is also where the camera stops being a pinhole:
+// it is the ONE stage every finalize route already funnels through (the LDR
+// resolve's sharpen path, the HDR/DLSS/FSR recordPostFinalize, and the
+// motion-blur variant), and it is the LAST stage before the swapchain — which
+// is exactly what the lens warp and the sensor noise both need:
+//
+//   * lens distortion is a gather, so it must run where the whole resolved
+//     frame exists;
+//   * sensor noise must run AFTER the temporal resolve, because TAA averages
+//     successive frames and would quietly denoise anything injected earlier —
+//     the sim would then report a noise model it is not actually producing.
+//
+// Both are opt-in. With pcFlags' distortion and noise bits clear, the fetch
+// path is the original texelFetch and the output is byte-identical to before.
+
+#extension GL_GOOGLE_include_directive : enable
+
+#include "lens_distortion.glsl"// lensUndistort — CPU twin: cameras/LensDistortion.hpp
+#include "sensor_noise.glsl"   // applySensorNoise
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0) uniform sampler2D resolvedTex;     // TAA output (output extent)
 layout(set = 0, binding = 1) uniform writeonly image2D swapOut; // swapchain (bgra8, no format)
 
+// Flag bits in pc.flags.
+#define RCAS_FLAG_SHARPEN    1u// run the CAS kernel (else pass the centre tap through)
+#define RCAS_FLAG_DISTORT    2u// apply the lens warp
+#define RCAS_FLAG_NOISE      4u// apply the sensor noise model
+
 layout(push_constant) uniform Pc {
     uint  width;     // PANE (scissor region) size — resolved input is at the origin
     uint  height;
-    float amount;// sharpness 0..1 (slider); 0 should not dispatch this pass
+    float amount;// sharpness 0..1 (slider)
     uint  dstOffset;// split-screen: packed swapchain write offset (dstX | dstY<<16)
+
+    uint  flags;    // RCAS_FLAG_*
+    uint  lensModel;// LENS_MODEL_* (only read when RCAS_FLAG_DISTORT is set)
+    uint  frameSeed;// per-frame noise seed (sensor noise)
+    uint  _pad0;
+
+    vec4  normK;    // normalized intrinsics: (fx/W, fy/H, cx/W, cy/H) — resolution
+                    // independent, so the same values are correct here at DISPLAY
+                    // extent and in the readback at RENDER extent
+    vec4  radial;   // k1..k4
+    vec2  tangential;// p1, p2
+
+    // Sensor noise (see sensor_noise.glsl).
+    float fullWell;    // electrons at full scale
+    float readNoise;   // electrons RMS
+    float darkElectrons;// dark-current electrons accumulated over the exposure
+    float prnu;        // fixed-pattern gain sigma (fraction)
+    float isoGain;     // iso / 100
 } pc;
 
 vec3 fetch(ivec2 p) {
@@ -33,22 +76,44 @@ vec3 fetch(ivec2 p) {
                       clamp(p, ivec2(0), ivec2(int(pc.width) - 1, int(pc.height) - 1)), 0).rgb;
 }
 
+// Distorted-path tap: the same 3×3 neighbourhood, but taken in SOURCE space
+// around the warped centre. The warp is smooth over a pixel, so offsetting the
+// source position is a faithful local linearisation — and it keeps the CAS
+// kernel operating on genuinely adjacent samples rather than on samples the
+// warp has pulled apart.
+vec3 fetchWarped(vec2 srcUv, vec2 texel, ivec2 off) {
+    return textureLod(resolvedTex, clamp(srcUv + vec2(off) * texel, vec2(0.0), vec2(1.0)), 0.0).rgb;
+}
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
 
+    const bool distort = (pc.flags & RCAS_FLAG_DISTORT) != 0u;
+
+    // Where in the rendered pinhole image this sensor pixel is looking.
+    vec2 srcUv = vec2(0.0), texel = vec2(0.0);
+    if (distort) {
+        texel = 1.0 / vec2(float(pc.width), float(pc.height));
+        const vec2 uv = (vec2(px) + 0.5) * texel;
+        // pixel -> normalized distorted -> normalized ideal -> pixel
+        const vec2 pd = (uv - pc.normK.zw) / pc.normK.xy;
+        const vec2 p  = lensUndistort(int(pc.lensModel), pc.radial, pc.tangential, pd);
+        srcUv = p * pc.normK.xy + pc.normK.zw;
+    }
+
     // 3×3 neighbourhood:  a b c
     //                     d e f
     //                     g h i
-    const vec3 a = fetch(px + ivec2(-1, -1));
-    const vec3 b = fetch(px + ivec2( 0, -1));
-    const vec3 c = fetch(px + ivec2( 1, -1));
-    const vec3 d = fetch(px + ivec2(-1,  0));
-    const vec3 e = fetch(px + ivec2( 0,  0));
-    const vec3 f = fetch(px + ivec2( 1,  0));
-    const vec3 g = fetch(px + ivec2(-1,  1));
-    const vec3 h = fetch(px + ivec2( 0,  1));
-    const vec3 i = fetch(px + ivec2( 1,  1));
+    const vec3 a = distort ? fetchWarped(srcUv, texel, ivec2(-1, -1)) : fetch(px + ivec2(-1, -1));
+    const vec3 b = distort ? fetchWarped(srcUv, texel, ivec2( 0, -1)) : fetch(px + ivec2( 0, -1));
+    const vec3 c = distort ? fetchWarped(srcUv, texel, ivec2( 1, -1)) : fetch(px + ivec2( 1, -1));
+    const vec3 d = distort ? fetchWarped(srcUv, texel, ivec2(-1,  0)) : fetch(px + ivec2(-1,  0));
+    const vec3 e = distort ? fetchWarped(srcUv, texel, ivec2( 0,  0)) : fetch(px + ivec2( 0,  0));
+    const vec3 f = distort ? fetchWarped(srcUv, texel, ivec2( 1,  0)) : fetch(px + ivec2( 1,  0));
+    const vec3 g = distort ? fetchWarped(srcUv, texel, ivec2(-1,  1)) : fetch(px + ivec2(-1,  1));
+    const vec3 h = distort ? fetchWarped(srcUv, texel, ivec2( 0,  1)) : fetch(px + ivec2( 0,  1));
+    const vec3 i = distort ? fetchWarped(srcUv, texel, ivec2( 1,  1)) : fetch(px + ivec2( 1,  1));
 
     // Soft min/max over the cross, then fold in the diagonals (CAS weighting).
     vec3 mnRGB = min(min(min(d, e), min(f, b)), h);
@@ -65,10 +130,24 @@ void main() {
 
     // Peak negative weight, scaled by the sharpness slider. sharpness 0 → mild
     // (-1/8), 1 → strong (-1/5). CAS kernel: (e + w·(b+d+f+h)) / (1 + 4w).
-    const float sharpness = clamp(pc.amount, 0.0, 1.0);
-    const float peak = -1.0 / mix(8.0, 5.0, sharpness);
-    const vec3  w    = amp * peak;
-    vec3 res = (e + (b + d + f + h) * w) / (1.0 + 4.0 * w);
+    //
+    // The sharpen flag exists because sharpness 0 is NOT a no-op here (it is
+    // still a -1/8 kernel) — and the warp/noise stages need this pass to run
+    // even when the user asked for no sharpening at all.
+    vec3 res = e;
+    if ((pc.flags & RCAS_FLAG_SHARPEN) != 0u) {
+        const float sharpness = clamp(pc.amount, 0.0, 1.0);
+        const float peak = -1.0 / mix(8.0, 5.0, sharpness);
+        const vec3  w    = amp * peak;
+        res = (e + (b + d + f + h) * w) / (1.0 + 4.0 * w);
+    }
+
+    // Photon/electron statistics last: the image at this point is what reached
+    // the sensor, and everything downstream is just the swapchain.
+    if ((pc.flags & RCAS_FLAG_NOISE) != 0u) {
+        res = applySensorNoise(res, uvec2(px), pc.frameSeed, pc.fullWell, pc.readNoise,
+                               pc.darkElectrons, pc.prnu, pc.isoGain);
+    }
 
     imageStore(swapOut, px + ivec2(int(pc.dstOffset & 0xFFFFu), int(pc.dstOffset >> 16u)),
                vec4(clamp(res, 0.0, 1.0), 1.0));

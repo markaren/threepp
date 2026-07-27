@@ -436,6 +436,129 @@ private:
         if (ImGui::SliderFloat("Motion blur", &mb, 0.f, 1.f, "%.2f shutter")) {
             vk_->setMotionBlur(mb);
         }
+
+        drawVulkanLens();
+        drawVulkanSensorNoise();
+    }
+
+    // Lens: the geometry half of the camera. Everything here is OpenCV's
+    // convention, so a calibration file's numbers can be typed straight in.
+    void drawVulkanLens() {
+        using threepp::LensModel;
+
+        if (!section("Lens", false)) return;
+
+        // The intrinsics are a READOUT, not an input: the sensor and lens live
+        // on the camera (filmGauge + setFocalLength), which is where threepp
+        // already models them. Showing what the renderer derived is how a user
+        // checks their camera is set up the way they think it is.
+        const auto k = vk_->cameraIntrinsics();
+        if (k.width > 0u) {
+            ImGui::Text("fx %.1f  fy %.1f", k.fx, k.fy);
+            ImGui::Text("cx %.1f  cy %.1f  (%ux%u)", k.cx, k.cy, k.width, k.height);
+            ImGui::TextDisabled("Set via camera.filmGauge + setFocalLength");
+        } else {
+            ImGui::TextDisabled("Intrinsics available after the first frame");
+        }
+
+        auto lens = vk_->lensDistortion();
+        bool changed = false;
+
+        struct ModelEntry {
+            const char* label;
+            LensModel value;
+        };
+        static constexpr ModelEntry kModels[] = {
+                {"None (pinhole)", LensModel::None},
+                {"Brown-Conrady", LensModel::BrownConrady},
+                {"Fisheye (Kannala-Brandt)", LensModel::Fisheye},
+        };
+        const char* preview = kModels[0].label;
+        for (const auto& m : kModels) {
+            if (m.value == lens.model) preview = m.label;
+        }
+        if (ImGui::BeginCombo("Model", preview)) {
+            for (const auto& m : kModels) {
+                const bool selected = m.value == lens.model;
+                if (ImGui::Selectable(m.label, selected)) {
+                    lens.model = m.value;
+                    changed = true;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+
+        if (lens.model != LensModel::None) {
+            changed |= ImGui::SliderFloat("k1", &lens.k1, -0.6f, 0.6f, "%.4f");
+            changed |= ImGui::SliderFloat("k2", &lens.k2, -0.3f, 0.3f, "%.4f");
+            changed |= ImGui::SliderFloat("k3", &lens.k3, -0.1f, 0.1f, "%.4f");
+            if (lens.model == threepp::LensModel::Fisheye) {
+                changed |= ImGui::SliderFloat("k4", &lens.k4, -0.05f, 0.05f, "%.5f");
+            } else {
+                // Tangential terms are decentring: only Brown-Conrady has them.
+                changed |= ImGui::SliderFloat("p1", &lens.p1, -0.01f, 0.01f, "%.5f");
+                changed |= ImGui::SliderFloat("p2", &lens.p2, -0.01f, 0.01f, "%.5f");
+            }
+            if (ImGui::SmallButton("Reset coefficients")) {
+                const auto model = lens.model;
+                lens = threepp::LensDistortion{};
+                lens.model = model;
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("GoPro-ish barrel")) {
+                lens = threepp::LensDistortion{};
+                lens.model = threepp::LensModel::BrownConrady;
+                lens.k1 = -0.28f;
+                lens.k2 = 0.09f;
+                changed = true;
+            }
+            // k1 < 0 pulls off-axis points toward the centre (barrel);
+            // k1 > 0 pushes them out (pincushion). Naming the sign here saves
+            // the usual round of confusion.
+            ImGui::TextDisabled(lens.k1 < 0.f ? "k1 < 0: barrel" : (lens.k1 > 0.f ? "k1 > 0: pincushion" : ""));
+        }
+
+        if (changed) vk_->setLensDistortion(lens);
+        ImGui::TreePop();
+    }
+
+    // Sensor noise: the photometric half. Units are electrons, so a datasheet
+    // is enough to configure one.
+    void drawVulkanSensorNoise() {
+        if (!section("Sensor noise", false)) return;
+
+        auto sn = vk_->sensorNoise();
+        bool changed = false;
+
+        changed |= ImGui::Checkbox("Enabled", &sn.enabled);
+        if (sn.enabled) {
+            changed |= ImGui::SliderFloat("Full well (e-)", &sn.fullWellElectrons,
+                                          200.f, 100000.f, "%.0f", ImGuiSliderFlags_Logarithmic);
+            changed |= ImGui::SliderFloat("Read noise (e-)", &sn.readNoiseElectrons,
+                                          0.f, 50.f, "%.2f");
+            changed |= ImGui::SliderFloat("Dark current (e-/s)", &sn.darkCurrentElectronsPerSec,
+                                          0.f, 500.f, "%.1f");
+            changed |= ImGui::SliderFloat("PRNU", &sn.prnuPercent, 0.f, 5.f, "%.2f %%");
+
+            auto seed = static_cast<int>(sn.seed);
+            if (ImGui::InputInt("Seed", &seed)) {
+                sn.seed = static_cast<uint32_t>(std::max(seed, 0));
+                changed = true;
+            }
+            if (ImGui::SmallButton("Reset sequence")) vk_->resetSensorNoise();
+
+            // Shot noise scales with the ISO the exposure triplet is set to,
+            // so the two panels are coupled — say so rather than leaving the
+            // user to discover it.
+            const float iso = vk_->cameraExposure().iso;
+            ImGui::TextDisabled("ISO %.0f -> %.1fx shot noise vs ISO 100",
+                                iso, std::sqrt(iso / 100.f));
+        }
+
+        if (changed) vk_->setSensorNoise(sn);
+        ImGui::TreePop();
     }
 
     void drawVulkanEffects() {

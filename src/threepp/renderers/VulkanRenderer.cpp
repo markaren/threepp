@@ -834,6 +834,69 @@ namespace threepp {
         return rgb;
     }
 
+    namespace {
+
+        // Resample one G-buffer AOV through the active lens, so its pixels
+        // line up with the (already warped) colour image. CPU-side because
+        // readback is a synchronous, out-of-band call, not a per-frame cost —
+        // and because the alternative, a warp pass per AOV format, is a lot of
+        // plumbing for a path that already round-trips through host memory.
+        //
+        // NEAREST, always. Interpolating an instance id produces ids that
+        // belong to no object; interpolating reversed-Z depth across a
+        // silhouette produces surfaces that exist nowhere in the scene. Both
+        // are worse than the sub-pixel error nearest sampling leaves behind,
+        // and the colour path (which CAN interpolate, and does) is where
+        // smoothness matters.
+        //
+        // Runs on a copy of the source: the warp is a gather, so writing in
+        // place would feed already-warped texels back into later reads.
+        // `normK` is (fx/W, fy/H, cx/W, cy/H) — the same normalized intrinsics
+        // the shader gets. Normalized rather than in pixels precisely because
+        // the AOV is at the render extent while the display warp runs at the
+        // display extent, and both must describe the same lens.
+        void warpAovForLens(const LensDistortion& lens, const float normK[4],
+                            std::vector<uint8_t>& buf,
+                            uint32_t w, uint32_t h, uint32_t bpp) {
+            if (w == 0u || h == 0u || bpp == 0u) return;
+            const std::vector<uint8_t> src = buf;
+
+            const float nkx = normK[0];
+            const float nky = normK[1];
+            const float nkz = normK[2];
+            const float nkw = normK[3];
+            if (std::abs(nkx) < 1e-8f || std::abs(nky) < 1e-8f) return;
+
+            const auto fw = static_cast<float>(w);
+            const auto fh = static_cast<float>(h);
+
+            for (uint32_t y = 0; y < h; ++y) {
+                for (uint32_t x = 0; x < w; ++x) {
+                    const float u = (static_cast<float>(x) + 0.5f) / fw;
+                    const float v = (static_cast<float>(y) + 0.5f) / fh;
+                    // pixel -> normalized distorted -> normalized ideal -> pixel
+                    const float xd = (u - nkz) / nkx;
+                    const float yd = (v - nkw) / nky;
+                    float xi = 0.f, yi = 0.f;
+                    lensUndistort(lens, xd, yd, xi, yi);
+                    const float su = xi * nkx + nkz;
+                    const float sv = yi * nky + nkw;
+
+                    // Clamp to edge, matching the sampler the GPU warp uses.
+                    auto sx = static_cast<int>(std::floor(su * fw));
+                    auto sy = static_cast<int>(std::floor(sv * fh));
+                    sx = std::clamp(sx, 0, static_cast<int>(w) - 1);
+                    sy = std::clamp(sy, 0, static_cast<int>(h) - 1);
+
+                    const size_t dstOff = (static_cast<size_t>(y) * w + x) * bpp;
+                    const size_t srcOff = (static_cast<size_t>(sy) * w + sx) * bpp;
+                    std::memcpy(buf.data() + dstOff, src.data() + srcOff, bpp);
+                }
+            }
+        }
+
+    }// namespace
+
     bool VulkanRendererCore::readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
                                             int& width, int& height, int& bytesPerPixel) {
         auto& impl = *core();
@@ -984,6 +1047,16 @@ namespace threepp {
         width         = static_cast<int>(w);
         height        = static_cast<int>(h);
         bytesPerPixel = static_cast<int>(bpp);
+
+        // The G-buffer is rendered through a pinhole; the displayed image is
+        // not, once a lens is set (the RCAS stage warps it). Warp the AOV to
+        // match, or the dataset ships distorted pixels with undistorted labels
+        // — worse than shipping neither.
+        if (impl.lens_.active()) {
+            const float normK[4] = {0.5f * impl.projP0_, 0.5f * impl.projP5_,
+                                    0.5f * (1.f - impl.projP8_), 0.5f * (1.f + impl.projP9_)};
+            warpAovForLens(impl.lens_, normK, out, w, h, bpp);
+        }
         return true;
     }
 
@@ -1323,6 +1396,58 @@ namespace threepp {
 
     float VulkanRendererCore::exposureCompensation() const {
         return core()->camEvComp_;
+    }
+
+    VulkanRendererCore::CameraIntrinsics VulkanRendererCore::cameraIntrinsics() const {
+        auto& impl = *core();
+        if (!impl.ctx) return {};
+        const VkExtent2D ext = impl.renderExtent();
+        if (ext.width == 0u || ext.height == 0u) return {};
+
+        // Pixel mapping of the GL-convention projection threepp builds:
+        //   x_ndc = p0·(X/−Z) − p8      u = (x_ndc·0.5 + 0.5)·W
+        //   y_ndc = p5·(Y/−Z) − p9      v = (0.5 − y_ndc·0.5)·H   (top-left origin)
+        // Rewriting in OpenCV's frame (+Z forward, +Y down) gives
+        //   u = fx·(X/Z) + cx,  v = fy·(Y/Z) + cy
+        // with the terms below. A symmetric frustum (p8 = p9 = 0) lands the
+        // principal point exactly at the centre; filmOffset / setViewOffset
+        // shift it, which is why the skew terms are carried through.
+        const float w = static_cast<float>(ext.width);
+        const float h = static_cast<float>(ext.height);
+
+        CameraIntrinsics k;
+        k.fx     = 0.5f * w * impl.projP0_;
+        k.fy     = 0.5f * h * impl.projP5_;
+        k.cx     = 0.5f * w * (1.f - impl.projP8_);
+        k.cy     = 0.5f * h * (1.f + impl.projP9_);
+        k.width  = ext.width;
+        k.height = ext.height;
+        return k;
+    }
+
+    void VulkanRendererCore::setLensDistortion(const LensDistortion& distortion) {
+        core()->lens_ = distortion;
+    }
+
+    LensDistortion VulkanRendererCore::lensDistortion() const {
+        return core()->lens_;
+    }
+
+    void VulkanRendererCore::setSensorNoise(const SensorNoise& noise) {
+        auto* c = core();
+        // Re-seeding restarts the sequence; changing the sigmas alone must NOT
+        // (an interactive slider would otherwise replay frame 0 forever). Same
+        // convention as VisionSensor's RangeNoiseModel.
+        if (noise.seed != c->sensorNoise_.seed) c->sensorNoiseFrame_ = 0u;
+        c->sensorNoise_ = noise;
+    }
+
+    VulkanRendererCore::SensorNoise VulkanRendererCore::sensorNoise() const {
+        return core()->sensorNoise_;
+    }
+
+    void VulkanRendererCore::resetSensorNoise() {
+        core()->sensorNoiseFrame_ = 0u;
     }
 
     void VulkanRendererCore::setPhysicalLightUnits(bool enabled) {
