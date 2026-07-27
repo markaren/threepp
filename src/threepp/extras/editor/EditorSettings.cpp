@@ -68,6 +68,7 @@ bool EditorSettings::load(const std::filesystem::path& path) {
     modelDir = getString(j, "modelDir");
     textureDir = getString(j, "textureDir");
     environmentDir = getString(j, "environmentDir");
+    scriptDir = getString(j, "scriptDir");
 
     if (j.contains("bottomPanelOpen") && j["bottomPanelOpen"].is_boolean()) {
         bottomPanelOpen = j["bottomPanelOpen"].get<bool>();
@@ -108,6 +109,7 @@ bool EditorSettings::save(const std::filesystem::path& path) const {
     j["modelDir"] = modelDir;
     j["textureDir"] = textureDir;
     j["environmentDir"] = environmentDir;
+    j["scriptDir"] = scriptDir;
     j["bottomPanelOpen"] = bottomPanelOpen;
     j["hierarchyWidth"] = hierarchyWidth;
     j["inspectorWidth"] = inspectorWidth;

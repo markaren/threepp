@@ -17,6 +17,10 @@
 
 #include "FileBrowser.hpp"
 
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+#include "Scripting.hpp"
+#endif
+
 #include "threepp/extras/editor/Command.hpp"
 #include "threepp/extras/editor/EditorCommands.hpp"
 #include "threepp/extras/editor/EditorSettings.hpp"
@@ -41,6 +45,7 @@
 #include <future>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class ImguiContext;
@@ -111,6 +116,7 @@ namespace threepp::editor {
         void drawCameraSection(Object3D& object);
         void drawAnimationSection(Object3D& object);
         void drawJointsSection(Object3D& object);
+        void drawScriptSection(Object3D& object);
         void drawPhysicsSection(Object3D& object);
         void drawTextureSlot(Material& material, const char* label,
                              const std::shared_ptr<Texture>& current,
@@ -120,6 +126,38 @@ namespace threepp::editor {
         // Assets / console tabs
         void drawAssetsTab();
         void drawConsoleTab();
+
+        // Script Editor (apps/editor/panels/ScriptEditorPanel.cpp). One
+        // floating window, editing one object's inline script source.
+        void drawScriptEditor();
+        // Points the window at `object` and shows it. Reopening the same object
+        // keeps whatever was being typed — closing the window is not a decision
+        // to throw text away.
+        void openScriptEditor(const Object3D& object);
+        // Normalizes, syntax-checks and commits the buffer as one undo step.
+        void applyScriptEditor();
+
+        // --- external editing (apps/editor/ExternalScriptEdit.cpp) ----------
+        // Tier 1: hand a .py to VS Code. No watcher — every Play recompiles the
+        // file, so a file script is already hot.
+        void openScriptFileExternally(const std::filesystem::path& file);
+        // Tier 2: export the inline source to a scratch .py, open it, and poll
+        // it back in through applyScriptEditor() on every save.
+        void startExternalEdit(Object3D& object);
+        void stopExternalEdit(const std::string& why = {});
+        void pollExternalEdit(float dt);
+        [[nodiscard]] bool externalEditActive() const { return externalEdit_.active; }
+        [[nodiscard]] bool externalEditActive(const Object3D& object) const;
+        // Writes `<dir>/.vscode/settings.json` when it is absent, so Pylance
+        // completes `import threepp` in whatever folder the script lives in.
+        void ensureScriptWorkspace(const std::filesystem::path& dir);
+        // Where the threepp type stubs are: $THREEPP_PYTHON_STUBS, else the
+        // source tree this binary was built from.
+        [[nodiscard]] static std::filesystem::path pythonStubDir();
+        // Detached, non-blocking and without a console flash. Suppressed in the
+        // self-test, which drives everything else about a session.
+        void launchExternalEditor(const std::filesystem::path& dir,
+                                  const std::filesystem::path& file);
 
         // --- editing operations --------------------------------------------
         void newScene();
@@ -132,6 +170,17 @@ namespace threepp::editor {
         void clearEnvironment();
         void assignTextureToSelection(const std::filesystem::path& path);
         void assignTextureToSlot(const std::filesystem::path& path);
+        // Attaches (or clears, with an empty path) a .py on `object`, as one
+        // undoable step. Field values already stored for the same file are kept.
+        void assignScript(Object3D& object, const std::filesystem::path& path);
+        // Stores inline source on `object` as one undoable step, clearing any
+        // file reference — an object carries one script, in one form. Parameter
+        // values survive an edit to the same inline script and are dropped when
+        // the form changes, since they belong to the class that exposed them.
+        void setInlineScript(Object3D& object, const std::string& source, const std::string& label);
+        // Starting point for "New Inline Script": one class, one exposed field,
+        // and a header saying what the shape is.
+        [[nodiscard]] static std::string inlineScriptTemplate();
 
         void addObject(const std::shared_ptr<Object3D>& object, Object3D& parent, const std::string& label);
         void deleteSelected();
@@ -279,10 +328,15 @@ namespace threepp::editor {
             SaveAs,
             ImportModel,
             Environment,
-            Texture
+            Texture,
+            Script
         };
         PendingDialog pendingDialog_ = PendingDialog::None;
         bool environmentAsBackground_ = true;
+        // Which object a script file dialog is filling. Resolved by uuid rather
+        // than pointer: the dialog spans frames, and a Play/Stop in between
+        // replaces the whole graph.
+        std::string scriptTargetUuid_;
 
         // Which material slot a "Load..." button in the inspector is filling.
         // The file dialog resolves a frame or more later, so the target has to
@@ -341,6 +395,96 @@ namespace threepp::editor {
             std::vector<std::pair<ObjectWithMorphTargetInfluences*, std::vector<float>>> savedMorphs;
         };
         std::unique_ptr<AnimPreview> animPreview_;
+
+        // The Script Editor window. One instance, editing one object — a text
+        // buffer that is not the document until Apply commits it, which is what
+        // makes the unsaved marker in the title mean something.
+        //
+        // Not gated on Python: a build without it still edits and saves the
+        // source, it just cannot check or run it.
+        struct ScriptEditorState {
+            bool open = false;
+            // The object being edited, by uuid: a play/stop replaces the whole
+            // graph, and the window has to survive that.
+            std::string uuid;
+            std::string label;
+            // What the text box holds, and what the document holds. Different
+            // means unsaved.
+            std::string buffer;
+            std::string committed;
+            // Syntax error from the last Apply, shown in red until the next.
+            std::string status;
+            // Take the keyboard on the frame after an explicit open (but never
+            // when the window merely follows the selection).
+            bool focus = false;
+        };
+        ScriptEditorState scriptEditor_;
+
+        // "Edit in VS Code" on an inline script. The source is exported to a
+        // scratch .py, VS Code is pointed at it, and the file is polled once a
+        // second from the frame loop — no thread, no watcher API, nothing that
+        // can call back into the editor from anywhere but a frame.
+        //
+        // The object is held by UUID and re-resolved on every poll: a play/stop
+        // replaces the whole graph, and surviving exactly that is what makes
+        // "edit externally while iterating on Play" work at all.
+        struct ExternalEditState {
+
+            static constexpr float pollSeconds = 1.f;
+
+            bool active = false;
+            std::string uuid;
+            std::string label;
+            std::filesystem::path file;
+            // The normalized text last committed, and the only thing a poll
+            // compares against — write times tie between two quick saves, and a
+            // save that only rewrote the line endings (which is every save from
+            // a Windows editor) must not become an undo entry either way.
+            std::string synced;
+            float poll = 0.f;
+            // Open for the session's life. Coalescing is the command stack's
+            // transactions: ten saves collapse into one undo step, and the
+            // first still starts a fresh entry, because a transaction never
+            // merges into what was on the stack before it opened.
+            bool transaction = false;
+            // A save arrived while playing and is waiting for Stop.
+            bool waiting = false;
+            // Syncs applied this session (the self-test's counter).
+            int syncs = 0;
+        };
+        ExternalEditState externalEdit_;
+
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+        // Registered with the play controller; also the inspector's source for
+        // "what went wrong in this script last session".
+        std::shared_ptr<ScriptPlaySession> scripts_;
+
+        // Discovering a script's fields means importing the file, which the
+        // inspector cannot do sixty times a second. Cached per path and
+        // invalidated by the file's write time, so saving the .py in an editor
+        // refreshes the section without any reload button being pressed.
+        struct CachedInspection {
+            std::filesystem::file_time_type stamp{};
+            scripting::Inspection inspection;
+        };
+        std::unordered_map<std::string, CachedInspection> scriptInspections_;
+        // Returns the cached inspection for `path`, re-running it when the file
+        // changed on disk.
+        const scripting::Inspection& inspectScript(const std::string& path);
+
+        // The same for inline source, which has no write time to key on: the
+        // stamp is a hash of the text, so editing it in the Script Editor
+        // refreshes the parameters exactly as saving a .py does. Keyed by
+        // object, because the synthetic module is named after the object too.
+        struct CachedSourceInspection {
+            std::size_t hash = 0;
+            scripting::Inspection inspection;
+        };
+        std::unordered_map<std::string, CachedSourceInspection> scriptSourceInspections_;
+        const scripting::Inspection& inspectScriptSource(const std::string& uuid,
+                                                         const std::string& label,
+                                                         const std::string& source);
+#endif
 
         // Async model imports. One worker at a time; the rest wait in the
         // queue. importError_ non-empty keeps the failure modal open.

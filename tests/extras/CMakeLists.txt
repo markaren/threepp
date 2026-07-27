@@ -3,6 +3,8 @@ add_test_executable(EditorCommands_test)
 add_test_executable(EditorDocument_test)
 add_test_executable(EditorLights_test)
 add_test_executable(EditorPlaySession_test)
+add_test_executable(EditorScript_test)
+add_test_executable(EditorScriptWorkspace_test)
 add_test_executable(EditorUndoRebind_test)
 add_test_executable(PointCloud_test)
 add_test_executable(Sensor_test)
@@ -22,4 +24,15 @@ if (TARGET unofficial::omniverse-physx-sdk::sdk)
     endforeach ()
 else ()
     message(STATUS "physx not found, skipping the PhysX-backed sensor tests..")
+endif ()
+
+# The scripting session lives in apps/editor (it needs Python, which libthreepp
+# must stay free of) and is built as a library precisely so this test can drive
+# the same code the editor runs. Present only when the editor is being built and
+# Python's embed component was found.
+if (TARGET threepp_editor_scripting)
+    add_test_executable(EditorScriptPlay_test)
+    target_link_libraries(EditorScriptPlay_test PRIVATE threepp_editor_scripting)
+else ()
+    message(STATUS "editor scripting not built, skipping EditorScriptPlay_test..")
 endif ()
