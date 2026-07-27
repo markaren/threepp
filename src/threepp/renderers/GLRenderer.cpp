@@ -45,10 +45,8 @@
 #include <GLES3/gl32.h>
 #endif
 
-#ifndef STB_IMAGE_WRITE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
+// stb_image_write - implementation is compiled in utils/StbImageWrite.cpp.
 #include "stb_image_write.h"
-#endif
 
 
 using namespace threepp;

@@ -491,6 +491,7 @@ set(sources
         "threepp/utils/BufferGeometryUtils.cpp"
         "threepp/utils/GeometryLod.cpp"
         "threepp/utils/ImageUtils.cpp"
+        "threepp/utils/StbImageWrite.cpp"
         "threepp/utils/StringUtils.cpp"
         "threepp/utils/TaskManager.cpp"
 

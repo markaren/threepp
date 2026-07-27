@@ -16,8 +16,7 @@
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanCoreImpl.hpp"
 
-// stb_image_write — implementation is already compiled in GLRenderer.cpp.
-// Only this TU calls stbi_write_*() (screenshot/--shot capture path).
+// stb_image_write - implementation is compiled in utils/StbImageWrite.cpp.
 #include "stb_image_write.h"
 
 namespace threepp {
