@@ -134,13 +134,14 @@ bool SetTransformCommand::rebind(Object3D& root) {
 
 // ----------------------------------------------------------------- graph edits
 
-AddObjectCommand::AddObjectCommand(Object3D& parent, std::shared_ptr<Object3D> object, std::string label)
+AddObjectCommand::AddObjectCommand(Object3D& parent, std::shared_ptr<Object3D> object,
+                                   std::string label, std::size_t index)
     : parent_(&parent),
       object_(std::move(object)),
       parentUuid_(parent.uuid),
       objectUuid_(object_ ? object_->uuid : std::string{}),
       label_(std::move(label)),
-      index_(parent.children.size()) {}
+      index_(std::min(index, parent.children.size())) {}
 
 void AddObjectCommand::redo() {
 

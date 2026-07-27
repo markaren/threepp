@@ -1,6 +1,8 @@
 
 #include "threepp/extras/editor/ObjectFactory.hpp"
 
+#include "threepp/extras/editor/SplineConfig.hpp"
+
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/ConeGeometry.hpp"
@@ -181,4 +183,38 @@ std::shared_ptr<PerspectiveCamera> ObjectFactory::createCamera(const Object3D& r
     camera->name = uniqueName(root, "Camera");
     camera->position.set(0, 2, 5);
     return camera;
+}
+
+std::shared_ptr<Group> ObjectFactory::createSpline(const Object3D& root) {
+
+    auto spline = Group::create();
+    spline->name = uniqueName(root, "Spline");
+    SplineConfig{}.write(*spline);
+
+    // An arc rather than a straight line: four collinear points draw something
+    // indistinguishable from a segment, which tells the user nothing about what
+    // they just added. Lifted clear of the ground plane for the same reason.
+    static constexpr float positions[][3] = {
+            {-3.f, 0.5f, 1.5f},
+            {-1.f, 0.5f, -1.f},
+            {1.f, 0.5f, -1.f},
+            {3.f, 0.5f, 1.5f}};
+
+    for (const auto& position : positions) {
+        auto point = createSplinePoint(*spline);
+        point->position.set(position[0], position[1], position[2]);
+        spline->add(point);
+    }
+
+    return spline;
+}
+
+std::shared_ptr<Object3D> ObjectFactory::createSplinePoint(const Object3D& spline) {
+
+    auto point = Object3D::create();
+    // Unique within the spline, not within the scene: point names are read
+    // against their siblings, and two splines both starting at "Point" is
+    // clearer than one of them starting at "Point 5".
+    point->name = uniqueName(spline, "Point");
+    return point;
 }

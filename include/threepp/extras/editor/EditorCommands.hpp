@@ -160,7 +160,13 @@ namespace threepp::editor {
     class AddObjectCommand: public Command {
 
     public:
-        AddObjectCommand(Object3D& parent, std::shared_ptr<Object3D> object, std::string label = "Add Object");
+        // Appends by default; `index` places the child at a specific position
+        // among its siblings, which is what an "insert before/after" needs
+        // (spline control points are ordered by exactly that).
+        static constexpr std::size_t atEnd = static_cast<std::size_t>(-1);
+
+        AddObjectCommand(Object3D& parent, std::shared_ptr<Object3D> object,
+                         std::string label = "Add Object", std::size_t index = atEnd);
 
         void redo() override;
         void undo() override;

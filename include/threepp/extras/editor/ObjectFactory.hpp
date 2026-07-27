@@ -48,6 +48,15 @@ namespace threepp::editor {
         static std::shared_ptr<Object3D> createLight(LightKind kind, const Object3D& root);
         static std::shared_ptr<Group> createGroup(const Object3D& root);
         static std::shared_ptr<PerspectiveCamera> createCamera(const Object3D& root);
+        // A Group carrying SplineConfig, with four control-point children
+        // forming a gentle arc — the curve has to show what it is the moment it
+        // appears. See SplineConfig: the children ARE the control points.
+        static std::shared_ptr<Group> createSpline(const Object3D& root);
+
+        // A new control point for `spline`, named uniquely within it. Nothing
+        // is attached — the caller wraps it in an AddObjectCommand, at whatever
+        // index the insertion calls for.
+        static std::shared_ptr<Object3D> createSplinePoint(const Object3D& spline);
 
         // "Box" if free, else "Box 2", "Box 3", ... Matching is exact, so a
         // user-typed "Box copy" never blocks "Box".
