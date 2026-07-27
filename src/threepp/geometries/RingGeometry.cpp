@@ -7,7 +7,8 @@
 using namespace threepp;
 
 
-RingGeometry::RingGeometry(const Params& params) {
+RingGeometry::RingGeometry(const Params& params)
+    : parameters(params) {
 
     unsigned int thetaSegments = std::max(3u, params.thetaSegments);
     unsigned int phiSegments = std::max(1u, params.phiSegments);

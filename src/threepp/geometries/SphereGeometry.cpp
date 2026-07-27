@@ -8,7 +8,7 @@
 using namespace threepp;
 
 SphereGeometry::SphereGeometry(const Params& params)
-    : radius(params.radius) {
+    : parameters(params), radius(params.radius) {
 
     std::vector<unsigned int> indices;
     std::vector<float> vertices;

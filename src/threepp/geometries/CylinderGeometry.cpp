@@ -8,7 +8,8 @@ using namespace threepp;
 
 
 CylinderGeometry::CylinderGeometry(const Params& params)
-    : radiusTop(params.radiusTop),
+    : parameters(params),
+      radiusTop(params.radiusTop),
       radiusBottom(params.radiusBottom),
       height(params.height) {
 

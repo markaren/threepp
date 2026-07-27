@@ -18,6 +18,10 @@ namespace threepp {
             explicit Params(float radius = 0.5f, float length = 1, unsigned int capSegments = 8, unsigned int radialSegments = 16);
         };
 
+        // Construction parameters, kept so the geometry can be re-serialized in
+        // three.js' compact parametric form (see ObjectExporter).
+        const Params parameters;
+
         const float radius;
         const float length;
 

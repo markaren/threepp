@@ -30,6 +30,10 @@ namespace threepp {
                             float thetaLength = math::TWO_PI);
         };
 
+        // Construction parameters, kept so the geometry can be re-serialized in
+        // three.js' compact parametric form (see ObjectExporter).
+        const Params parameters;
+
         [[nodiscard]] std::string type() const override;
 
         static std::shared_ptr<ConeGeometry> create(const Params& params);

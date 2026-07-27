@@ -7,7 +7,14 @@
 using namespace threepp;
 
 
-TorusGeometry::TorusGeometry(float radius, float tube, unsigned int radialSegments, unsigned int tubularSegments, float arc) {
+TorusGeometry::TorusGeometry(const Params& params)
+    : parameters(params) {
+
+    const auto radius = params.radius;
+    const auto tube = params.tube;
+    const auto radialSegments = params.radialSegments;
+    const auto tubularSegments = params.tubularSegments;
+    const auto arc = params.arc;
 
     // buffers
 
@@ -87,7 +94,12 @@ std::string TorusGeometry::type() const {
     return "TorusGeometry";
 }
 
+std::shared_ptr<TorusGeometry> TorusGeometry::create(const Params& params) {
+
+    return std::shared_ptr<TorusGeometry>(new TorusGeometry(params));
+}
+
 std::shared_ptr<TorusGeometry> TorusGeometry::create(float radius, float tube, unsigned int radialSegments, unsigned int tubularSegments, float arc) {
 
-    return std::shared_ptr<TorusGeometry>(new TorusGeometry(radius, tube, radialSegments, tubularSegments, arc));
+    return create(Params(radius, tube, radialSegments, tubularSegments, arc));
 }

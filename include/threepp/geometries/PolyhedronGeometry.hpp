@@ -11,6 +11,12 @@ namespace threepp {
     class PolyhedronGeometry: public BufferGeometry {
 
     public:
+        // Construction parameters, kept so derived geometries (Icosahedron,
+        // Octahedron, ...) can be re-serialized in three.js' compact parametric
+        // form (see ObjectExporter).
+        const float radius;
+        const unsigned int detail;
+
         [[nodiscard]] std::string type() const override;
 
     protected:

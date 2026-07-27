@@ -32,6 +32,10 @@ namespace threepp {
                             float thetaLength = math::PI);
         };
 
+        // Construction parameters, kept so the geometry can be re-serialized in
+        // three.js' compact parametric form (see ObjectExporter).
+        const Params parameters;
+
         const float radius;
 
         [[nodiscard]] std::string type() const override;

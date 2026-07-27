@@ -6,7 +6,8 @@ using namespace threepp;
 ConeGeometry::ConeGeometry(const ConeGeometry::Params& params)
     : CylinderGeometry(CylinderGeometry::Params(
               0, params.radius, params.height, params.radialSegments,
-              params.heightSegments, params.openEnded, params.thetaStart, params.thetaLength)) {}
+              params.heightSegments, params.openEnded, params.thetaStart, params.thetaLength)),
+      parameters(params) {}
 
 
 std::string ConeGeometry::type() const {

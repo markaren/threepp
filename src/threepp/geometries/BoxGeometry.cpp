@@ -128,7 +128,7 @@ namespace {
 }// namespace
 
 BoxGeometry::BoxGeometry(const Params& params)
-    : width(params.width), height(params.height), depth(params.depth) {
+    : parameters(params), width(params.width), height(params.height), depth(params.depth) {
 
     Helper h(*this, params.widthSegments, params.heightSegments, params.depthSegments);
     this->setIndex(h.indices);

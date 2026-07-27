@@ -24,7 +24,15 @@ namespace {
 
 }// namespace
 
-TorusKnotGeometry::TorusKnotGeometry(float radius, float tube, unsigned int tubularSegments, unsigned int radialSegments, unsigned int p, unsigned int q) {
+TorusKnotGeometry::TorusKnotGeometry(const Params& params)
+    : parameters(params) {
+
+    const auto radius = params.radius;
+    const auto tube = params.tube;
+    const auto tubularSegments = params.tubularSegments;
+    const auto radialSegments = params.radialSegments;
+    const auto p = params.p;
+    const auto q = params.q;
 
     // buffers
 
@@ -135,7 +143,12 @@ std::string TorusKnotGeometry::type() const {
     return "TorusKnotGeometry";
 }
 
+std::shared_ptr<TorusKnotGeometry> TorusKnotGeometry::create(const Params& params) {
+
+    return std::shared_ptr<TorusKnotGeometry>(new TorusKnotGeometry(params));
+}
+
 std::shared_ptr<TorusKnotGeometry> TorusKnotGeometry::create(float radius, float tube, unsigned int tubularSegments, unsigned int radialSegments, unsigned int p, unsigned int q) {
 
-    return std::shared_ptr<TorusKnotGeometry>(new TorusKnotGeometry(radius, tube, tubularSegments, radialSegments, p, q));
+    return create(Params(radius, tube, tubularSegments, radialSegments, p, q));
 }
