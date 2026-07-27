@@ -968,36 +968,62 @@ void EditorApp::drawScriptSection(Object3D& object) {
         document_.setDirty(true);
     };
 
-    // --- the file ----------------------------------------------------------
+    // --- where the code is ---------------------------------------------------
+    // Two forms, never both: a .py file, or source stored in this scene and
+    // edited in the Script Editor window.
     const float buttonWidth = 90 * contentScale_;
 
-    if (ImGui::Button(config.path.empty() ? "Attach..." : "Change...", {buttonWidth, 0})) {
-        // The dialog resolves a frame or more later; remember the object by
-        // uuid, since a play/stop in between replaces the whole graph.
-        scriptTargetUuid_ = object.uuid;
-        pendingDialog_ = PendingDialog::Script;
-        fileBrowser_.open("Attach Script", FileBrowser::Mode::Open,
-                          settings_.scriptDir.empty() ? assetDir_ : std::filesystem::path(settings_.scriptDir),
-                          formats::scripts());
-    }
-    if (!config.path.empty()) {
-        ImGui::SameLine();
-        if (ImGui::Button("Clear", {buttonWidth * 0.7f, 0})) {
-            commit(ScriptConfig{}, "Clear Script");
+    if (config.isInline()) {
+        if (ImGui::Button("Edit...", {buttonWidth, 0})) openScriptEditor(object);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Open the Script Editor on this source.");
+    } else {
+        if (ImGui::Button(config.path.empty() ? "Attach..." : "Change...", {buttonWidth, 0})) {
+            // The dialog resolves a frame or more later; remember the object by
+            // uuid, since a play/stop in between replaces the whole graph.
+            scriptTargetUuid_ = object.uuid;
+            pendingDialog_ = PendingDialog::Script;
+            fileBrowser_.open("Attach Script", FileBrowser::Mode::Open,
+                              settings_.scriptDir.empty() ? assetDir_ : std::filesystem::path(settings_.scriptDir),
+                              formats::scripts());
         }
+    }
+
+    if (config.empty()) {
+        ImGui::SameLine();
+        if (ImGui::Button("New Inline Script", {buttonWidth * 1.9f, 0})) {
+            setInlineScript(object, inlineScriptTemplate(), "New Inline Script");
+            openScriptEditor(object);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Write the script into this scene instead of a file,\n"
+                              "and open it in the Script Editor.");
+        }
+        ImGui::TextColored(theme::muted(), "No script attached.");
+        ImGui::TextWrapped("A class with any of start(obj) / update(dt) / stop() — "
+                           "in a .py file named after it, or inline in this scene.");
+        ImGui::TreePop();
+        return;
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Clear", {buttonWidth * 0.7f, 0})) {
+        commit(ScriptConfig{}, "Clear Script");
+    }
+
+    if (config.isInline()) {
+        // No file name to show, so say what it is instead. The first line of
+        // the source on hover is usually the template's header comment or the
+        // class, which is enough to tell two objects' scripts apart.
+        ImGui::TextColored(theme::accent(), "(inline script)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", config.source.substr(0, config.source.find('\n')).c_str());
+        }
+    } else {
         // Filename with the full path on hover, same as the Robot section: the
         // inspector is too narrow for a real path and too useful to truncate.
         ImGui::TextColored(theme::accent(), "%s",
                            std::filesystem::path(config.path).filename().string().c_str());
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", config.path.c_str());
-    }
-
-    if (config.path.empty()) {
-        ImGui::TextColored(theme::muted(), "No script attached.");
-        ImGui::TextWrapped("A class named after the file, with any of "
-                           "start(obj) / update(dt) / stop().");
-        ImGui::TreePop();
-        return;
     }
 
     // --- what went wrong last time ------------------------------------------
@@ -1020,7 +1046,8 @@ void EditorApp::drawScriptSection(Object3D& object) {
     ImGui::Spacing();
 
     std::error_code ec;
-    const bool onDisk = std::filesystem::exists(config.path, ec);
+    // Inline source is always "there"; only a file can have moved away.
+    const bool onDisk = config.isInline() || std::filesystem::exists(config.path, ec);
     if (!onDisk) {
         ImGui::TextColored(theme::danger(), "File not found.");
     }
@@ -1044,7 +1071,12 @@ void EditorApp::drawScriptSection(Object3D& object) {
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
     if (onDisk) {
-        const auto& inspection = inspectScript(config.path);
+        const auto& inspection =
+                config.isInline()
+                        ? inspectScriptSource(object.uuid,
+                                              object.name.empty() ? object.type() : object.name,
+                                              config.source)
+                        : inspectScript(config.path);
         if (!inspection.error.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, theme::danger());
             ImGui::TextWrapped("%s", inspection.error.substr(0, inspection.error.find('\n')).c_str());
@@ -1135,7 +1167,8 @@ void EditorApp::drawScriptSection(Object3D& object) {
 
     if (!drewFields) drawStored();
 
-    ImGui::TextColored(theme::muted(), "Stored in userData[\"script\"]");
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"%s\"]",
+                       config.isInline() ? ScriptConfig::sourceKey : ScriptConfig::pathKey);
 
     ImGui::TreePop();
 }

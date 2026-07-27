@@ -537,6 +537,100 @@ int EditorApp::runSelfTest() {
         std::error_code ec;
         std::filesystem::remove(spinnerPath, ec);
         std::filesystem::remove(throwerPath, ec);
+
+        // The same drive again with no file anywhere: source authored in the
+        // Script Editor and stored in the scene. Through the window's own apply
+        // path, which is what the user's Ctrl+Enter runs.
+        if (auto* box = document_.scene().getObjectByName("Box")) {
+
+            const auto undosBefore = commands_.undoCount();
+
+            openScriptEditor(*box);
+            check(scriptEditor_.open, "the Script Editor opens on the object");
+            // Indented with TABS on purpose: Apply has to normalize them, or
+            // this source is a TabError waiting for the first space-indented
+            // line somebody adds later.
+            scriptEditor_.buffer = "class Inline:\n"
+                                   "\tspeed = 2.0\n"
+                                   "\n"
+                                   "\tdef start(self, obj):\n"
+                                   "\t\tself.obj = obj\n"
+                                   "\n"
+                                   "\tdef update(self, dt):\n"
+                                   "\t\tself.obj.rotation.y += self.speed * dt\n";
+            applyScriptEditor();
+            step();
+
+            auto stored = ScriptConfig::read(*box).value_or(ScriptConfig{});
+            check(stored.isInline(), "the inline source is recorded in userData");
+            check(stored.path.empty(), "an inline script carries no file path");
+            check(stored.source.find('\t') == std::string::npos, "Apply normalizes tabs to spaces");
+            check(scriptEditor_.status.empty(), "valid source passes the syntax check");
+            check(commands_.undoCount() == undosBefore + 1, "Apply is one undo entry");
+
+            commands_.undo();
+            step();
+            check(!ScriptConfig::read(*box).has_value(), "undo takes the inline script back off");
+            check(!scriptEditor_.open, "the window closes when its script is undone away");
+            commands_.redo();
+            step();
+            check(ScriptConfig::read(*box).has_value(), "redo puts it back");
+
+            const auto inspection = scripting::inspectSource(stored.source, box->uuid, "Box");
+            check(inspection.error.empty() && inspection.className == "Inline",
+                  "the inline class is discovered with no file name to match");
+            check(inspection.fields.size() == 1 && inspection.fields.front().name == "speed",
+                  "the inline script's parameter is discovered");
+
+            const float restY = box->rotation.y;
+            startPlay();
+            step(30);
+            auto* live = document_.scene().getObjectByName("Box");
+            check(live && live->rotation.y > restY + 1e-3f, "inline source drives the object");
+            stopPlay();
+            step();
+
+            auto* restored = document_.scene().getObjectByName("Box");
+            check(restored && std::abs(restored->rotation.y - restY) < 1e-4f,
+                  "stop restores the pose the inline script changed");
+            const auto after = restored ? ScriptConfig::read(*restored).value_or(ScriptConfig{})
+                                        : ScriptConfig{};
+            check(after.isInline() && after.source == stored.source,
+                  "the inline source survives the play/stop round trip");
+
+            // Source that does not parse: reported by Apply, saved anyway (a
+            // half-written script is a normal thing to want to keep), and Play
+            // survives it.
+            if (restored) {
+                const auto uuid = restored->uuid;
+                openScriptEditor(*restored);
+                scriptEditor_.buffer = "class Broken:\n    def update(self dt):\n        pass\n";
+                applyScriptEditor();
+                step();
+
+                check(!scriptEditor_.status.empty(), "Apply reports the syntax error");
+                check(scriptEditor_.status.find("line 2") != std::string::npos,
+                      "the syntax error carries its line number");
+                check(ScriptConfig::read(*restored).value_or(ScriptConfig{}).source ==
+                              scriptEditor_.buffer,
+                      "a syntax error does not block Apply");
+
+                startPlay();
+                step(5);
+                check(isPlaying(), "a broken inline script does not abort play");
+                stopPlay();
+                step();
+                check(scripts_ && !scripts_->errorFor(uuid).empty(),
+                      "the inline failure is recorded against the object");
+
+                if (auto* clear = document_.scene().getObjectByName("Box")) {
+                    assignScript(*clear, {});
+                    step();
+                    check(!ScriptConfig::read(*clear).has_value(), "clearing removes the inline script");
+                    check(!scriptEditor_.open, "clearing the script closes the Script Editor");
+                }
+            }
+        }
     }
 #endif
 
@@ -708,6 +802,8 @@ void EditorApp::drawUi() {
     drawStatusBar();
     drawPlayBanner();
     drawImportToast();
+    // A floating window, so it goes over the fixed panels and under the modals.
+    drawScriptEditor();
 
     if (preview_.visible) {
         // Background list, not foreground: the camera image is drawn by the
@@ -1265,7 +1361,46 @@ void EditorApp::assignScript(Object3D& object, const std::filesystem::path& path
         (object.name.empty() ? object.type() : object.name));
 }
 
+void EditorApp::setInlineScript(Object3D& object, const std::string& source, const std::string& label) {
+
+    const auto before = ScriptConfig::read(object).value_or(ScriptConfig{});
+
+    ScriptConfig after = before;
+    after.setSource(source);
+    // Editing the same inline script keeps the parameter values the user
+    // dialled in; arriving from a .py drops them, because they belonged to that
+    // file's class and mean nothing to this one. Anything the new class no
+    // longer exposes is pruned by the inspector on the next edit.
+    if (!before.isInline()) after.fields.clear();
+    if (source.empty()) after = ScriptConfig{};
+
+    auto* target = &object;
+    commands_.execute(makeProperty<ScriptConfig>(
+            label, "scriptSource:" + object.uuid,
+            [target](const ScriptConfig& value) { value.write(*target); },
+            before, after));
+    document_.setDirty(true);
+}
+
 #ifdef THREEPP_EDITOR_WITH_PYTHON
+const scripting::Inspection& EditorApp::inspectScriptSource(const std::string& uuid,
+                                                            const std::string& label,
+                                                            const std::string& source) {
+
+    // Keyed on a hash of the text rather than a write time, since there is no
+    // file — but the same contract: the section refreshes as soon as the source
+    // changes, which for inline scripts is the moment Apply commits.
+    const auto stamp = std::hash<std::string>{}(source);
+
+    auto it = scriptSourceInspections_.find(uuid);
+    if (it != scriptSourceInspections_.end() && it->second.hash == stamp) return it->second.inspection;
+
+    CachedSourceInspection entry;
+    entry.hash = stamp;
+    entry.inspection = scripting::inspectSource(source, uuid, label);
+    return (scriptSourceInspections_[uuid] = std::move(entry)).inspection;
+}
+
 const scripting::Inspection& EditorApp::inspectScript(const std::string& path) {
 
     // Keyed on the file's write time, so saving the .py in another editor is

@@ -16,6 +16,7 @@ add_executable(threepp_editor
         panels/HierarchyPanel.cpp
         panels/InspectorPanel.cpp
         panels/MenuBar.cpp
+        panels/ScriptEditorPanel.cpp
         panels/StatusBar.cpp
         panels/Toolbar.cpp
 )

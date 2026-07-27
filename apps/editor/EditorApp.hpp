@@ -127,6 +127,16 @@ namespace threepp::editor {
         void drawAssetsTab();
         void drawConsoleTab();
 
+        // Script Editor (apps/editor/panels/ScriptEditorPanel.cpp). One
+        // floating window, editing one object's inline script source.
+        void drawScriptEditor();
+        // Points the window at `object` and shows it. Reopening the same object
+        // keeps whatever was being typed — closing the window is not a decision
+        // to throw text away.
+        void openScriptEditor(const Object3D& object);
+        // Normalizes, syntax-checks and commits the buffer as one undo step.
+        void applyScriptEditor();
+
         // --- editing operations --------------------------------------------
         void newScene();
         void buildTemplateScene();
@@ -141,6 +151,14 @@ namespace threepp::editor {
         // Attaches (or clears, with an empty path) a .py on `object`, as one
         // undoable step. Field values already stored for the same file are kept.
         void assignScript(Object3D& object, const std::filesystem::path& path);
+        // Stores inline source on `object` as one undoable step, clearing any
+        // file reference — an object carries one script, in one form. Parameter
+        // values survive an edit to the same inline script and are dropped when
+        // the form changes, since they belong to the class that exposed them.
+        void setInlineScript(Object3D& object, const std::string& source, const std::string& label);
+        // Starting point for "New Inline Script": one class, one exposed field,
+        // and a header saying what the shape is.
+        [[nodiscard]] static std::string inlineScriptTemplate();
 
         void addObject(const std::shared_ptr<Object3D>& object, Object3D& parent, const std::string& label);
         void deleteSelected();
@@ -356,6 +374,30 @@ namespace threepp::editor {
         };
         std::unique_ptr<AnimPreview> animPreview_;
 
+        // The Script Editor window. One instance, editing one object — a text
+        // buffer that is not the document until Apply commits it, which is what
+        // makes the unsaved marker in the title mean something.
+        //
+        // Not gated on Python: a build without it still edits and saves the
+        // source, it just cannot check or run it.
+        struct ScriptEditorState {
+            bool open = false;
+            // The object being edited, by uuid: a play/stop replaces the whole
+            // graph, and the window has to survive that.
+            std::string uuid;
+            std::string label;
+            // What the text box holds, and what the document holds. Different
+            // means unsaved.
+            std::string buffer;
+            std::string committed;
+            // Syntax error from the last Apply, shown in red until the next.
+            std::string status;
+            // Take the keyboard on the frame after an explicit open (but never
+            // when the window merely follows the selection).
+            bool focus = false;
+        };
+        ScriptEditorState scriptEditor_;
+
 #ifdef THREEPP_EDITOR_WITH_PYTHON
         // Registered with the play controller; also the inspector's source for
         // "what went wrong in this script last session".
@@ -373,6 +415,19 @@ namespace threepp::editor {
         // Returns the cached inspection for `path`, re-running it when the file
         // changed on disk.
         const scripting::Inspection& inspectScript(const std::string& path);
+
+        // The same for inline source, which has no write time to key on: the
+        // stamp is a hash of the text, so editing it in the Script Editor
+        // refreshes the parameters exactly as saving a .py does. Keyed by
+        // object, because the synthetic module is named after the object too.
+        struct CachedSourceInspection {
+            std::size_t hash = 0;
+            scripting::Inspection inspection;
+        };
+        std::unordered_map<std::string, CachedSourceInspection> scriptSourceInspections_;
+        const scripting::Inspection& inspectScriptSource(const std::string& uuid,
+                                                         const std::string& label,
+                                                         const std::string& source);
 #endif
 
         // Async model imports. One worker at a time; the rest wait in the
