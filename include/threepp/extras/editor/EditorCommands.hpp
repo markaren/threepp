@@ -175,7 +175,9 @@ namespace threepp::editor {
         bool mergeWith(const Command&) override { return false; }
 
         [[nodiscard]] Object3D* object() const { return raw_; }
-        [[nodiscard]] bool valid() const { return parent_ != nullptr && object_ != nullptr; }
+        // Checked before execution: object_ (the retained ownership) is only
+        // populated by redo(), so validity must rest on the raw target.
+        [[nodiscard]] bool valid() const { return parent_ != nullptr && raw_ != nullptr; }
 
     private:
         Object3D* parent_;

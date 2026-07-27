@@ -150,6 +150,21 @@ TEST_CASE("AddObjectCommand adds and removes", "[editor]") {
     CHECK(scene->children[0]->name == "added");
 }
 
+TEST_CASE("RemoveObjectCommand is valid before execution", "[editor]") {
+
+    // The editor consults valid() BEFORE executing; it must mean "this object
+    // can be removed", not "the removal already happened". Regression: it once
+    // tested the ownership handle that only redo() populates, which vetoed
+    // every delete in the app.
+    auto scene = Scene::create();
+    auto parented = named("parented");
+    scene->add(parented);
+    CHECK(RemoveObjectCommand(*parented, "Delete").valid());
+
+    auto orphan = named("orphan");
+    CHECK_FALSE(RemoveObjectCommand(*orphan, "Delete").valid());
+}
+
 TEST_CASE("RemoveObjectCommand restores parent and child index", "[editor]") {
 
     auto scene = Scene::create();
@@ -161,7 +176,9 @@ TEST_CASE("RemoveObjectCommand restores parent and child index", "[editor]") {
     scene->add(c);
 
     CommandStack stack;
-    stack.execute(std::make_unique<RemoveObjectCommand>(*b, "Delete"));
+    auto remove = std::make_unique<RemoveObjectCommand>(*b, "Delete");
+    REQUIRE(remove->valid());
+    stack.execute(std::move(remove));
 
     REQUIRE(scene->children.size() == 2);
     CHECK(scene->children[0]->name == "a");
