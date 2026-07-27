@@ -15,6 +15,8 @@
 #include "EditorApp.hpp"
 #include "EditorTheme.hpp"
 
+#include "threepp/extras/editor/SplineConfig.hpp"
+
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/geometries/ShapeGeometry.hpp"
 #include "threepp/helpers/CameraHelper.hpp"
@@ -53,6 +55,7 @@ namespace {
         SpotLight,
         AmbientLight,
         HemisphereLight,
+        SplinePoint,
         kCount
     };
 
@@ -112,16 +115,28 @@ namespace {
 
             // Sky dome over ground: two colours, one from above, one below.
             case Icon::HemisphereLight:
-            default:
                 return R"(<svg viewBox="0 0 24 24">
 <path d="M4 13 C4 8.58 7.58 5 12 5 C16.42 5 20 8.58 20 13 Z"/>
 <path d="M3 15.5 L21 15.5 L21 18.5 L3 18.5 Z"/>
+</svg>)";
+
+            // A ringed handle: a knot on a curve, small enough not to bury the
+            // line it sits on. Drawn as a ring because a solid disc at the
+            // sizes a spline is authored at reads as a blob.
+            case Icon::SplinePoint:
+            default:
+                return R"(<svg viewBox="0 0 24 24">
+<path d="M12 3 C16.97 3 21 7.03 21 12 C21 16.97 16.97 21 12 21 C7.03 21 3 16.97 3 12 C3 7.03 7.03 3 12 3 Z M12 6.5 C8.96 6.5 6.5 8.96 6.5 12 C6.5 15.04 8.96 17.5 12 17.5 C15.04 17.5 17.5 15.04 17.5 12 C17.5 8.96 15.04 6.5 12 6.5 Z"/>
+<path d="M12 9.5 C13.38 9.5 14.5 10.62 14.5 12 C14.5 13.38 13.38 14.5 12 14.5 C10.62 14.5 9.5 13.38 9.5 12 C9.5 10.62 10.62 9.5 12 9.5 Z"/>
 </svg>)";
         }
     }
 
     Icon iconFor(Object3D& object) {
 
+        // Before the type checks: a control point is an ordinary Object3D and
+        // is told apart by its parent, not by what it is.
+        if (SplineConfig::splineOf(object)) return Icon::SplinePoint;
         if (object.as<Camera>()) return Icon::Camera;
         if (object.as<DirectionalLight>()) return Icon::DirectionalLight;
         if (object.as<SpotLight>()) return Icon::SpotLight;
@@ -249,7 +264,11 @@ void EditorApp::syncViewportMarkers() {
     owners.clear();
     document_.scene().traverse([this](Object3D& object) {
         if (document_.isEditorOnly(object)) return;
-        if (object.as<Camera>() || object.as<Light>()) owners.push_back(&object);
+        // Spline control points draw nothing either — the curve does — so they
+        // are unclickable without an icon of their own.
+        if (object.as<Camera>() || object.as<Light>() || SplineConfig::splineOf(object)) {
+            owners.push_back(&object);
+        }
     });
 
     // --- retire markers whose owner is gone -------------------------------

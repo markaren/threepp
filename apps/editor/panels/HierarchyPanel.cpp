@@ -75,6 +75,11 @@ void EditorApp::drawAddMenu(Object3D& parent) {
             addObject(ObjectFactory::createCamera(document_.scene()), *target, "Add Camera");
         };
     }
+    if (ImGui::MenuItem("Spline")) {
+        deferred_ = [this, target] {
+            addObject(ObjectFactory::createSpline(document_.scene()), *target, "Add Spline");
+        };
+    }
 }
 
 void EditorApp::drawHierarchyNode(Object3D& object) {

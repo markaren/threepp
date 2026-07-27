@@ -12,6 +12,7 @@ add_executable(threepp_editor
         EditorTheme.cpp
         ExternalScriptEdit.cpp
         FileBrowser.cpp
+        SplineOverlay.cpp
         ViewportMarkers.cpp
         panels/AssetPanel.cpp
         panels/HierarchyPanel.cpp

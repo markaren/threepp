@@ -8,7 +8,9 @@
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
+#include "threepp/extras/editor/SplineConfig.hpp"
 
+#include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/objects/Robot.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
@@ -220,6 +222,7 @@ void EditorApp::drawInspector() {
         drawCameraSection(*selected);
         drawAnimationSection(*selected);
         drawJointsSection(*selected);
+        drawSplineSection(*selected);
         drawScriptSection(*selected);
         drawPhysicsSection(*selected);
 
@@ -1298,6 +1301,140 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
     ImGui::PopItemWidth();
 
     ImGui::TextColored(theme::muted(), "Stored in userData[\"physics\"]");
+
+    ImGui::TreePop();
+}
+
+
+// ------------------------------------------------------------------- spline
+
+void EditorApp::drawSplineSection(Object3D& object) {
+
+    // Two forms of the same section, because a spline and one of its control
+    // points are both ordinary scene nodes: only the userData entry and the
+    // parent link tell them apart.
+    if (auto* spline = SplineConfig::splineOf(object)) {
+
+        if (!section("Spline Point")) return;
+
+        const auto index = childIndex(*spline, object);
+        const auto count = spline->children.size();
+        ImGui::TextColored(theme::muted(), "Point %zu of %zu in \"%s\"",
+                           index + 1, count, spline->name.c_str());
+
+        // Uuid rather than the pointer: the deferred edit runs later in the
+        // frame, and an undo (or a stop) in between replaces the graph.
+        const auto uuid = spline->uuid;
+        const auto insert = [this, uuid](std::size_t slot, const char* label) {
+            deferred_ = [this, uuid, slot, label] {
+                if (auto* live = findByUuid(document_.scene(), uuid)) {
+                    addSplinePoint(*live, slot, label);
+                }
+            };
+        };
+
+        if (ImGui::Button("Insert Before")) insert(index, "Insert Spline Point");
+        ImGui::SameLine();
+        if (ImGui::Button("Insert After")) insert(index + 1, "Insert Spline Point");
+        ImGui::SameLine();
+        if (ImGui::Button("Select Spline")) {
+            deferred_ = [this, uuid] {
+                if (auto* live = findByUuid(document_.scene(), uuid)) selectObject(live);
+            };
+        }
+
+        ImGui::TextColored(theme::muted(), "Delete removes it from the curve.");
+
+        ImGui::TreePop();
+        return;
+    }
+
+    if (!SplineConfig::isSpline(object)) return;
+    if (!section("Spline")) return;
+
+    auto* target = &object;
+    auto config = SplineConfig::read(object).value_or(SplineConfig{});
+    const auto before = config;
+
+    const auto commit = [&](SplineConfig after, const char* label) {
+        commands_.execute(makeProperty<SplineConfig>(
+                label, "spline:" + object.uuid,
+                [target](const SplineConfig& value) { value.write(*target); },
+                before, after));
+        document_.setDirty(true);
+    };
+
+    ImGui::PushItemWidth(-100 * contentScale_);
+
+    {
+        static const char* types[] = {"Centripetal", "Chordal", "CatmullRom"};
+        int type = static_cast<int>(config.type);
+        if (ImGui::Combo("Type", &type, types, IM_ARRAYSIZE(types))) {
+            auto after = config;
+            after.type = static_cast<SplineConfig::Type>(type);
+            commit(after, "Spline Type");
+        }
+    }
+
+    {
+        float tension = config.tension;
+        const bool changed = ImGui::DragFloat("Tension", &tension, 0.005f, 0.f, 1.f);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.tension = tension;
+            commit(after, "Spline Tension");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        // Shown regardless, because that is three.js's own semantics: the value
+        // is stored and does nothing until the type is CatmullRom.
+        if (config.type != SplineConfig::Type::CatmullRom) {
+            ImGui::TextColored(theme::muted(), "Tension applies to CatmullRom only");
+        }
+    }
+
+    {
+        bool closed = config.closed;
+        if (ImGui::Checkbox("Closed", &closed)) {
+            auto after = config;
+            after.closed = closed;
+            commit(after, closed ? "Close Spline" : "Open Spline");
+        }
+    }
+
+    {
+        int samples = config.samples;
+        const bool changed = ImGui::DragInt("Samples/Segment", &samples, 0.25f, 1, 200);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.samples = std::clamp(samples, 1, 200);
+            commit(after, "Spline Samples");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+
+    ImGui::PopItemWidth();
+    ImGui::Spacing();
+
+    const auto count = object.children.size();
+    if (auto curve = config.curve(object)) {
+        ImGui::Text("%zu control points, length %.2f", count, curve->getLength());
+    } else {
+        ImGui::TextColored(theme::warning(), "%zu control points - two are needed for a curve", count);
+    }
+
+    const auto uuid = object.uuid;
+    if (ImGui::Button("Add Point")) {
+        deferred_ = [this, uuid] {
+            if (auto* live = findByUuid(document_.scene(), uuid)) {
+                addSplinePoint(*live, AddObjectCommand::atEnd, "Add Spline Point");
+            }
+        };
+    }
+
+    ImGui::TextColored(theme::muted(), "Children are the control points, in order.");
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"spline\"]");
 
     ImGui::TreePop();
 }

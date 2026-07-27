@@ -53,6 +53,8 @@ class ImguiContext;
 namespace threepp {
 
     class CameraHelper;
+    class Line;
+    class LineBasicMaterial;
     class Material;
     class MeshBasicMaterial;
     class ObjectWithMorphTargetInfluences;
@@ -118,6 +120,10 @@ namespace threepp::editor {
         void drawJointsSection(Object3D& object);
         void drawScriptSection(Object3D& object);
         void drawPhysicsSection(Object3D& object);
+        // Shown for a spline and, in its point form, for one of its control
+        // points — both are ordinary scene nodes, so the section is what tells
+        // them apart.
+        void drawSplineSection(Object3D& object);
         void drawTextureSlot(Material& material, const char* label,
                              const std::shared_ptr<Texture>& current,
                              const std::function<void(const std::shared_ptr<Texture>&)>& setter,
@@ -183,6 +189,12 @@ namespace threepp::editor {
         [[nodiscard]] static std::string inlineScriptTemplate();
 
         void addObject(const std::shared_ptr<Object3D>& object, Object3D& parent, const std::string& label);
+        // A new control point for `spline`, at `index` among its siblings
+        // (AddObjectCommand::atEnd appends). Placed midway to the neighbour it
+        // is inserted next to, or past the end along the last segment, so the
+        // curve visibly changes. Undoable, and the point becomes the selection
+        // so the gizmo is already on it.
+        void addSplinePoint(Object3D& spline, std::size_t index, const std::string& label);
         void deleteSelected();
         void duplicateSelected();
         void focusSelected();
@@ -205,6 +217,12 @@ namespace threepp::editor {
         void syncViewportMarkers();
         void syncCameraHelper();
         void clearViewportMarkers();
+        // --- spline overlay (apps/editor/SplineOverlay.cpp) -----------------
+        // One Line per spline, sampled from the CatmullRomCurve3 its control
+        // points describe. Editor furniture: it lives under the overlay, so it
+        // is never saved and never picked.
+        void syncSplineOverlays();
+        void clearSplineOverlays();
         // The object a marker stands for, or nullptr when `hit` is not part of
         // one. Lets a click on an icon select its owner.
         [[nodiscard]] Object3D* markerOwnerOf(Object3D* hit) const;
@@ -305,6 +323,21 @@ namespace threepp::editor {
         // it is torn down whenever the selection or the scene changes.
         std::shared_ptr<CameraHelper> cameraHelper_;
         Object3D* cameraHelperFor_ = nullptr;
+
+        // Curve overlays. Same lifetime rules as the markers above: the owner
+        // is a raw pointer into the current graph, the whole list is dropped
+        // when the scene is replaced, and entries whose owner is absent from
+        // this frame's walk are retired. `hash` is over everything the curve is
+        // built from (point count, positions, config), so a dragged control
+        // point rebuilds the line and nothing else does.
+        struct SplineOverlay {
+            Object3D* owner = nullptr;
+            std::shared_ptr<Line> line;
+            std::shared_ptr<LineBasicMaterial> material;
+            std::size_t hash = 0;
+        };
+        std::shared_ptr<Group> splines_;
+        std::vector<SplineOverlay> splineOverlays_;
 
         Raycaster raycaster_;
         std::unique_ptr<ImguiContext> ui_;

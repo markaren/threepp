@@ -11,6 +11,7 @@
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
+#include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
@@ -122,6 +123,10 @@ EditorApp::EditorApp(const Options& options)
     markers_->name = "__editor_markers";
     overlay_->add(markers_);
 
+    splines_ = Group::create();
+    splines_->name = "__editor_splines";
+    overlay_->add(splines_);
+
     gizmo_ = std::make_unique<TransformControls>(camera_, canvas_);
     gizmo_->setSize(0.9f);
     overlay_->addRef(*gizmo_);
@@ -173,9 +178,11 @@ EditorApp::EditorApp(const Options& options)
         // The previewed nodes lived in the old scene; restoring would write
         // through dangling pointers. Discard only.
         stopAnimationPreview(false);
-        // Markers and the frustum helper point into the outgoing graph too.
-        // Drop them before anything can dereference an owner that is gone.
+        // Markers, spline curves and the frustum helper point into the outgoing
+        // graph too. Drop them before anything can dereference an owner that is
+        // gone.
         clearViewportMarkers();
+        clearSplineOverlays();
         if (cameraHelper_) {
             cameraHelper_->removeFromParent();
             cameraHelper_.reset();
@@ -330,7 +337,7 @@ int EditorApp::runSelfTest() {
         int n = 0;
         for (auto* child : overlay_->children) {
             if (child == grid_.get() || child == axes_.get() ||
-                child == markers_.get() ||
+                child == markers_.get() || child == splines_.get() ||
                 child == static_cast<Object3D*>(cameraHelper_.get()) ||
                 child == static_cast<Object3D*>(gizmo_.get())) continue;
             ++n;
@@ -1669,6 +1676,42 @@ void EditorApp::addObject(const std::shared_ptr<Object3D>& object, Object3D& par
     scrollTo_ = raw;
 }
 
+void EditorApp::addSplinePoint(Object3D& spline, std::size_t index, const std::string& label) {
+
+    if (!SplineConfig::isSpline(spline)) return;
+
+    const auto points = SplineConfig::controlPoints(spline);
+    const auto count = points.size();
+    const auto slot = std::min(index, count);
+
+    // Where the new point goes has one rule: the curve must visibly change.
+    // Between two points that is their midpoint; past either end it is the end
+    // segment continued, so "Add Point" extends the spline rather than
+    // stacking a second point on the last one.
+    Vector3 position;
+    if (count == 0) {
+        // Nothing to extend; the origin of the spline's own space.
+    } else if (slot == 0) {
+        position.copy(points.front());
+        if (count > 1) position.sub(points[1]).add(points.front());
+    } else if (slot >= count) {
+        position.copy(points.back());
+        if (count > 1) position.sub(points[count - 2]).add(points.back());
+        else position.x += 1.f;
+    } else {
+        position.copy(points[slot - 1]).add(points[slot]).multiplyScalar(0.5f);
+    }
+
+    auto point = ObjectFactory::createSplinePoint(spline);
+    point->position.copy(position);
+
+    auto* raw = point.get();
+    commands_.execute(std::make_unique<AddObjectCommand>(spline, point, label, slot));
+    document_.setDirty(true);
+    selectObject(raw);
+    scrollTo_ = raw;
+}
+
 void EditorApp::deleteSelected() {
 
     auto* selected = selection_.get();
@@ -1995,6 +2038,7 @@ void EditorApp::refreshSelectionHelpers() {
     }
 
     syncViewportMarkers();
+    syncSplineOverlays();
     syncCameraHelper();
 
     // Snap is a hold-to-engage modifier, exactly like the transform example.
