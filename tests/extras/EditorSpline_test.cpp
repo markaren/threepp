@@ -27,6 +27,11 @@ TEST_CASE("SplineConfig round-trips through userData", "[editor]") {
     config.closed = true;
     config.tension = 0.25f;
     config.samples = 40;
+    config.mesh = SplineConfig::MeshKind::Road;
+    config.radius = 0.75f;
+    config.radialSegments = 12;
+    config.width = 6.5f;
+    config.uvLength = 2.f;
     config.write(*group);
 
     CHECK(SplineConfig::isSpline(*group));
@@ -38,7 +43,8 @@ TEST_CASE("SplineConfig round-trips through userData", "[editor]") {
 
     // Deterministic encoding: an unchanged value produces the same bytes every
     // time, which is what keeps saved documents diff-clean.
-    CHECK(config.encode() == "type=catmullrom;closed=1;tension=0.25;samples=40");
+    CHECK(config.encode() == "type=catmullrom;closed=1;tension=0.25;samples=40;"
+                             "mesh=road;radius=0.75;radialSegments=12;width=6.5;uvLength=2");
     CHECK(config.encode() == read->encode());
 
     // The key's presence is the definition, so an entry that says nothing is
@@ -46,12 +52,21 @@ TEST_CASE("SplineConfig round-trips through userData", "[editor]") {
     const auto empty = SplineConfig::decode("");
     REQUIRE(empty.has_value());
     CHECK(*empty == SplineConfig{});
+    CHECK(empty->mesh == SplineConfig::MeshKind::None);
 
     // Unknown keys are ignored, so a document written by a newer editor loads.
-    const auto forward = SplineConfig::decode("type=chordal;radius=3;samples=8");
+    const auto forward = SplineConfig::decode("type=chordal;bevel=3;samples=8");
     REQUIRE(forward.has_value());
     CHECK(forward->type == SplineConfig::Type::Chordal);
     CHECK(forward->samples == 8);
+
+    // A document written BEFORE the mesh keys existed reads as "no mesh",
+    // which is what keeps every spline already saved unchanged on load.
+    const auto legacy = SplineConfig::decode("type=chordal;closed=1;tension=0.5;samples=24");
+    REQUIRE(legacy.has_value());
+    CHECK(legacy->mesh == SplineConfig::MeshKind::None);
+    CHECK(legacy->radius == SplineConfig{}.radius);
+    CHECK(legacy->width == SplineConfig{}.width);
 
     SplineConfig::erase(*group);
     CHECK_FALSE(SplineConfig::isSpline(*group));
@@ -86,6 +101,96 @@ TEST_CASE("every direct child of a spline is a control point", "[editor]") {
     CHECK(SplineConfig::controlPoints(*spline).size() == 3);
     CHECK(SplineConfig::splineOf(*b) == spline.get());
     CHECK(SplineConfig::splineOf(*nested) == nullptr);
+}
+
+TEST_CASE("the generated mesh is a child without being a control point", "[editor]") {
+
+    auto spline = Group::create();
+    SplineConfig{}.write(*spline);
+
+    auto a = Object3D::create();
+    a->position.set(-1, 0, 0);
+    auto b = Object3D::create();
+    b->position.set(1, 0, 0);
+    spline->add(a);
+    spline->add(b);
+
+    CHECK(SplineConfig::derivedMesh(*spline) == nullptr);
+
+    auto derived = Object3D::create();
+    SplineConfig::markDerived(*derived);
+    spline->add(derived);
+
+    // Three children, two points. Every count and index the editor shows has
+    // to come off the second number, not the first.
+    CHECK(spline->children.size() == 3);
+    CHECK(SplineConfig::isDerived(*derived));
+    CHECK(SplineConfig::derivedMesh(*spline) == derived.get());
+    CHECK(SplineConfig::controlPoints(*spline).size() == 2);
+    CHECK(SplineConfig::controlPointNodes(*spline).size() == 2);
+    // ... and it is not a control point of anything, so it gets no marker and
+    // no point form of the inspector section.
+    CHECK(SplineConfig::splineOf(*derived) == nullptr);
+    CHECK(SplineConfig::splineOf(*a) == spline.get());
+
+    CHECK(SplineConfig::pointIndexOf(*spline, *a) == 0);
+    CHECK(SplineConfig::pointIndexOf(*spline, *b) == 1);
+    // Not a point: reported as "past the end", never as index 2 (which is what
+    // its child index would say).
+    CHECK(SplineConfig::pointIndexOf(*spline, *derived) == 2);
+
+    // Inserting point i means inserting at child index i here, because the
+    // mesh is last — and appending goes BEFORE it, so it stays last.
+    CHECK(SplineConfig::childSlotForPointIndex(*spline, 0) == 0);
+    CHECK(SplineConfig::childSlotForPointIndex(*spline, 1) == 1);
+    CHECK(SplineConfig::childSlotForPointIndex(*spline, 2) == 2);
+    CHECK(SplineConfig::childSlotForPointIndex(*spline, 99) == 2);
+
+    // Same answers with the mesh FIRST among the children, which is what a
+    // hand-edited or re-ordered document can hand back.
+    derived->removeFromParent();
+    auto reordered = Group::create();
+    SplineConfig{}.write(*reordered);
+    auto lead = Object3D::create();
+    SplineConfig::markDerived(*lead);
+    auto c = Object3D::create();
+    auto d = Object3D::create();
+    reordered->add(lead);
+    reordered->add(c);
+    reordered->add(d);
+    CHECK(SplineConfig::controlPoints(*reordered).size() == 2);
+    CHECK(SplineConfig::pointIndexOf(*reordered, *c) == 0);
+    CHECK(SplineConfig::pointIndexOf(*reordered, *d) == 1);
+    CHECK(SplineConfig::childSlotForPointIndex(*reordered, 0) == 1);
+    CHECK(SplineConfig::childSlotForPointIndex(*reordered, 1) == 2);
+    CHECK(SplineConfig::childSlotForPointIndex(*reordered, 2) == 3);
+}
+
+TEST_CASE("samples-per-segment is one formula", "[editor]") {
+
+    auto spline = Group::create();
+    SplineConfig config;
+    config.samples = 10;
+    config.write(*spline);
+
+    for (int i = 0; i < 4; ++i) spline->add(Object3D::create());
+
+    // Four points, three segments open; the loop adds the closing one.
+    CHECK(config.divisions(*spline) == 30);
+    config.closed = true;
+    CHECK(config.divisions(*spline) == 40);
+
+    // The generated mesh must not inflate the tessellation by counting as a
+    // point — the reason divisions() goes through controlPoints().
+    auto derived = Object3D::create();
+    SplineConfig::markDerived(*derived);
+    spline->add(derived);
+    CHECK(config.divisions(*spline) == 40);
+
+    // Clamped, and never zero: one point is no segments at all.
+    config.closed = false;
+    config.samples = 10000;
+    CHECK(config.divisions(*spline) == static_cast<unsigned int>(SplineConfig::maxSamples) * 3);
 }
 
 TEST_CASE("a spline builds a curve from its children", "[editor]") {
