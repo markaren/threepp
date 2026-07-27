@@ -76,7 +76,7 @@ int main() {
     Canvas canvas("Lidar", {{"antialiasing", 4}});
     // Works with any raster backend — the sensor handles all
     // backend differences internally, so no extra setup is needed here.
-    auto renderer = createRenderer(canvas);
+    auto renderer = GLRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = Color(0x111122);
@@ -121,7 +121,7 @@ int main() {
     };
 
     bool senorDataOnly = false;
-    RendererSettingsUi ui(canvas, *renderer, [&] {
+    RendererSettingsUi ui(canvas, renderer, [&] {
         ImGui::Checkbox("Show senor data only", &senorDataOnly);
         ImGui::SliderFloat("Range noise", &lidar->rangeNoise.stddev, 0.f, 0.1f);
 
@@ -141,7 +141,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer->setSize(size);
+        renderer.setSize(size);
     });
 
     Clock clock;
@@ -160,7 +160,7 @@ int main() {
         lidar->setSimTime(t);
         points->visible = false;
         colors.clear();
-        lidar->scan(*renderer, *scene, cloud);
+        lidar->scan(renderer, *scene, cloud);
         points->visible = true;
 
         updatePointCloud(*points, cloud, lidar->far());
@@ -171,7 +171,7 @@ int main() {
             camera->layers.enableAll();
         }
 
-        renderer->render(*scene, *camera);
+        renderer.render(*scene, *camera);
         ui.render();
     });
 }
