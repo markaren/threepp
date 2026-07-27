@@ -949,6 +949,27 @@ int EditorApp::runSelfTest() {
             check(spline && spline->children.size() == before.size(), "the insert is undoable");
         }
 
+        // Removing a point is the ordinary delete — no spline-specific path,
+        // which is the claim the whole design makes.
+        if (spline && !spline->children.empty()) {
+            const auto count = spline->children.size();
+            const auto markers = viewportMarkers_.size();
+
+            selectObject(spline->children.back());
+            deleteSelected();
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && spline->children.size() == count - 1,
+                  "Del on a control point takes it out of the curve");
+            check(viewportMarkers_.size() == markers - 1, "and its marker icon with it");
+            check(splineOverlays_.size() == 1, "while the spline keeps its curve");
+
+            commands_.undo();
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && spline->children.size() == count, "and the delete is undoable");
+        }
+
         // Save and reload: the config and every control point have to survive
         // the document round trip, since neither is anything but userData and
         // ordinary child transforms.
