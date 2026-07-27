@@ -60,12 +60,12 @@ float froxelTransmittance(vec2 fuv, float viewDist) {
 // for rough, down to 1 (reset) as roughness → mirror. Thresholds use a
 // view-dependence factor (1 - smoothstep(0.05, 0.30, roughness)).
 bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, out float histCap) {
-    const vec2 mv   = texture(gbufMotionTex, uv).rg;
+    const vec2 mv   = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
     const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
     pUv = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
     bool valid = all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)));
     if (valid) {
-        const vec3 pn = texture(gbufNormalPrevTex, pUv).xyz * 2.0 - 1.0;
+        const vec3 pn = texture(gbufNormalPrevTex, paneToPhys(gbufNormalPrevTex, pUv)).xyz * 2.0 - 1.0;
         // DEPTH-discontinuity disocclusion (mirrors the GI reproject below, ~line
         // 2630 — the reason GI doesn't smear at silhouettes but the reflection did).
         // The reflection channel did a NORMAL-only match (dot>0.9); at a car-body
@@ -76,8 +76,8 @@ bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, o
         // mismatch means the reproject crossed the silhouette onto a DIFFERENT surface
         // ⇒ reject ⇒ the edge resets to a fresh (noisy, un-smeared) reflection. Normal
         // loosened to 0.7 to match the GI (depth is now the primary disocclusion gate).
-        const float surfD = texture(gbufMotionTex, uv).b;     // this surface's prev NDC depth
-        const float bufD  = texture(gbufDepthPrevTex, pUv).x; // prev depth buffer at the reproject
+        const float surfD = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).b;     // this surface's prev NDC depth
+        const float bufD  = texture(gbufDepthPrevTex, paneToPhys(gbufDepthPrevTex, pUv)).x; // prev depth buffer at the reproject
         const vec4  svh   = cam.projInverse * vec4(pNdc, surfD, 1.0);
         const vec4  bvh   = cam.projInverse * vec4(pNdc, bufD,  1.0);
         const float svz   = svh.z / svh.w;
@@ -146,7 +146,7 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
     // re-estimated fresh each frame (the roughness-scaled spatial blur is the
     // gloss); no accumulation = no ghost comb.
     if (hitMoved) valid = false;
-    const vec4 prevR = valid ? texture(reflectPrevTex, pUv) : vec4(0.0);
+    const vec4 prevR = valid ? texture(reflectPrevTex, paneToPhys(reflectPrevTex, pUv)) : vec4(0.0);
     if (valid && any(greaterThan(abs(prevR.rgb), vec3(1e6)))) valid = false;// garbage guard
     if (hold && valid) {
         // Checkerboard SKIP frame: no new sample — carry the history through
@@ -154,14 +154,14 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool 
         // channel's giSkip pattern. Freezing histLen keeps the blend alpha tied
         // to the number of REAL samples, so the running mean stays unbiased at
         // half rate.
-        const vec4 pa = texture(reflAuxPrevTex, pUv);
+        const vec4 pa = texture(reflAuxPrevTex, paneToPhys(reflAuxPrevTex, pUv));
         imageStore(reflAuxWrite, px, vec4(clamp(pa.x, 1.0, histCap), pa.y, pa.z, pa.w));
         return vec4(prevR.rgb, cur.a);
     }
     float histLen, moment, trend, hitW;
     vec3  accum;
     if (valid) {
-        const vec4  pa = texture(reflAuxPrevTex, pUv);
+        const vec4  pa = texture(reflAuxPrevTex, paneToPhys(reflAuxPrevTex, pUv));
         // CONTENT-CHANGE ANTILAG — fixes "glass/mirror reflections never update
         // under a static camera". The static-512 cap freezes the running mean:
         // CONTENT motion (an object sliding behind glass, or moving in a mirror

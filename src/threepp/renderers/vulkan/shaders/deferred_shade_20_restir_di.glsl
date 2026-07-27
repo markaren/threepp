@@ -130,13 +130,13 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     {
         const vec2 uv   = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
-        const vec2 mv   = texture(gbufMotionTex, uv).rg;
+        const vec2 mv   = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
         const vec2 cNDC = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
         const vec2 pNDC = cNDC + mv;
         const vec2 pUv  = vec2(pNDC.x * 0.5 + 0.5, 0.5 - pNDC.y * 0.5);
         bool tvalid = all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)));
         if (tvalid) {
-            const vec3 pn = texture(gbufNormalPrevTex, pUv).xyz * 2.0 - 1.0;
+            const vec3 pn = texture(gbufNormalPrevTex, paneToPhys(gbufNormalPrevTex, pUv)).xyz * 2.0 - 1.0;
             tvalid = dot(pn, pn) > 1e-6 && dot(N, normalize(pn)) > 0.7;// surface match (rejects sky/disocclusion)
         }
         if (tvalid) {
@@ -188,7 +188,7 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
         const vec2  size   = vec2(float(pc.width), float(pc.height));
         const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
         const float distC  = length(P - camPos);
-        const float mvLen  = length(texture(gbufMotionTex, (vec2(px) + 0.5) / size).rg);
+        const float mvLen  = length(texture(gbufMotionTex, paneToPhys(gbufMotionTex, (vec2(px) + 0.5) / size)).rg);
         const uint  spMax   = (mvLen > 0.01) ? 2u : 5u;
         const float mTarget = 20.0;
         const ivec2 maxPx   = ivec2(int(pc.width) - 1, int(pc.height) - 1);

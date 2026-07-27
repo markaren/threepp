@@ -389,7 +389,12 @@ layout(push_constant) uniform Pc { ShadePush pc; };
 // over the accepted cloud-bearing taps — sceneDist when no tap carries cloud —
 // so compositeClouds can fog the cloud in-scatter over the camera→cloud leg.
 vec4 cloudGather(ivec2 px, float sceneDist, out float meanDist) {
-    const ivec2 hsz = textureSize(cloudColorTex, 0);
+    // Cloud march runs one thread per half-PANE pixel ((pc.width+1)/2 x ...),
+    // so the valid content spans the pane's half extent at the image origin —
+    // NOT the physical image extent (fullscreen the two coincide). Mapping by
+    // textureSize here would stretch the lookup across the whole image under a
+    // scissored pane render (see paneToPhys below).
+    const ivec2 hsz = ivec2(int(pc.width + 1u) / 2, int(pc.height + 1u) / 2);
     const vec2  uv  = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
     const vec2  pos = uv * vec2(hsz) - 0.5;
     const ivec2 b0  = ivec2(floor(pos));
@@ -498,6 +503,21 @@ bool gShadowSunTopUp = false;
 // noise drowns the trend signal that works for the low-variance channels).
 bool  gGiRayHitMoved = false;
 float gGiMovFrac     = 0.0;
+
+// ── Pane-UV → physical-UV rescale (split-screen) ────────────────────────────
+// Under a scissored pane render (setScissorTest + a sub-rect viewport) the
+// deferred pipeline renders PANE-SIZED content at the ORIGIN of the same
+// full-render-extent images used fullscreen. Every screen-space normalized
+// coordinate in this shader family ([0,1] over pc.width/height) must therefore
+// be rescaled by pane/physical before it touches a sampler, or the tap lands
+// at a stretched position — the visible symptom was shadow/GI history ghosts
+// offset from their casters in lidar_slam's split view. Fullscreen the ratio
+// is exactly 1.0 (w/w), so this is a no-op there. Applies ONLY to samplers
+// backed by render-extent images (gbuf*, *Prev, history); env/noise/froxel/
+// cloud-shadow textures live in their own spaces and take their uv raw.
+vec2 paneToPhys(sampler2D t, vec2 paneUv) {
+    return paneUv * vec2(float(pc.width), float(pc.height)) / vec2(textureSize(t, 0));
+}
 
 #include "deferred_shade_10_lighting_utils.glsl"
 #include "deferred_shade_20_restir_di.glsl"
@@ -905,14 +925,14 @@ void main() {
     bool giSkip = false;// checkerboard carry (set in the adaptive block below)
     int nSRays = 2;// shadow-ratio rays: 2 while fresh / in-penumbra, 1 converged
     if (demodIndirect) {
-        const vec2 mv   = texture(gbufMotionTex, uv).rg;
+        const vec2 mv   = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
         const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
         const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
         float ph = 0.0;// prev histLen at the reprojected pixel (0 = off-screen / disoccluded ⇒ fresh)
         if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
-            const vec3  pn = texture(gbufNormalPrevTex, pUv).xyz * 2.0 - 1.0;
-            const float surfD = texture(gbufMotionTex, uv).b;    // this surface's prev NDC depth
-            const float bufD  = texture(gbufDepthPrevTex, pUv).x;// prev depth buffer at the reproject
+            const vec3  pn = texture(gbufNormalPrevTex, paneToPhys(gbufNormalPrevTex, pUv)).xyz * 2.0 - 1.0;
+            const float surfD = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).b;    // this surface's prev NDC depth
+            const float bufD  = texture(gbufDepthPrevTex, paneToPhys(gbufDepthPrevTex, pUv)).x;// prev depth buffer at the reproject
             const vec4  svh = cam.projInverse * vec4(pNdc, surfD, 1.0);
             const vec4  bvh = cam.projInverse * vec4(pNdc, bufD, 1.0);
             const float svz = svh.z / svh.w;
@@ -921,13 +941,13 @@ void main() {
             // skinned surface as fresh → keeps its history → no dust).
             if (dot(N, normalize(pn)) > 0.7 &&
                 abs(svz - bvh.z / bvh.w) <= 0.1 * max(abs(svz), 1e-3)) {
-                ph = texture(giPrevTex, pUv).a;
+                ph = texture(giPrevTex, paneToPhys(giPrevTex, pUv)).a;
                 // Shadow-channel adaptive rays: a CONVERGED pixel outside any
                 // penumbra (long history, near-zero temporal variance of the
                 // visibility ratio) coasts on 1 ray/frame; fresh/disoccluded
                 // and penumbra pixels (where E[R²]−R² stays > 0) keep 2 so
                 // they converge with samples instead of blur.
-                const vec4 sPrev = texture(shadowVisPrevTex, pUv);
+                const vec4 sPrev = texture(shadowVisPrevTex, paneToPhys(shadowVisPrevTex, pUv));
                 if (sPrev.z >= 8.0 && (sPrev.y - sPrev.x * sPrev.x) < 0.005) nSRays = 1;
             }
         }
@@ -1201,7 +1221,7 @@ void main() {
         ((((px.x ^ px.y) ^ int(pc.frame)) & 1) == 0)) {
         vec2 rUv; float rCap;
         if (reflReproject(uv, N, roughness, length(worldPos - camPos), rUv, rCap))
-            reflSkip = rCap >= 4.0 && texture(reflAuxPrevTex, rUv).x >= 4.0;
+            reflSkip = rCap >= 4.0 && texture(reflAuxPrevTex, paneToPhys(reflAuxPrevTex, rUv)).x >= 4.0;
     }
     if (reflBlend > 0.0 && opaqueRefl && !reflSkip) {
         // Emitter self-emission scale for the ray (the other half of the split):
@@ -1240,7 +1260,7 @@ void main() {
         // roughening). The motion proxy mirrors reflReproject's mvLen (screen-space
         // surface motion OR camera world motion) so the estimator choice matches the
         // history the pixel will actually receive.
-        const vec2  reflMv     = texture(gbufMotionTex, uv).rg;
+        const vec2  reflMv     = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
         const float reflCamNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(length(worldPos - camPos), 0.25);
         const bool  reflMoving = max(length(reflMv), reflCamNdc) > 0.004;
         // Ray-miss env LOD: the roughness-blurred PMREM mip — FLOORED while
@@ -1458,7 +1478,7 @@ void main() {
     // doesn't drag a ghost. NaN-guard the feedback. Motion convention matches
     // taa_resolve exactly.
     if (demodIndirect) {
-        const vec2 motionGL = texture(gbufMotionTex, uv).rg;
+        const vec2 motionGL = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).rg;
         const vec2 currNDC  = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
         const vec2 prevNDC  = currNDC + motionGL;
         const vec2 prevUv   = vec2(prevNDC.x * 0.5 + 0.5, 0.5 - prevNDC.y * 0.5);
@@ -1506,7 +1526,7 @@ void main() {
             // reprojected neighbourhood last frame? A truly vacated pixel has
             // no matching texel → still resets; a jitter-rounded edge finds
             // its surface one texel over → history survives.
-            const float surfD = texture(gbufMotionTex, uv).b;// this surface's prev NDC depth
+            const float surfD = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).b;// this surface's prev NDC depth
             const vec4  svh   = cam.projInverse * vec4(prevNDC, surfD, 1.0);
             const float svz   = svh.z / svh.w;
             bool found = false;
@@ -1557,8 +1577,8 @@ void main() {
         // Checkerboard carry: prefer the reprojected history; if this skip-
         // frame pixel's reproject fails (rare gate mismatch), carry the
         // same-pixel history rather than cold-starting on no data.
-        const vec4  prevT = valid ? texture(giPrevTex, prevUv)
-                                  : (giSkip ? texture(giPrevTex, uv) : vec4(0.0));
+        const vec4  prevT = valid ? texture(giPrevTex, paneToPhys(giPrevTex, prevUv))
+                                  : (giSkip ? texture(giPrevTex, paneToPhys(giPrevTex, uv)) : vec4(0.0));
         const vec3  prev  = prevT.rgb;
         valid = valid && all(lessThan(abs(prev), vec3(1e6)));// NaN/garbage guard
         // fp16-SAFE clamp on the NEW sample: indirect + the à-trous ping-pongs
@@ -1628,8 +1648,8 @@ void main() {
         // exact behaviour the clean bisect reference had.
         const float curLum  = dot(diffInd, vec3(0.2126, 0.7152, 0.0722));
         const float prevLum = dot(prev, vec3(0.2126, 0.7152, 0.0722));
-        const vec2  prevM   = valid ? texture(momentsPrevTex, prevUv).rg
-                                    : (giSkip ? texture(momentsPrevTex, uv).rg : vec2(curLum * curLum, 0.0));
+        const vec2  prevM   = valid ? texture(momentsPrevTex, paneToPhys(momentsPrevTex, prevUv)).rg
+                                    : (giSkip ? texture(momentsPrevTex, paneToPhys(momentsPrevTex, uv)).rg : vec2(curLum * curLum, 0.0));
         const float prevTr  = prevM.g;
         const float prevSig = sqrt(max(prevM.r - prevLum * prevLum, 0.0));
         const float sdev    = clamp((curLum - prevLum) / (0.05 + 0.25 * max(curLum, prevLum) + 2.0 * prevSig), -1.0, 1.0);
@@ -1735,7 +1755,7 @@ void main() {
                 // copy inside its `if (valid)` block; giFlagsZ (the source flag) is
                 // still in scope here so this is the same bit test, not a new heuristic.
                 const bool  dsided  = ifDoubleSided(giFlagsZ);
-                const float surfD   = texture(gbufMotionTex, uv).b;// this surface's prev NDC depth (shared by all 4 taps)
+                const float surfD   = texture(gbufMotionTex, paneToPhys(gbufMotionTex, uv)).b;// this surface's prev NDC depth (shared by all 4 taps)
                 const vec4  svh     = cam.projInverse * vec4(prevNDC, surfD, 1.0);
                 const float svz     = svh.z / svh.w;
                 // Nearest tap = what the old `texture()` NEAREST fetch would have
