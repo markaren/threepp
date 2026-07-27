@@ -37,3 +37,28 @@ std::shared_ptr<Material> ShaderMaterial::createDefault() const {
 
     return std::shared_ptr<ShaderMaterial>(new ShaderMaterial());
 }
+
+bool ShaderMaterial::setValue(const std::string& key, const MaterialValue& value) {
+
+    if (key == "vertexShader") {
+        vertexShader = std::get<std::string>(value);
+    } else if (key == "fragmentShader") {
+        fragmentShader = std::get<std::string>(value);
+    } else if (key == "wireframe") {
+        wireframe = std::get<bool>(value);
+    } else if (key == "wireframeLinewidth") {
+        wireframeLinewidth = extractFloat(value);
+    } else if (key == "linewidth") {
+        linewidth = extractFloat(value);
+    } else if (key == "lights") {
+        lights = std::get<bool>(value);
+    } else if (key == "clipping") {
+        clipping = std::get<bool>(value);
+    } else if (key == "envMap") {
+        envMap = std::get<std::shared_ptr<Texture>>(value);
+    } else {
+        return false;
+    }
+
+    return true;
+}

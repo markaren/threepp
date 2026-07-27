@@ -38,6 +38,8 @@ namespace threepp {
         ShaderMaterial();
 
         std::shared_ptr<Material> createDefault() const override;
+
+        bool setValue(const std::string& key, const MaterialValue& value) override;
     };
 
 }// namespace threepp

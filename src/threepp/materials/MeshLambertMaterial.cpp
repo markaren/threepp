@@ -113,6 +113,16 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
         return true;
 
+    } else if (key == "emissiveIntensity") {
+
+        emissiveIntensity = extractFloat(value);
+        return true;
+
+    } else if (key == "emissiveMap") {
+
+        emissiveMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
     } else if (key == "map") {
 
         map = std::get<std::shared_ptr<Texture>>(value);

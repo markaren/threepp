@@ -108,6 +108,21 @@ bool MeshNormalMaterial::setValue(const std::string& key, const MaterialValue& v
         normalMapType = std::get<NormalMapType>(value);
         return true;
 
+    } else if (key == "normalScale") {
+
+        normalScale.copy(std::get<Vector2>(value));
+        return true;
+
+    } else if (key == "bumpMap") {
+
+        bumpMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "bumpScale") {
+
+        bumpScale = extractFloat(value);
+        return true;
+
     } else if (key == "displacementMap") {
 
         displacementMap = std::get<std::shared_ptr<Texture>>(value);

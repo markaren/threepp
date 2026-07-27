@@ -92,9 +92,14 @@ bool SpriteMaterial::setValue(const std::string& key, const MaterialValue& value
         rotation = extractFloat(value);
         return true;
 
+    } else if (key == "size") {
+
+        size = extractFloat(value);
+        return true;
+
     } else if (key == "sizeAttenuation") {
 
-        rotation = std::get<bool>(value);
+        sizeAttenuation = std::get<bool>(value);
         return true;
     }
 

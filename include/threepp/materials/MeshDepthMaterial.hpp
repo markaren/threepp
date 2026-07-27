@@ -121,6 +121,31 @@ namespace threepp {
 
             return std::shared_ptr<MeshDepthMaterial>(new MeshDepthMaterial());
         }
+
+        bool setValue(const std::string& key, const MaterialValue& value) override {
+
+            if (key == "map") {
+                map = std::get<std::shared_ptr<Texture>>(value);
+            } else if (key == "alphaMap") {
+                alphaMap = std::get<std::shared_ptr<Texture>>(value);
+            } else if (key == "displacementMap") {
+                displacementMap = std::get<std::shared_ptr<Texture>>(value);
+            } else if (key == "displacementScale") {
+                displacementScale = extractFloat(value);
+            } else if (key == "displacementBias") {
+                displacementBias = extractFloat(value);
+            } else if (key == "wireframe") {
+                wireframe = std::get<bool>(value);
+            } else if (key == "wireframeLinewidth") {
+                wireframeLinewidth = extractFloat(value);
+            } else if (key == "depthPacking") {
+                depthPacking = std::get<DepthPacking>(value);
+            } else {
+                return false;
+            }
+
+            return true;
+        }
     };
 
 

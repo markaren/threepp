@@ -159,6 +159,41 @@ namespace threepp {
 
             return std::shared_ptr<MeshMatcapMaterial>(new MeshMatcapMaterial());
         }
+
+        bool setValue(const std::string& key, const MaterialValue& value) override {
+
+            if (key == "color") {
+                color.copy(extractColor(value));
+            } else if (key == "map") {
+                map = std::get<std::shared_ptr<Texture>>(value);
+            } else if (key == "alphaMap") {
+                alphaMap = std::get<std::shared_ptr<Texture>>(value);
+            } else if (key == "matcap") {
+                matcap = std::get<std::shared_ptr<Texture>>(value);
+            } else if (key == "bumpMap") {
+                bumpMap = std::get<std::shared_ptr<Texture>>(value);
+            } else if (key == "bumpScale") {
+                bumpScale = extractFloat(value);
+            } else if (key == "normalMap") {
+                normalMap = std::get<std::shared_ptr<Texture>>(value);
+            } else if (key == "normalMapType") {
+                normalMapType = std::get<NormalMapType>(value);
+            } else if (key == "normalScale") {
+                normalScale.copy(std::get<Vector2>(value));
+            } else if (key == "displacementMap") {
+                displacementMap = std::get<std::shared_ptr<Texture>>(value);
+            } else if (key == "displacementScale") {
+                displacementScale = extractFloat(value);
+            } else if (key == "displacementBias") {
+                displacementBias = extractFloat(value);
+            } else if (key == "flatShading") {
+                flatShading = std::get<bool>(value);
+            } else {
+                return false;
+            }
+
+            return true;
+        }
     };
 
 }// namespace threepp

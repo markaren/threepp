@@ -19,6 +19,11 @@ std::string Material::uuid() const {
     return uuid_;
 }
 
+void Material::setUuid(const std::string& uuid) {
+
+    uuid_ = uuid;
+}
+
 unsigned int Material::version() const {
 
     return version_;
@@ -338,7 +343,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "stencilWrite") {
 
-            stencilWrite = std::get<int>(value);
+            stencilWrite = std::get<bool>(value);
             used = true;
 
         } else if (key == "shadowSide") {

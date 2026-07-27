@@ -185,6 +185,41 @@ bool MeshPhysicalMaterial::setValue(const std::string& key, const MaterialValue&
         clearcoatNormalMap = std::get<std::shared_ptr<Texture>>(value);
         return true;
 
+    } else if (key == "clearcoatNormalScale") {
+
+        clearcoatNormalScale.copy(std::get<Vector2>(value));
+        return true;
+
+    } else if (key == "sheen") {
+
+        sheen = extractColor(value);
+        return true;
+
+    } else if (key == "sheenColor") {
+
+        sheenColor.copy(extractColor(value));
+        return true;
+
+    } else if (key == "sheenRoughness") {
+
+        sheenRoughness = extractFloat(value);
+        return true;
+
+    } else if (key == "specularIntensity") {
+
+        specularIntensity = extractFloat(value);
+        return true;
+
+    } else if (key == "specularColor") {
+
+        specularColor.copy(extractColor(value));
+        return true;
+
+    } else if (key == "thinWalled") {
+
+        thinWalled = std::get<bool>(value);
+        return true;
+
     } else if (key == "dispersion") {
 
         dispersion = extractFloat(value);

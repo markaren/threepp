@@ -14,7 +14,7 @@
 
 namespace threepp {
 
-    typedef std::variant<bool, int, float, Vector2, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, NormalMapType, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
+    typedef std::variant<bool, int, float, Vector2, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, DepthPacking, NormalMapType, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
 
     class Material: public EventDispatcher {
 
@@ -110,6 +110,9 @@ namespace threepp {
         Material& operator=(const Material&) = delete;
 
         [[nodiscard]] std::string uuid() const;
+
+        // Only serialization round-trips (ObjectLoader) have a reason to call this.
+        void setUuid(const std::string& uuid);
 
         [[nodiscard]] unsigned int version() const;
 

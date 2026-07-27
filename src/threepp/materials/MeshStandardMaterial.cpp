@@ -216,6 +216,11 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
         normalMap = std::get<std::shared_ptr<Texture>>(value);
         return true;
 
+    } else if (key == "normalScale") {
+
+        normalScale.copy(std::get<Vector2>(value));
+        return true;
+
     } else if (key == "normalMapType") {
 
         normalMapType = std::get<NormalMapType>(value);

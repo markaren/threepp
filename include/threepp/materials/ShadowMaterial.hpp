@@ -72,6 +72,17 @@ namespace threepp {
 
             return std::shared_ptr<ShadowMaterial>(new ShadowMaterial());
         }
+
+        bool setValue(const std::string& key, const MaterialValue& value) override {
+
+            if (key == "color") {
+
+                color.copy(extractColor(value));
+                return true;
+            }
+
+            return false;
+        }
     };
 
 }// namespace threepp
