@@ -520,16 +520,43 @@ class SlamMapper:
     CELL  = 0.14
     RAD   = 0.22   # tight: surface hugs scan hits rather than ballooning above them
     ISO   = 0.55
+    MAX_VERTS = 600_000   # preallocated surface capacity (200k triangles)
 
     def __init__(self, scene):
         self.scene   = scene
         self.grid    = tp.VoxelGrid(self.VOXEL, max_points_per_voxel=3, min_spacing=0.12)
-        self._surf   = [None]
         self._pending= [None]
         self._busy   = [False]
         self._visible= [True]
         self._sent   = None      # scanner cells already pushed into the grid
         self._lock   = threading.Lock()
+
+        # ONE mesh + geometry for the whole session, preallocated at capacity:
+        # a rebuild overwrites the leading rows and moves the draw range.
+        # Building a fresh Mesh per rebuild instead cost ~11 ms inside the NEXT
+        # render() — a new multi-MB vertex buffer plus the scene add/remove
+        # forcing a full entry re-expansion — i.e. a visible hitch every
+        # MC_FRAMES. In-place updates keep the entry (and its TAA history) put.
+        g = tp.BufferGeometry()
+        g.set_attribute("position", np.zeros((self.MAX_VERTS, 3), np.float32))
+        g.set_attribute("normal",   np.zeros((self.MAX_VERTS, 3), np.float32))
+        g.set_draw_range(0, 0)
+        mat = tp.MeshStandardMaterial()
+        mat.color       = 0x55bbff
+        mat.side        = tp.Side.Double
+        # Wireframe routes the mesh through the renderer's raster overlay path: on Vulkan it
+        # gets the kSnapWire flag → EXCLUDED from the path-tracer TLAS (so the depth sensor
+        # never hits its own reconstruction → no self-contamination), and is drawn depth-tested
+        # over the PT frame. On GL it simply renders as wireframe (still hidden during scans).
+        mat.wireframe   = True
+        self._geo  = g
+        self._surf = tp.Mesh(g, mat)
+        self._surf.frustum_culled = False
+        self._surf.visible = self._visible[0]
+        # Added to the scene on the FIRST surface, not here: a 600k-vertex
+        # all-zero geometry parked at the origin is still a scene entry, and the
+        # depth sensor traces the scene rather than the draw range.
+        self._added = False
 
     def insert_scanner(self, scanner):
         """Push the cells the scanner has newly filled in since the last call.
@@ -577,31 +604,28 @@ class SlamMapper:
             iso = self._pending[0]; self._pending[0] = None
         if iso is None:
             return
-        geo = tp.iso_mesh_to_geometry(iso)
-        mat = tp.MeshStandardMaterial()
-        mat.color       = 0x55bbff
-        mat.side        = tp.Side.Double
-        # Wireframe routes the mesh through the renderer's raster overlay path: on Vulkan it
-        # gets the kSnapWire flag → EXCLUDED from the path-tracer TLAS (so the depth sensor
-        # never hits its own reconstruction → no self-contamination), and is drawn depth-tested
-        # over the PT frame. On GL it simply renders as wireframe (still hidden during scans).
-        mat.wireframe   = True
-        mesh = tp.Mesh(geo, mat); mesh.frustum_culled = False
-        mesh.visible = self._visible[0]
-        if self._surf[0] is not None:
-            self.scene.remove(self._surf[0])
-        self._surf[0] = mesh
-        self.scene.add(mesh)
+        pos, nrm = iso.positions, iso.normals
+        n = min(pos.shape[0], self.MAX_VERTS)
+        n -= n % 3                       # whole triangles only
+        if n <= 0:
+            self._geo.set_draw_range(0, 0)
+            return
+        if pos.shape[0] > self.MAX_VERTS:
+            print(f"[slam] surface clipped to {self.MAX_VERTS} of {pos.shape[0]} verts")
+        self._geo.update_attribute("position", pos[:n])
+        self._geo.update_attribute("normal",   nrm[:n])
+        self._geo.set_draw_range(0, n)
+        if not self._added:
+            self.scene.add(self._surf)   # once per session, not per rebuild
+            self._added = True
 
     def clear(self):
-        """Remove the displayed surface and discard all accumulated data."""
+        """Hide the displayed surface and discard all accumulated data."""
         with self._lock:
             self._pending[0] = None
         self.grid.clear()
         self._sent = None
-        if self._surf[0] is not None:
-            self.scene.remove(self._surf[0])
-            self._surf[0] = None
+        self._geo.set_draw_range(0, 0)
 
     @property
     def busy(self):  return self._busy[0]
@@ -613,8 +637,7 @@ class SlamMapper:
     @visible.setter
     def visible(self, v):
         self._visible[0] = v
-        if self._surf[0] is not None:
-            self._surf[0].visible = v
+        self._surf.visible = v
 
 
 # ── path trail ────────────────────────────────────────────────────────────────
@@ -1031,7 +1054,7 @@ def main():
             else:
                 # GL: the sensor re-renders the scene, so hide the SLAM surface + trail (the
                 # scanner already hides the robot + its own cloud/grid).
-                _extra = [(o, o.visible) for o in (slam._surf[0], trail.line) if o is not None]
+                _extra = [(o, o.visible) for o in (slam._surf, trail.line) if o is not None]
                 for o, _ in _extra: o.visible = False
                 ahead_cache[0], h_here_cache[0] = scanner.scan(rs)
                 for o, v in _extra: o.visible = v
