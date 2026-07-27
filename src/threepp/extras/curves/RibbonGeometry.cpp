@@ -78,14 +78,12 @@ RibbonGeometry::RibbonGeometry(const Curve3& path, const Params& params)
         }
     }
 
-    std::vector<float> positions;
-    std::vector<float> normals;
-    std::vector<float> uvs;
-    std::vector<unsigned int> indices;
-    positions.reserve(rings * 2 * 3);
-    normals.reserve(rings * 2 * 3);
-    uvs.reserve(rings * 2 * 2);
-    indices.reserve(spans * 6);
+    // Rings are collected before they are emitted: the pinning pass below
+    // needs to walk the finished edges.
+    std::vector<Vector3> lefts(rings);
+    std::vector<Vector3> rights(rings);
+    std::vector<Vector3> ringNormals(rings);
+    std::vector<float> ringU(rings);
 
     Vector3 bisector;
     Vector3 side;
@@ -139,15 +137,49 @@ RibbonGeometry::RibbonGeometry(const Curve3& path, const Params& params)
         }
 
         const float offset = half * miter;
-        const float u = arc / tile;
-        for (int sign = -1; sign <= 1; sign += 2) {
-            positions.insert(positions.end(),
-                             {center.x + side.x * offset * static_cast<float>(sign),
-                              center.y + side.y * offset * static_cast<float>(sign),
-                              center.z + side.z * offset * static_cast<float>(sign)});
-            normals.insert(normals.end(), {normal.x, normal.y, normal.z});
-            uvs.insert(uvs.end(), {u, sign < 0 ? 0.f : 1.f});
+        lefts[i].copy(center).addScaledVector(side, -offset);
+        rights[i].copy(center).addScaledVector(side, offset);
+        ringNormals[i].copy(normal);
+        ringU[i] = arc / tile;
+    }
+
+    // Inside a bend tighter than the half-width the inner offset edge runs
+    // BACKWARD — its speed is the centre's times (1 - offset/radius) — so
+    // every quad in the stretch crosses itself and renders inside out. There
+    // is no width to recover in there: a backward step is pinned to the vertex
+    // before it instead, closing the notch into a pivot the way a road pinches
+    // its inner shoulder around a hairpin. The pivot's zero-area triangles
+    // render as nothing, which is the point.
+    {
+        Vector3 forward;
+        Vector3 step;
+        for (auto* edge : {&lefts, &rights}) {
+            auto& points = *edge;
+            for (unsigned int i = 1; i < rings; ++i) {
+                forward.copy(centers[i]).sub(centers[i - 1]);
+                if (forward.length() <= kDegenerate) continue;
+                step.copy(points[i]).sub(points[i - 1]);
+                if (step.dot(forward) < 0.f) points[i].copy(points[i - 1]);
+            }
         }
+    }
+
+    std::vector<float> positions;
+    std::vector<float> normals;
+    std::vector<float> uvs;
+    std::vector<unsigned int> indices;
+    positions.reserve(rings * 2 * 3);
+    normals.reserve(rings * 2 * 3);
+    uvs.reserve(rings * 2 * 2);
+    indices.reserve(spans * 6);
+
+    for (unsigned int i = 0; i < rings; ++i) {
+        positions.insert(positions.end(), {lefts[i].x, lefts[i].y, lefts[i].z});
+        normals.insert(normals.end(), {ringNormals[i].x, ringNormals[i].y, ringNormals[i].z});
+        uvs.insert(uvs.end(), {ringU[i], 0.f});
+        positions.insert(positions.end(), {rights[i].x, rights[i].y, rights[i].z});
+        normals.insert(normals.end(), {ringNormals[i].x, ringNormals[i].y, ringNormals[i].z});
+        uvs.insert(uvs.end(), {ringU[i], 1.f});
     }
 
     // A closed curve's last ring is positionally identical to its first, so the

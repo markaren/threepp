@@ -1271,19 +1271,20 @@ int EditorApp::runSelfTest() {
             if (auto* asMesh = reloadedMesh ? reloadedMesh->as<Mesh>() : nullptr) {
                 const auto* position = asMesh->geometry()->getAttribute<float>("position");
                 if (position && position->count() >= 2) {
-                    // The NARROWEST cross-section. Each one is the authored
-                    // width times its miter factor, which is exactly 1 where
-                    // the ribbon runs straight and a little over it wherever a
-                    // sampled curve bends — including at a closed loop's seam,
-                    // which is a corner like any other.
-                    float narrowest = std::numeric_limits<float>::max();
+                    // The WIDEST cross-section: straight rings measure the
+                    // authored width exactly, mitered corners a little over it
+                    // and never past the 2x clamp — while a bend tighter than
+                    // the half-width PINS its rings narrower. The maximum is
+                    // the one measure of "which width the rebuild used" that
+                    // every legal ribbon agrees on.
+                    float widest = 0.f;
                     for (int i = 0; i + 1 < position->count(); i += 2) {
                         const Vector3 left(position->getX(i), position->getY(i), position->getZ(i));
                         const Vector3 right(position->getX(i + 1), position->getY(i + 1), position->getZ(i + 1));
-                        narrowest = std::min(narrowest, left.distanceTo(right));
+                        widest = std::max(widest, left.distanceTo(right));
                     }
-                    narrowed = narrowest >= authored.width - 1e-3f &&
-                               narrowest < authored.width * 1.05f;
+                    narrowed = widest >= authored.width - 1e-3f &&
+                               widest <= authored.width * 2.f + 1e-3f;
                 }
             }
             check(narrowed, "rebuilt to the width the reloaded config asks for");

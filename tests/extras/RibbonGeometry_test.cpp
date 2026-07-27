@@ -249,6 +249,41 @@ TEST_CASE("a horizontal cusp mirrors instead of fanning", "[extras]") {
     }
 }
 
+TEST_CASE("a bend tighter than the half-width pins the inner edge", "[extras]") {
+
+    // The editor's DEFAULT spline with the DEFAULT road: the arc's bends have
+    // a curvature radius of about two metres, and half of the default four
+    // metre width reaches exactly that far. Inside such a bend the inner
+    // offset edge's speed goes negative — it runs BACKWARD — so every quad in
+    // the stretch crosses itself and renders inside out: the fan of flipped
+    // slivers this reproduces (out of the box, no authoring needed).
+    CatmullRomCurve3 curve({Vector3(-3, 0.5f, 1.5f), Vector3(-1, 0.5f, -1),
+                            Vector3(1, 0.5f, -1), Vector3(3, 0.5f, 1.5f)});
+    auto geometry = RibbonGeometry::create(curve, RibbonGeometry::Params(4.f, 72, 4.f));
+
+    // No cross-section cuts through its neighbour...
+    for (unsigned int i = 0; i < 72; ++i) {
+        const auto [leftA, rightA] = ring(*geometry, i);
+        const auto [leftB, rightB] = ring(*geometry, i + 1);
+        CHECK(!crossesXZ(leftA, rightA, leftB, rightB));
+    }
+
+    // ...and no triangle faces down. Pinned rings make degenerate (zero-area)
+    // triangles, which are fine — what is not fine is a face the winding has
+    // turned over, which is what the crossed quads produced.
+    const auto* position = geometry->getAttribute<float>("position");
+    const auto& index = geometry->getIndex()->array();
+    for (std::size_t t = 0; t + 2 < index.size(); t += 3) {
+        const Vector3 a(position->getX(index[t]), position->getY(index[t]), position->getZ(index[t]));
+        const Vector3 b(position->getX(index[t + 1]), position->getY(index[t + 1]), position->getZ(index[t + 1]));
+        Vector3 c(position->getX(index[t + 2]), position->getY(index[t + 2]), position->getZ(index[t + 2]));
+        Vector3 ab, ac;
+        ab.copy(b).sub(a);
+        ac.copy(c).sub(a);
+        CHECK(ab.cross(ac).y > -1e-6f);
+    }
+}
+
 TEST_CASE("a climbing ribbon stays level side to side", "[extras]") {
 
     // A curve that rises as it runs: the two vertices of every cross-section

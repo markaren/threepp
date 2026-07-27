@@ -241,9 +241,17 @@ namespace threepp::editor {
                 v[3] = vertex(i * 2 + 3);
 
                 // A closed ribbon's seam ring duplicates the first
-                // cross-section; the span onto it has no area and no hull.
-                const PxVec3 face = (v[2] - v[0]).cross(v[1] - v[0]);
-                if (face.magnitude() < 1e-8f) continue;
+                // cross-section; the span onto it has no area and no hull. A
+                // span with one PINNED edge is not that — the ribbon pins an
+                // edge that would run backward through a tight bend, and the
+                // other edge still sweeps real area — so both triangles get a
+                // say before the span is dropped: keying on the left edge
+                // alone skipped every pinned span, and the corner's whole fan
+                // of hulls with it.
+                const PxVec3 faceA = (v[2] - v[0]).cross(v[1] - v[0]);
+                const PxVec3 faceB = (v[3] - v[1]).cross(v[2] - v[1]);
+                if (faceA.magnitude() < 1e-8f && faceB.magnitude() < 1e-8f) continue;
+                const PxVec3 face = faceA + faceB;
 
                 // Extrude along the ribbon's OWN surface normal rather than the
                 // winding's. Where a corner is tighter than the half-width the
