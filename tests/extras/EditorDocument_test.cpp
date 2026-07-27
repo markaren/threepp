@@ -5,6 +5,7 @@
 #include "threepp/extras/editor/ObjectFactory.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
+#include "threepp/extras/editor/Selection.hpp"
 
 #include "threepp/loaders/ObjectLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -247,6 +248,29 @@ TEST_CASE("a dirty document is marked in its title", "[editor]") {
 
     document.setDirty(true);
     CHECK(document.title() == "untitled*");
+}
+
+TEST_CASE("a selection uuid outlives the object it came from", "[editor]") {
+
+    // Re-resolving a selection is needed exactly when the old graph is gone:
+    // SceneDocument::replaceScene frees it before notifying listeners, so a
+    // uuid read back from the object at that point is a use-after-free.
+    Selection selection;
+    std::string expected;
+    {
+        auto scene = Scene::create();
+        auto object = Group::create();
+        object->name = "target";
+        expected = object->uuid;
+        scene->add(object);
+        selection.set(object.get());
+        CHECK(selection.uuid() == expected);
+    }// the scene, and the selected object with it, are destroyed here
+
+    CHECK(selection.uuid() == expected);
+
+    selection.set(nullptr);
+    CHECK(selection.uuid().empty());
 }
 
 TEST_CASE("newScene replaces the scene and notifies", "[editor]") {

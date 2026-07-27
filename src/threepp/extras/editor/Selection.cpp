@@ -11,7 +11,7 @@ using namespace threepp::editor;
 
 std::string Selection::uuid() const {
 
-    return current_ ? current_->uuid : std::string{};
+    return uuid_;
 }
 
 void Selection::set(Object3D* object) {
@@ -19,6 +19,7 @@ void Selection::set(Object3D* object) {
     if (object == current_) return;
 
     current_ = object;
+    uuid_ = object ? object->uuid : std::string{};
 
     // Copy first: a listener is allowed to change the selection again (the
     // hierarchy scrolls, the inspector resets its drag state), which would

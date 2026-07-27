@@ -51,6 +51,10 @@ namespace threepp::editor {
         };
 
         Object3D* current_ = nullptr;
+        // Captured on set() rather than read back from current_. Re-resolving a
+        // selection is needed exactly when the old graph is gone, and
+        // SceneDocument::replaceScene frees it before it notifies anyone.
+        std::string uuid_;
         std::vector<Entry> listeners_;
         int nextId_ = 1;
     };
