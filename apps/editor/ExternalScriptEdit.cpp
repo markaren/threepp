@@ -290,7 +290,10 @@ void EditorApp::startExternalEdit(Object3D& object) {
 
     // Opened here and closed in stopExternalEdit: the first save lands as its
     // own undo entry (nothing merges into what preceded the transaction) and
-    // every save after it merges into that one.
+    // every save after it merges into that one. The one side effect of holding
+    // it open is that other edits sharing a merge key — two of this script's
+    // parameters in a row, say — coalesce while the session lives, as if they
+    // had been one drag.
     commands_.beginTransaction();
     externalEdit_.transaction = true;
 

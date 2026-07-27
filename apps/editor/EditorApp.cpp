@@ -722,11 +722,26 @@ int EditorApp::runSelfTest() {
             check(generated.find(pythonStubDir().generic_string()) != std::string::npos,
                   "and it is this build's own stub directory");
 
-            const std::string sentinel = "{ \"mine\": true }\n";
-            ScriptWorkspace::writeSource(settings, sentinel);
-            ensureScriptWorkspace(scratch.parent_path());
-            check(ScriptWorkspace::readSource(settings) == sentinel,
-                  "regenerating never overwrites an existing settings.json");
+            // In a directory of its own, so the generated file above survives
+            // the run — it is what a user's scratch folder ends up holding, and
+            // clobbering it with a sentinel would make that unreadable.
+            {
+                const auto dir = std::filesystem::temp_directory_path() / "threepp-editor-selftest-ws";
+                std::filesystem::remove_all(dir, ec);
+                std::filesystem::create_directories(dir, ec);
+                const auto file = dir / ".vscode" / "settings.json";
+
+                ensureScriptWorkspace(dir);
+                check(std::filesystem::exists(file), "a workspace is generated where there was none");
+
+                const std::string sentinel = "{ \"mine\": true }\n";
+                ScriptWorkspace::writeSource(file, sentinel);
+                ensureScriptWorkspace(dir);
+                check(ScriptWorkspace::readSource(file) == sentinel,
+                      "regenerating never overwrites an existing settings.json");
+
+                std::filesystem::remove_all(dir, ec);
+            }
 
             // A save from another program: CRLF endings and a tab-indented
             // line, which is what an editor that is not this one produces.
