@@ -25,9 +25,12 @@ namespace {
         return object.name.empty() ? ("<" + object.type() + ">") : object.name;
     }
 
-    std::string fileOf(const std::string& path) {
+    // What a message calls the code. A file has a name; inline source has
+    // nothing but the object it belongs to, which the message already carries.
+    std::string originOf(const ScriptConfig& config) {
 
-        return std::filesystem::path(path).filename().string();
+        if (config.isInline()) return "inline script";
+        return std::filesystem::path(config.path).filename().string();
     }
 
 }// namespace
@@ -38,7 +41,8 @@ struct ScriptPlaySession::Impl {
     struct Instance {
         std::string uuid;
         std::string label;
-        std::string path;
+        // "spinner.py" or "inline script" — what the console calls the code.
+        std::string origin;
         // The script object itself. Created and destroyed with the GIL held.
         py::object self;
         bool hasUpdate = false;
@@ -65,7 +69,7 @@ struct ScriptPlaySession::Impl {
         instance.failed = true;
         instance.self = py::object();
         errors[instance.uuid] = detail;
-        log("script error in " + fileOf(instance.path) + " on " + instance.label +
+        log("script error in " + instance.origin + " on " + instance.label +
             " (" + what + "): " + detail);
     }
 
@@ -176,19 +180,27 @@ void ScriptPlaySession::start(Scene& scene) {
 
         // Recorded before anything can go wrong, so a failure has somewhere to
         // be recorded against.
+        const auto label = labelOf(*entry.object);
         impl_->instances.push_back(
-                Impl::Instance{entry.object->uuid, labelOf(*entry.object), entry.config.path});
+                Impl::Instance{entry.object->uuid, label, originOf(entry.config)});
         auto& instance = impl_->instances.back();
 
         std::error_code ec;
-        if (!std::filesystem::exists(entry.config.path, ec)) {
+        if (entry.config.isFile() && !std::filesystem::exists(entry.config.path, ec)) {
             impl_->fail(instance, "load", "file not found: " + entry.config.path);
             continue;
         }
 
         try {
             std::string className;
-            auto cls = scripting::loadScriptClass(entry.config.path, className);
+            // Inline source is compiled fresh here, exactly as a file is read
+            // and compiled fresh — inline scripts are therefore inherently hot:
+            // Apply in the editor, press Play, and that is what runs. The
+            // module is named after the object so a traceback says which one.
+            auto cls = entry.config.isInline()
+                               ? scripting::loadInlineScriptClass(entry.config.source,
+                                                                  entry.object->uuid, label, className)
+                               : scripting::loadScriptClass(entry.config.path, className);
             auto self = cls();
             impl_->applyFields(cls, self, entry.config);
 

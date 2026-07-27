@@ -52,6 +52,16 @@ namespace threepp::editor::scripting {
     // std::runtime_error (no usable class). GIL must be held.
     py::object loadScriptClass(const std::filesystem::path& path, std::string& className);
 
+    // Same, for source held in the document rather than in a file. `key` gives
+    // the synthetic module its identity (the object uuid, so two objects never
+    // share module state) and `label` is what tracebacks name the code after.
+    // GIL must be held.
+    py::object loadInlineScriptClass(const std::string& source, const std::string& key,
+                                     const std::string& label, std::string& className);
+
+    // "<inline:Box>" — what a traceback from inline source is filed under.
+    [[nodiscard]] std::string inlineFilename(const std::string& label);
+
     // The loader/discovery helpers, as a Python module object. Built once per
     // interpreter. GIL must be held.
     py::object helpers();

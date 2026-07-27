@@ -53,6 +53,19 @@ namespace {
         return group;
     }
 
+    std::shared_ptr<Group> attachSource(Scene& scene, const std::string& source,
+                                        const std::vector<ScriptConfig::Field>& fields = {}) {
+
+        auto group = Group::create();
+        group->name = "Inline";
+        ScriptConfig config;
+        config.source = source;
+        config.fields = fields;
+        config.write(*group);
+        scene.add(group);
+        return group;
+    }
+
     constexpr const char* kSpinner = R"(
 class Spinner:
     speed = 1.5
@@ -375,6 +388,167 @@ class Badstart:
     for (const auto* object : {a.get(), b.get(), c.get(), d.get(), missing.get()}) {
         CHECK_FALSE(session.errorFor(object->uuid).empty());
     }
+}
+
+TEST_CASE("inline source drives an object like a file does", "[editor][scripting]") {
+
+    auto scene = Scene::create();
+    // Same class, no file anywhere: the source lives in the document.
+    auto group = attachSource(*scene, kSpinner, {{"speed", "3"}});
+
+    ScriptPlaySession session;
+    session.start(*scene);
+    CHECK(session.errorCount() == 0);
+    CHECK(session.instanceCount() == 1);
+
+    for (int i = 0; i < 10; ++i) session.update(0.1f);
+    session.stop();
+
+    CHECK(group->rotation.y > 2.9f);
+    CHECK(group->rotation.y < 3.1f);
+}
+
+TEST_CASE("inline source is compiled fresh on every play", "[editor][scripting]") {
+
+    auto scene = Scene::create();
+    auto group = attachSource(*scene, R"(
+class Inline:
+    def start(self, obj):
+        obj.position.x = 1.0
+)");
+
+    ScriptPlaySession session;
+    session.start(*scene);
+    session.stop();
+    CHECK(group->position.x == 1.f);
+
+    // Editing inline source IS the hot reload: there is no file, no cache and
+    // no stamp to compare — the next Play compiles whatever the document says.
+    ScriptConfig edited;
+    edited.source = R"(
+class Inline:
+    def start(self, obj):
+        obj.position.x = 7.0
+)";
+    edited.write(*group);
+
+    session.start(*scene);
+    session.stop();
+    CHECK(group->position.x == 7.f);
+}
+
+TEST_CASE("inline scripts get their own module per object", "[editor][scripting]") {
+
+    // Two objects, two different inline scripts, both defining a class with the
+    // same name. A shared module would leave the second overwriting the first.
+    auto scene = Scene::create();
+    auto a = attachSource(*scene, R"(
+class Behaviour:
+    def start(self, obj):
+        obj.position.x = 1.0
+)");
+    auto b = attachSource(*scene, R"(
+class Behaviour:
+    def start(self, obj):
+        obj.position.x = 2.0
+)");
+
+    ScriptPlaySession session;
+    session.start(*scene);
+    session.stop();
+
+    CHECK(session.errorCount() == 0);
+    CHECK(a->position.x == 1.f);
+    CHECK(b->position.x == 2.f);
+}
+
+TEST_CASE("inline fields are discovered from the source", "[editor][scripting]") {
+
+    const auto inspection = scripting::inspectSource(R"(
+class Discovered:
+    speed = 1.5
+    count = 3
+    enabled = True
+    label = "hello"
+    _hidden = 1
+
+    def update(self, dt):
+        pass
+)",
+                                                     "uuid-1234", "Box");
+    REQUIRE(inspection.error.empty());
+    CHECK(inspection.className == "Discovered");
+    REQUIRE(inspection.fields.size() == 4);
+    CHECK(inspection.fields[0].name == "speed");
+    CHECK(inspection.fields[0].type == ScriptField::Type::Float);
+    CHECK(inspection.fields[2].type == ScriptField::Type::Bool);
+    CHECK(inspection.fields[3].defaultValue == "hello");
+}
+
+TEST_CASE("an inline class is found without a file name to match", "[editor][scripting]") {
+
+    // One class, whatever it is called and whether or not it updates: there is
+    // nothing to be ambiguous about.
+    CHECK(scripting::inspectSource("class Anything:\n    def start(self, obj):\n        pass\n",
+                                   "k", "Box")
+                  .className == "Anything");
+
+    // Several classes: the one defining update() is the behaviour.
+    CHECK(scripting::inspectSource("class Config:\n    pass\n\n"
+                                   "class Behaviour:\n    def update(self, dt):\n        pass\n",
+                                   "k", "Box")
+                  .className == "Behaviour");
+
+    // Ambiguous, and no file name to break the tie: reported, not guessed.
+    CHECK_FALSE(scripting::inspectSource("class One:\n    def update(self, dt):\n        pass\n\n"
+                                         "class Two:\n    def update(self, dt):\n        pass\n",
+                                         "k", "Box")
+                        .error.empty());
+
+    // No class at all.
+    CHECK_FALSE(scripting::inspectSource("SPEED = 3\n", "k", "Box").error.empty());
+}
+
+TEST_CASE("broken inline source is recorded, not fatal", "[editor][scripting]") {
+
+    auto scene = Scene::create();
+    // A syntax error, a runtime failure at import, and one that raises every
+    // frame — beside a healthy script that has to keep running.
+    auto syntax = attachSource(*scene, "class Broken:\n    def update(self dt):\n        pass\n");
+    auto imports = attachSource(*scene, "raise ValueError('boom')\n");
+    auto raises = attachSource(*scene, "class Thrower:\n"
+                                       "    def update(self, dt):\n"
+                                       "        raise RuntimeError('every single frame')\n");
+    auto working = attachSource(*scene, kSpinner);
+
+    ScriptPlaySession session;
+    session.start(*scene);
+    for (int i = 0; i < 20; ++i) session.update(0.1f);
+    session.stop();
+
+    CHECK(session.errorCount() == 3);
+    for (const auto* object : {syntax.get(), imports.get(), raises.get()}) {
+        CHECK_FALSE(session.errorFor(object->uuid).empty());
+    }
+    // The traceback names the object the source belongs to, since there is no
+    // file name to point at.
+    CHECK(session.errorFor(raises->uuid).find("<inline:Inline>") != std::string::npos);
+    CHECK(session.errorFor(working->uuid).empty());
+    CHECK(working->rotation.y > 2.5f);
+}
+
+TEST_CASE("a syntax check compiles without running anything", "[editor][scripting]") {
+
+    CHECK(scripting::checkSyntax(kSpinner, "Box").empty());
+
+    // The line number is the whole point: it is what the editor shows in red.
+    const auto error = scripting::checkSyntax("class Broken:\n    def update(self dt):\n        pass\n", "Box");
+    CHECK_FALSE(error.empty());
+    CHECK(error.find("line 2") != std::string::npos);
+
+    // Valid syntax that would blow up (or fire a missile) when executed still
+    // passes the check — nothing here runs.
+    CHECK(scripting::checkSyntax("raise SystemExit(1)\n", "Box").empty());
 }
 
 TEST_CASE("a scene with no scripts costs nothing", "[editor][scripting]") {

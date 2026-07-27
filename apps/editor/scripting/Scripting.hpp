@@ -43,7 +43,7 @@ namespace threepp::editor {
 
     namespace scripting {
 
-        // Result of looking at a .py file without running any of its behaviour.
+        // Result of looking at a script without running any of its behaviour.
         struct Inspection {
             std::string className;
             std::vector<ScriptField> fields;
@@ -63,12 +63,25 @@ namespace threepp::editor {
         // reports its exposed fields. Never throws.
         [[nodiscard]] Inspection inspect(const std::filesystem::path& path);
 
+        // Same for inline source held in the document. `key` gives the
+        // synthetic module its identity (pass the object uuid) and `label` is
+        // what a traceback from this code will name it. Never throws.
+        [[nodiscard]] Inspection inspectSource(const std::string& source, const std::string& key,
+                                               const std::string& label);
+
+        // Does `source` parse? Returns "" when it does, and the SyntaxError
+        // with its line number when it does not. compile() only — nothing in
+        // the script runs, which is what makes this safe to call from a text
+        // editor's Apply button. Never throws.
+        [[nodiscard]] std::string checkSyntax(const std::string& source, const std::string& label);
+
     }// namespace scripting
 
 
     // Runs every object's attached script for the duration of a Play.
     //
-    // start()  loads each referenced .py fresh, instantiates its class, applies
+    // start()  compiles each script fresh — the referenced .py, or the inline
+    //          source the document carries — instantiates its class, applies
     //          the authored field values and calls start(obj) with a handle to
     //          the object — always its CONCRETE type (Mesh, Robot, Light, ...),
     //          held by shared_ptr, so a script that stashes it outlives the

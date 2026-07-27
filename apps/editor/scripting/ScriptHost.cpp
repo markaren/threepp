@@ -5,6 +5,7 @@
 
 #include "threepp/extras/editor/ScriptConfig.hpp"
 
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -83,6 +84,73 @@ def find_class(mod, stem):
 def load_class(path):
     mod, stem = load(path)
     return find_class(mod, stem)
+
+def _module_id(key):
+    """A module name component from an arbitrary key (an object uuid)."""
+    return "".join(c if c.isalnum() else "_" for c in key)
+
+def load_source(source, key, filename):
+    """Compile and run INLINE source in a brand-new module, and return it.
+
+    Same compile-from-text path as load(); inline source simply skips the read.
+    The module name is derived from the object, so two objects carrying
+    different inline scripts never share module state, and `filename` is what
+    every traceback line from this script will name - which is why it says
+    which object the code belongs to.
+    """
+    name = _PREFIX + "inline_" + _module_id(key)
+    code = compile(source, filename, "exec")
+    mod = types.ModuleType(name)
+    mod.__file__ = filename
+    sys.modules[name] = mod
+    try:
+        exec(code, mod.__dict__)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    return mod
+
+def find_inline_class(mod):
+    """The script class of an inline module.
+
+    There is no file name to match, so: the only class if the module defines
+    just one (which makes a start()-only inline script work, the same promise
+    a named file gets), else the single class defining update(). Several
+    candidates is reported, never guessed at.
+    """
+    own = [v for v in vars(mod).values()
+           if inspect.isclass(v) and getattr(v, "__module__", None) == mod.__name__]
+    if not own:
+        raise LookupError("the inline script defines no class")
+    if len(own) == 1:
+        return own[0]
+    updaters = [c for c in own if callable(getattr(c, "update", None))]
+    if len(updaters) == 1:
+        return updaters[0]
+    if not updaters:
+        raise LookupError("the inline script defines several classes and none defines update()")
+    raise LookupError("the inline script defines several classes with update(); it must be clear which one to run")
+
+def load_class_source(source, key, filename):
+    return find_inline_class(load_source(source, key, filename))
+
+def check_syntax(source, filename):
+    """compile() WITHOUT exec: does this text parse, and if not, where?
+
+    Returns "" for valid source. Nothing in the script runs - this is what the
+    Script Editor's Apply button uses, and pressing Apply must never execute
+    anything.
+    """
+    try:
+        compile(source, filename, "exec")
+    except SyntaxError as e:
+        where = "line %d" % e.lineno if e.lineno else "syntax error"
+        text = (e.text or "").strip()
+        message = "%s: %s" % (where, e.msg)
+        return message + "\n    " + text if text else message
+    except BaseException as e:
+        return "%s: %s" % (type(e).__name__, e)
+    return ""
 
 # Exact types only. `type(x) is bool` before int matters (bool IS an int), and
 # rejecting subclasses keeps an IntEnum or a numpy scalar out of the inspector,
@@ -211,6 +279,19 @@ namespace threepp::editor::scripting {
         return cls;
     }
 
+    std::string inlineFilename(const std::string& label) {
+
+        return "<inline:" + (label.empty() ? std::string("script") : label) + ">";
+    }
+
+    py::object loadInlineScriptClass(const std::string& source, const std::string& key,
+                                     const std::string& label, std::string& className) {
+
+        auto cls = helpers().attr("load_class_source")(source, key, inlineFilename(label));
+        className = py::cast<std::string>(cls.attr("__name__"));
+        return cls;
+    }
+
     py::object exposedFields(const py::object& cls) {
 
         return helpers().attr("fields")(cls);
@@ -227,10 +308,53 @@ namespace threepp::editor::scripting {
         }
     }
 
+    namespace {
+
+        // The half of an inspection that does not care where the class came
+        // from. GIL must be held; `load` reports the class and its name.
+        Inspection inspectWith(const std::function<py::object(std::string&)>& load) {
+
+            Inspection result;
+            try {
+                auto cls = load(result.className);
+                const auto discovered = py::cast<py::list>(exposedFields(cls));
+                for (const auto& entry : discovered) {
+                    const auto tuple = py::cast<py::tuple>(entry);
+                    ScriptField field;
+                    field.name = py::cast<std::string>(tuple[0]);
+                    const auto kind = py::cast<std::string>(tuple[1]);
+                    if (kind == "bool") {
+                        field.type = ScriptField::Type::Bool;
+                        field.defaultValue = ScriptConfig::toText(py::cast<bool>(tuple[2]));
+                    } else if (kind == "int") {
+                        field.type = ScriptField::Type::Int;
+                        field.defaultValue = ScriptConfig::toText(py::cast<int>(tuple[2]));
+                    } else if (kind == "float") {
+                        field.type = ScriptField::Type::Float;
+                        field.defaultValue = ScriptConfig::toText(py::cast<float>(tuple[2]));
+                    } else {
+                        field.type = ScriptField::Type::String;
+                        field.defaultValue = ScriptConfig::sanitized(py::cast<std::string>(tuple[2]));
+                    }
+                    result.fields.push_back(std::move(field));
+                }
+            } catch (py::error_already_set& e) {
+                result.error = describeError(e);
+                result.fields.clear();
+                result.className.clear();
+            } catch (const std::exception& e) {
+                result.error = e.what();
+                result.fields.clear();
+                result.className.clear();
+            }
+            return result;
+        }
+
+    }// namespace
+
     Inspection inspect(const std::filesystem::path& path) {
 
         Inspection result;
-
         if (!ensureInterpreter(&result.error)) return result;
 
         std::error_code ec;
@@ -240,39 +364,41 @@ namespace threepp::editor::scripting {
         }
 
         py::gil_scoped_acquire gil;
+        return inspectWith([&path](std::string& className) {
+            return loadScriptClass(path, className);
+        });
+    }
+
+    Inspection inspectSource(const std::string& source, const std::string& key,
+                             const std::string& label) {
+
+        Inspection result;
+        if (!ensureInterpreter(&result.error)) return result;
+
+        // Note that this RUNS the source, exactly as inspect() runs the file:
+        // class bodies execute on import, and that is the only way to see what
+        // a class exposes. It happens when the inspector draws a script's
+        // parameters, never when a scene is opened.
+        py::gil_scoped_acquire gil;
+        return inspectWith([&](std::string& className) {
+            return loadInlineScriptClass(source, key, label, className);
+        });
+    }
+
+    std::string checkSyntax(const std::string& source, const std::string& label) {
+
+        std::string error;
+        if (!ensureInterpreter(&error)) return error;
+
+        py::gil_scoped_acquire gil;
         try {
-            auto cls = loadScriptClass(path, result.className);
-            const auto discovered = py::cast<py::list>(exposedFields(cls));
-            for (const auto& entry : discovered) {
-                const auto tuple = py::cast<py::tuple>(entry);
-                ScriptField field;
-                field.name = py::cast<std::string>(tuple[0]);
-                const auto kind = py::cast<std::string>(tuple[1]);
-                if (kind == "bool") {
-                    field.type = ScriptField::Type::Bool;
-                    field.defaultValue = ScriptConfig::toText(py::cast<bool>(tuple[2]));
-                } else if (kind == "int") {
-                    field.type = ScriptField::Type::Int;
-                    field.defaultValue = ScriptConfig::toText(py::cast<int>(tuple[2]));
-                } else if (kind == "float") {
-                    field.type = ScriptField::Type::Float;
-                    field.defaultValue = ScriptConfig::toText(py::cast<float>(tuple[2]));
-                } else {
-                    field.type = ScriptField::Type::String;
-                    field.defaultValue = ScriptConfig::sanitized(py::cast<std::string>(tuple[2]));
-                }
-                result.fields.push_back(std::move(field));
-            }
+            return py::cast<std::string>(
+                    helpers().attr("check_syntax")(source, inlineFilename(label)));
         } catch (py::error_already_set& e) {
-            result.error = describeError(e);
-            result.fields.clear();
-            result.className.clear();
+            return describeError(e);
         } catch (const std::exception& e) {
-            result.error = e.what();
-            result.fields.clear();
-            result.className.clear();
+            return e.what();
         }
-        return result;
     }
 
 }// namespace threepp::editor::scripting
