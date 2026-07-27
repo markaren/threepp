@@ -607,6 +607,7 @@ int EditorApp::runSelfTest() {
             auto* restored = document_.scene().getObjectByName("Box");
             check(restored && std::abs(restored->rotation.y - restY) < 1e-4f,
                   "stop restores the pose the inline script changed");
+
             const auto after = restored ? ScriptConfig::read(*restored).value_or(ScriptConfig{})
                                         : ScriptConfig{};
             check(after.isInline() && after.source == stored.source,
@@ -636,6 +637,27 @@ int EditorApp::runSelfTest() {
                 step();
                 check(scripts_ && !scripts_->errorFor(uuid).empty(),
                       "the inline failure is recorded against the object");
+
+                // The New Inline Script template must itself run: it carries
+                // `import threepp` and an Object3D annotation for IDE
+                // completion, and this is what proves that import resolves
+                // inside a script module against the embedded interpreter.
+                // Placed here, on a re-resolved Box, with nothing after it
+                // reusing pre-play pointers — the crash the first placement
+                // caused is exactly the scene-replace staleness this file
+                // keeps having to respect.
+                if (auto* target = document_.scene().getObjectByName("Box")) {
+                    setInlineScript(*target, inlineScriptTemplate(), "New Inline Script");
+                    step();
+                    const float beforeTemplate = target->rotation.y;
+                    startPlay();
+                    step(30);
+                    auto* driven = document_.scene().getObjectByName("Box");
+                    check(driven && driven->rotation.y > beforeTemplate + 1e-3f,
+                          "the template script runs as generated (import threepp resolves)");
+                    stopPlay();
+                    step();
+                }
 
                 if (auto* clear = document_.scene().getObjectByName("Box")) {
                     assignScript(*clear, {});

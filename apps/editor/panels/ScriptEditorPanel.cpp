@@ -59,20 +59,34 @@ std::string EditorApp::inlineScriptTemplate() {
     // One class, one exposed parameter, and the three method names spelled out
     // — the header is the documentation most users will ever read about the
     // shape a script has to have.
+    //
+    // `import threepp` and the Object3D annotation are here for the IDE, not
+    // the runtime: they are what makes `self.obj.` complete in VS Code the
+    // moment the file opens, instead of after the user reinvents both lines.
+    // At Play they resolve against the embedded module, so they are also
+    // correct. Narrow the annotation (threepp.Mesh, threepp.Robot) for the
+    // type-specific API.
     return "# Inline Python script. Stored in this scene, runs when you press Play.\n"
            "#\n"
            "# One class with any of start(obj) / update(dt) / stop(). Plain class\n"
            "# attributes (int, float, bool, str) appear as parameters in the\n"
            "# inspector, where their values are saved with the scene.\n"
+           "#\n"
+           "# The annotation below is what gives `self.obj.` completion in an IDE;\n"
+           "# narrow it (threepp.Mesh, threepp.Robot, ...) for the full API of\n"
+           "# what this script is attached to.\n"
+           "\n"
+           "import threepp\n"
+           "\n"
            "\n"
            "class Behaviour:\n"
            "\n"
            "    speed = 1.0\n"
            "\n"
-           "    def start(self, obj):\n"
+           "    def start(self, obj: threepp.Object3D):\n"
            "        self.obj = obj\n"
            "\n"
-           "    def update(self, dt):\n"
+           "    def update(self, dt: float):\n"
            "        self.obj.rotation.y += self.speed * dt\n";
 }
 

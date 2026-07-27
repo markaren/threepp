@@ -265,13 +265,16 @@ body has to execute for its attributes to exist). The Script Editor's Apply
 compiles the source without executing it. A scene file is data, not a program.
 
 ```python
+import threepp           # for the IDE; resolves against the embedded module at Play
+
+
 class Spinner:
     speed = 1.5          # exposed in the inspector, saved with the scene
 
-    def start(self, obj):
+    def start(self, obj: threepp.Object3D):
         self.obj = obj
 
-    def update(self, dt):
+    def update(self, dt: float):
         self.obj.rotation.y += self.speed * dt
 
     def stop(self):
