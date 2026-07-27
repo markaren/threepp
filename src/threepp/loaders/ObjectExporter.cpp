@@ -398,6 +398,20 @@ namespace {
             data["displacementScale"] = m->displacementScale;
             data["displacementBias"] = m->displacementBias;
         }
+        // threepp extensions with no three.js counterpart. Namespaced so a
+        // three.js reader ignores them and a threepp round-trip stays lossless.
+        if (auto* m = dynamic_cast<MaterialWithDetailMap*>(&material)) {
+            writeTextureSlot(data, "threeppDetailMap", m->detailMap, meta);
+            data["threeppDetailRepeat"] = m->detailRepeat;
+            data["threeppDetailStrength"] = m->detailStrength;
+            writeTextureSlot(data, "threeppDetailNormalMap", m->detailNormalMap, meta);
+            data["threeppDetailNormalScale"] = m->detailNormalScale;
+            data["threeppDetailRoughStrength"] = m->detailRoughStrength;
+        }
+        if (auto* m = dynamic_cast<MaterialWithTranslucency*>(&material)) {
+            data["threeppTranslucency"] = m->translucency;
+            data["threeppTranslucencyColor"] = hex(m->translucencyColor);
+        }
         if (auto* m = dynamic_cast<MaterialWithSpecularMap*>(&material)) {
             writeTextureSlot(data, "specularMap", m->specularMap, meta);
         }
@@ -510,6 +524,10 @@ namespace {
 
         data["visible"] = material.visible;
         data["toneMapped"] = material.toneMapped;
+
+        // threepp extension: a Vulkan temporal-pass hint, no three.js counterpart.
+        // Only written when set, so the common case costs no bytes.
+        if (material.textureAnimatedHint) data["threeppTextureAnimatedHint"] = true;
 
         meta.materials.push_back(data);
 

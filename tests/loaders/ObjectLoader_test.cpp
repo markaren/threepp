@@ -1007,6 +1007,37 @@ TEST_CASE("A raw (non-normalized) narrow attribute keeps its integers unscaled")
 }
 
 
+TEST_CASE("threepp-only material fields survive the round-trip") {
+
+    auto material = MeshStandardMaterial::create();
+    material->textureAnimatedHint = true;
+    material->detailRepeat = 3.5f;
+    material->detailStrength = 0.25f;
+    material->detailNormalScale = 0.75f;
+    material->detailRoughStrength = 0.4f;
+    material->translucency = 0.6f;
+    material->translucencyColor = Color(0x22aa44);
+
+    auto mesh = Mesh::create(makeDataGeometry(), material);
+
+    ObjectExporter exporter;
+    ObjectLoader loader;
+    auto parsed = loader.parse(exporter.toJson(*mesh));
+    REQUIRE(parsed != nullptr);
+
+    auto parsedMaterial = std::dynamic_pointer_cast<MeshStandardMaterial>(parsed->material());
+    REQUIRE(parsedMaterial != nullptr);
+
+    CHECK(parsedMaterial->textureAnimatedHint);
+    CHECK_THAT(parsedMaterial->detailRepeat, WithinAbs(3.5f, 1e-5));
+    CHECK_THAT(parsedMaterial->detailStrength, WithinAbs(0.25f, 1e-5));
+    CHECK_THAT(parsedMaterial->detailNormalScale, WithinAbs(0.75f, 1e-5));
+    CHECK_THAT(parsedMaterial->detailRoughStrength, WithinAbs(0.4f, 1e-5));
+    CHECK_THAT(parsedMaterial->translucency, WithinAbs(0.6f, 1e-5));
+    CHECK(parsedMaterial->translucencyColor.getHex() == 0x22aa44);
+}
+
+
 TEST_CASE("three.js typed-array names map onto threepp attribute types") {
 
     ObjectLoader loader;

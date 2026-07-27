@@ -474,6 +474,40 @@ namespace {
         return values;
     }
 
+    // The threepp-only material fields (see the matching writer in
+    // ObjectExporter). These have no three.js key and no setValue() entry, so
+    // they are applied straight onto the object rather than through setValues().
+    void applyThreeppMaterialExtensions(
+            Material& material, const json& j, const TextureMap& textures, Warnings& warnings) {
+
+        const auto getFloat = [&](const char* key, float& target) {
+            if (j.contains(key) && j[key].is_number()) target = j[key].get<float>();
+        };
+        const auto getTexture = [&](const char* key, std::shared_ptr<Texture>& target) {
+            if (auto texture = lookupTexture(j, key, textures, warnings)) target = texture;
+        };
+
+        if (j.contains("threeppTextureAnimatedHint") && j["threeppTextureAnimatedHint"].is_boolean()) {
+            material.textureAnimatedHint = j["threeppTextureAnimatedHint"].get<bool>();
+        }
+
+        if (auto* m = dynamic_cast<MaterialWithDetailMap*>(&material)) {
+            getTexture("threeppDetailMap", m->detailMap);
+            getFloat("threeppDetailRepeat", m->detailRepeat);
+            getFloat("threeppDetailStrength", m->detailStrength);
+            getTexture("threeppDetailNormalMap", m->detailNormalMap);
+            getFloat("threeppDetailNormalScale", m->detailNormalScale);
+            getFloat("threeppDetailRoughStrength", m->detailRoughStrength);
+        }
+
+        if (auto* m = dynamic_cast<MaterialWithTranslucency*>(&material)) {
+            getFloat("threeppTranslucency", m->translucency);
+            if (j.contains("threeppTranslucencyColor") && j["threeppTranslucencyColor"].is_number()) {
+                m->translucencyColor.copy(colorFrom(j["threeppTranslucencyColor"]));
+            }
+        }
+    }
+
     MaterialMap parseMaterials(const json& j, const TextureMap& textures, Warnings& warnings) {
 
         MaterialMap materials;
@@ -496,6 +530,7 @@ namespace {
             material->name = value<std::string>(entry, "name", "");
 
             material->setValues(collectMaterialValues(*material, entry, textures, warnings));
+            applyThreeppMaterialExtensions(*material, entry, textures, warnings);
 
             if (auto* withDefines = dynamic_cast<MaterialWithDefines*>(material.get())) {
                 if (entry.contains("defines") && entry["defines"].is_object()) {
