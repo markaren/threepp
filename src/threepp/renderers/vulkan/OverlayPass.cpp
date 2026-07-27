@@ -20,6 +20,8 @@
 // including in two TUs is safe.
 #include "threepp/renderers/vulkan/shaders/overlay.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_color.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_color.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_point.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_point.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.frag.spv.h"
@@ -84,6 +86,8 @@ OverlayPass::~OverlayPass() {
     if (spritePipelineLayout_)      vkDestroyPipelineLayout(d, spritePipelineLayout_, nullptr);
     if (orthoLineListPipeline_)     vkDestroyPipeline(d, orthoLineListPipeline_, nullptr);
     if (orthoLineStripPipeline_)    vkDestroyPipeline(d, orthoLineStripPipeline_, nullptr);
+    if (orthoLineListColoredPipeline_)  vkDestroyPipeline(d, orthoLineListColoredPipeline_, nullptr);
+    if (orthoLineStripColoredPipeline_) vkDestroyPipeline(d, orthoLineStripColoredPipeline_, nullptr);
     if (orthoMeshPipeline_)         vkDestroyPipeline(d, orthoMeshPipeline_, nullptr);
     if (orthoMeshTransparentPipeline_) vkDestroyPipeline(d, orthoMeshTransparentPipeline_, nullptr);
     if (orthoPointListPipeline_)    vkDestroyPipeline(d, orthoPointListPipeline_, nullptr);
@@ -241,6 +245,59 @@ void OverlayPass::createOrthoLinePipelines() {
     check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpciStrip, nullptr,
                                     &orthoLineStripPipeline_),
           "vkCreateGraphicsPipelines(orthoLineStrip)");
+
+    // ── Vertex-colored line variants ────────────────────────────────
+    // Same state, but the overlay_color shader pair and a second vertex
+    // binding for the per-vertex color — mirrors the primary scene's
+    // colored overlay pipelines so a GridHelper/AxesHelper looks the
+    // same in a composed pane as in the main view (and as on GL).
+    {
+        VkShaderModuleCreateInfo cvsmci{};
+        cvsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        cvsmci.codeSize = sizeof(kOverlayColorVertSpv);
+        cvsmci.pCode    = kOverlayColorVertSpv;
+        VkShaderModule cvert = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(ctx_.device(), &cvsmci, nullptr, &cvert),
+              "vkCreateShaderModule(ortho overlay_color.vert)");
+        VkShaderModuleCreateInfo cfsmci{};
+        cfsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        cfsmci.codeSize = sizeof(kOverlayColorFragSpv);
+        cfsmci.pCode    = kOverlayColorFragSpv;
+        VkShaderModule cfrag = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(ctx_.device(), &cfsmci, nullptr, &cfrag),
+              "vkCreateShaderModule(ortho overlay_color.frag)");
+
+        VkPipelineShaderStageCreateInfo cStages[2] = {stages[0], stages[1]};
+        cStages[0].module = cvert;
+        cStages[1].module = cfrag;
+
+        VkVertexInputBindingDescription cvibs[2] = {vib, vib};
+        cvibs[1].binding = 1;
+        VkVertexInputAttributeDescription cvias[2] = {via, via};
+        cvias[1].location = 1;
+        cvias[1].binding  = 1;
+        VkPipelineVertexInputStateCreateInfo cvi = vi;
+        cvi.vertexBindingDescriptionCount   = 2;
+        cvi.pVertexBindingDescriptions      = cvibs;
+        cvi.vertexAttributeDescriptionCount = 2;
+        cvi.pVertexAttributeDescriptions    = cvias;
+
+        VkGraphicsPipelineCreateInfo gpciColored = gpci;
+        gpciColored.pStages           = cStages;
+        gpciColored.pVertexInputState = &cvi;
+        check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpciColored, nullptr,
+                                        &orthoLineListColoredPipeline_),
+              "vkCreateGraphicsPipelines(orthoLineListColored)");
+
+        VkGraphicsPipelineCreateInfo gpciColoredStrip = gpciColored;
+        gpciColoredStrip.pInputAssemblyState = &iaStrip;
+        check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpciColoredStrip, nullptr,
+                                        &orthoLineStripColoredPipeline_),
+              "vkCreateGraphicsPipelines(orthoLineStripColored)");
+
+        vkDestroyShaderModule(ctx_.device(), cvert, nullptr);
+        vkDestroyShaderModule(ctx_.device(), cfrag, nullptr);
+    }
 
     // Identical state to the line pipelines (position-only input,
     // depth off, CULL_NONE, same layout) but TRIANGLE_LIST topology;
@@ -1296,12 +1353,21 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
 
             Color color(1.f, 1.f, 1.f);
             float opacity = 1.f;
+            bool useVertexColors = false;
             if (auto m = ld.line->material()) {
                 if (auto* mc = dynamic_cast<MaterialWithColor*>(m.get())) color = mc->color;
                 opacity = m->opacity;
+                // three.js semantics: vertexColors modulates the material color.
+                // Requires the geometry to actually have an uploaded color buffer.
+                useVertexColors = m->vertexColors && lrec->color.handle != VK_NULL_HANDLE;
             }
 
-            VkPipeline want = ld.isSegments ? orthoLineListPipeline_ : orthoLineStripPipeline_;
+            VkPipeline want;
+            if (useVertexColors) {
+                want = ld.isSegments ? orthoLineListColoredPipeline_ : orthoLineStripColoredPipeline_;
+            } else {
+                want = ld.isSegments ? orthoLineListPipeline_ : orthoLineStripPipeline_;
+            }
             if (want != curLine) {
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
                 curLine = want;
@@ -1319,9 +1385,15 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(pc), &pc);
 
-            VkBuffer     vb[1] = {lrec->vertex.handle};
-            VkDeviceSize vo[1] = {0};
-            vkCmdBindVertexBuffers(cb, 0, 1, vb, vo);
+            if (useVertexColors) {
+                VkBuffer     vb[2] = {lrec->vertex.handle, lrec->color.handle};
+                VkDeviceSize vo[2] = {0, 0};
+                vkCmdBindVertexBuffers(cb, 0, 2, vb, vo);
+            } else {
+                VkBuffer     vb[1] = {lrec->vertex.handle};
+                VkDeviceSize vo[1] = {0};
+                vkCmdBindVertexBuffers(cb, 0, 1, vb, vo);
+            }
 
             const auto& dr = g->drawRange;
             if (lrec->index.handle != VK_NULL_HANDLE) {

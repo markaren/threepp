@@ -20,9 +20,19 @@ layout(push_constant) uniform Pc {
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outMask;// coverage for overlay_aa (see overlay.frag)
 
+// Same linear->sRGB OETF as overlay.frag: the swapchain is UNORM and holds
+// display-referred data, so writing the linear product raw would render the
+// cloud darker than the identical PointsMaterial on the GL backend.
+vec3 linearToSRGB(vec3 x) {
+    const vec3 cutoff = vec3(lessThan(x, vec3(0.0031308)));
+    const vec3 lower  = 12.92 * x;
+    const vec3 higher = 1.055 * pow(max(x, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+    return mix(higher, lower, cutoff);
+}
+
 void main() {
     vec2 d = gl_PointCoord - vec2(0.5);
     if (dot(d, d) > 0.25) discard;
-    outColor = vec4(pc.color.rgb * vColor, 1.0);
+    outColor = vec4(linearToSRGB(pc.color.rgb * vColor), 1.0);
     outMask  = vec4(1.0);
 }

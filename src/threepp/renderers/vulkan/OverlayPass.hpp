@@ -143,6 +143,12 @@ namespace threepp::vulkan {
         VkPipelineLayout orthoLinePipelineLayout_      = VK_NULL_HANDLE;
         VkPipeline       orthoLineListPipeline_        = VK_NULL_HANDLE;
         VkPipeline       orthoLineStripPipeline_       = VK_NULL_HANDLE;
+        // Vertex-colored variants (overlay_color shaders, pos + color
+        // bindings) — without them a GridHelper/AxesHelper in a composed
+        // secondary pane loses its vertex colors and draws in the flat
+        // material color (white, for the helpers' default materials).
+        VkPipeline       orthoLineListColoredPipeline_  = VK_NULL_HANDLE;
+        VkPipeline       orthoLineStripColoredPipeline_ = VK_NULL_HANDLE;
         VkPipeline       orthoMeshPipeline_            = VK_NULL_HANDLE;
         VkPipeline       orthoMeshTransparentPipeline_ = VK_NULL_HANDLE;
 
