@@ -126,39 +126,6 @@ namespace threepp::vulkan {
                            float jitterTexX = 0.f,
                            float jitterTexY = 0.f);
 
-        // ── Lens + sensor parameters for the final RCAS stage ────────────────
-        // RCAS is the one stage every finalize route funnels through and the
-        // last one before the swapchain, so it also carries the lens warp and
-        // the sensor noise (rcas.comp explains why each has to live there).
-        // Set once per frame instead of threaded through recordResolve /
-        // recordPostFinalize, which already carry a long tail of arguments.
-        //
-        // `applySharpen` is separate from the recordResolve/recordPostFinalize
-        // `sharpen` argument, which means "run this pass at all": with a lens
-        // or noise active the pass must run even when the user asked for no
-        // sharpening, and RCAS at amount 0 is still a -1/8 kernel, not a
-        // passthrough.
-        struct SensorParams {
-            bool     applySharpen  = false;
-            bool     distortActive = false;
-            bool     noiseActive   = false;
-            uint32_t lensModel     = 0u;   // threepp::LensModel
-            float    radial[4]     = {0.f, 0.f, 0.f, 0.f};// k1..k4
-            float    tangential[2] = {0.f, 0.f};          // p1, p2
-            // Normalized intrinsics (fx/W, fy/H, cx/W, cy/H) — resolution
-            // independent, so render-extent values stay correct at the
-            // display extent this pass runs at.
-            float    normK[4] = {1.f, 1.f, 0.5f, 0.5f};
-            uint32_t frameSeed     = 0u;
-            float    fullWell      = 20000.f;
-            float    readNoise     = 3.f;
-            float    darkElectrons = 0.f;
-            float    prnu          = 0.f;
-            float    isoGain       = 1.f;
-        };
-        void setSensorParams(const SensorParams& p) { sensor_ = p; }
-        [[nodiscard]] const SensorParams& sensorParams() const { return sensor_; }
-
         // Denoise writes its output here when TAA is active (replaces the
         // direct-to-swapchain write of non-TAA mode).
         [[nodiscard]] VkImageView inputView(uint32_t frame) const {
@@ -274,8 +241,6 @@ namespace threepp::vulkan {
         std::vector<VkImage> postFinalizeDstImage_;// [imageCount]
 
         bool historyValid_ = false;
-
-        SensorParams sensor_{};// lens warp + sensor noise for the RCAS stage
 
         // Internal helpers.
         Image2D createStorageSampledImage(uint32_t w, uint32_t h, VkFormat format,

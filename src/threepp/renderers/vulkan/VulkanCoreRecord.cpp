@@ -925,10 +925,6 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
             preExpHist_[currentFrame] = preExp;
             std::memcpy(&preExpBits_, &preExp, sizeof(preExpBits_));
 
-            // Lens warp + sensor noise for the final (RCAS) stage — see
-            // rcas.comp for why both live at the very end of the chain.
-            if (taa_) taa_->setSensorParams(buildSensorParams());
-
             // Gather this frame's particle centers + base indices BEFORE the
             // scene dispatch — the hook tail runs particle_light.comp over them
             // (lit billboards; the overlay loop below consumes the bases).
@@ -1113,7 +1109,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                 // Finalize hdrOut_ → swapchain (display-referred RCAS or plain copy).
                 taa_->recordPostFinalize(cb, currentFrame, imageIndex,
                                          regionSwapExt_.width, regionSwapExt_.height,
-                                         sharpenStrength_ > 0.0f || sensorStageActive(), sharpenStrength_);
+                                         sharpenStrength_ > 0.0f, sharpenStrength_);
             } else
 #endif
 #if defined(THREEPP_WITH_FSR)
@@ -1227,7 +1223,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                 // Finalize hdrOut_ → swapchain (display-referred RCAS or plain copy).
                 taa_->recordPostFinalize(cb, currentFrame, imageIndex,
                                          regionSwapExt_.width, regionSwapExt_.height,
-                                         sharpenStrength_ > 0.0f || sensorStageActive(), sharpenStrength_);
+                                         sharpenStrength_ > 0.0f, sharpenStrength_);
             } else
 #endif
             {
@@ -1258,7 +1254,7 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
                 taa_->recordResolve(cb, currentFrame, imageIndex,
                                     regionRenderExt_.width, regionRenderExt_.height,
                                     regionSwapExt_.width, regionSwapExt_.height, effAlpha, taaDtFrames,
-                                    sharpenStrength_ > 0.0f || sensorStageActive(), sharpenStrength_,
+                                    sharpenStrength_ > 0.0f, sharpenStrength_,
                                     taaSkyReproj_.data(),
                                     static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
                                     ptExt.width, ptExt.height, ext.width, ext.height,
@@ -2061,6 +2057,27 @@ void VulkanRendererCore::CoreImpl::recordCommandBuffer(VkCommandBuffer cb, uint3
             }
             // ── End hybrid raster overlay pass ─────────────────────────────────
 
+            // ── Camera image formation: lens distortion + sensor noise ─────────
+            // Deliberately LAST. The overlay pass above composites particle
+            // billboards (chimney smoke and friends), lines and wireframe
+            // straight onto the swapchain, so a warp applied any earlier bent
+            // the scene but not them — overlays visibly slid off the geometry
+            // they belong to, worsening toward the frame edge. A real lens
+            // bends everything in front of it, and a real sensor noises
+            // everything the lens projects, so both belong here. Doing it here
+            // also leaves the overlay's depth test in the undistorted space its
+            // depth buffer is actually in. ImGui draws after (endFrame) and
+            // stays clean, which is right — a HUD is not in front of the lens.
+            //
+            // No-op (and no allocation) unless a lens or noise is configured.
+            if (sensorPass_ && sensorStageActive()) {
+                gpuTimings_->begin(cb, TP_SensorImage, currentFrame);
+                sensorPass_->record(cb, currentFrame,
+                                    ctx->swapchainImages()[imageIndex],
+                                    ctx->swapchainImageViews()[imageIndex],
+                                    ext.width, ext.height, buildSensorParams());
+                gpuTimings_->end(cb, TP_SensorImage, currentFrame);
+            }
 
             // ── End of deferred-render recording. ──────────────────────────────
             // The swapchain image is left in VK_IMAGE_LAYOUT_GENERAL — endFrame

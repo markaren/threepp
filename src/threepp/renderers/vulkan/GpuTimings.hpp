@@ -39,7 +39,8 @@ namespace threepp::vulkan {
         TP_ShadeB        = 7,// MSAA dispatch B: per-sample edge shading (setGbufferMsaa > 1 only)
         TP_Dof           = 8,// thin-lens depth of field (setDepthOfField only)
         TP_Froxel        = 9,// froxel volumetrics: inject + integrate (medium-active frames only)
-        TP_COUNT         = 10,
+        TP_SensorImage   = 10,// lens distortion + sensor noise (setLensDistortion / setSensorNoise only)
+        TP_COUNT         = 11,
     };
     inline constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
 

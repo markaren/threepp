@@ -16,6 +16,8 @@
 
 #include "threepp/cameras/LensDistortion.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
+#include "threepp/materials/LineBasicMaterial.hpp"
+#include "threepp/objects/LineSegments.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
@@ -73,6 +75,11 @@ namespace {
 }// namespace
 
 int main() {
+    // Unbuffered: this test drives a GPU, and a device-lost or a crash would
+    // otherwise discard every check already printed, leaving no clue as to how
+    // far it got.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+
     std::unique_ptr<Canvas> canvasPtr;
     std::unique_ptr<VulkanRenderer> rendererPtr;
     try {
@@ -306,6 +313,21 @@ int main() {
                                    MeshBasicMaterial::create({{"color", Color(1.f, 0.f, 0.f)}}));
         marker->position.set(1.35f, 0.95f, -3.f);// well off-axis, where distortion bites
         scene.add(marker);
+
+        // Used only by the overscan check far below: a blue marker placed
+        // OUTSIDE the nominal frustum (ideal normalized 0.75, 0.20 — the
+        // rendered pinhole image reaches |x| <= (W/2)/fx = 0.656). It is
+        // therefore invisible in every check before that one, and no detector
+        // here looks at blue.
+        //
+        // It is added HERE rather than at the point of use because adding a
+        // mesh after an earlier add/remove crashes the renderer outright
+        // (0xC0000409) — reproducible with the lens disabled, so unrelated to
+        // the camera model. Keeping the scene's object set stable sidesteps it.
+        auto outsider = Mesh::create(SphereGeometry::create(0.22f, 24, 12),
+                                     MeshBasicMaterial::create({{"color", Color(0.f, 0.f, 1.f)}}));
+        outsider->position.set(0.75f * 5.f, 0.20f * 5.f, -5.f);
+        scene.add(outsider);
         scene.background = Color(0.f, 0.f, 0.f);
         camera.position.set(0.f, 0.f, 0.f);
         camera.lookAt({0.f, 0.f, -1.f});
@@ -422,6 +444,158 @@ int main() {
                             ok ? "[ ok ]" : "[FAIL]", cxRgb, cyRgb, cxId, cyId, d);
                 if (!ok) ++failures;
             }
+        }
+
+        // ── Overlay content is warped too ───────────────────────────────────
+        // The hybrid raster overlay pass (particle billboards — chimney smoke
+        // and the like — plus Line/LineSegments and wireframe) composites onto
+        // the swapchain AFTER the TAA resolve. When the warp lived in RCAS,
+        // which runs BEFORE that, overlays stayed pinhole while the scene bent
+        // around them and visibly slid off the geometry they belong to. The
+        // warp now runs last (SensorPass), so a line drawn at a mesh's
+        // position must still sit on that mesh under distortion.
+        std::printf("overlay content follows the lens:\n");
+        {
+            // A green cross of LineSegments, centred on the same world point
+            // as the red marker, small enough that per-vertex vs per-pixel
+            // warping is not the thing under test.
+            const std::vector<float> verts = {
+                    -0.30f, 0.f, 0.f, 0.30f, 0.f, 0.f,
+                    0.f, -0.30f, 0.f, 0.f, 0.30f, 0.f};
+            auto lineGeo = BufferGeometry::create();
+            lineGeo->setAttribute("position", FloatBufferAttribute::create(verts, 3));
+            auto lineMat = LineBasicMaterial::create();
+            lineMat->color = Color(0.f, 1.f, 0.f);
+            auto cross = LineSegments::create(lineGeo, lineMat);
+            cross->position.copy(marker->position);
+            scene.add(cross);
+
+            auto greenCentroid = [&](float& cxOut, float& cyOut) -> int {
+                const auto rgb = renderer.readRGBPixels();
+                const size_t n = static_cast<size_t>(kW) * kH;
+                if (rgb.size() < n * 3) return 0;
+                // Green-DOMINANT rather than green-bright: the line is one
+                // pixel wide, so the warp's bilinear gather splits it across
+                // two pixels and roughly halves its value. An absolute
+                // threshold would report the line as missing purely because it
+                // got resampled. Weight by green so the centroid is not pulled
+                // by the dimmer half.
+                double sx = 0, sy = 0, wsum = 0;
+                int count = 0;
+                for (size_t i = 0; i < n; ++i) {
+                    const int r = rgb[i * 3], g = rgb[i * 3 + 1], b = rgb[i * 3 + 2];
+                    if (g > 40 && g > r * 2 && g > b * 2) {
+                        const auto wgt = static_cast<double>(g);
+                        sx += static_cast<double>(i % kW) * wgt;
+                        sy += static_cast<double>(i / kW) * wgt;
+                        wsum += wgt;
+                        ++count;
+                    }
+                }
+                if (count == 0 || wsum <= 0.0) return 0;
+                cxOut = static_cast<float>(sx / wsum);
+                cyOut = static_cast<float>(sy / wsum);
+                return count;
+            };
+
+            renderer.setLensDistortion(LensDistortion{});
+            settle();
+            float lx0 = 0, ly0 = 0;
+            const int nLine0 = greenCentroid(lx0, ly0);
+            check(nLine0 > 0, "overlay line visible without a lens");
+
+            renderer.setLensDistortion(barrel);
+            settle();
+            float lx1 = 0, ly1 = 0;
+            const int nLine1 = greenCentroid(lx1, ly1);
+            check(nLine1 > 0, "overlay line visible with a lens");
+
+            if (nLine0 && nLine1) {
+                const float moved = std::hypot(lx1 - lx0, ly1 - ly0);
+                std::printf("  overlay line centroid moved %.1f px under the lens\n", moved);
+                // The marker moved ~24 px inward at this k1; the line sits on
+                // it, so it has to travel with it. An unwarped overlay would
+                // sit still (moved ~= 0) — that was the bug.
+                check(moved > 10.f, "overlay line moves with the scene under distortion");
+            }
+
+            renderer.setLensDistortion(LensDistortion{});
+            scene.remove(*cross);
+        }
+
+        // ── Overscan ────────────────────────────────────────────────────────
+        // Overscan renders a WIDER field so barrel distortion can gather real
+        // geometry into the output corners instead of clamped edge texels. The
+        // framing must not change: the same scene point has to land on the same
+        // output pixel either way, or overscan would silently re-frame every
+        // shot (and get the shrink direction wrong without anyone noticing).
+        std::printf("overscan:\n");
+        {
+            renderer.setLensDistortion(barrel);
+            renderer.setLensOverscan(1.f);
+            settle();
+            float ax = 0, ay = 0;
+            const int nA = markerCentroid(ax, ay);
+            const auto framePlain = renderer.readRGBPixels();
+
+            renderer.setLensOverscan(1.3f);
+            settle();
+            float bx = 0, by = 0;
+            const int nB = markerCentroid(bx, by);
+            const auto frameOver = renderer.readRGBPixels();
+
+            check(nA > 0 && nB > 0, "marker visible with and without overscan");
+            if (nA > 0 && nB > 0) {
+                const float d = std::hypot(bx - ax, by - ay);
+                std::printf("  marker at (%.1f, %.1f) plain vs (%.1f, %.1f) overscanned, %.2f px apart\n",
+                            ax, ay, bx, by, d);
+                check(d < 2.5f, "overscan does not re-frame the shot");
+            }
+
+            (void) framePlain;
+            (void) frameOver;
+
+            // The decisive check: an object that lies OUTSIDE the nominal
+            // frustum but inside the overscanned one. Without overscan it is
+            // never rendered, so the barrel warp can only clamp edge texels
+            // into that part of the frame; with overscan it exists and the
+            // warp pulls it into view. This is exactly the content the smeared
+            // border was standing in for.
+            //
+            // Placed at ideal normalized (0.75, 0.20): the rendered pinhole
+            // image reaches |x| <= (W/2)/fx = 0.656, and a 1.3x overscan
+            // reaches 0.853. Barrel then maps it to roughly (365, 174), inside
+            // the output frame.
+            // NOTE: `outsider` is added at scene-setup time, not here. Adding a
+            // mesh at this point in the session crashes the renderer — with the
+            // lens on OR off, so it is unrelated to this feature; see the
+            // add/remove/add churn note where it is created.
+            auto blueCount = [&] {
+                const auto rgb = renderer.readRGBPixels();
+                const size_t n = static_cast<size_t>(kW) * kH;
+                if (rgb.size() < n * 3) return 0;
+                int count = 0;
+                for (size_t i = 0; i < n; ++i) {
+                    const int r = rgb[i * 3], g = rgb[i * 3 + 1], b = rgb[i * 3 + 2];
+                    if (b > 90 && b > r * 2 && b > g * 2) ++count;
+                }
+                return count;
+            };
+
+            renderer.setLensOverscan(1.f);
+            settle();
+            const int blindPixels = blueCount();
+
+            renderer.setLensOverscan(1.3f);
+            settle();
+            const int seenPixels = blueCount();
+
+            std::printf("  out-of-frustum object: %d px without overscan, %d px with\n",
+                        blindPixels, seenPixels);
+            check(blindPixels == 0, "object outside the nominal frustum is not visible without overscan");
+            check(seenPixels > 50, "overscan brings it into the distorted frame");
+
+            renderer.setLensOverscan(1.f);
         }
 
         renderer.setLensDistortion(LensDistortion{});

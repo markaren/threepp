@@ -608,6 +608,15 @@ namespace threepp_py {
                                            return o;
                                        },
                                        "Current lens distortion as a dict (see set_lens_distortion).")
+                .def_property("lens_overscan",
+                              [](PyVulkanRenderer& r) { return r.native().lensOverscan(); },
+                              [](PyVulkanRenderer& r, float v) { r.native().setLensOverscan(v); },
+                              "Render the scene with the frustum widened by this factor so the "
+                              "lens warp has real geometry for the output corners instead of a "
+                              "clamped, smeared border. Barrel distortion (k1 < 0) needs it; "
+                              "1.15-1.3 covers typical wide lenses. Costs effective resolution "
+                              "(the same pixels cover a wider field). camera_intrinsics still "
+                              "reports the OUTPUT camera. Default 1 (off).")
                 // ── Image-sensor noise ────────────────────────────────────────
                 .def("set_sensor_noise",
                      [](PyVulkanRenderer& r, bool enabled, float full_well, float read_noise,

@@ -493,6 +493,12 @@ set(sources
         "threepp/renderers/common/Lights.cpp"
         "threepp/renderers/common/RenderLists.cpp"
         "threepp/renderers/common/RenderStates.cpp"
+        # Pure-CPU BCn encode/decode. Only the Vulkan renderer consumes these,
+        # but they have no Vulkan dependency and BC7Encode_test round-trips
+        # them unconditionally — keeping them in every build lets CI without a
+        # Vulkan SDK still pin the encoder/decoder conventions.
+        "threepp/renderers/common/BC7Encode.cpp"
+        "threepp/renderers/common/BCnDecode.cpp"
 
         "threepp/renderers/gl/GLAttributes.cpp"
         "threepp/renderers/gl/GLBackground.cpp"
@@ -659,6 +665,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/BloomPass.cpp"
             "threepp/renderers/vulkan/PostComposite.cpp"
             "threepp/renderers/vulkan/DofPass.cpp"
+            "threepp/renderers/vulkan/SensorPass.cpp"
             "threepp/renderers/vulkan/DeferredShade.cpp"
             "threepp/renderers/vulkan/ProbeGI.cpp"
             "threepp/renderers/vulkan/HiZPyramid.cpp"
@@ -682,15 +689,6 @@ if (THREEPP_WITH_VULKAN)
         list(APPEND privateHeaders "threepp/renderers/vulkan/DlssUpscaler.hpp")
         list(APPEND sources        "threepp/renderers/vulkan/DlssUpscaler.cpp")
     endif ()
-endif ()
-
-# BCn / DXT software decode for compressed-texture upload in the Vulkan
-# renderer. (Originally shared with the now-removed Vulkan path tracer.)
-if (THREEPP_WITH_VULKAN)
-    list(APPEND sources
-            "threepp/renderers/common/BC7Encode.cpp"
-            "threepp/renderers/common/BCnDecode.cpp"
-    )
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN)
@@ -923,6 +921,13 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/post_composite.comp"
         kPostCompositeCompSpv
         _post_composite_spv_h)
+    # Camera image formation: lens distortion + sensor noise on the FINISHED
+    # frame, after the overlay pass so it covers everything the camera sees.
+    # See vulkan/SensorPass.{hpp,cpp}.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/sensor_image.comp"
+        kSensorImageCompSpv
+        _sensor_image_spv_h)
     # Thin-lens depth of field (CoC prefilter → tile max/dilate → near/far
     # scatter-as-gather → full-res combine). See vulkan/DofPass.{hpp,cpp}.
     compile_vulkan_shader(threepp

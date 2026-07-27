@@ -12,66 +12,6 @@
 
 namespace threepp::vulkan {
 
-    namespace {
-
-        // Mirror of rcas.comp's push-constant block (std430 scalar layout: the
-        // vec4s are 16-byte aligned, which the explicit padding below keeps
-        // true — get this wrong and the lens coefficients arrive shifted).
-        struct RcasPush {
-            uint32_t width;
-            uint32_t height;
-            float    amount;
-            uint32_t dstOffset;
-
-            uint32_t flags;
-            uint32_t lensModel;
-            uint32_t frameSeed;
-            uint32_t pad0;
-
-            float normK[4];     // offset 32
-            float radial[4];    // offset 48
-            float tangential[2];// offset 64
-
-            float fullWell;     // 72
-            float readNoise;    // 76
-            float darkElectrons;// 80
-            float prnu;         // 84
-            float isoGain;      // 88
-            float pad1;         // 92 → 96, a multiple of 16
-        };
-        static_assert(sizeof(RcasPush) == 96, "rcas push constants must match rcas.comp");
-
-        // Flag bits — must match rcas.comp's RCAS_FLAG_*.
-        constexpr uint32_t kRcasFlagSharpen = 1u;
-        constexpr uint32_t kRcasFlagDistort = 2u;
-        constexpr uint32_t kRcasFlagNoise   = 4u;
-
-        RcasPush makeRcasPush(const TaaResolve::SensorParams& s,
-                              uint32_t width, uint32_t height,
-                              float amount, uint32_t dstOffset) {
-            RcasPush p{};
-            p.width     = width;
-            p.height    = height;
-            p.amount    = amount;
-            p.dstOffset = dstOffset;
-            p.flags     = (s.applySharpen ? kRcasFlagSharpen : 0u) |
-                      (s.distortActive ? kRcasFlagDistort : 0u) |
-                      (s.noiseActive ? kRcasFlagNoise : 0u);
-            p.lensModel = s.lensModel;
-            p.frameSeed = s.frameSeed;
-            std::memcpy(p.normK, s.normK, sizeof(p.normK));
-            std::memcpy(p.radial, s.radial, sizeof(p.radial));
-            std::memcpy(p.tangential, s.tangential, sizeof(p.tangential));
-            p.fullWell      = s.fullWell;
-            p.readNoise     = s.readNoise;
-            p.darkElectrons = s.darkElectrons;
-            p.prnu          = s.prnu;
-            p.isoGain       = s.isoGain;
-            return p;
-        }
-
-    }// namespace
-
     TaaResolve::TaaResolve(VulkanContext& ctx,
                            VkCommandPool cmdPool,
                            uint32_t imageCount,
@@ -350,7 +290,7 @@ namespace threepp::vulkan {
             VkPushConstantRange rpc{};
             rpc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
             rpc.offset     = 0;
-            rpc.size       = sizeof(RcasPush);
+            rpc.size       = 16;
             VkPipelineLayoutCreateInfo rplci{};
             rplci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
             rplci.setLayoutCount         = 1;
@@ -908,10 +848,11 @@ namespace threepp::vulkan {
                                     mblur ? &rcasMbSets_[descIdx]
                                           : &rcasSets_[descIdx],
                                     0, nullptr);
-            const RcasPush rpc = makeRcasPush(sensor_, outWidth, outHeight,
-                                              sharpenAmount, packedDst);
+            uint32_t amountBits;
+            std::memcpy(&amountBits, &sharpenAmount, sizeof(amountBits));
+            const uint32_t rpc[4] = {outWidth, outHeight, amountBits, packedDst};
             vkCmdPushConstants(cb, rcasPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
-                               0, sizeof(rpc), &rpc);
+                               0, sizeof(rpc), rpc);
             vkCmdDispatch(cb, gx, gy, 1);
         }
 
@@ -990,9 +931,11 @@ namespace threepp::vulkan {
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                     rcasPipeLayout_, 0, 1,
                                     &postFinalizeRcasSets_[descIdx], 0, nullptr);
-            const RcasPush rpc = makeRcasPush(sensor_, width, height, sharpenAmount, 0u);
+            uint32_t amountBits;
+            std::memcpy(&amountBits, &sharpenAmount, sizeof(amountBits));
+            const uint32_t rpc[4] = {width, height, amountBits, 0u};
             vkCmdPushConstants(cb, rcasPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
-                               0, sizeof(rpc), &rpc);
+                               0, sizeof(rpc), rpc);
             vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
         } else {
             // Plain copy — both images are BGRA8 at the same (display)

@@ -482,6 +482,43 @@ namespace threepp {
 
     void VulkanRendererCore::render(Object3D& scene, Camera& camera) {
         const auto frameStart = std::chrono::high_resolution_clock::now();
+
+        // ── Lens overscan ───────────────────────────────────────────────────
+        // Widen the frustum for the duration of this render so the lens warp
+        // has real geometry to gather into the output corners. Barrel
+        // distortion maps scene points inward, so without this the corners can
+        // only come from outside the rendered field and clamp to a smeared
+        // edge. Scaling proj[0]/proj[5] widens about the centre RAY (which sits
+        // at -proj[8]/-proj[9] in NDC regardless of proj[0]), so the principal
+        // point does not move and the skew terms stay valid.
+        //
+        // The camera is restored before returning, so this is invisible to the
+        // caller — but it does mean every consumer of the projection this frame
+        // (culling, motion vectors, the G-buffer AOVs) sees the SAME widened
+        // camera, which is what keeps colour and labels describing one lens.
+        // updateCameraUbo divides the factor back out when it stashes the
+        // intrinsics, so cameraIntrinsics() still reports the camera the user
+        // configured rather than the one we rendered.
+        const float overscan = core()->effectiveOverscan();
+        const bool  applyOverscan = overscan > 1.0001f && !camera.is<OrthographicCamera>();
+        float savedP0 = 0.f, savedP5 = 0.f;
+        if (applyOverscan) {
+            savedP0 = camera.projectionMatrix.elements[0];
+            savedP5 = camera.projectionMatrix.elements[5];
+            camera.projectionMatrix.elements[0] = savedP0 / overscan;
+            camera.projectionMatrix.elements[5] = savedP5 / overscan;
+        }
+        struct OverscanRestore {
+            Camera* cam;
+            bool    active;
+            float   p0, p5;
+            ~OverscanRestore() {
+                if (!active) return;
+                cam->projectionMatrix.elements[0] = p0;
+                cam->projectionMatrix.elements[5] = p5;
+            }
+        } overscanRestore{&camera, applyOverscan, savedP0, savedP5};
+
         const auto cur = core()->canvas.size();
         if (cur.width() != core()->size.width() || cur.height() != core()->size.height()) {
             core()->needsResize = true;
@@ -855,7 +892,7 @@ namespace threepp {
         // the shader gets. Normalized rather than in pixels precisely because
         // the AOV is at the render extent while the display warp runs at the
         // display extent, and both must describe the same lens.
-        void warpAovForLens(const LensDistortion& lens, const float normK[4],
+        void warpAovForLens(const LensDistortion& lens, const float normK[4], float overscan,
                             std::vector<uint8_t>& buf,
                             uint32_t w, uint32_t h, uint32_t bpp) {
             if (w == 0u || h == 0u || bpp == 0u) return;
@@ -879,8 +916,17 @@ namespace threepp {
                     const float yd = (v - nkw) / nky;
                     float xi = 0.f, yi = 0.f;
                     lensUndistort(lens, xd, yd, xi, yi);
-                    const float su = xi * nkx + nkz;
-                    const float sv = yi * nky + nkw;
+                    float su = xi * nkx + nkz;
+                    float sv = yi * nky + nkw;
+                    // The AOV was rendered through the same overscanned
+                    // frustum as the colour image, so shrink the ideal offset
+                    // about the principal point exactly as sensor_image.comp
+                    // does — otherwise labels and pixels describe fields of
+                    // different widths.
+                    if (overscan != 1.f) {
+                        su = nkz + (su - nkz) / overscan;
+                        sv = nkw + (sv - nkw) / overscan;
+                    }
 
                     // Clamp to edge, matching the sampler the GPU warp uses.
                     auto sx = static_cast<int>(std::floor(su * fw));
@@ -1055,7 +1101,7 @@ namespace threepp {
         if (impl.lens_.active()) {
             const float normK[4] = {0.5f * impl.projP0_, 0.5f * impl.projP5_,
                                     0.5f * (1.f - impl.projP8_), 0.5f * (1.f + impl.projP9_)};
-            warpAovForLens(impl.lens_, normK, out, w, h, bpp);
+            warpAovForLens(impl.lens_, normK, impl.effectiveOverscan(), out, w, h, bpp);
         }
         return true;
     }
@@ -1431,6 +1477,16 @@ namespace threepp {
 
     LensDistortion VulkanRendererCore::lensDistortion() const {
         return core()->lens_;
+    }
+
+    void VulkanRendererCore::setLensOverscan(float factor) {
+        // Below 1 would CROP the rendered field, which no lens does and which
+        // would silently discard geometry the user asked to see.
+        core()->lensOverscan_ = std::clamp(factor, 1.f, 4.f);
+    }
+
+    float VulkanRendererCore::lensOverscan() const {
+        return core()->lensOverscan_;
     }
 
     void VulkanRendererCore::setSensorNoise(const SensorNoise& noise) {
