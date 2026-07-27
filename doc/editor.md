@@ -601,7 +601,22 @@ class FollowSpline:
             print("FollowSpline: a curve needs two control points")
             return
 
-        self.curve = threepp.CatmullRomCurve3(points)
+        # The authored parameters ride in userData["spline"] as a flat
+        # "type=...;closed=...;tension=...;samples=..." string. Honor them,
+        # so the script walks the same curve the editor draws.
+        config = dict(
+            item.split("=", 1)
+            for item in (spline.get_user_data("spline") or "").split(";")
+            if "=" in item
+        )
+        self.curve = threepp.CatmullRomCurve3(
+            points,
+            closed=config.get("closed") == "1",
+            curve_type=getattr(threepp.CatmullRomCurve3.CurveType,
+                               config.get("type", ""),
+                               threepp.CatmullRomCurve3.centripetal),
+            tension=float(config.get("tension", "0.5")),
+        )
 
     def update(self, dt: float):
         if self.curve is None:
@@ -616,12 +631,12 @@ Attach it to any object, set `spline_name` to your spline in the inspector, and
 press Play. `get_tangent_at(u)` gives the heading if you want the object to face
 where it is going.
 
-Two things the script does **not** get: `userData` is not exposed to Python, so
-the document's `closed` / `type` / `tension` do not reach it — the constructor
-above takes the defaults, and a script that wants the authored ones asks for
-them as exposed fields of its own. And the curve is built once in `start()`, so
-moving a control point during Play does not bend it; rebuild in `update()` if
-that is what you want.
+The config parsing works because `Object3D.get_user_data(key)` returns string
+`userData` entries to Python — the raw `type=...;closed=...` text here, `None`
+for a missing key or a non-string value (the editor's configs are all strings,
+so that is not a loss). One thing the script still does **not** get: the curve
+is built once in `start()`, so moving a control point during Play does not bend
+it; rebuild in `update()` if that is what you want.
 
 ### Async model import
 

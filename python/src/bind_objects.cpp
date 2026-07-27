@@ -80,6 +80,9 @@ namespace threepp_py {
                 .def("local_to_world", [](T& o, Vector3 v) { o.localToWorld(v); return v; }, py::arg("vector"))
                 .def("world_to_local", [](T& o, Vector3 v) { o.worldToLocal(v); return v; }, py::arg("vector"))
                 .def("get_object_by_name", [](T& o, const std::string& n) { return o.getObjectByName(n); }, py::arg("name"), py::return_value_policy::reference)
+                // The lambda takes T& so pybind extracts a correct self pointer;
+                // the T& -> Object3D& upcast inside is plain C++ and safe.
+                .def("get_user_data", [](const T& o, const std::string& key) { return user_data_string(o, key); }, py::arg("key"))
                 .def("traverse", [](T& self, const std::function<void(py::object)>& cb) {
                     self.traverse([&cb](Object3D& o) { cb(py::cast(&o, py::return_value_policy::reference)); });
                 }, py::arg("callback"))

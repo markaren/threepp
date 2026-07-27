@@ -16,6 +16,7 @@
 #include "threepp/objects/Points.hpp"
 
 #include <algorithm>
+#include <any>
 
 using namespace threepp;
 
@@ -33,6 +34,22 @@ namespace threepp_py {
         if (py::isinstance<Points>(h)) return h.cast<std::shared_ptr<Points>>();
         if (py::isinstance<Line>(h)) return h.cast<std::shared_ptr<Line>>();
         return h.cast<std::shared_ptr<Object3D>>();
+    }
+
+    // String entries only: userData holds std::any, and the editor's configs
+    // (spline, physics, script) are all flat `key=value;...` strings — the one
+    // shape a script has a documented reason to read. Non-string scalars return
+    // None rather than a guessed conversion.
+    py::object user_data_string(const Object3D& o, const std::string& key) {
+        const auto it = o.userData.find(key);
+        if (it == o.userData.end()) return py::none();
+        if (it->second.type() == typeid(std::string)) {
+            return py::str(std::any_cast<const std::string&>(it->second));
+        }
+        if (it->second.type() == typeid(const char*)) {
+            return py::str(std::any_cast<const char*>(it->second));
+        }
+        return py::none();
     }
 
     void init_core(py::module_& m) {
@@ -113,6 +130,9 @@ namespace threepp_py {
                 .def("local_to_world", [](Object3D& o, Vector3 v) { o.localToWorld(v); return v; }, py::arg("vector"))
                 .def("world_to_local", [](Object3D& o, Vector3 v) { o.worldToLocal(v); return v; }, py::arg("vector"))
                 .def("get_object_by_name", [](Object3D& o, const std::string& name) { return o.getObjectByName(name); }, py::arg("name"), py::return_value_policy::reference)
+                .def("get_user_data", [](const Object3D& o, const std::string& key) { return user_data_string(o, key); }, py::arg("key"),
+                     "String userData entry for `key`, or None when absent or not a string. "
+                     "The editor's spline/physics/script configs live here as flat 'key=value;...' strings.")
                 // Pass each visited object by reference (Object3D is non-copyable)
                 // and let polymorphic_type_hook hand back the concrete subclass.
                 .def("traverse", [](Object3D& self, const std::function<void(py::object)>& cb) {

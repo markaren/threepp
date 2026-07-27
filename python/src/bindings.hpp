@@ -8,6 +8,7 @@
 #include <pybind11/pybind11.h>
 
 #include <memory>
+#include <string>
 
 namespace threepp {
     class Material;
@@ -34,6 +35,14 @@ namespace threepp_py {
     // shared_ptr<Object3D> across threepp's `virtual Object3D` base without
     // tripping pybind11's broken pointer adjustment. Defined in bind_core.cpp.
     std::shared_ptr<threepp::Object3D> as_object3d(const py::handle& h);
+
+    // The string userData entry for `key` as a Python str, or None when the key
+    // is absent or the value is not a string. Read access for scripts to the
+    // editor's flat `key=value;...` configs (spline, physics, script), which
+    // are all stored as strings. Defined in bind_core.cpp; bound on Object3D
+    // there and re-bound concretely on the virtual-base leaves in
+    // bind_objects.cpp.
+    py::object user_data_string(const threepp::Object3D& o, const std::string& key);
 
     void init_math(py::module_& m);
     void init_textures(py::module_& m);

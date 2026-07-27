@@ -1043,10 +1043,14 @@ int EditorApp::runSelfTest() {
         }
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
-        // The documented FollowSpline script, verbatim: it resolves the spline
-        // by name, builds a threepp.CatmullRomCurve3 from the children and
-        // drives the object along it. If this stops working, doc/editor.md is
-        // handing users a script that does not run.
+        // The documented FollowSpline script: it resolves the spline by name,
+        // reads the authored config out of userData["spline"] through
+        // get_user_data, and builds the threepp.CatmullRomCurve3 the document
+        // describes. If this stops working, doc/editor.md is handing users a
+        // script that does not run. One deviation from the doc: u advances a
+        // fixed 0.03 per update instead of speed * dt, so after step(30) it
+        // sits at a deterministic u ~= 0.9 — deep in the closing span that
+        // exists only when the authored closed=1 reaches the script.
         if (auto* follower = document_.scene().getObjectByName("Box")) {
 
             const auto followerUuid = follower->uuid;
@@ -1056,7 +1060,6 @@ int EditorApp::runSelfTest() {
                             "\n"
                             "class FollowSpline:\n"
                             "    spline_name = \"Spline\"\n"
-                            "    speed = 0.2\n"
                             "\n"
                             "    def start(self, obj, scene):\n"
                             "        self.obj = obj\n"
@@ -1068,12 +1071,24 @@ int EditorApp::runSelfTest() {
                             "        points = [spline.local_to_world(p.position) for p in spline.children]\n"
                             "        if len(points) < 2:\n"
                             "            return\n"
-                            "        self.curve = threepp.CatmullRomCurve3(points)\n"
+                            "        config = dict(\n"
+                            "            item.split(\"=\", 1)\n"
+                            "            for item in (spline.get_user_data(\"spline\") or \"\").split(\";\")\n"
+                            "            if \"=\" in item\n"
+                            "        )\n"
+                            "        self.curve = threepp.CatmullRomCurve3(\n"
+                            "            points,\n"
+                            "            closed=config.get(\"closed\") == \"1\",\n"
+                            "            curve_type=getattr(threepp.CatmullRomCurve3.CurveType,\n"
+                            "                               config.get(\"type\", \"\"),\n"
+                            "                               threepp.CatmullRomCurve3.centripetal),\n"
+                            "            tension=float(config.get(\"tension\", \"0.5\")),\n"
+                            "        )\n"
                             "\n"
                             "    def update(self, dt):\n"
                             "        if self.curve is None:\n"
                             "            return\n"
-                            "        self.u = (self.u + self.speed * dt) % 1.0\n"
+                            "        self.u = (self.u + 0.03) % 1.0\n"
                             "        self.obj.position.copy(self.curve.get_point_at(self.u))\n",
                             "Follow Spline");
             step();
@@ -1086,25 +1101,35 @@ int EditorApp::runSelfTest() {
             auto* driven = findByUuid(document_.scene(), followerUuid);
             check(driven && driven->position.distanceTo(rest) > 1e-3f,
                   "the FollowSpline script drives the object along the curve");
-            // On the curve, not merely somewhere: the sampled path is what it
-            // is supposed to be following.
-            bool onCurve = false;
+            // On the AUTHORED curve, not the defaults: the document says
+            // closed=1, catmullrom, tension=0.25, and get_user_data is how
+            // that reaches the script. At u ~= 0.9 the follower is inside the
+            // closing span, so the same parameters with closed=0 must NOT
+            // contain the position — if they do, the config never arrived.
+            bool onAuthored = false;
+            bool offOpen = true;
             if (driven) {
                 if (auto* live = splineNow(splineUuid)) {
-                    // The DEFAULTS, not the authored config: the script builds a
-                    // plain CatmullRomCurve3 from the points, so the document's
-                    // closed/tension are not what it is following. That is the
-                    // documented limitation — scripts cannot read userData.
-                    if (auto curve = SplineConfig{}.curve(*live)) {
-                        live->updateMatrixWorld();
+                    live->updateMatrixWorld();
+                    const auto config = SplineConfig::read(*live).value_or(SplineConfig{});
+                    if (auto curve = config.curve(*live)) {
                         for (auto& point : curve->getPoints(512)) {
                             point.applyMatrix4(*live->matrixWorld);
-                            if (point.distanceTo(driven->position) < 0.1f) onCurve = true;
+                            if (point.distanceTo(driven->position) < 0.1f) onAuthored = true;
+                        }
+                    }
+                    SplineConfig open = config;
+                    open.closed = false;
+                    if (auto curve = open.curve(*live)) {
+                        for (auto& point : curve->getPoints(512)) {
+                            point.applyMatrix4(*live->matrixWorld);
+                            if (point.distanceTo(driven->position) < 0.1f) offOpen = false;
                         }
                     }
                 }
             }
-            check(onCurve, "and it lands on the curve, not merely somewhere else");
+            check(onAuthored, "and it lands on the authored closed curve");
+            check(offOpen, "in the closing span an open curve does not have");
 
             stopPlay();
             step();
