@@ -60,6 +60,7 @@ PYBIND11_MODULE(threepp, m) {
     tp::init_core(m);
     tp::init_sensor_base(m);// Sensor base: before init_render, whose DepthSensor derives from it
     tp::init_geometries(m);
+    tp::init_curves(m);// CatmullRomCurve3; needs Vector3 from init_math
     tp::init_materials(m);
     tp::init_objects(m);
     tp::init_ocean(m);   // DisplacedMesh + Ocean (subclasses of Mesh from init_objects)

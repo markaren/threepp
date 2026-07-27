@@ -12,9 +12,9 @@
 // process's.
 //
 // Only the areas a scene script plausibly needs are linked — scene graph, math,
-// geometry, materials, animation, cameras, lights, robots. The renderer, loader,
-// physics, sensor and Vulkan areas are left out: they would drag windowing and
-// device state into a script, and the editor already owns those.
+// geometry, curves, materials, animation, cameras, lights, robots. The renderer,
+// loader, physics, sensor and Vulkan areas are left out: they would drag
+// windowing and device state into a script, and the editor already owns those.
 
 #include "ScriptHost.hpp"
 
@@ -57,6 +57,7 @@ PYBIND11_EMBEDDED_MODULE(threepp, m) {
     tp::init_textures(m);
     tp::init_core(m);
     tp::init_geometries(m);
+    tp::init_curves(m);// CatmullRomCurve3 — what an authored spline reads back as
     tp::init_materials(m);
     tp::init_objects(m);
     tp::init_animation(m);

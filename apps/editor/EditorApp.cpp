@@ -22,6 +22,7 @@
 
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/core/Clock.hpp"
+#include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/helpers/AxesHelper.hpp"
@@ -873,6 +874,219 @@ int EditorApp::runSelfTest() {
                 check(!std::filesystem::exists(scratch), "and takes the scratch file with it");
             }
         }
+    }
+
+    // Splines. A spline is a Group whose children are its control points, so
+    // everything here runs against ordinary scene nodes and the commands that
+    // already move them — which is the whole claim the design rests on.
+    {
+        const auto splineNow = [&](const std::string& uuid) {
+            return findByUuid(document_.scene(), uuid);
+        };
+
+        const auto markersBefore = viewportMarkers_.size();
+
+        auto created = ObjectFactory::createSpline(document_.scene());
+        const auto splineUuid = created->uuid;
+        addObject(created, document_.scene(), "Add Spline");
+        created.reset();// the command owns it now; nothing here may outlive a replace
+        step();
+
+        auto* spline = splineNow(splineUuid);
+        check(spline && SplineConfig::isSpline(*spline), "the factory creates a spline");
+        check(spline && spline->children.size() == 4, "with control points as its children");
+        check(splineOverlays_.size() == 1, "the spline gets a curve overlay");
+        check(viewportMarkers_.size() == markersBefore + 4,
+              "every control point gets a marker icon");
+
+        // Add Point: appended, undoable, and the curve is longer for it.
+        if (spline) {
+            const auto config = SplineConfig::read(*spline).value_or(SplineConfig{});
+            const float lengthBefore = config.curve(*spline)->getLength();
+
+            addSplinePoint(*spline, AddObjectCommand::atEnd, "Add Spline Point");
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && spline->children.size() == 5, "Add Point appends a control point");
+            check(spline && config.curve(*spline)->getLength() > lengthBefore + 1e-3f,
+                  "and the point lands past the end, so the curve extends");
+            check(selection_.get() == (spline ? spline->children.back() : nullptr),
+                  "the new point is selected, ready to drag");
+
+            commands_.undo();
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && spline->children.size() == 4, "undo takes the point back off");
+            commands_.redo();
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && spline->children.size() == 5, "redo puts it back");
+            commands_.undo();
+            step();
+            spline = splineNow(splineUuid);
+        }
+
+        // Insert: at a specific index, midway to the neighbour it went in next
+        // to — an insert that leaves the curve unchanged is not one.
+        if (spline) {
+            const auto before = SplineConfig::controlPoints(*spline);
+            addSplinePoint(*spline, 1, "Insert Spline Point");
+            step();
+            spline = splineNow(splineUuid);
+            const auto after = SplineConfig::controlPoints(*spline);
+            check(after.size() == before.size() + 1, "Insert Before adds a control point");
+            Vector3 midpoint;
+            midpoint.copy(before[0]).add(before[1]).multiplyScalar(0.5f);
+            check(after.size() > 1 && after[1].distanceTo(midpoint) < 1e-4f,
+                  "the inserted point sits midway between its neighbours");
+            check(after[0].distanceTo(before[0]) < 1e-4f &&
+                          after[2].distanceTo(before[1]) < 1e-4f,
+                  "and the existing points keep their order");
+
+            commands_.undo();
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && spline->children.size() == before.size(), "the insert is undoable");
+        }
+
+        // Save and reload: the config and every control point have to survive
+        // the document round trip, since neither is anything but userData and
+        // ordinary child transforms.
+        const auto splinePath = std::filesystem::temp_directory_path() /
+                                "threepp-editor-selftest-spline.json";
+        SplineConfig authored;
+        authored.type = SplineConfig::Type::CatmullRom;
+        authored.closed = true;
+        authored.tension = 0.25f;
+        authored.samples = 12;
+        std::vector<Vector3> authoredPoints;
+
+        if (spline) {
+            authored.write(*spline);
+            // A moved point, so the round trip is proving positions and not
+            // just the factory's defaults twice.
+            spline->children.front()->position.y += 1.5f;
+            authoredPoints = SplineConfig::controlPoints(*spline);
+            saveSceneAs(splinePath);
+            openScene(splinePath);
+            step();
+
+            auto* reloaded = splineNow(splineUuid);
+            check(reloaded != nullptr, "the spline survives save and reload");
+            check(reloaded && SplineConfig::read(*reloaded) == authored,
+                  "its config round-trips through the document");
+            check(reloaded && reloaded->children.size() == authoredPoints.size(),
+                  "and so does the control point count");
+            bool positionsMatch = reloaded != nullptr;
+            if (reloaded) {
+                const auto points = SplineConfig::controlPoints(*reloaded);
+                for (std::size_t i = 0; i < points.size() && i < authoredPoints.size(); ++i) {
+                    if (points[i].distanceTo(authoredPoints[i]) > 1e-4f) positionsMatch = false;
+                }
+            }
+            check(positionsMatch, "with every control point where it was left");
+            check(splineOverlays_.size() == 1, "and a curve overlay rebuilt on the new graph");
+        }
+
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+        // The documented FollowSpline script, verbatim: it resolves the spline
+        // by name, builds a threepp.CatmullRomCurve3 from the children and
+        // drives the object along it. If this stops working, doc/editor.md is
+        // handing users a script that does not run.
+        if (auto* follower = document_.scene().getObjectByName("Box")) {
+
+            const auto followerUuid = follower->uuid;
+            setInlineScript(*follower,
+                            "import threepp\n"
+                            "\n"
+                            "\n"
+                            "class FollowSpline:\n"
+                            "    spline_name = \"Spline\"\n"
+                            "    speed = 0.2\n"
+                            "\n"
+                            "    def start(self, obj, scene):\n"
+                            "        self.obj = obj\n"
+                            "        self.u = 0.0\n"
+                            "        self.curve = None\n"
+                            "        spline = scene.get_object_by_name(self.spline_name)\n"
+                            "        if spline is None:\n"
+                            "            return\n"
+                            "        points = [spline.local_to_world(p.position) for p in spline.children]\n"
+                            "        if len(points) < 2:\n"
+                            "            return\n"
+                            "        self.curve = threepp.CatmullRomCurve3(points)\n"
+                            "\n"
+                            "    def update(self, dt):\n"
+                            "        if self.curve is None:\n"
+                            "            return\n"
+                            "        self.u = (self.u + self.speed * dt) % 1.0\n"
+                            "        self.obj.position.copy(self.curve.get_point_at(self.u))\n",
+                            "Follow Spline");
+            step();
+
+            Vector3 rest;
+            rest.copy(follower->position);
+
+            startPlay();
+            step(30);
+            auto* driven = findByUuid(document_.scene(), followerUuid);
+            check(driven && driven->position.distanceTo(rest) > 1e-3f,
+                  "the FollowSpline script drives the object along the curve");
+            // On the curve, not merely somewhere: the sampled path is what it
+            // is supposed to be following.
+            bool onCurve = false;
+            if (driven) {
+                if (auto* live = splineNow(splineUuid)) {
+                    // The DEFAULTS, not the authored config: the script builds a
+                    // plain CatmullRomCurve3 from the points, so the document's
+                    // closed/tension are not what it is following. That is the
+                    // documented limitation — scripts cannot read userData.
+                    if (auto curve = SplineConfig{}.curve(*live)) {
+                        live->updateMatrixWorld();
+                        for (auto& point : curve->getPoints(512)) {
+                            point.applyMatrix4(*live->matrixWorld);
+                            if (point.distanceTo(driven->position) < 0.1f) onCurve = true;
+                        }
+                    }
+                }
+            }
+            check(onCurve, "and it lands on the curve, not merely somewhere else");
+
+            stopPlay();
+            step();
+            auto* restored = findByUuid(document_.scene(), followerUuid);
+            check(restored && restored->position.distanceTo(rest) < 1e-4f,
+                  "stop restores the pose FollowSpline changed");
+        }
+#endif
+
+        // The scene-replace hazard, with a control point selected: the overlay
+        // and its markers both hold raw pointers into the graph about to be
+        // freed. Open first (replace with an equivalent graph), then New
+        // (replace with a different one).
+        if (auto* live = splineNow(splineUuid)) {
+            selectObject(live);
+            step();
+            check(splineOverlays_.size() == 1, "the selected spline still has its curve");
+            if (!live->children.empty()) selectObject(live->children.front());
+            step();
+            check(selection_.get() != nullptr, "a control point is selectable");
+        }
+
+        openScene(splinePath);
+        step(2);
+        check(splineOverlays_.size() == 1, "reopening rebuilds the overlay on the new graph");
+
+        if (auto* live = splineNow(splineUuid)) {
+            if (!live->children.empty()) selectObject(live->children.front());
+        }
+        step();
+        newScene();
+        step(2);
+        check(splineOverlays_.empty(), "a scene replace drops every spline overlay");
+
+        std::error_code ec;
+        std::filesystem::remove(splinePath, ec);
     }
 
     // With a model path on the command line, exercise the async import path

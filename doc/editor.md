@@ -81,6 +81,10 @@ the camera dock beside the bottom panel. Objects that bound to
 nothing get no selection box — an empty `Box3` would leave `BoxHelper` showing a
 degenerate speck at the origin.
 
+**Splines.** Add ▸ Spline drops a curve whose control points are ordinary scene
+nodes — drag them with the gizmo, insert and delete them, and the sampled curve
+redraws live. See [Splines in `userData`](#splines-in-userdata).
+
 **Hierarchy.** The full `Object3D` tree, selection synced both ways with the
 viewport, double-click to rename, drag-and-drop to reparent (undoable, world
 transform preserved), and a right-click menu with Add ▸ / Duplicate / Delete /
@@ -89,8 +93,9 @@ Focus.
 **Inspector.** Object flags, transform (rotation shown in degrees), material
 (type, colour, emissive, roughness, metalness, opacity, transparency, side,
 wireframe, flat shading, six texture slots with previews), read-only geometry
-counts, light parameters, camera parameters, attached scripts and physics. Every
-edit is undoable, and a drag collapses into a single undo step.
+counts, light parameters, camera parameters, spline curve parameters, attached
+scripts and physics. Every edit is undoable, and a drag collapses into a single
+undo step.
 
 **Bottom panel.** A console showing loader and exporter warnings, and an asset
 browser (double-click a file to open/import/assign). Console is the first tab —
@@ -514,10 +519,109 @@ Python wheel is built from (`python/src/bind_*.cpp`), linked into the editor and
 registered with `PYBIND11_EMBEDDED_MODULE`. Importing a wheel-built `threepp`
 into the embedded interpreter instead would register a second, independent set
 of C++ types, and the editor would be handing scripts objects that module has
-never seen. Ten areas are linked — math, textures, core, geometries, materials,
-objects, animation, cameras, lights, robot — and the renderer, loader, physics,
-sensor and Vulkan areas are deliberately left out: a script has no business
-creating a window, and the editor already owns the ones that exist.
+never seen. Eleven areas are linked — math, textures, core, geometries, curves,
+materials, objects, animation, cameras, lights, robot — and the renderer,
+loader, physics, sensor and Vulkan areas are deliberately left out: a script has
+no business creating a window, and the editor already owns the ones that exist.
+
+### Splines in `userData`
+
+**Add ▸ Spline** creates a `Group` carrying `userData["spline"]`, with four
+control-point children forming an arc. The rule is one sentence:
+
+> **Every direct child of a spline is a control point, in child order.**
+
+Nothing else marks them. A control point is a plain `Object3D`, its local
+position is that point's position in the spline's space, and reordering,
+renaming, deleting or dragging one is the ordinary operation on an ordinary
+scene node. That is the entire point of the design: serialization, undo/redo,
+the transform gizmo, the hierarchy, duplication and delete are the ones the
+editor already has, and the spline feature adds none of them back.
+
+The curve's own parameters ride in the same flat format as physics and
+animation:
+
+```
+type=centripetal;closed=0;tension=0.5;samples=24
+```
+
+| key | values | meaning |
+| --- | --- | --- |
+| `type` | `centripetal`, `chordal`, `catmullrom` | three.js's parameterisations; centripetal avoids cusps |
+| `closed` | `0`, `1` | join the last point back to the first |
+| `tension` | `0`…`1` | `catmullrom` only — stored and inert for the other two, as in three.js |
+| `samples` | `1`…`200` | curve samples per segment, for the editor's overlay |
+
+`SplineConfig::encode()` / `decode()` own that format, unknown keys are ignored
+on read, and — unlike `PhysicsConfig` — `write()` never erases the entry: the
+entry *is* the spline, so removing it would stop the object being one.
+
+**Authoring.** Select the spline for type / tension / closed / samples and an
+**Add Point** button, which appends past the last point along the last segment
+so the curve visibly extends. Select a control point and the inspector shows its
+index and **Insert Before** / **Insert After**, which put a new point midway to
+its neighbour. Removing a point is `Del`. Every one of those is an undo entry.
+
+**The curve you see is not in the document.** Control points draw nothing, so
+the editor samples `CatmullRomCurve3` into one `Line` per spline under the
+editor-only overlay — never saved, never picked, never in the camera preview.
+It is rebuilt when a hash over the point count, their positions and the encoded
+config changes, which is what makes dragging a point redraw the curve live.
+Control points additionally get a marker icon through the same machinery
+cameras and lights use, so they are clickable in the viewport at all.
+
+**From a script.** `threepp.CatmullRomCurve3` is bound, so a play-mode script
+builds the same curve the editor draws. `FollowSpline` — resolve the spline by
+name, lift its children into world space, walk the curve at a constant speed:
+
+```python
+import threepp
+
+
+class FollowSpline:
+    spline_name = "Spline"   # the spline Group to follow
+    speed = 0.2              # laps per second
+
+    def start(self, obj: threepp.Object3D, scene: threepp.Scene):
+        self.obj = obj
+        self.u = 0.0
+        self.curve = None
+
+        spline = scene.get_object_by_name(self.spline_name)
+        if spline is None:
+            print("FollowSpline: no object named", self.spline_name)
+            return
+
+        # The control points ARE the spline's direct children, in order. Their
+        # positions are local to the spline, so lift them into world space --
+        # obj.position is world space too, as long as obj sits under the scene
+        # root rather than inside some other transformed group.
+        points = [spline.local_to_world(p.position) for p in spline.children]
+        if len(points) < 2:
+            print("FollowSpline: a curve needs two control points")
+            return
+
+        self.curve = threepp.CatmullRomCurve3(points)
+
+    def update(self, dt: float):
+        if self.curve is None:
+            return
+        self.u = (self.u + self.speed * dt) % 1.0
+        # get_point_at is arc-length parameterised, so the speed is constant
+        # along the curve rather than per segment. get_point(t) is not.
+        self.obj.position.copy(self.curve.get_point_at(self.u))
+```
+
+Attach it to any object, set `spline_name` to your spline in the inspector, and
+press Play. `get_tangent_at(u)` gives the heading if you want the object to face
+where it is going.
+
+Two things the script does **not** get: `userData` is not exposed to Python, so
+the document's `closed` / `type` / `tension` do not reach it — the constructor
+above takes the defaults, and a script that wants the authored ones asks for
+them as exposed fields of its own. And the curve is built once in `start()`, so
+moving a control point during Play does not bend it; rebuild in `update()` if
+that is what you want.
 
 ### Async model import
 
@@ -632,6 +736,11 @@ their say.
   The stubs are also a superset of what a script can reach — they come from the
   full wheel module, while the script host binds ten areas of it — so a name
   that completes is not proof that it exists at Play.
+* **Splines are Catmull-Rom only.** One curve type, parameterised three ways —
+  no Bézier handles, no per-point tangents or twist, and no closed-form
+  reordering of control points beyond dragging them in the hierarchy. A spline
+  is also not a path anything follows by itself: it is data, and a script (or
+  your own `PlaySession`) is what walks it.
 * **Duplicate shares geometry.** `Object3D::clone()` shares both geometry and
   materials; the editor clones the materials afterwards so recolouring a copy
   does not recolour the original, but geometry stays shared. That is intentional

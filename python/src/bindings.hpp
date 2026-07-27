@@ -39,6 +39,7 @@ namespace threepp_py {
     void init_textures(py::module_& m);
     void init_core(py::module_& m);
     void init_geometries(py::module_& m);
+    void init_curves(py::module_& m);// CatmullRomCurve3 (the editor's spline curve)
     void init_materials(py::module_& m);
     void init_objects(py::module_& m);
     void init_ocean(py::module_& m);// DisplacedMesh + Ocean; no-op unless built with Vulkan
