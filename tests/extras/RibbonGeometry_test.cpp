@@ -18,6 +18,21 @@ namespace {
                 Vector3(position->getX(a + 1), position->getY(a + 1), position->getZ(a + 1))};
     }
 
+    // Do the segments p0-p1 and q0-q1 cross, in the XZ plane? Ribbons here are
+    // flat, and a cross-section that cuts through its neighbour is the ribbon
+    // turning inside out.
+    bool crossesXZ(const Vector3& p0, const Vector3& p1, const Vector3& q0, const Vector3& q1) {
+
+        const auto side = [](const Vector3& a, const Vector3& b, const Vector3& c) {
+            return (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
+        };
+        const float d0 = side(p0, p1, q0);
+        const float d1 = side(p0, p1, q1);
+        const float d2 = side(q0, q1, p0);
+        const float d3 = side(q0, q1, p1);
+        return ((d0 > 0) != (d1 > 0)) && ((d2 > 0) != (d3 > 0));
+    }
+
 }// namespace
 
 
@@ -118,6 +133,74 @@ TEST_CASE("a vertical ribbon keeps the side vector it had", "[extras]") {
     for (unsigned int i = 0; i <= 8; ++i) {
         const auto [left, right] = ring(*geometry, i);
         CHECK(std::abs(left.distanceTo(right) - 2.f) < 1e-4f);
+    }
+}
+
+TEST_CASE("a ribbon miters its corners instead of folding", "[extras]") {
+
+    // A hard 90-degree corner, tessellated so the corner IS a sample: two
+    // 6 metre spans meeting at the origin, and a ribbon wide enough that the
+    // per-sample side vectors this replaced sent each edge overshooting into
+    // the next span.
+    CatmullRomCurve3 curve({Vector3(-6, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 6)});
+    auto geometry = RibbonGeometry::create(curve, RibbonGeometry::Params(6.f, 2, 4.f));
+
+    const auto [left0, right0] = ring(*geometry, 0);
+    const auto [left1, right1] = ring(*geometry, 1);
+    const auto [left2, right2] = ring(*geometry, 2);
+
+    // The straight spans keep the authored width, measured across the span they
+    // belong to: the miter widens the corner only.
+    CHECK(std::abs(left0.distanceTo(right0) - 6.f) < 1e-4f);
+    CHECK(std::abs(left2.distanceTo(right2) - 6.f) < 1e-4f);
+    Vector3 across;
+    across.copy(right0).sub(left0).normalize();
+    CHECK(std::abs(across.dot(Vector3(1, 0, 0))) < 1e-4f);// span runs along +X
+    across.copy(right2).sub(left2).normalize();
+    CHECK(std::abs(across.dot(Vector3(0, 0, 1))) < 1e-4f);// span runs along +Z
+
+    // The corner is widened by 1/cos(45 deg) = sqrt(2) — enough to reach where
+    // the two spans' offset edges meet — and no more.
+    const float cornerWidth = left1.distanceTo(right1);
+    CHECK(std::abs(cornerWidth - 6.f * std::sqrt(2.f)) < 1e-3f);
+    CHECK(cornerWidth <= 6.f * 2.f + 1e-4f);
+
+    // Neither edge doubles back on itself. This is the fold: with independent
+    // per-sample sides the corner ring's inner vertex sits short of where the
+    // two offset edges cross, so the edge runs in and straight back out again
+    // and the two quads overlap in the notch it leaves.
+    const auto edgeTurnsBack = [](const Vector3& a, const Vector3& b, const Vector3& c) {
+        Vector3 in, out;
+        in.copy(b).sub(a);
+        out.copy(c).sub(b);
+        return in.dot(out) < -1e-4f;
+    };
+    CHECK(!edgeTurnsBack(left0, left1, left2));
+    CHECK(!edgeTurnsBack(right0, right1, right2));
+
+    // And consecutive cross-sections stay clear of each other, so no quad is
+    // built inside out.
+    CHECK(!crossesXZ(left0, right0, left1, right1));
+    CHECK(!crossesXZ(left1, right1, left2, right2));
+}
+
+TEST_CASE("the miter widening is clamped at a hairpin", "[extras]") {
+
+    // A near-reversal: 1/cos(theta/2) runs away here (over 8x), and an
+    // unclamped cross-section would spike far outside the ribbon.
+    CatmullRomCurve3 curve({Vector3(-4, 0, 0), Vector3(0, 0, 0), Vector3(-4, 0, 1)});
+    auto geometry = RibbonGeometry::create(curve, RibbonGeometry::Params(2.f, 2, 1.f));
+
+    const auto* position = geometry->getAttribute<float>("position");
+    for (int i = 0; i < position->count(); ++i) {
+        CHECK(std::isfinite(position->getX(i)));
+        CHECK(std::isfinite(position->getZ(i)));
+    }
+    for (unsigned int i = 0; i <= 2; ++i) {
+        const auto [left, right] = ring(*geometry, i);
+        const float across = left.distanceTo(right);
+        CHECK(across >= 2.f - 1e-4f);
+        CHECK(across <= 2.f * 2.f + 1e-4f);
     }
 }
 
