@@ -98,11 +98,17 @@ namespace {
     // triggered it and the pass would chase its own tail for a frame.
     std::size_t splineHash(const Object3D& spline, const std::string& encoded) {
 
-        const auto points = SplineConfig::controlPointNodes(spline);
+        // Walked rather than collected: this runs every frame for every spline
+        // in the scene, and the allocation would be the expensive part of it.
+        std::size_t points = 0;
+        for (const auto* child : spline.children) {
+            if (!SplineConfig::isDerived(*child)) ++points;
+        }
 
-        std::size_t seed = points.size();
+        std::size_t seed = points;
         hashBytes(seed, encoded.data(), encoded.size());
-        for (const auto* child : points) {
+        for (const auto* child : spline.children) {
+            if (SplineConfig::isDerived(*child)) continue;
             const float xyz[3]{child->position.x, child->position.y, child->position.z};
             hashBytes(seed, xyz, sizeof(xyz));
         }
