@@ -12,6 +12,7 @@ MeshPhongMaterial::MeshPhongMaterial()
       MaterialWithBumpMap(1),
       MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}),
       MaterialWithDisplacementMap(1, 0),
+      MaterialWithRefractionRatio(0.98f),// virtual base: must be named here
       MaterialWithReflectivity(1, 0.98f),
       MaterialWithWireframe(false, 1),
       MaterialWithCombine(CombineOperation::Multiply),

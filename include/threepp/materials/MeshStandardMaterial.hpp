@@ -33,7 +33,7 @@ namespace threepp {
           public MaterialWithWireframe,
           public MaterialWithFlatShading,
           public MaterialWithVertexTangents,
-          public MaterialWithRefractionRatio,
+          public virtual MaterialWithRefractionRatio,
           public MaterialWithMorphTargets,
           public MaterialWithDefines {
 

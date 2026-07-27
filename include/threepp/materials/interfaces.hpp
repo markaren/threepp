@@ -74,7 +74,19 @@ namespace threepp {
         explicit MaterialWithRefractionRatio(float refractionRatio): refractionRatio(refractionRatio) {}
     };
 
-    struct MaterialWithReflectivity: virtual Material, MaterialWithRefractionRatio {
+    // MaterialWithRefractionRatio is a VIRTUAL base here (and in
+    // MeshStandardMaterial) so that MeshPhysicalMaterial -- which reaches it
+    // both through MeshStandardMaterial and through this mixin -- ends up with
+    // exactly one refractionRatio. With two, `material->refractionRatio` was
+    // ambiguous, dynamic_cast<MaterialWithRefractionRatio*> returned null (so
+    // ObjectLoader/ObjectExporter skipped the field entirely), and the GL
+    // renderer read a different copy than the one setValues() wrote.
+    //
+    // Consequence of the virtual base: every concrete material that inherits
+    // this mixin must name MaterialWithRefractionRatio in its own ctor
+    // init-list, since it has no default ctor and only the most-derived class
+    // initializes a virtual base.
+    struct MaterialWithReflectivity: virtual Material, virtual MaterialWithRefractionRatio {
 
         float reflectivity;
 

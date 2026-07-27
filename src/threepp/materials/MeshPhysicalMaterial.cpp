@@ -5,7 +5,8 @@ using namespace threepp;
 
 
 MeshPhysicalMaterial::MeshPhysicalMaterial()
-    : MaterialWithReflectivity(0.5f, 0.98f) {
+    : MaterialWithRefractionRatio(0.98f),// virtual base: must be named here
+      MaterialWithReflectivity(0.5f, 0.98f) {
 
     defines["STANDARD"] = "";
     defines["PHYSICAL"] = "";
@@ -78,10 +79,7 @@ std::shared_ptr<MeshPhysicalMaterial> MeshPhysicalMaterial::create(const Params&
     TPP_SET(lightMapIntensity)
     TPP_TEX(envMap)
     TPP_SET(envMapIntensity)
-    // refractionRatio is inherited via two base paths (MeshStandardMaterial and
-    // MaterialWithReflectivity -> MaterialWithRefractionRatio), so an unqualified m->refractionRatio
-    // is ambiguous here. Qualify through the MeshStandardMaterial path to disambiguate.
-    if (p.refractionRatio_) m->MeshStandardMaterial::refractionRatio = *p.refractionRatio_;
+    TPP_SET(refractionRatio)
     TPP_SET(wireframe)
     TPP_SET(wireframeLinewidth)
     TPP_SET(flatShading)
@@ -123,11 +121,6 @@ void MeshPhysicalMaterial::copyInto(Material& material) const {
     m->defines["PHYSICAL"] = "";
 
     m->reflectivity = reflectivity;
-    // MeshPhysicalMaterial inherits MaterialWithRefractionRatio twice (once via
-    // MeshStandardMaterial, once via MaterialWithReflectivity), so it holds two
-    // distinct refractionRatio members. MeshStandardMaterial::copyInto handled
-    // the Standard one; this is the other.
-    m->MaterialWithReflectivity::refractionRatio = MaterialWithReflectivity::refractionRatio;
 
     m->clearcoat = clearcoat;
     m->clearcoatMap = clearcoatMap;

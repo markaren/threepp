@@ -163,7 +163,7 @@ namespace {
     // MaterialWithReflectivity is the one mixin with a second base, so its
     // mirror is spelled out rather than generated.
     namespace mirror_MaterialWithReflectivity {
-        struct Mirror: virtual Material, MaterialWithRefractionRatio {
+        struct Mirror: virtual Material, virtual MaterialWithRefractionRatio {
             float reflectivity;
         };
         static_assert(sizeof(Mirror) == sizeof(MaterialWithReflectivity),
@@ -215,10 +215,8 @@ namespace {
     X(MaterialWithMorphTargets)
 
     // `is_convertible` rather than `is_base_of`: it is false both for "not a
-    // base" and for "ambiguous base". MeshPhysicalMaterial inherits
-    // MaterialWithRefractionRatio twice (via MeshStandardMaterial and via
-    // MaterialWithReflectivity), so that one subobject pair is skipped for that
-    // material only — MeshStandardMaterial still covers it.
+    // base" and for "ambiguous base", so a mixin reachable by two paths is
+    // skipped rather than failing to compile.
     template<class MIXIN, class Mat>
     void mutateOne(Mat& m, int& seed) {
 
@@ -521,6 +519,28 @@ TEST_CASE("MeshStandardMaterial::clone keeps the whole detail layer", "[material
     CHECK(dst->detailNormalMap == src->detailNormalMap);
     CHECK(dst->detailNormalScale == src->detailNormalScale);
     CHECK(dst->detailRoughStrength == src->detailRoughStrength);
+}
+
+TEST_CASE("MeshPhysicalMaterial has exactly one refractionRatio", "[materials]") {
+
+    // MaterialWithRefractionRatio is reached both via MeshStandardMaterial and
+    // via MaterialWithReflectivity. It is a *virtual* base so those collapse to
+    // one subobject; if that ever regresses to two, the plain assignment below
+    // stops compiling and the dynamic_cast starts returning null.
+    auto m = MeshPhysicalMaterial::create();
+    m->refractionRatio = 0.5f;
+
+    auto* viaMixin = dynamic_cast<MaterialWithRefractionRatio*>(m.get());
+    REQUIRE(viaMixin != nullptr);// null when the base is ambiguous
+    CHECK(viaMixin->refractionRatio == 0.5f);
+
+    // The path ObjectLoader/ObjectExporter and GLMaterials each take.
+    CHECK(m->as<MaterialWithReflectivity>()->refractionRatio == 0.5f);
+    CHECK(static_cast<MeshStandardMaterial*>(m.get())->refractionRatio == 0.5f);
+
+    // ...and the path setValues() takes.
+    m->setValues({{"refractionRatio", 0.25f}});
+    CHECK(viaMixin->refractionRatio == 0.25f);
 }
 
 TEST_CASE("copyCompatibleFrom carries every shared mixin", "[materials]") {

@@ -7,6 +7,7 @@ MeshBasicMaterial::MeshBasicMaterial()
     : MaterialWithColor(0xffffff),
       MaterialWithLightMap(1),
       MaterialWithAoMap(1),
+      MaterialWithRefractionRatio(0.98f),// virtual base: must be named here
       MaterialWithReflectivity(1, 0.98f),
       MaterialWithWireframe(false, 1),
       MaterialWithCombine(CombineOperation::Multiply) {}
