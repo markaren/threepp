@@ -35,7 +35,16 @@ namespace threepp {
 
     // This is the base class for most objects in three.js and provides a set of properties and methods for manipulating objects in 3D space.
     //Note that this can be used for grouping objects via the .add( object ) method which adds the object as a child, however it is better to use Group for this.
-    class Object3D: public EventDispatcher {
+    //
+    // enable_shared_from_this is for the Python bindings: pybind11 uses it to
+    // adopt the existing control block whenever a raw Object3D* crosses into
+    // Python (children/parent/traverse/...), so the wrapper shares ownership.
+    // Without it those wrappers are non-owning, and one that outlives its
+    // object segfaults on destruction: Mesh/Points/Line inherit Object3D
+    // virtually, so pybind11's instance deregistration must read the (dead)
+    // object's vtable to locate the base. Objects on the stack are fine as
+    // long as shared_from_this() is never called on them.
+    class Object3D: public EventDispatcher, public std::enable_shared_from_this<Object3D> {
 
     public:
         inline static Vector3 defaultUp{0, 1, 0};
