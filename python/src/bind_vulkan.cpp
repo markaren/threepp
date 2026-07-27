@@ -719,6 +719,32 @@ namespace threepp_py {
                 // stop being "lit with no light" (ungated ambient/env-specular) and
                 // receive only what actually bounces in through openings. Default ON;
                 // converges over a few dozen frames after enable/scene load.
+                // Automatic mesh LOD: background-simplified index/BLAS chains
+                // selected per entry by projected screen-space error. Default ON.
+                // Exposed so a script can A/B it — chain finalization does GPU
+                // work in the frame it lands, so it is the first thing to rule
+                // out when hunting periodic hitches.
+                .def_property("auto_lod",
+                              [](PyVulkanRenderer& r) { return r.native().autoLod(); },
+                              [](PyVulkanRenderer& r, bool v) { r.native().setAutoLod(v); },
+                              "Toggle automatic mesh LOD (background-simplified chains chosen "
+                              "by projected screen-space error). Default ON; False pins every "
+                              "mesh to full detail.")
+                .def_property_readonly("auto_lod_stats",
+                                       [](PyVulkanRenderer& r) {
+                                           const auto s = r.native().autoLodStats();
+                                           py::dict d;
+                                           d["index_bytes"]   = s.indexBytes;
+                                           d["blas_bytes"]    = s.blasBytes;
+                                           d["chains_ready"]  = s.chainsReady;
+                                           d["chains_queued"] = s.chainsQueued;
+                                           py::list per;
+                                           for (unsigned i = 0; i < 6; ++i) per.append(s.entriesPerLevel[i]);
+                                           d["entries_per_level"] = per;
+                                           return d;
+                                       },
+                                       "Auto-LOD counters: resident index/BLAS bytes, chains "
+                                       "ready/queued, and the per-level entry histogram.")
                 .def_property("probe_gi",
                               [](PyVulkanRenderer& r) { return r.native().probeGI(); },
                               [](PyVulkanRenderer& r, bool v) { r.native().setProbeGI(v); },

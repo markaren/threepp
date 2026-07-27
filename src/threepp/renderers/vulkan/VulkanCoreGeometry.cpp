@@ -597,8 +597,18 @@ void VulkanRenderer::Impl::flushLodLevelBuilds(std::vector<LodPendingBuild>& pen
 // as eligible. Stale/failed results don't count against the budget — they
 // create no resources.
 void VulkanRenderer::Impl::drainLodResults() {
-            constexpr uint32_t kMaxGeomsPerFrame = 16;
-            constexpr uint64_t kMaxNewBytesPerFrame = 8ull * 1024ull * 1024ull;
+            // Per-frame finalize budget. Deliberately small: every drain that
+            // builds anything ends in flushLodLevelBuilds, whose one-shot submit
+            // WAITS on the graphics queue — so the budget is not a throughput
+            // knob, it is the size of a stall landing inside render(). At 16
+            // geoms / 8 MiB a scene that brings a lot of geometry into view at
+            // once (spot_slam's 46 vegetation chains) paid ~40 ms hitches every
+            // time a batch landed. Two geometries / 1 MiB spreads the same total
+            // work over more frames, trading a few frames of latency before a
+            // chain becomes selectable for a stall small enough to stay inside
+            // a 60 Hz budget.
+            constexpr uint32_t kMaxGeomsPerFrame = 2;
+            constexpr uint64_t kMaxNewBytesPerFrame = 1ull * 1024ull * 1024ull;
 
             uint32_t finalizedGeoms = 0;
             uint64_t newBytes = 0;
