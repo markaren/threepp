@@ -1486,7 +1486,10 @@ int main(int argc, char** argv) {
     lidarCloudGeom->getAttribute<float>("color")->setUsage(DrawUsage::Dynamic);
     lidarCloudGeom->setDrawRange(0, 0);
 
-    auto lidarCloudMat = PointsMaterial::create(PointsMaterial::Params{}.size(3.f).vertexColors(true));
+    // sizeAttenuation(false): the 3 is PIXELS. The default unit is world
+    // space, where a 3-metre point covers the horizon.
+    auto lidarCloudMat = PointsMaterial::create(
+            PointsMaterial::Params{}.size(3.f).sizeAttenuation(false).vertexColors(true));
     auto lidarCloud = Points::create(lidarCloudGeom, lidarCloudMat);
     lidarCloud->frustumCulled = false;
     scene.add(lidarCloud);

@@ -1499,7 +1499,21 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     //
                     // Points entries (isPoints == true) always use the
                     // POINT_LIST pipeline; the push constant's color.w slot
-                    // carries PointsMaterial::size instead of opacity.
+                    // carries PointsMaterial::size instead of opacity, and
+                    // params.x the scale that turns a world-space size into
+                    // pixels (0 when the size is already pixels). See
+                    // overlay_point.vert for the two meanings of `size`.
+                    //
+                    // Perspective-ness comes off the view-projection rather
+                    // than a camera pointer, which this path does not hold:
+                    // an ortho VP has w row exactly (0,0,0,1), so non-zero
+                    // xyz there is the answer GL's isPerspectiveMatrix gives.
+                    const bool vpPerspective = vpUnjitMat.elements[3] != 0.f ||
+                                               vpUnjitMat.elements[7] != 0.f ||
+                                               vpUnjitMat.elements[11] != 0.f;
+                    const float pointAttenScale =
+                            vpPerspective ? 0.5f * float(regionSwapExt_.height) : 0.f;
+
                     auto drawOverlayLine = [&](const LineEntry& le) {
                         std::shared_ptr<BufferGeometry> geomPtr;
                         std::shared_ptr<Material>       matPtr;
@@ -1518,6 +1532,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
 
                         Color color(1.f, 1.f, 1.f);
                         float pcW           = 1.0f;// opacity for lines, point-size for points
+                        float pcAtten       = 0.f; // point attenuation scale, 0 = size is px
                         bool useVertexColors = false;
                         if (matPtr) {
                             if (auto* mc = dynamic_cast<MaterialWithColor*>(matPtr.get())) {
@@ -1525,7 +1540,12 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                             }
                             if (le.isPoints) {
                                 if (auto* ms = dynamic_cast<MaterialWithSize*>(matPtr.get())) {
-                                    pcW = std::max(1.0f, ms->size);
+                                    // No floor: an attenuated size is in METRES,
+                                    // and clamping it to 1 collapsed every
+                                    // world-space cloud to 1px specks. The
+                                    // shader clamps the resolved PIXEL size.
+                                    pcW = ms->size;
+                                    if (ms->sizeAttenuation) pcAtten = pointAttenScale;
                                 } else {
                                     pcW = 3.0f;// sensible default for sizeless materials
                                 }
@@ -1564,12 +1584,14 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         struct OverlayPC {
                             float mvp[16];
                             float color[4];
+                            float params[4];// .x = point attenuation scale
                         } pcL{};
                         std::memcpy(pcL.mvp, mvpL.elements.data(), 64);
-                        pcL.color[0] = color.r;
-                        pcL.color[1] = color.g;
-                        pcL.color[2] = color.b;
-                        pcL.color[3] = pcW;
+                        pcL.color[0]  = color.r;
+                        pcL.color[1]  = color.g;
+                        pcL.color[2]  = color.b;
+                        pcL.color[3]  = pcW;
+                        pcL.params[0] = pcAtten;
                         vkCmdPushConstants(cb, overlayPipelineLayout,
                                            VK_SHADER_STAGE_VERTEX_BIT |
                                                    VK_SHADER_STAGE_FRAGMENT_BIT,

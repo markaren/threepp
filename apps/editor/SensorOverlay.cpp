@@ -43,9 +43,26 @@ namespace {
     // and the spline curves are drawn in.
     constexpr int kCloudRenderOrder = 3000;
 
-    // Big enough to read as a point at the ranges a robot sensor works at,
-    // small enough not to paint over the geometry it is measuring.
-    constexpr float kPointSize = 0.06f;
+    // PIXELS, not metres — the material below turns sizeAttenuation off.
+    //
+    // A world-space size is the wrong unit for this overlay. It answers "how
+    // big is a return" when the question is "where did the beams land", and it
+    // makes the far half of every scan sub-pixel: the returns that most need
+    // looking at, out at the sensor's range limit, are exactly the ones that
+    // shrink away. A LIDAR sweeping a 40 m scene put its far arc under a pixel
+    // while the near arc painted over the geometry it was measuring.
+    //
+    // Screen-space also happens to be the only size the two backends agreed on
+    // for a while: the Vulkan overlay read PointsMaterial::size as pixels
+    // unconditionally and floored it at 1, so 0.06 m rendered as 1px specks
+    // there and as chunky squares on GL. Both backends now honour
+    // sizeAttenuation (overlay_point.vert), so either unit would match — this
+    // one is chosen because it reads better, not because it is the one that
+    // works.
+    //
+    // 4px: two returns a pixel apart stay distinguishable, and a dense cloud
+    // still reads as a surface rather than as noise.
+    constexpr float kPointSize = 4.f;
 
 }// namespace
 
@@ -78,6 +95,7 @@ void EditorApp::syncSensorOverlay() {
     if (!sensorCloud_) {
         auto material = PointsMaterial::create(PointsMaterial::Params()
                                                        .size(kPointSize)
+                                                       .sizeAttenuation(false)
                                                        .vertexColors(true));
         // Range colour is data, not shading: tone mapping would compress the far
         // end of the ramp into the near end.

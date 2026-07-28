@@ -175,7 +175,9 @@ int main() {
     // routes Points to the POINT_LIST overlay pipeline (drawn after TAA,
     // depth-tested against the raster G-buffer) and excludes them from
     // the TLAS, so the LIDAR beams don't see their own visualisation.
-    // PointsMaterial::size controls the sprite size in pixels.
+    // sizeAttenuation(false) makes PointsMaterial::size a size in PIXELS,
+    // which is what the 4 below has always meant here — the default is
+    // world units, and a 4-metre point is the whole screen.
     auto cloudGeom = BufferGeometry::create();
     cloudGeom->setAttribute("position",
                             FloatBufferAttribute::create(std::vector<float>(kMaxBeams * 3), 3));
@@ -185,7 +187,8 @@ int main() {
     cloudGeom->getAttribute<float>("color")->setUsage(DrawUsage::Dynamic);
     cloudGeom->setDrawRange(0, 0);
 
-    auto cloudMat = PointsMaterial::create(PointsMaterial::Params{}.size(4.f).vertexColors(true));
+    auto cloudMat = PointsMaterial::create(
+            PointsMaterial::Params{}.size(4.f).sizeAttenuation(false).vertexColors(true));
 
     auto cloud = Points::create(cloudGeom, cloudMat);
     cloud->frustumCulled = false;

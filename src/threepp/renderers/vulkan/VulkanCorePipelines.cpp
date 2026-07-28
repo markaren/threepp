@@ -1350,13 +1350,16 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
             dyn.dynamicStateCount = 3;
             dyn.pDynamicStates    = dynStates;
 
-            // mat4 mvp (64) + vec4 color (16) = 80 bytes, well under the
-            // 128B push-constant guarantee. Both vertex and fragment read
-            // the same block.
+            // mat4 mvp (64) + vec4 color (16) + vec4 params (16) = 96 bytes,
+            // well under the 128B push-constant guarantee. Both vertex and
+            // fragment read the same block. Only overlay_point.vert declares
+            // the params tail (its .x is the point-size attenuation scale);
+            // the line and wireframe shaders sharing this layout stop at 80
+            // and push 80, which is a legal sub-range.
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             pcRange.offset     = 0;
-            pcRange.size       = 80;
+            pcRange.size       = 96;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

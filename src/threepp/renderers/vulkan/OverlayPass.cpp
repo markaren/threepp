@@ -74,7 +74,10 @@ struct OverlayRecordScratch {
         Points* points = nullptr;
         Matrix4 world;
         Color   color{1.f, 1.f, 1.f};
-        float   size = 3.f;
+        // World units when `attenuate`, pixels otherwise — PointsMaterial's own
+        // two-meaning contract, resolved into a pixel scale at record time.
+        float   size      = 3.f;
+        bool    attenuate = false;
     };
     std::vector<SpriteDraw>     sprites;
     std::vector<OrthoLineDraw>  lines;
@@ -228,10 +231,14 @@ void OverlayPass::createOrthoLinePipelines() {
     dyn.pDynamicStates    = dynStates;
 
     if (orthoLinePipelineLayout_ == VK_NULL_HANDLE) {
-        VkPushConstantRange pcRange{};// mat4 mvp (64) + vec4 color (16) = 80
+        // mat4 mvp (64) + vec4 color (16) + vec4 params (16) = 96, under the
+        // 128B guarantee. Only overlay_point.vert declares the params tail (see
+        // its header for what .x means); the line and wireframe shaders sharing
+        // this layout stop at 80 and push 80, which is a legal sub-range.
+        VkPushConstantRange pcRange{};
         pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         pcRange.offset     = 0;
-        pcRange.size       = 80;
+        pcRange.size       = 96;
         VkPipelineLayoutCreateInfo plci{};
         plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.pushConstantRangeCount = 1;
@@ -1606,8 +1613,10 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     }
 
     // Collect Points objects (point clouds). POINT_LIST topology; the push
-    // constant's color.w carries PointsMaterial::size (pixels). Requires a
-    // per-vertex "color" attribute — the point pipeline always reads binding 1.
+    // constant's color.w carries PointsMaterial::size, in world units or in
+    // pixels depending on the material's sizeAttenuation (see
+    // overlay_point.vert). Requires a per-vertex "color" attribute — the point
+    // pipeline always reads binding 1.
     // Same ortho/HUD gating as lines/meshes (never the perspective
     // screen-space auto-pass).
     auto& pointDraws = scratch_->points;
@@ -1624,7 +1633,13 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
             std::memcpy(pd.world.elements.data(), p->matrixWorld->elements.data(), 64);
             if (auto mat = p->material()) {
                 if (auto* mc = dynamic_cast<MaterialWithColor*>(mat.get())) pd.color = mc->color;
-                if (auto* ms = dynamic_cast<MaterialWithSize*>(mat.get())) pd.size = std::max(1.f, ms->size);
+                if (auto* ms = dynamic_cast<MaterialWithSize*>(mat.get())) {
+                    // No floor here: an attenuated size is in METRES, and
+                    // clamping it to 1 turned every world-space cloud into
+                    // 1px specks. The shader clamps the resolved PIXEL size.
+                    pd.size      = ms->size;
+                    pd.attenuate = ms->sizeAttenuation;
+                }
             }
             pointDraws.push_back(pd);
         });
@@ -2187,7 +2202,8 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     // ── Points overlay (point clouds) ───────────────────────────────
     // Drawn last so dense scan/map clouds composite over grid + gizmos.
     // Mirrors the inline primary-scene point path: POINT_LIST pipeline,
-    // pos (binding 0) + color (binding 1), color.w = point size in pixels.
+    // pos (binding 0) + color (binding 1), color.w = point size, params.x =
+    // the attenuation scale that turns a world-space size into pixels.
     if (!pointDraws.empty()) {
         if (orthoPointListPipeline_ == VK_NULL_HANDLE) createOrthoPointPipeline();
 
@@ -2201,9 +2217,23 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         Matrix4 cvp;
         cvp.multiplyMatrices(zfix, vpMat);
 
+        // GL's points_vert.glsl scales an attenuated size by
+        // (0.5 * drawingBufferHeight) / -viewZ; `rgh` is that height in the
+        // same pixels the viewport was just set to, so a regioned pane
+        // attenuates against its own rect rather than the whole swapchain.
+        // Perspective-ness is read off the view-projection instead of the
+        // camera type: for an ortho projection the w row of VP is exactly
+        // (0,0,0,1), so a non-zero xyz there is the same answer
+        // isPerspectiveMatrix() gives, and it holds for hand-built matrices.
+        const bool perspective = cvp.elements[3] != 0.f ||
+                                 cvp.elements[7] != 0.f ||
+                                 cvp.elements[11] != 0.f;
+        const float attenScale = perspective ? 0.5f * rgh : 0.f;
+
         struct PointPC {
             float mvp[16];
-            float color[4];// .rgb = tint, .w = point size (pixels)
+            float color[4]; // .rgb = tint, .w = point size (world units or px)
+            float params[4];// .x = attenuation scale, 0 = .w is already px
         };
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, orthoPointListPipeline_);
         for (const auto& pd : pointDraws) {
@@ -2216,10 +2246,11 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
             mvp.multiplyMatrices(cvp, pd.world);
             PointPC pc{};
             std::memcpy(pc.mvp, mvp.elements.data(), 64);
-            pc.color[0] = pd.color.r;
-            pc.color[1] = pd.color.g;
-            pc.color[2] = pd.color.b;
-            pc.color[3] = pd.size;
+            pc.color[0]  = pd.color.r;
+            pc.color[1]  = pd.color.g;
+            pc.color[2]  = pd.color.b;
+            pc.color[3]  = pd.size;
+            pc.params[0] = pd.attenuate ? attenScale : 0.f;
             vkCmdPushConstants(cb, orthoLinePipelineLayout_,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(pc), &pc);
