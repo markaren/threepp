@@ -55,6 +55,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -2596,6 +2597,235 @@ int EditorApp::runSelfTest() {
             step(2);
         }
         physicsDebug_ = false;
+    }
+
+    // --- sensors -----------------------------------------------------------
+    // Drives the whole authoring-to-measurement path through the same members
+    // the UI calls: userData written the way the inspector writes it, Play, and
+    // then assertions about what came BACK. A sensor that authors cleanly and
+    // measures nothing is the failure mode here, and nothing short of reading
+    // the samples catches it.
+    {
+        newScene();
+        step(2);
+
+        auto* ground = document_.scene().getObjectByName("Ground");
+        auto* box = document_.scene().getObjectByName("Box");
+        check(box != nullptr && ground != nullptr, "template scene for the sensor drive");
+
+        std::string imuUuid, lidarUuid;
+
+        if (box && ground) {
+            // KINEMATIC, not dynamic. A kinematic body never moves and gravity
+            // does not act on it, so the accelerometer's specific force is
+            // exactly -g in world space — i.e. +g on the sensor's up axis, with
+            // no settling, no contact and no bounce mixed into the number. Same
+            // fact as a body with eDISABLE_GRAVITY reading +g.
+            PhysicsConfig physics;
+            physics.enabled = true;
+            physics.body = PhysicsConfig::Body::Kinematic;
+            physics.shape = PhysicsConfig::Shape::Box;
+            physics.write(*box);
+
+            SensorConfig imu;
+            imu.enabled = true;
+            imu.type = SensorConfig::Type::Imu;
+            imu.rateHz = 0.f;// every substep
+            // A zero noise model is a bit-exact passthrough, which is what makes
+            // a physics-truth assertion possible at all.
+            imu.gyroNoiseDensity = 0.f;
+            imu.gyroRandomWalk = 0.f;
+            imu.accelNoiseDensity = 0.f;
+            imu.accelRandomWalk = 0.f;
+            imu.write(*box);
+            imuUuid = box->uuid;
+
+            // The LIDAR goes on a node of its own, above the ground and clear of
+            // it. No physics: a vision sensor is pulled from the frame loop and
+            // needs no body — which is also what makes its cloud reproducible,
+            // since a static pose cannot drift between plays.
+            auto mast = ObjectFactory::createPrimitive(Primitive::Sphere, document_.scene());
+            mast->name = "Lidar";
+            mast->position.set(1.5f, 1.2f, 1.5f);
+            mast->scale.set(0.15f, 0.15f, 0.15f);
+
+            SensorConfig lidar;
+            lidar.enabled = true;
+            lidar.type = SensorConfig::Type::Lidar;
+            lidar.beams = SensorConfig::Beams::VLP16;
+            lidar.faceSize = 64;
+            lidar.rateHz = 0.f;// scan on every frame, so one step = one scan
+            lidar.seed = 12345;
+            lidar.rangeStddev = 0.01f;// noise on: the seed has to matter
+            lidar.nearPlane = 0.2f;
+            lidar.farPlane = 30.f;
+            lidar.write(*mast);
+            lidarUuid = mast->uuid;
+            addObject(mast, document_.scene(), "Add Lidar");
+            step();
+        }
+
+        // Authored, before any Play: the marker pass has to have picked the
+        // sensor glyph for both, or an instrumented object is invisible.
+        check(viewportMarkers_.size() >= 2, "an authored sensor gets a viewport marker");
+
+        const auto entryFor = [this](const std::string& uuid) -> const SensorPlaySession::Entry* {
+            if (!sensors_) return nullptr;
+            for (const auto& entry : sensors_->entries()) {
+                if (entry->uuid == uuid) return entry.get();
+            }
+            return nullptr;
+        };
+        // Order-independent so a cloud is compared by CONTENT: the same returns
+        // in a different order would be a different cloud to a hash over the
+        // sequence, and the beam order is the thing the seed reproduces, so it
+        // must not change either. Hash the sequence.
+        const auto hashCloud = [](const std::vector<LidarReturn>& cloud) {
+            std::size_t h = 1469598103934665603ull;
+            const auto mix = [&h](float v) {
+                std::uint32_t bits;
+                std::memcpy(&bits, &v, sizeof(bits));
+                h = (h ^ bits) * 1099511628211ull;
+            };
+            for (const auto& r : cloud) {
+                mix(r.position.x);
+                mix(r.position.y);
+                mix(r.position.z);
+                mix(r.distance);
+            }
+            return h;
+        };
+
+        const auto recordDir = std::filesystem::temp_directory_path() / "threepp-editor-selftest-sensors";
+        std::error_code ec;
+        std::filesystem::remove_all(recordDir, ec);
+        if (sensors_) {
+            sensors_->setRecordDirectory(recordDir);
+            // Armed while stopped: the files open on the first measurement of the
+            // play that follows, so "Record then Play" captures from t = 0.
+            sensors_->setRecording(true);
+        }
+
+        std::size_t firstHash = 0;
+        std::size_t firstPoints = 0;
+
+        for (int pass = 0; pass < 2; ++pass) {
+
+            startPlay();
+            check(isPlaying(), "play starts with sensors in the scene");
+            check(sensors_ && sensors_->sensorCount() == 2, "both authored sensors are built");
+            check(sensors_ && sensors_->liveCount() == 2, "and both come up live");
+
+            // One step is one scan for an ungated sensor. Hash the FIRST scan and
+            // nothing later: every scan draws from the range-noise stream, so
+            // scan N is only comparable with scan N of another run, and how many
+            // frames the IMU wait below takes is a property of the machine.
+            step();
+            const auto* lidarEntry = entryFor(lidarUuid);
+            check(lidarEntry != nullptr && lidarEntry->scans == 1,
+                  "the first frame of play is exactly one scan");
+            const std::size_t scanHash = lidarEntry ? hashCloud(lidarEntry->returns) : 0;
+            const std::size_t scanPoints = lidarEntry ? lidarEntry->returns.size() : 0;
+
+            // The IMU needs a substep to have run, which on a fast machine is not
+            // the first frame.
+            for (int i = 0; i < 600; ++i) {
+                const auto* imuEntry = entryFor(imuUuid);
+                if (imuEntry && imuEntry->samples > 0) break;
+                step();
+            }
+
+            const auto* imuEntry = entryFor(imuUuid);
+            check(imuEntry != nullptr && imuEntry->samples > 0, "IMU samples arrive during play");
+
+            if (imuEntry && imuEntry->imu) {
+                const auto sample = imuEntry->imu->latest();
+                check(sample.has_value(), "and the IMU has a latest reading");
+                if (sample) {
+                    // The one assertion that says the sensor is measuring PHYSICS
+                    // and not zeros: a level accelerometer at rest reads +g up.
+                    check(std::abs(sample->linearAcceleration.y - 9.81f) < 1e-2f,
+                          "an IMU at rest reads +g on its up axis");
+                    check(std::abs(sample->linearAcceleration.x) < 1e-2f &&
+                                  std::abs(sample->linearAcceleration.z) < 1e-2f,
+                          "and nothing on the horizontal axes");
+                }
+                // Sim time, not wall time, and it has to move.
+                const double before = imuEntry->lastTime;
+                check(before > 0.0, "IMU samples are stamped with a non-zero sim time");
+                step(20);
+                check(entryFor(imuUuid) && entryFor(imuUuid)->lastTime > before,
+                      "and the timestamps advance with the simulation");
+            }
+
+            lidarEntry = entryFor(lidarUuid);
+            check(lidarEntry != nullptr && lidarEntry->scans > 0, "the LIDAR scans during play");
+            check(lidarEntry != nullptr && !lidarEntry->returns.empty(),
+                  "and its cloud is not empty");
+
+            // The overlay is the visible half. It must be drawing the same points.
+            const auto cloudGeometry = sensorCloud_ ? sensorCloud_->geometry() : nullptr;
+            check(cloudGeometry != nullptr, "the sensor cloud overlay exists while playing");
+            check(cloudGeometry && cloudGeometry->drawRange.count > 0, "and is drawing points");
+            check(sensorCloud_ && sensorCloud_->visible, "and is visible");
+
+            if (pass == 0) {
+                firstHash = scanHash;
+                firstPoints = scanPoints;
+                check(firstPoints > 0, "the first scan has returns to compare");
+            } else {
+                // Sensors are rebuilt from the authored seed on every Play. Two
+                // plays of the same scene are therefore the same dataset — the
+                // whole reason the seed is authored rather than drawn from the OS.
+                check(scanPoints == firstPoints,
+                      "the second play scans the same number of returns");
+                check(scanHash == firstHash, "and an identical cloud - the seed replays");
+            }
+
+            check(sensors_ && sensors_->recordedRows() > 0, "recording accumulates rows");
+
+            stopPlay();
+            step(2);
+            check(sensors_ && sensors_->sensorCount() == 0, "stop drops every sensor");
+            check(sensorCloud_ == nullptr, "and clears the cloud overlay");
+            check(sensorRig_ && sensorRig_->children.empty(),
+                  "and leaves nothing parented to the sensor rig");
+        }
+
+        // The CSVs are flushed on Stop, one per sensor, header plus rows.
+        int csvFiles = 0;
+        int csvRows = 0;
+        if (std::filesystem::exists(recordDir)) {
+            for (const auto& file : std::filesystem::directory_iterator(recordDir)) {
+                if (file.path().extension() != ".csv") continue;
+                ++csvFiles;
+                std::ifstream in(file.path());
+                std::string line;
+                int lines = 0;
+                while (std::getline(in, line)) ++lines;
+                csvRows += std::max(lines - 1, 0);
+            }
+        }
+        // One per sensor, plus the final-cloud dump each vision sensor writes.
+        check(csvFiles >= 2, "recording wrote a CSV per sensor");
+        check(csvRows > 0, "with rows in them");
+        if (sensors_) sensors_->setRecording(false);
+        std::filesystem::remove_all(recordDir, ec);
+
+        // Two scene replaces back to back with the cloud toggle still on. Every
+        // scar this file carries is a pointer into a graph that was swapped out
+        // from under an overlay, and doing it twice is what catches the ones that
+        // survive the first.
+        newScene();
+        step(2);
+        newScene();
+        step(2);
+        check(sensorCloud_ == nullptr, "a double scene replace leaves no sensor overlay");
+        check(sensors_ && sensors_->sensorCount() == 0, "and no sensors");
+        // The sensor glyphs went with the objects that carried them; the fresh
+        // template scene's lights still get theirs, which is the marker pass
+        // having survived two graph swaps rather than gone quiet.
+        check(!viewportMarkers_.empty(), "and a marker pass that still runs");
     }
 #endif
 
