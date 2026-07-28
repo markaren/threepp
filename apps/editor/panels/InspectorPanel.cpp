@@ -5,6 +5,7 @@
 #include "../PanelLayout.hpp"
 
 #include "threepp/extras/editor/AnimationConfig.hpp"
+#include "threepp/extras/editor/MaterialTextureSlots.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
@@ -386,6 +387,12 @@ void EditorApp::drawTextureSlot(Material& material, const char* label,
 
     ImGui::PushID(label);
 
+    // The whole row is grouped so its screen rect can be recorded below: a file
+    // dropped from the OS carries no ImGui payload, so the only way to know
+    // which slot the user aimed at is to hit-test the cursor against the rows
+    // this frame drew.
+    ImGui::BeginGroup();
+
     const float thumb = 34 * contentScale_;
     drawThumbnail(current, thumb);
     ImGui::SameLine();
@@ -410,6 +417,16 @@ void EditorApp::drawTextureSlot(Material& material, const char* label,
         ImGui::TextColored(theme::muted(), "none");
     }
     ImGui::EndGroup();
+
+    ImGui::EndGroup();
+
+    // Recorded every frame the row is visible, and consumed at the end of the
+    // same frame — so the raw material pointer and the setter's captured
+    // material cannot outlive what they point at.
+    const auto rowMin = ImGui::GetItemRectMin();
+    const auto rowMax = ImGui::GetItemRectMax();
+    frameTextureSlots_.push_back({{&material, setter, current, label, srgb},
+                                  rowMin.x, rowMin.y, rowMax.x, rowMax.y});
 
     ImGui::PopID();
 }
@@ -592,31 +609,20 @@ void EditorApp::drawMaterialSection(Object3D& object) {
 
     ImGui::PopItemWidth();
 
+    // Collapsed until asked for — the section is long and most objects never
+    // need it. A drop aimed at one of these rows implies it is already open;
+    // a drop anywhere else is resolved by file name instead, so the feature
+    // does not depend on this being expanded.
+    if (openTextureSectionOnce_) {
+        ImGui::SetNextItemOpen(true);
+        openTextureSectionOnce_ = false;
+    }
     if (ImGui::TreeNodeEx("Textures", ImGuiTreeNodeFlags_SpanAvailWidth)) {
 
-        if (auto* m = dynamic_cast<MaterialWithMap*>(raw)) {
-            drawTextureSlot(*raw, "map", m->map,
-                            [m](const std::shared_ptr<Texture>& t) { m->map = t; }, true);
-        }
-        if (auto* m = dynamic_cast<MaterialWithNormalMap*>(raw)) {
-            drawTextureSlot(*raw, "normalMap", m->normalMap,
-                            [m](const std::shared_ptr<Texture>& t) { m->normalMap = t; }, false);
-        }
-        if (auto* m = dynamic_cast<MaterialWithRoughness*>(raw)) {
-            drawTextureSlot(*raw, "roughnessMap", m->roughnessMap,
-                            [m](const std::shared_ptr<Texture>& t) { m->roughnessMap = t; }, false);
-        }
-        if (auto* m = dynamic_cast<MaterialWithMetalness*>(raw)) {
-            drawTextureSlot(*raw, "metalnessMap", m->metalnessMap,
-                            [m](const std::shared_ptr<Texture>& t) { m->metalnessMap = t; }, false);
-        }
-        if (auto* m = dynamic_cast<MaterialWithAoMap*>(raw)) {
-            drawTextureSlot(*raw, "aoMap", m->aoMap,
-                            [m](const std::shared_ptr<Texture>& t) { m->aoMap = t; }, false);
-        }
-        if (auto* m = dynamic_cast<MaterialWithEmissive*>(raw)) {
-            drawTextureSlot(*raw, "emissiveMap", m->emissiveMap,
-                            [m](const std::shared_ptr<Texture>& t) { m->emissiveMap = t; }, true);
+        // Same list the file-drop handler resolves against — see
+        // MaterialTextureSlots.hpp for why it is not spelled out twice.
+        for (const auto& slot : textureSlotsOf(*raw)) {
+            drawTextureSlot(*raw, slot.name.c_str(), slot.current, slot.set, slot.srgb);
         }
 
         ImGui::TreePop();

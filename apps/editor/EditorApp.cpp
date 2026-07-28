@@ -7,6 +7,7 @@
 
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/AnimationPlaySession.hpp"
+#include "threepp/extras/editor/MaterialTextureSlots.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
@@ -2293,6 +2294,101 @@ int EditorApp::runSelfTest() {
         }
     }
 
+    // --- dropped textures find the right slot -------------------------------
+    // A file dropped from the OS carries no ImGui payload, so the slot has to
+    // be worked out: from the row the cursor is over, else from the file name.
+    // Until this existed every drop went to `map`, as sRGB, whatever it was.
+    {
+        newScene();
+        step(2);
+
+        auto* box = document_.scene().getObjectByName("Box");
+        auto* mesh = box ? box->as<Mesh>() : nullptr;
+        auto material = mesh ? mesh->materialAs<MeshStandardMaterial>() : nullptr;
+        check(material != nullptr, "the template Box has a standard material");
+
+        // Real files, because the drop path actually decodes them — but written
+        // here rather than taken from the asset repo, so the check runs in an
+        // editor-only build too. A 2x2 24-bit BMP is the smallest thing every
+        // image decoder agrees on.
+        const auto writeBmp = [](const std::filesystem::path& path) {
+            const unsigned char bytes[70]{
+                    'B', 'M', 70, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0,
+                    40, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 1, 0, 24, 0,
+                    0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0,
+                    // two rows of two pixels, each padded to a 4-byte boundary
+                    255, 255, 255, 128, 128, 128, 0, 0,
+                    128, 128, 128, 255, 255, 255, 0, 0};
+            std::ofstream out(path, std::ios::binary);
+            out.write(reinterpret_cast<const char*>(bytes), sizeof(bytes));
+            return out.good();
+        };
+
+        const auto temp = std::filesystem::temp_directory_path();
+        const auto plain = temp / "threepp_drop_checker.bmp";
+        const auto named = temp / "threepp_drop_normal.bmp";
+        std::error_code ec;
+        const bool wrote = writeBmp(plain) && writeBmp(named);
+        check(wrote, "the drop test could stage its images");
+
+        if (material && wrote) {
+
+            selectObject(mesh);
+            step(2);
+
+            // 1. An unrecognised name, dropped nowhere in particular: the base
+            //    colour map, exactly as before.
+            handleFileDrop({plain.string()});
+            resolveTextureDrops(-1.f, -1.f);
+            check(material->map != nullptr, "a plain texture drop still fills map");
+            check(material->map && material->map->colorSpace == ColorSpace::sRGB,
+                  "and a colour map decodes from sRGB");
+            check(material->normalMap == nullptr, "and nothing else");
+
+            // 2. Named "..._normal": inferred, and NOT tagged sRGB. That tag is
+            //    the part that used to be silently wrong.
+            handleFileDrop({named.string()});
+            resolveTextureDrops(-1.f, -1.f);
+            check(material->normalMap != nullptr, "a *_normal drop is inferred to normalMap");
+            check(material->normalMap && material->normalMap->colorSpace == ColorSpace::NoColorSpace,
+                  "and a data map is not decoded as sRGB");
+
+            // 3. Dropped onto a specific row, which outranks the name: the
+            //    *_normal file aimed at roughnessMap lands in roughnessMap.
+            //    The section is collapsed until asked for, exactly as a user
+            //    would have to expand it before dropping on a row.
+            openTextureSectionOnce_ = true;
+            step(2);// let the inspector lay the rows out
+            check(!frameTextureSlots_.empty(), "the inspector publishes its texture rows");
+
+            const auto row = std::find_if(frameTextureSlots_.begin(), frameTextureSlots_.end(),
+                                          [](const FrameTextureSlot& slot) {
+                                              return slot.target.slot == "roughnessMap";
+                                          });
+            check(row != frameTextureSlots_.end(), "including one for roughnessMap");
+
+            if (row != frameTextureSlots_.end()) {
+                const float x = (row->minX + row->maxX) * 0.5f;
+                const float y = (row->minY + row->maxY) * 0.5f;
+                handleFileDrop({named.string()});
+                resolveTextureDrops(x, y);
+                check(material->roughnessMap != nullptr,
+                      "a drop on a slot row goes to that slot, not the one its name suggests");
+                check(material->roughnessMap && material->roughnessMap->colorSpace == ColorSpace::NoColorSpace,
+                      "in that slot's colour space");
+            }
+
+            // 4. Undoable like every other material edit.
+            const auto before = material->roughnessMap;
+            commands_.undo();
+            check(material->roughnessMap != before, "a dropped texture can be undone");
+        }
+
+        std::filesystem::remove(plain, ec);
+        std::filesystem::remove(named, ec);
+    }
+
     // --- material shadowSide ----------------------------------------------
     // The inspector's answer to a Double-sided material self-shadowing into a
     // moire. It is only worth exposing if it survives being written down, and
@@ -3109,6 +3205,10 @@ void EditorApp::drawUi() {
         if (!document_.isEditorOnly(o) && &o != &document_.scene()) ++objectCount_;
     });
 
+    // Rebuilt by drawInspector() below; anything left from last frame points at
+    // a layout that no longer exists.
+    frameTextureSlots_.clear();
+
     drawMenuBar();
     drawToolbar();
     drawHierarchy();
@@ -3259,6 +3359,10 @@ void EditorApp::drawUi() {
     }
 
     handleShortcuts();
+
+    // After every panel has drawn, so the texture slot rows a drop may have
+    // landed on are known for this frame.
+    resolveTextureDrops(io.MousePos.x, io.MousePos.y);
 
     // Structural edits parked by the hierarchy walk.
     if (deferred_) {
@@ -3651,9 +3755,82 @@ void EditorApp::assignTextureToSlot(const std::filesystem::path& path) {
         return;
     }
 
+    applyTextureToSlot(path, target, "");
+}
+
+void EditorApp::assignTextureToSelection(const std::filesystem::path& path) {
+
+    auto* selected = selection_.get();
+    if (!selected) {
+        log("no selection to texture");
+        return;
+    }
+    auto material = selected->material();
+    if (!material) {
+        log("selected object has no material");
+        return;
+    }
+
+    // Nothing said where this should go, so let the file name say. A texture
+    // named "..._normal" almost never wants to be the base colour map, and
+    // dropping it there is a change the user then has to notice and undo.
+    const auto slots = textureSlotsOf(*material);
+    if (slots.empty()) {
+        log("selected object's material has no texture slots");
+        return;
+    }
+
+    const auto wanted = textureSlotFromFilename(path.stem().string());
+    auto match = std::find_if(slots.begin(), slots.end(),
+                              [&wanted](const MaterialTextureSlot& slot) { return slot.name == wanted; });
+
+    const bool inferred = match != slots.end();
+    // Falls back to the first slot, which is the base colour map wherever the
+    // material has one.
+    const auto& slot = inferred ? *match : slots.front();
+
+    applyTextureToSlot(path, {material.get(), slot.set, slot.current, slot.name, slot.srgb},
+                       inferred ? " (matched by name)" : "");
+}
+
+void EditorApp::resolveTextureDrops(float mouseX, float mouseY) {
+
+    if (pendingTextureDrops_.empty()) return;
+
+    auto dropped = std::move(pendingTextureDrops_);
+    pendingTextureDrops_.clear();
+
+    for (const auto& path : dropped) {
+
+        // A drop straight onto a slot row is an explicit answer; take it over
+        // anything the file name might suggest. When the cursor is nowhere near
+        // a row - or the window was not focused, so the position is stale - this
+        // finds nothing and the name-based path below decides instead.
+        const auto hit = std::find_if(frameTextureSlots_.begin(), frameTextureSlots_.end(),
+                                      [mouseX, mouseY](const FrameTextureSlot& slot) {
+                                          return slot.contains(mouseX, mouseY);
+                                      });
+
+        if (hit != frameTextureSlots_.end()) {
+            applyTextureToSlot(path, hit->target, "");
+            continue;
+        }
+
+        assignTextureToSelection(path);
+    }
+}
+
+void EditorApp::applyTextureToSlot(const std::filesystem::path& path,
+                                   const TextureSlotTarget& target,
+                                   const std::string& note) {
+
+    if (!target.material || !target.setter) return;
+
     TextureLoader loader;
     std::shared_ptr<Texture> texture;
     try {
+        // The slot decides: a data map decoded as sRGB shades wrong, and that
+        // is a bug you chase in the renderer rather than here.
         texture = loader.load(path, target.srgb ? ColorSpace::sRGB : ColorSpace::NoColorSpace);
     } catch (const std::exception& e) {
         log("texture failed: " + std::string(e.what()));
@@ -3667,43 +3844,8 @@ void EditorApp::assignTextureToSlot(const std::filesystem::path& path) {
     commands_.execute(std::make_unique<SetMaterialMapCommand>(
             *target.material, target.slot, target.setter, target.current, texture));
     document_.setDirty(true);
-    log(target.slot + " set from " + path.filename().string());
-}
-
-void EditorApp::assignTextureToSelection(const std::filesystem::path& path) {
-
-    auto* selected = selection_.get();
-    if (!selected) {
-        log("no selection to texture");
-        return;
-    }
-    auto material = selected->material();
-    auto* withMap = material ? dynamic_cast<MaterialWithMap*>(material.get()) : nullptr;
-    if (!withMap) {
-        log("selected object has no base-colour map slot");
-        return;
-    }
-
-    TextureLoader loader;
-    std::shared_ptr<Texture> texture;
-    try {
-        texture = loader.load(path, ColorSpace::sRGB);
-    } catch (const std::exception& e) {
-        log("texture failed: " + std::string(e.what()));
-        return;
-    }
-    if (!texture) {
-        log("texture failed: " + path.filename().string());
-        return;
-    }
-
-    commands_.execute(std::make_unique<SetMaterialMapCommand>(
-            *material, "map",
-            [withMap](const std::shared_ptr<Texture>& t) { withMap->map = t; },
-            withMap->map, texture));
-    document_.setDirty(true);
     settings_.textureDir = path.parent_path().string();
-    log("map set from " + path.filename().string());
+    log(target.slot + " set from " + path.filename().string() + note);
 }
 
 void EditorApp::assignScript(Object3D& object, const std::filesystem::path& path) {
@@ -4697,7 +4839,11 @@ void EditorApp::handleFileDrop(const std::vector<std::string>& paths) {
             }
         } else if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
                    extension == ".bmp" || extension == ".tga" || extension == ".gif") {
-            assignTextureToSelection(path);
+            // Deferred: which slot this belongs in depends on where the cursor
+            // is over the inspector, and those rows are only known once the UI
+            // has drawn. resolveTextureDrops() picks it up at the end of the
+            // frame.
+            pendingTextureDrops_.push_back(path);
         } else {
             log("ignored dropped file " + path.filename().string());
         }

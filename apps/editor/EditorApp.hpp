@@ -200,6 +200,17 @@ namespace threepp::editor {
         void launchExternalEditor(const std::filesystem::path& dir,
                                   const std::filesystem::path& file);
 
+        // Which material slot is being filled — by an inspector "Load..."
+        // button (the file dialog resolves a frame or more later, so the target
+        // has to survive across frames) or by a file dropped onto its row.
+        struct TextureSlotTarget {
+            Material* material = nullptr;
+            std::function<void(const std::shared_ptr<Texture>&)> setter;
+            std::shared_ptr<Texture> current;
+            std::string slot;
+            bool srgb = true;
+        };
+
         // --- editing operations --------------------------------------------
         void newScene();
         void buildTemplateScene();
@@ -216,8 +227,20 @@ namespace threepp::editor {
         void unlinkSelectedAsset();
         void setEnvironment(const std::filesystem::path& path, bool alsoBackground);
         void clearEnvironment();
+        // Where a dropped image goes when nothing pointed at a specific slot:
+        // inferred from the file name, else the material's base colour map.
         void assignTextureToSelection(const std::filesystem::path& path);
         void assignTextureToSlot(const std::filesystem::path& path);
+        // Loads `path` in the slot's colour space and assigns it as one
+        // undoable step. `note` is appended to the console line.
+        void applyTextureToSlot(const std::filesystem::path& path,
+                                const TextureSlotTarget& target,
+                                const std::string& note);
+        // Consumes the frame's dropped images against the texture slot rows the
+        // inspector just drew, hit-testing them at (mouseX, mouseY). Called at
+        // the end of drawUi() with the cursor position; the position is a
+        // parameter so the self-test can aim a drop without an OS drag.
+        void resolveTextureDrops(float mouseX, float mouseY);
         // Attaches (or clears, with an empty path) a .py on `object`, as one
         // undoable step. Field values already stored for the same file are kept.
         void assignScript(Object3D& object, const std::filesystem::path& path);
@@ -516,17 +539,30 @@ namespace threepp::editor {
         // replaces the whole graph.
         std::string scriptTargetUuid_;
 
-        // Which material slot a "Load..." button in the inspector is filling.
-        // The file dialog resolves a frame or more later, so the target has to
-        // survive across frames.
-        struct TextureSlotTarget {
-            Material* material = nullptr;
-            std::function<void(const std::shared_ptr<Texture>&)> setter;
-            std::shared_ptr<Texture> current;
-            std::string slot;
-            bool srgb = true;
-        };
         TextureSlotTarget textureSlotTarget_;
+
+        // Where each texture slot row landed on screen this frame, so a file
+        // dropped from the OS can be hit-tested against them. Rebuilt every
+        // frame and consumed at the end of the same one — the raw Material* in
+        // the target must never outlive the frame that recorded it.
+        //
+        // Screen-space rect as plain floats: this header is included by every
+        // panel and has no business dragging imgui's types in for four numbers.
+        struct FrameTextureSlot {
+            TextureSlotTarget target;
+            float minX, minY, maxX, maxY;
+
+            [[nodiscard]] bool contains(float x, float y) const {
+                return x >= minX && x <= maxX && y >= minY && y <= maxY;
+            }
+        };
+        std::vector<FrameTextureSlot> frameTextureSlots_;
+        // Opens the inspector's Textures section for one frame. The self-test
+        // sets it to reach the slot rows; a user does the same by clicking.
+        bool openTextureSectionOnce_ = false;
+        // Image paths dropped this frame, resolved after the UI has drawn (and
+        // so after the rows above are known).
+        std::vector<std::filesystem::path> pendingTextureDrops_;
 
         // Confirmation for a destructive action on a dirty document.
         enum class PendingAction {
