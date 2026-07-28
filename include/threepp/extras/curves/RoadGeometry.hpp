@@ -27,7 +27,9 @@
 //
 // Only LOCAL self-intersection is trimmed. A road whose two far-apart lobes
 // overlap is out of scope: the pieces are correct, their overlap is not
-// resolved, and the same was true of the ribbon.
+// resolved, and the same was true of the ribbon. A CLOSED road's edges are
+// walked as a chain from the seam, so a loop straddling that seam is not seen
+// either — put the seam somewhere the road is not turning tightly.
 
 #ifndef THREEPP_ROADGEOMETRY_HPP
 #define THREEPP_ROADGEOMETRY_HPP

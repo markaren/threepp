@@ -619,7 +619,9 @@ and is out of scope as a road — `RibbonGeometry`
 (`threepp/extras/curves/RibbonGeometry.hpp`) still sweeps a ribbon along
 anything, including that. And only *local* self-intersection is trimmed: a road
 whose two far-apart lobes **cross each other** draws both, in the same plane,
-which may z-fight. Neither is new; the ribbon had both.
+which may z-fight — as does a loop that straddles the seam of a *closed* road,
+whose edges are walked as a chain starting there. Neither is new; the ribbon had
+both.
 
 **Regeneration is derived state, not a command.** The undoable step is the
 config edit; the sync pass then adds, rebuilds or removes the mesh to follow
