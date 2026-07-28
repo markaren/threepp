@@ -85,6 +85,10 @@ namespace threepp::editor {
             bool selfTest = false;
             // Optional robot for the selftest's URDF pass.
             std::filesystem::path urdf;
+            // Render the road-acceptance scene to this PNG and exit. Exists so
+            // a person — or a tool — can LOOK at what the geometry does before
+            // anyone claims it works.
+            std::filesystem::path screenshot;
         };
 
         explicit EditorApp(const Options& options);
@@ -274,6 +278,7 @@ namespace threepp::editor {
 
         // --- misc ----------------------------------------------------------
         int runSelfTest();
+        int runScreenshot();
         void handleShortcuts();
         void handleFileDrop(const std::vector<std::string>& paths);
         void log(const std::string& message);

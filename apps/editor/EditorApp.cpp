@@ -337,6 +337,7 @@ int EditorApp::run() {
     Clock clock;
 
     if (options_.selfTest) return runSelfTest();
+    if (!options_.screenshot.empty()) return runScreenshot();
 
     if (options_.maxFrames > 0) {
         for (int i = 0; i < options_.maxFrames; ++i) {
@@ -350,6 +351,99 @@ int EditorApp::run() {
 
     persistSettings();
     return 0;
+}
+
+// stb_image_write is already compiled into threepp (utils/StbImageWrite.cpp);
+// these mirror its two entry points rather than adding an include path for the
+// one function this file wants.
+extern "C" {
+    int stbi_write_png(char const* filename, int w, int h, int comp, const void* data, int stride_in_bytes);
+    void stbi_flip_vertically_on_write(int flag);
+}
+
+int EditorApp::runScreenshot() {
+
+    Clock clock;
+    const auto playFor = [&](float seconds) {
+        float elapsed = 0.f;
+        // Wall-clock, not frame-count: with vsync off a frame's dt is tiny and
+        // a fixed frame budget would capture the balls still in the air.
+        for (int i = 0; i < 20000 && elapsed < seconds; ++i) {
+            const float dt = clock.getDelta();
+            elapsed += std::max(dt, 0.f);
+            canvas_.animateOnce([&] { frame(dt); });
+        }
+    };
+
+    auto& scene = document_.scene();
+
+    // The two roads every round of this feature was judged on: the factory
+    // default at the default width (both bends tighter than the half-width)
+    // and an S-curve whose opposite bends are far tighter than its.
+    auto plain = ObjectFactory::createSpline(scene);
+    {
+        auto config = SplineConfig::read(*plain).value_or(SplineConfig{});
+        config.mesh = SplineConfig::MeshKind::Road;
+        config.width = 4.f;
+        config.write(*plain);
+    }
+    plain->position.z = -6.f;
+    addObject(plain, scene, "Screenshot Road");
+
+    auto s = ObjectFactory::createSpline(scene);
+    {
+        static constexpr float points[][3] = {
+                {-9.f, 0.5f, -3.f}, {-3.f, 0.5f, 3.f}, {3.f, 0.5f, -3.f}, {9.f, 0.5f, 3.f}};
+        const auto nodes = SplineConfig::controlPointNodes(*s);
+        for (std::size_t i = 0; i < nodes.size() && i < 4; ++i) {
+            nodes[i]->position.set(points[i][0], points[i][1], points[i][2]);
+        }
+        auto config = SplineConfig::read(*s).value_or(SplineConfig{});
+        config.mesh = SplineConfig::MeshKind::Road;
+        config.width = 6.f;
+        config.write(*s);
+    }
+    s->position.z = 4.f;
+    addObject(s, scene, "Screenshot S Road");
+    playFor(0.1f);// the sync pass derives the road meshes
+
+    for (auto* spline : {plain.get(), s.get()}) {
+        if (auto* mesh = SplineConfig::derivedMesh(*spline)) {
+            PhysicsConfig config;
+            config.enabled = true;
+            config.body = PhysicsConfig::Body::Static;
+            config.write(*mesh);
+        }
+    }
+    const auto drop = [&](const Vector3& from, const char* label) {
+        auto ball = ObjectFactory::createPrimitive(Primitive::Sphere, scene);
+        ball->position.copy(from);
+        PhysicsConfig config;
+        config.enabled = true;
+        config.body = PhysicsConfig::Body::Dynamic;
+        config.write(*ball);
+        addObject(ball, scene, label);
+    };
+    drop({-6.f, 3.f, 4.f}, "Ball on S");
+    drop({0.f, 3.f, -7.f}, "Ball on default");
+
+    physicsDebug_ = true;
+    startPlay();
+    playFor(2.5f);// balls settle, the collider overlay's line buffer fills
+
+    camera_.position.set(0.f, 17.f, 17.f);
+    orbit_.target.set(0.f, 0.f, -1.f);
+    playFor(0.1f);
+
+    const auto pixels = renderer_->readRGBPixels();
+    const auto size = canvas_.size();
+    stbi_flip_vertically_on_write(1);
+    const bool wrote = pixels.size() >= static_cast<std::size_t>(size.width()) * size.height() * 3 &&
+                       stbi_write_png(options_.screenshot.string().c_str(), size.width(),
+                                      size.height(), 3, pixels.data(), size.width() * 3) != 0;
+    std::cout << "[screenshot] " << (wrote ? "wrote " : "FAILED to write ")
+              << options_.screenshot.string() << std::endl;
+    return wrote ? 0 : 1;
 }
 
 int EditorApp::runSelfTest() {

@@ -20,6 +20,8 @@ int main(int argc, char** argv) {
             options.selfTest = true;
         } else if (std::strncmp(argument, "--urdf=", 7) == 0) {
             options.urdf = argument + 7;
+        } else if (std::strncmp(argument, "--screenshot=", 13) == 0) {
+            options.screenshot = argument + 13;
         } else if (std::strcmp(argument, "--help") == 0 || std::strcmp(argument, "-h") == 0) {
             std::cout << "threepp editor\n"
                       << "  usage: threepp_editor [--vulkan] [--frames=N] [scene.json]\n"
