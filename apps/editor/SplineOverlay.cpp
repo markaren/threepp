@@ -136,8 +136,12 @@ namespace {
                 // first (SplineConfig::roadPath), which is what keeps it full
                 // width through a bend tighter than its own half-width — and
                 // what the collider rebuilds from, so the two cannot disagree.
+                // An empty chain is a curve with no length to it — two points
+                // dragged onto each other. Nothing to build, and a geometry
+                // with no position attribute is not something to hand a
+                // renderer; the sync pass hides the mesh instead.
                 const auto road = config.roadPath(spline);
-                if (!road) return nullptr;
+                if (!road || road->empty()) return nullptr;
                 return RoadGeometry::create(
                         *road, RoadGeometry::Params(std::max(config.width, 1e-3f),
                                                     std::max(config.uvLength, 1e-3f)));
