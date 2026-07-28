@@ -84,6 +84,39 @@ namespace {
         return GraphicsAPI::OpenGL;
     }
 
+    // How far a generated road reaches from the curve it was generated on.
+    //
+    // A road's edges are the offsets of that curve at half the authored width,
+    // with the loop a bend tighter than the offset ties CUT OUT, so the typical
+    // vertex sits exactly the half-width away from it. Cross-sections cannot be
+    // measured pairwise any more: trimming takes vertices off one edge and not
+    // the other. Zero when there is nothing to measure. Selftest only.
+    float roadReach(const Mesh& mesh, const Object3D& spline, const SplineConfig& config) {
+
+        const auto geometry = mesh.geometry();
+        const auto curve = config.curve(spline);
+        if (!geometry || !curve) return 0.f;
+        const auto* position = geometry->getAttribute<float>("position");
+        if (!position || position->count() < 2) return 0.f;
+
+        const auto samples = curve->getPoints(512);
+        std::vector<float> reach;
+        reach.reserve(position->count());
+        for (int i = 0; i < position->count(); ++i) {
+            const Vector3 vertex(position->getX(i), position->getY(i), position->getZ(i));
+            float nearest = std::numeric_limits<float>::max();
+            for (const auto& sample : samples) nearest = std::min(nearest, vertex.distanceTo(sample));
+            reach.push_back(nearest);
+        }
+        if (reach.empty()) return 0.f;
+        // The TYPICAL vertex, not the extreme one at either end of it: a mitered
+        // corner of a coarsely sampled bend sits a little outside the offset,
+        // and a trimmed one sits inside. Most of a road is neither.
+        const auto middle = reach.begin() + static_cast<std::ptrdiff_t>(reach.size() / 2);
+        std::nth_element(reach.begin(), middle, reach.end());
+        return *middle;
+    }
+
 }// namespace
 
 
@@ -1116,27 +1149,16 @@ int EditorApp::runSelfTest() {
                       "switching tube to road keeps the node");
                 check(mesh->geometry() != geometry, "and rebuilds its geometry");
 
-                // The road emits the two vertices of a cross-section back to
-                // back, so a pair measures the width there. It NEVER narrows:
-                // a straight run and any bend the width fits through measure
-                // the authored width exactly, and a bend tighter than the
-                // half-width reaches from the outer edge to the centre of the
-                // bend — the pie sector, still over half the width. The ribbon
-                // this replaced pinned those rings down to a pivot.
-                const auto* position = mesh->geometry()->getAttribute<float>("position");
-                float widest = 0.f;
-                float narrowest = std::numeric_limits<float>::max();
-                for (int i = 0; position && i + 1 < position->count(); i += 2) {
-                    const Vector3 left(position->getX(i), position->getY(i), position->getZ(i));
-                    const Vector3 right(position->getX(i + 1), position->getY(i + 1), position->getZ(i + 1));
-                    const float across = left.distanceTo(right);
-                    widest = std::max(widest, across);
-                    narrowest = std::min(narrowest, across);
-                }
-                check(std::abs(widest - 7.f) < 1e-3f,
-                      "with the road exactly as wide as the config says");
-                check(narrowest >= 3.5f - 1e-3f && narrowest <= 7.f + 1e-3f,
-                      "and never pinched narrower than the half-width it always reaches");
+                // A road lays its whole left edge down and then its whole
+                // right edge (v says which), and the two are not the same
+                // length once a bend tighter than the half-width has had its
+                // offset loop trimmed off. Where the road STARTS and ENDS
+                // there is no bend, so the two edges begin and finish exactly
+                // `width` apart — which is what says the rebuild used the
+                // width the config asks for.
+                const float reach = spline ? roadReach(*mesh, *spline, config) : 0.f;
+                check(std::abs(reach - 3.5f) < 0.02f,
+                      "with the road reaching exactly the half-width the config says");
             }
 
             // mesh=none removes it — and undoing that config edit brings it
@@ -1281,23 +1303,9 @@ int EditorApp::runSelfTest() {
             bool narrowed = false;
             if (auto* asMesh = reloadedMesh ? reloadedMesh->as<Mesh>() : nullptr) {
                 const auto* position = asMesh->geometry()->getAttribute<float>("position");
-                if (position && position->count() >= 2) {
-                    // The WIDEST cross-section is the authored width exactly —
-                    // straight runs and every bend the width fits through
-                    // measure it — and the narrowest still reaches the outer
-                    // half, since a bend tighter than that spans from the outer
-                    // edge to its own centre rather than pinching.
-                    float widest = 0.f;
-                    float narrowest = std::numeric_limits<float>::max();
-                    for (int i = 0; i + 1 < position->count(); i += 2) {
-                        const Vector3 left(position->getX(i), position->getY(i), position->getZ(i));
-                        const Vector3 right(position->getX(i + 1), position->getY(i + 1), position->getZ(i + 1));
-                        const float across = left.distanceTo(right);
-                        widest = std::max(widest, across);
-                        narrowest = std::min(narrowest, across);
-                    }
-                    narrowed = std::abs(widest - authored.width) < 1e-3f &&
-                               narrowest >= authored.width * 0.5f - 1e-3f;
+                if (position && position->count() >= 2 && reloaded) {
+                    const float reach = roadReach(*asMesh, *reloaded, authored);
+                    narrowed = std::abs(reach - authored.width * 0.5f) < 0.02f;
                 }
             }
             check(narrowed, "rebuilt to the width the reloaded config asks for");
@@ -1562,8 +1570,23 @@ int EditorApp::runSelfTest() {
             config.write(*object);
         }
 
+        // Vertices the overlay is actually drawing. drawRange starts at "all of
+        // them" — a sentinel, not a count — so a geometry that has never been
+        // filled has to answer zero rather than half a billion.
         const auto colliderVertices = [this] {
-            return physicsDebugLines_ ? physicsDebugLines_->geometry()->drawRange.count : 0;
+            const auto geometry = physicsDebugLines_ ? physicsDebugLines_->geometry() : nullptr;
+            const auto* position = geometry ? geometry->getAttribute<float>("position") : nullptr;
+            if (!position) return 0;
+            return std::min(geometry->drawRange.count, position->count());
+        };
+
+        // PhysX fills the debug buffer during simulate(), and the session steps
+        // on a FIXED timestep out of a real-time clock: on a machine drawing
+        // frames faster than the substep, several frames pass before the sim
+        // advances at all. Waiting on the buffer rather than on a frame count
+        // is what keeps this about the overlay instead of about the frame rate.
+        const auto stepUntilColliders = [&](int budget) {
+            for (int i = 0; i < budget && colliderVertices() == 0; ++i) step();
         };
 
         physicsDebug_ = true;
@@ -1571,9 +1594,9 @@ int EditorApp::runSelfTest() {
         check(physicsDebugLines_ == nullptr, "the collider overlay stays off while stopped");
 
         startPlay();
-        // PhysX fills the render buffer during simulate(), so the lines arrive
-        // one substep after the parameter is set.
-        step(8);
+        // The lines arrive one substep after the visualization parameter is
+        // set, which is one substep after play started.
+        stepUntilColliders(600);
         check(physicsDebugLines_ != nullptr, "toggling Physics Colliders on while playing draws an overlay");
         check(physicsDebugLines_ && physicsDebugLines_->visible, "which is visible");
         check(colliderVertices() > 0, "with a non-empty line buffer");
@@ -1586,7 +1609,7 @@ int EditorApp::runSelfTest() {
         // pointers in the overlay, which is the shape of every scar this file
         // carries.
         physicsDebug_ = true;
-        step(5);
+        stepUntilColliders(600);
         check(colliderVertices() > 0, "toggling it back on refills the buffer");
         stopPlay();
         step(2);
@@ -1594,19 +1617,18 @@ int EditorApp::runSelfTest() {
 
         // And once more across an explicit document replace while playing.
         startPlay();
-        step(5);
+        stepUntilColliders(600);
         check(colliderVertices() > 0, "the overlay comes back on the next play");
         stopPlay();
         newScene();
         step(2);
         check(physicsDebugLines_ == nullptr, "a new scene with the toggle on leaves nothing behind");
 
-        // A road's collider count follows the road's SHAPE, not its
-        // tessellation. This S bends twice, both tighter than half its six
-        // metre width — the case that used to be cooked as one sliver hull per
-        // sample of a folded ribbon, which drew a moiré of them. The pieces
-        // behind it are a handful, so the overlay's line count is BOUNDED: this
-        // is a regression guard on the count, not on the drawing.
+        // A road collides as ONE static solid, whatever its shape. This S
+        // bends twice, both tighter than half its six metre width — the case
+        // that used to be cooked as one sliver hull per sample of a folded
+        // ribbon, drawing a moiré of them. Both bends have their offset loops
+        // trimmed, and what comes out is a single triangle mesh.
         {
             auto created = ObjectFactory::createSpline(document_.scene());
             const auto splineUuid = created->uuid;
@@ -1623,9 +1645,6 @@ int EditorApp::runSelfTest() {
                 auto config = SplineConfig::read(*spline).value_or(SplineConfig{});
                 config.mesh = SplineConfig::MeshKind::Road;
                 config.width = 6.f;
-                // Sampled as finely as the editor allows, which is what makes
-                // the bound below mean something: one hull per sample would be
-                // 600 of them here.
                 config.samples = SplineConfig::maxSamples;
                 config.write(*spline);
                 step();
@@ -1640,10 +1659,22 @@ int EditorApp::runSelfTest() {
             }
 
             startPlay();
-            step(8);
-            const int lines = colliderVertices();
-            check(lines > 0, "an S-curve road draws collider lines of its own");
-            check(lines < 4000, "and a bounded number of them, not one hull per sample");
+            stepUntilColliders(600);
+            check(colliderVertices() > 0, "an S-curve road draws collider lines of its own");
+
+            int shapes = -1;
+            if (auto* world = physics_ ? physics_->world() : nullptr) {
+                using namespace ::physx;
+                auto& pxScene = world->scene();
+                const PxU32 count = pxScene.getNbActors(PxActorTypeFlag::eRIGID_STATIC);
+                std::vector<PxActor*> actors(count);
+                if (count) pxScene.getActors(PxActorTypeFlag::eRIGID_STATIC, actors.data(), count);
+                shapes = 0;
+                for (auto* actor : actors) {
+                    shapes += static_cast<int>(static_cast<PxRigidActor*>(actor)->getNbShapes());
+                }
+            }
+            check(shapes == 1, "and collides as exactly one shape, both bends and all");
             stopPlay();
             step(2);
         }

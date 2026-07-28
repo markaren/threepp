@@ -100,8 +100,19 @@ void EditorApp::syncPhysicsDebug() {
     }
 
     auto* position = physicsDebugLines_->geometry()->getAttribute<float>("position");
-    physicsDebugLines_->visible = position != nullptr && vertices > 0;
-    if (!position || vertices == 0) return;
+    if (!position) {
+        physicsDebugLines_->visible = false;
+        return;
+    }
+    if (vertices == 0) {
+        // PhysX REFILLS the buffer on each simulate(), so a frame that ran no
+        // substep finds it empty rather than unchanged. Keep the last lines —
+        // which is what the note above promises — instead of hiding the overlay
+        // and blinking it at every frame the accumulator swallows.
+        physicsDebugLines_->visible = physicsDebugLines_->geometry()->drawRange.count > 0;
+        return;
+    }
+    physicsDebugLines_->visible = true;
 
     const PxDebugLine* lines = buffer.getLines();
     for (int i = 0; i < lineCount; ++i) {
