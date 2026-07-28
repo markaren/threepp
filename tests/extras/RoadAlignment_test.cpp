@@ -200,3 +200,54 @@ TEST_CASE("stations hold their angle break in plan too", "[extras]") {
     std::cout << "[default width 4] worst station break = " << worst << " rad" << std::endl;
     CHECK(worst < params.stationAngle * 1.5f);
 }
+
+TEST_CASE("PROBE profile coverage", "[.probe]") {
+
+    const auto look = [](const char* what, const std::vector<Vector3>& pts) {
+        CatmullRomCurve3 curve(pts);
+        const auto a = RoadAlignment::build(curve, {});
+        const auto& pieces = a.profile().pieces();
+        if (pieces.empty()) { std::cout << "[" << what << "] EMPTY profile\n"; return; }
+        float back = -1e9f; int nonMonotone = 0; float worstGap = 0.f;
+        for (std::size_t i = 0; i < pieces.size(); ++i) {
+            const float s = pieces[i].start.x, e = pieces[i].end().x;
+            if (e < s) ++nonMonotone;
+            if (i > 0) worstGap = std::max(worstGap, std::abs(s - back));
+            back = e;
+        }
+        float hi = -1e9f, lo = 1e9f;
+        for (const auto& st : a.stations()) { hi = std::max(hi, st.point.y); lo = std::min(lo, st.point.y); }
+        std::cout << "[" << what << "] planLength=" << a.length()
+                  << " profileX=[" << pieces.front().start.x << "," << pieces.back().end().x << "]"
+                  << " nonMonotonePieces=" << nonMonotone
+                  << " worstJointGapX=" << worstGap
+                  << " stationY=[" << lo << "," << hi << "]" << std::endl;
+    };
+    look("gentle crest", {Vector3(-12,0,-6), Vector3(-4,1.5f,-2), Vector3(0,3,2), Vector3(4,1.5f,6), Vector3(12,0,8)});
+    look("steep hill", {Vector3(-6,0,0), Vector3(-2,4,0), Vector3(2,0,0), Vector3(6,4,0)});
+    look("default + lifted", {Vector3(-3,0.5f,1.5f), Vector3(-1,3.f,-1), Vector3(1,0.5f,-1), Vector3(3,0.5f,1.5f)});
+}
+TEST_CASE("PROBE closed", "[.probe2]") {
+
+    const auto look = [](const char* what, const std::vector<Vector3>& pts, bool closed) {
+        CatmullRomCurve3 curve(pts, closed);
+        RoadAlignment::Params p; p.closed = closed;
+        const auto a = RoadAlignment::build(curve, p);
+        const auto& st = a.stations();
+        if (st.size() < 2) { std::cout << "[" << what << "] EMPTY\n"; return; }
+        float hi=-1e9f, lo=1e9f, worstStep=0.f; std::size_t at=0;
+        for (std::size_t i=0;i<st.size();++i){ hi=std::max(hi,st[i].point.y); lo=std::min(lo,st[i].point.y); }
+        for (std::size_t i=1;i<st.size();++i){
+            const float d = st[i].point.distanceTo(st[i-1].point);
+            if (d > worstStep) { worstStep = d; at = i; }
+        }
+        std::cout << "[" << what << "] closed=" << closed << " stations=" << st.size()
+                  << " planLength=" << a.length()
+                  << " stationY=[" << lo << "," << hi << "]"
+                  << " worstStationGap=" << worstStep << " at " << at << std::endl;
+    };
+    look("default closed flat", {Vector3(-3,0.5f,1.5f), Vector3(-1,0.5f,-1), Vector3(1,0.5f,-1), Vector3(3,0.5f,1.5f)}, true);
+    look("closed + lifted", {Vector3(-3,0.5f,1.5f), Vector3(-1,3.f,-1), Vector3(1,0.5f,-1), Vector3(3,0.5f,1.5f)}, true);
+    look("closed loop", {Vector3(-4,0,-4), Vector3(4,0,-4), Vector3(4,0,4), Vector3(-4,0,4)}, true);
+    look("closed loop lifted", {Vector3(-4,0,-4), Vector3(4,2,-4), Vector3(4,0,4), Vector3(-4,2,4)}, true);
+}
