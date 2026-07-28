@@ -116,6 +116,37 @@ void EditorApp::drawMenuBar() {
 
             if (ImGui::MenuItem("Frame Selection", "F", false, !selection_.empty())) focusSelected();
             ImGui::Separator();
+
+            if (ImGui::BeginMenu("Viewpoint")) {
+
+                // The numpad layout every 3D editor shares. Picking one of the
+                // six switches to the orthographic projection, which is what an
+                // axis view is for; the toggle below is how to come back.
+                static constexpr struct {
+                    ViewPreset preset;
+                    const char* shortcut;
+                } viewpoints[] = {
+                        {ViewPreset::Front, "Num1 / Alt+1"},
+                        {ViewPreset::Back, "Ctrl+Num1"},
+                        {ViewPreset::Right, "Num3 / Alt+3"},
+                        {ViewPreset::Left, "Ctrl+Num3"},
+                        {ViewPreset::Top, "Num7 / Alt+7"},
+                        {ViewPreset::Bottom, "Ctrl+Num7"},
+                };
+                for (const auto& entry : viewpoints) {
+                    if (ImGui::MenuItem(viewPresetLabel(entry.preset), entry.shortcut,
+                                        viewPreset() == entry.preset && orthographic())) {
+                        setOrthographic(true);
+                        setViewPreset(entry.preset);
+                    }
+                }
+                ImGui::Separator();
+                bool ortho = orthographic();
+                if (ImGui::MenuItem("Orthographic", "Num5 / Alt+5", &ortho)) setOrthographic(ortho);
+
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
             if (grid_) ImGui::MenuItem("Grid", nullptr, &grid_->visible);
             if (axes_) ImGui::MenuItem("Origin Axes", nullptr, &axes_->visible);
             // Only draws anything while playing — the colliders do not exist
@@ -167,6 +198,10 @@ void EditorApp::drawMenuBar() {
                     {"Q", "Toggle local / world space"},
                     {"Shift (hold)", "Snap while dragging"},
                     {"F", "Frame selection"},
+                    {"Num1 / 3 / 7", "Front / right / top orthographic view"},
+                    {"Ctrl+Num1 / 3 / 7", "Back / left / bottom"},
+                    {"Num5", "Toggle orthographic / perspective"},
+                    {"Alt+1 / 3 / 5 / 7", "The same, without a numpad"},
                     {"Del", "Delete selection"},
                     {"Esc", "Deselect"},
                     {"Ctrl+D", "Duplicate"},

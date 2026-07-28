@@ -123,7 +123,7 @@ EditorApp::EditorApp(const Options& options)
                       .exitOnKeyEscape(false)),
       renderer_(createRenderer(canvas_, requestedApi(options.vulkan))),
       camera_(55.f, canvas_.aspect(), 0.05f, 5000.f),
-      orbit_(camera_, canvas_) {
+      ortho_(-1.f, 1.f, 1.f, -1.f, 0.05f, 10000.f) {
 
     contentScale_ = monitor::contentScale().first;
 
@@ -133,8 +133,6 @@ EditorApp::EditorApp(const Options& options)
     renderer_->toneMappingExposure = 1.0f;
 
     camera_.position.set(6, 5, 8);
-    orbit_.target.set(0, 0.5f, 0);
-    orbit_.enableDamping = true;
 
     // --- editor-only overlay ------------------------------------------------
     // One node holds everything the editor draws but never saves. SceneDocument
@@ -157,15 +155,11 @@ EditorApp::EditorApp(const Options& options)
     splines_->name = "__editor_splines";
     overlay_->add(splines_);
 
-    gizmo_ = std::make_unique<TransformControls>(camera_, canvas_);
-    gizmo_->setSize(0.9f);
-    overlay_->addRef(*gizmo_);
-
     // Orbiting while dragging a handle fights the gizmo; and a drag is exactly
     // the span an undo entry should cover.
     gizmoDragListener_ = std::make_unique<LambdaEventListener>([this](Event& event) {
         const bool dragging = std::any_cast<bool>(event.target);
-        orbit_.enabled = !dragging;
+        orbit_->enabled = !dragging;
         auto* selected = selection_.get();
         if (dragging) {
             if (selected) {
@@ -184,7 +178,11 @@ EditorApp::EditorApp(const Options& options)
         }
         gizmoDragging_ = false;
     });
-    gizmo_->addEventListener("dragging-changed", *gizmoDragListener_);
+
+    // Builds orbit_ and gizmo_ against the perspective camera. Called again
+    // whenever the projection changes.
+    bindViewportControls();
+    orbit_->target.set(0, 0.5f, 0);
 
     // --- ImGui --------------------------------------------------------------
     ui_ = std::make_unique<ImguiFunctionalContext>(canvas_, *renderer_, [this] { drawUi(); });
@@ -197,6 +195,9 @@ EditorApp::EditorApp(const Options& options)
     canvas_.onWindowResize([this](WindowSize size) {
         camera_.aspect = size.aspect();
         camera_.updateProjectionMatrix();
+        // The ortho frustum keeps its height and re-derives its width, so a
+        // resize widens the view rather than rescaling what is in it.
+        setOrthoHeight((ortho_.top - ortho_.bottom) / std::max(ortho_.zoom, 1e-4f));
         renderer_->setSize(size);
     });
 
@@ -453,7 +454,7 @@ int EditorApp::runScreenshot() {
     playFor(2.5f);// balls settle, the collider overlay's line buffer fills
 
     camera_.position.set(-1.f, 27.f, 27.f);
-    orbit_.target.set(0.f, 0.f, 5.f);
+    orbit_->target.set(0.f, 0.f, 5.f);
     playFor(0.2f);
 
     const auto size = canvas_.size();
@@ -485,15 +486,37 @@ int EditorApp::runScreenshot() {
     // invisible from overhead — it is a shading break, and shading breaks want
     // a glancing angle and the surface filling the frame.
     camera_.position.set(1.f, 3.2f, 34.f);
-    orbit_.target.set(0.f, 1.f, 12.f);
+    orbit_->target.set(0.f, 1.f, 12.f);
     playFor(0.2f);
     wrote = shoot(sibling("_graded")) && wrote;
 
     camera_.position.set(-1.f, 27.f, 27.f);
-    orbit_.target.set(0.f, 0.f, 5.f);
+    orbit_->target.set(0.f, 0.f, 5.f);
     physicsDebug_ = true;
     playFor(0.4f);// the overlay's line buffer fills
     wrote = shoot(sibling("_colliders")) && wrote;
+
+    // And the axis views, for the same reason the rest of this function exists:
+    // a projection is a claim about what the image does to parallel lines, and
+    // the only way to check it is to look. Top wants the grid flat under the
+    // road; Front wants it stood up behind it.
+    physicsDebug_ = false;
+    // Stopped and with something selected: the gizmo is rebuilt against the
+    // ortho camera when the projection changes, and a gizmo that draws at the
+    // wrong size or points the wrong way is the failure mode to look for.
+    stopPlay();
+    playFor(0.2f);
+    if (auto* subject = document_.scene().getObjectByName("Spline 3")) selectObject(subject);
+
+    setOrthographic(true);
+    setViewPreset(ViewPreset::Top);
+    playFor(0.2f);
+    wrote = shoot(sibling("_ortho_top")) && wrote;
+
+    setViewPreset(ViewPreset::Front);
+    playFor(0.2f);
+    wrote = shoot(sibling("_ortho_front")) && wrote;
+
     return wrote ? 0 : 1;
 }
 
@@ -1889,6 +1912,82 @@ int EditorApp::runSelfTest() {
         }
     }
 
+    // --- orthographic axis views ------------------------------------------
+    // The screenshots are what say the views look right; these say the state
+    // machine behind them holds — that the projection swaps without moving what
+    // is framed, that picking still works through the ortho unprojection, and
+    // that the label follows the camera rather than the last button pressed.
+    {
+        newScene();
+        step(2);
+
+        const Vector3 target = orbit_->target;
+        const float perspDistance = camera_.position.distanceTo(target);
+
+        check(!orthographic_ && viewPreset_ == ViewPreset::User,
+              "the editor starts in a free perspective view");
+
+        setOrthographic(true);
+        step(2);
+        check(viewCamera().is<OrthographicCamera>(), "the ortho toggle swaps the projection");
+        // What the perspective camera covered at the orbit distance.
+        const float expected = 2.f * perspDistance * std::tan(math::degToRad(camera_.fov) * 0.5f);
+        check(std::abs((ortho_.top - ortho_.bottom) - expected) < 1e-2f,
+              "the ortho frustum is sized to the perspective framing");
+        check(std::abs(orbit_->target.distanceTo(target)) < 1e-3f,
+              "and the toggle leaves the orbit target alone");
+
+        setViewPreset(ViewPreset::Top);
+        step(2);
+        Vector3 direction;
+        direction.subVectors(viewCamera().position, orbit_->target).normalize();
+        check(direction.dot(Vector3(0, 1, 0)) > 0.9999f, "Top looks straight down");
+        check(viewPreset_ == ViewPreset::Top, "and keeps its label while it does");
+        check(std::abs(grid_->rotation.x) < 1e-4f, "the ground grid stays flat under a Top view");
+        // The template Ground is a plane at y=0, exactly where the grid is, and
+        // the depth buffer decides coplanar surfaces — the grid has to stand
+        // off towards whichever side is being looked from.
+        check(grid_->position.y > 0.f, "and stands off towards a camera above it");
+
+        setViewPreset(ViewPreset::Bottom);
+        step(2);
+        check(grid_->position.y < 0.f, "the stand-off flips for a camera below");
+
+        setViewPreset(ViewPreset::Front);
+        step(2);
+        direction.subVectors(viewCamera().position, orbit_->target).normalize();
+        check(direction.dot(Vector3(0, 0, 1)) > 0.9999f, "Front looks down -Z");
+        check(std::abs(grid_->rotation.x - math::PI * 0.5f) < 1e-4f,
+              "and stands the grid up into the plane being looked at");
+
+        // Picking goes through the ortho unprojection, which is a different
+        // Raycaster path entirely — a click in the middle of the viewport has
+        // to land on the template Box in front of the camera.
+        selectObject(nullptr);
+        step();
+        const auto* viewport = ImGui::GetMainViewport();
+        pickAt(viewport->Pos.x + viewport->Size.x * 0.5f,
+               viewport->Pos.y + viewport->Size.y * 0.5f);
+        step();
+        check(selection_.get() != nullptr, "a click picks through the orthographic projection");
+
+        // Orbiting off the axis retires the label; the projection is not a
+        // thing the orbit gets to change.
+        viewCamera().position.copy(orbit_->target).add(Vector3(4.f, 3.f, 5.f));
+        step(2);
+        check(viewPreset_ == ViewPreset::User, "orbiting off the axis drops back to User");
+        check(orthographic_, "without leaving orthographic");
+        check(std::abs(grid_->rotation.x) < 1e-4f, "and lays the grid back down");
+
+        setOrthographic(false);
+        step(2);
+        check(!viewCamera().is<OrthographicCamera>(), "the toggle comes back to perspective");
+        const float height = 2.f * camera_.position.distanceTo(orbit_->target) *
+                             std::tan(math::degToRad(camera_.fov) * 0.5f);
+        check(std::abs(height - expected) < 1e-1f,
+              "framing the same height it was showing in ortho");
+    }
+
 #ifdef THREEPP_EDITOR_WITH_PHYSX
     // The physics collider overlay. It exists because a body resting on nothing
     // and a body whose collider is somewhere else look identical, so the checks
@@ -2029,11 +2128,15 @@ void EditorApp::frame(float dt) {
     pollImports(dt);
     pollExternalEdit(dt);
     if (animPreview_) animPreview_->mixer->update(dt);
-    orbit_.update();
+    orbit_->update();
+    updateViewPreset();
+    // The nudge that keeps the grid off a coplanar ground is measured against
+    // the camera, so it is re-derived every frame rather than on view changes.
+    updateGridPlacement();
 
     refreshSelectionHelpers();
 
-    renderer_->render(document_.scene(), camera_);
+    renderer_->render(document_.scene(), viewCamera());
     renderCameraPreview();
     ui_->render();
 
@@ -2270,8 +2373,11 @@ void EditorApp::buildTemplateScene() {
     box->receiveShadow = true;
     scene.add(box);
 
+    // A new document starts where the editor started: a free perspective view.
+    setOrthographic(false);
+    setViewPreset(ViewPreset::User);
     camera_.position.set(6, 5, 8);
-    orbit_.target.set(0, 0.5f, 0);
+    orbit_->target.set(0, 0.5f, 0);
 
     document_.setDirty(false);
     selectObject(box.get());
@@ -2799,7 +2905,7 @@ void EditorApp::focusSelected() {
     Box3 box;
     box.setFromObject(*selected);
     if (box.isEmpty()) {
-        selected->getWorldPosition(orbit_.target);
+        selected->getWorldPosition(orbit_->target);
         return;
     }
 
@@ -2808,15 +2914,25 @@ void EditorApp::focusSelected() {
     const float radius = std::max({size.x, size.y, size.z}) * 0.5f;
     // Pull back far enough that the bounding sphere fits the vertical FOV, with
     // a little air around it.
-    const float distance = std::max(radius / std::tan(math::degToRad(camera_.fov) * 0.5f), 0.5f) * 1.6f;
+    float distance = std::max(radius / std::tan(math::degToRad(camera_.fov) * 0.5f), 0.5f) * 1.6f;
+
+    Camera& camera = viewCamera();
 
     Vector3 direction;
-    direction.subVectors(camera_.position, orbit_.target);
+    direction.subVectors(camera.position, orbit_->target);
     if (direction.length() < 1e-4f) direction.set(1, 1, 1);
     direction.normalize();
 
-    orbit_.target.copy(centre);
-    camera_.position.copy(centre).add(direction.multiplyScalar(distance));
+    if (orthographic_) {
+        // Framing an ortho view is a frustum change, not a move. The camera
+        // still goes clear of the scene so nothing in front of the subject is
+        // clipped away.
+        setOrthoHeight(std::max(radius, 0.25f) * 2.f * 1.6f);
+        distance = std::max(distance, sceneClearDistance(centre));
+    }
+
+    orbit_->target.copy(centre);
+    camera.position.copy(centre).add(direction.multiplyScalar(distance));
 }
 
 void EditorApp::reparent(Object3D& object, Object3D& newParent) {
@@ -3125,7 +3241,7 @@ void EditorApp::pickAt(float mouseX, float mouseY) {
             ((mouseX - viewport->Pos.x) / width) * 2.f - 1.f,
             -(((mouseY - viewport->Pos.y) / height) * 2.f - 1.f)};
 
-    raycaster_.setFromCamera(ndc, camera_);
+    raycaster_.setFromCamera(ndc, viewCamera());
     auto intersections = raycaster_.intersectObject(document_.scene(), true);
 
     // Markers win over geometry regardless of depth: they are drawn on top of
@@ -3148,6 +3264,261 @@ void EditorApp::pickAt(float mouseX, float mouseY) {
     }
 
     selectObject(nullptr);
+}
+
+
+// ----------------------------------------------------------- viewport camera
+
+Camera& EditorApp::viewCamera() {
+
+    return orthographic_ ? static_cast<Camera&>(ortho_) : static_cast<Camera&>(camera_);
+}
+
+const char* EditorApp::viewPresetLabel(ViewPreset preset) {
+
+    switch (preset) {
+        case ViewPreset::Front: return "Front";
+        case ViewPreset::Back: return "Back";
+        case ViewPreset::Left: return "Left";
+        case ViewPreset::Right: return "Right";
+        case ViewPreset::Top: return "Top";
+        case ViewPreset::Bottom: return "Bottom";
+        default: return "User";
+    }
+}
+
+Vector3 EditorApp::viewPresetDirection(ViewPreset preset) {
+
+    // A hair of tilt on the pole views. Looking exactly down +Y with an up
+    // vector of +Y is the degenerate case for both lookAt() and the orbit
+    // spherical; a ten-thousandth of a radian costs a tenth of a pixel and
+    // removes the whole class of problem.
+    constexpr float eps = 1e-4f;
+
+    switch (preset) {
+        case ViewPreset::Front: return {0, 0, 1};
+        case ViewPreset::Back: return {0, 0, -1};
+        case ViewPreset::Right: return {1, 0, 0};
+        case ViewPreset::Left: return {-1, 0, 0};
+        case ViewPreset::Top: return Vector3(0, 1, eps).normalize();
+        case ViewPreset::Bottom: return Vector3(0, -1, eps).normalize();
+        default: return {0, 0, 1};
+    }
+}
+
+float EditorApp::sceneClearDistance(const Vector3& from) const {
+
+    // Everything the document holds, without the overlay: the grid is 40 units
+    // across and would otherwise set the distance for every scene.
+    Box3 bounds;
+    for (const auto& child : document_.scene().children) {
+        if (!child || child == overlay_.get()) continue;
+        if (document_.isEditorOnly(*child)) continue;
+        Box3 childBounds;
+        childBounds.setFromObject(*child);
+        if (!childBounds.isEmpty()) bounds.union_(childBounds);
+    }
+    if (bounds.isEmpty()) return 0.f;
+
+    // Half-diagonal, so the answer holds whichever way the camera is pointing.
+    const float radius = bounds.getSize().length() * 0.5f;
+    return radius + from.distanceTo(bounds.getCenter()) + 1.f;
+}
+
+void EditorApp::setOrthoHeight(float height) {
+
+    const float halfHeight = std::max(height, 1e-3f) * 0.5f;
+    const float aspect = std::max(canvas_.aspect(), 1e-3f);
+
+    ortho_.top = halfHeight;
+    ortho_.bottom = -halfHeight;
+    ortho_.right = halfHeight * aspect;
+    ortho_.left = -halfHeight * aspect;
+    ortho_.zoom = 1.f;
+    ortho_.updateProjectionMatrix();
+}
+
+void EditorApp::setOrthographic(bool ortho) {
+
+    if (ortho == orthographic_) return;
+
+    const Vector3 target = orbit_->target;
+    const float halfFovTan = std::tan(math::degToRad(camera_.fov) * 0.5f);
+
+    if (ortho) {
+        // Same framing, different projection: the frustum is sized to what the
+        // perspective camera covers at the orbit distance.
+        const float distance = std::max(camera_.position.distanceTo(target), 0.01f);
+        ortho_.up.copy(camera_.up);
+        ortho_.position.copy(camera_.position);
+        ortho_.quaternion.copy(camera_.quaternion);
+        setOrthoHeight(2.f * distance * halfFovTan);
+
+        // Ortho framing does not depend on how far back the camera stands, but
+        // clipping does — and an axis view is usually asked for precisely to
+        // see past whatever is between here and the far side of the scene.
+        const float clear = sceneClearDistance(target);
+        if (clear > distance) {
+            Vector3 direction;
+            direction.subVectors(ortho_.position, target);
+            if (direction.length() < 1e-4f) direction.set(0, 0, 1);
+            ortho_.position.copy(target).addScaledVector(direction.normalize(), clear);
+        }
+        ortho_.lookAt(target);
+    } else {
+        // And back: the distance that reproduces the ortho frustum height under
+        // the perspective fov.
+        const float height = (ortho_.top - ortho_.bottom) / std::max(ortho_.zoom, 1e-4f);
+        const float distance = std::max(height * 0.5f / halfFovTan, 0.01f);
+        Vector3 direction;
+        direction.subVectors(ortho_.position, target);
+        if (direction.length() < 1e-4f) direction.set(0, 0, 1);
+        camera_.up.copy(ortho_.up);
+        camera_.position.copy(target).addScaledVector(direction.normalize(), distance);
+        camera_.lookAt(target);
+    }
+
+    orthographic_ = ortho;
+    bindViewportControls();
+    updateGridPlacement();
+}
+
+void EditorApp::setViewPreset(ViewPreset preset) {
+
+    viewPreset_ = preset;
+
+    if (preset != ViewPreset::User) {
+
+        Camera& camera = viewCamera();
+        const Vector3 target = orbit_->target;
+
+        // Orbiting keeps the distance it had — the view turns, it does not
+        // dolly. In ortho the distance only decides what is clipped, so it is
+        // pushed clear of the scene instead.
+        float distance = std::max(camera.position.distanceTo(target), 0.01f);
+        if (orthographic_) distance = std::max(distance, sceneClearDistance(target));
+
+        camera.position.copy(target).addScaledVector(viewPresetDirection(preset), distance);
+        camera.lookAt(target);
+    }
+
+    updateGridPlacement();
+}
+
+void EditorApp::updateViewPreset() {
+
+    if (viewPreset_ == ViewPreset::User) return;
+
+    // The label describes where the camera is standing, so orbiting away from
+    // the axis retires it. Pan and zoom keep the direction and so keep the
+    // label. The threshold is a degree — wide enough that damping settling out
+    // of a just-applied preset does not trip it.
+    Vector3 direction;
+    direction.subVectors(viewCamera().position, orbit_->target);
+    if (direction.length() < 1e-6f) return;
+
+    if (direction.normalize().dot(viewPresetDirection(viewPreset_)) < 0.99985f) {
+        viewPreset_ = ViewPreset::User;
+        updateGridPlacement();
+    }
+}
+
+void EditorApp::updateGridPlacement() {
+
+    if (!grid_) return;
+
+    // GridHelper lies in XZ. In an axis ortho view that plane is edge-on — a
+    // single line — so the grid is stood up into the plane being looked at.
+    // Only in ortho: a perspective axis view still reads as a 3D view, and a
+    // ground plane is the right reference there.
+    Vector3 normal(0, 1, 0);
+    if (orthographic_) {
+        switch (viewPreset_) {
+            case ViewPreset::Front:
+            case ViewPreset::Back:
+                normal.set(0, 0, 1);
+                break;
+            case ViewPreset::Left:
+            case ViewPreset::Right:
+                normal.set(1, 0, 0);
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (normal.z != 0.f) {
+        grid_->rotation.set(math::PI * 0.5f, 0, 0);
+    } else if (normal.x != 0.f) {
+        grid_->rotation.set(0, 0, math::PI * 0.5f);
+    } else {
+        grid_->rotation.set(0, 0, 0);
+    }
+
+    // A scene's ground plane usually sits exactly on the grid, and which of two
+    // coplanar surfaces survives is decided by the depth buffer rather than by
+    // draw order — no render order puts the grid back on top, and turning the
+    // depth test off would float it over objects that really are in front.
+    // Nudging it towards the viewer does both jobs. The nudge grows with the
+    // square of the distance, which is how depth precision degrades, and is
+    // capped at a fraction of that distance so it stays invisible.
+    const Vector3& eye = viewCamera().position;
+    const float distance = std::max(eye.length(), 0.01f);// the grid sits at the origin
+    const float lift = std::clamp(distance * distance * 2e-5f, 2e-3f, distance * 0.02f);
+
+    grid_->position.copy(normal).multiplyScalar(eye.dot(normal) < 0.f ? -lift : lift);
+    // The origin axes lie in the same plane and lose to the same ground.
+    if (axes_) axes_->position.copy(grid_->position);
+}
+
+void EditorApp::bindViewportControls() {
+
+    Camera& camera = viewCamera();
+
+    // OrbitControls and TransformControls each capture a Camera& for their
+    // whole life, so a projection switch means new ones. It happens on a
+    // keypress, and keeping exactly one of each alive matters: both subscribe
+    // to the canvas, and two live sets would both act on every drag.
+    // What the view is looking at is a property of the session, not of the
+    // controls, so it is carried across. On the first call there is nothing to
+    // carry and the constructor sets it.
+    Vector3 target;
+    if (orbit_) target.copy(orbit_->target);
+
+    orbit_ = std::make_unique<OrbitControls>(camera, canvas_);
+    orbit_->target.copy(target);
+    orbit_->enableDamping = true;
+    orbit_->enabled = !gizmoDragging_;
+    // An ortho dolly scales the frustum rather than moving the camera, and an
+    // unbounded zoom either inverts the frustum or divides it away.
+    orbit_->minZoom = 1e-3f;
+    orbit_->maxZoom = 1e4f;
+
+    if (gizmo_) {
+        gizmo_->removeEventListener("dragging-changed", *gizmoDragListener_);
+        gizmo_->detach();
+        gizmo_->removeFromParent();
+    }
+    gizmo_ = std::make_unique<TransformControls>(camera, canvas_);
+    gizmo_->setSize(0.9f);
+    overlay_->addRef(*gizmo_);
+    gizmo_->addEventListener("dragging-changed", *gizmoDragListener_);
+    // Snap and enabled/visible are re-applied every frame by
+    // refreshSelectionHelpers(); mode, space and the attachment are not.
+    if (auto* selected = selection_.get()) gizmo_->attach(*selected);
+    applyGizmoMode();
+}
+
+float EditorApp::viewportWorldPerPixel(const Vector3& world) const {
+
+    const auto height = static_cast<float>(renderer_->size().height());
+
+    if (orthographic_) {
+        // Parallel projection: the same everywhere in the frame.
+        return (ortho_.top - ortho_.bottom) / std::max(ortho_.zoom, 1e-4f) / std::max(1.f, height);
+    }
+    const float distance = camera_.position.distanceTo(world);
+    return 2.f * distance * std::tan(math::degToRad(camera_.fov) * 0.5f) / std::max(1.f, height);
 }
 
 
@@ -3231,6 +3602,24 @@ void EditorApp::handleShortcuts() {
 
     const bool ctrl = io.KeyCtrl;
     const bool shift = io.KeyShift;
+    const bool alt = io.KeyAlt;
+
+    // --- viewpoints -------------------------------------------------------
+    // The numpad bindings every 3D editor shares, with Ctrl for the opposite
+    // side. Alt+digit does the same on the keyboards that have no numpad.
+    const auto viewKey = [&](ImGuiKey keypad, ImGuiKey digit, ViewPreset side, ViewPreset opposite) {
+        if (!(ImGui::IsKeyPressed(keypad, false) || (alt && ImGui::IsKeyPressed(digit, false)))) return;
+        // An axis view is an orthographic view — that is what it is for. The
+        // projection stays put afterwards; Numpad5 is the way back.
+        setOrthographic(true);
+        setViewPreset(ctrl ? opposite : side);
+    };
+    viewKey(ImGuiKey_Keypad1, ImGuiKey_1, ViewPreset::Front, ViewPreset::Back);
+    viewKey(ImGuiKey_Keypad3, ImGuiKey_3, ViewPreset::Right, ViewPreset::Left);
+    viewKey(ImGuiKey_Keypad7, ImGuiKey_7, ViewPreset::Top, ViewPreset::Bottom);
+    if (ImGui::IsKeyPressed(ImGuiKey_Keypad5, false) || (alt && ImGui::IsKeyPressed(ImGuiKey_5, false))) {
+        setOrthographic(!orthographic_);
+    }
 
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) pendingAction_ = PendingAction::New;
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) pendingAction_ = PendingAction::Open;

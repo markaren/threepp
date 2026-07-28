@@ -98,6 +98,44 @@ void EditorApp::drawToolbar() {
         ImGui::SameLine();
         if (ImGui::Button("Stop", transport)) stopPlay();
         if (!playing) ImGui::EndDisabled();
+
+        // --- viewpoint, right-aligned ----------------------------------------
+        // Says where the camera is standing and under which projection, and is
+        // also how to get there without a numpad.
+        const float viewWidth = 130 * s;
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(viewport->Size.x - viewWidth - 14 * s);
+
+        // ASCII only: the ImGui default font has no glyph for a middle dot and
+        // draws a box in its place.
+        const std::string label =
+                std::string(viewPresetLabel(viewPreset())) + (orthographic() ? " / Ortho" : " / Persp");
+
+        ImGui::SetNextItemWidth(viewWidth);
+        if (ImGui::BeginCombo("##viewpoint", label.c_str())) {
+
+            static constexpr ViewPreset presets[] = {
+                    ViewPreset::Front, ViewPreset::Back,
+                    ViewPreset::Right, ViewPreset::Left,
+                    ViewPreset::Top, ViewPreset::Bottom};
+
+            for (auto preset : presets) {
+                if (ImGui::Selectable(viewPresetLabel(preset),
+                                      viewPreset() == preset && orthographic())) {
+                    setOrthographic(true);
+                    setViewPreset(preset);
+                }
+            }
+            ImGui::Separator();
+            bool ortho = orthographic();
+            if (ImGui::Checkbox("Orthographic", &ortho)) setOrthographic(ortho);
+
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Axis views: Num1/3/7 (Ctrl for the opposite side).\n"
+                              "Num5 toggles orthographic. Alt+digit works without a numpad.");
+        }
     }
     ImGui::End();
     ImGui::PopStyleVar();

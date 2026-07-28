@@ -45,6 +45,11 @@ void EditorApp::drawStatusBar() {
         ImGui::TextColored(theme::muted(), "|");
 
         ImGui::SameLine();
+        ImGui::Text("%s %s", viewPresetLabel(viewPreset()), orthographic() ? "ortho" : "persp");
+        ImGui::SameLine();
+        ImGui::TextColored(theme::muted(), "|");
+
+        ImGui::SameLine();
         ImGui::Text("%s / %s", modeLabel(gizmoMode_), gizmoWorldSpace_ ? "World" : "Local");
         if (snapEnabled_ || ImGui::GetIO().KeyShift) {
             ImGui::SameLine();

@@ -301,11 +301,11 @@ void EditorApp::syncViewportMarkers() {
     if (viewportMarkers_.empty()) return;
 
     // --- place, face and size them ----------------------------------------
-    // Constant screen size: at distance d a pixel spans
-    // 2*d*tan(fov/2)/heightInPixels world units.
-    const auto height = static_cast<float>(renderer_->size().height());
-    const float halfFovTan = std::tan(math::degToRad(camera_.fov) * 0.5f);
+    // Constant screen size, whichever projection is active — see
+    // viewportWorldPerPixel(). Under perspective that is 2*d*tan(fov/2) per
+    // frame height; under ortho the frustum height, the same everywhere.
     const float pixels = kMarkerPixels * contentScale_;
+    const auto& viewQuaternion = viewCamera().quaternion;
     const auto* selected = selection_.get();
 
     Vector3 world;
@@ -315,10 +315,9 @@ void EditorApp::syncViewportMarkers() {
         marker.node->position.copy(world);
         // Billboard: adopt the viewer's orientation outright, so the icon is
         // never edge-on regardless of how the owner is rotated.
-        marker.node->quaternion.copy(camera_.quaternion);
+        marker.node->quaternion.copy(viewQuaternion);
 
-        const float distance = camera_.position.distanceTo(world);
-        const float scale = pixels * (2.f * distance * halfFovTan / std::max(1.f, height));
+        const float scale = pixels * viewportWorldPerPixel(world);
         marker.node->scale.set(scale, scale, scale);
 
         const bool isSelected = selected == marker.owner;

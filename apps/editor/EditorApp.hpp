@@ -30,6 +30,7 @@
 #include "threepp/extras/editor/Selection.hpp"
 
 #include "threepp/animation/AnimationMixer.hpp"
+#include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/controls/OrbitControls.hpp"
@@ -89,6 +90,19 @@ namespace threepp::editor {
             // a person — or a tool — can LOOK at what the geometry does before
             // anyone claims it works.
             std::filesystem::path screenshot;
+        };
+
+        // The standard editor viewpoints. `User` is any freely orbited angle;
+        // the other six are the axis-aligned views every 3D editor puts on the
+        // numpad. Public because it names the argument of setViewPreset().
+        enum class ViewPreset {
+            User,
+            Front,
+            Back,
+            Left,
+            Right,
+            Top,
+            Bottom
         };
 
         explicit EditorApp(const Options& options);
@@ -252,6 +266,46 @@ namespace threepp::editor {
         void pickAt(float mouseX, float mouseY);
         [[nodiscard]] Object3D* resolveSelectable(Object3D* hit) const;
 
+        // --- viewport camera -------------------------------------------------
+        // The camera the viewport is currently seen through: the perspective
+        // one, or the orthographic one while an ortho view is on. Everything
+        // that projects or unprojects (render, pick, gizmo, markers) goes
+        // through this rather than naming camera_ directly.
+        [[nodiscard]] Camera& viewCamera();
+        // Swaps the projection, preserving what is framed: the ortho frustum is
+        // sized to what the perspective camera sees at the orbit distance, and
+        // the reverse on the way back.
+        void setOrthographic(bool ortho);
+        [[nodiscard]] bool orthographic() const { return orthographic_; }
+        // Points the view down a world axis without changing what it looks at.
+        // `User` only clears the label — an axis view is not a mode, it is a
+        // place the camera happens to be standing.
+        void setViewPreset(ViewPreset preset);
+        [[nodiscard]] ViewPreset viewPreset() const { return viewPreset_; }
+        [[nodiscard]] static const char* viewPresetLabel(ViewPreset preset);
+        // Unit vector from the orbit target towards where the camera stands in
+        // that view. The pole views carry a hair of tilt so `lookAt` and the
+        // orbit spherical never hit their degenerate case.
+        [[nodiscard]] static Vector3 viewPresetDirection(ViewPreset preset);
+        // Drops the label back to `User` once the view has been orbited off its
+        // axis, and keeps the grid facing the viewer in the axis views.
+        void updateViewPreset();
+        void updateGridPlacement();
+        // Rebuilds the orbit and transform controls against whichever camera is
+        // active. Both hold a Camera& for life, so switching projection means
+        // building new ones.
+        void bindViewportControls();
+        // Sets the ortho frustum to `height` world units tall at the current
+        // aspect, with zoom reset.
+        void setOrthoHeight(float height);
+        // How far back from `from` an ortho camera has to stand to keep the
+        // whole document in front of its near plane. Ortho framing does not
+        // depend on the distance, only the clipping does.
+        [[nodiscard]] float sceneClearDistance(const Vector3& from) const;
+        // World units per screen pixel at `world`, for whichever projection is
+        // active. Constant-screen-size overlays size themselves with this.
+        [[nodiscard]] float viewportWorldPerPixel(const Vector3& world) const;
+
         // --- play ----------------------------------------------------------
         void startPlay();
         void togglePause();
@@ -310,8 +364,17 @@ namespace threepp::editor {
 
         Canvas canvas_;
         std::unique_ptr<Renderer> renderer_;
+        // Two cameras, one viewport: only one is ever rendered with, and every
+        // projection-aware path asks viewCamera() which. They look at the same
+        // orbit target and hand their framing over on each switch. The ortho
+        // frustum is sized in world units rather than by a negative near plane,
+        // so the camera is pushed clear of the scene when an axis view is
+        // entered — in a parallel projection the distance only sets clipping.
         PerspectiveCamera camera_;
-        OrbitControls orbit_;
+        OrthographicCamera ortho_;
+        std::unique_ptr<OrbitControls> orbit_;
+        bool orthographic_ = false;
+        ViewPreset viewPreset_ = ViewPreset::User;
 
         SceneDocument document_;
         Selection selection_;
