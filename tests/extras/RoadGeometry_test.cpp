@@ -264,6 +264,30 @@ TEST_CASE("a bend tighter than the half-width becomes a pie sector", "[extras]")
     }
 }
 
+TEST_CASE("the same road builds the same bytes", "[extras]") {
+
+    // The document carries the generated mesh, so a rebuild that wandered by an
+    // ulp would make every save after a reload a diff. Nothing in the
+    // segmentation is ordered by anything but the samples, and nothing in it is
+    // random; this is the contract that says so.
+    auto curve = cornerSpline();
+    const auto first = RoadPath::fromCurve(curve, 48, false);
+    const auto second = RoadPath::fromCurve(curve, 48, false);
+    REQUIRE(first.primitives().size() == second.primitives().size());
+
+    auto a = RoadGeometry::create(first, 6.f, 4.f);
+    auto b = RoadGeometry::create(second, 6.f, 4.f);
+    const auto& positionsA = a->getAttribute<float>("position")->array();
+    const auto& positionsB = b->getAttribute<float>("position")->array();
+    REQUIRE(positionsA.size() == positionsB.size());
+    bool identical = true;
+    for (std::size_t i = 0; i < positionsA.size(); ++i) {
+        if (positionsA[i] != positionsB[i]) identical = false;
+    }
+    CHECK(identical);
+    CHECK(a->getIndex()->array() == b->getIndex()->array());
+}
+
 TEST_CASE("a closed road welds its loop", "[extras]") {
 
     CatmullRomCurve3 curve({Vector3(-4, 0, -4), Vector3(4, 0, -4),
