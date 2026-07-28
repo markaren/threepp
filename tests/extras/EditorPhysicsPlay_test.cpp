@@ -132,10 +132,22 @@ namespace {
         return makeRoad(scene, {Vector3(-10, 0, 0), Vector3(0, 0, 0), Vector3(10, 0, 0)}, 4.f);
     }
 
-    // Shapes attached to every static actor in the live scene. A road is ONE
-    // triangle mesh however it bends, which is the difference between a
-    // collider that follows the road's shape and one that follows its
-    // tessellation.
+    // Station intervals of a road surface: it is laid down one cross-section at
+    // a time, two vertices each, and the collider is one convex hull per
+    // interval between them.
+    int intervalsOf(const Mesh& mesh) {
+
+        const auto geometry = mesh.geometry();
+        if (!geometry) return -1;
+        const auto* position = geometry->getAttribute<float>("position");
+        if (!position) return -1;
+        return position->count() / 2 - 1;
+    }
+
+    // Shapes attached to every static actor in the live scene. A road is one
+    // convex per station interval — a count driven by the road's SHAPE, since
+    // that is what chooses the stations, and not by how finely anybody sampled
+    // the spline.
     int staticShapeCount(PhysicsPlaySession& session) {
 
         using namespace ::physx;
@@ -287,8 +299,10 @@ TEST_CASE("a road collides through a corner", "[editor][physx]") {
     PhysicsPlaySession session;
     session.start(scene);
     CHECK(session.bodyCount() == 2);
-    // One solid, whatever the corner did to the surface.
-    CHECK(staticShapeCount(session) == 1);
+    // One convex per station interval of the surface itself, and not one more:
+    // the collider IS the drawing, span for span.
+    CHECK(staticShapeCount(session) == intervalsOf(*road.mesh));
+    CHECK(staticShapeCount(session) > 4);
 
     checkRestsOnRoad(session, *ball);
 }
@@ -322,11 +336,76 @@ TEST_CASE("a road wider than its own bends still holds a body up", "[editor][phy
     PhysicsPlaySession session;
     session.start(scene);
     CHECK(session.bodyCount() == 3);
-    // Both bends, both trims, and still one shape.
-    CHECK(staticShapeCount(session) == 1);
+    // Both bends, one hull per span, and every one of them convex — a wedge
+    // through a bend cannot be anything else once no bend is tighter than the
+    // half-width.
+    CHECK(staticShapeCount(session) == intervalsOf(*road.mesh));
 
     checkRestsOnRoad(session, *onBend);
     checkRestsOnRoad(session, *onStraight);
+}
+
+TEST_CASE("a kinematic road is a road that drives", "[editor][physx]") {
+
+    // Why the collider is convex and not a triangle mesh. A triangle mesh comes
+    // back from PhysX as a PxRigidStatic, which is not something code can move;
+    // the hull chain goes on a kinematic PxRigidDynamic, so the same authoring
+    // that makes a road makes a conveyor belt. A body resting on it comes along
+    // for the ride.
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto road = makeStraightRoad(scene);
+    PhysicsConfig config;
+    config.enabled = true;
+    config.body = PhysicsConfig::Body::Kinematic;
+    config.shape = PhysicsConfig::Shape::Auto;
+    config.friction = 0.9f;
+    config.write(*road.mesh);
+    scene.add(road.spline);
+
+    auto ball = makeFallingSphere(scene, Vector3(0.f, 1.f, 0.f));
+    scene.add(ball);
+
+    PhysicsPlaySession session;
+    session.start(scene);
+    REQUIRE(session.world() != nullptr);
+
+    using namespace ::physx;
+    auto& pxScene = session.world()->scene();
+    const PxU32 count = pxScene.getNbActors(PxActorTypeFlag::eRIGID_DYNAMIC);
+    std::vector<PxActor*> actors(count);
+    if (count) pxScene.getActors(PxActorTypeFlag::eRIGID_DYNAMIC, actors.data(), count);
+
+    PxRigidDynamic* driven = nullptr;
+    for (auto* actor : actors) {
+        auto* body = static_cast<PxRigidDynamic*>(actor);
+        if (body->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC) driven = body;
+    }
+    REQUIRE(driven != nullptr);
+    CHECK(static_cast<int>(driven->getNbShapes()) == intervalsOf(*road.mesh));
+
+    run(session, 60);// the ball settles on it
+    const float restingHeight = ball->position.y;
+    CHECK(restingHeight > 0.f);
+
+    // Drive it. A kinematic target is the whole point: the road moves, the
+    // object bound to it moves, and what is standing on it is carried. Driven
+    // ALONG its own length, so what is measured is the carry rather than the
+    // surface being slid out from under the ball sideways.
+    const float startX = ball->position.x;
+    for (int i = 0; i < 120; ++i) {
+        const auto pose = driven->getGlobalPose();
+        driven->setKinematicTarget(PxTransform(
+                PxVec3(pose.p.x + 2.f / 60.f, pose.p.y, pose.p.z), pose.q));
+        session.update(1.f / 60.f);
+    }
+
+    // The road itself went where it was driven...
+    CHECK(road.mesh->position.x > 3.f);
+    // ...and took the ball with it, still on top.
+    CHECK(ball->position.x > startX + 1.f);
+    CHECK_THAT(ball->position.y, Catch::Matchers::WithinAbs(restingHeight, 0.1f));
 }
 
 TEST_CASE("a static mesh that is no primitive collides as its triangles", "[editor][physx]") {

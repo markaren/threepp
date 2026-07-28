@@ -31,6 +31,7 @@
 #include "threepp/scenes/Scene.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <memory>
@@ -180,46 +181,80 @@ namespace threepp::editor {
         // through one between substeps whatever the solver does about it.
         static constexpr float kRoadThickness = 0.25f;
 
-        // A road collides as ONE static triangle mesh, cooked from a closed
-        // solid built out of the road's OWN triangles (RoadGeometry::solid):
-        // the surface, a copy of it pushed 0.25 m down, and a wall along every
-        // boundary edge. So the collider is the surface the user is looking at,
-        // triangle for triangle, and no cross-section of it can disagree with
-        // the drawing however the road was trimmed.
+        // A road collides as a CHAIN OF CONVEX SHAPES, one per station interval
+        // of the surface itself (RoadGeometry::hulls): boxes on a straight,
+        // wedges through a bend, each sharing a whole joint cross-section with
+        // its neighbour. The collider is therefore the vertices the user is
+        // looking at, and no part of it can disagree with the drawing.
         //
-        // Static only — a triangle mesh cannot move — which is what lets this
-        // be one shape rather than the convex decomposition a kinematic body
-        // would need. The whole road is one shape whatever its shape.
-        bool addRoadSolid(Mesh& mesh, ::physx::PxMaterial* material) {
+        // Convex and not a triangle mesh because a triangle mesh cannot be
+        // attached to a moving actor. A KINEMATIC road gets a PxRigidDynamic
+        // and is BOUND, so code can drive it — which is what makes a conveyor
+        // belt and a road the same feature.
+        bool addRoadHulls(Mesh& mesh, const PhysicsConfig& config, ::physx::PxMaterial* material) {
 
             using namespace ::physx;
 
             const auto geometry = mesh.geometry();
             if (!geometry) return false;
-            const auto solid = RoadGeometry::solid(*geometry, kRoadThickness);
-            const auto* position = solid->getAttribute<float>("position");
-            if (!position || position->count() < 4) return false;
+            const auto hulls = RoadGeometry::hulls(*geometry, kRoadThickness);
+            if (hulls.empty()) return false;
 
             mesh.updateMatrixWorld();
             Vector3 translation, scale;
             Quaternion rotation;
             mesh.matrixWorld->decompose(translation, rotation, scale);
+            const PxTransform pose(toPxVec3(translation), toPxQuat(rotation));
 
-            // The scale rides along as a PxMeshScale rather than being baked
-            // in: one mesh, cooked once, and the solid is built in the geometry
-            // its own vertices are in.
-            return world_->addStaticTrimesh(
-                           *solid, PxTransform(toPxVec3(translation), toPxQuat(rotation)),
-                           scale, material) != nullptr;
+            const bool moving = config.body != PhysicsConfig::Body::Static;
+            PxRigidDynamic* dynamic = moving ? world_->physics().createRigidDynamic(pose) : nullptr;
+            PxRigidStatic* fixed = moving ? nullptr : world_->physics().createRigidStatic(pose);
+            auto* body = moving ? static_cast<PxRigidActor*>(dynamic) : static_cast<PxRigidActor*>(fixed);
+
+            const PxCookingParams cooking(world_->physics().getTolerancesScale());
+            std::array<PxVec3, 8> points{};
+            std::size_t attached = 0;
+            for (const auto& hull : hulls) {
+                for (std::size_t i = 0; i < hull.size(); ++i) points[i] = toPxVec3(hull[i]);
+
+                PxConvexMeshDesc desc;
+                desc.points.count = static_cast<PxU32>(points.size());
+                desc.points.stride = sizeof(PxVec3);
+                desc.points.data = points.data();
+                desc.flags = PxConvexFlag::eCOMPUTE_CONVEX;
+
+                PxConvexMesh* convex = PxCreateConvexMesh(cooking, desc);
+                if (!convex) continue;
+                PxShape* shape = world_->physics().createShape(
+                        PxConvexMeshGeometry(convex, PxMeshScale(toPxVec3(scale))), *material, true);
+                body->attachShape(*shape);
+                shape->release();
+                convex->release();
+                ++attached;
+            }
+
+            if (attached == 0) {
+                body->release();
+                return false;
+            }
+
+            if (dynamic) finishDynamic(*dynamic, config);
+            world_->scene().addActor(*body);
+            // Only a moving road is bound: a static one never changes pose, and
+            // binding it would have PhysxWorld write over a transform the
+            // document owns.
+            if (dynamic) world_->bind(mesh, *dynamic);
+            return true;
         }
 
         // Cook the descendants of a geometry-less static body as its collider.
         // Meshes carrying their own enabled PhysicsConfig are left alone —
         // start() is creating their actors — and a derived road goes through
-        // the road solid above rather than a bare surface trimesh, so it
+        // the hull chain above rather than a bare surface trimesh, so it
         // collides the same whether the config sat on it or on the group over
         // it — and so a body cannot end up under a road with no underside.
-        std::size_t addSubtree(Object3D& root, ::physx::PxMaterial* material) {
+        std::size_t addSubtree(Object3D& root, const PhysicsConfig& config,
+                               ::physx::PxMaterial* material) {
 
             std::size_t added = 0;
 
@@ -227,7 +262,7 @@ namespace threepp::editor {
             root.traverseType<Mesh>([&](Mesh& mesh) {
                 if (&mesh == &root || ownsActor(mesh) || !mesh.geometry()) return;
                 if (!isDerivedRoad(mesh)) return;
-                if (addRoadSolid(mesh, material)) ++added;
+                if (addRoadHulls(mesh, config, material)) ++added;
             });
 
             const auto actors = world_->addStaticTrimeshTree(
@@ -263,21 +298,22 @@ namespace threepp::editor {
             if (!moving && !object.geometry() &&
                 (config.shape == PhysicsConfig::Shape::Auto ||
                  config.shape == PhysicsConfig::Shape::TriMesh)) {
-                if (addSubtree(object, material) > 0) return true;
+                if (addSubtree(object, config, material) > 0) return true;
                 // Nothing under it: fall through to the placeholder, which is
                 // still what a bare Group used as a trigger volume wants.
             }
 
-            // A spline-derived road collides as its solid whichever of the
+            // A spline-derived road collides as its hull chain whichever of the
             // mesh shapes was asked for — Auto, TriMesh and Convex all mean
-            // "the surface I can see" here, and the solid is the only one of
+            // "the surface I can see" here, and the chain is the only one of
             // the three that is exact AND safe to rest a body on (a bare
-            // surface has no thickness, a hull swallows every bend). An
-            // explicit primitive is left alone; so is a moving road, which is a
-            // plank rather than a road and keeps the whole-mesh hull.
-            if (mesh && !moving && isDerivedRoad(*mesh) &&
+            // surface has no thickness, one hull over the whole road swallows
+            // every bend). Moving roads included: the chain is convex, so a
+            // kinematic road is a road that drives. An explicit primitive is
+            // left alone.
+            if (mesh && isDerivedRoad(*mesh) &&
                 (shape == PhysicsConfig::Shape::TriMesh || shape == PhysicsConfig::Shape::Convex)) {
-                if (addRoadSolid(*mesh, material)) return true;
+                if (addRoadHulls(*mesh, config, material)) return true;
             }
 
             if (shape == PhysicsConfig::Shape::TriMesh && mesh) {
