@@ -585,42 +585,64 @@ index in the editor goes through `SplineConfig::controlPoints()` /
 index. It is a document node in every other respect: it saves, it reloads, and
 a scene with a road in it renders and collides in a plain viewer with no editor
 present. Select it and the ordinary Material and **Physics** sections apply —
-put a static trimesh collider on a road and drive on it.
+put a collider on a road and drive on it.
 
-Tube sweeps `TubeGeometry` along the curve. Road offsets it: the **same samples
-the overlay draws** are offset both sides by `width`/2 in the spline's own
-space, level side to side with the grade carried, so the road follows the curve
-you authored sample for sample — no fit, no consolidation, nothing that changes
-the shape. `u` runs arc-length/`uvLength` along it, `v` runs 0…1 across.
+Tube sweeps `TubeGeometry` along the curve. Road sweeps an **alignment** fitted
+to it (`threepp/extras/curves/RoadAlignment.hpp`), and the difference is the
+whole feature.
 
-**Bends tighter than the half-width are trimmed, not narrowed.** An offset
-polyline ties a *swallowtail* inside a bend tighter than the offset: the edge
-runs past the centre of curvature, turns back and crosses itself. That loop is
-not part of the road, so `RoadGeometry`
-(`threepp/extras/curves/RoadGeometry.hpp`) finds the crossing and **cuts it
-out**, continuing from the crossing point. The outer edge of a bend stays smooth
-the whole way round; the inner edge is smooth except for one crisp corner
-exactly where the swept region has one. No fans, no pinning, no narrowing — the
-editor's default spline at width 4 has one such corner per bend, and at width 2
-none at all. Trimming breaks the ring correspondence a ribbon relies on, so the
-surface is stitched between the two edge polylines by arc length; around a trim
-that is a fan out of the corner vertex.
+**The road is a shape, not an offset.** Offsetting a sampled curve sideways
+produces edges that cross themselves inside any bend tighter than the offset,
+and every answer to that — miter, trim, pin a cross-section to the apex, fan
+across it — is a repair to a shape that should not have been produced. So the
+road is built as a shape instead. Seeds taken off your curve are joined by
+**biarcs** (the classical pair of circular arcs), which means every joint is
+tangent-continuous *by construction* rather than within a fitting tolerance —
+there is no angle at a joint to hold under a threshold. Seeds are refined until
+the chain sits within 2 cm of what you drew. Elevation over distance is a second
+chain of the same kind, so grade is continuous too and a grade change is a
+vertical curve rather than a crease.
 
-**The collider is the same triangles.** A road with physics on it (or on the
-spline over it) collides as **one** static triangle mesh, cooked from a closed
-solid built out of the road's own surface: the triangles you see, a copy of them
-0.25 m below with the winding reversed, and a wall along every boundary edge
-(`RoadGeometry::solid`). A surface has no thickness for a fast body to be
-stopped by, and a hull would swallow every bend. One shape per road, whatever
-the road does — and being static is what allows it: a triangle mesh cannot move.
+**No bend is tighter than the half-width, so the road bends a little instead.**
+That single rule is what removes the whole family of artefacts: the inner edge
+of every bend has somewhere to be, so there is nothing to trim, no miter to
+widen, no apex, no fan. Where you drew a bend tighter than the road is wide, the
+alignment relaxes the seeds there and *re-solves* — never patching a radius in
+place, so the chain is still tangent-continuous afterwards — and the road takes
+a slightly wider line than your curve. The editor's default spline has a
+1.35 m curvature radius; at the default width 4 the floor is 2.1 m, so it bends,
+by about 0.8 m at the worst point, and the curve you drew still runs on the
+road. `RoadGeometry::alignment().report()` carries the figures: how far the fit
+sat from your curve, how far the finished road does, how many bends were
+relaxed, and the tightest radius that came out.
 
-Two limitations. A spline that **loops vertically** has no plan view to offset
+The surface is then swept at **stations** chosen so neither the heading nor the
+grade breaks by more than a degree between neighbours. A cross-section is
+perpendicular to the road, level side to side, and **full width, always** —
+never narrowed, at any bend. `u` runs arc-length/`uvLength` along it, `v` runs
+0…1 across.
+
+**The collider is the same cross-sections.** A road with physics on it (or on
+the spline over it) collides as one **convex hull per station interval**: the
+four corners of that span plus the same four pushed 0.25 m down the
+cross-sections' own normals (`RoadGeometry::hulls`). Boxes on a straight,
+wedges through a bend, each sharing a whole joint cross-section with its
+neighbour, so there is no seam to fall through and no thickness-less surface for
+a fast body to pass through. The count follows the road's *shape*, not how
+finely you sampled the spline.
+
+Convex and not a triangle mesh for a reason: a triangle mesh comes back from
+PhysX as a static actor, which nothing can move. Set **Body** to Kinematic and
+the same road becomes a `PxRigidDynamic` you can drive, carrying whatever is
+standing on it — which is what makes a road and a conveyor belt the same
+feature.
+
+Two limitations. A spline that **loops vertically** has no plan view to align
 and is out of scope as a road — `RibbonGeometry`
 (`threepp/extras/curves/RibbonGeometry.hpp`) still sweeps a ribbon along
-anything, including that. And only *local* self-intersection is trimmed: a road
-whose two far-apart lobes **cross each other** draws both, in the same plane,
-which may z-fight — as does a loop that straddles the seam of a *closed* road,
-whose edges are walked as a chain starting there. Neither is new; the ribbon had
+anything, including that. And a road whose two far-apart lobes **cross each
+other** draws both, in the same plane, which may z-fight: each piece is correct
+and their overlap is not resolved. Neither is new; every version of this had
 both.
 
 **Regeneration is derived state, not a command.** The undoable step is the

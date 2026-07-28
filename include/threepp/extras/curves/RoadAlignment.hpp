@@ -211,7 +211,6 @@ namespace threepp {
         [[nodiscard]] const BiarcChain& plan() const { return plan_; }
         [[nodiscard]] const BiarcChain& profile() const { return profile_; }
         [[nodiscard]] float length() const { return plan_.length(); }
-        [[nodiscard]] bool empty() const { return stations_.size() < 2; }
 
     private:
         // Elevation and grade at plan station `s`. The profile is a chain in

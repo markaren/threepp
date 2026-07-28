@@ -619,17 +619,84 @@ RoadAlignment RoadAlignment::build(const Curve3& path, const Params& params) {
     // it at, joined by the same solver in the (station, height) plane.
     {
         const auto& marks = out.plan_.seedStations();
-        std::vector<BiarcChain::Seed> seeds;
-        seeds.reserve(marks.size());
+        const std::size_t n = marks.size();
+        std::vector<float> station(n), authored(n), theta(n), height(n);
         Vector3 point, tangent;
-        for (std::size_t i = 0; i < marks.size(); ++i) {
+        for (std::size_t i = 0; i < n; ++i) {
             const float t = (i < ts.size()) ? ts[i] : 1.f;
             path.getPoint(t, point);
             path.getTangent(t, tangent);
             const float planSpeed = std::sqrt(tangent.x * tangent.x + tangent.z * tangent.z);
             const float grade = planSpeed > 1e-5f ? tangent.y / planSpeed : 0.f;
+            station[i] = marks[i];
+            authored[i] = point.y;
+            height[i] = point.y;
+            theta[i] = std::atan(grade);
+        }
+
+        // The floor has to be met HERE, on the grades, or it cannot be met at
+        // all. A vertical curve of radius R turns its grade by ds/R over ds of
+        // station, so a grade sequence that turns faster than that describes an
+        // arc tighter than R no matter where the heights sit — moving heights
+        // alone (all the chain's relaxation can do once the abscissa is frozen)
+        // leaves the angle between two seeds exactly as it was. That is why the
+        // floor read as satisfied and came out forty times under it, and why an
+        // authored hill creased hard enough to look like a step.
+        const float floor = std::max(params.profileMinRadius, 1e-3f);
+        const auto boundTurnRate = [&] {
+            for (int pass = 0; pass < 64; ++pass) {
+                float worst = 0.f;
+                for (std::size_t i = 0; i + 1 < n; ++i) {
+                    const float ds = std::max(station[i + 1] - station[i], 1e-4f);
+                    const float turn = theta[i + 1] - theta[i];
+                    const float excess = std::abs(turn) - ds / floor;
+                    if (excess <= 0.f) continue;
+                    worst = std::max(worst, excess);
+                    // Both ends give half, so the run keeps its average grade
+                    // and the correction does not walk down the road.
+                    const float give = 0.5f * excess * (turn > 0.f ? 1.f : -1.f);
+                    theta[i] += give;
+                    theta[i + 1] -= give;
+                }
+                if (worst < 1e-5f) break;
+            }
+        };
+        // Heights follow the grades that survived, by trapezoid, and the
+        // closure error is spread as a constant grade offset — which bends
+        // nothing, since curvature is the DERIVATIVE of grade.
+        const auto integrate = [&] {
+            height[0] = authored[0];
+            for (std::size_t i = 0; i + 1 < n; ++i) {
+                const float ds = station[i + 1] - station[i];
+                height[i + 1] = height[i] +
+                                0.5f * (std::tan(theta[i]) + std::tan(theta[i + 1])) * ds;
+            }
+        };
+        const auto close = [&] {
+            const float run = station[n - 1] - station[0];
+            if (run <= 1e-4f) return;
+            const float drift = (authored[n - 1] - height[n - 1]) / run;
+            for (std::size_t i = 0; i < n; ++i) theta[i] = std::atan(std::tan(theta[i]) + drift);
+        };
+
+        if (n >= 2) {
+            for (int outer = 0; outer < 3; ++outer) {
+                boundTurnRate();
+                integrate();
+                close();
+            }
+            // The clamp runs LAST: the floor is the invariant, and the closure
+            // offset is the thing allowed to give when the two disagree.
+            boundTurnRate();
+            integrate();
+        }
+
+        std::vector<BiarcChain::Seed> seeds;
+        seeds.reserve(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            const float grade = std::tan(theta[i]);
             const float scale = 1.f / std::sqrt(1.f + grade * grade);
-            seeds.push_back({Vector2(marks[i], point.y), Vector2(scale, grade * scale)});
+            seeds.push_back({Vector2(station[i], height[i]), Vector2(scale, grade * scale)});
         }
         BiarcChain::Limits profileLimits;
         profileLimits.minRadius = std::max(params.profileMinRadius, 0.f);
