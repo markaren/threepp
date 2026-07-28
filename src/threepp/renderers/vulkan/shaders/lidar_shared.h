@@ -78,8 +78,12 @@ namespace threepp::vulkan_lidar {
         float mediumExtinction;
         float mediumAlbedo;
         float mediumAnisotropy;
+        // Sensor blind zone: first-leg tMin, so the beam passes through the
+        // sensor's own housing instead of returning it (raster near-plane
+        // equivalent).
+        float minRange;
     };
-    static_assert(sizeof(LidarPushConstants) == 56,
+    static_assert(sizeof(LidarPushConstants) == 60,
                   "LidarPushConstants layout drifted - update the GLSL mirror below.");
 
 }// namespace threepp::vulkan_lidar

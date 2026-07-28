@@ -212,6 +212,9 @@ PathTracedLidarSensor& DepthSensor::tracedBackend() {
     // so its model tracks ours (including a seed the caller re-rolled). Copying
     // an unchanged seed does not restart the stream — see VisionSensor.
     tracedBackend_->rangeNoise = rangeNoise;
+    // The near plane doubles as the blind zone: without it every beam
+    // returns the sensor's own housing mesh from the inside.
+    tracedBackend_->params.minRange = camera_.nearPlane;
     return *tracedBackend_;
 }
 #endif

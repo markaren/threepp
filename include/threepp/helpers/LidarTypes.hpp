@@ -61,6 +61,14 @@ namespace threepp {
         // distance produce miss results.
         float maxRange = 100.f;
 
+        // Minimum slant range — the sensor's blind zone. Surfaces closer
+        // than this are traced *through* rather than detected, which is what
+        // keeps a sensor authored on (or inside) a housing mesh from
+        // returning its own geometry — the same job the raster sensors'
+        // near plane does, and a property real scanners share (a VLP-16
+        // cannot report inside ~0.4 m). 0 = epsilon only.
+        float minRange = 0.f;
+
         // Reference transmit power. The product
         //     laserPower · f_back(material) · cos θ · η(r) / r²
         // is multiplied by π·referenceRange² so that, at laserPower = 1,

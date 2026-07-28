@@ -64,6 +64,9 @@ layout(push_constant) uniform Pc {
     float mediumExtinction;
     float mediumAlbedo;
     float mediumAnisotropy;
+    // Sensor blind zone: first-leg tMin, so the beam passes through the
+    // sensor's own housing instead of returning it.
+    float minRange;
 } pc;
 
 struct Payload {
@@ -246,10 +249,16 @@ void main() {
         pl.instanceId       = -1;
         pl.continueFraction = 0.0;
 
+        // Blind zone applies to the first leg only (totalRange is exactly
+        // 0.0 until the first advance): a sensor cannot detect inside its
+        // own housing, but continuation legs already start offset past
+        // their previous hit and must see everything.
+        const float tMin = (totalRange == 0.0) ? max(pc.minRange, 0.001) : 0.001;
+
         traceRayEXT(topAS,
                     gl_RayFlagsOpaqueEXT,
                     0xFF, 0, 0, 0,
-                    rayOrigin, 0.001,
+                    rayOrigin, tMin,
                     rayDir,    segmentMax,
                     0);
 
@@ -271,7 +280,9 @@ void main() {
                     pc.laserPower * throughput * fogAlbedo * pBack
                     * exp(-sigmaT * fogSW) * pc.invReferenceIntensity,
                     0.0, 1.0);
-            if (fogI >= pc.detectorThreshold) {
+            // The blind zone gates fog returns too — the detector is what
+            // cannot see there, not just the surface trace.
+            if (fogI >= pc.detectorThreshold && (totalRange + fogS) >= pc.minRange) {
                 LidarResult r;
                 r.position   = rayOrigin + rayDir * fogS;
                 r.distance   = totalRange + fogS;
