@@ -13,6 +13,8 @@
 #ifndef THREEPP_EDITOR_SCENEDOCUMENT_HPP
 #define THREEPP_EDITOR_SCENEDOCUMENT_HPP
 
+#include "threepp/loaders/ObjectExporter.hpp"
+
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -57,6 +59,18 @@ namespace threepp::editor {
         bool save(std::string* error = nullptr);
         bool saveAs(const std::filesystem::path& path, std::string* error = nullptr);
 
+        // How much of the scene the file carries itself. The default embeds
+        // everything, which is what a document you might hand to someone else
+        // wants; referencing trades that for files that save and open in a
+        // fraction of the time, at the cost of needing the source assets
+        // alongside. Persisted in the editor's settings, not in the document —
+        // it describes how you work, not what the scene is.
+        [[nodiscard]] ImageStorage imageStorage() const { return imageStorage_; }
+        void setImageStorage(ImageStorage storage) { imageStorage_ = storage; }
+
+        [[nodiscard]] ModelStorage modelStorage() const { return modelStorage_; }
+        void setModelStorage(ModelStorage storage) { modelStorage_ = storage; }
+
         // The document as it would be written, without touching the filesystem.
         [[nodiscard]] std::string toJson(bool prettyPrint, std::string* error = nullptr);
 
@@ -91,6 +105,8 @@ namespace threepp::editor {
 
         std::shared_ptr<Scene> scene_;
         std::filesystem::path path_;
+        ImageStorage imageStorage_ = ImageStorage::Embed;
+        ModelStorage modelStorage_ = ModelStorage::Embed;
         bool dirty_ = false;
         std::vector<Object3D*> editorOnly_;
         std::vector<std::string> warnings_;

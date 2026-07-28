@@ -6,6 +6,7 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"
 
+#include "threepp/loaders/AssetSource.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <filesystem>
@@ -56,6 +57,44 @@ void EditorApp::drawMenuBar() {
                                                       : std::string("scene.json"));
             }
 
+            // What Save actually writes. Embedding is the safe default — one
+            // file you can hand to anyone — but on a scene with real imported
+            // models it is also the reason saving and opening take as long as
+            // they do, so the choice is here rather than assumed.
+            if (ImGui::BeginMenu("Save Contents")) {
+
+                const auto imageStorage = document_.imageStorage();
+                if (ImGui::MenuItem("Embed textures", nullptr, imageStorage == ImageStorage::Embed)) {
+                    setImageStorage(ImageStorage::Embed);
+                }
+                if (ImGui::MenuItem("Reference textures", nullptr, imageStorage == ImageStorage::Reference)) {
+                    setImageStorage(ImageStorage::Reference);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Write the path to each texture file instead of a base64 copy.\n"
+                                      "Textures with no file of their own (procedural, or packed\n"
+                                      "inside a .glb) are still embedded.");
+                }
+
+                ImGui::Separator();
+
+                const auto modelStorage = document_.modelStorage();
+                if (ImGui::MenuItem("Embed models", nullptr, modelStorage == ModelStorage::Embed)) {
+                    setModelStorage(ModelStorage::Embed);
+                }
+                if (ImGui::MenuItem("Reference models", nullptr, modelStorage == ModelStorage::Reference)) {
+                    setModelStorage(ModelStorage::Reference);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Write imported subtrees as a path to the source file plus\n"
+                                      "your per-node edits, instead of every vertex. Much smaller\n"
+                                      "and much faster, but material edits inside an imported\n"
+                                      "subtree are not kept - unlink it first (Edit menu).");
+                }
+
+                ImGui::EndMenu();
+            }
+
             ImGui::Separator();
 
             if (ImGui::MenuItem("Import Model or Robot...")) {
@@ -96,6 +135,22 @@ void EditorApp::drawMenuBar() {
             if (ImGui::MenuItem(redoLabel.c_str(), "Ctrl+Y", false, commands_.canRedo())) {
                 commands_.redo();
                 document_.setDirty(true);
+            }
+
+            ImGui::Separator();
+
+            // Breaking the link makes the subtree ordinary scene content, so a
+            // save writes it out in full. That is what you want before editing
+            // its materials, or when the source file is about to go away.
+            {
+                auto* selected = selection_.get();
+                const bool linked = selected && !assetSource(*selected).empty();
+                if (ImGui::MenuItem("Unlink Imported Asset", nullptr, false, linked)) {
+                    unlinkSelectedAsset();
+                }
+                if (linked && ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Linked to %s", assetSource(*selected).filename().string().c_str());
+                }
             }
 
             ImGui::Separator();

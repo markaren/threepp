@@ -13,6 +13,8 @@
 #ifndef THREEPP_EDITOR_EDITORSETTINGS_HPP
 #define THREEPP_EDITOR_EDITORSETTINGS_HPP
 
+#include "threepp/loaders/ObjectExporter.hpp"
+
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -43,6 +45,16 @@ namespace threepp::editor {
         std::string scriptDir;
 
         bool bottomPanelOpen = true;
+
+        // How File ▸ Save writes textures and imported models: embedded (the
+        // document stands alone) or referenced (the document points at the
+        // source files, and saves and opens in a fraction of the time).
+        //
+        // A preference rather than a document property — it describes how you
+        // work, so a scene saved by reference on one machine still opens on
+        // another that prefers to embed.
+        ImageStorage imageStorage = ImageStorage::Embed;
+        ModelStorage modelStorage = ModelStorage::Embed;
 
         // Side panel widths, in pixels at 100% DPI (the content scale is
         // applied at draw time). User-draggable, so a deep hierarchy or a long

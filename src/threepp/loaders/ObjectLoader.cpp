@@ -19,7 +19,10 @@
 #include "threepp/geometries/PolyhedronGeometry.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/lights/lights.hpp"
+#include "threepp/loaders/AssetSource.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
+#include "threepp/loaders/ModelLoader.hpp"
+#include "threepp/loaders/URDFLoader.hpp"
 #include "threepp/materials/materials.hpp"
 #include "threepp/materials/MeshDepthMaterial.hpp"
 #include "threepp/materials/MeshMatcapMaterial.hpp"
@@ -48,6 +51,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <unordered_map>
@@ -869,6 +873,9 @@ namespace {
         const TextureMap& textures;
         const AnimationMap& animations;
         Warnings& warnings;
+        // Base directory for the paths of referenced assets, same as for
+        // referenced images.
+        const std::filesystem::path& resourcePath;
     };
 
     std::shared_ptr<BufferGeometry> lookupGeometry(const json& j, const ParseContext& ctx) {
@@ -1104,6 +1111,158 @@ namespace {
         return nullptr;
     }
 
+    // ------------------------------------------------- linked asset subtrees
+
+    std::shared_ptr<Object3D> importAsset(const std::filesystem::path& path) {
+
+        auto extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (extension == ".urdf" || extension == ".xacro") {
+            URDFLoader loader;
+            return loader.load(path);
+        }
+
+        ModelLoader loader;
+        return loader.load(path);
+    }
+
+    // Pre-order, root excluded — the exact walk ObjectExporter numbered the
+    // override table against.
+    std::vector<Object3D*> flattenDescendants(Object3D& root) {
+
+        std::vector<Object3D*> flat;
+
+        std::function<void(Object3D&)> collect = [&](Object3D& node) {
+            for (auto* child : node.children) {
+                if (!child) continue;
+                flat.push_back(child);
+                collect(*child);
+            }
+        };
+        collect(root);
+
+        return flat;
+    }
+
+    // Replays the edits the document recorded on top of a freshly imported
+    // subtree. Each entry carries the name the node had when the document was
+    // written; a mismatch means the asset file has changed underneath and the
+    // index no longer identifies the same node, so the edit is dropped rather
+    // than applied to whatever now sits at that position.
+    void applyAssetOverrides(Object3D& root, const json& nodes, Warnings& warnings) {
+
+        if (!nodes.is_array()) return;
+
+        const auto flat = flattenDescendants(root);
+
+        std::size_t stale = 0;
+
+        for (const auto& entry : nodes) {
+
+            if (!entry.contains("i") || !entry["i"].is_number_integer()) continue;
+
+            const auto index = entry["i"].get<std::int64_t>();
+            if (index < 0 || static_cast<std::size_t>(index) >= flat.size()) {
+                ++stale;
+                continue;
+            }
+
+            auto& node = *flat[static_cast<std::size_t>(index)];
+            if (node.name != value<std::string>(entry, "name", "")) {
+                ++stale;
+                continue;
+            }
+
+            if (entry.contains("matrix")) {
+                node.matrix->copy(matrixFrom(entry["matrix"]));
+                node.matrix->decompose(node.position, node.quaternion, node.scale);
+                node.rotation.setFromQuaternion(node.quaternion);
+            }
+
+            node.visible = value(entry, "visible", true);
+            node.castShadow = value(entry, "castShadow", false);
+            node.receiveShadow = value(entry, "receiveShadow", false);
+            node.frustumCulled = value(entry, "frustumCulled", true);
+            node.renderOrder = value(entry, "renderOrder", 0);
+
+            if (entry.contains("layers") && entry["layers"].is_number()) {
+                applyLayers(node, static_cast<unsigned int>(entry["layers"].get<std::int64_t>()));
+            }
+            if (entry.contains("userData")) applyUserData(node, entry["userData"], warnings);
+        }
+
+        // One message, not one per node: a changed asset invalidates the whole
+        // table at once and a few thousand identical lines help nobody.
+        if (stale > 0) {
+            warnings.add("linked asset '" + root.name + "' has changed since the document was saved - " +
+                         std::to_string(stale) + " of " + std::to_string(nodes.size()) +
+                         " saved edits could not be matched to a node");
+        }
+    }
+
+    // Returns the re-imported subtree, or nullptr when the asset could not be
+    // loaded — in which case the caller keeps the empty placeholder, so the
+    // rest of the scene still opens.
+    std::shared_ptr<Object3D> resolveLinkedAsset(const json& ref, const Object3D& placeholder,
+                                                 const ParseContext& ctx) {
+
+        const auto stored = value<std::string>(ref, "path", "");
+        if (stored.empty()) {
+            ctx.warnings.add("linked asset '" + placeholder.name + "' has no path");
+            return nullptr;
+        }
+
+        std::filesystem::path path{stored};
+        if (path.is_relative() && !ctx.resourcePath.empty()) path = ctx.resourcePath / path;
+
+        // Normalised so that re-saving this document writes the same relative
+        // path it was loaded from, rather than one with a '..' baked in.
+        std::error_code ec;
+        if (auto canonical = std::filesystem::weakly_canonical(path, ec); !ec && !canonical.empty()) {
+            path = canonical;
+        }
+
+        std::shared_ptr<Object3D> imported;
+        std::string error;
+        try {
+            imported = importAsset(path);
+        } catch (const std::exception& e) {
+            error = e.what();
+        }
+
+        if (!imported) {
+            ctx.warnings.add("could not re-import linked asset '" + path.string() + "'" +
+                             (error.empty() ? "" : ": " + error));
+            return nullptr;
+        }
+
+        // Identity and placement belong to the document; everything below the
+        // root belongs to the asset file.
+        imported->uuid = placeholder.uuid;
+        imported->name = placeholder.name;
+        imported->matrix->copy(*placeholder.matrix);
+        imported->matrix->decompose(imported->position, imported->quaternion, imported->scale);
+        imported->rotation.setFromQuaternion(imported->quaternion);
+        imported->matrixAutoUpdate = placeholder.matrixAutoUpdate;
+        imported->castShadow = placeholder.castShadow;
+        imported->receiveShadow = placeholder.receiveShadow;
+        imported->visible = placeholder.visible;
+        imported->frustumCulled = placeholder.frustumCulled;
+        imported->renderOrder = placeholder.renderOrder;
+        applyLayers(*imported, placeholder.layers.mask());
+        imported->userData = placeholder.userData;
+
+        // Where the asset actually is now, which is not necessarily where the
+        // machine that saved the document had it.
+        setAssetSource(*imported, path);
+
+        if (ref.contains("nodes")) applyAssetOverrides(*imported, ref["nodes"], ctx.warnings);
+
+        return imported;
+    }
+
     std::shared_ptr<Object3D> parseObject(const json& j, const ParseContext& ctx) {
 
         auto object = createObject(j, ctx);
@@ -1138,6 +1297,14 @@ namespace {
                 const auto it = ctx.animations.find(entry.get<std::string>());
                 if (it != ctx.animations.end()) object->animations.push_back(it->second);
             }
+        }
+
+        // A linked subtree has no children in the document — it has a file to
+        // read them from. On failure the placeholder stands: correctly placed
+        // and named, just empty, and the warning says why.
+        if (j.contains("threeppAsset")) {
+            if (auto linked = resolveLinkedAsset(j["threeppAsset"], *object, ctx)) return linked;
+            return object;
         }
 
         std::vector<std::shared_ptr<Object3D>> children;
@@ -1289,7 +1456,7 @@ std::shared_ptr<Object3D> ObjectLoader::parse(const std::string& jsonText) {
     const auto textures = parseTextures(j.contains("textures") ? j["textures"] : json(), images);
     const auto materials = parseMaterials(j.contains("materials") ? j["materials"] : json(), textures, warnings);
 
-    const ParseContext ctx{geometries, materials, textures, animations, warnings};
+    const ParseContext ctx{geometries, materials, textures, animations, warnings, resourcePath_};
 
     auto object = parseObject(j["object"], ctx);
 

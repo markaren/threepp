@@ -24,6 +24,35 @@ namespace {
         return j[key].get<std::string>();
     }
 
+    // Stored as words, not enum ordinals: the file is meant to be readable and
+    // hand-editable, and a reordered enum must not silently mean something
+    // else the next time it is read.
+    const char* storageName(ImageStorage storage) {
+
+        switch (storage) {
+            case ImageStorage::Reference: return "reference";
+            case ImageStorage::Omit: return "omit";
+            default: return "embed";
+        }
+    }
+
+    ImageStorage imageStorageFrom(const std::string& text, ImageStorage fallback) {
+
+        if (text == "reference") return ImageStorage::Reference;
+        if (text == "embed") return ImageStorage::Embed;
+        // "omit" is deliberately not accepted: it produces a document that
+        // cannot render on its own, which is a play-snapshot concern and never
+        // something a user should be able to pick for File ▸ Save.
+        return fallback;
+    }
+
+    ModelStorage modelStorageFrom(const std::string& text, ModelStorage fallback) {
+
+        if (text == "reference") return ModelStorage::Reference;
+        if (text == "embed") return ModelStorage::Embed;
+        return fallback;
+    }
+
 }// namespace
 
 
@@ -74,6 +103,9 @@ bool EditorSettings::load(const std::filesystem::path& path) {
         bottomPanelOpen = j["bottomPanelOpen"].get<bool>();
     }
 
+    imageStorage = imageStorageFrom(getString(j, "imageStorage"), imageStorage);
+    modelStorage = modelStorageFrom(getString(j, "modelStorage"), modelStorage);
+
     // Clamped on read: a settings file edited by hand (or written by a build
     // with different limits) must not be able to push a panel off-screen.
     const auto readWidth = [&j](const char* key, float fallback) {
@@ -111,6 +143,8 @@ bool EditorSettings::save(const std::filesystem::path& path) const {
     j["environmentDir"] = environmentDir;
     j["scriptDir"] = scriptDir;
     j["bottomPanelOpen"] = bottomPanelOpen;
+    j["imageStorage"] = storageName(imageStorage);
+    j["modelStorage"] = modelStorage == ModelStorage::Reference ? "reference" : "embed";
     j["hierarchyWidth"] = hierarchyWidth;
     j["inspectorWidth"] = inspectorWidth;
     j["recentFiles"] = recentFiles_;

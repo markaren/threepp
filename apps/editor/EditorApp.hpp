@@ -207,6 +207,13 @@ namespace threepp::editor {
         void saveScene();
         void saveSceneAs(const std::filesystem::path& path);
         void importModel(const std::filesystem::path& path);
+        // Save-time storage choices. Applied to the document and remembered in
+        // the settings file, so the preference outlives the session.
+        void setImageStorage(ImageStorage storage);
+        void setModelStorage(ModelStorage storage);
+        // Turns the selected linked subtree into ordinary scene content, so a
+        // save writes it in full. Undoable — it is a userData edit.
+        void unlinkSelectedAsset();
         void setEnvironment(const std::filesystem::path& path, bool alsoBackground);
         void clearEnvironment();
         void assignTextureToSelection(const std::filesystem::path& path);

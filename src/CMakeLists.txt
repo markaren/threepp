@@ -422,6 +422,7 @@ set(sources
 
         "threepp/input/PeripheralsEventSource.cpp"
 
+        "threepp/loaders/AssetSource.cpp"
         "threepp/loaders/AsyncGroup.cpp"
         "threepp/loaders/ColladaLoader.cpp"
         "threepp/loaders/DDSLoader.cpp"

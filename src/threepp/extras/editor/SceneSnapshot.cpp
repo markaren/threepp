@@ -122,7 +122,11 @@ bool SceneSnapshot::capture(Scene& scene, std::string* error) {
     ObjectExporter exporter;
     ObjectExporterOptions options;
     // See the header: the live textures are kept by pointer instead.
-    options.embedImages = false;
+    options.images = ImageStorage::Omit;
+    // Never reference: a snapshot has to restore the scene exactly as it is
+    // right now, including whatever the running session did to an imported
+    // subtree. Re-importing from disk would hand back the file's version.
+    options.models = ModelStorage::Embed;
     options.prettyPrint = false;
 
     try {

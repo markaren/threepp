@@ -98,6 +98,11 @@ struct TextureLoader::Impl {
         }
         if (!texture) return nullptr;
 
+        // Remembered so an exporter can reference the file instead of embedding
+        // a base64 copy of it. Set for both decode paths, and before the cache
+        // insert so every later sharer of this instance sees it too.
+        texture->sourceFile = path;
+
         std::lock_guard<std::mutex> lock(mutex_);
         // Re-check under the lock: another thread may have decoded the same key
         // while we were decoding — prefer its cached instance so a shared path

@@ -33,6 +33,7 @@
 #include "threepp/textures/CubeTexture.hpp"
 
 #include "ObjectJsonConstants.hpp"
+#include "threepp/loaders/AssetSource.hpp"
 #include "threepp/utils/Base64.hpp"
 
 #include <nlohmann/json.hpp>
@@ -44,6 +45,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <unordered_set>
 
@@ -59,7 +61,9 @@ namespace {
     // scene-traversal order, which makes exports reproducible run to run.
     struct Meta {
 
-        bool embedImages{true};
+        ImageStorage imageStorage{ImageStorage::Embed};
+        ModelStorage modelStorage{ModelStorage::Embed};
+        std::filesystem::path resourcePath;
 
         std::vector<json> geometries;
         std::vector<json> materials;
@@ -71,6 +75,21 @@ namespace {
         std::vector<std::string> warnings;
 
         std::unordered_set<std::string> seen;
+
+        // Path as it should appear in the document: relative to resourcePath
+        // when that is possible, so a scene and its assets can be moved or
+        // checked in together. Absolute otherwise — a wrong relative path is
+        // worse than an honest absolute one.
+        [[nodiscard]] std::string reference(const std::filesystem::path& path) const {
+
+            if (resourcePath.empty()) return path.generic_string();
+
+            std::error_code ec;
+            const auto relative = std::filesystem::relative(path, resourcePath, ec);
+            if (ec || relative.empty()) return path.generic_string();
+
+            return relative.generic_string();
+        }
 
         bool claim(const std::string& uuid) {
 
@@ -197,6 +216,14 @@ namespace {
 
     std::string writeTexture(Texture& texture, Meta& meta);
 
+    // A texture can be written as a path only when its pixels came from one
+    // file. A cube map is six faces behind a single `sourceFile`, so there is
+    // nothing to point the other five at; it embeds like it always did.
+    bool canReference(const Texture& texture) {
+
+        return !texture.sourceFile.empty() && texture.images().size() != 6;
+    }
+
     // Emits the `images` entry backing `texture` and returns its uuid, or an
     // empty string when there is no CPU-side pixel data to embed.
     std::string writeImage(const Texture& texture, Meta& meta) {
@@ -215,6 +242,15 @@ namespace {
         entry["uuid"] = imageUuid;
 
         const bool isCube = images.size() == 6;
+
+        // A path reference stands in for the whole entry — the pixels are
+        // already on disk, in a better format than a re-encoded PNG.
+        if (meta.imageStorage == ImageStorage::Reference && canReference(texture)) {
+            entry["url"] = meta.reference(texture.sourceFile);
+            entry["threeppChannels"] = images.front().channels();
+            meta.images.push_back(entry);
+            return imageUuid;
+        }
 
         if (isCube) {
             json urls = json::array();
@@ -273,7 +309,17 @@ namespace {
 
         entry["generateMipmaps"] = texture.generateMipmaps;
 
-        if (meta.embedImages) {
+        if (meta.imageStorage != ImageStorage::Omit) {
+
+            // Reference mode is best-effort per texture: one that never came
+            // from a file (procedural, or unpacked from inside a .glb) has
+            // nothing to point at, so it embeds instead. Say so, because the
+            // document is then not as small - or as portable - as asked for.
+            if (meta.imageStorage == ImageStorage::Reference && !canReference(texture)) {
+                meta.warn("texture '" + (texture.name.empty() ? texture.uuid() : texture.name) +
+                          "' cannot be referenced - embedded instead");
+            }
+
             const auto imageUuid = writeImage(texture, meta);
             if (imageUuid.empty()) {
                 meta.warn("texture '" + texture.uuid() +
@@ -841,6 +887,56 @@ namespace {
         return skeleton.uuid();
     }
 
+    // -------------------------------------------------- linked asset subtrees
+
+    // Pre-order walk of everything below `root`, matching the order ObjectLoader
+    // will see when it re-imports the asset and walks the result the same way.
+    // The root itself is excluded: its own fields are written as the ordinary
+    // object entry and transplanted onto the re-import.
+    void forEachDescendant(Object3D& root, const std::function<void(Object3D&)>& visit) {
+
+        for (auto* child : root.children) {
+            if (!child) continue;
+            visit(*child);
+            forEachDescendant(*child, visit);
+        }
+    }
+
+    // The per-node edits that survive a re-import. Geometry, materials and
+    // textures are deliberately not here — those come back from the asset file,
+    // which is the whole point of referencing it. Everything a scene editor
+    // routinely changes about an imported node without touching its mesh is.
+    json writeAssetOverrides(Object3D& root, Meta& meta) {
+
+        json nodes = json::array();
+
+        int index = 0;
+        forEachDescendant(root, [&](Object3D& node) {
+            const int i = index++;
+
+            json entry;
+            // Written unconditionally: it is what tells a reader that the asset
+            // still has the shape the document was saved against.
+            entry["i"] = i;
+            entry["name"] = node.name;
+
+            if (node.matrixAutoUpdate) node.updateMatrix();
+            entry["matrix"] = toArray(*node.matrix);
+
+            if (!node.visible) entry["visible"] = false;
+            if (node.castShadow) entry["castShadow"] = true;
+            if (node.receiveShadow) entry["receiveShadow"] = true;
+            if (!node.frustumCulled) entry["frustumCulled"] = false;
+            if (node.renderOrder != 0) entry["renderOrder"] = node.renderOrder;
+            if (node.layers.mask() != 1) entry["layers"] = node.layers.mask();
+            if (!node.userData.empty()) entry["userData"] = writeUserData(node.userData, meta);
+
+            nodes.push_back(entry);
+        });
+
+        return nodes;
+    }
+
     // -------------------------------------------------------------- objects
 
     json writeObject(Object3D& object, Meta& meta, bool includeMatrix = true);
@@ -864,6 +960,13 @@ namespace {
 
         json data;
 
+        // A linked subtree writes a path and a table of edits where its
+        // geometry, materials and children would otherwise go.
+        const auto asset = meta.modelStorage == ModelStorage::Reference
+                                   ? assetSource(object)
+                                   : std::filesystem::path{};
+        const bool linked = !asset.empty();
+
         data["uuid"] = object.uuid;
         data["type"] = object.type();
         if (!object.name.empty()) data["name"] = object.name;
@@ -882,6 +985,32 @@ namespace {
             if (object.matrixAutoUpdate) object.updateMatrix();
             data["matrix"] = toArray(*object.matrix);
             if (!object.matrixAutoUpdate) data["matrixAutoUpdate"] = false;
+        }
+
+        // ---- linked asset
+        // Everything past this point describes what the object IS, and for a
+        // linked subtree that is the asset file's business - geometry,
+        // materials, skeletons, clips and children all come back from the
+        // re-import. Only the edits made on top of it are ours to record.
+        if (linked) {
+
+            // The mark itself stays out of userData here: threeppAsset.path is
+            // the authoritative copy, and it is relative. Leaving the absolute
+            // sourceFile string in userData would pin this machine's directory
+            // layout into an otherwise portable document — every other machine
+            // would re-save it with a spurious diff. ObjectLoader re-stamps the
+            // mark from the resolved path on load.
+            if (data.contains("userData")) {
+                data["userData"].erase(assetSourceKey);
+                if (data["userData"].empty()) data.erase("userData");
+            }
+
+            json ref;
+            ref["path"] = meta.reference(asset);
+            ref["nodes"] = writeAssetOverrides(object, meta);
+            data["threeppAsset"] = ref;
+
+            return data;
         }
 
         // ---- cameras
@@ -1041,7 +1170,9 @@ std::string ObjectExporter::toJson(Object3D& object, const ObjectExporterOptions
     warnings_.clear();
 
     Meta meta;
-    meta.embedImages = options.embedImages;
+    meta.imageStorage = options.images;
+    meta.modelStorage = options.models;
+    meta.resourcePath = options.resourcePath;
 
     json output;
     output["metadata"] = json{
@@ -1072,5 +1203,10 @@ void ObjectExporter::save(Object3D& object, const std::filesystem::path& path, c
         throw std::runtime_error("[ObjectExporter] unable to open file for writing: " + path.string());
     }
 
-    out << toJson(object, options);
+    // References are relative to the document, and here we finally know where
+    // the document is. An explicitly configured resourcePath still wins.
+    auto resolved = options;
+    if (resolved.resourcePath.empty()) resolved.resourcePath = path.parent_path();
+
+    out << toJson(object, resolved);
 }

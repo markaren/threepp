@@ -13,6 +13,7 @@
 #include "threepp/textures/Image.hpp"
 
 #include <atomic>
+#include <filesystem>
 #include <memory>
 #include <optional>
 
@@ -30,6 +31,15 @@ namespace threepp {
         unsigned int id = textureId.fetch_add(1, std::memory_order_relaxed);
 
         std::string name;
+
+        // Where the pixels came from, when they came from a file on disk. Set by
+        // TextureLoader; empty for textures built in memory (procedural ones, and
+        // the ones a .glb/.fbx carries inside itself).
+        //
+        // Purely informational to the renderer — it exists so ObjectExporter can
+        // write a path reference instead of a base64 data-URI. A texture without
+        // one can only ever be embedded.
+        std::filesystem::path sourceFile;
 
         Mapping mapping = DEFAULT_MAPPING;
 

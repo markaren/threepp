@@ -32,6 +32,7 @@
 #include "threepp/helpers/GridHelper.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/loaders/AssetSource.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
@@ -2149,6 +2150,72 @@ int EditorApp::runSelfTest() {
             check(commands_.undoCount() == undosBefore, "preview pushes no undo entries");
             step(5);
         }
+
+        // Save by reference, through the same path File ▸ Save takes. The
+        // imported subtree is the expensive part of any real scene, so this is
+        // where the setting has to actually pay off — and where a reopened
+        // document has to come back identical.
+        if (imported) {
+
+            const auto linked = imported->uuid;
+            const auto nodesBefore = [&] {
+                std::size_t n = 0;
+                imported->traverse([&n](Object3D&) { ++n; });
+                return n;
+            }();
+            check(!assetSource(*imported).empty(), "an imported subtree records its source file");
+
+            const auto embeddedPath = std::filesystem::temp_directory_path() / "threepp_editor_embed.json";
+            const auto referencedPath = std::filesystem::temp_directory_path() / "threepp_editor_ref.json";
+
+            setImageStorage(ImageStorage::Embed);
+            setModelStorage(ModelStorage::Embed);
+            saveSceneAs(embeddedPath);
+            step();
+
+            setImageStorage(ImageStorage::Reference);
+            setModelStorage(ModelStorage::Reference);
+            saveSceneAs(referencedPath);
+            step();
+
+            std::error_code ec;
+            const auto embeddedSize = std::filesystem::file_size(embeddedPath, ec);
+            const auto referencedSize = std::filesystem::file_size(referencedPath, ec);
+            check(!ec && embeddedSize > 0 && referencedSize > 0, "both documents were written");
+            check(referencedSize * 10 < embeddedSize,
+                  "referencing the model makes the document at least 10x smaller");
+
+            openScene(referencedPath);
+            step(2);
+            auto* reopened = findByUuid(document_.scene(), linked);
+            check(reopened != nullptr, "the linked subtree is back after reopening");
+            if (reopened) {
+                std::size_t n = 0;
+                reopened->traverse([&n](Object3D&) { ++n; });
+                check(n == nodesBefore, "and it came back with every node");
+                check(!assetSource(*reopened).empty(), "still linked, so a re-save references it again");
+
+                // Unlink is the escape hatch: the same scene, written in full.
+                selectObject(reopened);
+                step();
+                unlinkSelectedAsset();
+                step();
+                check(assetSource(*reopened).empty(), "unlink breaks the link");
+                saveSceneAs(referencedPath);
+                step();
+                const auto unlinkedSize = std::filesystem::file_size(referencedPath, ec);
+                check(!ec && unlinkedSize > referencedSize * 10,
+                      "an unlinked subtree is written out in full again");
+            }
+
+            std::filesystem::remove(embeddedPath, ec);
+            std::filesystem::remove(referencedPath, ec);
+
+            setImageStorage(ImageStorage::Embed);
+            setModelStorage(ModelStorage::Embed);
+            newScene();
+            step(2);
+        }
     }
 
     // URDF: import, drive a joint, and prove the pose survives a full document
@@ -3308,6 +3375,41 @@ void EditorApp::saveSceneAs(const std::filesystem::path& path) {
     log("saved " + path.filename().string());
 }
 
+void EditorApp::setImageStorage(ImageStorage storage) {
+
+    document_.setImageStorage(storage);
+    settings_.imageStorage = storage;
+    log(storage == ImageStorage::Reference ? "textures will be referenced on save"
+                                           : "textures will be embedded on save");
+}
+
+void EditorApp::setModelStorage(ModelStorage storage) {
+
+    document_.setModelStorage(storage);
+    settings_.modelStorage = storage;
+    log(storage == ModelStorage::Reference ? "imported models will be referenced on save"
+                                           : "imported models will be embedded on save");
+}
+
+void EditorApp::unlinkSelectedAsset() {
+
+    auto* selected = selection_.get();
+    if (!selected) return;
+
+    const auto source = assetSource(*selected);
+    if (source.empty()) return;
+
+    auto* target = selected;
+    commands_.execute(makeProperty<std::string>(
+            "Unlink Asset", "assetSource:" + selected->uuid,
+            [target](const std::string& value) { setAssetSource(*target, value); },
+            source.generic_string(), std::string{}));
+    document_.setDirty(true);
+
+    log("unlinked " + (selected->name.empty() ? selected->type() : selected->name) +
+        " from " + source.filename().string() + " - it will be written out in full");
+}
+
 void EditorApp::importModel(const std::filesystem::path& path) {
 
     // Loading happens on a worker so the UI never freezes; pollImports picks
@@ -3368,6 +3470,17 @@ void EditorApp::pollImports(float dt) {
 
     std::size_t nodes = 0;
     group->traverse([&nodes](Object3D&) { ++nodes; });
+
+    // Remember the file. Whether the document then writes the subtree out or
+    // just points at it is the save-time storage choice; either way this is
+    // what makes the choice available later.
+    //
+    // Normalised to match what ObjectLoader stamps when it re-imports, so that
+    // saving a scene, reopening it and saving again produces the same bytes
+    // rather than converging on the second try.
+    std::error_code pathEc;
+    const auto canonical = std::filesystem::weakly_canonical(path, pathEc);
+    setAssetSource(*group, pathEc ? path : canonical);
 
     // A robot records where it came from: the joint table cannot be
     // serialised, so the document keeps a reference and rebuilds on load.
@@ -3890,7 +4003,20 @@ void EditorApp::rearticulateRobots(Scene& scene) {
     // lookups (selection, undo rebinding) still resolve.
     std::vector<Object3D*> placeholders;
     scene.traverse([&placeholders](Object3D& object) {
-        if (object.as<Robot>()) return;// already live
+        if (auto* robot = object.as<Robot>()) {
+            // Already live — ObjectLoader re-imported it from the URDF the
+            // document referenced. The node transforms are right (the override
+            // table restored them) but the joint table is still at the file's
+            // rest pose, so the inspector would show the wrong angles and snap
+            // the robot on the first drag. Re-drive it from the saved values.
+            if (const auto config = RobotConfig::read(object)) {
+                for (std::size_t i = 0; i < config->joints.size() && i < robot->numDOF(); ++i) {
+                    robot->setJointValue(i, config->joints[i]);
+                }
+                robot->showColliders(config->showColliders);
+            }
+            return;
+        }
         if (RobotConfig::read(object)) placeholders.push_back(&object);
     });
 
@@ -4605,6 +4731,8 @@ void EditorApp::loadSettings() {
     settingsPath_ = EditorSettings::defaultPath();
     settings_.load(settingsPath_);
     bottomPanelOpen_ = settings_.bottomPanelOpen;
+    document_.setImageStorage(settings_.imageStorage);
+    document_.setModelStorage(settings_.modelStorage);
 }
 
 void EditorApp::persistSettings() {

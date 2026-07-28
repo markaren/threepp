@@ -116,10 +116,12 @@ bool SceneDocument::saveAs(const std::filesystem::path& path, std::string* error
 
     ObjectExporter exporter;
     ObjectExporterOptions options;
-    options.embedImages = true;// a saved scene must stand on its own
+    options.images = imageStorage_;
+    options.models = modelStorage_;
     options.prettyPrint = true;
 
     try {
+        // save() derives the base for relative references from `path`.
         exporter.save(*scene_, path, options);
     } catch (const std::exception& e) {
         if (error) *error = e.what();
@@ -142,7 +144,11 @@ std::string SceneDocument::toJson(bool prettyPrint, std::string* error) {
 
     ObjectExporter exporter;
     ObjectExporterOptions options;
-    options.embedImages = true;
+    options.images = imageStorage_;
+    options.models = modelStorage_;
+    // No file to make references relative to, so this one uses the document's
+    // own directory when it has been saved before, and absolute paths if not.
+    options.resourcePath = path_.empty() ? std::filesystem::path{} : path_.parent_path();
     options.prettyPrint = prettyPrint;
 
     try {
