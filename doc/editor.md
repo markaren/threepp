@@ -582,7 +582,8 @@ no business creating a window, and the editor already owns the ones that exist.
 **Add ▸ Spline** creates a `Group` carrying `userData["spline"]`, with four
 control-point children forming an arc. The rule is one sentence:
 
-> **Every direct child of a spline is a control point, in child order.**
+> **Every direct child of a spline is a control point, in child order —
+> except the generated mesh, which is tagged.**
 
 Nothing else marks them. A control point is a plain `Object3D`, its local
 position is that point's position in the spline's space, and reordering,
@@ -595,7 +596,7 @@ The curve's own parameters ride in the same flat format as physics and
 animation:
 
 ```
-type=centripetal;closed=0;tension=0.5;samples=24
+type=centripetal;closed=0;tension=0.5;samples=24;mesh=none;radius=0.25;radialSegments=8;width=4;uvLength=4
 ```
 
 | key | values | meaning |
@@ -603,7 +604,10 @@ type=centripetal;closed=0;tension=0.5;samples=24
 | `type` | `centripetal`, `chordal`, `catmullrom` | three.js's parameterisations; centripetal avoids cusps |
 | `closed` | `0`, `1` | join the last point back to the first |
 | `tension` | `0`…`1` | `catmullrom` only — stored and inert for the other two, as in three.js |
-| `samples` | `1`…`200` | curve samples per segment, for the editor's overlay |
+| `samples` | `1`…`200` | curve samples per segment; drives the overlay *and* what the mesh is fitted from |
+| `mesh` | `none`, `tube` | what the spline generates as real geometry
+| `radius` | metres | `tube` — cross-section radius |
+| `radialSegments` | `3`…`64` | `tube` — sides of the cross-section |
 
 `SplineConfig::encode()` / `decode()` own that format, unknown keys are ignored
 on read, and — unlike `PhysicsConfig` — `write()` never erases the entry: the
@@ -623,9 +627,37 @@ config changes, which is what makes dragging a point redraw the curve live.
 Control points additionally get a marker icon through the same machinery
 cameras and lights use, so they are clickable in the viewport at all.
 
-**From a script.** `threepp.CatmullRomCurve3` is bound, so a play-mode script
-builds the same curve the editor draws. `FollowSpline` — resolve the spline by
-name, lift its children into world space, walk the curve at a constant speed:
+**The mesh you generate is.** Set **Mesh** to Tube in the spline section and the
+spline grows one more child: a real `Mesh`, with a `MeshStandardMaterial`,
+shadows on, carrying `userData["splineDerived"] = "1"`. That tag is the only
+thing separating it from a control point — every count and index in the editor
+goes through `SplineConfig::controlPoints()` / `pointIndexOf()` rather than
+`children`, so adding geometry never shifts a point index. It is a document node
+in every other respect: it saves, it reloads, and a scene with a tube in it
+renders and collides in a plain viewer with no editor present. Select it and the
+ordinary Material and **Physics** sections apply — or put the physics on the
+spline itself, which collides as the tube underneath it.
+
+Tube sweeps threepp's `TubeGeometry` along the curve, at the radius and radial
+segment count the config carries. A closed cross-section is also what a triangle
+mesh collider handles well, which is why a tube needs nothing special to stand
+on.
+
+**Regeneration is derived state, not a command.** The undoable step is the
+config edit; the sync pass then adds, rebuilds or removes the mesh to follow
+whatever the config says — so undoing "Mesh = Tube" brings the mesh back on the
+next frame's sync, and there is never a second entry on the undo stack fighting
+the first. Rebuilds preserve the node: same object, same uuid, same material,
+same `userData`, with only the geometry swapped (and the orphaned one disposed).
+Anything you configure on the mesh survives dragging the control points around.
+A loaded document already has its mesh, and the first sync adopts that one
+rather than adding a second.
+
+**From a script.** `threepp.editor.spline_from_object` turns an authored spline
+into a `SplinePath` — no child filtering, no config parsing, and the authored
+`closed`, curve type and `tension` are honored. It returns `None` when the
+object is not a spline or has fewer than two control points, so the result of
+`get_object_by_name` pipes straight in:
 
 ```python
 import threepp
@@ -638,58 +670,35 @@ class FollowSpline:
     def start(self, obj: threepp.Object3D, scene: threepp.Scene):
         self.obj = obj
         self.u = 0.0
-        self.curve = None
-
-        spline = scene.get_object_by_name(self.spline_name)
-        if spline is None:
-            print("FollowSpline: no object named", self.spline_name)
-            return
-
-        # The control points ARE the spline's direct children, in order. Their
-        # positions are local to the spline, so lift them into world space --
-        # obj.position is world space too, as long as obj sits under the scene
-        # root rather than inside some other transformed group.
-        points = [spline.local_to_world(p.position) for p in spline.children]
-        if len(points) < 2:
-            print("FollowSpline: a curve needs two control points")
-            return
-
-        # The authored parameters ride in userData["spline"] as a flat
-        # "type=...;closed=...;tension=...;samples=..." string. Honor them,
-        # so the script walks the same curve the editor draws.
-        config = dict(
-            item.split("=", 1)
-            for item in (spline.get_user_data("spline") or "").split(";")
-            if "=" in item
-        )
-        self.curve = threepp.CatmullRomCurve3(
-            points,
-            closed=config.get("closed") == "1",
-            curve_type=getattr(threepp.CatmullRomCurve3.CurveType,
-                               config.get("type", ""),
-                               threepp.CatmullRomCurve3.centripetal),
-            tension=float(config.get("tension", "0.5")),
-        )
+        self.path = threepp.editor.spline_from_object(
+            scene.get_object_by_name(self.spline_name))
 
     def update(self, dt: float):
-        if self.curve is None:
+        if self.path is None:
             return
         self.u = (self.u + self.speed * dt) % 1.0
         # get_point_at is arc-length parameterised, so the speed is constant
-        # along the curve rather than per segment. get_point(t) is not.
-        self.obj.position.copy(self.curve.get_point_at(self.u))
+        # along the curve rather than per segment.
+        self.obj.position.copy(self.path.get_point_at(self.u))
 ```
 
 Attach it to any object, set `spline_name` to your spline in the inspector, and
-press Play. `get_tangent_at(u)` gives the heading if you want the object to face
-where it is going.
+press Play. `get_point_at(u)` and `get_tangent_at(u)` answer in **world space**
+(the follower's `position` is world space too, as long as it sits under the
+scene root); `get_length()` is the arc length in the spline's local space, so a
+scaled spline scales distances with it.
 
-The config parsing works because `Object3D.get_user_data(key)` returns string
-`userData` entries to Python — the raw `type=...;closed=...` text here, `None`
-for a missing key or a non-string value (the editor's configs are all strings,
-so that is not a loss). One thing the script still does **not** get: the curve
-is built once in `start()`, so moving a control point during Play does not bend
-it; rebuild in `update()` if that is what you want.
+The path's contract in one sentence: the local-space curve — control points,
+`closed`, type, `tension` — is captured when the path is created (or
+`refresh()`ed), and the spline's world transform is applied live on every
+sample. A spline riding a moving platform therefore stays followable for free,
+while moving control points during Play needs `path.refresh()` before the
+change bends the path. Sampling runs off the curve's own arc-length table,
+independent of the overlay's `samples` density. For anything beyond points and
+tangents the captured local-space curve is exposed as `path.curve` (a plain
+`threepp.CatmullRomCurve3`), and `Object3D.get_user_data(key)` remains the raw
+escape hatch: it returns any string `userData` entry — every editor config
+(`spline`, `physics`, script fields) is one flat `key=value;…` string.
 
 ### Async model import
 
@@ -810,6 +819,13 @@ their say.
   reordering of control points beyond dragging them in the hierarchy. A spline
   is also not a path anything follows by itself: it is data, and a script (or
   your own `PlaySession`) is what walks it.
+* **Generated geometry is derived, so removing it is destructive.** Setting
+  **Mesh** back to None deletes the node; undoing that config edit re-derives a
+  *new* mesh rather than restoring the old one, and the material, physics and
+  name you had put on it are gone with the node. Undo covers the config edit,
+  which is all it claims to. Nothing else loses that state — dragging points,
+  changing the radius, reloading the document all rebuild through the same node.
+  There is also one generated mesh per spline, and one material with it.
 * **Duplicate shares geometry.** `Object3D::clone()` shares both geometry and
   materials; the editor clones the materials afterwards so recolouring a copy
   does not recolour the original, but geometry stays shared. That is intentional

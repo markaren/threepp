@@ -55,6 +55,7 @@ namespace threepp {
     class CameraHelper;
     class Line;
     class LineBasicMaterial;
+    class LineSegments;
     class Material;
     class MeshBasicMaterial;
     class ObjectWithMorphTargetInfluences;
@@ -64,6 +65,11 @@ namespace threepp {
 }// namespace threepp
 
 namespace threepp::editor {
+
+    // Held by the app so the collider overlay can reach its PhysX world.
+    // Forward-declared: PhysicsPlaySession pulls in the whole PhysX SDK, and
+    // every panel includes this header.
+    class PhysicsPlaySession;
 
     class EditorApp {
 
@@ -79,6 +85,10 @@ namespace threepp::editor {
             bool selfTest = false;
             // Optional robot for the selftest's URDF pass.
             std::filesystem::path urdf;
+            // Render the road-acceptance scene to this PNG and exit. Exists so
+            // a person — or a tool — can LOOK at what the geometry does before
+            // anyone claims it works.
+            std::filesystem::path screenshot;
         };
 
         explicit EditorApp(const Options& options);
@@ -223,6 +233,12 @@ namespace threepp::editor {
         // is never saved and never picked.
         void syncSplineOverlays();
         void clearSplineOverlays();
+        // --- physics collider overlay (apps/editor/PhysicsDebugOverlay.cpp) --
+        // PhysX's own debug lines for every collider in the playing world,
+        // drawn as one LineSegments under the overlay. The answer to "where is
+        // my collider" being unanswerable without leaving the editor.
+        void syncPhysicsDebug();
+        void clearPhysicsDebug();
         // The object a marker stands for, or nullptr when `hit` is not part of
         // one. Lets a click on an icon select its owner.
         [[nodiscard]] Object3D* markerOwnerOf(Object3D* hit) const;
@@ -262,6 +278,7 @@ namespace threepp::editor {
 
         // --- misc ----------------------------------------------------------
         int runSelfTest();
+        int runScreenshot();
         void handleShortcuts();
         void handleFileDrop(const std::vector<std::string>& paths);
         void log(const std::string& message);
@@ -341,6 +358,17 @@ namespace threepp::editor {
         };
         std::shared_ptr<Group> splines_;
         std::vector<SplineOverlay> splineOverlays_;
+
+        // Physics collider overlay. The line buffer PhysX hands out changes
+        // size every frame, so the attribute is rewritten in place and only
+        // replaced when it is outgrown — same contract as the spline curves
+        // above, for the same reason (the renderer caches GPU buffers by
+        // attribute identity). Null whenever the view is off, play is stopped,
+        // or the scene was replaced under it.
+        std::shared_ptr<PhysicsPlaySession> physics_;
+        std::shared_ptr<LineSegments> physicsDebugLines_;
+        int physicsDebugCapacity_ = 0;
+        bool physicsDebug_ = false;
 
         Raycaster raycaster_;
         std::unique_ptr<ImguiContext> ui_;

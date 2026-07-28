@@ -38,6 +38,7 @@
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/ObjectWithMaterials.hpp"
 #include "threepp/objects/Robot.hpp"
@@ -50,6 +51,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <limits>
 
 // GLFW's window-title setter. Declared rather than included: the GLFW headers
 // are private to the threepp target, but the symbol is linked into it and the
@@ -80,6 +82,33 @@ namespace {
         }
 #endif
         return GraphicsAPI::OpenGL;
+    }
+
+    // The radius a generated tube actually came out at: the FARTHEST any of its
+    // vertices sits from the curve it was swept along. A tube is a ring of
+    // vertices per sample, so the maximum is the radius wherever the sweep is
+    // honest and larger wherever it is not. Zero when there is nothing to
+    // measure. Selftest only.
+    float tubeRadius(const Mesh& mesh, const Object3D& spline) {
+
+        const auto geometry = mesh.geometry();
+        if (!geometry) return 0.f;
+        const auto* position = geometry->getAttribute<float>("position");
+        if (!position || position->count() < 4) return 0.f;
+
+        const auto config = editor::SplineConfig::read(spline);
+        const auto curve = config ? config->curve(spline) : nullptr;
+        if (!curve) return 0.f;
+        const auto spine = curve->getPoints(256);
+
+        float farthest = 0.f;
+        for (int i = 0; i < position->count(); ++i) {
+            const Vector3 vertex(position->getX(i), position->getY(i), position->getZ(i));
+            float nearest = std::numeric_limits<float>::max();
+            for (const auto& on : spine) nearest = std::min(nearest, vertex.distanceTo(on));
+            farthest = std::max(farthest, nearest);
+        }
+        return farthest;
     }
 
 }// namespace
@@ -184,6 +213,10 @@ EditorApp::EditorApp(const Options& options)
         // gone.
         clearViewportMarkers();
         clearSplineOverlays();
+        // The collider lines are world-space and belong to a world that stop()
+        // has already destroyed; the node itself is parented to the surviving
+        // overlay, so it has to be taken down explicitly.
+        clearPhysicsDebug();
         if (cameraHelper_) {
             cameraHelper_->removeFromParent();
             cameraHelper_.reset();
@@ -233,13 +266,12 @@ EditorApp::EditorApp(const Options& options)
     });
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-    {
-        auto physics = std::make_shared<PhysicsPlaySession>();
-        // Soft bodies can decline to cook, and the GPU world can decline to
-        // come up; both are worth a line in the log rather than silence.
-        physics->setLogger([this](const std::string& message) { log(message); });
-        play_.addSession(physics);
-    }
+    // Kept as a member too: the collider overlay reads the world it builds.
+    physics_ = std::make_shared<PhysicsPlaySession>();
+    // Soft bodies can decline to cook, and the GPU world can decline to come
+    // up; both are worth a line in the log rather than silence.
+    physics_->setLogger([this](const std::string& message) { log(message); });
+    play_.addSession(physics_);
 #endif
     play_.addSession(std::make_shared<AnimationPlaySession>());
 #ifdef THREEPP_EDITOR_WITH_PYTHON
@@ -302,6 +334,7 @@ int EditorApp::run() {
     Clock clock;
 
     if (options_.selfTest) return runSelfTest();
+    if (!options_.screenshot.empty()) return runScreenshot();
 
     if (options_.maxFrames > 0) {
         for (int i = 0; i < options_.maxFrames; ++i) {
@@ -315,6 +348,153 @@ int EditorApp::run() {
 
     persistSettings();
     return 0;
+}
+
+// stb_image_write is already compiled into threepp (utils/StbImageWrite.cpp);
+// these mirror its two entry points rather than adding an include path for the
+// one function this file wants.
+extern "C" {
+    int stbi_write_png(char const* filename, int w, int h, int comp, const void* data, int stride_in_bytes);
+    void stbi_flip_vertically_on_write(int flag);
+}
+
+int EditorApp::runScreenshot() {
+
+    Clock clock;
+    const auto playFor = [&](float seconds) {
+        float elapsed = 0.f;
+        // Wall-clock, not frame-count: with vsync off a frame's dt is tiny and
+        // a fixed frame budget would capture the balls still in the air.
+        for (int i = 0; i < 20000 && elapsed < seconds; ++i) {
+            const float dt = clock.getDelta();
+            elapsed += std::max(dt, 0.f);
+            canvas_.animateOnce([&] { frame(dt); });
+        }
+    };
+
+    auto& scene = document_.scene();
+
+    // The tubes this feature is judged on: the factory default, an S-curve, and
+    // a GRADED one that climbs into a crest inside a bend — a tube's closed
+    // cross-section has to survive all three.
+    auto plain = ObjectFactory::createSpline(scene);
+    {
+        auto config = SplineConfig::read(*plain).value_or(SplineConfig{});
+        config.mesh = SplineConfig::MeshKind::Tube;
+        config.radius = 0.5f;
+        config.write(*plain);
+    }
+    plain->position.z = -6.f;
+    addObject(plain, scene, "Screenshot Tube");
+
+    auto s = ObjectFactory::createSpline(scene);
+    {
+        static constexpr float points[][3] = {
+                {-9.f, 0.5f, -3.f}, {-3.f, 0.5f, 3.f}, {3.f, 0.5f, -3.f}, {9.f, 0.5f, 3.f}};
+        const auto nodes = SplineConfig::controlPointNodes(*s);
+        for (std::size_t i = 0; i < nodes.size() && i < 4; ++i) {
+            nodes[i]->position.set(points[i][0], points[i][1], points[i][2]);
+        }
+        auto config = SplineConfig::read(*s).value_or(SplineConfig{});
+        config.mesh = SplineConfig::MeshKind::Tube;
+        config.radius = 0.6f;
+        config.write(*s);
+    }
+    s->position.z = 4.f;
+    addObject(s, scene, "Screenshot S Tube");
+
+    auto hill = ObjectFactory::createSpline(scene);
+    {
+        static constexpr float points[][3] = {
+                {-11.f, 0.f, 0.f}, {-4.f, 1.5f, 3.f}, {1.f, 3.f, 0.f}, {6.f, 1.5f, -3.f}, {12.f, 0.f, 0.f}};
+        auto config = SplineConfig::read(*hill).value_or(SplineConfig{});
+        for (std::size_t i = SplineConfig::controlPointNodes(*hill).size(); i < 5; ++i) {
+            hill->add(ObjectFactory::createSplinePoint(*hill));
+        }
+        const auto nodes = SplineConfig::controlPointNodes(*hill);
+        for (std::size_t i = 0; i < nodes.size() && i < 5; ++i) {
+            nodes[i]->position.set(points[i][0], points[i][1], points[i][2]);
+        }
+        config.mesh = SplineConfig::MeshKind::Tube;
+        config.radius = 0.4f;
+        config.write(*hill);
+    }
+    hill->position.z = 12.f;
+    addObject(hill, scene, "Screenshot Hill Tube");
+    playFor(0.1f);// the sync pass derives the tube meshes
+
+    for (auto* spline : {plain.get(), s.get(), hill.get()}) {
+        if (auto* mesh = SplineConfig::derivedMesh(*spline)) {
+            PhysicsConfig config;
+            config.enabled = true;
+            config.body = PhysicsConfig::Body::Static;
+            config.write(*mesh);
+        }
+    }
+    const auto drop = [&](Primitive kind, const Vector3& from, const char* label) {
+        auto object = ObjectFactory::createPrimitive(kind, scene);
+        object->position.copy(from);
+        PhysicsConfig config;
+        config.enabled = true;
+        config.body = PhysicsConfig::Body::Dynamic;
+        config.friction = 0.8f;
+        config.write(*object);
+        addObject(object, scene, label);
+    };
+    drop(Primitive::Sphere, {-6.f, 3.f, 4.f}, "Ball on S");
+    drop(Primitive::Sphere, {0.f, 3.f, -7.f}, "Ball on default");
+    // A box, not a ball: a sphere on a hill rolls off it, and what wants
+    // showing here is a body sitting still on a graded surface — the case a
+    // trimmed offset broke, since it invented a height at every corner it cut
+    // and left a step to catch on.
+    drop(Primitive::Box, {-1.f, 4.5f, 13.5f}, "Box near the crest");
+
+    startPlay();
+    playFor(2.5f);// balls settle, the collider overlay's line buffer fills
+
+    camera_.position.set(-1.f, 27.f, 27.f);
+    orbit_.target.set(0.f, 0.f, 5.f);
+    playFor(0.2f);
+
+    const auto size = canvas_.size();
+    stbi_flip_vertically_on_write(1);
+    const auto shoot = [&](const std::filesystem::path& path) {
+        const auto pixels = renderer_->readRGBPixels();
+        const bool wrote =
+                pixels.size() >= static_cast<std::size_t>(size.width()) * size.height() * 3 &&
+                stbi_write_png(path.string().c_str(), size.width(), size.height(), 3,
+                               pixels.data(), size.width() * 3) != 0;
+        std::cout << "[screenshot] " << (wrote ? "wrote " : "FAILED to write ") << path.string()
+                  << std::endl;
+        return wrote;
+    };
+
+    // Two shots, because one cannot answer both questions. A road drawn under
+    // its own collider overlay is a wall of lines — good for asking whether the
+    // shapes hug the surface, useless for asking whether the surface is faceted.
+    const auto sibling = [&](const char* suffix) {
+        auto path = options_.screenshot;
+        path.replace_filename(options_.screenshot.stem().string() + suffix +
+                              options_.screenshot.extension().string());
+        return path;
+    };
+
+    bool wrote = shoot(options_.screenshot);
+
+    // And a third, low and near, along the graded road. A crease in a grade is
+    // invisible from overhead — it is a shading break, and shading breaks want
+    // a glancing angle and the surface filling the frame.
+    camera_.position.set(1.f, 3.2f, 34.f);
+    orbit_.target.set(0.f, 1.f, 12.f);
+    playFor(0.2f);
+    wrote = shoot(sibling("_graded")) && wrote;
+
+    camera_.position.set(-1.f, 27.f, 27.f);
+    orbit_.target.set(0.f, 0.f, 5.f);
+    physicsDebug_ = true;
+    playFor(0.4f);// the overlay's line buffer fills
+    wrote = shoot(sibling("_colliders")) && wrote;
+    return wrote ? 0 : 1;
 }
 
 int EditorApp::runSelfTest() {
@@ -345,6 +525,7 @@ int EditorApp::runSelfTest() {
         for (auto* child : overlay_->children) {
             if (child == grid_.get() || child == axes_.get() ||
                 child == markers_.get() || child == splines_.get() ||
+                child == static_cast<Object3D*>(physicsDebugLines_.get()) ||
                 child == static_cast<Object3D*>(cameraHelper_.get()) ||
                 child == static_cast<Object3D*>(gizmo_.get())) continue;
             ++n;
@@ -1160,6 +1341,196 @@ int EditorApp::runSelfTest() {
             check(spline && spline->children.size() == count, "and the delete is undoable");
         }
 
+        // Generated geometry. The mesh is a REAL child of the spline — saved,
+        // materialled, physics-configurable — and the only thing separating it
+        // from a control point is its tag, which makes every count and index
+        // above the part of this feature most likely to be off by one.
+        const auto derivedCount = [](const Object3D& owner) {
+            std::size_t n = 0;
+            for (const auto* child : owner.children) {
+                if (SplineConfig::isDerived(*child)) ++n;
+            }
+            return n;
+        };
+        // The inspector's edit path: a PropertyCommand carrying the encoded
+        // config, so undo below goes through the same stack the UI uses.
+        const auto setConfig = [&](const SplineConfig& after, const char* label) {
+            auto* target = splineNow(splineUuid);
+            if (!target) return;
+            const auto before = SplineConfig::read(*target).value_or(SplineConfig{});
+            commands_.execute(makeProperty<SplineConfig>(
+                    label, "spline:" + target->uuid,
+                    [target](const SplineConfig& value) { value.write(*target); },
+                    before, after));
+        };
+
+        std::string derivedUuid;
+        if (spline) {
+            // Selected throughout, so the inspector's Geometry block is drawn
+            // for every mesh kind this exercises rather than for none of them.
+            selectObject(spline);
+            step();
+
+            const auto pointsBefore = SplineConfig::controlPoints(*spline).size();
+            const auto markersBefore2 = viewportMarkers_.size();
+
+            auto config = SplineConfig::read(*spline).value_or(SplineConfig{});
+            config.mesh = SplineConfig::MeshKind::Tube;
+            config.radius = 0.4f;
+            setConfig(config, "Spline Mesh");
+            step();
+            spline = splineNow(splineUuid);
+
+            check(spline && derivedCount(*spline) == 1,
+                  "enabling a tube adds exactly one derived child");
+            auto* derived = spline ? SplineConfig::derivedMesh(*spline) : nullptr;
+            auto* mesh = derived ? derived->as<Mesh>() : nullptr;
+            check(mesh != nullptr, "which is a Mesh, and part of the document");
+            check(spline && SplineConfig::controlPoints(*spline).size() == pointsBefore,
+                  "while the control point count is what it was");
+            check(viewportMarkers_.size() == markersBefore2,
+                  "and no control-point marker appears for it");
+            check(derived && SplineConfig::splineOf(*derived) == nullptr,
+                  "the tag, not the parent link, is what says it is not a point");
+
+            if (mesh) {
+                derivedUuid = mesh->uuid;
+
+                // Everything a user may have configured on the mesh, set here
+                // so the regeneration below has something to lose.
+                mesh->userData["physics"] = std::string("enabled=1;type=static;shape=trimesh");
+                if (auto* standard = mesh->materialAs<MeshStandardMaterial>()) {
+                    standard->color.setHex(0x3366aa);
+                }
+
+                const auto geometry = mesh->geometry();
+                const auto material = mesh->material();
+                bool disposed = false;
+                LambdaEventListener watcher{[&disposed](Event&) { disposed = true; }};
+                geometry->addEventListener("dispose", watcher);
+
+                auto* dragged = SplineConfig::controlPointNodes(*spline).front();
+                dragged->position.y += 2.f;
+                step();
+                spline = splineNow(splineUuid);
+
+                check(spline && SplineConfig::derivedMesh(*spline) == mesh &&
+                              mesh->uuid == derivedUuid,
+                      "dragging a point regenerates through the SAME mesh node");
+                check(mesh->geometry() != geometry, "swapping in a new geometry");
+                check(disposed, "and disposing the one it orphaned");
+                check(mesh->material() == material, "the material it carries is untouched");
+                check(mesh->materialAs<MeshStandardMaterial>() &&
+                              mesh->materialAs<MeshStandardMaterial>()->color.getHex() == 0x3366aa,
+                      "down to what was edited on it");
+                check(mesh->userData.contains("physics"),
+                      "and the physics a user attached survives the rebuild");
+
+                geometry->removeEventListener("dispose", watcher);
+                dragged->position.y -= 2.f;
+                step();
+            }
+
+            // A radius change rebuilds the geometry on the SAME node, which is
+            // what keeps a material and a physics setup attached through an
+            // edit.
+            if (mesh) {
+                const auto geometry = mesh->geometry();
+                config.radius = 0.75f;
+                setConfig(config, "Spline Mesh");
+                step();
+                spline = splineNow(splineUuid);
+
+                check(spline && SplineConfig::derivedMesh(*spline) == mesh,
+                      "a radius change keeps the mesh node");
+                check(mesh->geometry() != geometry, "and rebuilds its geometry");
+                check(std::abs(tubeRadius(*mesh, *spline) - 0.75f) < 0.02f,
+                      "at the radius the config asks for");
+            }
+
+            // mesh=none removes it — and undoing that config edit brings it
+            // back on the next sync, without an undo entry of its own.
+            config.mesh = SplineConfig::MeshKind::None;
+            setConfig(config, "Spline Mesh");
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && derivedCount(*spline) == 0, "mesh=none removes the derived child");
+            check(spline && SplineConfig::controlPoints(*spline).size() == pointsBefore,
+                  "taking no control point with it");
+
+            commands_.undo();
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && derivedCount(*spline) == 1,
+                  "undoing the config edit brings the mesh back on the next sync");
+
+            // As a NEW node, though: mesh=none destroys the old one, and the
+            // sync re-derives rather than restores. Whatever was configured on
+            // the removed mesh is gone with it — undo covers the config edit,
+            // which is all it ever claimed to. Re-applied here because the
+            // round trip below is about surviving REGENERATION, not deletion.
+            if (auto* back = spline ? SplineConfig::derivedMesh(*spline) : nullptr) {
+                check(!derivedUuid.empty() && back->uuid != derivedUuid,
+                      "though as a fresh node - removal destroys, and undo re-derives");
+                derivedUuid = back->uuid;
+                back->userData["physics"] = std::string("enabled=1;type=static;shape=trimesh");
+                if (auto* standard = back->materialAs<MeshStandardMaterial>()) {
+                    standard->color.setHex(0x3366aa);
+                }
+            }
+        }
+
+        // Insert and delete with a derived child present: the point index and
+        // the child index are different numbers now, and this is where mixing
+        // them up shows.
+        if (spline) {
+            const auto before = SplineConfig::controlPoints(*spline);
+            addSplinePoint(*spline, 1, "Insert Spline Point");
+            step();
+            spline = splineNow(splineUuid);
+            const auto after = SplineConfig::controlPoints(*spline);
+            check(after.size() == before.size() + 1,
+                  "Insert Before still adds one control point with a mesh in the way");
+            Vector3 midpoint;
+            if (before.size() > 1) midpoint.copy(before[0]).add(before[1]).multiplyScalar(0.5f);
+            check(after.size() > 2 && before.size() > 1 &&
+                          after[1].distanceTo(midpoint) < 1e-4f &&
+                          after[0].distanceTo(before[0]) < 1e-4f &&
+                          after[2].distanceTo(before[1]) < 1e-4f,
+                  "at the point index asked for, not the child index");
+            check(spline && derivedCount(*spline) == 1, "and the mesh is still the only derived child");
+
+            addSplinePoint(*spline, AddObjectCommand::atEnd, "Add Spline Point");
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && !spline->children.empty() &&
+                          SplineConfig::isDerived(*spline->children.back()),
+                  "appending a point puts it before the mesh, which stays last");
+
+            // The ordinary delete on "the last point" — the trap being that
+            // the last CHILD is the mesh.
+            const auto points = SplineConfig::controlPointNodes(*spline);
+            if (!points.empty()) {
+                selectObject(points.back());
+                deleteSelected();
+                step();
+                spline = splineNow(splineUuid);
+                check(spline && SplineConfig::controlPoints(*spline).size() == points.size() - 1,
+                      "Del on the last control point takes the point");
+                check(spline && derivedCount(*spline) == 1, "and never the generated mesh");
+                commands_.undo();
+                step();
+                spline = splineNow(splineUuid);
+            }
+            commands_.undo();// the append
+            step();
+            commands_.undo();// the insert
+            step();
+            spline = splineNow(splineUuid);
+            check(spline && SplineConfig::controlPoints(*spline).size() == before.size(),
+                  "and both edits undo back to the point count they started from");
+        }
+
         // Save and reload: the config and every control point have to survive
         // the document round trip, since neither is anything but userData and
         // ordinary child transforms.
@@ -1170,13 +1541,19 @@ int EditorApp::runSelfTest() {
         authored.closed = true;
         authored.tension = 0.25f;
         authored.samples = 12;
+        // With a generated mesh, so the round trip proves the document carries
+        // the geometry too — and that reloading ADOPTS it rather than adding a
+        // second one beside it.
+        authored.mesh = SplineConfig::MeshKind::Tube;
+        authored.radius = 0.45f;
+        authored.radialSegments = 10;
         std::vector<Vector3> authoredPoints;
 
         if (spline) {
             authored.write(*spline);
             // A moved point, so the round trip is proving positions and not
             // just the factory's defaults twice.
-            spline->children.front()->position.y += 1.5f;
+            SplineConfig::controlPointNodes(*spline).front()->position.y += 1.5f;
             authoredPoints = SplineConfig::controlPoints(*spline);
             saveSceneAs(splinePath);
             openScene(splinePath);
@@ -1186,7 +1563,7 @@ int EditorApp::runSelfTest() {
             check(reloaded != nullptr, "the spline survives save and reload");
             check(reloaded && SplineConfig::read(*reloaded) == authored,
                   "its config round-trips through the document");
-            check(reloaded && reloaded->children.size() == authoredPoints.size(),
+            check(reloaded && SplineConfig::controlPoints(*reloaded).size() == authoredPoints.size(),
                   "and so does the control point count");
             bool positionsMatch = reloaded != nullptr;
             if (reloaded) {
@@ -1197,17 +1574,37 @@ int EditorApp::runSelfTest() {
             }
             check(positionsMatch, "with every control point where it was left");
             check(splineOverlays_.size() == 1, "and a curve overlay rebuilt on the new graph");
+
+            // The document already contains the generated mesh, so the first
+            // sync has to ADOPT it. Adding one of its own would leave two.
+            check(reloaded && derivedCount(*reloaded) == 1,
+                  "the reloaded document has exactly one derived child, adopted not duplicated");
+            auto* reloadedMesh = reloaded ? SplineConfig::derivedMesh(*reloaded) : nullptr;
+            check(reloadedMesh && reloadedMesh->uuid == derivedUuid,
+                  "the same mesh node, by uuid, as the one that was saved");
+            check(reloadedMesh && reloadedMesh->userData.contains("physics"),
+                  "with the physics config a user put on it");
+            check(reloadedMesh && reloadedMesh->materialAs<MeshStandardMaterial>() &&
+                          reloadedMesh->materialAs<MeshStandardMaterial>()->color.getHex() == 0x3366aa,
+                  "and the material they edited, both surviving the regeneration");
+            bool sized = false;
+            if (auto* asMesh = reloadedMesh ? reloadedMesh->as<Mesh>() : nullptr) {
+                if (auto* live = splineNow(splineUuid)) {
+                    sized = std::abs(tubeRadius(*asMesh, *live) - authored.radius) < 0.02f;
+                }
+            }
+            check(sized, "rebuilt to the radius the reloaded config asks for");
         }
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
-        // The documented FollowSpline script: it resolves the spline by name,
-        // reads the authored config out of userData["spline"] through
-        // get_user_data, and builds the threepp.CatmullRomCurve3 the document
-        // describes. If this stops working, doc/editor.md is handing users a
-        // script that does not run. One deviation from the doc: u advances a
-        // fixed 0.03 per update instead of speed * dt, so after step(30) it
-        // sits at a deterministic u ~= 0.9 — deep in the closing span that
-        // exists only when the authored closed=1 reaches the script.
+        // The documented FollowSpline script: spline_from_object hands it a
+        // SplinePath honoring the authored config — no child filtering, no
+        // userData parsing in the script. If this stops working, doc/editor.md
+        // is handing users a script that does not run. One deviation from the
+        // doc: u advances a fixed 0.03 per update instead of speed * dt, so
+        // after step(30) it sits at a deterministic u ~= 0.9 — deep in the
+        // closing span that exists only when the authored closed=1 reaches the
+        // script.
         if (auto* follower = document_.scene().getObjectByName("Box")) {
 
             const auto followerUuid = follower->uuid;
@@ -1221,32 +1618,14 @@ int EditorApp::runSelfTest() {
                             "    def start(self, obj, scene):\n"
                             "        self.obj = obj\n"
                             "        self.u = 0.0\n"
-                            "        self.curve = None\n"
-                            "        spline = scene.get_object_by_name(self.spline_name)\n"
-                            "        if spline is None:\n"
-                            "            return\n"
-                            "        points = [spline.local_to_world(p.position) for p in spline.children]\n"
-                            "        if len(points) < 2:\n"
-                            "            return\n"
-                            "        config = dict(\n"
-                            "            item.split(\"=\", 1)\n"
-                            "            for item in (spline.get_user_data(\"spline\") or \"\").split(\";\")\n"
-                            "            if \"=\" in item\n"
-                            "        )\n"
-                            "        self.curve = threepp.CatmullRomCurve3(\n"
-                            "            points,\n"
-                            "            closed=config.get(\"closed\") == \"1\",\n"
-                            "            curve_type=getattr(threepp.CatmullRomCurve3.CurveType,\n"
-                            "                               config.get(\"type\", \"\"),\n"
-                            "                               threepp.CatmullRomCurve3.centripetal),\n"
-                            "            tension=float(config.get(\"tension\", \"0.5\")),\n"
-                            "        )\n"
+                            "        self.path = threepp.editor.spline_from_object(\n"
+                            "            scene.get_object_by_name(self.spline_name))\n"
                             "\n"
                             "    def update(self, dt):\n"
-                            "        if self.curve is None:\n"
+                            "        if self.path is None:\n"
                             "            return\n"
                             "        self.u = (self.u + 0.03) % 1.0\n"
-                            "        self.obj.position.copy(self.curve.get_point_at(self.u))\n",
+                            "        self.obj.position.copy(self.path.get_point_at(self.u))\n",
                             "Follow Spline");
             step();
 
@@ -1259,9 +1638,9 @@ int EditorApp::runSelfTest() {
             check(driven && driven->position.distanceTo(rest) > 1e-3f,
                   "the FollowSpline script drives the object along the curve");
             // On the AUTHORED curve, not the defaults: the document says
-            // closed=1, catmullrom, tension=0.25, and get_user_data is how
-            // that reaches the script. At u ~= 0.9 the follower is inside the
-            // closing span, so the same parameters with closed=0 must NOT
+            // closed=1, catmullrom, tension=0.25, and spline_from_object is
+            // how that reaches the script. At u ~= 0.9 the follower is inside
+            // the closing span, so the same parameters with closed=0 must NOT
             // contain the position — if they do, the config never arrived.
             bool onAuthored = false;
             bool offOpen = true;
@@ -1287,6 +1666,13 @@ int EditorApp::runSelfTest() {
             }
             check(onAuthored, "and it lands on the authored closed curve");
             check(offOpen, "in the closing span an open curve does not have");
+            // The generated mesh is a child too, and at the spline's origin.
+            // Counting it as a control point would bend the curve the script
+            // builds away from the one the editor draws, so the two checks
+            // above are also the test that the documented list comprehension
+            // skips it.
+            check(splineNow(splineUuid) && derivedCount(*splineNow(splineUuid)) == 1,
+                  "with the generated mesh present, which the script has to skip");
 
             stopPlay();
             step();
@@ -1304,9 +1690,19 @@ int EditorApp::runSelfTest() {
             selectObject(live);
             step();
             check(splineOverlays_.size() == 1, "the selected spline still has its curve");
-            if (!live->children.empty()) selectObject(live->children.front());
+            const auto points = SplineConfig::controlPointNodes(*live);
+            if (!points.empty()) selectObject(points.front());
             step();
             check(selection_.get() != nullptr, "a control point is selectable");
+            // The generated mesh is picked and inspected like any other mesh —
+            // that is the whole point of it being a document node.
+            if (auto* generated = SplineConfig::derivedMesh(*live)) {
+                selectObject(generated);
+                step();
+                check(selection_.get() == generated, "and so is the generated mesh");
+                check(resolveSelectable(generated) == generated,
+                      "a click on it drills down to it while its spline is the selection");
+            }
         }
 
         openScene(splinePath);
@@ -1439,6 +1835,136 @@ int EditorApp::runSelfTest() {
             }
         }
     }
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    // The physics collider overlay. It exists because a body resting on nothing
+    // and a body whose collider is somewhere else look identical, so the checks
+    // are about the buffer being there, being emptied, and surviving the scene
+    // replace that Stop performs under it.
+    {
+        newScene();
+        step(2);
+
+        for (const char* name : {"Ground", "Box"}) {
+            auto* object = document_.scene().getObjectByName(name);
+            if (!object) continue;
+            PhysicsConfig config;
+            config.enabled = true;
+            config.body = std::string(name) == "Box" ? PhysicsConfig::Body::Dynamic
+                                                     : PhysicsConfig::Body::Static;
+            config.write(*object);
+        }
+
+        // Vertices the overlay is actually drawing. drawRange starts at "all of
+        // them" — a sentinel, not a count — so a geometry that has never been
+        // filled has to answer zero rather than half a billion.
+        const auto colliderVertices = [this] {
+            const auto geometry = physicsDebugLines_ ? physicsDebugLines_->geometry() : nullptr;
+            const auto* position = geometry ? geometry->getAttribute<float>("position") : nullptr;
+            if (!position) return 0;
+            return std::min(geometry->drawRange.count, position->count());
+        };
+
+        // PhysX fills the debug buffer during simulate(), and the session steps
+        // on a FIXED timestep out of a real-time clock: on a machine drawing
+        // frames faster than the substep, several frames pass before the sim
+        // advances at all. Waiting on the buffer rather than on a frame count
+        // is what keeps this about the overlay instead of about the frame rate.
+        const auto stepUntilColliders = [&](int budget) {
+            for (int i = 0; i < budget && colliderVertices() == 0; ++i) step();
+        };
+
+        physicsDebug_ = true;
+        step(2);
+        check(physicsDebugLines_ == nullptr, "the collider overlay stays off while stopped");
+
+        startPlay();
+        // The lines arrive one substep after the visualization parameter is
+        // set, which is one substep after play started.
+        stepUntilColliders(600);
+        check(physicsDebugLines_ != nullptr, "toggling Physics Colliders on while playing draws an overlay");
+        check(physicsDebugLines_ && physicsDebugLines_->visible, "which is visible");
+        check(colliderVertices() > 0, "with a non-empty line buffer");
+
+        physicsDebug_ = false;
+        step(2);
+        check(physicsDebugLines_ == nullptr, "toggling it off clears the overlay");
+
+        // Back on, then Stop: that is a full scene replace with live world
+        // pointers in the overlay, which is the shape of every scar this file
+        // carries.
+        physicsDebug_ = true;
+        stepUntilColliders(600);
+        check(colliderVertices() > 0, "toggling it back on refills the buffer");
+        stopPlay();
+        step(2);
+        check(physicsDebugLines_ == nullptr, "stopping play clears it, scene replace and all");
+
+        // And once more across an explicit document replace while playing.
+        startPlay();
+        stepUntilColliders(600);
+        check(colliderVertices() > 0, "the overlay comes back on the next play");
+        stopPlay();
+        newScene();
+        step(2);
+        check(physicsDebugLines_ == nullptr, "a new scene with the toggle on leaves nothing behind");
+
+        // A generated tube collides as its own triangles — a closed
+        // cross-section is exactly what a triangle mesh handles well — and the
+        // collider overlay draws them. Physics goes on the SPLINE here, not on
+        // the mesh: that is where a user puts it, and it used to produce a
+        // phantom 1 m box at the spline's origin instead of the tube.
+        {
+            auto created = ObjectFactory::createSpline(document_.scene());
+            const auto splineUuid = created->uuid;
+            addObject(created, document_.scene(), "Add Spline");
+            step();
+
+            auto* spline = findByUuid(document_.scene(), splineUuid);
+            if (spline) {
+                const Vector3 shape[]{{-6, 0, 0}, {-2, 0, 2.5f}, {2, 0, -2.5f}, {6, 0, 0}};
+                const auto points = SplineConfig::controlPointNodes(*spline);
+                for (std::size_t i = 0; i < points.size() && i < 4; ++i) {
+                    points[i]->position.copy(shape[i]);
+                }
+                auto config = SplineConfig::read(*spline).value_or(SplineConfig{});
+                config.mesh = SplineConfig::MeshKind::Tube;
+                config.radius = 0.5f;
+                config.write(*spline);
+                step();
+
+                PhysicsConfig physics;
+                physics.enabled = true;
+                physics.body = PhysicsConfig::Body::Static;
+                physics.shape = PhysicsConfig::Shape::Auto;
+                physics.write(*spline);
+            }
+
+            startPlay();
+            stepUntilColliders(600);
+            check(colliderVertices() > 0, "an S-curve tube draws collider lines of its own");
+
+            int shapes = -1;
+            if (auto* world = physics_ ? physics_->world() : nullptr) {
+                using namespace ::physx;
+                auto& pxScene = world->scene();
+                const PxU32 count = pxScene.getNbActors(PxActorTypeFlag::eRIGID_STATIC);
+                std::vector<PxActor*> actors(count);
+                if (count) pxScene.getActors(PxActorTypeFlag::eRIGID_STATIC, actors.data(), count);
+                shapes = 0;
+                for (auto* actor : actors) {
+                    shapes += static_cast<int>(static_cast<PxRigidActor*>(actor)->getNbShapes());
+                }
+            }
+            // One shape, cooked from the tube the spline generated — not the
+            // unit-box placeholder a geometry-less group used to fall back on.
+            check(shapes == 1, "and physics on the SPLINE collides as the tube under it");
+            stopPlay();
+            step(2);
+        }
+        physicsDebug_ = false;
+    }
+#endif
 
     std::cout << "[selftest] " << (failed == 0 ? "ALL PASS" : "FAILED") << std::endl;
     return failed == 0 ? 0 : 1;
@@ -2156,7 +2682,10 @@ void EditorApp::addSplinePoint(Object3D& spline, std::size_t index, const std::s
     point->position.copy(position);
 
     auto* raw = point.get();
-    commands_.execute(std::make_unique<AddObjectCommand>(spline, point, label, slot));
+    // `slot` is a POINT index; AddObjectCommand takes a CHILD index, and the
+    // generated mesh sits among the same children without being a point.
+    commands_.execute(std::make_unique<AddObjectCommand>(
+            spline, point, label, SplineConfig::childSlotForPointIndex(spline, slot)));
     document_.setDirty(true);
     selectObject(raw);
     scrollTo_ = raw;
@@ -2489,6 +3018,7 @@ void EditorApp::refreshSelectionHelpers() {
 
     syncViewportMarkers();
     syncSplineOverlays();
+    syncPhysicsDebug();
     syncCameraHelper();
 
     // Snap is a hold-to-engage modifier, exactly like the transform example.
@@ -2603,6 +3133,10 @@ void EditorApp::togglePause() {
 void EditorApp::stopPlay() {
 
     if (!isPlaying()) return;
+
+    // Before the sessions go: the lines describe a PhysX world that stop() is
+    // about to destroy.
+    clearPhysicsDebug();
 
     std::string error;
     if (!play_.stop(document_, &error)) {

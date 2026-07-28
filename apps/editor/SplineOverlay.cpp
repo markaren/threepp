@@ -1,4 +1,5 @@
-// Spline curve overlay: the line an authored spline actually describes.
+// Spline curve overlay: the line an authored spline actually describes — and,
+// in the same pass, the geometry it generates.
 //
 // A spline is a Group whose children are its control points (see SplineConfig),
 // so the scene graph alone draws nothing — the points are empty Object3Ds and
@@ -10,16 +11,29 @@
 // their local positions and the encoded config. Control points number in the
 // tens, so hashing every frame is cheaper than tracking dirty flags through the
 // gizmo, the command stack and the play snapshot.
+//
+// The generated mesh (config.mesh) runs off the SAME hash, because it is a
+// function of exactly the same inputs. Unlike the curve line it is a real
+// document node — a child of the spline tagged userData["splineDerived"] — so a
+// saved scene renders and collides with no editor present. It is DERIVED STATE,
+// not a command: the undoable step is the config edit, and this pass follows the
+// config wherever undo/redo/load leaves it. Undoing "mesh = tube" therefore
+// removes the mesh on the next sync rather than through an undo entry of its
+// own, which is what keeps the two from disagreeing about which exists.
 
 #include "EditorApp.hpp"
 #include "EditorTheme.hpp"
 
+#include "threepp/extras/editor/ObjectFactory.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
+#include "threepp/geometries/TubeGeometry.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
+#include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Line.hpp"
+#include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <imgui.h>// theme colours are ImVec4
@@ -34,9 +48,6 @@ namespace {
 
     // Drawn over scene geometry but under the marker icons, which are UI.
     constexpr int kCurveRenderOrder = 3000;
-
-    // A curve with more samples than this per segment costs more than it shows.
-    constexpr int kMaxSamples = 200;
 
     void hashBytes(std::size_t& seed, const void* data, std::size_t size) {
 
@@ -76,18 +87,121 @@ namespace {
         line.geometry()->drawRange = {0, count};
     }
 
-    // Everything the sampled line is a function of. Float bytes rather than
-    // values: a position that did not move hashes identically, and one that did
-    // cannot collide with it however small the move was.
+    // Everything the sampled line and the generated mesh are a function of.
+    // Float bytes rather than values: a position that did not move hashes
+    // identically, and one that did cannot collide with it however small the
+    // move was.
+    //
+    // Control points only. The generated mesh is an OUTPUT of this hash, so
+    // counting it as an input would make every regeneration dirty the hash that
+    // triggered it and the pass would chase its own tail for a frame.
     std::size_t splineHash(const Object3D& spline, const std::string& encoded) {
 
-        std::size_t seed = spline.children.size();
+        // Walked rather than collected: this runs every frame for every spline
+        // in the scene, and the allocation would be the expensive part of it.
+        std::size_t points = 0;
+        for (const auto* child : spline.children) {
+            if (!SplineConfig::isDerived(*child)) ++points;
+        }
+
+        std::size_t seed = points;
         hashBytes(seed, encoded.data(), encoded.size());
         for (const auto* child : spline.children) {
+            if (SplineConfig::isDerived(*child)) continue;
             const float xyz[3]{child->position.x, child->position.y, child->position.z};
             hashBytes(seed, xyz, sizeof(xyz));
         }
         return seed;
+    }
+
+    // The geometry `config` asks for, or nullptr when there is no curve to
+    // sweep along yet.
+    std::shared_ptr<BufferGeometry> buildSplineGeometry(const Object3D& spline,
+                                                        const SplineConfig& config) {
+
+        auto curve = config.curve(spline);
+        if (!curve) return nullptr;
+
+        const auto divisions = config.divisions(spline);
+        switch (config.mesh) {
+            case SplineConfig::MeshKind::Tube:
+                return TubeGeometry::create(
+                        curve, TubeGeometry::Params(
+                                       divisions, std::max(config.radius, 1e-3f),
+                                       static_cast<unsigned int>(std::clamp(config.radialSegments, 3, 64)),
+                                       config.closed));
+            case SplineConfig::MeshKind::None:
+                break;
+        }
+        return nullptr;
+    }
+
+    // Brings the spline's generated child in line with `config`. Called only
+    // when the hash moved, or when what is actually parented disagrees with
+    // what the config asks for — a loaded document already carries its mesh, and
+    // ADOPTING that one rather than adding a second is the whole reason this
+    // looks for the tag instead of remembering what it made.
+    //
+    // Regeneration preserves the NODE: same Object3D, same uuid, same material,
+    // same userData, because the user may have put physics or a texture on it.
+    // Only the geometry is swapped — and the orphaned one is disposed, since the
+    // renderer keys GPU buffers on geometry identity and an undisposed one both
+    // leaks them and re-arms the recycled-pointer staleness the overlay line
+    // above was fixed for.
+    void syncDerivedMesh(Object3D& spline, const SplineConfig& config) {
+
+        // Exactly one tagged child, ever. Extras (a duplicate, a hand-edited
+        // document) are removed rather than tolerated. Gathered up front
+        // because removeFromParent() rewrites the vector being walked.
+        std::vector<Object3D*> tagged;
+        for (auto* child : spline.children) {
+            if (SplineConfig::isDerived(*child)) tagged.push_back(child);
+        }
+
+        Mesh* derived = nullptr;
+        if (config.mesh != SplineConfig::MeshKind::None) {
+            for (auto* child : tagged) {
+                if (auto* mesh = child->as<Mesh>()) {
+                    derived = mesh;
+                    break;
+                }
+            }
+        }
+        const Object3D* keep = derived;
+        for (auto* child : tagged) {
+            if (child != keep) child->removeFromParent();
+        }
+
+        if (config.mesh == SplineConfig::MeshKind::None) return;
+
+        auto geometry = buildSplineGeometry(spline, config);
+        if (!geometry) {
+            // Fewer than two points: legal while authoring, and nothing to
+            // sweep. The node keeps its last geometry (and everything the user
+            // configured on it) and simply stops drawing until the curve is
+            // back.
+            if (derived) derived->visible = false;
+            return;
+        }
+
+        if (!derived) {
+            auto material = MeshStandardMaterial::create();
+            auto mesh = Mesh::create(geometry, material);
+            // Named once, at creation: switching tube to road preserves the
+            // node, and clobbering a name the user typed is not a thing a sync
+            // pass gets to do.
+            mesh->name = ObjectFactory::uniqueName(spline, SplineConfig::label(config.mesh));
+            mesh->castShadow = true;
+            mesh->receiveShadow = true;
+            SplineConfig::markDerived(*mesh);
+            spline.add(mesh);
+            return;
+        }
+
+        derived->visible = true;
+        const auto old = derived->geometry();
+        derived->setGeometry(geometry);
+        if (old && old != geometry) old->dispose();
     }
 
 }// namespace
@@ -150,16 +264,24 @@ void EditorApp::syncSplineOverlays() {
 
             std::vector<Vector3> sampled;
             if (auto curve = config.curve(*owner)) {
-                // samples-per-segment: the count the user authored is per
-                // segment, and getPoints() divides the whole curve.
-                const auto segments = static_cast<int>(owner->children.size()) - (config.closed ? 0 : 1);
-                const int divisions = std::clamp(config.samples, 1, kMaxSamples) * std::max(segments, 1);
-                sampled = curve->getPoints(static_cast<unsigned int>(divisions));
+                sampled = curve->getPoints(config.divisions(*owner));
             }
             // A spline down to one point is legal while it is being authored;
             // it just has no curve to draw yet.
             it->line->visible = !sampled.empty();
             if (!sampled.empty()) writeSamples(*it->line, it->capacity, sampled);
+
+            syncDerivedMesh(*owner, config);
+        } else {
+            // The hash only covers what the mesh is BUILT from, so it says
+            // nothing about whether the mesh is still there. A loaded document,
+            // a deleted derived child and a duplicated one all land here.
+            const std::size_t wanted = config.mesh == SplineConfig::MeshKind::None ? 0 : 1;
+            std::size_t derived = 0;
+            for (const auto* child : owner->children) {
+                if (SplineConfig::isDerived(*child)) ++derived;
+            }
+            if (derived != wanted) syncDerivedMesh(*owner, config);
         }
 
         owner->updateMatrixWorld();

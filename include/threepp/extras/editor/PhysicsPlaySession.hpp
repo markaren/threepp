@@ -23,11 +23,14 @@
 
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/PlaySession.hpp"
+#include "threepp/extras/editor/SplineConfig.hpp"
+
 
 #include "threepp/extras/physx/PhysxSoftBody.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/CapsuleGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/math/Box3.hpp"
@@ -35,7 +38,9 @@
 #include "threepp/scenes/Scene.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -186,15 +191,52 @@ namespace threepp::editor {
         // when the geometry IS one of them, otherwise a triangle mesh for
         // static bodies and a convex hull for moving ones (PhysX dynamics
         // cannot use a triangle mesh).
+        //
+        // Everything that is not a primitive used to land on Box, i.e. on its
+        // own AABB. For anything shaped — a road surface, a terrain patch, an
+        // imported prop — that slab is not an approximation of the surface, it
+        // is a different object: a flat surface's AABB is a razor at the minimum
+        // half-extent, and a body dropped on it falls through beside it.
         static PhysicsConfig::Shape resolveShape(Object3D& object, const PhysicsConfig& config) {
 
             if (config.shape != PhysicsConfig::Shape::Auto) return config.shape;
 
-            if (const auto geometry = object.geometry()) {
-                if (dynamic_cast<const SphereGeometry*>(geometry.get())) return PhysicsConfig::Shape::Sphere;
-                if (dynamic_cast<const CapsuleGeometry*>(geometry.get())) return PhysicsConfig::Shape::Capsule;
-            }
-            return PhysicsConfig::Shape::Box;
+            const auto geometry = object.geometry();
+            // No geometry to read. Static bodies collide as their subtree (see
+            // createActor); anything else keeps the unit-box placeholder.
+            if (!geometry) return PhysicsConfig::Shape::Box;
+
+            if (dynamic_cast<const SphereGeometry*>(geometry.get())) return PhysicsConfig::Shape::Sphere;
+            if (dynamic_cast<const CapsuleGeometry*>(geometry.get())) return PhysicsConfig::Shape::Capsule;
+            if (dynamic_cast<const BoxGeometry*>(geometry.get())) return PhysicsConfig::Shape::Box;
+
+            // Kinematic counts as moving: a triangle mesh would come back as a
+            // PxRigidStatic here, which is not something code can drive.
+            return config.body == PhysicsConfig::Body::Static ? PhysicsConfig::Shape::TriMesh
+                                                              : PhysicsConfig::Shape::Convex;
+        }
+
+        // Objects that get an actor of their own from start()'s walk. A subtree
+        // collider must not cook them a second time.
+        static bool ownsActor(const Object3D& object) {
+
+            const auto config = PhysicsConfig::read(object);
+            return config && config->enabled;
+        }
+
+        // Cook the descendants of a geometry-less static body as its collider.
+        // Meshes carrying their own enabled PhysicsConfig are left alone —
+        // start() is creating their actors — so putting physics on a spline
+        // collides its generated tube, which is where a user naturally puts it.
+        std::size_t addSubtree(Object3D& root, ::physx::PxMaterial* material) {
+
+            const auto actors = world_->addStaticTrimeshTree(
+                    root,
+                    [&root](const Mesh& mesh) {
+                        return &mesh != &root && mesh.geometry() != nullptr && !ownsActor(mesh);
+                    },
+                    material);
+            return actors.size();
         }
 
         // A deformable volume: PhysX cooks a tetrahedral mesh from the object's
@@ -275,8 +317,23 @@ namespace threepp::editor {
             auto* material = materialFor(config);
 
             // TriMesh and Convex go through PhysxWorld's cookers, which need a
-            // Mesh (they read its geometry and world matrix).
+            // Mesh WITH geometry (they read it, and throw when it is absent).
             auto* mesh = object.as<Mesh>();
+            if (mesh && !mesh->geometry()) mesh = nullptr;
+
+            // A static body with nothing to collide with of its own COLLIDES AS
+            // ITS SUBTREE. Physics authored on a spline group is the case this
+            // exists for: the spline IS the tube as far as the user is
+            // concerned, and the unit-box fallback below turned that into a
+            // phantom 1 m cube at the spline's origin.
+            if (!moving && !object.geometry() &&
+                (config.shape == PhysicsConfig::Shape::Auto ||
+                 config.shape == PhysicsConfig::Shape::TriMesh)) {
+                if (addSubtree(object, material) > 0) return true;
+                // Nothing under it: fall through to the placeholder, which is
+                // still what a bare Group used as a trigger volume wants.
+            }
+
             if (shape == PhysicsConfig::Shape::TriMesh && mesh) {
                 // Triangle meshes are valid for static/kinematic actors only;
                 // a dynamic request silently gets a static collider rather than
