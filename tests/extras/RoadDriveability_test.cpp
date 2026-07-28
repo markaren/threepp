@@ -249,19 +249,19 @@ TEST_CASE("a road drives without a jolt in it", "[extras][physx]") {
     CHECK(snake.samples > 10);
     CHECK(snake.peak < 1.f);
 
-    // Grade, and a crest INSIDE a bend: the open complaint. A vertical curve of
-    // the design radius is entitled to v^2/R = 9/10 m/s^2 of it, and a crease
-    // would read far above that.
+    // Grade, and a crest INSIDE a bend: the open complaint. The crest here is
+    // the curve the user drew, not one the vertical floor imposed, so what a
+    // driver feels over it is v^2/R for the arc that is genuinely there.
     const Drive graded = roll("crest in a turn, width 5",
                               {Vector3(-12, 0, -6), Vector3(-4, 1.5f, -2), Vector3(0, 3, 2),
                                Vector3(4, 1.5f, 6), Vector3(12, 0, 8)},
                               5.f);
-    // Measured 0.94 peak at the crest, 0.39 rms — and 0.94 is v^2/R for the
-    // vertical curve that is there, 9 / 10.1. The crest is the largest thing on
-    // this road and it reads as exactly the arc it is, which is what "no
-    // crease" means as a number.
+    // Measured 1.71 peak at the crest, 0.64 rms — and 9 / 5.13, the crest's own
+    // vertical radius, is 1.75. The largest thing on this road reads as exactly
+    // the arc it is and not a fraction more, which is what "no crease" looks
+    // like as a number.
     CHECK(graded.samples > 10);
-    CHECK(graded.peak < 2.f);
+    CHECK(graded.peak < 2.5f);
 
     // ...and it really did climb: a road that drives smoothly because it was
     // flattened into a plank is not the road that was drawn.

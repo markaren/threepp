@@ -84,37 +84,29 @@ namespace {
         return GraphicsAPI::OpenGL;
     }
 
-    // How far a generated road reaches from the curve it was generated on.
+    // The width a generated road actually came out at, measured at its
+    // NARROWEST cross-section.
     //
-    // A road's edges are the offsets of that curve at half the authored width,
-    // with the loop a bend tighter than the offset ties CUT OUT, so the typical
-    // vertex sits exactly the half-width away from it. Cross-sections cannot be
-    // measured pairwise any more: trimming takes vertices off one edge and not
-    // the other. Zero when there is nothing to measure. Selftest only.
-    float roadReach(const Mesh& mesh, const Object3D& spline, const SplineConfig& config) {
+    // A road is laid down one cross-section at a time — vertices 2i and 2i + 1
+    // — so its width is a property of every one of them, and the narrowest is
+    // the honest number: a road that narrowed anywhere narrowed. This used to
+    // measure how far the vertices sat from the authored curve instead, because
+    // a trimmed offset had no cross-sections left to measure. Zero when there is
+    // nothing to measure. Selftest only.
+    float roadWidth(const Mesh& mesh) {
 
         const auto geometry = mesh.geometry();
-        const auto curve = config.curve(spline);
-        if (!geometry || !curve) return 0.f;
+        if (!geometry) return 0.f;
         const auto* position = geometry->getAttribute<float>("position");
-        if (!position || position->count() < 2) return 0.f;
+        if (!position || position->count() < 4) return 0.f;
 
-        const auto samples = curve->getPoints(512);
-        std::vector<float> reach;
-        reach.reserve(position->count());
-        for (int i = 0; i < position->count(); ++i) {
-            const Vector3 vertex(position->getX(i), position->getY(i), position->getZ(i));
-            float nearest = std::numeric_limits<float>::max();
-            for (const auto& sample : samples) nearest = std::min(nearest, vertex.distanceTo(sample));
-            reach.push_back(nearest);
+        float narrowest = std::numeric_limits<float>::max();
+        for (int i = 0; i + 1 < position->count(); i += 2) {
+            const Vector3 left(position->getX(i), position->getY(i), position->getZ(i));
+            const Vector3 right(position->getX(i + 1), position->getY(i + 1), position->getZ(i + 1));
+            narrowest = std::min(narrowest, left.distanceTo(right));
         }
-        if (reach.empty()) return 0.f;
-        // The TYPICAL vertex, not the extreme one at either end of it: a mitered
-        // corner of a coarsely sampled bend sits a little outside the offset,
-        // and a trimmed one sits inside. Most of a road is neither.
-        const auto middle = reach.begin() + static_cast<std::ptrdiff_t>(reach.size() / 2);
-        std::nth_element(reach.begin(), middle, reach.end());
-        return *middle;
+        return narrowest;
     }
 
 }// namespace
@@ -377,9 +369,11 @@ int EditorApp::runScreenshot() {
 
     auto& scene = document_.scene();
 
-    // The two roads every round of this feature was judged on: the factory
-    // default at the default width (both bends tighter than the half-width)
-    // and an S-curve whose opposite bends are far tighter than its.
+    // The roads this feature is judged on: the factory default at the default
+    // width (both bends tighter than the half-width), an S-curve whose opposite
+    // bends are far tighter than its, and a GRADED one that climbs into a crest
+    // inside a bend — elevation being the complaint the trimmed offset could not
+    // answer, since it invented a height at every corner it cut.
     auto plain = ObjectFactory::createSpline(scene);
     {
         auto config = SplineConfig::read(*plain).value_or(SplineConfig{});
@@ -405,9 +399,28 @@ int EditorApp::runScreenshot() {
     }
     s->position.z = 4.f;
     addObject(s, scene, "Screenshot S Road");
+
+    auto hill = ObjectFactory::createSpline(scene);
+    {
+        static constexpr float points[][3] = {
+                {-11.f, 0.f, 0.f}, {-4.f, 1.5f, 3.f}, {1.f, 3.f, 0.f}, {6.f, 1.5f, -3.f}, {12.f, 0.f, 0.f}};
+        auto config = SplineConfig::read(*hill).value_or(SplineConfig{});
+        for (std::size_t i = SplineConfig::controlPointNodes(*hill).size(); i < 5; ++i) {
+            hill->add(ObjectFactory::createSplinePoint(*hill));
+        }
+        const auto nodes = SplineConfig::controlPointNodes(*hill);
+        for (std::size_t i = 0; i < nodes.size() && i < 5; ++i) {
+            nodes[i]->position.set(points[i][0], points[i][1], points[i][2]);
+        }
+        config.mesh = SplineConfig::MeshKind::Road;
+        config.width = 5.f;
+        config.write(*hill);
+    }
+    hill->position.z = 12.f;
+    addObject(hill, scene, "Screenshot Hill Road");
     playFor(0.1f);// the sync pass derives the road meshes
 
-    for (auto* spline : {plain.get(), s.get()}) {
+    for (auto* spline : {plain.get(), s.get(), hill.get()}) {
         if (auto* mesh = SplineConfig::derivedMesh(*spline)) {
             PhysicsConfig config;
             config.enabled = true;
@@ -415,34 +428,69 @@ int EditorApp::runScreenshot() {
             config.write(*mesh);
         }
     }
-    const auto drop = [&](const Vector3& from, const char* label) {
-        auto ball = ObjectFactory::createPrimitive(Primitive::Sphere, scene);
-        ball->position.copy(from);
+    const auto drop = [&](Primitive kind, const Vector3& from, const char* label) {
+        auto object = ObjectFactory::createPrimitive(kind, scene);
+        object->position.copy(from);
         PhysicsConfig config;
         config.enabled = true;
         config.body = PhysicsConfig::Body::Dynamic;
-        config.write(*ball);
-        addObject(ball, scene, label);
+        config.friction = 0.8f;
+        config.write(*object);
+        addObject(object, scene, label);
     };
-    drop({-6.f, 3.f, 4.f}, "Ball on S");
-    drop({0.f, 3.f, -7.f}, "Ball on default");
+    drop(Primitive::Sphere, {-6.f, 3.f, 4.f}, "Ball on S");
+    drop(Primitive::Sphere, {0.f, 3.f, -7.f}, "Ball on default");
+    // A box, not a ball: a sphere on a hill rolls off it, and what wants
+    // showing here is a body sitting still on a graded surface — the case a
+    // trimmed offset broke, since it invented a height at every corner it cut
+    // and left a step to catch on.
+    drop(Primitive::Box, {-1.f, 4.5f, 13.5f}, "Box near the crest");
 
-    physicsDebug_ = true;
     startPlay();
     playFor(2.5f);// balls settle, the collider overlay's line buffer fills
 
-    camera_.position.set(0.f, 17.f, 17.f);
-    orbit_.target.set(0.f, 0.f, -1.f);
-    playFor(0.1f);
+    camera_.position.set(-1.f, 27.f, 27.f);
+    orbit_.target.set(0.f, 0.f, 5.f);
+    playFor(0.2f);
 
-    const auto pixels = renderer_->readRGBPixels();
     const auto size = canvas_.size();
     stbi_flip_vertically_on_write(1);
-    const bool wrote = pixels.size() >= static_cast<std::size_t>(size.width()) * size.height() * 3 &&
-                       stbi_write_png(options_.screenshot.string().c_str(), size.width(),
-                                      size.height(), 3, pixels.data(), size.width() * 3) != 0;
-    std::cout << "[screenshot] " << (wrote ? "wrote " : "FAILED to write ")
-              << options_.screenshot.string() << std::endl;
+    const auto shoot = [&](const std::filesystem::path& path) {
+        const auto pixels = renderer_->readRGBPixels();
+        const bool wrote =
+                pixels.size() >= static_cast<std::size_t>(size.width()) * size.height() * 3 &&
+                stbi_write_png(path.string().c_str(), size.width(), size.height(), 3,
+                               pixels.data(), size.width() * 3) != 0;
+        std::cout << "[screenshot] " << (wrote ? "wrote " : "FAILED to write ") << path.string()
+                  << std::endl;
+        return wrote;
+    };
+
+    // Two shots, because one cannot answer both questions. A road drawn under
+    // its own collider overlay is a wall of lines — good for asking whether the
+    // shapes hug the surface, useless for asking whether the surface is faceted.
+    const auto sibling = [&](const char* suffix) {
+        auto path = options_.screenshot;
+        path.replace_filename(options_.screenshot.stem().string() + suffix +
+                              options_.screenshot.extension().string());
+        return path;
+    };
+
+    bool wrote = shoot(options_.screenshot);
+
+    // And a third, low and near, along the graded road. A crease in a grade is
+    // invisible from overhead — it is a shading break, and shading breaks want
+    // a glancing angle and the surface filling the frame.
+    camera_.position.set(1.f, 3.2f, 34.f);
+    orbit_.target.set(0.f, 1.f, 12.f);
+    playFor(0.2f);
+    wrote = shoot(sibling("_graded")) && wrote;
+
+    camera_.position.set(-1.f, 27.f, 27.f);
+    orbit_.target.set(0.f, 0.f, 5.f);
+    physicsDebug_ = true;
+    playFor(0.4f);// the overlay's line buffer fills
+    wrote = shoot(sibling("_colliders")) && wrote;
     return wrote ? 0 : 1;
 }
 
@@ -1243,16 +1291,11 @@ int EditorApp::runSelfTest() {
                       "switching tube to road keeps the node");
                 check(mesh->geometry() != geometry, "and rebuilds its geometry");
 
-                // A road lays its whole left edge down and then its whole
-                // right edge (v says which), and the two are not the same
-                // length once a bend tighter than the half-width has had its
-                // offset loop trimmed off. Where the road STARTS and ENDS
-                // there is no bend, so the two edges begin and finish exactly
-                // `width` apart — which is what says the rebuild used the
-                // width the config asks for.
-                const float reach = spline ? roadReach(*mesh, *spline, config) : 0.f;
-                check(std::abs(reach - 3.5f) < 0.02f,
-                      "with the road reaching exactly the half-width the config says");
+                // Full width at EVERY cross-section, bends and all. The old
+                // road narrowed through a bend tighter than its half-width and
+                // this one cannot: no bend in an alignment is that tight.
+                check(std::abs(roadWidth(*mesh) - 7.f) < 0.02f,
+                      "at the width the config asks for, at its narrowest section");
             }
 
             // mesh=none removes it — and undoing that config edit brings it
@@ -1394,15 +1437,11 @@ int EditorApp::runSelfTest() {
             check(reloadedMesh && reloadedMesh->materialAs<MeshStandardMaterial>() &&
                           reloadedMesh->materialAs<MeshStandardMaterial>()->color.getHex() == 0x3366aa,
                   "and the material they edited, both surviving the regeneration");
-            bool narrowed = false;
+            bool sized = false;
             if (auto* asMesh = reloadedMesh ? reloadedMesh->as<Mesh>() : nullptr) {
-                const auto* position = asMesh->geometry()->getAttribute<float>("position");
-                if (position && position->count() >= 2 && reloaded) {
-                    const float reach = roadReach(*asMesh, *reloaded, authored);
-                    narrowed = std::abs(reach - authored.width * 0.5f) < 0.02f;
-                }
+                sized = std::abs(roadWidth(*asMesh) - authored.width) < 0.02f;
             }
-            check(narrowed, "rebuilt to the width the reloaded config asks for");
+            check(sized, "rebuilt to the width the reloaded config asks for");
         }
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
@@ -1718,11 +1757,13 @@ int EditorApp::runSelfTest() {
         step(2);
         check(physicsDebugLines_ == nullptr, "a new scene with the toggle on leaves nothing behind");
 
-        // A road collides as ONE static solid, whatever its shape. This S
-        // bends twice, both tighter than half its six metre width — the case
-        // that used to be cooked as one sliver hull per sample of a folded
-        // ribbon, drawing a moiré of them. Both bends have their offset loops
-        // trimmed, and what comes out is a single triangle mesh.
+        // A road collides as one CONVEX per station interval of its own
+        // surface. This S bends twice, both tighter than half its six metre
+        // width — the case that used to be cooked as one sliver hull per sample
+        // of a folded ribbon, drawing a moiré of them. The alignment has no
+        // bend that tight, so every span is a box or a wedge, and the count is
+        // the road's shape rather than its sampling: `samples` is at its maximum
+        // here and the shapes still number in the low hundreds.
         {
             auto created = ObjectFactory::createSpline(document_.scene());
             const auto splineUuid = created->uuid;
@@ -1768,7 +1809,20 @@ int EditorApp::runSelfTest() {
                     shapes += static_cast<int>(static_cast<PxRigidActor*>(actor)->getNbShapes());
                 }
             }
-            check(shapes == 1, "and collides as exactly one shape, both bends and all");
+            int spans = -1;
+            if (spline) {
+                if (auto* road = SplineConfig::derivedMesh(*spline)) {
+                    if (auto* asMesh = road->as<Mesh>()) {
+                        if (const auto geometry = asMesh->geometry()) {
+                            if (const auto* position = geometry->getAttribute<float>("position")) {
+                                spans = position->count() / 2 - 1;
+                            }
+                        }
+                    }
+                }
+            }
+            check(spans > 4 && shapes == spans,
+                  "and collides as one convex per span of the surface, both bends and all");
             stopPlay();
             step(2);
         }

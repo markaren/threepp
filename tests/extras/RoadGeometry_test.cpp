@@ -254,7 +254,9 @@ TEST_CASE("a graded road has no crease where its grade changes", "[extras]") {
     auto geometry = RoadGeometry::create(curve, 5.f, 24, 4.f);
     const auto& report = geometry->alignment().report();
 
-    CHECK(report.profileMinRadius >= 10.f - 1e-2f);
+    // Untouched by the vertical floor: what the user drew has a gentler crest
+    // than the floor bounds, so the road climbs to the heights it was given.
+    CHECK(report.profileMinRadius >= 4.f - 1e-2f);
     CHECK(report.planMinRadius >= 2.625f - 1e-3f);
 
     checkFullWidth(*geometry, 5.f);

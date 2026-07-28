@@ -164,11 +164,14 @@ namespace threepp {
             // The plan floor is the half-width times this. Strictly over 1, so
             // the inner edge of every bend has somewhere to be.
             float minRadiusFactor = 1.05f;
-            // Floor on the vertical curves, in metres. Not derived from the
-            // width — what bounds a vertical curve is what a body driving over
-            // it feels, v^2/R, and 10 m at 4 m/s is 1.6 m/s^2, a sixth of
-            // gravity.
-            float profileMinRadius = 10.f;
+            // Floor on the vertical curves, in metres. Deliberately SMALL. What
+            // a crest owes a driver is a continuous grade, which the profile
+            // chain gives it at any radius; a floor beyond that is not fixing a
+            // crease, it is overruling the heights the user drew — at 10 m this
+            // took half a metre off an authored hill, visibly. Four metres
+            // bounds what a genuine vertical cusp can do (v^2/R = 2.25 m/s^2 at
+            // 3 m/s) and clears a hand-drawn hill without touching it.
+            float profileMinRadius = 4.f;
             unsigned int maxSeeds = 600;
             unsigned int maxStations = 4000;
         };

@@ -63,7 +63,7 @@ namespace threepp {
             // No bend tighter than the half-width times this.
             float minRadiusFactor = 1.05f;
             // Floor on the vertical curves, metres.
-            float profileMinRadius = 10.f;
+            float profileMinRadius = 4.f;
 
             explicit Params(float width = 1,
                             unsigned int divisions = 64,

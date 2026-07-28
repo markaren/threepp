@@ -132,16 +132,18 @@ namespace {
                                        static_cast<unsigned int>(std::clamp(config.radialSegments, 3, 64)),
                                        config.closed));
             case SplineConfig::MeshKind::Road: {
-                // Not a ribbon: a road offsets the SAME samples the overlay
-                // draws and trims the loops those offsets tie inside a bend
-                // tighter than the half-width, so it follows the authored curve
-                // exactly and stays full width through the bend.
+                // Not a ribbon and not an offset: a road is swept along an
+                // ALIGNMENT fitted to the drawn curve, no bend of which is
+                // tighter than the half-width. So it is full width at every
+                // cross-section, and where the drawing was tighter than that the
+                // road bends a little rather than folding. `divisions` seeds the
+                // fit; the stations it is built at are chosen by angle.
                 auto road = RoadGeometry::create(
                         *curve, RoadGeometry::Params(
                                         std::max(config.width, 1e-3f), divisions,
                                         std::max(config.uvLength, 1e-3f), config.closed));
                 // A curve with no length to it — two points dragged onto each
-                // other — leaves nothing to offset, and a geometry with no
+                // other — has no alignment to sweep, and a geometry with no
                 // position attribute is not something to hand a renderer. The
                 // sync pass hides the mesh instead.
                 if (!road->getAttribute<float>("position")) return nullptr;
