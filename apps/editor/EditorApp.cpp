@@ -2636,7 +2636,7 @@ int EditorApp::runSelfTest() {
         auto* box = document_.scene().getObjectByName("Box");
         check(box != nullptr && ground != nullptr, "template scene for the sensor drive");
 
-        std::string imuUuid, lidarUuid;
+        std::string imuUuid, lidarUuid, depthUuid;
 
         if (box && ground) {
             // KINEMATIC, not dynamic. A kinematic body never moves and gravity
@@ -2685,12 +2685,38 @@ int EditorApp::runSelfTest() {
             lidar.write(*mast);
             lidarUuid = mast->uuid;
             addObject(mast, document_.scene(), "Add Lidar");
+
+            // A depth camera too: it is a different GL path from the LIDAR (one
+            // pinhole pass and a readback, not six cube faces), so the LIDAR
+            // passing says nothing about it. Aimed straight down at the ground,
+            // which is the one thing every template scene has.
+            auto eye = ObjectFactory::createPrimitive(Primitive::Sphere, document_.scene());
+            eye->name = "Depth Cam";
+            eye->position.set(-2.f, 4.f, 2.f);
+            // -Z is the viewing direction; -90 degrees about X points it at -Y.
+            eye->rotation.x = -1.5707963f;
+            eye->scale.set(0.12f, 0.12f, 0.12f);
+
+            SensorConfig depth;
+            depth.enabled = true;
+            depth.type = SensorConfig::Type::Depth;
+            depth.width = 96;
+            depth.height = 72;
+            depth.fovY = 60.f;
+            depth.rateHz = 0.f;
+            depth.seed = 777;
+            depth.rangeStddev = 0.005f;
+            depth.nearPlane = 0.2f;
+            depth.farPlane = 20.f;
+            depth.write(*eye);
+            depthUuid = eye->uuid;
+            addObject(eye, document_.scene(), "Add Depth Cam");
             step();
         }
 
         // Authored, before any Play: the marker pass has to have picked the
-        // sensor glyph for both, or an instrumented object is invisible.
-        check(viewportMarkers_.size() >= 2, "an authored sensor gets a viewport marker");
+        // sensor glyph for all three, or an instrumented object is invisible.
+        check(viewportMarkers_.size() >= 3, "an authored sensor gets a viewport marker");
 
         const auto entryFor = [this](const std::string& uuid) -> const SensorPlaySession::Entry* {
             if (!sensors_) return nullptr;
@@ -2718,6 +2744,20 @@ int EditorApp::runSelfTest() {
             }
             return h;
         };
+        const auto hashPoints = [](const std::vector<Vector3>& cloud) {
+            std::size_t h = 1469598103934665603ull;
+            const auto mix = [&h](float v) {
+                std::uint32_t bits;
+                std::memcpy(&bits, &v, sizeof(bits));
+                h = (h ^ bits) * 1099511628211ull;
+            };
+            for (const auto& p : cloud) {
+                mix(p.x);
+                mix(p.y);
+                mix(p.z);
+            }
+            return h;
+        };
 
         const auto recordDir = std::filesystem::temp_directory_path() / "threepp-editor-selftest-sensors";
         std::error_code ec;
@@ -2731,13 +2771,15 @@ int EditorApp::runSelfTest() {
 
         std::size_t firstHash = 0;
         std::size_t firstPoints = 0;
+        std::size_t firstDepthHash = 0;
+        std::size_t firstDepthPoints = 0;
 
         for (int pass = 0; pass < 2; ++pass) {
 
             startPlay();
             check(isPlaying(), "play starts with sensors in the scene");
-            check(sensors_ && sensors_->sensorCount() == 2, "both authored sensors are built");
-            check(sensors_ && sensors_->liveCount() == 2, "and both come up live");
+            check(sensors_ && sensors_->sensorCount() == 3, "all three authored sensors are built");
+            check(sensors_ && sensors_->liveCount() == 3, "and all three come up live");
 
             // One step is one scan for an ungated sensor. Hash the FIRST scan and
             // nothing later: every scan draws from the range-noise stream, so
@@ -2749,6 +2791,13 @@ int EditorApp::runSelfTest() {
                   "the first frame of play is exactly one scan");
             const std::size_t scanHash = lidarEntry ? hashCloud(lidarEntry->returns) : 0;
             const std::size_t scanPoints = lidarEntry ? lidarEntry->returns.size() : 0;
+
+            const auto* depthEntry = entryFor(depthUuid);
+            check(depthEntry != nullptr && depthEntry->scans == 1,
+                  "the depth camera scanned on the same frame");
+            const std::size_t depthHash = depthEntry ? hashPoints(depthEntry->cloud) : 0;
+            const std::size_t depthPoints = depthEntry ? depthEntry->cloud.size() : 0;
+            check(depthPoints > 0, "and its cloud is not empty");
 
             // The IMU needs a substep to have run, which on a fast machine is not
             // the first frame.
@@ -2795,6 +2844,8 @@ int EditorApp::runSelfTest() {
             if (pass == 0) {
                 firstHash = scanHash;
                 firstPoints = scanPoints;
+                firstDepthHash = depthHash;
+                firstDepthPoints = depthPoints;
                 check(firstPoints > 0, "the first scan has returns to compare");
             } else {
                 // Sensors are rebuilt from the authored seed on every Play. Two
@@ -2803,6 +2854,9 @@ int EditorApp::runSelfTest() {
                 check(scanPoints == firstPoints,
                       "the second play scans the same number of returns");
                 check(scanHash == firstHash, "and an identical cloud - the seed replays");
+                check(depthPoints == firstDepthPoints,
+                      "the depth camera returns the same number of points");
+                check(depthHash == firstDepthHash, "and an identical depth cloud");
             }
 
             check(sensors_ && sensors_->recordedRows() > 0, "recording accumulates rows");
@@ -2830,7 +2884,7 @@ int EditorApp::runSelfTest() {
             }
         }
         // One per sensor, plus the final-cloud dump each vision sensor writes.
-        check(csvFiles >= 2, "recording wrote a CSV per sensor");
+        check(csvFiles >= 3, "recording wrote a CSV per sensor");
         check(csvRows > 0, "with rows in them");
         if (sensors_) sensors_->setRecording(false);
         std::filesystem::remove_all(recordDir, ec);
