@@ -701,9 +701,29 @@ int EditorApp::runSelfTest() {
     Clock clock;
     int failed = 0;
 
+    // Two steppers, and choosing between them is always the same question: does
+    // the assertion measure how much SIMULATED time passed?
+    //
+    // `step()` advances by the real frame delta — the app's own timing, and the
+    // right one for everything that just needs frames to happen: a rebuild, a
+    // repaint, a poll, a temporal history settling.
+    //
+    // `stepFixed()` advances by a constant dt that is also the physics session's
+    // substep, so one frame is exactly one substep. Anything asserting on
+    // accumulated motion has to use it. Under `step()` the same frame count
+    // covers a machine- and load-dependent slice of sim time, which turns the
+    // assertion into a frame-rate measurement: the soft body's impact squash
+    // below passed only 6-7 runs out of 8 that way, because how deeply it
+    // squashed depended on how fast 120 frames were drawn.
+    constexpr float kFixedDt = 1.f / 60.f;
     const auto step = [&](int frames = 1) {
         for (int i = 0; i < frames; ++i) {
             canvas_.animateOnce([&] { frame(clock.getDelta()); });
+        }
+    };
+    [[maybe_unused]] const auto stepFixed = [&](int frames = 1) {
+        for (int i = 0; i < frames; ++i) {
+            canvas_.animateOnce([&] { frame(kFixedDt); });
         }
     };
     const auto check = [&](bool ok, const char* what) {
@@ -905,16 +925,24 @@ int EditorApp::runSelfTest() {
 
             // Sample every frame: the deepest squash is at the impact instant,
             // and by the time the body has settled it is nearly round again.
-            // Checking only the final frame makes this pass or fail on how
-            // fast the machine rendered 120 frames.
+            // Checking only the final frame would read the settled shape.
+            //
+            // stepFixed, so 120 frames are 120 substeps and exactly 2 s of fall
+            // and impact every run. It also puts one substep in each frame, so
+            // sampling per frame sees every substep the solver took — under
+            // `step()` a slow frame ran several substeps behind one sync and
+            // the deepest squash could pass between two samples entirely.
             float flattest = restHeight;
             for (int i = 0; i < 120; ++i) {
-                step();
+                stepFixed();
                 if (auto* live = findJelly()) flattest = std::min(flattest, height(live));
             }
             playing = findJelly();
             check(playing && lowest(playing) < 0.4f, "the soft body falls to the ground");
             check(playing && lowest(playing) > -0.5f, "and does not fall through it");
+            // Measured 0.8597 of the rest height, to six figures, on both
+            // backends and every run — the fixed dt is what makes that a
+            // property of the sim rather than of the frame rate.
             check(flattest < restHeight * 0.9f,
                   "and squashes on impact - the vertices themselves deform");
         } else {
@@ -978,7 +1006,11 @@ int EditorApp::runSelfTest() {
 
         const auto uuid = raw->uuid;
         startPlay();
-        step(90);
+        // Fixed dt: 90 frames are 1.5 s, and the 20 m/s^2 of net climb clears
+        // the metre this asks for by a wide margin. Wall-clock frames would
+        // need only ~0.31 s to get there, so a machine drawing faster than
+        // ~290 fps would read the box still on its way up.
+        stepFixed(90);
         auto* live = findByUuid(document_.scene(), uuid);
         check(live && live->position.y > 3.f,
               "a script drives the rigid body the physics session is simulating");
@@ -1202,7 +1234,10 @@ int EditorApp::runSelfTest() {
 
             startPlay();
             check(isPlaying(), "play starts with a script attached");
-            step(30);
+            // Fixed dt here and in the script drives below: every one of them
+            // asserts on `something += rate * dt` having accumulated, so the
+            // quantity under test is simulated seconds, not frames.
+            stepFixed(30);
 
             auto* live = document_.scene().getObjectByName("Box");
             check(live && live->rotation.y > restY + 1e-3f, "the script drives the object");
@@ -1299,7 +1334,7 @@ int EditorApp::runSelfTest() {
 
             const float restY = box->rotation.y;
             startPlay();
-            step(30);
+            stepFixed(30);
             auto* live = document_.scene().getObjectByName("Box");
             check(live && live->rotation.y > restY + 1e-3f, "inline source drives the object");
             stopPlay();
@@ -1352,7 +1387,7 @@ int EditorApp::runSelfTest() {
                     step();
                     const float beforeTemplate = target->rotation.y;
                     startPlay();
-                    step(30);
+                    stepFixed(30);
                     auto* driven = document_.scene().getObjectByName("Box");
                     check(driven && driven->rotation.y > beforeTemplate + 1e-3f,
                           "the template script runs as generated (import threepp resolves)");
@@ -1375,7 +1410,7 @@ int EditorApp::runSelfTest() {
                     const float groundBefore =
                             document_.scene().getObjectByName("Ground")->position.y;
                     startPlay();
-                    step(30);
+                    stepFixed(30);
                     auto* ground = document_.scene().getObjectByName("Ground");
                     check(ground && ground->position.y > groundBefore + 1e-3f,
                           "a two-argument start receives the scene and reaches other objects");
@@ -2782,18 +2817,11 @@ int EditorApp::runSelfTest() {
         constexpr float kReplayTolerance = 1e-3f;
         const bool bitExactReplay = !options_.vulkan;
 
-        // Replay needs a deterministic sim advance. The shared `step()` above
-        // ticks `clock.getDelta()` — wall clock — so the two plays would land
-        // their scans at different sim times (measured: 0.033 s vs 0.000 s) and
-        // every dynamic object would be somewhere else when the beam arrived.
-        // That is a property of the machine, not of the seed. Step the replay
-        // passes at a fixed dt so the two plays are the same experiment.
-        constexpr float kFixedDt = 1.f / 60.f;
-        const auto stepFixed = [&](int frames = 1) {
-            for (int i = 0; i < frames; ++i) {
-                canvas_.animateOnce([&] { frame(kFixedDt); });
-            }
-        };
+        // Replay needs a deterministic sim advance, so everything below steps
+        // through the shared `stepFixed()`. Under `step()` — wall clock — the
+        // two plays landed their scans at different sim times (measured:
+        // 0.033 s vs 0.000 s) and every dynamic object was somewhere else when
+        // the beam arrived. That is a property of the machine, not of the seed.
 
         std::size_t firstHash = 0;
         std::size_t firstPoints = 0;
