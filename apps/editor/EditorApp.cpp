@@ -2769,10 +2769,54 @@ int EditorApp::runSelfTest() {
             sensors_->setRecording(true);
         }
 
+        // The raster backends read depth back through a 16-bit packed texture,
+        // so a replayed scan is bit-identical and the hash is the right test.
+        // The ray-traced (Vulkan) path is not: play/stop rebuilds the entry
+        // list, so the TLAS is rebuilt with a different instance ordering, and
+        // the same ray against the same static surface resolves 1-2 ULP apart
+        // (measured: 4.62550545 vs 4.62550735 m, and the ground's instance id
+        // moves too). What the authored seed guarantees is the noise draw, not
+        // the last bit of a hardware intersection — so there, assert the clouds
+        // agree far inside the noise sigma instead. A seed that failed to
+        // replay would deviate by ~sigma (0.02 m), 20x this bound.
+        constexpr float kReplayTolerance = 1e-3f;
+        const bool bitExactReplay = !options_.vulkan;
+
+        // Replay needs a deterministic sim advance. The shared `step()` above
+        // ticks `clock.getDelta()` — wall clock — so the two plays would land
+        // their scans at different sim times (measured: 0.033 s vs 0.000 s) and
+        // every dynamic object would be somewhere else when the beam arrived.
+        // That is a property of the machine, not of the seed. Step the replay
+        // passes at a fixed dt so the two plays are the same experiment.
+        constexpr float kFixedDt = 1.f / 60.f;
+        const auto stepFixed = [&](int frames = 1) {
+            for (int i = 0; i < frames; ++i) {
+                canvas_.animateOnce([&] { frame(kFixedDt); });
+            }
+        };
+
         std::size_t firstHash = 0;
         std::size_t firstPoints = 0;
         std::size_t firstDepthHash = 0;
         std::size_t firstDepthPoints = 0;
+        std::vector<LidarReturn> firstReturns;
+        std::vector<Vector3> firstDepthCloud;
+
+        // Largest per-point deviation between two clouds of equal length.
+        const auto maxDeviation = [](const auto& a, const auto& b, auto position) {
+            float worst = 0.f;
+            const std::size_t n = std::min(a.size(), b.size());
+            for (std::size_t i = 0; i < n; ++i) {
+                const Vector3& p = position(a[i]);
+                const Vector3& q = position(b[i]);
+                worst = std::max(worst, std::abs(p.x - q.x));
+                worst = std::max(worst, std::abs(p.y - q.y));
+                worst = std::max(worst, std::abs(p.z - q.z));
+            }
+            return worst;
+        };
+        const auto returnPos = [](const LidarReturn& r) -> const Vector3& { return r.position; };
+        const auto pointPos = [](const Vector3& p) -> const Vector3& { return p; };
 
         for (int pass = 0; pass < 2; ++pass) {
 
@@ -2785,7 +2829,7 @@ int EditorApp::runSelfTest() {
             // nothing later: every scan draws from the range-noise stream, so
             // scan N is only comparable with scan N of another run, and how many
             // frames the IMU wait below takes is a property of the machine.
-            step();
+            stepFixed();
             const auto* lidarEntry = entryFor(lidarUuid);
             check(lidarEntry != nullptr && lidarEntry->scans == 1,
                   "the first frame of play is exactly one scan");
@@ -2804,7 +2848,7 @@ int EditorApp::runSelfTest() {
             for (int i = 0; i < 600; ++i) {
                 const auto* imuEntry = entryFor(imuUuid);
                 if (imuEntry && imuEntry->samples > 0) break;
-                step();
+                stepFixed();
             }
 
             const auto* imuEntry = entryFor(imuUuid);
@@ -2825,7 +2869,7 @@ int EditorApp::runSelfTest() {
                 // Sim time, not wall time, and it has to move.
                 const double before = imuEntry->lastTime;
                 check(before > 0.0, "IMU samples are stamped with a non-zero sim time");
-                step(20);
+                stepFixed(20);
                 check(entryFor(imuUuid) && entryFor(imuUuid)->lastTime > before,
                       "and the timestamps advance with the simulation");
             }
@@ -2846,6 +2890,8 @@ int EditorApp::runSelfTest() {
                 firstPoints = scanPoints;
                 firstDepthHash = depthHash;
                 firstDepthPoints = depthPoints;
+                if (lidarEntry) firstReturns = lidarEntry->returns;
+                if (depthEntry) firstDepthCloud = depthEntry->cloud;
                 check(firstPoints > 0, "the first scan has returns to compare");
             } else {
                 // Sensors are rebuilt from the authored seed on every Play. Two
@@ -2853,16 +2899,28 @@ int EditorApp::runSelfTest() {
                 // whole reason the seed is authored rather than drawn from the OS.
                 check(scanPoints == firstPoints,
                       "the second play scans the same number of returns");
-                check(scanHash == firstHash, "and an identical cloud - the seed replays");
                 check(depthPoints == firstDepthPoints,
                       "the depth camera returns the same number of points");
-                check(depthHash == firstDepthHash, "and an identical depth cloud");
+
+                if (bitExactReplay) {
+                    check(scanHash == firstHash, "and an identical cloud - the seed replays");
+                    check(depthHash == firstDepthHash, "and an identical depth cloud");
+                } else {
+                    const float lidarDev = lidarEntry
+                            ? maxDeviation(lidarEntry->returns, firstReturns, returnPos) : 1e9f;
+                    const float depthDev = depthEntry
+                            ? maxDeviation(depthEntry->cloud, firstDepthCloud, pointPos) : 1e9f;
+                    check(lidarDev < kReplayTolerance,
+                          "and the same cloud within the traced path's tolerance - the seed replays");
+                    check(depthDev < kReplayTolerance,
+                          "and the same depth cloud within that tolerance");
+                }
             }
 
             check(sensors_ && sensors_->recordedRows() > 0, "recording accumulates rows");
 
             stopPlay();
-            step(2);
+            stepFixed(2);
             check(sensors_ && sensors_->sensorCount() == 0, "stop drops every sensor");
             check(sensorCloud_ == nullptr, "and clears the cloud overlay");
             check(sensorRig_ && sensorRig_->children.empty(),
