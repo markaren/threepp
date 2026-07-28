@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -85,15 +86,29 @@ namespace threepp::vulkan {
     VulkanContext::VulkanContext(GLFWwindow* window, bool enableRayTracing, bool vsync)
         : window_(window), vsync_(vsync) {
 
+        // Validation defaults on in debug builds and off elsewhere, but
+        // THREEPP_VULKAN_VALIDATION overrides either way ("0" forces off, any
+        // other value forces on). Without the override, RelWithDebInfo — the
+        // build everyone actually runs — could never report a VUID, so spec
+        // violations went unnoticed there. Forcing the layer on at the
+        // loader level (VK_LOADER_LAYERS_ENABLE=*validation*) is not a
+        // substitute: the app then still skips VK_EXT_DEBUG_UTILS, which costs
+        // the messenger callback and every setObjectName() label, leaving bare
+        // handles in the layer's output.
+        bool wantValidation =
 #ifndef NDEBUG
-        const bool enableValidation = hasInstanceLayer(kValidationLayer);
-        if (!enableValidation) {
+                true;
+#else
+                false;
+#endif
+        if (const char* env = std::getenv("THREEPP_VULKAN_VALIDATION"); env && *env) {
+            wantValidation = *env != '0';
+        }
+        const bool enableValidation = wantValidation && hasInstanceLayer(kValidationLayer);
+        if (wantValidation && !enableValidation) {
             std::cerr << "[VulkanContext] " << kValidationLayer
                       << " not found; running without validation.\n";
         }
-#else
-        const bool enableValidation = false;
-#endif
         rayTracingEnabled_ = enableRayTracing;
 
         createInstance(enableValidation);
@@ -443,6 +458,15 @@ namespace threepp::vulkan {
                 return false;
             };
             for (const char* n : dlssRequiredDeviceExtensions()) {
+                // NGX still asks for VK_EXT_buffer_device_address, the
+                // pre-promotion alias of what this device gets from
+                // VkPhysicalDeviceVulkan12Features::bufferDeviceAddress below
+                // (plus VK_KHR_buffer_device_address on the ray-tracing path).
+                // Enabling the EXT alias alongside either is illegal —
+                // VUID-VkDeviceCreateInfo-ppEnabledExtensionNames-03328 and
+                // VUID-VkDeviceCreateInfo-pNext-04748 — and buys nothing: the
+                // core 1.2 feature is what NGX actually consumes.
+                if (std::strcmp(n, VK_EXT_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME) == 0) continue;
                 if (supported(n) && !alreadyEnabled(n)) extensions.push_back(n);
             }
         }

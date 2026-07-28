@@ -69,7 +69,15 @@ namespace threepp::vulkan {
         ici.arrayLayers   = 1;
         ici.samples       = VK_SAMPLE_COUNT_1_BIT;
         ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        // TRANSFER_DST because these are clearable scratch targets, same rule
+        // the deferred G-buffer storage images follow. It is not optional for
+        // taa.history: that slot is what DLSS/FSR are handed as their output
+        // resource, and NGX clears it internally on OUR command buffer — which
+        // is a spec violation (VUID-vkCmdClearColorImage-image-00002) unless
+        // the usage bit is here, since the clear is issued by the SDK and can't
+        // be routed through a render-pass loadOp on our side.
+        ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                            VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 

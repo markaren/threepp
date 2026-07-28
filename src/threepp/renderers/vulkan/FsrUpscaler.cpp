@@ -470,6 +470,8 @@ namespace threepp::vulkan {
             vci.subresourceRange.levelCount = 1;
             vci.subresourceRange.layerCount = 1;
             check(vkCreateImageView(d, &vci, nullptr, &img.view), "vkCreateImageView(fsr.reactive)");
+            ctx_.setObjectName(img.image, "fsr.reactiveMask");
+            ctx_.setObjectName(img.view, "fsr.reactiveMask");
         }
     }
 
