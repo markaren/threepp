@@ -557,6 +557,21 @@ int EditorApp::runScreenshot() {
     playFor(0.3f);
     wrote = shoot(sibling("_ortho_user")) && wrote;
 
+    // And the camera-preview dock. A scene camera, selected, renders through
+    // the renderer's secondary-pane path — the one that drew flat unlit fills
+    // over the editor view on Vulkan. The shot is what says the dock now shows
+    // a cleared background and lit, depth-tested geometry.
+    setOrthographic(false);
+    {
+        auto previewCamera = ObjectFactory::createCamera(document_.scene());
+        previewCamera->position.set(-8.f, 6.f, 4.f);
+        previewCamera->lookAt(Vector3(0.f, 1.f, 6.f));
+        addObject(previewCamera, document_.scene(), "Add Camera");
+        selectObject(previewCamera.get());
+    }
+    playFor(0.3f);
+    wrote = shoot(sibling("_campreview")) && wrote;
+
     return wrote ? 0 : 1;
 }
 
@@ -884,6 +899,84 @@ int EditorApp::runSelfTest() {
 
     selectObject(cameraRaw);
     step();
+
+    // --- the preview dock SHADES ------------------------------------------
+    // A selected camera renders its view through the renderer's secondary
+    // scissored pane. On Vulkan that path drew flat unlit fills with no clear
+    // — every mesh a silhouette in its base colour over whatever the frame
+    // already held. Flatness is measurable: point the camera at two faces of
+    // the template Box, one toward the sun and one away, and compare. A lit
+    // pane separates them (the away face has only the 0.35 ambient); a flat
+    // fill answers the same number twice.
+    {
+        cameraRaw->position.set(-5.f, 4.f, 0.f);
+        cameraRaw->lookAt(Vector3(0.f, 1.5f, 0.f));
+        // Wide enough that one frame holds all three probes: the box's two
+        // faces below the view axis and, above it, rays that clear the 20 m
+        // ground plane entirely (at the default 50° the ground fills the
+        // frustum from this close and no empty pixel exists to probe).
+        cameraRaw->fov = 70.f;
+        cameraRaw->updateProjectionMatrix();
+        step(8);
+
+        float dockX = 0, dockY = 0, dockW = 0, dockH = 0;
+        const bool dockVisible = cameraDockRect(dockX, dockY, dockW, dockH);
+        check(dockVisible, "the camera dock has a rect to probe");
+
+        bool bottomUp = true;
+#ifdef THREEPP_WITH_VULKAN
+        if (dynamic_cast<VulkanRenderer*>(renderer_.get())) bottomUp = false;
+#endif
+        // Mean luma of a 5x5 patch around where `world` lands in the DOCK —
+        // projected through the preview camera at the aspect the preview
+        // renders with (renderCameraPreview overrides it per frame and
+        // restores it, so it must be re-derived here).
+        const auto dockLuma = [&](const Vector3& world) -> double {
+            auto* cam = cameraRaw->as<PerspectiveCamera>();
+            if (!cam || dockW < 1.f || dockH < 1.f) return -1.0;
+            const float aspectBefore = cam->aspect;
+            cam->aspect = dockW / dockH;
+            cam->updateProjectionMatrix();
+            Vector3 ndc = world;
+            ndc.project(*cam);
+            cam->aspect = aspectBefore;
+            cam->updateProjectionMatrix();
+            if (std::abs(ndc.x) > 0.9f || std::abs(ndc.y) > 0.9f || ndc.z > 1.f) return -1.0;
+
+            const auto pixels = renderer_->readRGBPixels();
+            const auto size = renderer_->size();
+            const int w = size.width(), h = size.height();
+            if (pixels.size() < static_cast<std::size_t>(w) * h * 3) return -1.0;
+            const int cx = static_cast<int>(dockX + (ndc.x * 0.5f + 0.5f) * dockW);
+            const int cyTop = static_cast<int>(dockY + (0.5f - ndc.y * 0.5f) * dockH);
+            double sum = 0;
+            int n = 0;
+            for (int y = cyTop - 2; y <= cyTop + 2; ++y) {
+                for (int x = cx - 2; x <= cx + 2; ++x) {
+                    if (x < 0 || y < 0 || x >= w || y >= h) continue;
+                    const int row = bottomUp ? (h - 1 - y) : y;
+                    const std::size_t i = (static_cast<std::size_t>(row) * w + x) * 3;
+                    sum += 0.2126 * pixels[i] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i + 2];
+                    ++n;
+                }
+            }
+            return n > 0 ? sum / n : -1.0;
+        };
+
+        const double litFace  = dockLuma(Vector3(0.f, 1.f, 0.f));  // box top — faces the sun
+        const double darkFace = dockLuma(Vector3(-0.5f, 0.5f, 0.f));// -x face — ambient only
+        check(litFace > 0.0 && darkFace > 0.0, "both probe faces land inside the dock");
+        check(litFace > 0.0 && darkFace > 0.0 && litFace > darkFace * 1.3,
+              "the preview shades: the sunlit face outshines the unlit one");
+
+        // Empty preview pixels are the scene background, not a stale frame:
+        // an upward ray from a camera above the ground plane hits nothing
+        // and must read dark.
+        const double emptyPatch = dockLuma(Vector3(7.f, 4.4f, 0.f));
+        check(emptyPatch >= 0.0 && emptyPatch < 60.0,
+              "and its empty pixels read as background");
+    }
+
     deleteSelected();
     step();
     check(viewportMarkers_.size() == lightMarkers, "deleting the camera drops its marker");

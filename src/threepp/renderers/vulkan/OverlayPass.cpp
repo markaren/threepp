@@ -6,9 +6,13 @@
 #include "threepp/core/AttributeView.hpp"
 #include "threepp/core/InterleavedBufferAttribute.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/lights/AmbientLight.hpp"
+#include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/materials/interfaces.hpp"
+#include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
+#include "threepp/scenes/Scene.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -22,6 +26,8 @@
 #include "threepp/renderers/vulkan/shaders/overlay.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_mesh_lit.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_mesh_lit.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_point.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_point.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.frag.spv.h"
@@ -56,6 +62,11 @@ struct OverlayRecordScratch {
         Color   color{1.f, 1.f, 1.f};
         float   opacity = 1.f;
         bool    transparent = false;
+        // Lit split-screen pane: true when the geometry carries a float
+        // normal attribute, so the mesh can take the lit depth-tested
+        // pipeline. Meshes without one (HUD art, narrowed geometry) keep
+        // the flat unlit path even inside a pane.
+        bool    lit = false;
     };
     struct OrthoPointDraw {
         Points* points = nullptr;
@@ -92,6 +103,11 @@ OverlayPass::~OverlayPass() {
     if (orthoMeshTransparentPipeline_) vkDestroyPipeline(d, orthoMeshTransparentPipeline_, nullptr);
     if (orthoPointListPipeline_)    vkDestroyPipeline(d, orthoPointListPipeline_, nullptr);
     if (orthoLinePipelineLayout_)   vkDestroyPipelineLayout(d, orthoLinePipelineLayout_, nullptr);
+    if (litMeshPipeline_)            vkDestroyPipeline(d, litMeshPipeline_, nullptr);
+    if (litMeshTransparentPipeline_) vkDestroyPipeline(d, litMeshTransparentPipeline_, nullptr);
+    if (litMeshPipelineLayout_)      vkDestroyPipelineLayout(d, litMeshPipelineLayout_, nullptr);
+    if (paneLightSetLayout_)         vkDestroyDescriptorSetLayout(d, paneLightSetLayout_, nullptr);
+    if (paneLightDescPool_)          vkDestroyDescriptorPool(d, paneLightDescPool_, nullptr);
     if (spriteDescSetLayout_)       vkDestroyDescriptorSetLayout(d, spriteDescSetLayout_, nullptr);
     for (auto& pool : spriteDescPools_) {
         if (pool) vkDestroyDescriptorPool(d, pool, nullptr);
@@ -109,8 +125,11 @@ OverlayPass::~OverlayPass() {
         destroyBuffer(ctx_.allocator(), rec.vertex);
         if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.index);
         if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.color);
+        if (rec.normal.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.normal);
     }
     lineGeomCache_.clear();
+    for (auto& b : paneLightUbos_) destroyBuffer(ctx_.allocator(), b);
+    destroyImage2D(ctx_.allocator(), d, paneDepth_);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -446,6 +465,316 @@ void OverlayPass::createOrthoPointPipeline() {
     vkDestroyShaderModule(ctx_.device(), fragModule, nullptr);
 }
 
+void OverlayPass::createLitMeshPipelines() {
+    if (litMeshPipeline_ != VK_NULL_HANDLE) return;
+
+    // ── Per-FIF light UBO + descriptor set ──────────────────────────
+    // One 48-byte UBO per frame-in-flight slot: sun direction+intensity,
+    // sun color, summed ambient. Written each pane record (the frame's
+    // fence wait guarantees the slot is free), bound once here.
+    {
+        VkDescriptorSetLayoutBinding b{};
+        b.binding         = 0;
+        b.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        b.descriptorCount = 1;
+        b.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo dslci{};
+        dslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dslci.bindingCount = 1;
+        dslci.pBindings    = &b;
+        check(vkCreateDescriptorSetLayout(ctx_.device(), &dslci, nullptr, &paneLightSetLayout_),
+              "vkCreateDescriptorSetLayout(paneLight)");
+
+        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, framesInFlight_};
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets       = framesInFlight_;
+        dpci.poolSizeCount = 1;
+        dpci.pPoolSizes    = &ps;
+        check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &paneLightDescPool_),
+              "vkCreateDescriptorPool(paneLight)");
+
+        paneLightUbos_.resize(framesInFlight_);
+        paneLightSets_.resize(framesInFlight_, VK_NULL_HANDLE);
+        for (uint32_t f = 0; f < framesInFlight_; ++f) {
+            paneLightUbos_[f] = createBuffer(
+                    ctx_.allocator(), ctx_.device(), 3 * 4 * sizeof(float),
+                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+            VkDescriptorSetAllocateInfo asi{};
+            asi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            asi.descriptorPool     = paneLightDescPool_;
+            asi.descriptorSetCount = 1;
+            asi.pSetLayouts        = &paneLightSetLayout_;
+            check(vkAllocateDescriptorSets(ctx_.device(), &asi, &paneLightSets_[f]),
+                  "vkAllocateDescriptorSets(paneLight)");
+
+            VkDescriptorBufferInfo bi{paneLightUbos_[f].handle, 0, VK_WHOLE_SIZE};
+            VkWriteDescriptorSet w{};
+            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet          = paneLightSets_[f];
+            w.dstBinding      = 0;
+            w.descriptorCount = 1;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            w.pBufferInfo     = &bi;
+            vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+        }
+    }
+
+    // ── Pipeline layout: 128-byte PC + the light set ────────────────
+    {
+        VkPushConstantRange pcRange{};// mvp(64) + 3 normal-matrix vec4 (48) + color(16)
+        pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        pcRange.offset     = 0;
+        pcRange.size       = 128;
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &paneLightSetLayout_;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pcRange;
+        check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &litMeshPipelineLayout_),
+              "vkCreatePipelineLayout(litMesh)");
+    }
+
+    VkShaderModuleCreateInfo vsmci{};
+    vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    vsmci.codeSize = sizeof(kOverlayMeshLitVertSpv);
+    vsmci.pCode    = kOverlayMeshLitVertSpv;
+    VkShaderModule vertModule = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(ctx_.device(), &vsmci, nullptr, &vertModule),
+          "vkCreateShaderModule(overlay_mesh_lit.vert)");
+    VkShaderModuleCreateInfo fsmci{};
+    fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    fsmci.codeSize = sizeof(kOverlayMeshLitFragSpv);
+    fsmci.pCode    = kOverlayMeshLitFragSpv;
+    VkShaderModule fragModule = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(ctx_.device(), &fsmci, nullptr, &fragModule),
+          "vkCreateShaderModule(overlay_mesh_lit.frag)");
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName  = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName  = "main";
+
+    // position (loc 0, binding 0) + normal (loc 1, binding 1).
+    VkVertexInputBindingDescription vibs[2]{};
+    vibs[0].binding = 0; vibs[0].stride = 3 * sizeof(float); vibs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    vibs[1].binding = 1; vibs[1].stride = 3 * sizeof(float); vibs[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    VkVertexInputAttributeDescription vias[2]{};
+    vias[0].location = 0; vias[0].binding = 0; vias[0].format = VK_FORMAT_R32G32B32_SFLOAT; vias[0].offset = 0;
+    vias[1].location = 1; vias[1].binding = 1; vias[1].format = VK_FORMAT_R32G32B32_SFLOAT; vias[1].offset = 0;
+    VkPipelineVertexInputStateCreateInfo vi{};
+    vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount   = 2;
+    vi.pVertexBindingDescriptions      = vibs;
+    vi.vertexAttributeDescriptionCount = 2;
+    vi.pVertexAttributeDescriptions    = vias;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount  = 1;
+
+    // CULL_NONE like the flat mesh path — Side::Double materials (the ground
+    // plane) are the norm in preview content; the shader flips N on back faces.
+    VkPipelineRasterizationStateCreateInfo rs{};
+    rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode    = VK_CULL_MODE_NONE;
+    rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth   = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Real depth, unlike every other overlay pipeline: the pane clears its
+    // own D32 rect and the meshes occlude each other with the PREVIEW
+    // camera's depth — the flat path's painter's order shows the wrong
+    // object in front whenever the scene isn't drawn back-to-front, which
+    // a scene graph walk never guarantees. Plain forward Z (clear 1.0,
+    // LESS_OR_EQUAL): the pane is self-contained, so reverse-Z buys nothing
+    // and the zfix remap already lands GL clip z in [0,1].
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable  = VK_TRUE;
+    ds.depthWriteEnable = VK_TRUE;
+    ds.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    VkPipelineColorBlendAttachmentState cbas{};
+    cbas.blendEnable    = VK_FALSE;
+    cbas.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo cb{};
+    cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments    = &cbas;
+
+    VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{};
+    dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn.dynamicStateCount = 2;
+    dyn.pDynamicStates    = dynStates;
+
+    const VkFormat colorFmt = ctx_.swapchainFormat();
+    VkPipelineRenderingCreateInfo prci{};
+    prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    prci.colorAttachmentCount    = 1;
+    prci.pColorAttachmentFormats = &colorFmt;
+    prci.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT;
+
+    VkGraphicsPipelineCreateInfo gpci{};
+    gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    gpci.pNext               = &prci;
+    gpci.stageCount          = 2;
+    gpci.pStages             = stages;
+    gpci.pVertexInputState   = &vi;
+    gpci.pInputAssemblyState = &ia;
+    gpci.pViewportState      = &vp;
+    gpci.pRasterizationState = &rs;
+    gpci.pMultisampleState   = &ms;
+    gpci.pDepthStencilState  = &ds;
+    gpci.pColorBlendState    = &cb;
+    gpci.pDynamicState       = &dyn;
+    gpci.layout              = litMeshPipelineLayout_;
+    check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpci, nullptr,
+                                    &litMeshPipeline_),
+          "vkCreateGraphicsPipelines(litMesh)");
+
+    // Transparent variant: standard src-alpha blend, depth-test on but
+    // write OFF so overlapping transparent surfaces don't punch holes in
+    // each other (they draw after every opaque, in scene order).
+    VkPipelineDepthStencilStateCreateInfo dsT = ds;
+    dsT.depthWriteEnable = VK_FALSE;
+    VkPipelineColorBlendAttachmentState cbasT = cbas;
+    cbasT.blendEnable         = VK_TRUE;
+    cbasT.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    cbasT.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cbasT.colorBlendOp        = VK_BLEND_OP_ADD;
+    cbasT.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cbasT.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cbasT.alphaBlendOp        = VK_BLEND_OP_ADD;
+    VkPipelineColorBlendStateCreateInfo cbT = cb;
+    cbT.pAttachments = &cbasT;
+    VkGraphicsPipelineCreateInfo gpciT = gpci;
+    gpciT.pDepthStencilState = &dsT;
+    gpciT.pColorBlendState   = &cbT;
+    check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpciT, nullptr,
+                                    &litMeshTransparentPipeline_),
+          "vkCreateGraphicsPipelines(litMeshTransparent)");
+
+    vkDestroyShaderModule(ctx_.device(), vertModule, nullptr);
+    vkDestroyShaderModule(ctx_.device(), fragModule, nullptr);
+}
+
+void OverlayPass::ensurePaneDepth(VkCommandBuffer cb) {
+    const VkExtent2D ext = ctx_.swapchainExtent();
+    if (paneDepth_.image != VK_NULL_HANDLE &&
+        paneDepth_.width == ext.width && paneDepth_.height == ext.height) {
+        // Same image as last pane record — the previous frame's depth writes
+        // may still be executing (frames overlap), so fence this frame's
+        // loadOp CLEAR behind them. Pure execution+memory dependency, no
+        // layout change.
+        VkImageMemoryBarrier2 bar{};
+        bar.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        bar.srcStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        bar.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        bar.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        bar.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        bar.oldLayout     = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        bar.newLayout     = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        bar.image         = paneDepth_.image;
+        bar.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        bar.subresourceRange.levelCount = 1;
+        bar.subresourceRange.layerCount = 1;
+        VkDependencyInfo dep{};
+        dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dep.imageMemoryBarrierCount = 1;
+        dep.pImageMemoryBarriers    = &bar;
+        vkCmdPipelineBarrier2(cb, &dep);
+        return;
+    }
+
+    // Extent changed (or first use). The old image may be referenced by
+    // in-flight command buffers — retire it on the frame-serial queue.
+    if (paneDepth_.image != VK_NULL_HANDLE) {
+        if (retireFn_) {
+            retireFn_(std::move(paneDepth_));
+        } else {
+            vkDeviceWaitIdle(ctx_.device());
+            destroyImage2D(ctx_.allocator(), ctx_.device(), paneDepth_);
+        }
+        paneDepth_ = {};
+    }
+
+    paneDepth_.width  = ext.width;
+    paneDepth_.height = ext.height;
+    paneDepth_.format = VK_FORMAT_D32_SFLOAT;
+    VkImageCreateInfo ici{};
+    ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ici.imageType     = VK_IMAGE_TYPE_2D;
+    ici.format        = VK_FORMAT_D32_SFLOAT;
+    ici.extent        = {ext.width, ext.height, 1};
+    ici.mipLevels     = 1;
+    ici.arrayLayers   = 1;
+    ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_AUTO;
+    check(vmaCreateImage(ctx_.allocator(), &ici, &aci, &paneDepth_.image, &paneDepth_.alloc, nullptr),
+          "vmaCreateImage(paneDepth)");
+
+    VkImageViewCreateInfo vci{};
+    vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vci.image    = paneDepth_.image;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format   = VK_FORMAT_D32_SFLOAT;
+    vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    vci.subresourceRange.levelCount = 1;
+    vci.subresourceRange.layerCount = 1;
+    check(vkCreateImageView(ctx_.device(), &vci, nullptr, &paneDepth_.view),
+          "vkCreateImageView(paneDepth)");
+    ctx_.setObjectName(paneDepth_.image, "overlay pane depth");
+
+    VkImageMemoryBarrier2 toDepth{};
+    toDepth.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    toDepth.srcStageMask  = VK_PIPELINE_STAGE_2_NONE;
+    toDepth.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    toDepth.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+    toDepth.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
+    toDepth.newLayout     = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    toDepth.image         = paneDepth_.image;
+    toDepth.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    toDepth.subresourceRange.levelCount = 1;
+    toDepth.subresourceRange.layerCount = 1;
+    VkDependencyInfo dep{};
+    dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.imageMemoryBarrierCount = 1;
+    dep.pImageMemoryBarriers    = &toDepth;
+    vkCmdPipelineBarrier2(cb, &dep);
+}
+
 void OverlayPass::createSpriteOverlayPipeline() {
     if (overlaySpritePipeline_ != VK_NULL_HANDLE) return;
 
@@ -774,10 +1103,17 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
     // Untyped so a narrowed (compressAttributes) color still counts; the
     // uploads below widen it through a FloatAttributeView.
     const auto* colAttr = geom->getAttribute("color");
+    // Optional normal, bound only by the lit split-screen pane's mesh path.
+    // Typed float on purpose: a compressAttributes-narrowed normal is
+    // oct-snorm16x2 — two components an unaware widen would hand the shader
+    // as a broken vec3 — so a narrowed geometry simply falls back to the flat
+    // unlit pipeline instead of shading with garbage normals.
+    const auto* nrmAttr = geom->getAttribute<float>("normal");
 
     const uint32_t posVer = posAttr->version;
     const uint32_t idxVer = (idxAttr && idxAttr->count() > 0) ? idxAttr->version : 0u;
     const uint32_t colVer = (colAttr && colAttr->count() > 0) ? colAttr->version : 0u;
+    const uint32_t nrmVer = (nrmAttr && nrmAttr->count() > 0) ? nrmAttr->version : 0u;
 
     auto it = lineGeomCache_.find(geom);
     if (it != lineGeomCache_.end() && it->second.geomId != geom->id) {
@@ -787,6 +1123,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
         destroyBuffer(ctx_.allocator(), it->second.vertex);
         if (it->second.index.handle) destroyBuffer(ctx_.allocator(), it->second.index);
         if (it->second.color.handle) destroyBuffer(ctx_.allocator(), it->second.color);
+        if (it->second.normal.handle) destroyBuffer(ctx_.allocator(), it->second.normal);
         lineGeomCache_.erase(it);
         it = lineGeomCache_.end();
     }
@@ -795,7 +1132,8 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
         rec.lastTouch = overlayFrameCounter_;
         if (rec.positionVersion == posVer &&
             rec.indexVersion    == idxVer &&
-            rec.colorVersion    == colVer) {
+            rec.colorVersion    == colVer &&
+            rec.normalVersion   == nrmVer) {
             return &rec;
         }
         // Re-upload paths.
@@ -853,6 +1191,26 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
             rec.color        = {};
             rec.colorVersion = 0;
         }
+
+        // Normal buffer, same in-place / recreate logic.
+        if (nrmAttr && nrmAttr->count() > 0) {
+            const auto& nrmArr = nrmAttr->array();
+            const VkDeviceSize nbBytes = nrmArr.size() * sizeof(float);
+            if (rec.normal.handle == VK_NULL_HANDLE || nbBytes > rec.normal.size) {
+                if (rec.normal.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.normal);
+                rec.normal = createBuffer(
+                        ctx_.allocator(), ctx_.device(), nbBytes,
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            }
+            uploadHostVisible(ctx_.allocator(), rec.normal, nrmArr.data(), nbBytes);
+            rec.normalVersion = nrmVer;
+        } else if (rec.normal.handle != VK_NULL_HANDLE) {
+            destroyBuffer(ctx_.allocator(), rec.normal);
+            rec.normal        = {};
+            rec.normalVersion = 0;
+        }
         return &rec;
     }
 
@@ -895,6 +1253,18 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
                 VMA_MEMORY_USAGE_AUTO,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
         uploadHostVisible(ctx_.allocator(), rec.color, colView.data(), cbBytes);
+    }
+
+    if (nrmAttr && nrmAttr->count() > 0) {
+        const auto& nrmArr = nrmAttr->array();
+        rec.normalVersion = nrmVer;
+        const VkDeviceSize nbBytes = nrmArr.size() * sizeof(float);
+        rec.normal = createBuffer(
+                ctx_.allocator(), ctx_.device(), nbBytes,
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VMA_MEMORY_USAGE_AUTO,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+        uploadHostVisible(ctx_.allocator(), rec.normal, nrmArr.data(), nbBytes);
     }
 
     return &lineGeomCache_.emplace(geom, std::move(rec)).first->second;
@@ -951,6 +1321,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
                 destroyBuffer(ctx_.allocator(), it->second.vertex);
                 if (it->second.index.handle) destroyBuffer(ctx_.allocator(), it->second.index);
                 if (it->second.color.handle) destroyBuffer(ctx_.allocator(), it->second.color);
+                if (it->second.normal.handle) destroyBuffer(ctx_.allocator(), it->second.normal);
                 it = lineGeomCache_.erase(it);
             } else {
                 ++it;
@@ -1064,6 +1435,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
             if (auto* mc = dynamic_cast<MaterialWithColor*>(mat.get())) md.color = mc->color;
             md.opacity     = mat->opacity;
             md.transparent = mat->transparent;
+            md.lit         = g->getAttribute<float>("normal") != nullptr;
             meshDraws.push_back(md);
         });
     }
@@ -1093,7 +1465,18 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         });
     }
 
-    if (draws.empty() && lineDraws.empty() && meshDraws.empty() && pointDraws.empty()) return;
+    // Lit split-screen pane: a REGIONED secondary render() is a view of a 3D
+    // scene, not a HUD layer — its rect gets cleared to the scene background
+    // and its meshes draw depth-tested and sun-lit (GL clears and lights the
+    // scissored region the same way, so this is parity, not a new look).
+    // The un-regioned calls — standalone 2D scenes, the HUD-append pattern,
+    // the screen-space sprite auto-pass — keep the paint-over path untouched.
+    const bool litPane = regionW > 0u && regionH > 0u && !screenSpaceOnly;
+
+    // A lit pane with nothing to draw still clears its rect — an empty scene
+    // pane must show background, not whatever the frame put there before.
+    if (!litPane &&
+        draws.empty() && lineDraws.empty() && meshDraws.empty() && pointDraws.empty()) return;
     if (draws.size() > kMaxSpritesPerFrame) {
         std::cerr << "[VulkanRenderer] HUD sprite count " << draws.size()
                   << " exceeds kMaxSpritesPerFrame=" << kMaxSpritesPerFrame
@@ -1145,6 +1528,186 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         vkCmdPipelineBarrier2(cb, &dep);
     }
 
+    // Shared by the lit pane scope and the flat mesh loop below: GL clip z
+    // ∈ [-1,1] → Vulkan [0,1], composed in front of proj·view once.
+    Matrix4 paneCvp;
+    {
+        Matrix4 zfix;
+        zfix.set(1.f, 0.f, 0.f, 0.f,
+                 0.f, 1.f, 0.f, 0.f,
+                 0.f, 0.f, 0.5f, 0.5f,
+                 0.f, 0.f, 0.f, 1.f);
+        Matrix4 vpMat;
+        vpMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+        paneCvp.multiplyMatrices(zfix, vpMat);
+    }
+
+    // ── Lit pane scope ──────────────────────────────────────────────
+    // Its own rendering scope because the depth attachment changes the
+    // rendering info: every flat overlay pipeline was built color-only and
+    // cannot record inside a scope that binds a depth image. renderArea is
+    // the pane rect itself, so the loadOp CLEARs touch exactly the pane —
+    // color to the scene background (the editor-view-as-backdrop bug), depth
+    // to the far plane.
+    if (litPane) {
+        createLitMeshPipelines();
+        ensurePaneDepth(cb);
+
+        // Scene light rig, reduced to what a Lambert preview can carry: the
+        // first visible sun + the summed ambient. Deliberately an
+        // approximation — the pane says "same scene, same sun", not "final
+        // pixels" (that is the multi-view roadmap's job).
+        float lightData[12];
+        {
+            Vector3 sunDir(0.577f, 0.577f, 0.577f);
+            Color   sunColor(0xffffff);
+            float   sunIntensity = 0.f;
+            Color   ambient(0x000000);
+            bool    haveSun = false;
+            scene.traverseVisible([&](Object3D& o) {
+                if (!haveSun) {
+                    if (auto* dl = o.as<DirectionalLight>()) {
+                        Vector3 lp, tp;
+                        lp.setFromMatrixPosition(*dl->matrixWorld);
+                        tp.setFromMatrixPosition(*dl->target().matrixWorld);
+                        Vector3 d = lp;
+                        d.sub(tp);
+                        if (d.lengthSq() > 1e-12f) {
+                            sunDir       = d.normalize();
+                            sunColor     = dl->color;
+                            sunIntensity = dl->intensity;
+                            haveSun      = true;
+                        }
+                        return;
+                    }
+                }
+                if (auto* al = o.as<AmbientLight>()) {
+                    ambient.r += al->color.r * al->intensity;
+                    ambient.g += al->color.g * al->intensity;
+                    ambient.b += al->color.b * al->intensity;
+                }
+            });
+            lightData[0]  = sunDir.x;
+            lightData[1]  = sunDir.y;
+            lightData[2]  = sunDir.z;
+            lightData[3]  = sunIntensity;
+            lightData[4]  = sunColor.r;
+            lightData[5]  = sunColor.g;
+            lightData[6]  = sunColor.b;
+            lightData[7]  = 0.f;
+            lightData[8]  = ambient.r;
+            lightData[9]  = ambient.g;
+            lightData[10] = ambient.b;
+            lightData[11] = 0.f;
+        }
+        uploadHostVisible(ctx_.allocator(), paneLightUbos_[frame], lightData, sizeof(lightData));
+
+        // Background = the scene's solid color, written display-referred like
+        // the deferred path's own solid-bg bypass (the clear color is restored
+        // verbatim there, so the two views agree on what "empty" looks like).
+        VkClearValue bgClear{};
+        bgClear.color = {{0.f, 0.f, 0.f, 1.f}};
+        if (auto* sc3 = dynamic_cast<Scene*>(&scene)) {
+            if (!sc3->background.empty() && sc3->background.isColor()) {
+                const Color& bg = sc3->background.color();
+                bgClear.color = {{bg.r, bg.g, bg.b, 1.f}};
+            }
+        }
+
+        VkRenderingAttachmentInfo paneColor{};
+        paneColor.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        paneColor.imageView   = ctx_.swapchainImageViews()[imageIndex];
+        paneColor.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        paneColor.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        paneColor.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        paneColor.clearValue  = bgClear;
+        VkRenderingAttachmentInfo paneDepthAtt{};
+        paneDepthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        paneDepthAtt.imageView   = paneDepth_.view;
+        paneDepthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        paneDepthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        paneDepthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        paneDepthAtt.clearValue.depthStencil = {1.f, 0};
+        VkRenderingInfo pri{};
+        pri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        pri.renderArea.offset = {static_cast<int32_t>(regionX), static_cast<int32_t>(regionY)};
+        pri.renderArea.extent = {regionW, regionH};
+        pri.layerCount = 1;
+        pri.colorAttachmentCount = 1;
+        pri.pColorAttachments = &paneColor;
+        pri.pDepthAttachment = &paneDepthAtt;
+        vkCmdBeginRendering(cb, &pri);
+
+        VkViewport pvp{static_cast<float>(regionX), static_cast<float>(regionY),
+                       static_cast<float>(regionW), static_cast<float>(regionH), 0.f, 1.f};
+        vkCmdSetViewport(cb, 0, 1, &pvp);
+        VkRect2D psc{{static_cast<int32_t>(regionX), static_cast<int32_t>(regionY)},
+                     {regionW, regionH}};
+        vkCmdSetScissor(cb, 0, 1, &psc);
+
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, litMeshPipelineLayout_,
+                                0, 1, &paneLightSets_[frame], 0, nullptr);
+
+        struct LitMeshPC {
+            float mvp[16];
+            float nrm[12];// world normal matrix, three vec4 columns
+            float color[4];
+        };
+        static_assert(sizeof(LitMeshPC) == 128, "LitMeshPC must fill the 128-byte PC");
+
+        // Opaque first, transparent after (blend needs everything opaque
+        // already in the depth buffer; within transparent, scene order).
+        for (const int wantTransparent : {0, 1}) {
+            VkPipeline pipeline = wantTransparent ? litMeshTransparentPipeline_ : litMeshPipeline_;
+            bool bound = false;
+            for (const auto& md : meshDraws) {
+                if (!md.lit || static_cast<int>(md.transparent) != wantTransparent) continue;
+                const LineRec* rec = ensureLineGeometryUploaded(md.mesh->geometry().get());
+                if (!rec || rec->vertex.handle == VK_NULL_HANDLE ||
+                    rec->normal.handle == VK_NULL_HANDLE) continue;
+                if (!bound) {
+                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                    bound = true;
+                }
+
+                Matrix4 mvp;
+                mvp.multiplyMatrices(paneCvp, md.world);
+                Matrix3 nrm;
+                nrm.getNormalMatrix(md.world);
+                LitMeshPC pc{};
+                std::memcpy(pc.mvp, mvp.elements.data(), 64);
+                for (int c = 0; c < 3; ++c) {
+                    pc.nrm[c * 4 + 0] = nrm.elements[c * 3 + 0];
+                    pc.nrm[c * 4 + 1] = nrm.elements[c * 3 + 1];
+                    pc.nrm[c * 4 + 2] = nrm.elements[c * 3 + 2];
+                    pc.nrm[c * 4 + 3] = 0.f;
+                }
+                pc.color[0] = md.color.r;
+                pc.color[1] = md.color.g;
+                pc.color[2] = md.color.b;
+                pc.color[3] = md.opacity;
+                vkCmdPushConstants(cb, litMeshPipelineLayout_,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0, sizeof(pc), &pc);
+
+                VkBuffer     vb[2] = {rec->vertex.handle, rec->normal.handle};
+                VkDeviceSize vo[2] = {0, 0};
+                vkCmdBindVertexBuffers(cb, 0, 2, vb, vo);
+                if (rec->index.handle != VK_NULL_HANDLE) {
+                    vkCmdBindIndexBuffer(cb, rec->index.handle, 0, VK_INDEX_TYPE_UINT32);
+                    vkCmdDrawIndexed(cb, rec->indexCount, 1, 0, 0, 0);
+                } else {
+                    vkCmdDraw(cb, rec->vertexCount, 1, 0, 0);
+                }
+            }
+        }
+        vkCmdEndRendering(cb);
+
+        // Everything else the pane holds (lines, points, sprites, meshes
+        // without normals) still draws — through the color-only scope below,
+        // over the cleared, lit pane.
+    }
+
     VkRenderingAttachmentInfo colorAtt{};
     colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAtt.imageView   = ctx_.swapchainImageViews()[imageIndex];
@@ -1175,17 +1738,11 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     // Drawn FIRST so Sprites/TextSprites composite on top of the vector
     // art (panels behind labels). Uses the same flat-color overlay
     // shader + ortho MVP (with GL→Vulkan clip-z remap) as the lines.
+    // In a lit pane this loop only picks up what the lit scope could not
+    // (meshes without a float normal attribute).
     if (!meshDraws.empty()) {
         if (orthoMeshPipeline_ == VK_NULL_HANDLE) createOrthoLinePipelines();
-        Matrix4 zfix;
-        zfix.set(1.f, 0.f, 0.f, 0.f,
-                 0.f, 1.f, 0.f, 0.f,
-                 0.f, 0.f, 0.5f, 0.5f,
-                 0.f, 0.f, 0.f, 1.f);
-        Matrix4 vpMat;
-        vpMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-        Matrix4 cvp;
-        cvp.multiplyMatrices(zfix, vpMat);
+        const Matrix4& cvp = paneCvp;
 
         struct MeshPC {
             float mvp[16];
@@ -1193,6 +1750,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         };
         VkPipeline curMesh = VK_NULL_HANDLE;
         for (const auto& md : meshDraws) {
+            if (litPane && md.lit) continue;// already drawn, depth-tested and lit
             const LineRec* rec = ensureLineGeometryUploaded(md.mesh->geometry().get());
             if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
 

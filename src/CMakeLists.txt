@@ -1234,6 +1234,17 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_point.frag"
         kOverlayPointFragSpv
         _overlay_point_frag_spv_h)
+    # Lit split-screen pane meshes — a secondary scissored render() draws its
+    # meshes depth-tested and sun+ambient lit over a cleared background,
+    # instead of the flat HUD fills (the editor's camera preview).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_mesh_lit.vert"
+        kOverlayMeshLitVertSpv
+        _overlay_mesh_lit_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_mesh_lit.frag"
+        kOverlayMeshLitFragSpv
+        _overlay_mesh_lit_frag_spv_h)
     # HUD sprite (TextSprite + Sprite) — alpha-blended quad with per-sprite
     # combined-image-sampler binding. Walked from the user's HUD scene during
     # the ortho overlay pass, post-PT/TAA, depth disabled.

@@ -78,9 +78,14 @@ namespace threepp::vulkan {
         //                   are drawn (used for the automatic screen-space sprite
         //                   compositing after the deferred-shaded frame body).
         // regionW == 0 → full frame. Otherwise the overlay is clipped to the
-        // swapchain sub-rect (regionX, regionY, regionW, regionH) — used for
-        // split-screen secondary panes (overlay-only, drawn beside the
-        // primary deferred-render pane).
+        // swapchain sub-rect (regionX, regionY, regionW, regionH) — the
+        // split-screen secondary pane, drawn beside (or docked over) the
+        // primary deferred-render pane. A regioned pane is a VIEW, not a HUD:
+        // its rect is cleared to the scene background and meshes with float
+        // normals draw depth-tested and sun+ambient lit (the lit pane —
+        // matches what GL's forward path does for a scissored render()).
+        // Lines / Points / Sprites / normal-less meshes composite on top
+        // through the flat path as before.
         void record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex,
                     Object3D& scene, Camera& camera, bool screenSpaceOnly,
                     uint32_t regionX = 0, uint32_t regionY = 0,
@@ -110,6 +115,14 @@ namespace threepp::vulkan {
         void createSpriteOverlayPipeline();
         void createOrthoLinePipelines();
         void createOrthoPointPipeline();
+        void createLitMeshPipelines();
+
+        // Lit split-screen pane depth buffer: (re)create at the swapchain
+        // extent and transition to DEPTH_ATTACHMENT_OPTIMAL. Must be called
+        // OUTSIDE a rendering scope (records a barrier into cb). A stale
+        // extent's image goes through retireFn_ — frames still in flight may
+        // reference it.
+        void ensurePaneDepth(VkCommandBuffer cb);
 
         // Cache helpers — called from record() on each draw.
         // ensureSpriteAtlasTexture records any needed (re)upload into `cb`,
@@ -155,6 +168,24 @@ namespace threepp::vulkan {
         // Ortho point pipeline (overlay_point.vert/frag, POINT_LIST, pos+color
         // vertex bindings, depth-off). Reuses orthoLinePipelineLayout_.
         VkPipeline       orthoPointListPipeline_       = VK_NULL_HANDLE;
+
+        // Lit split-screen pane (overlay_mesh_lit shaders): meshes in a
+        // secondary scissored render() draw depth-tested and sun+ambient lit
+        // over a cleared background, instead of the flat fills the HUD path
+        // uses. Own layout — 128-byte PC (mvp + normal-matrix columns + color)
+        // plus a per-FIF light UBO the flat pipelines don't carry.
+        VkDescriptorSetLayout        paneLightSetLayout_ = VK_NULL_HANDLE;
+        VkDescriptorPool             paneLightDescPool_  = VK_NULL_HANDLE;
+        std::vector<VkDescriptorSet> paneLightSets_;// per FIF, written once
+        std::vector<Buffer>          paneLightUbos_;// per FIF, 48 B host-visible
+        VkPipelineLayout litMeshPipelineLayout_      = VK_NULL_HANDLE;
+        VkPipeline       litMeshPipeline_            = VK_NULL_HANDLE;
+        VkPipeline       litMeshTransparentPipeline_ = VK_NULL_HANDLE;
+        // The pane's own depth image (D32, swapchain extent). The rect in use
+        // is cleared each pane record; a dedicated image because the main
+        // frame's depth attachments all carry meaning across passes.
+        Image2D paneDepth_{};
+        bool    paneDepthInitialized_ = false;// first use transitions from UNDEFINED
 
         // Per-frame descriptor pools reset at the top of each record() call.
         std::vector<VkDescriptorPool> spriteDescPools_;

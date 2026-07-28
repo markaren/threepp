@@ -823,12 +823,17 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
             // Frame already in flight from a prior render() call this iteration.
             if (!isOrtho) {
                 // Split-screen secondary pane: when a scissor sub-rect is set, a
-                // second perspective render() composes overlay-only (Points /
-                // Lines / Sprites of THIS scene+camera) into that region of the
-                // open frame, beside the primary deferred-render pane — without
-                // touching the accumulation/TLAS state of that pane. Without a
-                // scissor, fall back to the old behavior (finalize the prior
-                // frame, restart for this one).
+                // second perspective render() composes THIS scene+camera into
+                // that region of the open frame, beside the primary
+                // deferred-render pane — without touching the accumulation/TLAS
+                // state of that pane. The pane is a LIT PANE (OverlayPass): rect
+                // cleared to the scene background, meshes depth-tested and
+                // sun+ambient shaded, Points/Lines/Sprites on top. A preview,
+                // not the deferred pipeline — the editor's camera dock and
+                // multiple_scenes' second view read as the same scene under the
+                // same sun, but shadows/GI/fog stay a multi-view feature.
+                // Without a scissor, fall back to the old behavior (finalize
+                // the prior frame, restart for this one).
                 if (scissorTest && scissor.z >= 1.f && scissor.w >= 1.f) {
                     const VkExtent2D full = ctx->swapchainExtent();
                     const uint32_t rx = static_cast<uint32_t>(std::clamp(static_cast<int>(scissor.x), 0, static_cast<int>(full.width)));
