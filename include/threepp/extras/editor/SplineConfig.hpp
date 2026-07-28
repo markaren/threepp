@@ -57,15 +57,15 @@ namespace threepp::editor {
         enum class MeshKind {
             None,// default; the spline is a path and nothing else
             Tube,// pipe / rail / cable, round cross-section
-            Road // flat ribbon of constant width, level side to side
+            Road // flat surface of constant width, level side to side
         };
 
         Type type = Type::Centripetal;
         bool closed = false;
         float tension = 0.5f;
         // Curve samples per segment. Drives the editor's overlay AND the
-        // tessellation of the generated mesh; nothing at runtime is obliged to
-        // use it.
+        // generated mesh — a tube's tessellation, and what a road's straights
+        // and arcs are fitted from; nothing at runtime is obliged to use it.
         int samples = 24;
 
         MeshKind mesh = MeshKind::None;

@@ -551,11 +551,11 @@ type=centripetal;closed=0;tension=0.5;samples=24;mesh=none;radius=0.25;radialSeg
 | `type` | `centripetal`, `chordal`, `catmullrom` | three.js's parameterisations; centripetal avoids cusps |
 | `closed` | `0`, `1` | join the last point back to the first |
 | `tension` | `0`…`1` | `catmullrom` only — stored and inert for the other two, as in three.js |
-| `samples` | `1`…`200` | curve samples per segment; drives the overlay *and* the generated mesh |
+| `samples` | `1`…`200` | curve samples per segment; drives the overlay *and* what the mesh is fitted from |
 | `mesh` | `none`, `tube`, `road` | what the spline generates as real geometry |
 | `radius` | metres | `tube` — cross-section radius |
 | `radialSegments` | `3`…`64` | `tube` — sides of the cross-section |
-| `width` | metres | `road` — ribbon width |
+| `width` | metres | `road` — surface width, kept through every bend |
 | `uvLength` | metres | metres of curve per U tile, both kinds |
 
 `SplineConfig::encode()` / `decode()` own that format, unknown keys are ignored
@@ -587,13 +587,40 @@ a scene with a road in it renders and collides in a plain viewer with no editor
 present. Select it and the ordinary Material and **Physics** sections apply —
 put a static trimesh collider on a road and drive on it.
 
-Tube sweeps `TubeGeometry` along the curve. Road sweeps `RibbonGeometry`
-(`threepp/extras/curves/RibbonGeometry.hpp`) — two vertices per sample at
-±`width`/2 either side of the centreline, with the sideways direction taken as
-`cross((0,1,0), tangent)` **in the spline's own space**. So the ribbon stays
-level side to side and rises with the grade, and a rotated spline rotates its
-road with it rather than twisting it back to world level. `u` runs
-arc-length/`uvLength` along it, `v` runs 0…1 across.
+Tube sweeps `TubeGeometry` along the curve. Road does **not** sweep a ribbon: it
+consolidates the sampled centreline into straights and circular arcs
+(`SplineConfig::roadPath`, `threepp/extras/curves/RoadPath.hpp`) and emits each
+piece's swept region directly (`RoadGeometry`). A straight is a rectangle, an
+arc an annular sector — outer radius R + `width`/2, inner radius
+max(R − `width`/2, 0). Everything is in **the spline's own space**, level side to
+side and rising with the grade, so a rotated spline rotates its road with it
+rather than twisting it back to world level. `u` runs arc-length/`uvLength`
+along it, `v` runs 0…1 across.
+
+**The road is full width everywhere.** That is the point of the consolidation: a
+cross-section offset from a dense polyline has no full-width answer at a bend
+tighter than its own half-width, because the inner edge runs backward past the
+curvature radius. An arc's region is known in closed form instead, and a bend
+tighter than the half-width simply takes the inner radius to zero — the annulus
+becomes a **pie sector** whose inner vertices sit on the centre of the bend,
+which is the region the road covers there. No narrowing, no fold, and the inside
+of the corner is covered by the pieces either side of it.
+
+**The collider is the same list.** A road with physics on it (or on the spline
+over it) collides as one static actor carrying a box per straight — top face on
+the road, 0.25 m thick — and a bend tiled by convex annular wedges of about 15°
+that share each radial face exactly, the conveyor-belt treatment from
+`examples/projects/Fish`. Those primitives are recomputed from the config rather
+than read off the mesh; the segmentation is deterministic, so the two agree. The
+shape count follows the road's **shape**: the editor's default spline is three
+pieces whatever `samples` is set to, where the ribbon it replaced cooked one
+hull per sample.
+
+Two limitations follow from the fit being an XZ one. A spline that **loops
+vertically** has no XZ projection to consolidate and is out of scope as a road —
+`RibbonGeometry` still sweeps a ribbon along anything, including that. And a
+road that **crosses itself** at the same height renders two pieces in the same
+plane, which may z-fight; the pieces are correct, their overlap is not resolved.
 
 **Regeneration is derived state, not a command.** The undoable step is the
 config edit; the sync pass then adds, rebuilds or removes the mesh to follow

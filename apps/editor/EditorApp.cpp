@@ -1116,16 +1116,27 @@ int EditorApp::runSelfTest() {
                       "switching tube to road keeps the node");
                 check(mesh->geometry() != geometry, "and rebuilds its geometry");
 
-                // The ribbon emits the two vertices of a cross-section back to
-                // back, so the first pair spans the full width.
+                // The road emits the two vertices of a cross-section back to
+                // back, so a pair measures the width there. It NEVER narrows:
+                // a straight run and any bend the width fits through measure
+                // the authored width exactly, and a bend tighter than the
+                // half-width reaches from the outer edge to the centre of the
+                // bend — the pie sector, still over half the width. The ribbon
+                // this replaced pinned those rings down to a pivot.
                 const auto* position = mesh->geometry()->getAttribute<float>("position");
-                bool wide = false;
-                if (position && position->count() >= 2) {
-                    const Vector3 left(position->getX(0), position->getY(0), position->getZ(0));
-                    const Vector3 right(position->getX(1), position->getY(1), position->getZ(1));
-                    wide = std::abs(left.distanceTo(right) - 7.f) < 1e-3f;
+                float widest = 0.f;
+                float narrowest = std::numeric_limits<float>::max();
+                for (int i = 0; position && i + 1 < position->count(); i += 2) {
+                    const Vector3 left(position->getX(i), position->getY(i), position->getZ(i));
+                    const Vector3 right(position->getX(i + 1), position->getY(i + 1), position->getZ(i + 1));
+                    const float across = left.distanceTo(right);
+                    widest = std::max(widest, across);
+                    narrowest = std::min(narrowest, across);
                 }
-                check(wide, "with the road exactly as wide as the config says");
+                check(std::abs(widest - 7.f) < 1e-3f,
+                      "with the road exactly as wide as the config says");
+                check(narrowest >= 3.5f - 1e-3f && narrowest <= 7.f + 1e-3f,
+                      "and never pinched narrower than the half-width it always reaches");
             }
 
             // mesh=none removes it — and undoing that config edit brings it
@@ -1271,20 +1282,22 @@ int EditorApp::runSelfTest() {
             if (auto* asMesh = reloadedMesh ? reloadedMesh->as<Mesh>() : nullptr) {
                 const auto* position = asMesh->geometry()->getAttribute<float>("position");
                 if (position && position->count() >= 2) {
-                    // The WIDEST cross-section: straight rings measure the
-                    // authored width exactly, mitered corners a little over it
-                    // and never past the 2x clamp — while a bend tighter than
-                    // the half-width PINS its rings narrower. The maximum is
-                    // the one measure of "which width the rebuild used" that
-                    // every legal ribbon agrees on.
+                    // The WIDEST cross-section is the authored width exactly —
+                    // straight runs and every bend the width fits through
+                    // measure it — and the narrowest still reaches the outer
+                    // half, since a bend tighter than that spans from the outer
+                    // edge to its own centre rather than pinching.
                     float widest = 0.f;
+                    float narrowest = std::numeric_limits<float>::max();
                     for (int i = 0; i + 1 < position->count(); i += 2) {
                         const Vector3 left(position->getX(i), position->getY(i), position->getZ(i));
                         const Vector3 right(position->getX(i + 1), position->getY(i + 1), position->getZ(i + 1));
-                        widest = std::max(widest, left.distanceTo(right));
+                        const float across = left.distanceTo(right);
+                        widest = std::max(widest, across);
+                        narrowest = std::min(narrowest, across);
                     }
-                    narrowed = widest >= authored.width - 1e-3f &&
-                               widest <= authored.width * 2.f + 1e-3f;
+                    narrowed = std::abs(widest - authored.width) < 1e-3f &&
+                               narrowest >= authored.width * 0.5f - 1e-3f;
                 }
             }
             check(narrowed, "rebuilt to the width the reloaded config asks for");
@@ -1587,6 +1600,53 @@ int EditorApp::runSelfTest() {
         newScene();
         step(2);
         check(physicsDebugLines_ == nullptr, "a new scene with the toggle on leaves nothing behind");
+
+        // A road's collider count follows the road's SHAPE, not its
+        // tessellation. This S bends twice, both tighter than half its six
+        // metre width — the case that used to be cooked as one sliver hull per
+        // sample of a folded ribbon, which drew a moiré of them. The pieces
+        // behind it are a handful, so the overlay's line count is BOUNDED: this
+        // is a regression guard on the count, not on the drawing.
+        {
+            auto created = ObjectFactory::createSpline(document_.scene());
+            const auto splineUuid = created->uuid;
+            addObject(created, document_.scene(), "Add Spline");
+            step();
+
+            auto* spline = findByUuid(document_.scene(), splineUuid);
+            if (spline) {
+                const Vector3 shape[]{{-6, 0, 0}, {-2, 0, 2.5f}, {2, 0, -2.5f}, {6, 0, 0}};
+                const auto points = SplineConfig::controlPointNodes(*spline);
+                for (std::size_t i = 0; i < points.size() && i < 4; ++i) {
+                    points[i]->position.copy(shape[i]);
+                }
+                auto config = SplineConfig::read(*spline).value_or(SplineConfig{});
+                config.mesh = SplineConfig::MeshKind::Road;
+                config.width = 6.f;
+                // Sampled as finely as the editor allows, which is what makes
+                // the bound below mean something: one hull per sample would be
+                // 600 of them here.
+                config.samples = SplineConfig::maxSamples;
+                config.write(*spline);
+                step();
+
+                if (auto* road = SplineConfig::derivedMesh(*spline)) {
+                    PhysicsConfig physics;
+                    physics.enabled = true;
+                    physics.body = PhysicsConfig::Body::Static;
+                    physics.shape = PhysicsConfig::Shape::Auto;
+                    physics.write(*road);
+                }
+            }
+
+            startPlay();
+            step(8);
+            const int lines = colliderVertices();
+            check(lines > 0, "an S-curve road draws collider lines of its own");
+            check(lines < 4000, "and a bounded number of them, not one hull per sample");
+            stopPlay();
+            step(2);
+        }
         physicsDebug_ = false;
     }
 #endif

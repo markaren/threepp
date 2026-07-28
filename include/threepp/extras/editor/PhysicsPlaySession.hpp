@@ -131,9 +131,9 @@ namespace threepp::editor {
         // cannot use a triangle mesh).
         //
         // Everything that is not a primitive used to land on Box, i.e. on its
-        // own AABB. For anything shaped — a road ribbon, a terrain patch, an
+        // own AABB. For anything shaped — a road surface, a terrain patch, an
         // imported prop — that slab is not an approximation of the surface, it
-        // is a different object: a flat ribbon's AABB is a razor at the minimum
+        // is a different object: a flat surface's AABB is a razor at the minimum
         // half-extent, and a body dropped on it falls through beside it.
         static PhysicsConfig::Shape resolveShape(Object3D& object, const PhysicsConfig& config) {
 
