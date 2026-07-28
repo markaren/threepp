@@ -26,6 +26,8 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
+#include "threepp/scenes/Scene.hpp"
+
 #include <cfloat>
 #include <cstddef>
 #include <string>
