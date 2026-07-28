@@ -1912,6 +1912,81 @@ int EditorApp::runSelfTest() {
         }
     }
 
+    // --- material shadowSide ----------------------------------------------
+    // The inspector's answer to a Double-sided material self-shadowing into a
+    // moire. It is only worth exposing if it survives being written down, and
+    // Play is the harshest test of that: the snapshot goes through the same
+    // exporter/loader pair a saved scene does.
+    {
+        newScene();
+        step(2);
+
+        auto* box = document_.scene().getObjectByName("Box");
+        auto* mesh = box ? box->as<Mesh>() : nullptr;
+        auto material = mesh ? mesh->materialAs<MeshStandardMaterial>() : nullptr;
+        check(material != nullptr, "the template Box has a standard material");
+
+        if (material) {
+            const auto uuid = box->uuid;
+            check(!material->shadowSide.has_value(), "shadowSide starts unset (renderer's rule)");
+
+            material->side = Side::Double;
+            material->shadowSide = Side::Back;
+            startPlay();
+            step(3);
+            stopPlay();
+            step();
+
+            Object3D* restored = findByUuid(document_.scene(), uuid);
+            auto* restoredMesh = restored ? restored->as<Mesh>() : nullptr;
+            auto restoredMaterial = restoredMesh ? restoredMesh->materialAs<MeshStandardMaterial>() : nullptr;
+            check(restoredMaterial && restoredMaterial->side == Side::Double,
+                  "side survives the play round trip");
+            check(restoredMaterial && restoredMaterial->shadowSide == Side::Back,
+                  "and so does shadowSide");
+        }
+    }
+
+    // --- a material edit reaches the frame ---------------------------------
+    // The inspector writes plain fields: colour, roughness, opacity. Under
+    // Vulkan those reach the GPU only when Material::version() moves — the
+    // scene diff refreshes an entry's MaterialDesc on that version and never
+    // memcmps the live floats — so a bump-less edit sat invisible until some
+    // unrelated rebuild happened to re-derive it. Clicking the viewport did
+    // exactly that (the selection outline enters or leaves the overlay), which
+    // is why the edit appeared to need a click. Nothing but pixels can answer
+    // this, so the check reads the frame rather than the material.
+    {
+        newScene();
+        selectObject(nullptr);// no outline: nothing else can force a rebuild
+        step(4);              // and let the temporal history settle first
+
+        // Count of pixels that moved a long way in green, not a frame mean: a
+        // box is a small part of the frame, and an average would bury it under
+        // the temporal jitter of everything that did not change.
+        std::vector<unsigned char> before = renderer_->readRGBPixels();
+        check(!before.empty(), "the frame can be read back at all");
+
+        auto* box = document_.scene().getObjectByName("Box");
+        auto* mesh = box ? box->as<Mesh>() : nullptr;
+        auto material = mesh ? mesh->materialAs<MeshStandardMaterial>() : nullptr;
+
+        if (material && !before.empty()) {
+            material->color = Color(0x00ff00);
+            material->needsUpdate();// what every inspector setter now does
+            step(2);
+
+            const auto after = renderer_->readRGBPixels();
+            std::size_t moved = 0;
+            const std::size_t n = std::min(before.size(), after.size());
+            for (std::size_t i = 1; i < n; i += 3) {
+                if (std::abs(static_cast<int>(after[i]) - static_cast<int>(before[i])) > 24) ++moved;
+            }
+            check(after.size() == before.size() && moved > (n / 3) / 500,
+                  "a material edit shows up without a selection change");
+        }
+    }
+
     // --- orthographic axis views ------------------------------------------
     // The screenshots are what say the views look right; these say the state
     // machine behind them holds — that the projection swaps without moving what

@@ -425,6 +425,20 @@ void EditorApp::drawMaterialSection(Object3D& object) {
         document_.setDirty(true);
     };
 
+    // Vulkan refreshes an entry's MaterialDesc only when Material::version()
+    // moves — the scene diff never memcmps the live floats. GL re-reads them
+    // every frame, so an edit to Color or Roughness looked applied there and
+    // looked ignored under Vulkan until some unrelated selection change (a
+    // click in the viewport swaps the outline object) forced a rebuild. Every
+    // setter goes through this, not just the call sites: undo and redo replay
+    // the setter alone and owe the renderer the same bump.
+    const auto sync = [raw](auto setter) {
+        return [raw, setter = std::move(setter)](const auto& value) {
+            setter(value);
+            raw->needsUpdate();
+        };
+    };
+
     ImGui::PushItemWidth(-100 * contentScale_);
 
     if (auto* withColor = dynamic_cast<MaterialWithColor*>(raw)) {
@@ -435,7 +449,7 @@ void EditorApp::drawMaterialSection(Object3D& object) {
         if (changed) {
             commands_.execute(makeProperty<Color>(
                     "Color", "color:" + raw->uuid(),
-                    [withColor](const Color& v) { withColor->color = v; },
+                    sync([withColor](const Color& v) { withColor->color = v; }),
                     withColor->color, fromSrgbFloats(rgb)));
             touched();
         }
@@ -450,7 +464,7 @@ void EditorApp::drawMaterialSection(Object3D& object) {
         if (changed) {
             commands_.execute(makeProperty<Color>(
                     "Emissive", "emissive:" + raw->uuid(),
-                    [withEmissive](const Color& v) { withEmissive->emissive = v; },
+                    sync([withEmissive](const Color& v) { withEmissive->emissive = v; }),
                     withEmissive->emissive, fromSrgbFloats(rgb)));
             touched();
         }
@@ -462,7 +476,7 @@ void EditorApp::drawMaterialSection(Object3D& object) {
         if (ch) {
             commands_.execute(makeProperty<float>(
                     "Emissive Intensity", "emissiveIntensity:" + raw->uuid(),
-                    [withEmissive](const float& v) { withEmissive->emissiveIntensity = v; },
+                    sync([withEmissive](const float& v) { withEmissive->emissiveIntensity = v; }),
                     withEmissive->emissiveIntensity, intensity));
             touched();
         }
@@ -476,7 +490,7 @@ void EditorApp::drawMaterialSection(Object3D& object) {
         const bool changed = ImGui::DragFloat(label, &edited, speed, min, max);
         if (ImGui::IsItemActivated()) commands_.beginTransaction();
         if (changed) {
-            commands_.execute(makeProperty<float>(label, key + raw->uuid(), setter, *value, edited));
+            commands_.execute(makeProperty<float>(label, key + raw->uuid(), sync(setter), *value, edited));
             touched();
         }
         if (ImGui::IsItemDeactivated()) commands_.endTransaction();
@@ -499,10 +513,7 @@ void EditorApp::drawMaterialSection(Object3D& object) {
         if (ImGui::Checkbox("Transparent", &transparent)) {
             commands_.execute(makeProperty<bool>(
                     "Transparent", {},
-                    [raw](const bool& v) {
-                        raw->transparent = v;
-                        raw->needsUpdate();
-                    },
+                    sync([raw](const bool& v) { raw->transparent = v; }),
                     !transparent, transparent));
             touched();
         }
@@ -514,12 +525,43 @@ void EditorApp::drawMaterialSection(Object3D& object) {
         if (ImGui::Combo("Side", &side, sides, IM_ARRAYSIZE(sides))) {
             commands_.execute(makeProperty<int>(
                     "Side", {},
-                    [raw](const int& v) {
-                        raw->side = static_cast<Side>(v);
-                        raw->needsUpdate();
-                    },
+                    sync([raw](const int& v) { raw->side = static_cast<Side>(v); }),
                     static_cast<int>(raw->side), side));
             touched();
+        }
+    }
+
+    {
+        // Which faces go into the shadow map, which is not the same question as
+        // which faces are shaded. Unset ("Auto") means the renderer's rule: a
+        // single-sided material casts from its BACK faces, and that is exactly
+        // what stops it shadowing itself. A double-sided one has no far side to
+        // move to, so under Auto it self-shadows into a moire. Pinning it to
+        // Back cures that — at the cost of thin geometry (a plane, a leaf) no
+        // longer casting at all, which is why it is a choice and not a default.
+        static const char* shadowSides[] = {"Auto", "Front", "Back", "Double"};
+        const auto encode = [](const std::optional<Side>& s) {
+            return s ? static_cast<int>(*s) + 1 : 0;
+        };
+        int shadowSide = encode(raw->shadowSide);
+        if (ImGui::Combo("Shadow side", &shadowSide, shadowSides, IM_ARRAYSIZE(shadowSides))) {
+            commands_.execute(makeProperty<int>(
+                    "Shadow side", {},
+                    sync([raw](const int& v) {
+                        if (v == 0) {
+                            raw->shadowSide.reset();
+                        } else {
+                            raw->shadowSide = static_cast<Side>(v - 1);
+                        }
+                    }),
+                    encode(raw->shadowSide), shadowSide));
+            touched();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Which faces are drawn into the shadow map.\n"
+                              "Auto: back faces for a single-sided material, both for Double.\n"
+                              "A Double-sided material self-shadows under Auto (moire banding);\n"
+                              "set Back to clear it. Thin surfaces then stop casting a shadow.");
         }
     }
 
@@ -528,7 +570,7 @@ void EditorApp::drawMaterialSection(Object3D& object) {
         if (ImGui::Checkbox("Wireframe", &wireframe)) {
             commands_.execute(makeProperty<bool>(
                     "Wireframe", {},
-                    [withWireframe](const bool& v) { withWireframe->wireframe = v; },
+                    sync([withWireframe](const bool& v) { withWireframe->wireframe = v; }),
                     !wireframe, wireframe));
             touched();
         }
@@ -540,10 +582,7 @@ void EditorApp::drawMaterialSection(Object3D& object) {
         if (ImGui::Checkbox("Flat shading", &flat)) {
             commands_.execute(makeProperty<bool>(
                     "Flat Shading", {},
-                    [withFlat](const bool& v) {
-                        withFlat->flatShading = v;
-                        withFlat->needsUpdate();
-                    },
+                    sync([withFlat](const bool& v) { withFlat->flatShading = v; }),
                     !flat, flat));
             touched();
         }
