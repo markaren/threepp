@@ -31,7 +31,9 @@ layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
     vec4 jitter;
+    vec4 camAux;// .x = parallel projection, .yzw = camera world forward
 } cam;
+#include "camera_ray.glsl"// camViewPointAtDist / camRayOrigin — perspective AND ortho
 
 struct DirLight   { vec3 direction; vec3 color; };
 struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
@@ -176,12 +178,18 @@ void main() {
     const vec2  uv   = (vec2(f.xy) + vec2(rnd(seed), rnd(seed))) / vec2(float(kFroxelX), float(kFroxelY));
     const float dist = froxelDist(float(f.z) + rnd(seed));
     const vec2  ndc  = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
-    const vec4  vh   = cam.projInverse * vec4(ndc, 0.5, 1.0);
-    const vec3  pv   = vh.xyz / vh.w;
-    const vec3  viewPos = pv * (dist / max(-pv.z, 1e-6));
+    // The froxel's world position and the view ray that reaches it. Under a
+    // parallel projection the grid is a BOX rather than a frustum: the column
+    // through this tile keeps its lateral offset at every depth, and its ray
+    // starts at the tile's own near-plane point instead of the shared eye.
+    const vec3  viewPos = camViewPointAtDist(ndc, dist);
     const vec3  x       = (cam.viewInverse * vec4(viewPos, 1.0)).xyz;
-    const vec3  camPos  = cam.viewInverse[3].xyz;
-    const vec3  rd      = normalize(x - camPos);// camera → froxel (the view ray)
+    const vec3  camPos  = camRayOrigin(ndc);
+    // camera → froxel (the view ray). Taken outright under a parallel
+    // projection: the near froxels sit a fraction of a metre from the origin
+    // this ray starts at, close enough that normalising the difference is at
+    // the mercy of which of the two the ladder puts first.
+    const vec3  rd      = (cam.camAux.x > 0.5) ? cam.camAux.yzw : normalize(x - camPos);
 
     // Medium parameters. HOMOGENEOUS (today): scene fog drives σ/g/albedo,
     // max'd with the explicit beam density; pc.volDensity alone gives clear-air

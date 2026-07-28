@@ -487,6 +487,20 @@ OrthographicCamera ortho(left, right, top, bottom, near, far);
 > Note the naming difference from three.js: the clip planes are **`nearPlane`** and
 > **`farPlane`** (`near`/`far` are macros on some Windows headers).
 
+> **`VulkanRenderer` and orthographic cameras.** An `OrthographicCamera` means one of
+> two things to the deferred backend, and it cannot tell them apart on its own. By
+> default a standalone `render(scene, orthoCam)` is the **2D/HUD** path: sprites, lines,
+> points and meshes are drawn as flat unlit fills over the frame. If the ortho camera is
+> a real 3D **view** — an editor's axis views, an isometric game camera — say so once:
+> ```cpp
+> renderer.setOrthographicSceneRendering(true);
+> ```
+> and the frame takes the same deferred path a perspective camera does (lights, shadows,
+> GI, reflections, fog, tone mapping). Depth of field is skipped under it — a parallel
+> projection has no lens. The HUD pattern (a perspective `render()`, then a second
+> `render()` with an ortho camera over a HUD scene) is unaffected either way.
+> `GLRenderer` never had the ambiguity and needs nothing.
+
 Any change to a projection input (`fov`, `aspect`, `zoom`, `nearPlane`, `farPlane`) needs
 `camera.updateProjectionMatrix()`. This is why every example has the same resize handler:
 

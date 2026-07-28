@@ -44,6 +44,9 @@
 #include "threepp/objects/Robot.hpp"
 #include "threepp/renderers/RendererFactory.hpp"
 #include "threepp/scenes/Scene.hpp"
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -131,6 +134,17 @@ EditorApp::EditorApp(const Options& options)
     renderer_->shadowMap().type = ShadowMap::PFC;
     renderer_->toneMapping = ToneMapping::ACESFilmic;
     renderer_->toneMappingExposure = 1.0f;
+
+#ifdef THREEPP_WITH_VULKAN
+    // The axis views are a 3D camera that happens to project in parallel, not a
+    // 2D overlay. Without this the Vulkan backend reads an OrthographicCamera as
+    // a HUD and draws the scene as flat unlit fills — no lights, no shadows, no
+    // fog — so Numpad 5 would change how the viewport SHADES, not just how it
+    // projects. Ignored by the OpenGL backend, which never had the ambiguity.
+    if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer_.get())) {
+        vk->setOrthographicSceneRendering(true);
+    }
+#endif
 
     camera_.position.set(6, 5, 8);
 
@@ -458,7 +472,15 @@ int EditorApp::runScreenshot() {
     playFor(0.2f);
 
     const auto size = canvas_.size();
-    stbi_flip_vertically_on_write(1);
+    // Row order is the backend's, not a constant. GL hands back a bottom-up
+    // framebuffer and needs the flip; the Vulkan swapchain readback is already
+    // top-down (VulkanRenderer::writeFramebuffer writes it straight out), so
+    // flipping there turned every --vulkan screenshot upside down.
+    bool bottomUpPixels = true;
+#ifdef THREEPP_WITH_VULKAN
+    if (dynamic_cast<VulkanRenderer*>(renderer_.get())) bottomUpPixels = false;
+#endif
+    stbi_flip_vertically_on_write(bottomUpPixels ? 1 : 0);
     const auto shoot = [&](const std::filesystem::path& path) {
         const auto pixels = renderer_->readRGBPixels();
         const bool wrote =
@@ -516,6 +538,24 @@ int EditorApp::runScreenshot() {
     setViewPreset(ViewPreset::Front);
     playFor(0.2f);
     wrote = shoot(sibling("_ortho_front")) && wrote;
+
+    // And the pair that answers the OTHER question about a projection toggle:
+    // does the scene still SHADE the same. The axis views above can't — nothing
+    // to compare them against — so shoot one user viewpoint twice, perspective
+    // then orthographic, and let the toggle's own framing preservation line them
+    // up. Lights, shadows, ambient occlusion and fog should read the same in
+    // both; only the perspective convergence should differ. This is the shot
+    // that caught the Vulkan backend routing an ortho camera into the flat
+    // unlit HUD path (see setOrthographicSceneRendering).
+    setOrthographic(false);
+    camera_.position.set(-1.f, 14.f, 22.f);
+    orbit_->target.set(0.f, 0.f, 8.f);
+    playFor(0.3f);
+    wrote = shoot(sibling("_persp_user")) && wrote;
+
+    setOrthographic(true);
+    playFor(0.3f);
+    wrote = shoot(sibling("_ortho_user")) && wrote;
 
     return wrote ? 0 : 1;
 }
@@ -2061,6 +2101,157 @@ int EditorApp::runSelfTest() {
                              std::tan(math::degToRad(camera_.fov) * 0.5f);
         check(std::abs(height - expected) < 1e-1f,
               "framing the same height it was showing in ortho");
+    }
+
+    // --- the ortho view SHADES like the perspective one --------------------
+    // The checks above are about the projection; this one is about the light.
+    // The Vulkan backend reads an OrthographicCamera as a 2D HUD unless told
+    // otherwise (setOrthographicSceneRendering) and would otherwise draw every
+    // mesh as a flat unlit fill — no sun, no shadows, no fog, no tone mapping.
+    // That failure is invisible to every state-machine check ever written and
+    // obvious the moment two frames of the same scene sit side by side, so
+    // measure it: same viewpoint, same pivot, one toggle between them.
+    //
+    // Mean luminance of a CENTRED crop, which is the viewport (the panels sit
+    // outside it) and is symmetric about the middle row — so it reads the same
+    // whichever row order the backend hands back. The toggle preserves framing,
+    // so the two crops see the same scene; a tolerance of a quarter absorbs the
+    // parallel-vs-converging difference in what a pixel covers while still
+    // being a fraction of the gap a flat unlit fill opens up.
+    {
+        newScene();
+        selectObject(nullptr);
+        camera_.position.set(-1.f, 14.f, 22.f);
+        orbit_->target.set(0.f, 0.f, 8.f);
+        setOrthographic(false);
+        step(8);// TAA/DLSS history settles
+
+        const auto size = canvas_.size();
+        const auto cropMean = [&](const std::vector<unsigned char>& px) {
+            const int w = size.width(), h = size.height();
+            if (px.size() < static_cast<std::size_t>(w) * h * 3) return -1.0;
+            const int x0 = w * 35 / 100, x1 = w * 65 / 100;
+            const int y0 = h * 35 / 100, y1 = h * 65 / 100;
+            double sum = 0;
+            for (int y = y0; y < y1; ++y) {
+                for (int x = x0; x < x1; ++x) {
+                    const std::size_t i = (static_cast<std::size_t>(y) * w + x) * 3;
+                    sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+                }
+            }
+            return sum / static_cast<double>((x1 - x0) * (y1 - y0));
+        };
+
+        const double perspMean = cropMean(renderer_->readRGBPixels());
+        setOrthographic(true);
+        step(8);
+        const double orthoMean = cropMean(renderer_->readRGBPixels());
+
+        check(perspMean > 8.0, "the perspective viewport renders a lit scene");
+        check(orthoMean > 8.0, "and so does the orthographic one");
+        check(perspMean > 0.0 && orthoMean > 0.0 &&
+                      std::abs(orthoMean - perspMean) < 0.25 * perspMean,
+              "the two projections shade the same scene to the same brightness");
+
+        setOrthographic(false);
+        step();
+    }
+
+    // --- and it casts the same shadows -------------------------------------
+    // A mean is a weak witness: a flat unlit fill of a light grey ground
+    // averages out close to a lit one, which is exactly how a projection that
+    // dropped every light could pass the check above. A SHADOW cannot be
+    // faked — it is the one thing the unlit path has no way to produce. So
+    // float the template's Box, work out where the sun must put its shadow on
+    // the ground, project THAT world point through whichever camera is live,
+    // and read the pixel. Lit ground beside it is the control.
+    {
+        newScene();
+        selectObject(nullptr);
+
+        auto* box = document_.scene().getObjectByName("Box");
+        auto* sun = document_.scene().getObjectByName("Sun");
+        if (box && sun) {
+            box->position.set(0.f, 3.f, 0.f);
+            // One light, so the shadow is a real hole rather than a dent in the
+            // ambient fill. The deferred path's denoised shadow plus its GI
+            // bounce close most of a 0.35 ambient back up, which leaves the
+            // measurement riding on a difference too small to state a claim on.
+            if (auto* ambient = document_.scene().getObjectByName("Ambient Light")) {
+                if (auto* light = ambient->as<Light>()) light->intensity = 0.f;
+            }
+
+            // The template's sun points at the origin, so its direction is the
+            // way its position falls. Where that direction drops the box centre
+            // onto y = 0 is where the shadow's middle lands.
+            Vector3 toGround = Vector3(0, 0, 0).sub(sun->position).normalize();
+            const float drop = (std::abs(toGround.y) > 1e-3f) ? 3.f / -toGround.y : 0.f;
+            const Vector3 shadowed = box->position.clone().addScaledVector(toGround, drop);
+            // The control: ground the box cannot reach, but still near enough to
+            // the pivot to stay in the middle of the window. The panels are drawn
+            // OVER the viewport, so a probe that wanders out to the edge reads
+            // ImGui, not the scene — lumaAt refuses anything past the centre.
+            const Vector3 lit(3.f, 0.f, 3.f);
+
+            const auto size = renderer_->size();
+            bool bottomUp = true;
+#ifdef THREEPP_WITH_VULKAN
+            if (dynamic_cast<VulkanRenderer*>(renderer_.get())) bottomUp = false;
+#endif
+            // Mean luminance of a small patch around a WORLD point, or -1 when
+            // it projects off-screen. Small enough to sit inside the shadow, big
+            // enough that one stray denoised pixel can't decide the answer.
+            const auto lumaAt = [&](const Vector3& world) {
+                const auto pixels = renderer_->readRGBPixels();
+                const int  w = size.width(), h = size.height();
+                if (pixels.size() < static_cast<std::size_t>(w) * h * 3) return -1.0;
+                Vector3 ndc = world;
+                ndc.project(viewCamera());
+                // Centre only: the hierarchy, inspector and console panels sit
+                // on top of the rendered frame, so a probe outside this box
+                // would be measuring UI.
+                if (std::abs(ndc.x) > 0.45f || ndc.y < -0.4f || ndc.y > 0.6f) return -1.0;
+                const int cx = static_cast<int>((ndc.x * 0.5f + 0.5f) * static_cast<float>(w));
+                const float v = bottomUp ? (ndc.y * 0.5f + 0.5f) : (0.5f - ndc.y * 0.5f);
+                const int cy = static_cast<int>(v * static_cast<float>(h));
+                double sum = 0;
+                int    n   = 0;
+                for (int y = cy - 2; y <= cy + 2; ++y) {
+                    for (int x = cx - 2; x <= cx + 2; ++x) {
+                        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+                        const std::size_t i = (static_cast<std::size_t>(y) * w + x) * 3;
+                        sum += 0.2126 * pixels[i] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i + 2];
+                        ++n;
+                    }
+                }
+                return n > 0 ? sum / n : -1.0;
+            };
+
+            // Perspective first — the reference for what "the sun casts a
+            // shadow here" looks like in this scene at all.
+            setOrthographic(false);
+            camera_.position.set(1.f, 16.f, 14.f);
+            orbit_->target.set(0.f, 0.f, 0.f);
+            step(24);// the deferred shadow denoiser needs a few frames to settle
+            const double perspLit = lumaAt(lit);
+            const double perspShadow = lumaAt(shadowed);
+            // >= 0 is the on-screen test (lumaAt answers -1 when a probe would
+            // land under a panel); a shadow that reads exactly 0 is the GL
+            // shadow map doing its job, not a failure.
+            check(perspLit >= 0.0 && perspShadow >= 0.0 && perspLit - perspShadow > 12.0,
+                  "the sun casts a visible shadow in the perspective view");
+
+            // Same claim, same points, parallel projection.
+            setOrthographic(true);
+            step(24);
+            const double orthoLit = lumaAt(lit);
+            const double orthoShadow = lumaAt(shadowed);
+            check(orthoLit >= 0.0 && orthoShadow >= 0.0 && orthoLit - orthoShadow > 12.0,
+                  "and the same shadow through the orthographic one");
+
+            setOrthographic(false);
+            step();
+        }
     }
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX

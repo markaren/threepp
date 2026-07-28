@@ -30,7 +30,9 @@ layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
     vec4 jitter;
+    vec4 camAux;// .x = parallel projection, .yzw = camera world forward
 } cam;
+#include "camera_ray.glsl"// camRayOrigin / camRayDir — perspective AND ortho
 
 struct DirLight   { vec3 direction; vec3 color; };
 struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
@@ -200,10 +202,8 @@ void main() {
     // at grazing geometry. (The march itself is blue-noise jittered along t.)
     const vec2 uv  = (vec2(hp) + 0.5) / vec2(float(hw), float(hh));
     const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + cam.jitter.xy;
-    const vec4 tVS   = cam.projInverse * vec4(ndc, 1.0, 1.0);
-    const vec3 dirVS = normalize(tVS.xyz / tVS.w);
-    const vec3 rd    = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
-    const vec3 camPos = cam.viewInverse[3].xyz;
+    const vec3 rd     = camRayDir(ndc);
+    const vec3 camPos = camRayOrigin(ndc);
     const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
 
     // Depth-aware clip: sky (id 0) → unbounded; else the surface ray-distance.

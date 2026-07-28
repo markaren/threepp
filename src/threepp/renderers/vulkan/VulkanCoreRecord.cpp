@@ -926,7 +926,12 @@ void VulkanRenderer::Impl::recordDepthOfField(VkCommandBuffer cb) {
             // physicalCamera off too), focal length from the camera's FOV on
             // the camera's OWN sensor (filmHeightM_, from PerspectiveCamera's
             // film gauge), focus plane at focusDistance_.
-            if (dofEnabled_ && dof_ && dof_->valid()) {
+            // Not under a parallel projection: an orthographic camera has no
+            // lens, so there is no aperture, no focal length and no circle of
+            // confusion — every point projects sharp by construction. The CoC
+            // derivation below would read a tan(fov/2) the projection never
+            // carried and defocus the frame by an arbitrary amount.
+            if (dofEnabled_ && !orthoFrame_ && dof_ && dof_->valid()) {
                 const float     kSensorH  = filmHeightM_;// sensor height (m)
                 constexpr float kMaxCocPx = 32.f;        // full-res radius clamp
                 const float f = (kSensorH * 0.5f) / std::max(tanHalfFovY_, 1e-3f);

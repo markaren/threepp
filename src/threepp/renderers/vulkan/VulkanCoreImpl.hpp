@@ -2933,6 +2933,28 @@ namespace threepp {
         enum class FrameState { Idle, RecordingPostShade, RecordingOrthoOnly };
         FrameState frameState_ = FrameState::Idle;
 
+        // setOrthographicSceneRendering: an ortho camera names a 3D VIEW, not a
+        // 2D overlay, so a standalone render() with one takes the deferred path.
+        // Off by default — every existing 2D/HUD user of this backend renders
+        // through the ortho-only overlay path and must keep doing so.
+        bool orthoSceneRendering_ = false;
+
+        // True for the duration of a deferred frame opened by an ORTHOGRAPHIC
+        // camera. Set in beginDeferredFrame, read by the passes that only make
+        // sense under a lens (DoF) and by the uploads that pack the projection
+        // for the shaders. Distinct from orthoSceneRendering_, which is the
+        // user's standing permission rather than this frame's projection.
+        bool orthoFrame_ = false;
+
+        // Does THIS render() call mean "shade the scene through a parallel
+        // projection"? Only a standalone one (nothing in flight) can — a second
+        // render() with an ortho camera over an open frame is the HUD pattern
+        // and stays overlay-only whatever the flag says.
+        [[nodiscard]] bool orthoSceneRender(const Camera& camera) const {
+            return orthoSceneRendering_ && frameState_ == FrameState::Idle &&
+                   camera.is<OrthographicCamera>();
+        }
+
         // Internal ortho camera used for the screen-space sprite overlay
         // auto-call from beginDeferredFrame. Lazy-created on first use, then
         // its bounds + projection are rebuilt each frame to track the

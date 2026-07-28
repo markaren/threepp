@@ -375,6 +375,11 @@ void VulkanRenderer::Impl::beginCommandRecording(VkCommandBuffer cb) {
         }
 
 bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
+            // Which projection this frame shades through. Read by the uploads
+            // (parallel-ray packing, jitter placement) and by DoF, which has no
+            // meaning without a lens. Stamped before the first upload below.
+            orthoFrame_ = camera.is<OrthographicCamera>();
+
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
             // Fence signaled ⇒ frame (frameSerial_ - kFramesInFlight) is
@@ -761,7 +766,13 @@ void VulkanRenderer::Impl::endFrame() {
         }
 
 void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
-            const bool isOrtho = camera.is<OrthographicCamera>();
+            // "Ortho" here means "route to the 2D overlay path", not "the camera
+            // is an OrthographicCamera". With setOrthographicSceneRendering on,
+            // a standalone ortho render is a 3D view and belongs on the deferred
+            // path; the HUD pattern's second call (a frame already in flight)
+            // is unaffected either way — orthoSceneRender() only answers true
+            // from Idle.
+            const bool isOrtho = camera.is<OrthographicCamera>() && !orthoSceneRender(camera);
 
             if (frameState_ == FrameState::Idle) {
                 if (isOrtho) {

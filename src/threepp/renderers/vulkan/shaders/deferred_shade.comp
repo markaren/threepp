@@ -65,7 +65,17 @@ layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
     vec4 jitter;
+    vec4 camAux;// .x = parallel projection, .yzw = camera world forward
 } cam;
+#include "camera_ray.glsl"// camRayOrigin / camRayDir — perspective AND ortho
+
+// This pixel's primary ray, set once at the top of main() and read by the
+// included _NN stages below (they shade the point this ray landed on and have
+// no ndc of their own to rebuild it from). Under a perspective camera
+// gPrimaryOrigin is the eye — the value those sites read out of viewInverse[3]
+// before parallel projections existed.
+vec3 gPrimaryOrigin = vec3(0.0);
+vec3 gPrimaryDir    = vec3(0.0, 0.0, -1.0);
 
 struct DirLight   { vec3 direction; vec3 color; };
 struct PointLight { vec3 position; float range; vec3 color; float decay; float radius; };
@@ -461,9 +471,8 @@ vec3 compositeClouds(vec3 col, ivec2 px, float sceneDist) {
     // off (short-circuited above) → byte-identical col*cl.a + cl.rgb.
     const vec2  uvp   = (vec2(px) + 0.5) / vec2(float(pc.width), float(pc.height));
     const vec2  ndcp  = vec2(uvp.x * 2.0 - 1.0, -(uvp.y * 2.0 - 1.0)) + cam.jitter.xy;
-    const vec4  tVS   = cam.projInverse * vec4(ndcp, 1.0, 1.0);
-    const vec3  dirWS = normalize((cam.viewInverse * vec4(normalize(tVS.xyz / tVS.w), 0.0)).xyz);
-    const vec3  camP  = cam.viewInverse[3].xyz;
+    const vec3  dirWS = camRayDir(ndcp);
+    const vec3  camP  = camRayOrigin(ndcp);
     // Clamp the camera→cloud leg defensively: cloud_march caps mean cloud depth at
     // 42 km, but a finite bound here means no future far-layer depth can overflow
     // the closed form regardless (heightFogOpticalDepth also self-clamps len + od).
@@ -633,7 +642,15 @@ void main() {
     // the surface → every ray occluded → the surface renders BLACK. cam.jitter.xy
     // equals the gbuffer's Halton jitter (same haltonFrame_, same frame).
     const vec2 ndc    = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + cam.jitter.xy;
-    const vec3 camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    // Where THIS pixel is looked at from. The eye under a perspective camera —
+    // unchanged — and this pixel's own near-plane point under a parallel one,
+    // which is what makes every camPos-relative term below (the view vector V,
+    // the fog and murk legs, the volumetric march origins, the foam LOD
+    // distance) come out right without each one growing its own ortho branch:
+    // the shading point lies on this ray, so camPos → worldPos IS the view leg.
+    const vec3 camPos = camRayOrigin(ndc);
+    gPrimaryOrigin    = camPos;
+    gPrimaryDir       = camRayDir(ndc);
     const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
 
     const uint id = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx).x
@@ -644,9 +661,7 @@ void main() {
         // non-dominant cluster" of a real surface pixel in practice, but
         // guard anyway — sky has no lit contribution to accumulate).
         if (pc.shadeMode == 1u) return;
-        const vec4 tVS   = cam.projInverse * vec4(ndc, 1.0, 1.0);
-        const vec3 dirVS = normalize(tVS.xyz / tVS.w);
-        const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
+        const vec3 dirWS = gPrimaryDir;
         // Sky pixels march the beams too — a lighthouse beam against the night
         // sky is exactly where the volumetric is most visible.
         // COVERAGE-WEIGHTED at MSAA complex pixels: a sky-DOMINANT edge pixel
@@ -810,7 +825,11 @@ void main() {
         // removed slope variance into the water roughness (fineKernelSq) so the
         // glint broadens into a coherent glitter sheen instead of aliasing. Near
         // water (small footprint) keeps its full crisp sparkle.
-        const float pixWorld = length(worldPos - camPos) * 2.0 * cam.projInverse[1][1]
+        // Under a PARALLEL projection the footprint doesn't grow with distance —
+        // projInverse[1][1] is already half the frustum height in world units,
+        // so the leg drops out and every pixel covers the same patch of water.
+        const float pixWorld = (cam.camAux.x > 0.5 ? 1.0 : length(worldPos - camPos))
+                             * 2.0 * cam.projInverse[1][1]
                              / max(float(pc.height), 1.0);            // world m / pixel (FOV+res correct)
         // The central-difference `tilt` measures wave slope at the ~2·eps (≈0.44 m)
         // scale; once the pixel footprint outgrows that, the slope it samples is

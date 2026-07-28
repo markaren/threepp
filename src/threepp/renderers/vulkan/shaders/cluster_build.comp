@@ -24,7 +24,9 @@ layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
     vec4 jitter;
+    vec4 camAux;// .x = parallel projection, .yzw = camera world forward
 } cam;
+#include "camera_ray.glsl"// camViewPointAtDist — perspective AND ortho
 
 // KEEP IN SYNC with deferred_shade.comp's ClusterLight + the CPU
 // GpuClusterLight (VulkanCoreImpl.hpp) — scalar layout, 64 bytes.
@@ -56,13 +58,12 @@ float sliceZ(uint k) {// lower view-distance bound of slice k
     return kClusterZMin * pow(kClusterZMax / kClusterZMin, float(k) / float(kClusterZ));
 }
 
-// A view-space point along the ray through `ndc`, scaled so its view DISTANCE
-// (-z, GL-style forward) equals d. The unproject depth is arbitrary — only
-// the ray direction matters.
+// A view-space point along the ray through `ndc` whose view DISTANCE (-z,
+// GL-style forward) is d — a frustum corner under a perspective camera, a BOX
+// corner under a parallel one (where the cell's lateral extent is the same at
+// every slice). camera_ray.glsl carries both forms.
 vec3 cornerAtDist(vec2 ndc, float d) {
-    const vec4 v = cam.projInverse * vec4(ndc, 0.5, 1.0);
-    const vec3 p = v.xyz / v.w;
-    return p * (d / max(-p.z, 1e-6));
+    return camViewPointAtDist(ndc, d);
 }
 
 void main() {

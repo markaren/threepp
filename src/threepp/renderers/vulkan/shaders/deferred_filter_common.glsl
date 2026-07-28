@@ -15,7 +15,9 @@ layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
     vec4 jitter;
+    vec4 camAux;// .x = parallel projection, .yzw = camera world forward
 } cam;
+#include "camera_ray.glsl"// camRayOrigin — perspective AND ortho
 layout(set = 0, binding = 3) uniform sampler2D  gbufNormalTex; // xyz=n*0.5+0.5, w=roughness (<0 unlit)
 layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;  // x = NDC z [0,1]
 layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;    // x = instanceId+1 (0 = sky)
@@ -71,6 +73,17 @@ vec3 worldFromDepth(ivec2 q, float depth) {
     const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + cam.jitter.xy;
     const vec4 vh  = cam.projInverse * vec4(ndc, depth, 1.0);
     return (cam.viewInverse * vec4(vh.xyz / vh.w, 1.0)).xyz;
+}
+
+// Where texel q is looked at FROM — the eye under a perspective camera, this
+// texel's own near-plane point under a parallel one. The à-trous plane stops
+// scale their tolerance by the view leg; measuring that leg from a shared eye
+// under an ortho camera (which sits wherever it had to to clear the scene
+// bounds) would make the tolerance a function of that arbitrary distance.
+vec3 camOriginAt(ivec2 q) {
+    const vec2 uv  = (vec2(q) + 0.5) / vec2(float(pc.width), float(pc.height));
+    const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + cam.jitter.xy;
+    return camRayOrigin(ndc);
 }
 
 // Closed-form exponential-height-fog optical depth along [a,b] — KEEP IN SYNC

@@ -44,6 +44,7 @@ layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
     vec4 jitter;
+    vec4 camAux;// .x = parallel projection, .yzw = camera world forward
 } cam;
 
 struct DirLight   { vec3 direction; vec3 color; };
@@ -247,10 +248,18 @@ void main() {
     if (i >= pc.count) return;
 
     const vec3 P      = centers[pc.centerBase + i].xyz;
-    const vec3 camPos = cam.viewInverse[3].xyz;
-    const vec3 toP    = P - camPos;
-    const float dist  = max(length(toP), 1e-4);
-    const vec3 rd     = toP / dist;// camera → particle (the view ray)
+    // The view ray that reaches this particle. Under a PARALLEL projection every
+    // ray shares the camera's forward and the origin is the particle's own
+    // footprint on the near plane, so the direction is known outright and the
+    // "camera" this particle sees is the point directly up-ray from it — which
+    // keeps the HG phase (backlit silver lining) and the march below honest
+    // instead of fanning them out from an eye that has no meaning here.
+    const bool  parallelCam = cam.camAux.x > 0.5;
+    const vec3  eye   = cam.viewInverse[3].xyz;
+    const vec3  rd    = parallelCam ? cam.camAux.yzw : normalize(P - eye);
+    const float dist  = parallelCam ? max(dot(P - eye, rd), 1e-4)
+                                    : max(length(P - eye), 1e-4);
+    const vec3  camPos = parallelCam ? (P - rd * dist) : eye;
 
     // Screen uv of the center (cluster cell + froxel LUT column). Behind the
     // camera / far off-screen: clamp — edge cells/columns are the least-wrong

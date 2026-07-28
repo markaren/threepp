@@ -70,7 +70,11 @@ void main() {
         }
         const vec3  Nc     = normalize(nC.xyz * 2.0 - 1.0);
         const vec3  Pc     = worldFromDepth(px, texelFetch(gbufDepthTex, px, 0).x);
-        const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        // Where this texel is looked at from — the eye under a perspective
+        // camera, the texel's own near-plane point under a parallel one. The
+        // plane edge stop, the kernel's view distance and the recombine's fog
+        // leg all measure from it.
+        const vec3  camPos = camOriginAt(px);
         const float planeScale = 1.0 / max(0.035 * length(Pc - camPos), 1e-3);
         // .a < 0 marks GLASS (refraction): ID-based edge stop (blur across the
         // curve); opaque reflection keeps the normal-stopped kernel (mirrors crisp).

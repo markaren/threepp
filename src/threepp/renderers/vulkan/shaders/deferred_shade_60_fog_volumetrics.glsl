@@ -160,7 +160,10 @@ vec3 applyMurk(vec3 col, vec3 ro, vec3 hit) {
 float heightFogSkyOpticalDepth(vec3 dir) {
     if (clouds.hfDensity <= 0.0) return 0.0;
     const float H    = max(clouds.hfFalloff, 1e-3);
-    const float hCam = cam.viewInverse[3].y - clouds.hfBaseY;// camera height above the base
+    // Height of the ray's START above the fog base. Under a parallel projection
+    // that is this pixel's own near-plane point, not the shared eye — a top-down
+    // ortho view would otherwise integrate every column from the same altitude.
+    const float hCam = gPrimaryOrigin.y - clouds.hfBaseY;
     const float m    = max(dir.y, 0.02);                     // elevation; floor the horizon
     // ∫₀^∞ σ0·e^(−max(hCam+m·t,0)/H) dt. Above base: a pure decaying column;
     // below base: a constant-σ0 slab (−hCam/m long) precedes the decaying part.
@@ -378,8 +381,6 @@ vec3 volumetricDirScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
 // path uses the same expression). Volumetric in-scatter is NOT included: that is
 // a per-pixel view-ray integral added once, at full weight, by the caller.
 vec3 skyBackground(vec2 ndc) {
-    const vec4 tVS   = cam.projInverse * vec4(ndc, 1.0, 1.0);
-    const vec3 dirVS = normalize(tVS.xyz / tVS.w);
-    const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
+    const vec3 dirWS = camRayDir(ndc);
     return applySkyFog(sampleEnvLod(dirWS, 0.0) + proceduralStars(dirWS), dirWS);
 }

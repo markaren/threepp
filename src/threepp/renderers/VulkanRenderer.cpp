@@ -459,7 +459,13 @@ namespace threepp {
         // lastVisibleEntries_ and the next deferred frame
         // cold-starts (visibly drops to ~1-spp quality).
         // The ortho overlay record path walks the HUD scene directly instead.
-        if (!camera.is<OrthographicCamera>() && !secondaryOverlayPane) {
+        // An ortho camera the user has declared a 3D view (see
+        // setOrthographicSceneRendering) is deferred-render-bound like any
+        // perspective one and DOES need the build — without it the TLAS,
+        // material descs and visible-entry list this frame's shade reads would
+        // be whatever the last perspective frame left behind.
+        const bool orthoSceneView = core()->orthoSceneRender(camera);
+        if ((!camera.is<OrthographicCamera>() || orthoSceneView) && !secondaryOverlayPane) {
             const auto sceneStart = std::chrono::high_resolution_clock::now();
             core()->ensureSceneBuilt(scene, camera);
             // World-space Sprites (screenSpace == false) are drawn by the overlay
@@ -1199,6 +1205,14 @@ namespace threepp {
 
     float VulkanRenderer::renderScale() const {
         return core()->renderScale_;
+    }
+
+    void VulkanRenderer::setOrthographicSceneRendering(bool enabled) {
+        core()->orthoSceneRendering_ = enabled;
+    }
+
+    bool VulkanRenderer::orthographicSceneRendering() const {
+        return core()->orthoSceneRendering_;
     }
 
     void VulkanRenderer::setFsr(bool enabled) {

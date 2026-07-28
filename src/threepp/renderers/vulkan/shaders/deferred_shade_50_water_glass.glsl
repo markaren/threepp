@@ -296,8 +296,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             // compute has no derivatives; a distance-based estimate (pixel
             // angle ≈ 0.001 rad) lands within ±1 mip of the true footprint,
             // indistinguishable for band-limited noise content.
-            const vec3  camPosF = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
-            const float distF   = length(P - camPosF);
+            const float distF   = length(P - gPrimaryOrigin);// view leg of THIS pixel's ray
             const float lodMicro = log2(max(1.0, distF * 0.128)); // 512 texels / 4 m · 0.001
             const float lodLace  = log2(max(1.0, distF * 0.0427));// 512 texels / 12 m · 0.001
             const float lodEdge  = log2(max(1.0, distF * 0.064)); // 512 texels / 8 m · 0.001

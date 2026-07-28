@@ -207,6 +207,30 @@ namespace threepp {
         void setRenderScale(float scale);
         [[nodiscard]] float renderScale() const;
 
+        // ── Orthographic camera: 3D view or 2D overlay? ──────────────────
+        // An OrthographicCamera means two different things to this backend. By
+        // default (false) a standalone render() with one is the HUD/2D path:
+        // the scene's Sprites, Lines, Points and Meshes are drawn as flat
+        // unlit fills over the swapchain — what an SVG layer or a screen-space
+        // overlay wants, and what every 2D user of this renderer already gets.
+        //
+        // Set true when the ortho camera is a real 3D VIEW (an editor's axis
+        // views, an isometric game camera). The frame then takes the same
+        // deferred path a perspective camera does — G-buffer, analytic lights,
+        // ray-traced shadows, GI, reflections, fog, tone mapping — so the two
+        // projections shade identically instead of one falling back to flat
+        // colour. Parallel rays are reconstructed per pixel, which costs one
+        // uniform-branch in the shading passes and nothing when off.
+        //
+        // Only the STANDALONE render() call is affected. The HUD pattern (a
+        // perspective render(), then a second render() with an ortho camera
+        // over a HUD scene) still composes overlay-only onto the open frame
+        // regardless of this flag. Depth of field is skipped under an ortho
+        // camera: a parallel projection has no lens, so there is no circle of
+        // confusion to compute.
+        void setOrthographicSceneRendering(bool enabled);
+        [[nodiscard]] bool orthographicSceneRendering() const;
+
         // ── AMD FidelityFX FSR 3.1 upscaler runtime toggle ───────────────
         // Only meaningful when built with -DTHREEPP_WITH_FSR (Windows/Vulkan) and
         // the FSR context created (fsrAvailable() == true); otherwise this is a

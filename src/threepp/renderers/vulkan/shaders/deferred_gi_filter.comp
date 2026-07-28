@@ -86,7 +86,10 @@ void main() {
 
     const vec3  Nc     = normalize(nC.xyz * 2.0 - 1.0);
     const vec3  Pc     = worldFromDepth(px, texelFetch(gbufDepthTex, px, 0).x);
-    const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    // Where this texel is looked at from — the eye under a perspective camera,
+    // the texel's own near-plane point under a parallel one. Both the plane
+    // edge stop below and the recombine's fog leg measure from it.
+    const vec3  camPos = camOriginAt(px);
     const float planeScale = 1.0 / max(0.035 * length(Pc - camPos), 1e-3);
     // Double-sided surface (ids flags bit 4): the raster flips N viewer-ward,
     // so neighbouring texels of one cutout card can carry OPPOSITE normals —

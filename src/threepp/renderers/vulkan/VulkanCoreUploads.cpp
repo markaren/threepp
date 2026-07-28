@@ -8,9 +8,12 @@ namespace threepp {
         for (auto& b : cameraUbos) {
             b = createBuffer(
                     ctx->allocator(), ctx->device(),
-                    /*size*/ 2 * 16 * sizeof(float) + 4 * sizeof(float),
+                    /*size*/ 2 * 16 * sizeof(float) + 8 * sizeof(float),
                     // viewInverse + projInverse + jitter (.xy = clip-space
                     // sub-pixel offset matching raster's Halton, .zw = 1/res)
+                    // + camAux (.x = parallel projection, .yzw = world forward).
+                    // Shaders that don't need camAux declare the block without
+                    // it — a trailing member only the readers have to know about.
                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -392,7 +395,11 @@ namespace threepp {
         // Stash tan(fovY/2) for the DoF focal-length derivation —
         // extracted from the projection matrix (proj[1][1] = 1/tan) so
         // it works for any camera type without a PerspectiveCamera cast.
-        if (std::abs(camera.projectionMatrix.elements[5]) > 1e-6f)
+        // Except an orthographic one, where proj[1][1] is 2/(top-bottom) — a
+        // length, not a tangent — and the derivation is meaningless. The DoF
+        // pass is skipped for that frame (a parallel projection has no lens),
+        // so the last perspective value is simply left standing.
+        if (!orthoFrame_ && std::abs(camera.projectionMatrix.elements[5]) > 1e-6f)
             tanHalfFovY_ = 1.f / std::abs(camera.projectionMatrix.elements[5]);
 
         // ...and the SENSOR that FOV was derived from. threepp's
@@ -424,7 +431,7 @@ namespace threepp {
         projP8_ = camera.projectionMatrix.elements[8];
         projP9_ = camera.projectionMatrix.elements[9];
 
-        float data[36];
+        float data[40];
         std::memcpy(data + 0,  camera.matrixWorld->elements.data(), 64);
         // Reverse-Z projInverse (matches the reverse-Z VP the raster uses) so
         // depth reconstruction (deferred worldFromDepth, hybrid primary) is
@@ -467,6 +474,17 @@ namespace threepp {
                 fsrCamNear_ = pcam->nearPlane;
                 fsrCamFar_  = pcam->farPlane;
                 fsrCamFovY_ = pcam->fov * 3.14159265f / 180.f;// vertical FOV, radians
+            } else if (auto* ocam = dynamic_cast<OrthographicCamera*>(&camera)) {
+                // A parallel projection has no field of view. FSR only feeds
+                // fovY into its disocclusion/reactivity heuristics, so hand it
+                // the angle a perspective camera would need to cover the same
+                // frustum height at the far plane — the closest honest answer,
+                // and one that at least scales with the zoom instead of holding
+                // whatever the last perspective frame left behind.
+                fsrCamNear_ = ocam->nearPlane;
+                fsrCamFar_  = ocam->farPlane;
+                const float halfH = 0.5f * std::abs(ocam->top - ocam->bottom);
+                fsrCamFovY_ = 2.f * std::atan(halfH / std::max(ocam->farPlane, 1e-3f));
             }
         } else
 #endif
@@ -513,6 +531,25 @@ namespace threepp {
         // want). First frame: self-seed to curr so the delta is zero.
         data[34] = rasterPrevJitterValid_ ? rasterPrevJitter_[0] : jClipX;
         data[35] = rasterPrevJitterValid_ ? rasterPrevJitter_[1] : jClipY;
+
+        // camAux — the two things a shader cannot get from the matrices alone
+        // cheaply. .x flags a PARALLEL projection: under one the primary rays
+        // share a direction and each pixel has its OWN origin, so every ray the
+        // shade builds from the eye point (view vector, fog leg, sky ray, cloud
+        // march) has to be rebuilt from that pixel's ray instead. .yzw is the
+        // camera's world-space forward, which IS that shared direction — the
+        // -Z column of matrixWorld (col2 points backward). Zero-length only for
+        // a degenerate camera matrix; the shaders never read it unless .x is 1.
+        {
+            const auto& wme = camera.matrixWorld->elements;
+            float fx = -wme[8], fy = -wme[9], fz = -wme[10];
+            const float len = std::sqrt(fx * fx + fy * fy + fz * fz);
+            if (len > 1e-12f) { fx /= len; fy /= len; fz /= len; }
+            data[36] = orthoFrame_ ? 1.f : 0.f;
+            data[37] = fx;
+            data[38] = fy;
+            data[39] = fz;
+        }
 
         // Build camera basis-vector buffer matching PrevCameraUbo layout.
         // matrixWorld column-major: col0=right, col1=up, col2=backward(-fwd), col3=pos.
@@ -612,6 +649,17 @@ namespace threepp {
                 fsrCamNear_ = pcam->nearPlane;
                 fsrCamFar_  = pcam->farPlane;
                 fsrCamFovY_ = pcam->fov * 3.14159265f / 180.f;// vertical FOV, radians
+            } else if (auto* ocam = dynamic_cast<OrthographicCamera*>(&camera)) {
+                // A parallel projection has no field of view. FSR only feeds
+                // fovY into its disocclusion/reactivity heuristics, so hand it
+                // the angle a perspective camera would need to cover the same
+                // frustum height at the far plane — the closest honest answer,
+                // and one that at least scales with the zoom instead of holding
+                // whatever the last perspective frame left behind.
+                fsrCamNear_ = ocam->nearPlane;
+                fsrCamFar_  = ocam->farPlane;
+                const float halfH = 0.5f * std::abs(ocam->top - ocam->bottom);
+                fsrCamFovY_ = 2.f * std::atan(halfH / std::max(ocam->farPlane, 1e-3f));
             }
         } else
 #endif
@@ -686,11 +734,31 @@ namespace threepp {
         // Apply jitter by shifting the projection matrix's m02/m12 (the
         // entries that translate the projected NDC). For a column-major
         // 4x4 stored in elements[c*4 + r], that's elements[8] (col=2,row=0)
-        // and elements[9] (col=2,row=1).
+        // and elements[9] (col=2,row=1). Those entries multiply the VIEW-space
+        // z on the way into clip.x/clip.y, and clip.w is -z_view under a
+        // perspective projection — so the shear lands as a constant -jClip in
+        // NDC at every depth (the sign the deferred shade undoes by ADDING
+        // cam.jitter.xy back to the pixel's NDC).
+        //
+        // A PARALLEL projection has clip.w == 1, so those same entries would
+        // scale with z_view instead: a sub-pixel offset that grows with
+        // distance. The translation entries m03/m13 — elements[12] and [13] —
+        // are the ones that shift NDC by a constant there, and they land it
+        // with the OPPOSITE sign (they add straight into clip, no negated w to
+        // divide by), so the offset is negated to keep the NDC shift identical
+        // in both. Getting this sign wrong is not subtle: the shade then
+        // reconstructs worldPos a pixel off the surface it shades, its ambient
+        // rays start under the geometry and every one of them is occluded —
+        // black bands across a lit ground.
         Matrix4 projJ;
         std::memcpy(projJ.elements.data(), proj.elements.data(), 64);
-        projJ.elements[8]  += jClipX;
-        projJ.elements[9]  += jClipY;
+        if (orthoFrame_) {
+            projJ.elements[12] -= jClipX;
+            projJ.elements[13] -= jClipY;
+        } else {
+            projJ.elements[8]  += jClipX;
+            projJ.elements[9]  += jClipY;
+        }
         Matrix4 vpJ;
         vpJ.multiplyMatrices(projJ, view);
 

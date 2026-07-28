@@ -186,8 +186,7 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     // dispatch / barrier.
     {
         const vec2  size   = vec2(float(pc.width), float(pc.height));
-        const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
-        const float distC  = length(P - camPos);
+        const float distC  = length(P - gPrimaryOrigin);// view leg of THIS pixel's ray
         const float mvLen  = length(texture(gbufMotionTex, paneToPhys(gbufMotionTex, (vec2(px) + 0.5) / size)).rg);
         const uint  spMax   = (mvLen > 0.01) ? 2u : 5u;
         const float mTarget = 20.0;
