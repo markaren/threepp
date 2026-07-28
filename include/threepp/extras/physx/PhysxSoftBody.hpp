@@ -306,7 +306,16 @@ namespace threepp {
                 throw std::runtime_error("SoftBody: visual geometry has no position attribute");
             }
             const size_t visualVerts = vPosAttr->count();
-            useDirectMapping_ = (visualVerts == static_cast<size_t>(nbCollVerts_));
+            // Equal vertex counts are necessary but NOT sufficient. The cooker
+            // remeshes the surface, so a match can be pure coincidence — a
+            // 221-vertex sphere cooking to a 221-vertex tet mesh whose vertices
+            // are in a completely different order — and skinning through that
+            // permutation scatters the mesh (a pole vertex lands at the far
+            // pole). Only take the fast path when the positions really do
+            // correspond, which is the case the direct mapping was meant for:
+            // a cook that passed the visual vertices through unchanged.
+            useDirectMapping_ = (visualVerts == static_cast<size_t>(nbCollVerts_)) &&
+                                positionsCorrespond(*vPosAttr);
 
             if (!useDirectMapping_) {
                 if (cachedBindings) {
@@ -712,9 +721,37 @@ namespace threepp {
             visualGeometry_->boundingSphere = Sphere(c, c.distanceTo(mx));
         }
 
+        // Does collision vertex i sit on visual vertex i, for every i? That is
+        // what makes the direct (index-for-index) skinning path valid. The
+        // tolerance is scale-relative because the cooker welds within 1 mm at
+        // unit scale, and a model may be authored in any units.
+        [[nodiscard]] bool positionsCorrespond(const TypedBufferAttribute<float>& positions) const {
+
+            const auto& vp = positions.array();
+            ::physx::PxVec3 lo(FLT_MAX), hi(-FLT_MAX);
+            for (size_t i = 0; i < vp.size() / 3; ++i) {
+                const ::physx::PxVec3 p(vp[i * 3], vp[i * 3 + 1], vp[i * 3 + 2]);
+                lo = lo.minimum(p);
+                hi = hi.maximum(p);
+            }
+            const float tolerance = std::max(1e-6f, 1e-4f * (hi - lo).magnitude());
+            for (::physx::PxU32 i = 0; i < nbCollVerts_; ++i) {
+                const ::physx::PxVec3 c = positionsInvMass_[i].getXYZ();
+                if (std::fabs(c.x - vp[i * 3 + 0]) > tolerance ||
+                    std::fabs(c.y - vp[i * 3 + 1]) > tolerance ||
+                    std::fabs(c.z - vp[i * 3 + 2]) > tolerance) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         // Build per-vertex bindings from visual mesh into the collision tet mesh.
-        // Walks every tet's AABB (with a small pad) and tests barycentric containment.
-        // Outside vertices fall back to closest point on tet surface. Threaded.
+        // Walks every tet's AABB (with a small pad) and tests barycentric
+        // containment. A vertex outside every tet — the cooked hull does not
+        // reach the sharp corners of a cone or a rotated box — binds to the
+        // nearest tet by extrapolation, so it still sits exactly where it was
+        // authored. Threaded.
         void buildBindings() {
             using namespace ::physx;
             auto vPosAttr = visualGeometry_->getAttribute<float>("position");
@@ -758,6 +795,9 @@ namespace threepp {
                 mx += PxVec3(aabbPad);
                 tetsData.push_back({i0, i1, i2, i3, p0, p1, p2, p3, mn, mx});
             }
+            // Nothing to bind against; leave the bindings zeroed rather than
+            // indexing an empty array below.
+            if (tetsData.empty()) return;
 
             const auto& vpos = vPosAttr->array();
             const float eps = 5e-3f;
@@ -771,27 +811,36 @@ namespace threepp {
                 size_t end = std::min(start + chunk, vVerts);
                 if (start >= end) break;
                 ths.emplace_back([&, start, end]() {
+                    // Barycentric coordinates of v in T. Not clamped: outside a
+                    // tet they go negative and still sum to 1, which is what
+                    // makes an outside vertex reproduce EXACTLY at rest.
+                    const auto baryOf = [](const PxVec3& v, const TetData& T, TetBind& out) {
+                        const float V = tet_util::tetVolume6(T.p0, T.p1, T.p2, T.p3);
+                        if (std::fabs(V) < 1e-8f) return false;
+                        float w0 = tet_util::tetVolume6(v, T.p1, T.p2, T.p3) / V;
+                        float w1 = tet_util::tetVolume6(T.p0, v, T.p2, T.p3) / V;
+                        float w2 = tet_util::tetVolume6(T.p0, T.p1, v, T.p3) / V;
+                        float w3 = tet_util::tetVolume6(T.p0, T.p1, T.p2, v) / V;
+                        float sum = w0 + w1 + w2 + w3;
+                        if (std::fabs(sum) < 1e-6f) sum = 1.0f;
+                        out = {T.i0, T.i1, T.i2, T.i3, w0 / sum, w1 / sum, w2 / sum, w3 / sum};
+                        return true;
+                    };
+
                     for (size_t vi = start; vi < end; ++vi) {
                         PxVec3 v(vpos[vi * 3 + 0], vpos[vi * 3 + 1], vpos[vi * 3 + 2]);
                         float bestDist = FLT_MAX;
-                        TetBind best{tetsData[0].i0, tetsData[0].i1, tetsData[0].i2, tetsData[0].i3,
-                                     0.25f, 0.25f, 0.25f, 0.25f};
+                        const TetData* bestTet = nullptr;
                         bool found = false;
                         for (const TetData& T : tetsData) {
                             if (v.x < T.aabbMin.x || v.x > T.aabbMax.x ||
                                 v.y < T.aabbMin.y || v.y > T.aabbMax.y ||
                                 v.z < T.aabbMin.z || v.z > T.aabbMax.z) continue;
-                            float V = tet_util::tetVolume6(T.p0, T.p1, T.p2, T.p3);
-                            if (std::fabs(V) < 1e-8f) continue;
-                            float w0 = tet_util::tetVolume6(v, T.p1, T.p2, T.p3) / V;
-                            float w1 = tet_util::tetVolume6(T.p0, v, T.p2, T.p3) / V;
-                            float w2 = tet_util::tetVolume6(T.p0, T.p1, v, T.p3) / V;
-                            float w3 = tet_util::tetVolume6(T.p0, T.p1, T.p2, v) / V;
-                            if (w0 >= -eps && w1 >= -eps && w2 >= -eps && w3 >= -eps) {
-                                float sum = w0 + w1 + w2 + w3;
-                                if (std::fabs(sum) < 1e-6f) sum = 1.0f;
-                                bindings_[vi] = {T.i0, T.i1, T.i2, T.i3,
-                                                 w0 / sum, w1 / sum, w2 / sum, w3 / sum};
+                            TetBind bind{};
+                            if (!baryOf(v, T, bind)) continue;
+                            if (bind.w0 >= -eps && bind.w1 >= -eps &&
+                                bind.w2 >= -eps && bind.w3 >= -eps) {
+                                bindings_[vi] = bind;
                                 found = true;
                                 break;
                             }
@@ -799,10 +848,50 @@ namespace threepp {
                             const float d2 = (r.point - v).magnitudeSquared();
                             if (d2 < bestDist) {
                                 bestDist = d2;
-                                best = {T.i0, T.i1, T.i2, T.i3, r.w0, r.w1, r.w2, r.w3};
+                                bestTet = &T;
                             }
                         }
-                        if (!found) bindings_[vi] = best;
+                        if (found) continue;
+
+                        // The AABB pad is a speed filter, not a correctness
+                        // bound. A visual vertex can sit further outside the
+                        // collision hull than the pad — the remeshed hull cuts
+                        // the corners of a rotated box, for one — and leaving
+                        // such a vertex on an arbitrary tet teleports it, and
+                        // the whole face it belongs to, into the middle of the
+                        // body. Only the stray vertices pay for this pass.
+                        if (!bestTet) {
+                            for (const TetData& T : tetsData) {
+                                auto r = tet_util::closestPointTetrahedron(v, T.p0, T.p1, T.p2, T.p3);
+                                const float d2 = (r.point - v).magnitudeSquared();
+                                if (d2 < bestDist) {
+                                    bestDist = d2;
+                                    bestTet = &T;
+                                }
+                            }
+                        }
+                        if (!bestTet) bestTet = &tetsData[0];
+
+                        // Bind by extrapolation from the nearest tet, so a
+                        // vertex outside the hull sits exactly where it was
+                        // authored instead of snapped onto the hull surface
+                        // (which visibly rounds off sharp corners). Runaway
+                        // weights would amplify that tet's deformation, so a
+                        // far-outside vertex still falls back to the clamped
+                        // surface point.
+                        TetBind bind{};
+                        const bool usable =
+                                baryOf(v, *bestTet, bind) &&
+                                std::max({std::fabs(bind.w0), std::fabs(bind.w1),
+                                          std::fabs(bind.w2), std::fabs(bind.w3)}) <= 2.f;
+                        if (usable) {
+                            bindings_[vi] = bind;
+                        } else {
+                            auto r = tet_util::closestPointTetrahedron(
+                                    v, bestTet->p0, bestTet->p1, bestTet->p2, bestTet->p3);
+                            bindings_[vi] = {bestTet->i0, bestTet->i1, bestTet->i2, bestTet->i3,
+                                             r.w0, r.w1, r.w2, r.w3};
+                        }
                     }
                 });
             }
