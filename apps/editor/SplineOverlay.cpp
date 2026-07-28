@@ -29,7 +29,7 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
-#include "threepp/extras/curves/RibbonGeometry.hpp"
+#include "threepp/extras/curves/RoadGeometry.hpp"
 #include "threepp/geometries/TubeGeometry.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -131,11 +131,17 @@ namespace {
                                        divisions, std::max(config.radius, 1e-3f),
                                        static_cast<unsigned int>(std::clamp(config.radialSegments, 3, 64)),
                                        config.closed));
-            case SplineConfig::MeshKind::Road:
-                return RibbonGeometry::create(
-                        *curve, RibbonGeometry::Params(
-                                        std::max(config.width, 1e-3f), divisions,
-                                        std::max(config.uvLength, 1e-3f), config.closed));
+            case SplineConfig::MeshKind::Road: {
+                // Not a ribbon: a road is consolidated into straights and arcs
+                // first (SplineConfig::roadPath), which is what keeps it full
+                // width through a bend tighter than its own half-width — and
+                // what the collider rebuilds from, so the two cannot disagree.
+                const auto road = config.roadPath(spline);
+                if (!road) return nullptr;
+                return RoadGeometry::create(
+                        *road, RoadGeometry::Params(std::max(config.width, 1e-3f),
+                                                    std::max(config.uvLength, 1e-3f)));
+            }
             case SplineConfig::MeshKind::None:
                 break;
         }

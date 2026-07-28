@@ -290,6 +290,15 @@ std::shared_ptr<CatmullRomCurve3> SplineConfig::curve(const Object3D& spline) co
             std::move(points), closed, curveTypeOf(type), tension);
 }
 
+std::optional<RoadPath> SplineConfig::roadPath(const Object3D& spline) const {
+
+    if (mesh != MeshKind::Road) return std::nullopt;
+    const auto path = curve(spline);
+    if (!path) return std::nullopt;
+
+    return RoadPath::fromCurve(*path, divisions(spline), closed);
+}
+
 unsigned int SplineConfig::divisions(const Object3D& spline) const {
 
     // The count the user authored is per SEGMENT; getPoints() divides the whole

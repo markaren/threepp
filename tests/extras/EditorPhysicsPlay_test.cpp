@@ -10,7 +10,7 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
-#include "threepp/extras/curves/RibbonGeometry.hpp"
+#include "threepp/extras/curves/RoadGeometry.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -63,9 +63,10 @@ namespace {
 
     // A spline that has generated its road, standing in for what the editor's
     // sync pass produces: the Group carries SplineConfig, its plain children
-    // are the control points, and one tagged Mesh holds the ribbon. Generating
+    // are the control points, and one tagged Mesh holds the surface. Generating
     // that mesh is app code (SplineOverlay.cpp), so a test builds it by hand
-    // from the same curve and the same parameters.
+    // from the same config — through SplineConfig::roadPath, which is also
+    // where the collider gets its primitives.
     struct Road {
         std::shared_ptr<Group> spline;
         std::shared_ptr<Mesh> mesh;
@@ -87,11 +88,9 @@ namespace {
             spline->add(node);
         }
 
-        auto curve = config.curve(*spline);
-        REQUIRE(curve != nullptr);
-        auto mesh = Mesh::create(RibbonGeometry::create(
-                *curve, RibbonGeometry::Params(width, config.divisions(*spline),
-                                               config.uvLength, config.closed)));
+        const auto road = config.roadPath(*spline);
+        REQUIRE(road.has_value());
+        auto mesh = Mesh::create(RoadGeometry::create(*road, width, config.uvLength));
         mesh->name = "Road";
         SplineConfig::markDerived(*mesh);
         spline->add(mesh);
@@ -270,6 +269,40 @@ TEST_CASE("a road collides through a corner", "[editor][physx]") {
     CHECK(session.bodyCount() == 2);
 
     checkRestsOnRoad(session, *ball);
+}
+
+TEST_CASE("a road wider than its own bends still holds a body up", "[editor][physx]") {
+
+    // The report this exists for: an S of two opposite bends, both tighter than
+    // the half-width, at which the ribbon this replaced folded — and a collider
+    // read off those folded triangles was a moiré of slivers a ball fell
+    // through or bounced off. The primitives behind the surface have no such
+    // state: the tight bends are pie sectors, and the wedges tiling them are
+    // convex whatever the radius.
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto road = makeRoad(scene,
+                         {Vector3(-8, 0, 0), Vector3(-4, 0, 0), Vector3(-2, 0, 3),
+                          Vector3(2, 0, -3), Vector3(4, 0, 0), Vector3(8, 0, 0)},
+                         6.f);
+    staticConfig(PhysicsConfig::Shape::Auto).write(*road.mesh);
+    scene.add(road.spline);
+
+    // One ball over the middle of the S, where the two bends meet, and one over
+    // the straight run leading into it.
+    auto onBend = makeFallingSphere(scene, Vector3(0.f, 3.f, 0.f));
+    auto onStraight = makeFallingSphere(scene, Vector3(-6.f, 3.f, 0.f));
+    onStraight->name = "Ball2";
+    scene.add(onBend);
+    scene.add(onStraight);
+
+    PhysicsPlaySession session;
+    session.start(scene);
+    CHECK(session.bodyCount() == 3);
+
+    checkRestsOnRoad(session, *onBend);
+    checkRestsOnRoad(session, *onStraight);
 }
 
 TEST_CASE("a static mesh that is no primitive collides as its triangles", "[editor][physx]") {

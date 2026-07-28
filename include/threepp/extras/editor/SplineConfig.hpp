@@ -26,6 +26,7 @@
 #ifndef THREEPP_EDITOR_SPLINECONFIG_HPP
 #define THREEPP_EDITOR_SPLINECONFIG_HPP
 
+#include "threepp/extras/curves/RoadPath.hpp"
 #include "threepp/math/Vector3.hpp"
 
 #include <cstddef>
@@ -130,6 +131,15 @@ namespace threepp::editor {
         // `spline`. One formula, so the overlay and the generated mesh are
         // tessellated alike.
         [[nodiscard]] unsigned int divisions(const Object3D& spline) const;
+
+        // The curve consolidated into straights and arcs, in the spline's local
+        // space. nullopt where curve() is. The road mesh and the road collider
+        // are both built from THIS, recomputed rather than shared: the
+        // segmentation is deterministic, so the two agree by construction
+        // without the collider having to read the vertices it is standing in
+        // for. nullopt for a spline that generates no road; the fit is an XZ
+        // one and only a road is promised to be flat enough for it.
+        [[nodiscard]] std::optional<RoadPath> roadPath(const Object3D& spline) const;
 
         static const char* label(Type type);
         static const char* label(MeshKind kind);
