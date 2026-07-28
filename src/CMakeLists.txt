@@ -74,6 +74,7 @@ set(publicHeaders
         "threepp/extras/editor/ScriptConfig.hpp"
         "threepp/extras/editor/ScriptWorkspace.hpp"
         "threepp/extras/editor/Selection.hpp"
+        "threepp/extras/editor/SensorConfig.hpp"
         "threepp/extras/editor/SplineConfig.hpp"
         "threepp/extras/imgui/ImguiContext.hpp"
 
@@ -375,6 +376,7 @@ set(sources
         "threepp/extras/editor/ScriptConfig.cpp"
         "threepp/extras/editor/ScriptWorkspace.cpp"
         "threepp/extras/editor/Selection.cpp"
+        "threepp/extras/editor/SensorConfig.cpp"
         "threepp/extras/editor/SplineConfig.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"
