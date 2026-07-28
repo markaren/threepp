@@ -487,8 +487,11 @@ int EditorApp::runScreenshot() {
             config.write(*mesh);
         }
     }
+    // Returns the body it dropped, so a caller can instrument it. `label` is the
+    // undo label AND the name, which makes the hierarchy in these shots readable.
     const auto drop = [&](Primitive kind, const Vector3& from, const char* label) {
         auto object = ObjectFactory::createPrimitive(kind, scene);
+        object->name = label;
         object->position.copy(from);
         PhysicsConfig config;
         config.enabled = true;
@@ -499,6 +502,17 @@ int EditorApp::runScreenshot() {
     };
     drop(Primitive::Sphere, {-6.f, 3.f, 4.f}, "Ball on S");
     drop(Primitive::Sphere, {0.f, 3.f, -7.f}, "Ball on default");
+    // An IMU on one of the falling bodies, so the Sensors tab has a signal with
+    // shape in it: free fall reads ~0, the landing impact spikes, and rest
+    // settles on +g. A flat trace proves the plot draws; that one proves it is
+    // plotting physics.
+    if (auto* ball = document_.scene().getObjectByName("Ball on S")) {
+        SensorConfig imu;
+        imu.enabled = true;
+        imu.type = SensorConfig::Type::Imu;
+        imu.rateHz = 60.f;
+        imu.write(*ball);
+    }
     // A box, not a ball: a sphere on a hill rolls off it, and what wants
     // showing here is a body sitting still on a graded surface — the case a
     // trimmed offset broke, since it invented a height at every corner it cut
@@ -598,7 +612,9 @@ int EditorApp::runScreenshot() {
         // Wall-clock, and waiting on the CLOUD rather than on a frame count: a
         // scan is rate-gated off the physics accumulator, so how many frames it
         // takes depends on the machine.
-        for (int i = 0; i < 400 && cloudPoints() == 0; ++i) playFor(0.05f);
+        // `sensors_` is null in a build without PhysX, where no scan will ever
+        // arrive — waiting the full budget for one would burn twenty seconds.
+        for (int i = 0; i < 400 && sensors_ && cloudPoints() == 0; ++i) playFor(0.05f);
         camera_.position.set(-11.f, 9.f, 20.f);
         orbit_->target.set(0.f, 1.5f, 6.f);
         playFor(0.4f);
@@ -612,6 +628,13 @@ int EditorApp::runScreenshot() {
         orbit_->target.set(0.f, 1.2f, 6.f);
         playFor(0.4f);
         wrote = shoot(sibling("_sensor_cloud_near")) && wrote;
+
+        // And the readout, with the Sensors tab brought forward. The plots are
+        // the other half of "see them live", and a plot nobody has looked at is
+        // a plot nobody knows is drawing the right thing.
+        selectSensorsTab_ = true;
+        playFor(0.4f);
+        wrote = shoot(sibling("_sensor_panel")) && wrote;
     }
     camera_.position.set(-1.f, 27.f, 27.f);
     orbit_->target.set(0.f, 0.f, 5.f);

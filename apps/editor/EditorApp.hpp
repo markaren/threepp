@@ -540,6 +540,10 @@ namespace threepp::editor {
         float toolbarHeight_ = 0.f;
         float statusHeight_ = 0.f;
         bool bottomPanelOpen_ = true;
+        // One-shot request to bring the Sensors tab forward. Consumed by the tab
+        // bar on the next frame it draws. Exists for --screenshot: a live readout
+        // that nobody has looked at is a readout nobody knows is right.
+        bool selectSensorsTab_ = false;
         std::deque<std::string> console_;
         std::string renameBuffer_;
         // Name as it was when the inspector's name field gained focus, so the

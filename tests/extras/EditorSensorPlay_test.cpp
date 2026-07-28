@@ -25,6 +25,7 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -367,6 +368,76 @@ TEST_CASE("A vision sensor without a renderer is built and says so") {
     CHECK(entry.scans == 0);// nothing to scan with
     rig.stop();
     CHECK(rig.rig->children.empty());
+}
+
+TEST_CASE("An authored contact sensor reports landing on the ground") {
+
+    Rig rig;
+
+    auto ground = ObjectFactory::createPrimitive(Primitive::Box, rig.scene);
+    ground->name = "Ground";
+    ground->scale.set(20.f, 0.4f, 20.f);
+    ground->position.set(0.f, -0.2f, 0.f);
+    {
+        PhysicsConfig floor;
+        floor.enabled = true;
+        floor.body = PhysicsConfig::Body::Static;
+        floor.shape = PhysicsConfig::Shape::Box;
+        floor.write(*ground);
+    }
+    rig.scene.add(ground);
+
+    auto foot = ObjectFactory::createPrimitive(Primitive::Box, rig.scene);
+    foot->name = "Foot";
+    foot->position.set(0.f, 1.f, 0.f);
+    {
+        PhysicsConfig physics;
+        physics.enabled = true;
+        physics.body = PhysicsConfig::Body::Dynamic;
+        physics.shape = PhysicsConfig::Shape::Box;
+        physics.mass = 1.f;
+        physics.restitution = 0.f;
+        physics.write(*foot);
+
+        SensorConfig sensor;
+        sensor.enabled = true;
+        sensor.type = SensorConfig::Type::Contact;
+        sensor.rateHz = 0.f;
+        sensor.write(*foot);
+    }
+    rig.scene.add(foot);
+
+    rig.start();
+    REQUIRE(rig.sensors.liveCount() == 1);
+    const auto& entry = *rig.sensors.entries().front();
+    CHECK(entry.status.empty());
+
+    // Not touching to begin with: it is a metre up.
+    rig.update(1);
+    CHECK_FALSE(entry.inContact);
+
+    // Fall and land. Waiting on the LATCH rather than on a frame count keeps
+    // this about the sensor instead of about how fast a box falls.
+    bool touched = false;
+    for (int i = 0; i < 300 && !touched; ++i) {
+        rig.update(1);
+        touched = entry.inContact;
+    }
+    CHECK(touched);
+    CHECK(entry.samples > 0);
+
+    // A force, not just a boolean. PhysX stops reporting a sleeping pair, so the
+    // peak over the settle is the honest thing to assert - a resting contact goes
+    // quiet while still physically touching.
+    float peak = 0.f;
+    for (int i = 0; i < 120; ++i) {
+        rig.update(1);
+        peak = std::max(peak, entry.contactForce);
+    }
+    // Magnitude only: the manifold's per-axis split is a solver detail.
+    CHECK(peak > 0.f);
+
+    rig.stop();
 }
 
 TEST_CASE("Types that need an articulation are authored, not simulated") {

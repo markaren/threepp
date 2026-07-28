@@ -230,7 +230,12 @@ void EditorApp::drawBottomPanel() {
                 drawAssetsTab();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("Sensors")) {
+            ImGuiTabItemFlags sensorFlags = 0;
+            if (selectSensorsTab_) {
+                sensorFlags = ImGuiTabItemFlags_SetSelected;
+                selectSensorsTab_ = false;
+            }
+            if (ImGui::BeginTabItem("Sensors", nullptr, sensorFlags)) {
                 drawSensorsTab();
                 ImGui::EndTabItem();
             }
