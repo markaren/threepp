@@ -1320,6 +1320,12 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
             ds.depthTestEnable  = VK_TRUE;
             ds.depthWriteEnable = VK_FALSE;
             ds.depthCompareOp   = VK_COMPARE_OP_GREATER_OR_EQUAL;// reverse-Z (overlay vs unjitDepth)
+            // ...but DEPTH_TEST_ENABLE is dynamic (core in 1.3, same promoted
+            // set as the vkCmdSetCullMode already used here) so the draw loop
+            // can honour Material::depthTest. GL disables GL_DEPTH_TEST for
+            // such materials, which is what makes TransformControls gizmos and
+            // similar helpers draw through solid geometry; without this the
+            // overlay pass silently depth-rejected them.
 
             // Attachment 0 = swapchain color; attachment 1 = the overlay
             // edge-AA coverage mask (R8, no blending — any touch writes 1).
@@ -1336,11 +1342,12 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
             cb.attachmentCount = 2;
             cb.pAttachments    = cbas;
 
-            VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT,
-                                           VK_DYNAMIC_STATE_SCISSOR};
+            VkDynamicState dynStates[3] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                           VK_DYNAMIC_STATE_SCISSOR,
+                                           VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE};
             VkPipelineDynamicStateCreateInfo dyn{};
             dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-            dyn.dynamicStateCount = 2;
+            dyn.dynamicStateCount = 3;
             dyn.pDynamicStates    = dynStates;
 
             // mat4 mvp (64) + vec4 color (16) = 80 bytes, well under the
@@ -1400,12 +1407,13 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
             VkPipelineRasterizationStateCreateInfo rsBasic = rs;
             rsBasic.polygonMode = VK_POLYGON_MODE_FILL;
             rsBasic.cullMode    = VK_CULL_MODE_BACK_BIT;// overridden per draw (dynamic)
-            VkDynamicState dynFillStates[3] = {VK_DYNAMIC_STATE_VIEWPORT,
+            VkDynamicState dynFillStates[4] = {VK_DYNAMIC_STATE_VIEWPORT,
                                                VK_DYNAMIC_STATE_SCISSOR,
-                                               VK_DYNAMIC_STATE_CULL_MODE};
+                                               VK_DYNAMIC_STATE_CULL_MODE,
+                                               VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE};
             VkPipelineDynamicStateCreateInfo dynFill{};
             dynFill.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-            dynFill.dynamicStateCount = 3;
+            dynFill.dynamicStateCount = 4;
             dynFill.pDynamicStates    = dynFillStates;
             VkGraphicsPipelineCreateInfo gpciBasic = gpci;
             gpciBasic.pRasterizationState = &rsBasic;
@@ -1416,7 +1424,8 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
 
             // Alpha-blended fill variant. Standard "non-premultiplied" alpha:
             //   srcColor·srcAlpha + dstColor·(1-srcAlpha)
-            // Depth-test stays on (occluded by scene geometry), depth-write OFF
+            // Depth-test defaults on (occluded by scene geometry) but is
+            // dynamic per material.depthTest; depth-write OFF
             // so back-to-front order doesn't matter for the depth attachment
             // even if multiple transparent overlays overlap. Per-overlay
             // depth sorting is NOT performed — overlapping transparent

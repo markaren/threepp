@@ -1405,6 +1405,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         float opacity = 1.0f;
                         bool wireframe = false;
                         bool transparent = false;
+                        bool depthTest = true;
                         Side side = Side::Front;
                         if (auto* m = en.mesh->material().get()) {
                             if (auto* mc = dynamic_cast<MaterialWithColor*>(m)) {
@@ -1415,6 +1416,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                             }
                             opacity     = m->opacity;
                             transparent = m->transparent;
+                            depthTest   = m->depthTest;
                             side        = m->side;
                         }
                         // Wireframe takes precedence — wireframe lines are
@@ -1428,6 +1430,11 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
                             curPipeline = want;
                         }
+                        // GL parity: material.depthTest == false means "draw
+                        // through everything" (TransformControls gizmos and
+                        // helpers rely on it). Dynamic state, so it must be set
+                        // for every draw in this pass, not just when it changes.
+                        vkCmdSetDepthTestEnable(cb, depthTest ? VK_TRUE : VK_FALSE);
                         if (!wireframe) {
                             // Fill pipelines carry cull mode as dynamic state so
                             // material.side is honoured — Side::Double (SVG/UI
@@ -1546,6 +1553,8 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
                             curPipeline = want;
                         }
+                        vkCmdSetDepthTestEnable(cb, (matPtr && !matPtr->depthTest) ? VK_FALSE
+                                                                                   : VK_TRUE);
 
                         Matrix4 model;
                         std::memcpy(model.elements.data(), le.worldMatrix.data(), 64);
@@ -1609,6 +1618,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                         bool  isLine;
                         size_t idx;
                         bool  transparent;
+                        int   renderOrder;
                         float viewZ;// camera-space z (negative in front; smaller = farther)
                     };
                     std::vector<OverlayItem> overlayItems;
@@ -1633,18 +1643,28 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                             auto* mw = dynamic_cast<MaterialWithWireframe*>(m);
                             tr = m->transparent && !(mw && mw->wireframe);
                         }
-                        overlayItems.push_back({false, i, tr, viewZOf(en.worldMatrix)});
+                        overlayItems.push_back({false, i, tr, en.mesh->renderOrder,
+                                                viewZOf(en.worldMatrix)});
                     }
                     for (size_t i = 0; i < lastVisibleLines_.size(); ++i) {
                         const auto& le = lastVisibleLines_[i];
+                        const Object3D* obj = le.isPoints ? static_cast<const Object3D*>(le.points)
+                                                          : static_cast<const Object3D*>(le.line);
                         const Material* m = le.isPoints
                                                     ? (le.points ? le.points->material().get() : nullptr)
                                                     : (le.line ? le.line->material().get() : nullptr);
-                        overlayItems.push_back({true, i, m && m->transparent, viewZOf(le.worldMatrix)});
+                        overlayItems.push_back({true, i, m && m->transparent,
+                                                obj ? obj->renderOrder : 0,
+                                                viewZOf(le.worldMatrix)});
                     }
+                    // renderOrder is the primary key inside each group, exactly
+                    // as GLRenderer's painter sorts do — TransformControls pins
+                    // its gizmo to renderOrder=INT_MAX so it composites over
+                    // every other overlay.
                     std::stable_sort(overlayItems.begin(), overlayItems.end(),
                                      [](const OverlayItem& a, const OverlayItem& b) {
                                          if (a.transparent != b.transparent) return !a.transparent;
+                                         if (a.renderOrder != b.renderOrder) return a.renderOrder < b.renderOrder;
                                          if (!a.transparent) return false;// opaque: keep traversal order
                                          return a.viewZ < b.viewZ;         // transparent: back-to-front
                                      });
