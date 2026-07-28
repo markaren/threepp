@@ -743,6 +743,59 @@ int EditorApp::runSelfTest() {
         selectObject(nullptr);
         step();
     }
+
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    // threepp.editor.rigid_body_from_object: a script reaching the body the
+    // physics session is simulating. The two sessions know nothing about each
+    // other, so this is the only pass that proves the seam between them holds
+    // in the real app rather than in a test harness that starts both by hand.
+    {
+        auto thruster = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        thruster->name = "Thruster";
+        thruster->position.set(-2.f, 2.f, 0.f);
+        auto* raw = thruster.get();
+
+        PhysicsConfig config;
+        config.enabled = true;
+        config.body = PhysicsConfig::Body::Dynamic;
+        config.mass = 2.f;
+        config.write(*raw);
+
+        addObject(thruster, document_.scene(), "Add Thruster");
+        // 2 kg needs ~19.6 N to hover, so 60 N climbs. A script that could not
+        // reach its body would leave the box falling instead.
+        setInlineScript(*raw,
+                        "import threepp\n"
+                        "\n"
+                        "class Thruster:\n"
+                        "    def start(self, obj):\n"
+                        "        self.body = threepp.editor.rigid_body_from_object(obj)\n"
+                        "\n"
+                        "    def update(self, dt):\n"
+                        "        if self.body:\n"
+                        "            self.body.apply_force(threepp.Vector3(0, 60, 0))\n",
+                        "Thruster Script");
+        step();
+
+        const auto uuid = raw->uuid;
+        startPlay();
+        step(90);
+        auto* live = findByUuid(document_.scene(), uuid);
+        check(live && live->position.y > 3.f,
+              "a script drives the rigid body the physics session is simulating");
+        check(scripts_ && scripts_->errorFor(uuid).empty(),
+              "and reaching it raised nothing");
+        stopPlay();
+        step();
+
+        if (auto* done = findByUuid(document_.scene(), uuid)) {
+            selectObject(done);
+            deleteSelected();
+        }
+        selectObject(nullptr);
+        step();
+    }
+#endif
 #endif
 
     // Viewport markers and the camera frustum. The marker count is also the

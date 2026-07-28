@@ -978,6 +978,11 @@ namespace threepp {
                 const std::string& cacheKey = "",
                 float mass = 0.f);
 
+        // Resolve the SoftBody whose visual Mesh is `obj`, or whose Mesh is the
+        // nearest ancestor of it. nullptr when this world simulates no soft
+        // body for that object. The rigid-side counterpart is findActor().
+        [[nodiscard]] SoftBody* findSoftBody(const Object3D* obj) const;
+
         // Destroy a soft body. Releases the PhysX actor + GPU/pinned resources and
         // — when the body was created via the Mesh& overload — also removes the
         // visual Mesh from its parent in the scene graph (single-call cleanup).

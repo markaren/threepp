@@ -1163,6 +1163,17 @@ namespace threepp {
         return raw;
     }
 
+    inline SoftBody* PhysxWorld::findSoftBody(const Object3D* obj) const {
+        // Walk up like findActor: a script may hold the group an authored soft
+        // body sits under rather than the mesh itself.
+        for (const Object3D* o = obj; o != nullptr; o = o->parent) {
+            for (const auto& sb : softBodies_) {
+                if (sb->mesh() == o) return sb.get();
+            }
+        }
+        return nullptr;
+    }
+
     inline void PhysxWorld::removeSoftBody(SoftBody* softBody) {
         if (!softBody) return;
         if (auto* m = softBody->mesh(); m && m->parent) {

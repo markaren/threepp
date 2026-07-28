@@ -121,6 +121,16 @@ if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
             "${PROJECT_SOURCE_DIR}/python/src/bind_lights.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_robot.cpp")
 
+    # The physics half of threepp.editor: handles onto the bodies the play
+    # session is simulating. Gated on the SDK the same way the play session
+    # itself is, so a build without PhysX simply does not have the names.
+    if (TARGET unofficial::omniverse-physx-sdk::sdk)
+        target_sources(threepp_editor_scripting
+                PRIVATE "${PROJECT_SOURCE_DIR}/python/src/bind_editor_physics.cpp")
+        target_link_libraries(threepp_editor_scripting PRIVATE unofficial::omniverse-physx-sdk::sdk)
+        target_compile_definitions(threepp_editor_scripting PRIVATE THREEPP_EDITOR_WITH_PHYSX=1)
+    endif ()
+
     target_link_libraries(threepp_editor_scripting PUBLIC threepp pybind11::headers Python3::Python)
     target_include_directories(threepp_editor_scripting
             PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/scripting"

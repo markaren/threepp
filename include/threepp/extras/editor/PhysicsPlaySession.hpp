@@ -45,6 +45,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace threepp::editor {
@@ -73,6 +74,46 @@ namespace threepp::editor {
 
         [[nodiscard]] PhysxWorld* world() { return world_.get(); }
 
+        // The session currently playing, or nullptr.
+        //
+        // A script reaches its object's body through a free function
+        // (threepp.editor.rigid_body_from_object), which has no context to
+        // resolve against — the script session and this one are independent
+        // PlaySessions that do not know about each other. The editor runs one
+        // Play at a time, so "the session that is playing" is well defined and
+        // is the seam. Set by start(), cleared by stop().
+        [[nodiscard]] static PhysicsPlaySession* active() { return active_; }
+
+        // The actor this session created for `object`, or for the nearest
+        // ancestor of it that has one.
+        //
+        // NOT the same as PhysxWorld::findActor, which only knows the bodies it
+        // was asked to bind() — and a static body is never bound, because there
+        // is no pose to write back into the scene graph. A script asking about
+        // the ground would get nothing. This map is the session's own record of
+        // every actor it built, so the answer covers static, kinematic and
+        // dynamic alike.
+        [[nodiscard]] ::physx::PxRigidActor* findActor(const Object3D* object) const {
+
+            for (const Object3D* o = object; o != nullptr; o = o->parent) {
+                if (const auto it = actors_.find(o); it != actors_.end()) return it->second;
+            }
+            return nullptr;
+        }
+
+        // A token that lives exactly as long as the world built by the last
+        // start(). Handles handed to scripts keep a weak_ptr to it, so a body
+        // still referenced after Stop reports that it is gone instead of
+        // dereferencing a released actor.
+        [[nodiscard]] std::weak_ptr<const void> lifetime() const { return lifetime_; }
+
+        // A session destroyed without a stop() — the editor tearing down mid-Play
+        // — must not leave active() pointing at freed memory.
+        ~PhysicsPlaySession() override {
+
+            if (active_ == this) active_ = nullptr;
+        }
+
         // Anything worth telling the user about a body that could not be
         // created — same hook the script session uses, so the editor routes
         // both into its log.
@@ -85,6 +126,7 @@ namespace threepp::editor {
 
             bodyCount_ = 0;
             softBodyCount_ = 0;
+            actors_.clear();
 
             // Collect first, create second: creating an actor binds the object,
             // and PhysxWorld writes transforms during step(), not during
@@ -101,6 +143,8 @@ namespace threepp::editor {
             });
 
             createWorld(wantsSoftBodies);
+            lifetime_ = std::make_shared<const char>('\0');
+            active_ = this;
 
             for (auto* object : targets) {
                 const auto config = PhysicsConfig::read(*object);
@@ -116,6 +160,11 @@ namespace threepp::editor {
 
         void stop() override {
 
+            // Drop the token BEFORE the world: any handle a script is still
+            // holding must read as dead from the moment the actors go.
+            lifetime_.reset();
+            if (active_ == this) active_ = nullptr;
+            actors_.clear();
             world_.reset();
             bodyCount_ = 0;
             softBodyCount_ = 0;
@@ -236,7 +285,19 @@ namespace threepp::editor {
                         return &mesh != &root && mesh.geometry() != nullptr && !ownsActor(mesh);
                     },
                     material);
+            // A subtree is many actors under one authored config. A script
+            // asking the root for "its" body gets the first — enough to answer
+            // is_static and where it is, which is all a static collider has.
+            if (!actors.empty()) record(root, actors.front());
             return actors.size();
+        }
+
+        // Remember the actor governing `object`, so a script can find it later.
+        // Returns true so the creation sites can `return record(...)`.
+        bool record(const Object3D& object, ::physx::PxRigidActor* actor) {
+
+            if (actor) actors_.emplace(&object, actor);
+            return actor != nullptr;
         }
 
         // A deformable volume: PhysX cooks a tetrahedral mesh from the object's
@@ -338,16 +399,16 @@ namespace threepp::editor {
                 // Triangle meshes are valid for static/kinematic actors only;
                 // a dynamic request silently gets a static collider rather than
                 // a PhysX assertion.
-                return world_->addStaticTrimesh(*mesh, material) != nullptr;
+                return record(object, world_->addStaticTrimesh(*mesh, material));
             }
             if (shape == PhysicsConfig::Shape::Convex && mesh && moving) {
                 auto* body = world_->addDynamicConvex(*mesh, 1000.f, material);
                 if (!body) return false;
                 finishDynamic(*body, config);
-                return true;
+                return record(object, body);
             }
             if (shape == PhysicsConfig::Shape::Convex && mesh) {
-                return world_->addStaticTrimesh(*mesh, material) != nullptr;
+                return record(object, world_->addStaticTrimesh(*mesh, material));
             }
 
             // Analytic shapes: build the geometry from the local bounds so an
@@ -388,7 +449,7 @@ namespace threepp::editor {
                 body->attachShape(*pxShape);
                 pxShape->release();
                 world_->scene().addActor(*body);
-                return true;
+                return record(object, body);
             }
 
             PxRigidDynamic* body = world_->physics().createRigidDynamic(placement.pose);
@@ -401,7 +462,7 @@ namespace threepp::editor {
             // PhysxWorld writes the actor pose back into the object each step,
             // converting to parent-local space for nested nodes.
             world_->bind(object, *body);
-            return true;
+            return record(object, body);
         }
 
         void finishDynamic(::physx::PxRigidDynamic& body, const PhysicsConfig& config) {
@@ -422,6 +483,9 @@ namespace threepp::editor {
         std::size_t bodyCount_ = 0;
         std::size_t softBodyCount_ = 0;
         bool gpu_ = false;
+        std::shared_ptr<const void> lifetime_;
+        std::unordered_map<const Object3D*, ::physx::PxRigidActor*> actors_;
+        inline static PhysicsPlaySession* active_ = nullptr;
     };
 
 }// namespace threepp::editor

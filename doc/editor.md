@@ -700,6 +700,74 @@ tangents the captured local-space curve is exposed as `path.curve` (a plain
 escape hatch: it returns any string `userData` entry — every editor config
 (`spline`, `physics`, script fields) is one flat `key=value;…` string.
 
+### Physics from a script
+
+`threepp.editor.rigid_body_from_object` hands a script the body PhysX is
+actually simulating, so it can push and steer it instead of fighting the
+simulation by writing transforms that the next step overwrites:
+
+```python
+import threepp
+
+
+class Hover:
+    height = 3.0
+    stiffness = 40.0
+
+    def start(self, obj: threepp.Object3D):
+        self.obj = obj
+        self.body = threepp.editor.rigid_body_from_object(obj)
+
+    def update(self, dt: float):
+        if self.body is None:
+            return
+        # A spring toward `height`, damped by the body's own velocity.
+        error = self.height - self.body.position.y
+        lift = self.stiffness * error - 5.0 * self.body.velocity.y
+        self.body.apply_force(threepp.Vector3(0, lift * self.body.mass, 0))
+```
+
+Read `velocity`, `angular_velocity`, `mass`, `position`, `rotation`,
+`sleeping`, `is_static` and `is_kinematic`; write `velocity`,
+`angular_velocity` and `mass`; call `apply_force`, `apply_impulse`,
+`apply_torque`, `apply_torque_impulse`, `wake_up`, and — on a body authored
+Kinematic — `set_kinematic_target(position, rotation=None)`, which sweeps the
+body so it pushes dynamics on the way rather than teleporting through them.
+Forces are per-step, not settings: call them every `update` while the force
+should act. Asking a **static** body for velocity, mass or forces raises rather
+than answering a zero.
+
+Scripts run *after* physics each frame, so a read sees the step that just
+happened and a force lands on the next one.
+
+Soft bodies get `threepp.editor.soft_body_from_object`, which is deliberately
+thinner — PhysX drives a deformable volume through per-vertex GPU buffers, so
+there is no per-actor "push this" to expose. What it does answer is where the
+thing *is*: `center`, `bounds_min`, `bounds_max`, `vertex_count`, and the
+`recompute_normals` toggle. That matters more than it sounds, because a soft
+body's object sits at the origin for the whole of Play — the mesh carries
+world-space vertices — so `obj.position` is useless for following it and
+`body.center` is the answer.
+
+Three things separate these from `spline_from_object`:
+
+* **They only exist during Play.** A spline is authoring data and reads back any
+  time; a body is not created until the physics session builds it, so both
+  functions return `None` outside Play (and for an object with no physics).
+* **A handle belongs to the play session that made it.** Stop releases every
+  actor, so a handle kept across a stop raises instead of reading freed memory —
+  check `body.valid`, or just ask again in `start()`. This is reachable in
+  normal use: sessions stop in registration order, physics first, so a script's
+  own `stop()` runs when the actors are already gone.
+* **They need the PhysX SDK.** Without it the names are absent from
+  `threepp.editor` rather than present and always failing.
+
+The lookup walks *up* the scene graph (like `PhysxWorld::findActor`), so a
+script on a child of a physics object still finds the body governing it. It
+resolves against the play session's own record of what it created, not
+`PhysxWorld`'s binding list — a static body is never bound, since it has no
+pose to write back, and would otherwise be invisible to a script.
+
 ### Async model import
 
 `Import Model…` and file drops never block the UI: loads run one at a time on

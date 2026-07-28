@@ -13,8 +13,14 @@
 //
 // Only the areas a scene script plausibly needs are linked — scene graph, math,
 // geometry, curves, materials, animation, cameras, lights, robots. The renderer,
-// loader, physics, sensor and Vulkan areas are left out: they would drag
-// windowing and device state into a script, and the editor already owns those.
+// loader, sensor and Vulkan areas are left out: they would drag windowing and
+// device state into a script, and the editor already owns those.
+//
+// Physics is left out on the same grounds — a script has no business building a
+// PhysxWorld — with one deliberate exception: threepp.editor's rigid_body /
+// soft_body handles onto the bodies the play session is ALREADY simulating.
+// That is the editor's own state, handed over read/write, not a second physics
+// stack. It is compiled only where the PhysX SDK was found.
 
 #include "ScriptHost.hpp"
 
@@ -65,6 +71,13 @@ PYBIND11_EMBEDDED_MODULE(threepp, m) {
     tp::init_cameras(m);
     tp::init_lights(m);
     tp::init_robot(m);
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    // threepp.editor.rigid_body_from_object / soft_body_from_object. NOT the
+    // general physics bindings — no PhysxWorld, no scene construction; just
+    // handles onto the bodies the play session is already simulating. Must
+    // follow init_editor, which owns the submodule.
+    tp::init_editor_physics(m);
+#endif
 }
 
 namespace threepp::editor::scripting {

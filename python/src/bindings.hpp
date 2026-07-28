@@ -50,6 +50,10 @@ namespace threepp_py {
     void init_geometries(py::module_& m);
     void init_curves(py::module_& m);// CatmullRomCurve3 (the editor's spline curve)
     void init_editor(py::module_& m);// threepp.editor — SplinePath sampling of authored splines
+    // threepp.editor, physics half — RigidBody/SoftBody handles onto the live
+    // play session. Defined only where the PhysX SDK was found, and must be
+    // called AFTER init_editor, which creates the submodule it adds to.
+    void init_editor_physics(py::module_& m);
     void init_materials(py::module_& m);
     void init_objects(py::module_& m);
     void init_ocean(py::module_& m);// DisplacedMesh + Ocean; no-op unless built with Vulkan

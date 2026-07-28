@@ -34,6 +34,14 @@ endif ()
 if (TARGET threepp_editor_scripting)
     add_test_executable(EditorScriptPlay_test)
     target_link_libraries(EditorScriptPlay_test PRIVATE threepp_editor_scripting)
+
+    # threepp.editor's RigidBody/SoftBody handles need both halves: the script
+    # host above, and the PhysX SDK the play session is built on.
+    if (TARGET unofficial::omniverse-physx-sdk::sdk)
+        add_test_executable(EditorScriptPhysics_test)
+        target_link_libraries(EditorScriptPhysics_test
+                PRIVATE threepp_editor_scripting unofficial::omniverse-physx-sdk::sdk)
+    endif ()
 else ()
     message(STATUS "editor scripting not built, skipping EditorScriptPlay_test..")
 endif ()
