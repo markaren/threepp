@@ -43,7 +43,7 @@ front end (a Qt tool, a Python binding, a batch script) would build on:
 | `SceneSnapshot` | scene ⇄ JSON, with live textures preserved |
 | `ObjectFactory` | primitives, lights, groups, cameras with unique names |
 | `PlaySession`, `PlayController` | the play-mode state machine |
-| `PhysicsConfig` | per-object rigid-body authoring, stored in `userData` |
+| `PhysicsConfig` | per-object rigid-body and soft-body authoring, stored in `userData` |
 | `PhysicsPlaySession` | the PhysX runtime (header-only, PhysX-gated) |
 | `ScriptConfig` | per-object Python script — a file path or inline source — plus its parameters, stored in `userData` |
 | `ScriptWorkspace` | the `.vscode/settings.json` that teaches Pylance about `threepp`, and the text normalization an external edit round-trips through |
@@ -183,13 +183,66 @@ double / string — see `ObjectExporter::writeUserData`), so a nested JSON objec
 is not available. The value is therefore one flat, deterministic string:
 
 ```
-body=dynamic;shape=convex;mass=12.5;friction=0.8;restitution=0.35
+body=dynamic;shape=convex;mass=12.5;friction=0.8;restitution=0.35;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0
 ```
 
 `PhysicsConfig::encode()` / `decode()` own that format. Unknown keys are ignored
-on read, so a document written by a newer editor still loads. A disabled body
-removes the entry entirely rather than writing `enabled=false`, so turning
-physics off leaves no trace in the file.
+on read, so a document written by a newer editor still loads — and a document
+written by an *older* one loads too, since a missing key keeps its default. A
+disabled body removes the entry entirely rather than writing `enabled=false`, so
+turning physics off leaves no trace in the file. Every key is written whatever
+the body type, so switching a body from `soft` to `dynamic` and back does not
+quietly discard the settings the other type was using.
+
+### Soft bodies
+
+`body=soft` makes the object a **deformable volume**: PhysX cooks a tetrahedral
+mesh out of the object's own geometry and rewrites its vertex positions every
+step, so the mesh itself bends, squashes and jiggles rather than moving as a
+rigid whole. The **Shape** picker disappears for a soft body — its collider is
+always that cooked volume — and these parameters take its place:
+
+| Field | Meaning |
+| --- | --- |
+| **Stiffness (Pa)** | Young's modulus. ~1e4 is jelly, 1e6 rubber, 1e8 near-rigid. Logarithmic drag, because the useful range spans four decades. |
+| **Poisson Ratio** | 0 squashes freely, →0.5 preserves volume. |
+| **Resolution** | Voxels along the longest axis of the simulation mesh. Higher = finer deformation and more solver work. |
+| **Iterations** | Solver iterations per step. |
+| **Self Collision** | Whether folds of the body collide with each other. |
+| **Mass**, **Friction** | As for a rigid body. Restitution has no soft-body equivalent and is hidden. |
+
+Two things follow from PhysX's implementation, and the editor deals with both:
+
+* **Soft bodies run on CUDA only.** `PhysicsPlaySession` therefore switches its
+  `PhysxWorld` to GPU dynamics as soon as the scene contains one — and only
+  then, since a CUDA context is not free. On a machine without a CUDA device the
+  world is rebuilt with the GPU off and the rigid bodies play on their own,
+  with one line in the log; Play is not failed over it.
+* **The mesh is the simulation output.** `addSoftBody` bakes the world matrix
+  into the geometry and zeroes the object's local transform, then writes
+  world-space vertices into it each step. Nothing special is needed to undo
+  that: the play snapshot restores geometry along with everything else, so Stop
+  hands back the rest pose and the authored transform.
+
+Cooking is the expensive part of `start()`, so identical geometries share one
+cooked mesh — keyed on the geometry uuid, and only for an unscaled object, since
+the cached path re-applies rotation and translation but not scale.
+
+A soft body needs a **closed, indexed triangle surface** to cook from. A mesh
+with no index buffer is skipped with a log line rather than simulated into
+nonsense; the stock Sphere, Box, Cylinder, Cone and Torus primitives are all
+fine, rotated or not.
+
+That last part is not free. The visual mesh is skinned from the cooked tet
+mesh, and the tet mesh is built from a *remeshed* surface that does not quite
+reach a sharp corner — the apex of a cone, or any corner of a rotated box. Two
+things in `SoftBody` make that come out right, and both were originally wrong:
+a vertex outside every tet binds to the nearest one by **extrapolation** (so it
+sits exactly where it was authored, rather than snapped onto the hull and
+visibly rounded off), and the index-for-index fast path is taken only when the
+tet and visual positions genuinely **correspond** — equal vertex counts alone
+are a coincidence waiting to scatter the mesh. `tests/extras/SoftBody_test.cpp`
+pins the rest pose to under a millimetre for both.
 
 ### Animations in `userData`
 
@@ -757,8 +810,9 @@ Two details that make this cheap and lossless:
   abandoned — the editor never ends up half-playing.
 
 The shipped `PhysicsPlaySession` reads `PhysicsConfig` from every object,
-creates a static/dynamic/kinematic `PxRigidActor` with the requested shape, and
-lets `PhysxWorld` write the poses back into the scene graph each step. It is
+creates a static/dynamic/kinematic `PxRigidActor` with the requested shape (or a
+soft body's deformable volume), and lets `PhysxWorld` write the poses back into
+the scene graph each step. It is
 header-only and compiled only when the PhysX SDK is found (vcpkg feature
 `physx`); without it the editor still authors and saves physics settings, and
 Play simply runs with no physics session.

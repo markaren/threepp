@@ -1250,7 +1250,7 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
     ImGui::PushItemWidth(-100 * contentScale_);
 
     {
-        static const char* bodies[] = {"Static", "Dynamic", "Kinematic"};
+        static const char* bodies[] = {"Static", "Dynamic", "Kinematic", "Soft"};
         int body = static_cast<int>(config.body);
         if (ImGui::Combo("Body", &body, bodies, IM_ARRAYSIZE(bodies))) {
             auto after = config;
@@ -1259,7 +1259,11 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
         }
     }
 
-    {
+    const bool soft = config.body == PhysicsConfig::Body::Soft;
+
+    // A soft body's collider is always a tetrahedral volume cooked from the
+    // mesh, so the shape picker has nothing to offer it.
+    if (!soft) {
         static const char* shapes[] = {"Auto", "Box", "Sphere", "Capsule", "Convex", "TriMesh"};
         int shape = static_cast<int>(config.shape);
         if (ImGui::Combo("Shape", &shape, shapes, IM_ARRAYSIZE(shapes))) {
@@ -1274,9 +1278,10 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
     }
 
     const auto floatField = [&](const char* label, float value, float speed, float min, float max,
-                                void (*assign)(PhysicsConfig&, float), const char* action) {
+                                void (*assign)(PhysicsConfig&, float), const char* action,
+                                ImGuiSliderFlags flags = 0) {
         float edited = value;
-        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max);
+        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max, "%.3f", flags);
         if (ImGui::IsItemActivated()) commands_.beginTransaction();
         if (changed) {
             auto after = config;
@@ -1286,7 +1291,20 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
         if (ImGui::IsItemDeactivated()) commands_.endTransaction();
     };
 
-    if (config.body == PhysicsConfig::Body::Dynamic) {
+    const auto intField = [&](const char* label, int value, float speed, int min, int max,
+                              void (*assign)(PhysicsConfig&, int), const char* action) {
+        int edited = value;
+        const bool changed = ImGui::DragInt(label, &edited, speed, min, max);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            assign(after, edited);
+            commit(after, action);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    if (config.body == PhysicsConfig::Body::Dynamic || soft) {
         floatField(
                 "Mass (kg)", config.mass, 0.05f, 0.001f, 10000.f,
                 [](PhysicsConfig& c, float v) { c.mass = v; }, "Physics Mass");
@@ -1294,11 +1312,44 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
     floatField(
             "Friction", config.friction, 0.005f, 0.f, 2.f,
             [](PhysicsConfig& c, float v) { c.friction = v; }, "Physics Friction");
-    floatField(
-            "Restitution", config.restitution, 0.005f, 0.f, 1.f,
-            [](PhysicsConfig& c, float v) { c.restitution = v; }, "Physics Restitution");
+    if (!soft) {
+        floatField(
+                "Restitution", config.restitution, 0.005f, 0.f, 1.f,
+                [](PhysicsConfig& c, float v) { c.restitution = v; }, "Physics Restitution");
+    }
+
+    if (soft) {
+        ImGui::Spacing();
+        // Stiffness spans four decades between jelly and hard rubber, so the
+        // drag is logarithmic — a linear one is unusable at the soft end.
+        floatField(
+                "Stiffness (Pa)", config.youngsModulus, 0.01f, 1e3f, 1e9f,
+                [](PhysicsConfig& c, float v) { c.youngsModulus = v; }, "Soft Body Stiffness",
+                ImGuiSliderFlags_Logarithmic);
+        floatField(
+                "Poisson Ratio", config.poissonsRatio, 0.002f, 0.f, 0.49f,
+                [](PhysicsConfig& c, float v) { c.poissonsRatio = v; }, "Soft Body Poisson Ratio");
+        intField(
+                "Resolution", config.voxelResolution, 0.1f, 2, 64,
+                [](PhysicsConfig& c, int v) { c.voxelResolution = v; }, "Soft Body Resolution");
+        intField(
+                "Iterations", config.solverIterations, 0.2f, 1, 255,
+                [](PhysicsConfig& c, int v) { c.solverIterations = v; }, "Soft Body Iterations");
+
+        bool selfCollision = config.selfCollision;
+        if (ImGui::Checkbox("Self Collision", &selfCollision)) {
+            auto after = config;
+            after.selfCollision = selfCollision;
+            commit(after, "Soft Body Self Collision");
+        }
+    }
 
     ImGui::PopItemWidth();
+
+    if (soft) {
+        ImGui::TextWrapped("Deformable volume: the mesh itself bends. Cooked from a closed "
+                           "triangle surface, simulated on the GPU (needs CUDA).");
+    }
 
     ImGui::TextColored(theme::muted(), "Stored in userData[\"physics\"]");
 

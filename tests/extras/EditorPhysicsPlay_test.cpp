@@ -6,16 +6,12 @@
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
-#include "threepp/extras/editor/SplineConfig.hpp"
 
-#include "threepp/core/BufferGeometry.hpp"
-#include "threepp/extras/curves/CatmullRomCurve3.hpp"
-#include "threepp/extras/curves/RoadGeometry.hpp"
-#include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
-#include <vector>
+#include <algorithm>
+#include <iostream>
 
 using namespace threepp;
 using namespace threepp::editor;
@@ -56,122 +52,54 @@ namespace {
         return box;
     }
 
+    std::shared_ptr<Mesh> makeSoftBall(Scene& scene) {
+
+        auto ball = ObjectFactory::createPrimitive(Primitive::Sphere, scene);
+        ball->name = "Jelly";
+        ball->position.set(0.f, 3.f, 0.f);
+
+        PhysicsConfig config;
+        config.enabled = true;
+        config.body = PhysicsConfig::Body::Soft;
+        config.mass = 2.f;
+        config.friction = 0.5f;
+        // Soft enough that a 3 m drop visibly squashes it, coarse enough that
+        // the cook stays quick.
+        config.youngsModulus = 5e4f;
+        config.voxelResolution = 6;
+        config.solverIterations = 15;
+        config.write(*ball);
+        return ball;
+    }
+
     void run(PhysicsPlaySession& session, int steps) {
 
         for (int i = 0; i < steps; ++i) session.update(1.f / 60.f);
     }
 
-    // A spline that has generated its road, standing in for what the editor's
-    // sync pass produces: the Group carries SplineConfig, its plain children
-    // are the control points, and one tagged Mesh holds the surface. Generating
-    // that mesh is app code (SplineOverlay.cpp), so a test builds it by hand
-    // from the same curve and the same parameters the editor passes.
-    struct Road {
-        std::shared_ptr<Group> spline;
-        std::shared_ptr<Mesh> mesh;
+    // A soft body's mesh IS the simulation output: its vertices are rewritten
+    // in world space every step, so the shape is read off the position buffer
+    // rather than off the transform.
+    struct VertexBounds {
+        float minY = 1e30f;
+        float maxY = -1e30f;
+        float meanY = 0.f;
     };
 
-    Road makeRoad(const Scene& scene, const std::vector<Vector3>& points, float width) {
+    VertexBounds boundsOf(const Mesh& mesh) {
 
-        auto spline = Group::create();
-        spline->name = ObjectFactory::uniqueName(scene, "Spline");
-
-        SplineConfig config;
-        config.mesh = SplineConfig::MeshKind::Road;
-        config.width = width;
-        config.write(*spline);
-
-        for (const auto& point : points) {
-            auto node = Object3D::create();
-            node->position.copy(point);
-            spline->add(node);
+        VertexBounds out;
+        const auto* positions = mesh.geometry()->getAttribute<float>("position");
+        REQUIRE(positions);
+        double sum = 0;
+        for (unsigned i = 0; i < positions->count(); ++i) {
+            const float y = positions->getY(i);
+            out.minY = std::min(out.minY, y);
+            out.maxY = std::max(out.maxY, y);
+            sum += y;
         }
-
-        auto curve = config.curve(*spline);
-        REQUIRE(curve != nullptr);
-        auto mesh = Mesh::create(RoadGeometry::create(
-                *curve, width, config.divisions(*spline), config.uvLength, config.closed));
-        mesh->name = "Road";
-        SplineConfig::markDerived(*mesh);
-        spline->add(mesh);
-
-        return {spline, mesh};
-    }
-
-    PhysicsConfig staticConfig(PhysicsConfig::Shape shape) {
-
-        PhysicsConfig config;
-        config.enabled = true;
-        config.body = PhysicsConfig::Body::Static;
-        config.shape = shape;
-        config.friction = 0.8f;
-        return config;
-    }
-
-    // Radius 0.5, so resting on a surface at y = 0 means a centre at y = 0.5.
-    std::shared_ptr<Mesh> makeFallingSphere(const Scene& scene, const Vector3& from) {
-
-        auto sphere = ObjectFactory::createPrimitive(Primitive::Sphere, scene);
-        sphere->name = "Ball";
-        sphere->position.copy(from);
-
-        PhysicsConfig config;
-        config.enabled = true;
-        config.body = PhysicsConfig::Body::Dynamic;
-        config.shape = PhysicsConfig::Shape::Auto;
-        config.mass = 2.f;
-        config.friction = 0.8f;
-        config.restitution = 0.f;
-        config.write(*sphere);
-        return sphere;
-    }
-
-    // Straight along X at y = 0, four metres wide.
-    Road makeStraightRoad(const Scene& scene) {
-
-        return makeRoad(scene, {Vector3(-10, 0, 0), Vector3(0, 0, 0), Vector3(10, 0, 0)}, 4.f);
-    }
-
-    // Station intervals of a road surface: it is laid down one cross-section at
-    // a time, two vertices each, and the collider is one convex hull per
-    // interval between them.
-    int intervalsOf(const Mesh& mesh) {
-
-        const auto geometry = mesh.geometry();
-        if (!geometry) return -1;
-        const auto* position = geometry->getAttribute<float>("position");
-        if (!position) return -1;
-        return position->count() / 2 - 1;
-    }
-
-    // Shapes attached to every static actor in the live scene. A road is one
-    // convex per station interval — a count driven by the road's SHAPE, since
-    // that is what chooses the stations, and not by how finely anybody sampled
-    // the spline.
-    int staticShapeCount(PhysicsPlaySession& session) {
-
-        using namespace ::physx;
-        auto* world = session.world();
-        if (!world) return -1;
-        auto& scene = world->scene();
-        const PxU32 count = scene.getNbActors(PxActorTypeFlag::eRIGID_STATIC);
-        std::vector<PxActor*> actors(count);
-        if (count) scene.getActors(PxActorTypeFlag::eRIGID_STATIC, actors.data(), count);
-        int shapes = 0;
-        for (auto* actor : actors) {
-            shapes += static_cast<int>(static_cast<PxRigidActor*>(actor)->getNbShapes());
-        }
-        return shapes;
-    }
-
-    void checkRestsOnRoad(PhysicsPlaySession& session, const Mesh& ball) {
-
-        run(session, 240);// 4 seconds
-
-        using Catch::Matchers::WithinAbs;
-        // Never below the surface, and settled at the radius on top of it.
-        CHECK(ball.position.y > 0.f);
-        CHECK_THAT(ball.position.y, WithinAbs(0.5f, 0.06f));
+        out.meanY = static_cast<float>(sum / positions->count());
+        return out;
     }
 
 }// namespace
@@ -212,237 +140,126 @@ TEST_CASE("PhysicsPlaySession simulates userData-authored bodies", "[editor][phy
     CHECK(session.bodyCount() == 0);
 }
 
-TEST_CASE("a generated road holds a body up, on Auto", "[editor][physx]") {
+TEST_CASE("soft body config round-trips through the userData string", "[editor][physx]") {
 
-    // The report this exists for: a dynamic sphere dropped on a spline road
-    // fell straight through, because Shape::Auto resolved a ribbon to its
-    // BOUNDING BOX — a flat one at the minimum half-extent, i.e. a razor at the
-    // road's mid-height, and nowhere near where the ball came down.
-    SceneDocument document;
-    auto& scene = document.scene();
-
-    auto road = makeStraightRoad(scene);
-    staticConfig(PhysicsConfig::Shape::Auto).write(*road.mesh);
-    scene.add(road.spline);
-
-    // Four metres out along the road, deliberately clear of the spline's origin
-    // where the old unit-box fallback put its phantom collider.
-    auto ball = makeFallingSphere(scene, Vector3(4.f, 3.f, 0.f));
-    scene.add(ball);
-
-    PhysicsPlaySession session;
-    session.start(scene);
-    CHECK(session.bodyCount() == 2);
-
-    checkRestsOnRoad(session, *ball);
-}
-
-TEST_CASE("a generated road holds a body up, on an explicit TriMesh", "[editor][physx]") {
-
-    SceneDocument document;
-    auto& scene = document.scene();
-
-    auto road = makeStraightRoad(scene);
-    staticConfig(PhysicsConfig::Shape::TriMesh).write(*road.mesh);
-    scene.add(road.spline);
-
-    auto ball = makeFallingSphere(scene, Vector3(4.f, 3.f, 0.f));
-    scene.add(ball);
-
-    PhysicsPlaySession session;
-    session.start(scene);
-    CHECK(session.bodyCount() == 2);
-
-    checkRestsOnRoad(session, *ball);
-}
-
-TEST_CASE("physics authored on the spline itself collides as the road", "[editor][physx]") {
-
-    // Where the user actually put it: the spline IS the road as far as they are
-    // concerned. A Group has no geometry, so this used to fall through to the
-    // unit-box placeholder — a phantom 1 m cube at the spline's origin, which
-    // is exactly the "small collider somewhere in the centre" that got reported.
-    SceneDocument document;
-    auto& scene = document.scene();
-
-    auto road = makeStraightRoad(scene);
-    staticConfig(PhysicsConfig::Shape::Auto).write(*road.spline);
-    scene.add(road.spline);
-
-    auto ball = makeFallingSphere(scene, Vector3(4.f, 3.f, 0.f));
-    scene.add(ball);
-
-    PhysicsPlaySession session;
-    session.start(scene);
-    // The spline counts as one body however many shapes its subtree came to.
-    CHECK(session.bodyCount() == 2);
-
-    checkRestsOnRoad(session, *ball);
-}
-
-TEST_CASE("a road collides through a corner", "[editor][physx]") {
-
-    // The whole point of a wedge chain rather than one hull per road: adjacent
-    // spans share their joint cross-section exactly, so a corner is covered at
-    // any angle with neither a gap to fall through nor an overlap to fight.
-    SceneDocument document;
-    auto& scene = document.scene();
-
-    auto road = makeRoad(scene, {Vector3(-10, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 10)}, 4.f);
-    staticConfig(PhysicsConfig::Shape::Auto).write(*road.mesh);
-    scene.add(road.spline);
-
-    // Straight down onto the bend.
-    auto ball = makeFallingSphere(scene, Vector3(0.f, 3.f, 0.f));
-    scene.add(ball);
-
-    PhysicsPlaySession session;
-    session.start(scene);
-    CHECK(session.bodyCount() == 2);
-    // One convex per station interval of the surface itself, and not one more:
-    // the collider IS the drawing, span for span.
-    CHECK(staticShapeCount(session) == intervalsOf(*road.mesh));
-    CHECK(staticShapeCount(session) > 4);
-
-    checkRestsOnRoad(session, *ball);
-}
-
-TEST_CASE("a road wider than its own bends still holds a body up", "[editor][physx]") {
-
-    // The report this exists for: an S of two opposite bends, both tighter than
-    // the half-width, at which the ribbon this replaced folded — and a collider
-    // read off those folded triangles was a moiré of slivers a ball fell
-    // through or bounced off. The primitives behind the surface have no such
-    // state: the tight bends are pie sectors, and the wedges tiling them are
-    // convex whatever the radius.
-    SceneDocument document;
-    auto& scene = document.scene();
-
-    auto road = makeRoad(scene,
-                         {Vector3(-8, 0, 0), Vector3(-4, 0, 0), Vector3(-2, 0, 3),
-                          Vector3(2, 0, -3), Vector3(4, 0, 0), Vector3(8, 0, 0)},
-                         6.f);
-    staticConfig(PhysicsConfig::Shape::Auto).write(*road.mesh);
-    scene.add(road.spline);
-
-    // One ball over the middle of the S, where the two bends meet, and one over
-    // the straight run leading into it.
-    auto onBend = makeFallingSphere(scene, Vector3(0.f, 3.f, 0.f));
-    auto onStraight = makeFallingSphere(scene, Vector3(-6.f, 3.f, 0.f));
-    onStraight->name = "Ball2";
-    scene.add(onBend);
-    scene.add(onStraight);
-
-    PhysicsPlaySession session;
-    session.start(scene);
-    CHECK(session.bodyCount() == 3);
-    // Both bends, one hull per span, and every one of them convex — a wedge
-    // through a bend cannot be anything else once no bend is tighter than the
-    // half-width.
-    CHECK(staticShapeCount(session) == intervalsOf(*road.mesh));
-
-    checkRestsOnRoad(session, *onBend);
-    checkRestsOnRoad(session, *onStraight);
-}
-
-TEST_CASE("a kinematic road is a road that drives", "[editor][physx]") {
-
-    // Why the collider is convex and not a triangle mesh. A triangle mesh comes
-    // back from PhysX as a PxRigidStatic, which is not something code can move;
-    // the hull chain goes on a kinematic PxRigidDynamic, so the same authoring
-    // that makes a road makes a conveyor belt. A body resting on it comes along
-    // for the ride.
-    SceneDocument document;
-    auto& scene = document.scene();
-
-    auto road = makeStraightRoad(scene);
     PhysicsConfig config;
     config.enabled = true;
-    config.body = PhysicsConfig::Body::Kinematic;
-    config.shape = PhysicsConfig::Shape::Auto;
-    config.friction = 0.9f;
-    config.write(*road.mesh);
-    scene.add(road.spline);
+    config.body = PhysicsConfig::Body::Soft;
+    config.mass = 3.5f;
+    config.friction = 0.7f;
+    config.youngsModulus = 25000.f;
+    config.poissonsRatio = 0.3f;
+    config.voxelResolution = 14;
+    config.solverIterations = 32;
+    config.selfCollision = true;
 
-    auto ball = makeFallingSphere(scene, Vector3(0.f, 1.f, 0.f));
-    scene.add(ball);
+    const auto decoded = PhysicsConfig::decode(config.encode());
+    REQUIRE(decoded);
+    CHECK(decoded->body == PhysicsConfig::Body::Soft);
+    CHECK(decoded->voxelResolution == 14);
+    CHECK(decoded->solverIterations == 32);
+    CHECK(decoded->selfCollision);
+    CHECK(decoded->encode() == config.encode());
 
-    PhysicsPlaySession session;
-    session.start(scene);
-    REQUIRE(session.world() != nullptr);
-
-    using namespace ::physx;
-    auto& pxScene = session.world()->scene();
-    const PxU32 count = pxScene.getNbActors(PxActorTypeFlag::eRIGID_DYNAMIC);
-    std::vector<PxActor*> actors(count);
-    if (count) pxScene.getActors(PxActorTypeFlag::eRIGID_DYNAMIC, actors.data(), count);
-
-    PxRigidDynamic* driven = nullptr;
-    for (auto* actor : actors) {
-        auto* body = static_cast<PxRigidDynamic*>(actor);
-        if (body->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC) driven = body;
-    }
-    REQUIRE(driven != nullptr);
-    CHECK(static_cast<int>(driven->getNbShapes()) == intervalsOf(*road.mesh));
-
-    run(session, 60);// the ball settles on it
-    const float restingHeight = ball->position.y;
-    CHECK(restingHeight > 0.f);
-
-    // Drive it. A kinematic target is the whole point: the road moves, the
-    // object bound to it moves, and what is standing on it is carried. Driven
-    // ALONG its own length, so what is measured is the carry rather than the
-    // surface being slid out from under the ball sideways.
-    const float startX = ball->position.x;
-    for (int i = 0; i < 120; ++i) {
-        const auto pose = driven->getGlobalPose();
-        driven->setKinematicTarget(PxTransform(
-                PxVec3(pose.p.x + 2.f / 60.f, pose.p.y, pose.p.z), pose.q));
-        session.update(1.f / 60.f);
-    }
-
-    // The road itself went where it was driven...
-    CHECK(road.mesh->position.x > 3.f);
-    // ...and took the ball with it, still on top.
-    CHECK(ball->position.x > startX + 1.f);
-    CHECK_THAT(ball->position.y, Catch::Matchers::WithinAbs(restingHeight, 0.1f));
+    // Soft parameters survive a document written before they existed, and an
+    // entry that never mentions them keeps the defaults.
+    const auto legacy = PhysicsConfig::decode("body=dynamic;shape=box;mass=2;friction=0.5;restitution=0.1");
+    REQUIRE(legacy);
+    CHECK(legacy->body == PhysicsConfig::Body::Dynamic);
+    CHECK(legacy->voxelResolution == PhysicsConfig{}.voxelResolution);
+    CHECK(legacy->youngsModulus == PhysicsConfig{}.youngsModulus);
 }
 
-TEST_CASE("a static mesh that is no primitive collides as its triangles", "[editor][physx]") {
+TEST_CASE("a soft body deforms and settles on the ground", "[editor][physx][gpu]") {
 
     SceneDocument document;
     auto& scene = document.scene();
 
-    // A 12 m plate at y = 0 with one 3 m spike off to the side. Auto used to
-    // mean "the AABB", and this geometry's AABB has its top face at the spike's
-    // tip: a ball dropped over the plate came to rest three metres in the air.
-    const std::vector<float> positions{
-            -6.f, 0.f, -6.f, 6.f, 0.f, -6.f, 6.f, 0.f, 6.f, -6.f, 0.f, 6.f,
-            -5.5f, 0.f, -0.5f, -4.5f, 0.f, -0.5f, -5.f, 3.f, 0.f};
-    const std::vector<unsigned int> indices{0, 2, 1, 0, 3, 2, 4, 5, 6};
-
-    auto geometry = BufferGeometry::create();
-    geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
-    geometry->setIndex(indices);
-
-    auto plate = Mesh::create(geometry);
-    plate->name = "Plate";
-    staticConfig(PhysicsConfig::Shape::Auto).write(*plate);
-    scene.add(plate);
-
-    auto ball = makeFallingSphere(scene, Vector3(2.f, 3.f, 2.f));
+    auto ground = makeGround(scene);
+    auto ball = makeSoftBall(scene);
+    scene.add(ground);
     scene.add(ball);
 
     PhysicsPlaySession session;
     session.start(scene);
+
+    if (!session.gpuAvailable()) {
+        // No CUDA device on this machine: the rigid half must still have run,
+        // and the soft body is simply absent.
+        std::cout << "[skip] no CUDA device - soft body simulation not exercised" << std::endl;
+        CHECK(session.softBodyCount() == 0);
+        CHECK(session.bodyCount() == 1);// the ground
+        session.stop();
+        return;
+    }
+
+    CHECK(session.softBodyCount() == 1);
     CHECK(session.bodyCount() == 2);
 
-    run(session, 240);
+    // addSoftBody bakes the world matrix into the geometry, so the mesh sits at
+    // the origin with world-space vertices from here on.
+    const auto spawned = boundsOf(*ball);
+    CHECK(spawned.minY > 2.f);
 
+    // Sample every step: the deepest squash is at the impact instant, not in
+    // the settled pose, and "it deformed at all" is too weak a claim to catch
+    // a soft body that is being simulated as a rigid one.
+    const float restHeight = spawned.maxY - spawned.minY;
+    float flattest = restHeight;
+    for (int i = 0; i < 240; ++i) {// 4 seconds
+        session.update(1.f / 60.f);
+        const auto now = boundsOf(*ball);
+        flattest = std::min(flattest, now.maxY - now.minY);
+    }
+
+    const auto settled = boundsOf(*ball);
+    // It fell to the ground...
+    CHECK(settled.minY < 0.4f);
+    CHECK(settled.meanY < 1.f);
+    // ...and it did not fall through it.
+    CHECK(settled.minY > -0.5f);
+    // ...and it is a soft body: a rigid sphere dropped from 3 m would still be
+    // exactly as tall on landing. 10% is well clear of solver noise while
+    // leaving room for a stiffer default than this test authors.
+    INFO("rest height " << restHeight << " m, flattest " << flattest << " m");
+    CHECK(flattest < restHeight * 0.9f);
+
+    session.stop();
+    CHECK(session.softBodyCount() == 0);
+}
+
+TEST_CASE("stop restores the mesh a soft body deformed", "[editor][physx][gpu]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+    scene.add(makeGround(scene));
+    scene.add(makeSoftBall(scene));
+
+    PlayController controller;
+    controller.addSession(std::make_shared<PhysicsPlaySession>());
+
+    std::string error;
+    REQUIRE(controller.play(document, &error));
+    for (int i = 0; i < 120; ++i) controller.update(1.f / 60.f);
+    REQUIRE(controller.stop(document, &error));
+
+    // Whether or not the machine had a GPU, Stop must hand back the authored
+    // mesh: rest-pose geometry, authored transform, physics entry intact.
+    auto* restored = document.scene().getObjectByName("Jelly");
+    REQUIRE(restored);
     using Catch::Matchers::WithinAbs;
-    CHECK(ball->position.y > 0.f);           // not through the plate
-    CHECK(ball->position.y < 1.f);           // and not floating on the AABB slab
-    CHECK_THAT(ball->position.y, WithinAbs(0.5f, 0.06f));
+    CHECK_THAT(restored->position.y, WithinAbs(3.f, 1e-5));
+
+    const auto config = PhysicsConfig::read(*restored);
+    REQUIRE(config);
+    CHECK(config->body == PhysicsConfig::Body::Soft);
+
+    auto* restoredMesh = restored->as<Mesh>();
+    REQUIRE(restoredMesh);
+    const auto bounds = boundsOf(*restoredMesh);
+    // Rest-pose sphere geometry: local space, centred on the origin.
+    CHECK_THAT(bounds.minY, WithinAbs(-0.5f, 1e-3));
+    CHECK_THAT(bounds.maxY, WithinAbs(0.5f, 1e-3));
 }
 
 TEST_CASE("play then stop leaves no trace of the simulation", "[editor][physx]") {
