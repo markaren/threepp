@@ -8,6 +8,7 @@
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
+#include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
@@ -225,6 +226,7 @@ void EditorApp::drawInspector() {
         drawSplineSection(*selected);
         drawScriptSection(*selected);
         drawPhysicsSection(*selected);
+        drawSensorSection(*selected);
 
         if (locked) ImGui::EndDisabled();
     }
@@ -1576,6 +1578,255 @@ void EditorApp::drawSplineSection(Object3D& object) {
 
     ImGui::TextColored(theme::muted(), "Children are the control points, in order.");
     ImGui::TextColored(theme::muted(), "Stored in userData[\"spline\"]");
+
+    ImGui::TreePop();
+}
+
+
+// ------------------------------------------------------------------- sensor
+
+void EditorApp::drawSensorSection(Object3D& object) {
+
+    if (object.is<Scene>()) return;
+    if (!section("Sensor", false)) return;
+
+    auto* target = &object;
+    auto config = SensorConfig::read(object).value_or(SensorConfig{});
+    const auto before = config;
+
+    const auto commit = [&](SensorConfig after, const char* label) {
+        commands_.execute(makeProperty<SensorConfig>(
+                label, "sensor:" + object.uuid,
+                [target](const SensorConfig& value) { value.write(*target); },
+                before, after));
+        document_.setDirty(true);
+    };
+
+    // Add/Remove is a userData edit, not a graph edit, so it goes straight
+    // through the property command like the physics Enabled box — nothing here
+    // can invalidate `object`, which is why this one does not need the deferred
+    // re-resolve the spline section's Insert buttons do.
+    bool enabled = config.enabled;
+    if (ImGui::Checkbox("Enabled", &enabled)) {
+        auto after = config;
+        after.enabled = enabled;
+        commit(after, enabled ? "Add Sensor" : "Remove Sensor");
+        // Re-read: the click already changed the document, and drawing the rest
+        // of this frame from the pre-click value would show the wrong fields for
+        // one frame (and, on Remove, fields for an entry that is gone).
+        config = SensorConfig::read(object).value_or(SensorConfig{});
+    }
+
+    if (!config.enabled) {
+        ImGui::TextColored(theme::muted(),
+                           "Measures in this object's world frame. The transform gizmo aims it.");
+        ImGui::TreePop();
+        return;
+    }
+
+    ImGui::PushItemWidth(-110 * contentScale_);
+
+    {
+        static const char* types[] = {"IMU", "Depth Camera", "LIDAR",
+                                      "Joint Encoder", "Contact", "Force/Torque"};
+        int type = static_cast<int>(config.type);
+        if (ImGui::Combo("Type", &type, types, IM_ARRAYSIZE(types))) {
+            auto after = config;
+            after.type = static_cast<SensorConfig::Type>(type);
+            // Only the type changes. Every other key is written regardless of
+            // type (see SensorConfig), so the settings of the type being left
+            // behind are still there when the user comes back to it.
+            commit(after, "Sensor Type");
+            config = SensorConfig::read(object).value_or(config);
+        }
+    }
+
+    const auto floatField = [&](const char* label, float value, float speed, float min, float max,
+                                void (*assign)(SensorConfig&, float), const char* action,
+                                const char* format = "%.4f") {
+        float edited = value;
+        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max, format);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            assign(after, std::clamp(edited, min, max));
+            commit(after, action);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    const auto intField = [&](const char* label, int value, float speed, int min, int max,
+                              void (*assign)(SensorConfig&, int), const char* action) {
+        int edited = value;
+        const bool changed = ImGui::DragInt(label, &edited, speed, min, max);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            assign(after, std::clamp(edited, min, max));
+            commit(after, action);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    floatField(
+            "Rate (Hz)", config.rateHz, 0.25f, 0.f, 2000.f,
+            [](SensorConfig& c, float v) { c.rateHz = v; }, "Sensor Rate", "%.1f");
+    if (config.rateHz <= 0.f) {
+        ImGui::TextColored(theme::muted(),
+                           SensorConfig::isVision(config.type)
+                                   ? "0 = scan every frame (expensive)"
+                                   : "0 = sample every physics substep");
+    }
+    intField(
+            "Seed", config.seed, 1.f, 0, 1000000,
+            [](SensorConfig& c, int v) { c.seed = v; }, "Sensor Seed");
+
+    ImGui::Spacing();
+
+    switch (config.type) {
+
+        case SensorConfig::Type::Imu: {
+            // Continuous-time densities, the way a spec sheet quotes them, so the
+            // authored numbers are rate-independent.
+            floatField(
+                    "Gyro Density", config.gyroNoiseDensity, 0.0002f, 0.f, 1.f,
+                    [](SensorConfig& c, float v) { c.gyroNoiseDensity = v; },
+                    "IMU Gyro Noise", "%.5f");
+            floatField(
+                    "Gyro Bias Walk", config.gyroRandomWalk, 1e-5f, 0.f, 0.1f,
+                    [](SensorConfig& c, float v) { c.gyroRandomWalk = v; },
+                    "IMU Gyro Bias Walk", "%.6f");
+            floatField(
+                    "Accel Density", config.accelNoiseDensity, 0.002f, 0.f, 10.f,
+                    [](SensorConfig& c, float v) { c.accelNoiseDensity = v; },
+                    "IMU Accel Noise", "%.5f");
+            floatField(
+                    "Accel Bias Walk", config.accelRandomWalk, 0.0002f, 0.f, 1.f,
+                    [](SensorConfig& c, float v) { c.accelRandomWalk = v; },
+                    "IMU Accel Bias Walk", "%.6f");
+
+            if (ImGui::SmallButton("Perfect")) {
+                auto after = config;
+                after.gyroNoiseDensity = 0.f;
+                after.gyroRandomWalk = 0.f;
+                after.accelNoiseDensity = 0.f;
+                after.accelRandomWalk = 0.f;
+                commit(after, "Perfect IMU");
+                config = SensorConfig::read(object).value_or(config);
+            }
+            ImGui::SameLine();
+            ImGui::TextColored(theme::muted(), "zero noise = ground truth");
+            break;
+        }
+
+        case SensorConfig::Type::Depth: {
+            floatField(
+                    "FOV (deg)", config.fovY, 0.25f, 1.f, 179.f,
+                    [](SensorConfig& c, float v) { c.fovY = v; }, "Depth FOV", "%.1f");
+            intField(
+                    "Width", config.width, 1.f, 8, SensorConfig::maxImageSize,
+                    [](SensorConfig& c, int v) { c.width = v; }, "Depth Width");
+            intField(
+                    "Height", config.height, 1.f, 8, SensorConfig::maxImageSize,
+                    [](SensorConfig& c, int v) { c.height = v; }, "Depth Height");
+            break;
+        }
+
+        case SensorConfig::Type::Lidar: {
+            static const char* beams[] = {"Dense Grid", "VLP-16", "HDL-32E", "OS1-64", "OS0-128"};
+            int pattern = static_cast<int>(config.beams);
+            if (ImGui::Combo("Beams", &pattern, beams, IM_ARRAYSIZE(beams))) {
+                auto after = config;
+                after.beams = static_cast<SensorConfig::Beams>(pattern);
+                commit(after, "LIDAR Beam Pattern");
+                config = SensorConfig::read(object).value_or(config);
+            }
+            intField(
+                    "Face Size", config.faceSize, 2.f, 16, SensorConfig::maxFaceSize,
+                    [](SensorConfig& c, int v) { c.faceSize = v; }, "LIDAR Face Size");
+            ImGui::TextColored(theme::muted(),
+                               "Six 90-degree depth passes per scan - face size is each "
+                               "one's resolution.");
+            break;
+        }
+
+        case SensorConfig::Type::Encoder: {
+            floatField(
+                    "Resolution", config.encoderResolution, 1e-5f, 0.f, 1.f,
+                    [](SensorConfig& c, float v) { c.encoderResolution = v; },
+                    "Encoder Resolution", "%.6f");
+            ImGui::TextColored(theme::muted(), "rad (or m) per tick; 0 = ideal");
+            break;
+        }
+
+        case SensorConfig::Type::Contact: {
+            floatField(
+                    "Force Threshold", config.contactForceThreshold, 0.05f, 0.f, 10000.f,
+                    [](SensorConfig& c, float v) { c.contactForceThreshold = v; },
+                    "Contact Force Threshold", "%.2f");
+            break;
+        }
+
+        case SensorConfig::Type::ForceTorque:
+            break;
+    }
+
+    // Shared by both ranging sensors: the frustum they see through and the
+    // per-return noise. Not a density — one laser pulse's uncertainty does not
+    // depend on how long ago the previous scan was.
+    if (SensorConfig::isVision(config.type)) {
+        ImGui::Spacing();
+        floatField(
+                "Near (m)", config.nearPlane, 0.005f, 0.001f, 100.f,
+                [](SensorConfig& c, float v) { c.nearPlane = v; }, "Sensor Near", "%.3f");
+        floatField(
+                "Far (m)", config.farPlane, 0.25f, 0.01f, 10000.f,
+                [](SensorConfig& c, float v) { c.farPlane = v; }, "Sensor Far", "%.2f");
+        if (config.farPlane <= config.nearPlane) {
+            ImGui::TextColored(theme::warning(), "Far must be beyond Near");
+        }
+        floatField(
+                "Range Sigma (m)", config.rangeStddev, 0.001f, 0.f, 5.f,
+                [](SensorConfig& c, float v) { c.rangeStddev = v; }, "Range Noise", "%.4f");
+        floatField(
+                "Sigma per m", config.rangeStddevPerMetre, 0.0002f, 0.f, 1.f,
+                [](SensorConfig& c, float v) { c.rangeStddevPerMetre = v; },
+                "Range Noise per Metre", "%.5f");
+        floatField(
+                "Range Bias (m)", config.rangeBias, 0.001f, -5.f, 5.f,
+                [](SensorConfig& c, float v) { c.rangeBias = v; }, "Range Bias", "%.4f");
+    }
+
+    ImGui::PopItemWidth();
+    ImGui::Spacing();
+
+    // The mistake that authors cleanly and measures nothing: a proprioceptive
+    // sensor with no rigid body under it. Cheap to answer here, and Play would
+    // otherwise be the first place it shows up.
+    if (config.type == SensorConfig::Type::Imu || config.type == SensorConfig::Type::Contact) {
+        bool onBody = false;
+        for (const Object3D* node = &object; node && !onBody; node = node->parent) {
+            const auto physics = PhysicsConfig::read(*node);
+            onBody = physics && physics->enabled &&
+                     physics->body != PhysicsConfig::Body::Static &&
+                     physics->body != PhysicsConfig::Body::Soft;
+        }
+        if (!onBody) {
+            ImGui::TextColored(theme::warning(),
+                               "No dynamic or kinematic body here or above - this will not "
+                               "measure. Add Physics to this object or a parent.");
+        }
+    }
+    if (config.type == SensorConfig::Type::Encoder ||
+        config.type == SensorConfig::Type::ForceTorque) {
+        ImGui::TextColored(theme::warning(),
+                           "Reads an articulation joint. The editor's physics builds rigid "
+                           "bodies only, so this is authored and saved, not simulated yet.");
+    }
+
+    ImGui::TextColored(theme::muted(),
+                       "Rebuilt from this config on every Play, so the seed replays exactly.");
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"sensor\"]");
 
     ImGui::TreePop();
 }

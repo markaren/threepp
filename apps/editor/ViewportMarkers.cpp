@@ -15,6 +15,7 @@
 #include "EditorApp.hpp"
 #include "EditorTheme.hpp"
 
+#include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 
 #include "threepp/cameras/Camera.hpp"
@@ -56,6 +57,7 @@ namespace {
         AmbientLight,
         HemisphereLight,
         SplinePoint,
+        Sensor,
         kCount
     };
 
@@ -120,6 +122,20 @@ namespace {
 <path d="M3 15.5 L21 15.5 L21 18.5 L3 18.5 Z"/>
 </svg>)";
 
+            // A domed puck on a mount, emitting. Reads as instrumentation from
+            // across the viewport without needing to say which KIND — the
+            // inspector and the Sensors tab both name that, and one glyph that
+            // means "there is a sensor here" is what a marker is for.
+            case Icon::Sensor:
+                return R"(<svg viewBox="0 0 24 24">
+<path d="M12 5.5 C14.76 5.5 17 7.74 17 10.5 L7 10.5 C7 7.74 9.24 5.5 12 5.5 Z"/>
+<path d="M7 10.5 L17 10.5 L17 19.5 L7 19.5 Z"/>
+<path d="M5.5 19.5 L18.5 19.5 L18.5 21.8 L5.5 21.8 Z"/>
+<path d="M11.25 1.2 L12.75 1.2 L12.75 4 L11.25 4 Z"/>
+<path d="M6 2.6 L7.3 1.85 L8.9 4.6 L7.6 5.35 Z"/>
+<path d="M18 2.6 L16.7 1.85 L15.1 4.6 L16.4 5.35 Z"/>
+</svg>)";
+
             // A ringed handle: a knot on a curve, small enough not to bury the
             // line it sits on. Drawn as a ring because a solid disc at the
             // sizes a spline is authored at reads as a blob.
@@ -134,6 +150,12 @@ namespace {
 
     Icon iconFor(Object3D& object) {
 
+        // Before everything: instrumentation is authored ON an object of some
+        // other kind (a link, a mast, a wheel hub), so the sensor is the more
+        // specific fact about a node that carries one.
+        if (const auto sensor = SensorConfig::read(object); sensor && sensor->enabled) {
+            return Icon::Sensor;
+        }
         // Before the type checks: a control point is an ordinary Object3D and
         // is told apart by its parent, not by what it is.
         if (SplineConfig::splineOf(object)) return Icon::SplinePoint;
@@ -266,7 +288,14 @@ void EditorApp::syncViewportMarkers() {
         if (document_.isEditorOnly(object)) return;
         // Spline control points draw nothing either — the curve does — so they
         // are unclickable without an icon of their own.
-        if (object.as<Camera>() || object.as<Light>() || SplineConfig::splineOf(object)) {
+        //
+        // An instrumented object is the one case where the marker is NOT about
+        // being invisible: a wheel hub with an IMU on it draws perfectly well.
+        // The icon says the instrumentation is there, which is otherwise only
+        // discoverable by selecting every object in turn.
+        const auto sensor = SensorConfig::read(object);
+        if (object.as<Camera>() || object.as<Light>() || SplineConfig::splineOf(object) ||
+            (sensor && sensor->enabled)) {
             owners.push_back(&object);
         }
     });
@@ -281,6 +310,19 @@ void EditorApp::syncViewportMarkers() {
         }
     }
 
+    // --- retire markers whose owner changed kind ---------------------------
+    // Authoring a sensor on a camera changes which glyph it wants, and the
+    // geometry is baked at build time. Cheaper to rebuild the one marker than to
+    // track authoring edits through the command stack.
+    for (auto it = viewportMarkers_.begin(); it != viewportMarkers_.end();) {
+        if (it->owner && it->icon != static_cast<int>(iconFor(*it->owner))) {
+            it->node->removeFromParent();
+            it = viewportMarkers_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     // --- create markers for new owners ------------------------------------
     for (auto* owner : owners) {
         const bool known = std::any_of(
@@ -288,14 +330,16 @@ void EditorApp::syncViewportMarkers() {
                 [owner](const ViewportMarker& m) { return m.owner == owner; });
         if (known) continue;
 
-        auto built = buildMarker(iconFor(*owner));
+        const auto icon = iconFor(*owner);
+        auto built = buildMarker(icon);
         // A marker that failed to parse is simply skipped; the object stays
         // selectable from the hierarchy, and the selftest asserts it parses.
         if (!built.node) continue;
 
         markers_->add(built.node);
-        viewportMarkers_.push_back(
-                ViewportMarker{owner, built.node, std::move(built.materials)});
+        viewportMarkers_.push_back(ViewportMarker{owner, built.node,
+                                                  std::move(built.materials),
+                                                  static_cast<int>(icon)});
     }
 
     if (viewportMarkers_.empty()) return;

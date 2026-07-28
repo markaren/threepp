@@ -11,6 +11,7 @@
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
+#include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
@@ -18,6 +19,7 @@
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
+#include "threepp/extras/editor/SensorPlaySession.hpp"
 #endif
 
 #include "threepp/canvas/Monitor.hpp"
@@ -41,6 +43,7 @@
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/ObjectWithMaterials.hpp"
+#include "threepp/objects/Points.hpp"
 #include "threepp/objects/Robot.hpp"
 #include "threepp/renderers/RendererFactory.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -169,6 +172,14 @@ EditorApp::EditorApp(const Options& options)
     splines_->name = "__editor_splines";
     overlay_->add(splines_);
 
+    // Editor-only like the overlay, but a SIBLING of it rather than a child: the
+    // overlay is hidden for the duration of every sensor scan (a depth camera
+    // pointed at the grid otherwise measures the grid), and a sensor must not be
+    // hidden from itself. See SensorPlaySession.
+    sensorRig_ = Group::create();
+    sensorRig_->name = "__editor_sensor_rig";
+    document_.addEditorOnly(*sensorRig_);
+
     // Orbiting while dragging a handle fights the gizmo; and a drag is exactly
     // the span an undo entry should cover.
     gizmoDragListener_ = std::make_unique<LambdaEventListener>([this](Event& event) {
@@ -232,6 +243,9 @@ EditorApp::EditorApp(const Options& options)
         // has already destroyed; the node itself is parented to the surviving
         // overlay, so it has to be taken down explicitly.
         clearPhysicsDebug();
+        // Same for the sensor cloud: world-space points from sensors the play
+        // session has already dropped, hanging off an overlay that survives.
+        clearSensorOverlay();
         if (cameraHelper_) {
             cameraHelper_->removeFromParent();
             cameraHelper_.reset();
@@ -289,6 +303,20 @@ EditorApp::EditorApp(const Options& options)
     play_.addSession(physics_);
 #endif
     play_.addSession(std::make_shared<AnimationPlaySession>());
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    // After physics (whose world the pushed sensors register with) and after the
+    // animation player, so a scan sees the pose the frame ended on. Before the
+    // script session, which stays last by rule — a script that moves a sensor's
+    // object is therefore read one frame later, which is the price of "scripts
+    // are the frame's final word".
+    sensors_ = std::make_shared<SensorPlaySession>();
+    sensors_->setPhysics(physics_.get());
+    sensors_->setRenderer(renderer_.get());
+    sensors_->setRig(sensorRig_.get());
+    sensors_->setHiddenDuringScan(overlay_.get());
+    sensors_->setLogger([this](const std::string& message) { log(message); });
+    play_.addSession(sensors_);
+#endif
 #ifdef THREEPP_EDITOR_WITH_PYTHON
     // Last, so a script's transform edits are the final word for the frame —
     // physics and the animation player have already had their say.
@@ -330,6 +358,18 @@ EditorApp::~EditorApp() {
     // Stops the poll and takes the scratch .py with it. Whatever was saved is
     // already in the document; what is left on disk is a copy nobody will read.
     stopExternalEdit("the editor is closing");
+
+    // The sensor session parents nodes into sensorRig_, which is a member of this
+    // same object: member destruction order would take the rig down first and
+    // leave the session's destructor unlinking from freed memory. Drop the
+    // sessions here, while everything they point into is still alive.
+    play_.clearSessions();
+    sensors_.reset();
+    physics_.reset();
+    if (sensorRig_) {
+        sensorRig_->clear();
+        document_.removeEditorOnly(*sensorRig_);
+    }
 
     // Tear the overlay down before the members it points at (the gizmo owns a
     // pimpl that unregisters canvas listeners in its destructor).
@@ -464,6 +504,34 @@ int EditorApp::runScreenshot() {
     // and left a step to catch on.
     drop(Primitive::Box, {-1.f, 4.5f, 13.5f}, "Box near the crest");
 
+    // A LIDAR on a mast, authored exactly as the inspector authors one. Added
+    // BEFORE play, because the pre-play snapshot is what Stop restores — an
+    // object added while playing is not in the document at all.
+    //
+    // This is the shot the sensor feature is judged on. A count in a panel says
+    // a scan happened; only the cloud says the beams, the sensor pose and the
+    // unprojection agree, and only a picture shows a cloud hugging the geometry
+    // rather than floating beside it.
+    {
+        auto mast = ObjectFactory::createPrimitive(Primitive::Box, scene);
+        mast->name = "Lidar Mast";
+        mast->position.set(0.f, 2.2f, 6.f);
+        mast->scale.set(0.3f, 0.3f, 0.3f);
+
+        SensorConfig sensor;
+        sensor.enabled = true;
+        sensor.type = SensorConfig::Type::Lidar;
+        sensor.beams = SensorConfig::Beams::OS1_64;
+        sensor.faceSize = 192;
+        sensor.rateHz = 8.f;
+        sensor.nearPlane = 0.4f;
+        sensor.farPlane = 40.f;
+        sensor.rangeStddev = 0.01f;
+        sensor.write(*mast);
+        addObject(mast, scene, "Add Lidar Mast");
+    }
+    sensorCloudVisible_ = true;
+
     startPlay();
     playFor(2.5f);// balls settle, the collider overlay's line buffer fills
 
@@ -517,6 +585,35 @@ int EditorApp::runScreenshot() {
     physicsDebug_ = true;
     playFor(0.4f);// the overlay's line buffer fills
     wrote = shoot(sibling("_colliders")) && wrote;
+
+    // And the sensor cloud, still inside the same play. Collider lines off:
+    // a cloud read through a wall of them says nothing about either.
+    physicsDebug_ = false;
+    {
+        const auto cloudPoints = [this] {
+            const auto geometry = sensorCloud_ ? sensorCloud_->geometry() : nullptr;
+            return geometry ? geometry->drawRange.count : 0;
+        };
+        // Wall-clock, and waiting on the CLOUD rather than on a frame count: a
+        // scan is rate-gated off the physics accumulator, so how many frames it
+        // takes depends on the machine.
+        for (int i = 0; i < 400 && cloudPoints() == 0; ++i) playFor(0.05f);
+        camera_.position.set(-11.f, 9.f, 20.f);
+        orbit_->target.set(0.f, 1.5f, 6.f);
+        playFor(0.4f);
+        std::cout << "[screenshot] sensor cloud: " << cloudPoints() << " points" << std::endl;
+        wrote = shoot(sibling("_sensor_cloud")) && wrote;
+
+        // Low and close, along the beams: a cloud that looks fine from above can
+        // still be sitting a metre off the surface it is meant to be measuring,
+        // and only a grazing angle shows that.
+        camera_.position.set(-2.f, 3.2f, 15.f);
+        orbit_->target.set(0.f, 1.2f, 6.f);
+        playFor(0.4f);
+        wrote = shoot(sibling("_sensor_cloud_near")) && wrote;
+    }
+    camera_.position.set(-1.f, 27.f, 27.f);
+    orbit_->target.set(0.f, 0.f, 5.f);
 
     // And the axis views, for the same reason the rest of this function exists:
     // a projection is a claim about what the image does to parallel lines, and
@@ -2631,6 +2728,18 @@ void EditorApp::drawUi() {
                 }
                 scriptTargetUuid_.clear();
                 break;
+            case PendingDialog::RecordDir:
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+                // The dialog picks a FILE (it has no directory mode); what the
+                // recorder wants is the folder it sits in, because it writes one
+                // CSV per sensor named after the sensor.
+                if (sensors_) {
+                    const auto dir = path.has_filename() ? path.parent_path() : path;
+                    sensors_->setRecordDirectory(dir);
+                    log("sensor recordings will go to " + dir.string());
+                }
+#endif
+                break;
             case PendingDialog::None:
                 break;
         }
@@ -3572,6 +3681,7 @@ void EditorApp::refreshSelectionHelpers() {
     syncViewportMarkers();
     syncSplineOverlays();
     syncPhysicsDebug();
+    syncSensorOverlay();
     syncCameraHelper();
 
     // Snap is a hold-to-engage modifier, exactly like the transform example.
@@ -3943,8 +4053,9 @@ void EditorApp::stopPlay() {
     if (!isPlaying()) return;
 
     // Before the sessions go: the lines describe a PhysX world that stop() is
-    // about to destroy.
+    // about to destroy, and the cloud describes sensors it is about to drop.
     clearPhysicsDebug();
+    clearSensorOverlay();
 
     std::string error;
     if (!play_.stop(document_, &error)) {

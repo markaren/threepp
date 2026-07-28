@@ -152,6 +152,11 @@ void EditorApp::drawMenuBar() {
             // Only draws anything while playing — the colliders do not exist
             // before that — but the toggle is a preference, not a play state.
             ImGui::MenuItem("Physics Colliders", nullptr, &physicsDebug_);
+            // On by default, unlike the colliders: a sensor's cloud IS the
+            // sensor as far as the viewport is concerned, and a feature nobody
+            // switches on is a feature nobody knows works. Costs nothing in a
+            // scene with no sensors authored.
+            ImGui::MenuItem("Sensor Point Cloud", nullptr, &sensorCloudVisible_);
             ImGui::MenuItem("Bottom Panel", nullptr, &bottomPanelOpen_);
             ImGui::Separator();
             ImGui::MenuItem("Renderer Settings", nullptr, &showRendererSettings);

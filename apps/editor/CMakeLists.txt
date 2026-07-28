@@ -13,6 +13,7 @@ add_executable(threepp_editor
         ExternalScriptEdit.cpp
         FileBrowser.cpp
         PhysicsDebugOverlay.cpp
+        SensorOverlay.cpp
         SplineOverlay.cpp
         ViewportMarkers.cpp
         panels/AssetPanel.cpp
@@ -20,6 +21,7 @@ add_executable(threepp_editor
         panels/InspectorPanel.cpp
         panels/MenuBar.cpp
         panels/ScriptEditorPanel.cpp
+        panels/SensorsPanel.cpp
         panels/StatusBar.cpp
         panels/Toolbar.cpp
 )

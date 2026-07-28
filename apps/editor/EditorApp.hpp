@@ -60,6 +60,7 @@ namespace threepp {
     class Material;
     class MeshBasicMaterial;
     class ObjectWithMorphTargetInfluences;
+    class Points;
     class Robot;
     class Texture;
 
@@ -71,6 +72,8 @@ namespace threepp::editor {
     // Forward-declared: PhysicsPlaySession pulls in the whole PhysX SDK, and
     // every panel includes this header.
     class PhysicsPlaySession;
+    // Same reason: SensorPlaySession includes Imu.hpp, which includes PhysX.
+    class SensorPlaySession;
 
     class EditorApp {
 
@@ -144,6 +147,10 @@ namespace threepp::editor {
         void drawJointsSection(Object3D& object);
         void drawScriptSection(Object3D& object);
         void drawPhysicsSection(Object3D& object);
+        // Sensor authoring: type, rate, seed and the per-type noise model, all
+        // written into userData["sensor"]. Fields for the types you are not on
+        // are hidden, never dropped — see SensorConfig.
+        void drawSensorSection(Object3D& object);
         // Shown for a spline and, in its point form, for one of its control
         // points — both are ordinary scene nodes, so the section is what tells
         // them apart.
@@ -153,9 +160,13 @@ namespace threepp::editor {
                              const std::function<void(const std::shared_ptr<Texture>&)>& setter,
                              bool srgb);
 
-        // Assets / console tabs
+        // Assets / console / sensors tabs
         void drawAssetsTab();
         void drawConsoleTab();
+        // Live sensor readout (apps/editor/panels/SensorsPanel.cpp): what is
+        // measuring, what it last read, plots of the scalar channels, and the
+        // Record toggle. A sensor is invisible without this.
+        void drawSensorsTab();
 
         // Script Editor (apps/editor/panels/ScriptEditorPanel.cpp). One
         // floating window, editing one object's inline script source.
@@ -253,6 +264,12 @@ namespace threepp::editor {
         // my collider" being unanswerable without leaving the editor.
         void syncPhysicsDebug();
         void clearPhysicsDebug();
+        // --- sensor point cloud (apps/editor/SensorOverlay.cpp) --------------
+        // Every playing depth camera's and LIDAR's returns, as one Points under
+        // the overlay, coloured by range. Same in-place attribute contract as
+        // the collider lines above and for the same reason.
+        void syncSensorOverlay();
+        void clearSensorOverlay();
         // The object a marker stands for, or nullptr when `hit` is not part of
         // one. Lets a click on an icon select its owner.
         [[nodiscard]] Object3D* markerOwnerOf(Object3D* hit) const;
@@ -396,6 +413,12 @@ namespace threepp::editor {
             Object3D* owner = nullptr;
             std::shared_ptr<Object3D> node;
             std::vector<std::shared_ptr<MeshBasicMaterial>> materials;
+            // Which glyph this was built from (ViewportMarkers.cpp's file-local
+            // Icon, as an int so this header stays free of it). What an object IS
+            // can change under a live marker — authoring a sensor on a camera
+            // changes its icon — so the marker is rebuilt when it no longer
+            // matches rather than showing yesterday's kind.
+            int icon = -1;
         };
         std::shared_ptr<Group> markers_;
         std::vector<ViewportMarker> viewportMarkers_;
@@ -433,6 +456,22 @@ namespace threepp::editor {
         int physicsDebugCapacity_ = 0;
         bool physicsDebug_ = false;
 
+        // Sensors authored on scene objects. The session is kept as a member for
+        // the same reason physics_ is: the readout and the point-cloud overlay
+        // both read what it built.
+        //
+        // sensorRig_ is where the vision sensors' nodes are parented. It is
+        // editor-only (so they are never saved, picked or given a marker) and
+        // deliberately NOT a child of overlay_, because the overlay is hidden for
+        // the duration of every scan — a depth camera aimed at the viewport grid
+        // otherwise measures the grid. The point cloud, being furniture, IS under
+        // the overlay and so is correctly invisible to the sensors.
+        std::shared_ptr<SensorPlaySession> sensors_;
+        std::shared_ptr<Group> sensorRig_;
+        std::shared_ptr<Points> sensorCloud_;
+        int sensorCloudCapacity_ = 0;
+        bool sensorCloudVisible_ = true;
+
         Raycaster raycaster_;
         std::unique_ptr<ImguiContext> ui_;
         IOCapture ioCapture_;
@@ -456,7 +495,12 @@ namespace threepp::editor {
             ImportModel,
             Environment,
             Texture,
-            Script
+            Script,
+            // Where sensor recordings go. The browser has no directory mode, so
+            // this is a Save dialog whose PARENT directory is what gets used —
+            // the file name the user types is ignored (one CSV per sensor, named
+            // after the sensor).
+            RecordDir
         };
         PendingDialog pendingDialog_ = PendingDialog::None;
         bool environmentAsBackground_ = true;

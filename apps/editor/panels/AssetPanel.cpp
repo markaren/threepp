@@ -230,6 +230,10 @@ void EditorApp::drawBottomPanel() {
                 drawAssetsTab();
                 ImGui::EndTabItem();
             }
+            if (ImGui::BeginTabItem("Sensors")) {
+                drawSensorsTab();
+                ImGui::EndTabItem();
+            }
             ImGui::EndTabBar();
         }
     }
