@@ -841,6 +841,15 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                     const uint32_t rh = static_cast<uint32_t>(std::clamp(static_cast<int>(scissor.w), 1, static_cast<int>(full.height)));
                     const int      syB = std::clamp(static_cast<int>(scissor.y), 0, static_cast<int>(full.height) - static_cast<int>(rh));
                     const uint32_t ry = static_cast<uint32_t>(static_cast<int>(full.height) - (syB + static_cast<int>(rh)));
+                    // Hand the pane the scene's equirect environment so its sky
+                    // matches the deferred primary miss. Only a REAL texture:
+                    // a background colour (or no env at all) keeps the pane's
+                    // verbatim colour clear — the deferred solid-bg bypass
+                    // shows that colour display-referred and tone-mapping it
+                    // in the pane would make the two views disagree.
+                    overlayPass_->setPaneEnvironment(
+                            (!envIsDefault && !envIsBgColor) ? envImage.view : VK_NULL_HANDLE,
+                            envImage.sampler, currentExposure());
                     overlayPass_->record(cmdBuffers[currentFrame], currentFrame, frameImageIndex_,
                                          scene, camera, /*screenSpaceOnly=*/false, rx, ry, rw, rh);
                     return;

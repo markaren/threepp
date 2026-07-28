@@ -28,6 +28,8 @@
 #include "threepp/renderers/vulkan/shaders/overlay_color.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_mesh_lit.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_mesh_lit.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_pane_sky.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_pane_sky.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_point.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_point.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.frag.spv.h"
@@ -108,6 +110,10 @@ OverlayPass::~OverlayPass() {
     if (litMeshPipelineLayout_)      vkDestroyPipelineLayout(d, litMeshPipelineLayout_, nullptr);
     if (paneLightSetLayout_)         vkDestroyDescriptorSetLayout(d, paneLightSetLayout_, nullptr);
     if (paneLightDescPool_)          vkDestroyDescriptorPool(d, paneLightDescPool_, nullptr);
+    if (paneSkyPipeline_)            vkDestroyPipeline(d, paneSkyPipeline_, nullptr);
+    if (paneSkyPipelineLayout_)      vkDestroyPipelineLayout(d, paneSkyPipelineLayout_, nullptr);
+    if (paneSkySetLayout_)           vkDestroyDescriptorSetLayout(d, paneSkySetLayout_, nullptr);
+    if (paneSkyDescPool_)            vkDestroyDescriptorPool(d, paneSkyDescPool_, nullptr);
     if (spriteDescSetLayout_)       vkDestroyDescriptorSetLayout(d, spriteDescSetLayout_, nullptr);
     for (auto& pool : spriteDescPools_) {
         if (pool) vkDestroyDescriptorPool(d, pool, nullptr);
@@ -675,6 +681,165 @@ void OverlayPass::createLitMeshPipelines() {
     check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpciT, nullptr,
                                     &litMeshTransparentPipeline_),
           "vkCreateGraphicsPipelines(litMeshTransparent)");
+
+    vkDestroyShaderModule(ctx_.device(), vertModule, nullptr);
+    vkDestroyShaderModule(ctx_.device(), fragModule, nullptr);
+}
+
+void OverlayPass::setPaneEnvironment(VkImageView view, VkSampler sampler, float exposure) {
+    paneEnvView_     = view;
+    paneEnvSampler_  = sampler;
+    paneEnvExposure_ = exposure;
+}
+
+void OverlayPass::createPaneSkyPipeline() {
+    if (paneSkyPipeline_ != VK_NULL_HANDLE) return;
+
+    {
+        VkDescriptorSetLayoutBinding b{};
+        b.binding         = 0;
+        b.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b.descriptorCount = 1;
+        b.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo dslci{};
+        dslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dslci.bindingCount = 1;
+        dslci.pBindings    = &b;
+        check(vkCreateDescriptorSetLayout(ctx_.device(), &dslci, nullptr, &paneSkySetLayout_),
+              "vkCreateDescriptorSetLayout(paneSky)");
+
+        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, framesInFlight_};
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets       = framesInFlight_;
+        dpci.poolSizeCount = 1;
+        dpci.pPoolSizes    = &ps;
+        check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &paneSkyDescPool_),
+              "vkCreateDescriptorPool(paneSky)");
+
+        paneSkySets_.resize(framesInFlight_, VK_NULL_HANDLE);
+        paneSkyWrittenView_.resize(framesInFlight_, VK_NULL_HANDLE);
+        for (uint32_t f = 0; f < framesInFlight_; ++f) {
+            VkDescriptorSetAllocateInfo asi{};
+            asi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            asi.descriptorPool     = paneSkyDescPool_;
+            asi.descriptorSetCount = 1;
+            asi.pSetLayouts        = &paneSkySetLayout_;
+            check(vkAllocateDescriptorSets(ctx_.device(), &asi, &paneSkySets_[f]),
+                  "vkAllocateDescriptorSets(paneSky)");
+        }
+    }
+
+    {
+        VkPushConstantRange pcRange{};// invVP(64) + rect(16) + params(16)
+        pcRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        pcRange.offset     = 0;
+        pcRange.size       = 96;
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount         = 1;
+        plci.pSetLayouts            = &paneSkySetLayout_;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges    = &pcRange;
+        check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &paneSkyPipelineLayout_),
+              "vkCreatePipelineLayout(paneSky)");
+    }
+
+    VkShaderModuleCreateInfo vsmci{};
+    vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    vsmci.codeSize = sizeof(kOverlayPaneSkyVertSpv);
+    vsmci.pCode    = kOverlayPaneSkyVertSpv;
+    VkShaderModule vertModule = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(ctx_.device(), &vsmci, nullptr, &vertModule),
+          "vkCreateShaderModule(overlay_pane_sky.vert)");
+    VkShaderModuleCreateInfo fsmci{};
+    fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    fsmci.codeSize = sizeof(kOverlayPaneSkyFragSpv);
+    fsmci.pCode    = kOverlayPaneSkyFragSpv;
+    VkShaderModule fragModule = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(ctx_.device(), &fsmci, nullptr, &fragModule),
+          "vkCreateShaderModule(overlay_pane_sky.frag)");
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName  = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName  = "main";
+
+    VkPipelineVertexInputStateCreateInfo vi{};// fullscreen triangle: no buffers
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount  = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{};
+    rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode    = VK_CULL_MODE_NONE;
+    rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth   = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Runs inside the lit pane's scope, so the depth format must be declared
+    // — but the sky neither tests nor writes it (meshes overdraw the sky by
+    // depth-testing against the cleared far plane, not the other way round).
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable  = VK_FALSE;
+    ds.depthWriteEnable = VK_FALSE;
+
+    VkPipelineColorBlendAttachmentState cbas{};
+    cbas.blendEnable    = VK_FALSE;
+    cbas.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo cb{};
+    cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments    = &cbas;
+
+    VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{};
+    dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn.dynamicStateCount = 2;
+    dyn.pDynamicStates    = dynStates;
+
+    const VkFormat colorFmt = ctx_.swapchainFormat();
+    VkPipelineRenderingCreateInfo prci{};
+    prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    prci.colorAttachmentCount    = 1;
+    prci.pColorAttachmentFormats = &colorFmt;
+    prci.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT;
+
+    VkGraphicsPipelineCreateInfo gpci{};
+    gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    gpci.pNext               = &prci;
+    gpci.stageCount          = 2;
+    gpci.pStages             = stages;
+    gpci.pVertexInputState   = &vi;
+    gpci.pInputAssemblyState = &ia;
+    gpci.pViewportState      = &vp;
+    gpci.pRasterizationState = &rs;
+    gpci.pMultisampleState   = &ms;
+    gpci.pDepthStencilState  = &ds;
+    gpci.pColorBlendState    = &cb;
+    gpci.pDynamicState       = &dyn;
+    gpci.layout              = paneSkyPipelineLayout_;
+    check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpci, nullptr,
+                                    &paneSkyPipeline_),
+          "vkCreateGraphicsPipelines(paneSky)");
 
     vkDestroyShaderModule(ctx_.device(), vertModule, nullptr);
     vkDestroyShaderModule(ctx_.device(), fragModule, nullptr);
@@ -1644,6 +1809,56 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         VkRect2D psc{{static_cast<int32_t>(regionX), static_cast<int32_t>(regionY)},
                      {regionW, regionH}};
         vkCmdSetScissor(cb, 0, 1, &psc);
+
+        // ── Sky: the scene's equirect environment behind everything ────
+        // Only when the renderer handed one over (setPaneEnvironment) — a
+        // solid background colour stays the loadOp clear above. Depth is
+        // untouched, so the meshes below simply overdraw it.
+        if (paneEnvView_ != VK_NULL_HANDLE) {
+            createPaneSkyPipeline();
+            if (paneSkyWrittenView_[frame] != paneEnvView_) {
+                // This slot's fence has passed (frame-start wait), so its set
+                // is not referenced by any in-flight command buffer.
+                VkDescriptorImageInfo ii{};
+                ii.sampler     = paneEnvSampler_;
+                ii.imageView   = paneEnvView_;
+                ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                VkWriteDescriptorSet w{};
+                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w.dstSet          = paneSkySets_[frame];
+                w.dstBinding      = 0;
+                w.descriptorCount = 1;
+                w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w.pImageInfo      = &ii;
+                vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+                paneSkyWrittenView_[frame] = paneEnvView_;
+            }
+
+            struct SkyPC {
+                float invVP[16];
+                float rect[4];
+                float params[4];
+            };
+            static_assert(sizeof(SkyPC) == 96, "SkyPC must match the pane-sky PC range");
+            Matrix4 vpM;
+            vpM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            Matrix4 invVP;
+            invVP.copy(vpM).invert();
+            SkyPC spc{};
+            std::memcpy(spc.invVP, invVP.elements.data(), 64);
+            spc.rect[0]   = static_cast<float>(regionX);
+            spc.rect[1]   = static_cast<float>(regionY);
+            spc.rect[2]   = static_cast<float>(regionW);
+            spc.rect[3]   = static_cast<float>(regionH);
+            spc.params[0] = paneEnvExposure_;
+
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, paneSkyPipeline_);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, paneSkyPipelineLayout_,
+                                    0, 1, &paneSkySets_[frame], 0, nullptr);
+            vkCmdPushConstants(cb, paneSkyPipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(spc), &spc);
+            vkCmdDraw(cb, 3, 1, 0, 0);
+        }
 
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, litMeshPipelineLayout_,
                                 0, 1, &paneLightSets_[frame], 0, nullptr);

@@ -1245,6 +1245,16 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_mesh_lit.frag"
         kOverlayMeshLitFragSpv
         _overlay_mesh_lit_frag_spv_h)
+    # Lit pane sky — fullscreen equirect background for the lit pane, sampling
+    # the same envImage the deferred primary miss shows.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_pane_sky.vert"
+        kOverlayPaneSkyVertSpv
+        _overlay_pane_sky_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_pane_sky.frag"
+        kOverlayPaneSkyFragSpv
+        _overlay_pane_sky_frag_spv_h)
     # HUD sprite (TextSprite + Sprite) — alpha-blended quad with per-sprite
     # combined-image-sampler binding. Walked from the user's HUD scene during
     # the ortho overlay pass, post-PT/TAA, depth disabled.

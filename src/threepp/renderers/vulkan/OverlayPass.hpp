@@ -91,6 +91,16 @@ namespace threepp::vulkan {
                     uint32_t regionX = 0, uint32_t regionY = 0,
                     uint32_t regionW = 0, uint32_t regionH = 0);
 
+        // Environment for the lit pane's sky. Pass the renderer's envImage
+        // view/sampler when the scene's environment is a REAL equirect
+        // texture; VK_NULL_HANDLE keeps the solid background clear (a
+        // background COLOUR must stay a verbatim clear — the deferred
+        // solid-bg bypass shows that colour display-referred, and tone
+        // mapping it here would make the two views disagree on "empty").
+        // Call before record(); the view must outlive the frame (it does —
+        // env swaps go through the retire queue).
+        void setPaneEnvironment(VkImageView view, VkSampler sampler, float exposure);
+
     private:
         // Cached uploaded sprite atlas. Keyed on Texture*; liveCheck detects
         // pointer recycle; textureVersion mirrors Texture::version() so
@@ -186,6 +196,22 @@ namespace threepp::vulkan {
         // frame's depth attachments all carry meaning across passes.
         Image2D paneDepth_{};
         bool    paneDepthInitialized_ = false;// first use transitions from UNDEFINED
+
+        // Lit pane sky (overlay_pane_sky shaders): fullscreen equirect draw
+        // under the meshes, sampling the renderer's envImage. Set state comes
+        // from setPaneEnvironment each frame; per-FIF descriptor sets are
+        // rewritten lazily when the env view changes (a slot is only touched
+        // once its fence has passed, so no in-flight set is ever updated).
+        void createPaneSkyPipeline();
+        VkImageView   paneEnvView_    = VK_NULL_HANDLE;
+        VkSampler     paneEnvSampler_ = VK_NULL_HANDLE;
+        float         paneEnvExposure_ = 1.f;
+        VkDescriptorSetLayout        paneSkySetLayout_ = VK_NULL_HANDLE;
+        VkDescriptorPool             paneSkyDescPool_  = VK_NULL_HANDLE;
+        std::vector<VkDescriptorSet> paneSkySets_;       // per FIF
+        std::vector<VkImageView>     paneSkyWrittenView_;// what each set holds
+        VkPipelineLayout paneSkyPipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline       paneSkyPipeline_       = VK_NULL_HANDLE;
 
         // Per-frame descriptor pools reset at the top of each record() call.
         std::vector<VkDescriptorPool> spriteDescPools_;

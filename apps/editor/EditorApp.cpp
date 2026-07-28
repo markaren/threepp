@@ -975,6 +975,31 @@ int EditorApp::runSelfTest() {
         const double emptyPatch = dockLuma(Vector3(7.f, 4.4f, 0.f));
         check(emptyPatch >= 0.0 && emptyPatch < 60.0,
               "and its empty pixels read as background");
+
+        // With a texture environment, that same empty ray becomes SKY. The
+        // Vulkan pane samples the very equirect the deferred miss shows;
+        // a bright constant env turns the probe from ~30 (background clear)
+        // to near-white, so one threshold answers "is the sky there at all"
+        // on both backends without caring how each maps the texture.
+        {
+            constexpr int W = 8, H = 4;// 2:1 equirect aspect
+            std::vector<float> data(static_cast<size_t>(W) * H * 4, 2.5f);
+            Image envImg{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
+            auto envTex = Texture::create(envImg);
+            envTex->format = Format::RGBA;
+            envTex->type = Type::Float;
+            envTex->colorSpace = ColorSpace::Linear;
+            envTex->mapping = Mapping::EquirectangularReflection;
+            envTex->needsUpdate();
+            document_.scene().background = envTex;
+            step(8);
+
+            const double skyPatch = dockLuma(Vector3(7.f, 4.4f, 0.f));
+            check(skyPatch > 120.0, "a texture environment shows as the preview's sky");
+
+            document_.scene().background = Color(0x1c1f24);// as the template had it
+            step(2);
+        }
     }
 
     deleteSelected();
