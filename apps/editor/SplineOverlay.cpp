@@ -131,21 +131,15 @@ namespace {
                                        divisions, std::max(config.radius, 1e-3f),
                                        static_cast<unsigned int>(std::clamp(config.radialSegments, 3, 64)),
                                        config.closed));
-            case SplineConfig::MeshKind::Road: {
-                // Not a ribbon: a road is consolidated into straights and arcs
-                // first (SplineConfig::roadPath), which is what keeps it full
-                // width through a bend tighter than its own half-width — and
-                // what the collider rebuilds from, so the two cannot disagree.
-                // An empty chain is a curve with no length to it — two points
-                // dragged onto each other. Nothing to build, and a geometry
-                // with no position attribute is not something to hand a
-                // renderer; the sync pass hides the mesh instead.
-                const auto road = config.roadPath(spline);
-                if (!road || road->empty()) return nullptr;
+            case SplineConfig::MeshKind::Road:
+                // Not a ribbon: a road offsets the SAME samples the overlay
+                // draws and trims the loops those offsets tie inside a bend
+                // tighter than the half-width, so it follows the authored curve
+                // exactly and stays full width through the bend.
                 return RoadGeometry::create(
-                        *road, RoadGeometry::Params(std::max(config.width, 1e-3f),
-                                                    std::max(config.uvLength, 1e-3f)));
-            }
+                        *curve, RoadGeometry::Params(
+                                        std::max(config.width, 1e-3f), divisions,
+                                        std::max(config.uvLength, 1e-3f), config.closed));
             case SplineConfig::MeshKind::None:
                 break;
         }

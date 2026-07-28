@@ -5,62 +5,87 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
+#include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 using namespace threepp;
 
 namespace {
 
-    // The two vertices of cross-section `i`, in the order the builder emits
-    // them: left of travel first, right second.
-    std::pair<Vector3, Vector3> ring(const BufferGeometry& geometry, int i) {
+    // The road lays its whole left edge down and then its whole right edge, and
+    // v says which is which. Trimming takes vertices off one edge and not the
+    // other, so the two are no longer the same length — reading them back is
+    // reading two polylines, not a list of cross-sections.
+    std::vector<Vector3> edgeChain(const BufferGeometry& geometry, float v) {
 
         const auto* position = geometry.getAttribute<float>("position");
-        const int a = i * 2;
-        return {Vector3(position->getX(a), position->getY(a), position->getZ(a)),
-                Vector3(position->getX(a + 1), position->getY(a + 1), position->getZ(a + 1))};
+        const auto* uv = geometry.getAttribute<float>("uv");
+        std::vector<Vector3> out;
+        for (int i = 0; i < position->count(); ++i) {
+            if (std::abs(uv->getY(i) - v) > 1e-5f) continue;
+            out.emplace_back(position->getX(i), position->getY(i), position->getZ(i));
+        }
+        return out;
     }
 
-    int ringCount(const BufferGeometry& geometry) {
-
-        return geometry.getAttribute<float>("position")->count() / 2;
-    }
-
-    // Are cross-sections i and i + 1 the pair a JOINT carries? They sit on the
-    // same centreline point — same arc length, hence same u — each in its own
-    // piece's frame, so they meet in the middle on purpose: the quad between
-    // them is the wedge that covers the kink. Every other neighbouring pair has
-    // to stay clear of its neighbour.
-    bool atJoint(const BufferGeometry& geometry, int i) {
+    std::vector<float> edgeU(const BufferGeometry& geometry, float v) {
 
         const auto* uv = geometry.getAttribute<float>("uv");
-        return std::abs(uv->getX(i * 2) - uv->getX(i * 2 + 2)) < 1e-6f;
+        std::vector<float> out;
+        for (int i = 0; i < uv->count(); ++i) {
+            if (std::abs(uv->getY(i) - v) > 1e-5f) continue;
+            out.push_back(uv->getX(i));
+        }
+        return out;
     }
 
-    // Do the segments p0-p1 and q0-q1 cross, in the XZ plane? A cross-section
-    // that cuts through its neighbour is the road turning inside out. Two that
-    // MEET at a shared vertex are not that: a pie sector's cross-sections all
-    // reach the same point at the arc's centre, on purpose.
-    bool crossesXZ(const Vector3& p0, const Vector3& p1, const Vector3& q0, const Vector3& q1) {
+    // Turn angles, in degrees, at every interior vertex of a polyline. On a
+    // smooth edge these are bounded by how coarsely the curve was sampled; a
+    // TRIM corner is the one place an edge really has a corner, and it stands
+    // far clear of that.
+    std::vector<float> turnAngles(const std::vector<Vector3>& chain) {
 
-        if (p0.distanceTo(q0) < 1e-4f || p1.distanceTo(q1) < 1e-4f) return false;
-        if (p0.distanceTo(q1) < 1e-4f || p1.distanceTo(q0) < 1e-4f) return false;
-
-        const auto side = [](const Vector3& a, const Vector3& b, const Vector3& c) {
-            return (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
-        };
-        const float d0 = side(p0, p1, q0);
-        const float d1 = side(p0, p1, q1);
-        const float d2 = side(q0, q1, p0);
-        const float d3 = side(q0, q1, p1);
-        return ((d0 > 0) != (d1 > 0)) && ((d2 > 0) != (d3 > 0));
+        std::vector<float> out;
+        for (std::size_t i = 1; i + 1 < chain.size(); ++i) {
+            Vector3 in, next;
+            in.copy(chain[i]).sub(chain[i - 1]);
+            next.copy(chain[i + 1]).sub(chain[i]);
+            if (in.length() < 1e-6f || next.length() < 1e-6f) continue;
+            in.normalize();
+            next.normalize();
+            out.push_back(std::acos(std::clamp(in.dot(next), -1.f, 1.f)) * 180.f / 3.14159265f);
+        }
+        return out;
     }
 
-    // Is `point` on the road, seen from above? The road is a union of pieces,
-    // so covering the full width is a property of the WHOLE mesh rather than of
-    // any one cross-section — which is exactly what has to be tested, since the
-    // inside of a tight corner is covered by the pieces either side of it.
+    // A corner sharper than any sampling artefact: the trim points, and nothing
+    // else. Each test also asserts how smooth the rest of the edge is, so this
+    // threshold separates rather than tolerates — the smooth edges below turn
+    // under ten degrees a vertex and the trim corners over thirty.
+    constexpr float kCornerDegrees = 20.f;
+
+    int sharpCount(const std::vector<Vector3>& chain) {
+
+        int count = 0;
+        for (const float angle : turnAngles(chain)) {
+            if (angle > kCornerDegrees) ++count;
+        }
+        return count;
+    }
+
+    float smoothest(const std::vector<Vector3>& chain) {
+
+        float worst = 0.f;
+        for (const float angle : turnAngles(chain)) {
+            if (angle <= kCornerDegrees) worst = std::max(worst, angle);
+        }
+        return worst;
+    }
+
+    // Is `point` on the road, seen from above? Full width is a property of the
+    // SURFACE, not of any one cross-section — the region around a trim is a fan
+    // rather than a strip — so it is asked of the triangles.
     bool coveredXZ(const BufferGeometry& geometry, const Vector3& point) {
 
         const auto* position = geometry.getAttribute<float>("position");
@@ -86,9 +111,6 @@ namespace {
         return false;
     }
 
-    // No triangle may face down: a degenerate one (zero area) is fine — the
-    // joints and the pie sectors make those — but a face the winding has turned
-    // over is the fold this construction exists to make impossible.
     void checkNoDownwardFace(const BufferGeometry& geometry) {
 
         const auto* position = geometry.getAttribute<float>("position");
@@ -105,18 +127,48 @@ namespace {
 
     void checkMonotoneU(const BufferGeometry& geometry) {
 
-        const auto* uv = geometry.getAttribute<float>("uv");
-        for (int i = 2; i < uv->count(); i += 2) {
-            CHECK(uv->getX(i) >= uv->getX(i - 2) - 1e-5f);
-        }
-        for (int i = 0; i + 1 < uv->count(); i += 2) {
-            CHECK(std::abs(uv->getY(i)) < 1e-5f);
-            CHECK(std::abs(uv->getY(i + 1) - 1.f) < 1e-5f);
+        for (const float v : {0.f, 1.f}) {
+            const auto u = edgeU(geometry, v);
+            for (std::size_t i = 1; i < u.size(); ++i) {
+                CHECK(u[i] >= u[i - 1] - 1e-5f);
+            }
         }
     }
 
-    // The editor's default spline, and the L corner that bends tighter than a
-    // six metre road's half-width.
+    // Every centreline sample, and both offsets of it, have to be paved — a
+    // road that narrowed through a bend is one that stopped covering its own
+    // offsets. `reach` is a shade under the half-width so a point does not fail
+    // for landing exactly on the boundary.
+    void checkCovers(const BufferGeometry& geometry, const Curve3& curve, float half,
+                     bool innerToo) {
+
+        const float reach = half * 0.95f;
+        for (int i = 3; i <= 97; ++i) {
+            const float t = static_cast<float>(i) / 100.f;
+            Vector3 point, tangent;
+            curve.getPoint(t, point);
+            curve.getTangent(t, tangent);
+            Vector3 across{tangent.z, 0.f, -tangent.x};
+            if (across.length() < 1e-6f) continue;
+            across.normalize();
+
+            CHECK(coveredXZ(geometry, point));
+            Vector3 offset;
+            offset.copy(point).addScaledVector(across, reach);
+            const bool right = coveredXZ(geometry, offset);
+            offset.copy(point).addScaledVector(across, -reach);
+            const bool left = coveredXZ(geometry, offset);
+            if (innerToo) {
+                CHECK(left);
+                CHECK(right);
+            } else {
+                // Inside a bend tighter than the half-width the offset has no
+                // region left to cover; the outer side always has.
+                CHECK((left || right));
+            }
+        }
+    }
+
     CatmullRomCurve3 defaultSpline() {
 
         return CatmullRomCurve3({Vector3(-3, 0.5f, 1.5f), Vector3(-1, 0.5f, -1),
@@ -131,161 +183,113 @@ namespace {
 }// namespace
 
 
-TEST_CASE("a road keeps the authored width through its bends", "[extras]") {
+TEST_CASE("a road is smooth and full width where its offsets fit", "[extras]") {
 
-    // The editor's default spline at the default width: its tightest bend has a
-    // curvature radius just over the half-width, so every offset fits and the
-    // road is FULL WIDTH from end to end. The ribbon this replaced narrowed
-    // through those bends — its inner offset was capped at the bend radius —
-    // and this is the reversal of that expectation.
+    // The editor's default spline, narrow enough that its tightest bend (a
+    // curvature radius of about 1.35 m) clears the half-width: neither offset
+    // ties a loop, there is nothing to trim, and the road is exactly as wide as
+    // it was asked to be from end to end.
     auto curve = defaultSpline();
-    const auto path = RoadPath::fromCurve(curve, 72, false);
-    auto geometry = RoadGeometry::create(path, 4.f, 4.f);
+    auto geometry = RoadGeometry::create(curve, 2.f, 72, 4.f);
     REQUIRE(geometry != nullptr);
 
-    const int rings = ringCount(*geometry);
-    REQUIRE(rings > 2);
+    const auto left = edgeChain(*geometry, 0.f);
+    const auto right = edgeChain(*geometry, 1.f);
+    REQUIRE(left.size() > 8);
 
-    float narrowest = std::numeric_limits<float>::max();
-    float widest = 0.f;
-    for (int i = 0; i < rings; ++i) {
-        const auto [left, right] = ring(*geometry, i);
-        const float across = left.distanceTo(right);
-        narrowest = std::min(narrowest, across);
-        widest = std::max(widest, across);
-        CHECK(std::abs(left.y - right.y) < 1e-4f);// level side to side
-        if (i + 1 < rings && !atJoint(*geometry, i)) {
-            const auto [nextLeft, nextRight] = ring(*geometry, i + 1);
-            CHECK(!crossesXZ(left, right, nextLeft, nextRight));
-        }
+    // No trim, so the two edges still run vertex for vertex, exactly `width`
+    // apart and level side to side.
+    REQUIRE(left.size() == right.size());
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        // Never narrower than the width, and no wider than the miter join at
+        // this sampling makes a cross-section through a bend: the offset of a
+        // polyline is its mitered one, so a corner spans width/cos(theta/2).
+        const float across = left[i].distanceTo(right[i]);
+        CHECK(across >= 2.f - 1e-4f);
+        CHECK(across <= 2.f * 1.01f);
+        CHECK(std::abs(left[i].y - right[i].y) < 1e-4f);
     }
-    // Every cross-section, corners included: the width is the width.
-    CHECK(narrowest > 4.f - 1e-3f);
-    CHECK(widest < 4.f + 1e-3f);
+
+    CHECK(sharpCount(left) == 0);
+    CHECK(sharpCount(right) == 0);
+    // ...and "smooth" is not merely "under the separator": the edges turn no
+    // faster than the sampling of the curve they came from.
+    CHECK(smoothest(left) < 8.f);
+    CHECK(smoothest(right) < 8.f);
 
     checkNoDownwardFace(*geometry);
     checkMonotoneU(*geometry);
+    checkCovers(*geometry, curve, 1.f, /*innerToo*/ true);
 
     // Flat spline, flat road: every normal points straight up, which is also
     // what the winding has to agree with or the surface is invisible.
     const auto* normal = geometry->getAttribute<float>("normal");
+    REQUIRE(normal != nullptr);
     for (int i = 0; i < normal->count(); ++i) {
         CHECK(std::abs(normal->getY(i) - 1.f) < 1e-3f);
     }
 }
 
-TEST_CASE("a road covers the full width its config asks for", "[extras]") {
+TEST_CASE("a road wider than its own bends trims one corner per bend", "[extras]") {
 
-    // Not a property of any one cross-section: the road is a UNION of pieces,
-    // and what the user sees is whether the band `width` wide around their
-    // curve is paved. Sampled off the CURVE rather than off the primitives, so
-    // it is the authored centreline being checked, not the fit's own idea of it.
+    // The same default spline at the default width. Both of its bends are
+    // tighter than the two metre half-width, so the inner offset ties a
+    // swallowtail in each — and cutting them leaves that edge with exactly two
+    // corners and nothing else. The outer edge never loops: it keeps every one
+    // of its vertices and stays as smooth as the sampling.
     auto curve = defaultSpline();
-    const auto path = RoadPath::fromCurve(curve, 72, false);
-    auto geometry = RoadGeometry::create(path, 4.f, 4.f);
+    auto geometry = RoadGeometry::create(curve, 4.f, 72, 4.f);
 
-    const float reach = 2.f * 0.95f;
-    for (int i = 3; i <= 97; ++i) {
-        const float t = static_cast<float>(i) / 100.f;
-        Vector3 point, tangent;
-        curve.getPoint(t, point);
-        curve.getTangent(t, tangent);
-        Vector3 across{tangent.z, 0.f, -tangent.x};
-        if (across.length() < 1e-6f) continue;
-        across.normalize();
+    const auto left = edgeChain(*geometry, 0.f);
+    const auto right = edgeChain(*geometry, 1.f);
 
-        CHECK(coveredXZ(*geometry, point));
-        Vector3 left, right;
-        left.copy(point).addScaledVector(across, -reach);
-        right.copy(point).addScaledVector(across, reach);
-        CHECK(coveredXZ(*geometry, left));
-        CHECK(coveredXZ(*geometry, right));
-    }
-}
+    CHECK(sharpCount(left) == 2);
+    CHECK(sharpCount(right) == 0);
+    CHECK(smoothest(left) < 8.f);
+    CHECK(smoothest(right) < 8.f);
+    CHECK(right.size() == 73);
+    CHECK(left.size() < right.size());
 
-TEST_CASE("a bend tighter than the half-width becomes a pie sector", "[extras]") {
-
-    // The corner that used to fold: a six metre road through a bend whose
-    // radius is about two. The inner offset cannot reach past the centre of the
-    // bend without running backward, so the annulus collapses to a SECTOR whose
-    // inner vertices sit on that centre — full outer reach, no fold, and the
-    // inside of the corner covered by the pieces either side of it.
-    auto curve = cornerSpline();
-    const auto path = RoadPath::fromCurve(curve, 48, false);
-    auto geometry = RoadGeometry::create(path, 6.f, 4.f);
-
-    bool tightBend = false;
-    bool reachesCentre = false;
-    const int rings = ringCount(*geometry);
-    for (const auto& primitive : path.primitives()) {
-        if (primitive.kind != RoadPrimitive::Kind::Arc || primitive.radius >= 3.f) continue;
-        tightBend = true;
-        for (int i = 0; i < rings; ++i) {
-            const auto [left, right] = ring(*geometry, i);
-            for (const auto& vertex : {left, right}) {
-                const float dx = vertex.x - primitive.center.x;
-                const float dz = vertex.z - primitive.center.z;
-                if (std::sqrt(dx * dx + dz * dz) < 1e-3f) reachesCentre = true;
-            }
-        }
-    }
-    CHECK(tightBend);
-    CHECK(reachesCentre);
-
-    // ...and the mesh is still a surface: no fold, no cross-section cutting
-    // through its neighbour, no face turned over.
-    for (int i = 0; i + 1 < rings; ++i) {
-        if (atJoint(*geometry, i)) continue;
-        const auto [left, right] = ring(*geometry, i);
-        const auto [nextLeft, nextRight] = ring(*geometry, i + 1);
-        CHECK(!crossesXZ(left, right, nextLeft, nextRight));
-    }
     checkNoDownwardFace(*geometry);
     checkMonotoneU(*geometry);
+    // The centreline and the outer half are paved the whole way; inside a bend
+    // tighter than the half-width there is no inner offset left to pave.
+    checkCovers(*geometry, curve, 2.f, /*innerToo*/ false);
 
-    // The OUTER half of the band is paved the whole way round whatever the bend
-    // does — it is the inner one a tight corner cannot reach past its centre,
-    // and the neighbouring pieces that cover it there.
-    for (int i = 3; i <= 97; ++i) {
-        const float t = static_cast<float>(i) / 100.f;
-        Vector3 point, tangent;
-        curve.getPoint(t, point);
-        curve.getTangent(t, tangent);
-        Vector3 across{tangent.z, 0.f, -tangent.x};
-        if (across.length() < 1e-6f) continue;
-        across.normalize();
-        // The corner turns one way the whole way through, so the outer side is
-        // the one away from (0, 0, 0).
-        const float sign = (point.x * across.x + point.z * across.z) >= 0.f ? 1.f : -1.f;
-        Vector3 outer;
-        outer.copy(point).addScaledVector(across, sign * 3.f * 0.95f);
-        CHECK(coveredXZ(*geometry, point));
-        CHECK(coveredXZ(*geometry, outer));
-    }
+    // Full width where it starts and where it ends, neither of which is a bend.
+    CHECK(std::abs(left.front().distanceTo(right.front()) - 4.f) < 1e-3f);
+    CHECK(std::abs(left.back().distanceTo(right.back()) - 4.f) < 1e-3f);
 }
 
-TEST_CASE("the same road builds the same bytes", "[extras]") {
+TEST_CASE("a bend tighter than the half-width is trimmed to one corner", "[extras]") {
 
-    // The document carries the generated mesh, so a rebuild that wandered by an
-    // ulp would make every save after a reload a diff. Nothing in the
-    // segmentation is ordered by anything but the samples, and nothing in it is
-    // random; this is the contract that says so.
+    // The corner that used to fold: a six metre road through a bend of about
+    // two. The inner offset runs past the centre of curvature and crosses
+    // itself — a swallowtail — and cutting that loop out leaves the inner edge
+    // with ONE corner, exactly where the swept region has one. The outer edge
+    // never loops and stays smooth.
     auto curve = cornerSpline();
-    const auto first = RoadPath::fromCurve(curve, 48, false);
-    const auto second = RoadPath::fromCurve(curve, 48, false);
-    REQUIRE(first.primitives().size() == second.primitives().size());
+    auto geometry = RoadGeometry::create(curve, 6.f, 48, 4.f);
 
-    auto a = RoadGeometry::create(first, 6.f, 4.f);
-    auto b = RoadGeometry::create(second, 6.f, 4.f);
-    const auto& positionsA = a->getAttribute<float>("position")->array();
-    const auto& positionsB = b->getAttribute<float>("position")->array();
-    REQUIRE(positionsA.size() == positionsB.size());
-    bool identical = true;
-    for (std::size_t i = 0; i < positionsA.size(); ++i) {
-        if (positionsA[i] != positionsB[i]) identical = false;
-    }
-    CHECK(identical);
-    CHECK(a->getIndex()->array() == b->getIndex()->array());
+    const auto left = edgeChain(*geometry, 0.f);
+    const auto right = edgeChain(*geometry, 1.f);
+
+    // The turn is toward the left edge, so that is the one that loops.
+    CHECK(sharpCount(left) == 1);
+    CHECK(sharpCount(right) == 0);
+    CHECK(smoothest(left) < 20.f);
+    CHECK(smoothest(right) < 20.f);
+    // The trim took vertices off the inner edge and none off the outer.
+    CHECK(left.size() < right.size());
+
+    checkNoDownwardFace(*geometry);
+    checkMonotoneU(*geometry);
+    checkCovers(*geometry, curve, 3.f, /*innerToo*/ false);
+
+    // The road is still exactly as wide as it was asked to be where it starts
+    // and where it ends, neither of which is in the bend.
+    CHECK(std::abs(left.front().distanceTo(right.front()) - 6.f) < 1e-3f);
+    CHECK(std::abs(left.back().distanceTo(right.back()) - 6.f) < 1e-3f);
 }
 
 TEST_CASE("a closed road welds its loop", "[extras]") {
@@ -293,39 +297,38 @@ TEST_CASE("a closed road welds its loop", "[extras]") {
     CatmullRomCurve3 curve({Vector3(-4, 0, -4), Vector3(4, 0, -4),
                             Vector3(4, 0, 4), Vector3(-4, 0, 4)},
                            /*closed*/ true);
-    const auto path = RoadPath::fromCurve(curve, 96, true);
-    auto geometry = RoadGeometry::create(path, 2.f, 4.f);
+    auto geometry = RoadGeometry::create(curve, 2.f, 96, 4.f, /*closed*/ true);
 
-    const int rings = ringCount(*geometry);
-    const auto [firstLeft, firstRight] = ring(*geometry, 0);
-    const auto [lastLeft, lastRight] = ring(*geometry, rings - 1);
+    const auto left = edgeChain(*geometry, 0.f);
+    const auto right = edgeChain(*geometry, 1.f);
 
-    // The seam ring is a DUPLICATE, not a shared index: it carries
-    // u = totalLength/uvLength where the first ring carries u = 0. What makes
-    // it a weld is that the positions coincide.
-    CHECK(firstLeft.distanceTo(lastLeft) < 1e-3f);
-    CHECK(firstRight.distanceTo(lastRight) < 1e-3f);
+    // The seam vertex is a DUPLICATE, not a shared index: it carries
+    // u = totalLength/uvLength where the first carries u = 0. What makes it a
+    // weld is that the positions coincide.
+    CHECK(left.front().distanceTo(left.back()) < 1e-4f);
+    CHECK(right.front().distanceTo(right.back()) < 1e-4f);
 
-    const auto* uv = geometry->getAttribute<float>("uv");
-    CHECK(uv->getX(0) < uv->getX(uv->count() - 1));
-    CHECK(uv->getX(uv->count() - 1) > 1.f);
+    const auto u = edgeU(*geometry, 0.f);
+    CHECK(u.front() < u.back());
+    CHECK(u.back() > 1.f);
+    CHECK(sharpCount(left) == 0);
+    CHECK(sharpCount(right) == 0);
     checkNoDownwardFace(*geometry);
 }
 
 TEST_CASE("a climbing road rises with the grade", "[extras]") {
 
-    // A road that climbs as it runs: the two vertices of every cross-section
-    // sit at the SAME height (a road banks nowhere), and the normals tip with
-    // the slope rather than staying at +Y.
+    // A road that climbs as it runs: the two edges sit at the SAME height (a
+    // road banks nowhere) and the normals tip with the slope.
     CatmullRomCurve3 curve({Vector3(0, 0, 0), Vector3(0, 2, 4), Vector3(0, 4, 8)});
-    const auto path = RoadPath::fromCurve(curve, 48, false);
-    auto geometry = RoadGeometry::create(path, 5.f, 1.f);
+    auto geometry = RoadGeometry::create(curve, 5.f, 48, 1.f);
 
-    const int rings = ringCount(*geometry);
-    for (int i = 0; i < rings; ++i) {
-        const auto [left, right] = ring(*geometry, i);
-        CHECK(std::abs(left.y - right.y) < 1e-4f);
-        CHECK(std::abs(left.distanceTo(right) - 5.f) < 1e-2f);
+    const auto left = edgeChain(*geometry, 0.f);
+    const auto right = edgeChain(*geometry, 1.f);
+    REQUIRE(left.size() == right.size());
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        CHECK(std::abs(left[i].y - right[i].y) < 1e-4f);
+        CHECK(std::abs(left[i].distanceTo(right[i]) - 5.f) < 1e-3f);
     }
 
     const auto* normal = geometry->getAttribute<float>("normal");
@@ -336,4 +339,76 @@ TEST_CASE("a climbing road rises with the grade", "[extras]") {
     }
     CHECK(tilted);
     checkNoDownwardFace(*geometry);
+}
+
+TEST_CASE("the collider solid is closed", "[extras]") {
+
+    // What a static collider is cooked from: the surface, its underside, and a
+    // wall along every boundary edge. Closed means every edge is shared by
+    // exactly two triangles — an opening is a way into a solid a body has no
+    // business being inside of, and PhysX will happily let it in.
+    const auto check = [](const std::shared_ptr<RoadGeometry>& surface) {
+        auto solid = RoadGeometry::solid(*surface, 0.25f);
+        const auto* position = solid->getAttribute<float>("position");
+        REQUIRE(position != nullptr);
+        REQUIRE(solid->getIndex() != nullptr);
+        const auto& index = solid->getIndex()->array();
+        REQUIRE(index.size() >= 12);
+
+        std::unordered_map<std::uint64_t, int> edges;
+        for (std::size_t t = 0; t + 2 < index.size(); t += 3) {
+            for (int e = 0; e < 3; ++e) {
+                const auto a = index[t + static_cast<std::size_t>(e)];
+                const auto b = index[t + static_cast<std::size_t>((e + 1) % 3)];
+                const auto key = (static_cast<std::uint64_t>(std::min(a, b)) << 32) |
+                                 static_cast<std::uint64_t>(std::max(a, b));
+                ++edges[key];
+            }
+        }
+        int open = 0;
+        for (const auto& [key, count] : edges) {
+            if (count != 2) ++open;
+        }
+        CHECK(open == 0);
+
+        // The top of the solid is the surface itself, and the underside a real
+        // 0.25 m below it.
+        surface->computeBoundingBox();
+        REQUIRE(solid->boundingBox.has_value());
+        REQUIRE(surface->boundingBox.has_value());
+        CHECK(std::abs(solid->boundingBox->max().y - surface->boundingBox->max().y) < 1e-5f);
+        CHECK(std::abs(solid->boundingBox->min().y -
+                       (surface->boundingBox->min().y - 0.25f)) < 1e-5f);
+    };
+
+    auto smooth = defaultSpline();
+    check(RoadGeometry::create(smooth, 4.f, 72, 4.f));
+    // Trimmed, so the surface has a fan and a corner in it.
+    auto corner = cornerSpline();
+    check(RoadGeometry::create(corner, 6.f, 48, 4.f));
+    // Closed, so the seam duplicates have to weld or the solid grows a wall
+    // straight across the road.
+    CatmullRomCurve3 loop({Vector3(-4, 0, -4), Vector3(4, 0, -4),
+                           Vector3(4, 0, 4), Vector3(-4, 0, 4)},
+                          /*closed*/ true);
+    check(RoadGeometry::create(loop, 2.f, 96, 4.f, /*closed*/ true));
+}
+
+TEST_CASE("the same road builds the same bytes", "[extras]") {
+
+    // The document carries the generated mesh, so a rebuild that wandered by an
+    // ulp would make every save after a reload a diff.
+    auto curve = cornerSpline();
+    auto a = RoadGeometry::create(curve, 6.f, 48, 4.f);
+    auto b = RoadGeometry::create(curve, 6.f, 48, 4.f);
+
+    const auto& positionsA = a->getAttribute<float>("position")->array();
+    const auto& positionsB = b->getAttribute<float>("position")->array();
+    REQUIRE(positionsA.size() == positionsB.size());
+    bool identical = true;
+    for (std::size_t i = 0; i < positionsA.size(); ++i) {
+        if (positionsA[i] != positionsB[i]) identical = false;
+    }
+    CHECK(identical);
+    CHECK(a->getIndex()->array() == b->getIndex()->array());
 }

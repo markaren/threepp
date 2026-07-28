@@ -65,8 +65,7 @@ namespace {
     // sync pass produces: the Group carries SplineConfig, its plain children
     // are the control points, and one tagged Mesh holds the surface. Generating
     // that mesh is app code (SplineOverlay.cpp), so a test builds it by hand
-    // from the same config — through SplineConfig::roadPath, which is also
-    // where the collider gets its primitives.
+    // from the same curve and the same parameters the editor passes.
     struct Road {
         std::shared_ptr<Group> spline;
         std::shared_ptr<Mesh> mesh;
@@ -88,9 +87,10 @@ namespace {
             spline->add(node);
         }
 
-        const auto road = config.roadPath(*spline);
-        REQUIRE(road.has_value());
-        auto mesh = Mesh::create(RoadGeometry::create(*road, width, config.uvLength));
+        auto curve = config.curve(*spline);
+        REQUIRE(curve != nullptr);
+        auto mesh = Mesh::create(RoadGeometry::create(
+                *curve, width, config.divisions(*spline), config.uvLength, config.closed));
         mesh->name = "Road";
         SplineConfig::markDerived(*mesh);
         spline->add(mesh);
@@ -130,6 +130,26 @@ namespace {
     Road makeStraightRoad(const Scene& scene) {
 
         return makeRoad(scene, {Vector3(-10, 0, 0), Vector3(0, 0, 0), Vector3(10, 0, 0)}, 4.f);
+    }
+
+    // Shapes attached to every static actor in the live scene. A road is ONE
+    // triangle mesh however it bends, which is the difference between a
+    // collider that follows the road's shape and one that follows its
+    // tessellation.
+    int staticShapeCount(PhysicsPlaySession& session) {
+
+        using namespace ::physx;
+        auto* world = session.world();
+        if (!world) return -1;
+        auto& scene = world->scene();
+        const PxU32 count = scene.getNbActors(PxActorTypeFlag::eRIGID_STATIC);
+        std::vector<PxActor*> actors(count);
+        if (count) scene.getActors(PxActorTypeFlag::eRIGID_STATIC, actors.data(), count);
+        int shapes = 0;
+        for (auto* actor : actors) {
+            shapes += static_cast<int>(static_cast<PxRigidActor*>(actor)->getNbShapes());
+        }
+        return shapes;
     }
 
     void checkRestsOnRoad(PhysicsPlaySession& session, const Mesh& ball) {
@@ -267,6 +287,8 @@ TEST_CASE("a road collides through a corner", "[editor][physx]") {
     PhysicsPlaySession session;
     session.start(scene);
     CHECK(session.bodyCount() == 2);
+    // One solid, whatever the corner did to the surface.
+    CHECK(staticShapeCount(session) == 1);
 
     checkRestsOnRoad(session, *ball);
 }
@@ -300,6 +322,8 @@ TEST_CASE("a road wider than its own bends still holds a body up", "[editor][phy
     PhysicsPlaySession session;
     session.start(scene);
     CHECK(session.bodyCount() == 3);
+    // Both bends, both trims, and still one shape.
+    CHECK(staticShapeCount(session) == 1);
 
     checkRestsOnRoad(session, *onBend);
     checkRestsOnRoad(session, *onStraight);

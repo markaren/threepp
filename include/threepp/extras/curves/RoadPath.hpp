@@ -1,27 +1,21 @@
-// A road centerline consolidated into STRAIGHT and CIRCULAR-ARC pieces.
+// A sampled centerline consolidated into STRAIGHT and CIRCULAR-ARC pieces.
 //
-// A sampled curve is a dense polyline, and offsetting a cross-section along one
-// is where every road artefact comes from: the inner edge of a bend runs
-// BACKWARD as soon as the offset passes the local curvature radius, and every
-// answer to that — a clamp, a pin, a fold — is a repair of a shape that was
-// wrong to begin with. None of it is needed if the road is built out of pieces
-// whose swept region is known in closed form: a rectangle for a straight, an
-// ANNULUS for an arc (outer radius R + w/2, inner radius max(R - w/2, 0)).
-// A bend tighter than the half-width takes that inner radius to zero and the
-// annulus degenerates to a PIE SECTOR, which is exactly the region the road
-// covers there — full width, no fold, no narrowing, by construction.
+// For layouts that want ANALYTIC pieces rather than a polyline: a conveyor
+// whose bends are driven as one rotating body, a path exported to a controller
+// that speaks arcs, a collider tiled by wedges. The segmentation walks the
+// samples and takes the LONGEST run a straight or a circle fits within
+// `tolerance`, so a curve of hundreds of spans comes out as a handful of pieces
+// whose swept region is known in closed form — a rectangle for a straight, an
+// annulus for an arc (outer radius R + w/2, inner max(R - w/2, 0)).
 //
-// The segmentation walks the samples and takes the LONGEST run a straight or a
-// circle fits within `tolerance`, so the editor's default spline comes out as a
-// handful of pieces rather than dozens of spans. Everything downstream is
-// bounded by that list: the mesh tessellates each piece for smoothness, and the
-// collider gets one box per straight and a fixed handful of wedges per arc —
-// counts that follow the road's SHAPE rather than how finely it was sampled.
+// This is NOT what the editor's roads are built from. A fit is an
+// approximation, and RoadGeometry follows the authored curve exactly — sample
+// for sample, with its offsets trimmed. Consolidation changes the shape the
+// user drew, however slightly, and leaves a curvature break at every joint.
 //
 // The fit is in the XZ plane with Y carried along as a per-piece LINEAR
 // profile; a piece ends where the grade stops being linear, so a hill keeps its
-// shape. A curve that loops vertically has no XZ projection to fit and is out
-// of scope for roads — RibbonGeometry still sweeps a ribbon along anything.
+// shape. A curve that loops vertically has no XZ projection to fit.
 
 #ifndef THREEPP_ROADPATH_HPP
 #define THREEPP_ROADPATH_HPP

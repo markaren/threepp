@@ -18,6 +18,8 @@
 #include "threepp/extras/editor/PlaySession.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 
+#include "threepp/extras/curves/RoadGeometry.hpp"
+
 #include "threepp/extras/physx/PhysxWorld.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
@@ -178,182 +180,45 @@ namespace threepp::editor {
         // through one between substeps whatever the solver does about it.
         static constexpr float kRoadThickness = 0.25f;
 
-        // Largest angle one collider wedge spans. Coarser than the mesh's, on
-        // purpose: a wedge is a solid a body rests on, not a silhouette.
-        static constexpr float kRoadWedgeStep = 0.2618f;// 15 degrees
-
-        // One PxRigidStatic per road, built from the road's PRIMITIVES — the
-        // conveyor-belt treatment (examples/projects/Fish/ConveyorSystem):
-        // a box per straight, and a bend tiled by convex ANNULAR WEDGES that
-        // share each radial face exactly, where overlapping rectangles fight
-        // each other on a tight bend.
+        // A road collides as ONE static triangle mesh, cooked from a closed
+        // solid built out of the road's OWN triangles (RoadGeometry::solid):
+        // the surface, a copy of it pushed 0.25 m down, and a wall along every
+        // boundary edge. So the collider is the surface the user is looking at,
+        // triangle for triangle, and no cross-section of it can disagree with
+        // the drawing however the road was trimmed.
         //
-        // The primitives are recomputed from the spline config rather than read
-        // off the mesh: the segmentation is deterministic, so the collider and
-        // the surface the user is looking at come out of the same numbers — and
-        // the shape count follows the road's SHAPE, a handful either way,
-        // instead of following how finely the curve was sampled.
-        bool addRoadPrimitives(Mesh& mesh, ::physx::PxMaterial* material) {
+        // Static only — a triangle mesh cannot move — which is what lets this
+        // be one shape rather than the convex decomposition a kinematic body
+        // would need. The whole road is one shape whatever its shape.
+        bool addRoadSolid(Mesh& mesh, ::physx::PxMaterial* material) {
 
             using namespace ::physx;
 
-            if (!mesh.parent) return false;
-            const auto config = SplineConfig::read(*mesh.parent);
-            if (!config) return false;
-            const auto road = config->roadPath(*mesh.parent);
-            if (!road || road->empty()) return false;
-
-            const float half = std::max(config->width, 1e-3f) * 0.5f;
+            const auto geometry = mesh.geometry();
+            if (!geometry) return false;
+            const auto solid = RoadGeometry::solid(*geometry, kRoadThickness);
+            const auto* position = solid->getAttribute<float>("position");
+            if (!position || position->count() < 4) return false;
 
             mesh.updateMatrixWorld();
             Vector3 translation, scale;
             Quaternion rotation;
             mesh.matrixWorld->decompose(translation, rotation, scale);
 
-            // Scale is BAKED INTO THE POINTS rather than carried as a
-            // PxMeshScale: every piece is cooked once and attached once, so a
-            // shared mesh with a per-shape scale buys nothing — and baking
-            // leaves the actor's frame a pure rotation, in which the extrusion
-            // below is a real 0.25 m rather than 0.25 m times whatever the node
-            // was scaled by.
-            const auto safe = [](float v) { return std::abs(v) < 1e-6f ? 1.f : v; };
-            const Vector3 s{safe(scale.x), safe(scale.y), safe(scale.z)};
-            const auto scaled = [&s](const Vector3& v) {
-                return PxVec3(v.x * s.x, v.y * s.y, v.z * s.z);
-            };
-            // A box is a box under a uniform scale only. Anything else goes
-            // through the hull path below, which is exact under any of them.
-            const bool uniform = std::abs(s.x - s.y) < 1e-4f * std::abs(s.x) &&
-                                 std::abs(s.x - s.z) < 1e-4f * std::abs(s.x);
-
-            PxCookingParams params(world_->physics().getTolerancesScale());
-            PxRigidStatic* body = world_->physics().createRigidStatic(
-                    PxTransform(toPxVec3(translation), toPxQuat(rotation)));
-
-            int shapes = 0;
-            const auto attach = [&](const PxGeometry& geometry, const PxTransform& pose) {
-                PxShape* shape = world_->physics().createShape(geometry, *material, true);
-                shape->setLocalPose(pose);
-                body->attachShape(*shape);
-                shape->release();
-                ++shapes;
-            };
-            const auto attachHull = [&](const PxVec3* points, PxU32 count) {
-                PxConvexMeshDesc desc;
-                desc.points.count = count;
-                desc.points.stride = sizeof(PxVec3);
-                desc.points.data = points;
-                desc.flags = PxConvexFlag::eCOMPUTE_CONVEX;
-                PxConvexMesh* convex = PxCreateConvexMesh(params, desc);
-                if (!convex) return;
-                attach(PxConvexMeshGeometry(convex), PxTransform(PxIdentity));
-                // The shape holds the reference now.
-                convex->release();
-            };
-
-            for (const auto& primitive : road->primitives()) {
-
-                const float length = primitive.length();
-                if (length < 1e-4f) continue;
-
-                if (primitive.kind == RoadPrimitive::Kind::Straight) {
-
-                    // A slab whose TOP FACE is the road: the box is dropped
-                    // half its thickness along its own normal, and butts
-                    // against its neighbours rather than overlapping them.
-                    Vector3 travel;
-                    travel.copy(primitive.end).sub(primitive.start).normalize();
-                    // The width axis is horizontal whatever the grade — a road
-                    // rises with the slope but never banks.
-                    Vector3 across{-travel.z, 0.f, travel.x};// cross(travel, up)
-                    if (across.length() < 1e-6f) across.set(0.f, 0.f, 1.f);
-                    across.normalize();
-                    Vector3 normal;
-                    normal.copy(across).cross(travel).normalize();
-
-                    Vector3 center;
-                    center.copy(primitive.start).add(primitive.end).multiplyScalar(0.5f);
-                    center.addScaledVector(normal, -kRoadThickness * 0.5f);
-
-                    if (uniform) {
-                        Matrix4 basis;
-                        basis.makeBasis(travel, normal, across);
-                        Quaternion orientation;
-                        orientation.setFromRotationMatrix(basis);
-                        attach(PxBoxGeometry(length * 0.5f * s.x,
-                                             kRoadThickness * 0.5f * s.x,
-                                             half * s.x),
-                               PxTransform(scaled(center), toPxQuat(orientation)));
-                    } else {
-                        PxVec3 hull[8];
-                        int n = 0;
-                        for (float u : {-length * 0.5f, length * 0.5f}) {
-                            for (float v : {-half, half}) {
-                                for (float w : {-kRoadThickness * 0.5f, kRoadThickness * 0.5f}) {
-                                    Vector3 corner;
-                                    corner.copy(center)
-                                            .addScaledVector(travel, u)
-                                            .addScaledVector(across, v)
-                                            .addScaledVector(normal, w);
-                                    hull[n++] = scaled(corner);
-                                }
-                            }
-                        }
-                        attachHull(hull, 8);
-                    }
-                    continue;
-                }
-
-                // The bend. Wedges tile the annulus between max(R - w/2, 0) and
-                // R + w/2 with no gap and no overlap, since neighbours share a
-                // radial face exactly. Where the bend is tighter than the half
-                // width that inner radius is zero and the wedge is a pie slice
-                // — six points rather than eight, and still convex.
-                const float inner = std::max(primitive.radius - half, 0.f);
-                const float outer = primitive.radius + half;
-                const int steps = std::max(
-                        1, static_cast<int>(std::ceil(std::abs(primitive.sweep) / kRoadWedgeStep)));
-                for (int k = 0; k < steps; ++k) {
-
-                    PxVec3 hull[8];
-                    int n = 0;
-                    // A pie slice's two inner points are the same point, and a
-                    // hull with a duplicate in it is one PhysX has to clean up.
-                    const auto push = [&hull, &n](const PxVec3& point) {
-                        for (int q = 0; q < n; ++q) {
-                            if ((hull[q] - point).magnitudeSquared() < 1e-12f) return;
-                        }
-                        hull[n++] = point;
-                    };
-                    for (int e = 0; e < 2; ++e) {
-                        const float t = static_cast<float>(k + e) / static_cast<float>(steps);
-                        const float angle = primitive.startAngle + primitive.sweep * t;
-                        const float y = primitive.start.y + (primitive.end.y - primitive.start.y) * t;
-                        const float cs = std::cos(angle), sn = std::sin(angle);
-                        for (float radius : {inner, outer}) {
-                            const Vector3 top{primitive.center.x + radius * cs, y,
-                                              primitive.center.z + radius * sn};
-                            push(scaled(top));
-                            push(scaled(Vector3(top.x, top.y - kRoadThickness, top.z)));
-                        }
-                    }
-                    attachHull(hull, static_cast<PxU32>(n));
-                }
-            }
-
-            if (shapes == 0) {
-                body->release();
-                return false;
-            }
-            world_->scene().addActor(*body);
-            return true;
+            // The scale rides along as a PxMeshScale rather than being baked
+            // in: one mesh, cooked once, and the solid is built in the geometry
+            // its own vertices are in.
+            return world_->addStaticTrimesh(
+                           *solid, PxTransform(toPxVec3(translation), toPxQuat(rotation)),
+                           scale, material) != nullptr;
         }
 
         // Cook the descendants of a geometry-less static body as its collider.
         // Meshes carrying their own enabled PhysicsConfig are left alone —
         // start() is creating their actors — and a derived road goes through
-        // the primitive chain above rather than a triangle mesh, so it collides
-        // the same whether the config sat on it or on the group over it.
+        // the road solid above rather than a bare surface trimesh, so it
+        // collides the same whether the config sat on it or on the group over
+        // it — and so a body cannot end up under a road with no underside.
         std::size_t addSubtree(Object3D& root, ::physx::PxMaterial* material) {
 
             std::size_t added = 0;
@@ -362,7 +227,7 @@ namespace threepp::editor {
             root.traverseType<Mesh>([&](Mesh& mesh) {
                 if (&mesh == &root || ownsActor(mesh) || !mesh.geometry()) return;
                 if (!isDerivedRoad(mesh)) return;
-                if (addRoadPrimitives(mesh, material)) ++added;
+                if (addRoadSolid(mesh, material)) ++added;
             });
 
             const auto actors = world_->addStaticTrimeshTree(
@@ -403,15 +268,16 @@ namespace threepp::editor {
                 // still what a bare Group used as a trigger volume wants.
             }
 
-            // A spline-derived road collides as its primitive chain whichever
-            // of the mesh shapes was asked for — Auto, TriMesh and Convex all
-            // mean "the surface I can see" here, and the chain is the only one
-            // of the three that is exact AND safe to rest a body on. An
+            // A spline-derived road collides as its solid whichever of the
+            // mesh shapes was asked for — Auto, TriMesh and Convex all mean
+            // "the surface I can see" here, and the solid is the only one of
+            // the three that is exact AND safe to rest a body on (a bare
+            // surface has no thickness, a hull swallows every bend). An
             // explicit primitive is left alone; so is a moving road, which is a
             // plank rather than a road and keeps the whole-mesh hull.
             if (mesh && !moving && isDerivedRoad(*mesh) &&
                 (shape == PhysicsConfig::Shape::TriMesh || shape == PhysicsConfig::Shape::Convex)) {
-                if (addRoadPrimitives(*mesh, material)) return true;
+                if (addRoadSolid(*mesh, material)) return true;
             }
 
             if (shape == PhysicsConfig::Shape::TriMesh && mesh) {
