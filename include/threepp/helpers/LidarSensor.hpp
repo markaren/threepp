@@ -11,12 +11,15 @@
 #include "threepp/scenes/Scene.hpp"
 
 #include <array>
+#include <memory>
+#include <optional>
 #include <vector>
 
 namespace threepp {
 
     class ShaderMaterial;
     class Renderer;
+    class PathTracedLidarSensor;
 
     /**
      * Simulates a full 360-degree LiDAR sensor using six 90-degree perspective
@@ -58,16 +61,28 @@ namespace threepp {
          */
         LidarSensor(const LidarModel& model, unsigned int faceSize, float near = 0.1f, float far = 100.f);
 
+        ~LidarSensor() override;
+
+        void resetNoise() override;
+
         /**
-         * Performs a scan and writes per-beam returns into `cloud`. Position
-         * and distance are populated from the cube-face depth read; the
-         * remaining `LidarReturn` fields are left at sentinel defaults
-         * (intensity = 0, normal = 0, hitInstanceId = -1) because the raster
-         * cube-face pipeline does not have access to material or geometry
-         * data. Use `PathTracedLidarSensor` (Vulkan) for those.
+         * Performs a scan and writes per-beam returns into `cloud`.
+         *
+         * On a raster backend (GL), position and distance are populated from
+         * the cube-face depth read; the remaining `LidarReturn` fields are
+         * left at sentinel defaults (intensity = 0, normal = 0,
+         * hitInstanceId = -1) because the raster pipeline does not have
+         * access to material or geometry data.
+         *
+         * On a `VulkanRenderer` there is no raster depth cube to read back:
+         * the same beam pattern is traced through the renderer's TLAS via a
+         * cached `PathTracedLidarSensor` back-end instead (so the scene must
+         * have been render()-ed at least once), and the returns carry the
+         * tracer's intensity / normal / hitInstanceId. Sentinel returns
+         * (misses, fog scatter) and near-clip hits are dropped to match the
+         * raster output shape.
          *
          * The renderer's active render target is restored to nullptr after the scan.
-         * Works with any raster backend.
          */
         void scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud);
 
@@ -101,6 +116,16 @@ namespace threepp {
             float u, v;// exact NDC of this beam's direction in the face camera
         };
         std::vector<BeamSample> beams_;
+
+        // Model-based mode keeps its model so the Vulkan back-end can be built
+        // with the same beam pattern; empty in dense-grid mode.
+        std::optional<LidarModel> model_;
+
+        // Path-traced back-end for Vulkan scans, built on first use.
+        std::unique_ptr<PathTracedLidarSensor> tracedBackend_;
+
+        // Builds tracedBackend_ on first call and syncs the noise model onto it.
+        PathTracedLidarSensor& tracedBackend();
 
         void init(float near, float far);
         void buildBeamTable(const LidarModel& model);

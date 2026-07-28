@@ -5,9 +5,20 @@
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/math/Quaternion.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/renderers/Renderer.hpp"
 #include "threepp/textures/DepthTexture.hpp"
+
+// The path-traced back-end is only *used* on a Vulkan build (there is no raster
+// depth cube there), but its header is included unconditionally so the cached
+// unique_ptr member has a complete type to destroy. The header itself is
+// Vulkan-include-free; only the renderer header below is gated.
+#include "threepp/helpers/PathTracedLidarSensor.hpp"
+
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -247,11 +258,43 @@ LidarSensor::LidarSensor(const LidarModel& model, unsigned int faceSize, float n
     // Default noise mirrors the pre-port constant: 2 cm sigma, fixed seed.
     : VisionSensor(*this, RangeNoiseModel{/*stddev*/ 0.02f, /*stddevPerMetre*/ 0.f,
                                           /*bias*/ 0.f, /*seed*/ 0x2545F4914F6CDD1DULL}),
-      faceSize_(faceSize), near_(near), far_(far), postCamera_(-1, 1, 1, -1, 0, 1) {
+      faceSize_(faceSize), near_(near), far_(far), postCamera_(-1, 1, 1, -1, 0, 1),
+      model_(model) {
 
     init(near, far);
     buildBeamTable(model);
 }
+
+LidarSensor::~LidarSensor() = default;
+
+void LidarSensor::resetNoise() {
+    VisionSensor::resetNoise();
+    // On Vulkan the back-end draws the noise, so resetting only our own stream
+    // would silently leave that path unreplayable.
+    if (tracedBackend_) tracedBackend_->resetNoise();
+}
+
+#ifdef THREEPP_WITH_VULKAN
+PathTracedLidarSensor& LidarSensor::tracedBackend() {
+    if (!tracedBackend_) {
+        if (model_) {
+            tracedBackend_ = std::make_unique<PathTracedLidarSensor>(*model_, far_);
+        } else {
+            // Dense-grid mode: the cube resolves ~90° per faceSize pixels, so
+            // match that angular resolution on the tracer's az × el grid.
+            tracedBackend_ = std::make_unique<PathTracedLidarSensor>(faceSize_ * 4, faceSize_ * 2, far_);
+        }
+    }
+    // This sensor owns the noise contract; the back-end just applies it, so
+    // its model tracks ours (including a seed the caller re-rolled). Copying
+    // an unchanged seed does not restart the stream — see VisionSensor.
+    tracedBackend_->rangeNoise = rangeNoise;
+    // The near plane doubles as the blind zone: without it every beam
+    // returns the sensor's own housing mesh from the inside.
+    tracedBackend_->params.minRange = near_;
+    return *tracedBackend_;
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Scan
@@ -260,6 +303,36 @@ LidarSensor::LidarSensor(const LidarModel& model, unsigned int faceSize, float n
 void LidarSensor::scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud) {
     beginScan();
     cloud.clear();
+
+#ifdef THREEPP_WITH_VULKAN
+    if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
+        // No raster depth cube to read back here: trace the same beam pattern
+        // through the renderer's TLAS instead. The TLAS, not the `scene` graph,
+        // is what gets traced, so the scene must have been render()-ed at least
+        // once before scanning. Range noise is applied by the back-end.
+        if (!parent) updateMatrixWorld();
+
+        auto& lidar = tracedBackend();
+        Vector3 pos, scl;
+        Quaternion quat;
+        matrixWorld->decompose(pos, quat, scl);
+        lidar.position = pos;
+        lidar.quaternion = quat;
+        lidar.scale = scl;
+
+        lidar.scan(*vk, cloud);
+
+        // The raster path emits only real surface hits: nothing past the far
+        // plane, nothing inside the near clip. Drop the tracer's sentinel
+        // returns (hitInstanceId < 0: -1 = miss, -2 = fog/volume scatter — a
+        // raster scan never sees atmosphere) and near-clip hits to match.
+        std::erase_if(cloud, [this](const LidarReturn& r) {
+            return r.hitInstanceId < 0 || r.distance < near_;
+        });
+        return;
+    }
+#endif
+
     DataPassGuard guard(renderer);
     renderFaces(renderer, scene);
 
