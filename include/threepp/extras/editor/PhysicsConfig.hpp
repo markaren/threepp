@@ -34,7 +34,8 @@ namespace threepp::editor {
         enum class Body {
             Static,   // never moves; collides with everything
             Dynamic,  // simulated
-            Kinematic // moved by code, pushes dynamics, ignores forces
+            Kinematic,// moved by code, pushes dynamics, ignores forces
+            Soft      // deformable volume; the mesh itself bends and squashes
         };
 
         enum class Shape {
@@ -49,9 +50,18 @@ namespace threepp::editor {
         bool enabled = false;
         Body body = Body::Dynamic;
         Shape shape = Shape::Auto;
-        float mass = 1.f;       // kg, dynamic bodies only
+        float mass = 1.f;       // kg, dynamic and soft bodies
         float friction = 0.5f;  // static == dynamic friction
-        float restitution = 0.2f;
+        float restitution = 0.2f;// rigid bodies only
+
+        // --- Body::Soft only. The Shape field is ignored for a soft body: its
+        // collider is always a tetrahedral volume cooked from the mesh itself.
+
+        float youngsModulus = 1e6f; // Pa. Stiffness: ~1e4 jelly, 1e6 rubber, 1e8 hard.
+        float poissonsRatio = 0.45f;// 0 squashes freely, ->0.5 preserves volume.
+        int voxelResolution = 10;   // simulation-mesh cells along the longest axis
+        int solverIterations = 20;  // per step; more = stiffer, slower
+        bool selfCollision = false; // let folds of the body collide with each other
 
         static constexpr const char* userDataKey = "physics";
 

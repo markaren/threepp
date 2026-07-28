@@ -233,7 +233,13 @@ EditorApp::EditorApp(const Options& options)
     });
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-    play_.addSession(std::make_shared<PhysicsPlaySession>());
+    {
+        auto physics = std::make_shared<PhysicsPlaySession>();
+        // Soft bodies can decline to cook, and the GPU world can decline to
+        // come up; both are worth a line in the log rather than silence.
+        physics->setLogger([this](const std::string& message) { log(message); });
+        play_.addSession(physics);
+    }
 #endif
     play_.addSession(std::make_shared<AnimationPlaySession>());
 #ifdef THREEPP_EDITOR_WITH_PYTHON
@@ -406,6 +412,157 @@ int EditorApp::runSelfTest() {
     } else {
         check(false, "Box available for the undo-across-play drive");
     }
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    // Soft bodies. Authored the way the inspector authors them (userData), and
+    // then actually played: a soft body's whole point is that the VERTICES move
+    // and the renderer sees them move, which a transform check cannot observe.
+    // The soft body is added and removed inside this block, so the passes below
+    // still see the template scene they expect.
+    {
+        auto ball = ObjectFactory::createPrimitive(Primitive::Sphere, document_.scene());
+        ball->name = "Jelly";
+        // Beside the template Box, not on top of it: the Box has no collider,
+        // so a body dropped at the origin sinks through it and the drive proves
+        // nothing about landing. ROTATED, because a soft body is skinned from a
+        // tet mesh that does not quite reach the corners of a rotated shape —
+        // the case that used to tear the visual mesh open the moment Play was
+        // pressed.
+        ball->position.set(2.f, 3.f, 0.f);
+        ball->rotation.set(0.4f, 0.7853982f, 0.f);
+        auto* jelly = ball.get();
+
+        PhysicsConfig soft;
+        soft.enabled = true;
+        soft.body = PhysicsConfig::Body::Soft;
+        soft.mass = 2.f;
+        soft.youngsModulus = 5e4f;
+        soft.voxelResolution = 6;
+        soft.solverIterations = 15;
+        soft.write(*jelly);
+
+        // The template Ground is a plain mesh; a soft body needs something to
+        // land on, so give it a static collider for the duration.
+        PhysicsConfig floorConfig;
+        floorConfig.enabled = true;
+        floorConfig.body = PhysicsConfig::Body::Static;
+        floorConfig.shape = PhysicsConfig::Shape::Box;
+        auto* floor = document_.scene().getObjectByName("Ground");
+        if (floor) floorConfig.write(*floor);
+
+        addObject(ball, document_.scene(), "Add Jelly");
+        step();
+
+        const auto uuid = jelly->uuid;
+        const auto height = [&](Object3D* object) {
+            auto* mesh = object ? object->as<Mesh>() : nullptr;
+            if (!mesh || !mesh->geometry()) return 0.f;
+            const auto* positions = mesh->geometry()->getAttribute<float>("position");
+            if (!positions) return 0.f;
+            float lo = 1e30f, hi = -1e30f;
+            for (unsigned i = 0; i < positions->count(); ++i) {
+                lo = std::min(lo, positions->getY(i));
+                hi = std::max(hi, positions->getY(i));
+            }
+            return hi - lo;
+        };
+        const auto lowest = [&](Object3D* object) {
+            auto* mesh = object ? object->as<Mesh>() : nullptr;
+            if (!mesh || !mesh->geometry()) return 0.f;
+            const auto* positions = mesh->geometry()->getAttribute<float>("position");
+            if (!positions) return 0.f;
+            float lo = 1e30f;
+            for (unsigned i = 0; i < positions->count(); ++i) lo = std::min(lo, positions->getY(i));
+            return lo;
+        };
+        const auto findJelly = [&] { return findByUuid(document_.scene(), uuid); };
+
+        // The authored mesh in world space. Play re-skins the visual from the
+        // tet mesh immediately, so this is what it must still look like on the
+        // very first frame — before gravity has done anything.
+        jelly->updateMatrixWorld(true);
+        std::vector<Vector3> authored;
+        if (const auto* positions = jelly->geometry()->getAttribute<float>("position")) {
+            for (unsigned i = 0; i < positions->count(); ++i) {
+                Vector3 v(positions->getX(i), positions->getY(i), positions->getZ(i));
+                authored.push_back(v.applyMatrix4(*jelly->matrixWorld));
+            }
+        }
+
+        const float restHeight = height(jelly);
+        startPlay();
+
+        // Read before the first update(): the bodies are built during
+        // startPlay, so at this point the mesh has been re-skinned from the tet
+        // mesh but no simulated time has passed. Any deviation here is a
+        // binding error, with no free fall mixed in — stepping first would put
+        // centimetres of honest falling into the same number.
+        auto* playing = findJelly();
+        // Creating the soft body bakes the world matrix into the geometry, so
+        // world-space vertices (around the spawn height) are the signal that
+        // PhysX took it. Untouched local-space geometry means no CUDA device:
+        // the fallback must keep the editor playing rather than failing Play.
+        const bool simulated = playing && lowest(playing) > 2.f;
+        check(isPlaying(), "play starts with a soft body in the scene");
+
+        if (simulated) {
+            // Vertex-for-vertex, still the authored shape. A torn mesh shows up
+            // here as a vertex flung across the body, long before it is visible
+            // as "the mesh is cut" on screen.
+            float drift = 0.f;
+            if (const auto* positions = playing->geometry()->getAttribute<float>("position");
+                positions && positions->count() == authored.size()) {
+                for (unsigned i = 0; i < positions->count(); ++i) {
+                    const Vector3 now(positions->getX(i), positions->getY(i), positions->getZ(i));
+                    drift = std::max(drift, authored[i].distanceTo(now));
+                }
+            } else {
+                drift = 1e30f;
+            }
+            // Sub-millimetre. The tear this pins moved vertices further than
+            // the body is wide.
+            check(drift < 1e-3f, "a rotated soft body plays the mesh that was authored");
+
+            // Sample every frame: the deepest squash is at the impact instant,
+            // and by the time the body has settled it is nearly round again.
+            // Checking only the final frame makes this pass or fail on how
+            // fast the machine rendered 120 frames.
+            float flattest = restHeight;
+            for (int i = 0; i < 120; ++i) {
+                step();
+                if (auto* live = findJelly()) flattest = std::min(flattest, height(live));
+            }
+            playing = findJelly();
+            check(playing && lowest(playing) < 0.4f, "the soft body falls to the ground");
+            check(playing && lowest(playing) > -0.5f, "and does not fall through it");
+            check(flattest < restHeight * 0.9f,
+                  "and squashes on impact - the vertices themselves deform");
+        } else {
+            check(true, "no CUDA device - the soft body is skipped and play continues");
+        }
+
+        stopPlay();
+        step();
+
+        auto* restored = findJelly();
+        check(restored && std::abs(restored->position.y - 3.f) < 1e-4f &&
+                      std::abs(restored->position.x - 2.f) < 1e-4f,
+              "stop restores the soft body's authored transform");
+        check(restored && std::abs(height(restored) - restHeight) < 1e-4f,
+              "and its rest-pose geometry");
+
+        // Put the template scene back for the passes that follow.
+        if (restored) {
+            selectObject(restored);
+            deleteSelected();
+        }
+        if (auto* groundNow = document_.scene().getObjectByName("Ground")) {
+            PhysicsConfig::erase(*groundNow);
+        }
+        selectObject(nullptr);
+        step();
+    }
+#endif
 
     // Viewport markers and the camera frustum. The marker count is also the
     // check that the embedded SVG parses — a failure there is silent by

@@ -36,11 +36,21 @@ namespace {
         }
     }
 
+    int toInt(std::string_view text, int fallback) {
+
+        try {
+            return std::stoi(std::string(text));
+        } catch (...) {
+            return fallback;
+        }
+    }
+
     PhysicsConfig::Body bodyFrom(std::string_view text, PhysicsConfig::Body fallback) {
 
         if (text == "static") return PhysicsConfig::Body::Static;
         if (text == "dynamic") return PhysicsConfig::Body::Dynamic;
         if (text == "kinematic") return PhysicsConfig::Body::Kinematic;
+        if (text == "soft") return PhysicsConfig::Body::Soft;
         return fallback;
     }
 
@@ -61,6 +71,7 @@ namespace {
             case PhysicsConfig::Body::Static: return "static";
             case PhysicsConfig::Body::Dynamic: return "dynamic";
             case PhysicsConfig::Body::Kinematic: return "kinematic";
+            case PhysicsConfig::Body::Soft: return "soft";
         }
         return "dynamic";
     }
@@ -87,6 +98,7 @@ const char* PhysicsConfig::label(Body body) {
         case Body::Static: return "Static";
         case Body::Dynamic: return "Dynamic";
         case Body::Kinematic: return "Kinematic";
+        case Body::Soft: return "Soft";
     }
     return "Dynamic";
 }
@@ -117,6 +129,18 @@ std::string PhysicsConfig::encode() const {
     out += number(friction);
     out += ";restitution=";
     out += number(restitution);
+    // Soft-body parameters ride along even for a rigid body, so flipping the
+    // body type back and forth does not quietly reset them on the next save.
+    out += ";young=";
+    out += number(youngsModulus);
+    out += ";poisson=";
+    out += number(poissonsRatio);
+    out += ";voxel=";
+    out += std::to_string(voxelResolution);
+    out += ";iterations=";
+    out += std::to_string(solverIterations);
+    out += ";selfcollision=";
+    out += (selfCollision ? "1" : "0");
     return out;
 }
 
@@ -146,6 +170,16 @@ std::optional<PhysicsConfig> PhysicsConfig::decode(const std::string& text) {
                 config.friction = toFloat(value, config.friction);
             } else if (key == "restitution") {
                 config.restitution = toFloat(value, config.restitution);
+            } else if (key == "young") {
+                config.youngsModulus = toFloat(value, config.youngsModulus);
+            } else if (key == "poisson") {
+                config.poissonsRatio = toFloat(value, config.poissonsRatio);
+            } else if (key == "voxel") {
+                config.voxelResolution = toInt(value, config.voxelResolution);
+            } else if (key == "iterations") {
+                config.solverIterations = toInt(value, config.solverIterations);
+            } else if (key == "selfcollision") {
+                config.selfCollision = toInt(value, config.selfCollision ? 1 : 0) != 0;
             }
             // Unknown keys ignored on purpose: a document written by a newer
             // editor still loads here.
