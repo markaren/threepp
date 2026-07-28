@@ -29,7 +29,6 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
-#include "threepp/extras/curves/RoadGeometry.hpp"
 #include "threepp/geometries/TubeGeometry.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -131,24 +130,6 @@ namespace {
                                        divisions, std::max(config.radius, 1e-3f),
                                        static_cast<unsigned int>(std::clamp(config.radialSegments, 3, 64)),
                                        config.closed));
-            case SplineConfig::MeshKind::Road: {
-                // Not a ribbon and not an offset: a road is swept along an
-                // ALIGNMENT fitted to the drawn curve, no bend of which is
-                // tighter than the half-width. So it is full width at every
-                // cross-section, and where the drawing was tighter than that the
-                // road bends a little rather than folding. `divisions` seeds the
-                // fit; the stations it is built at are chosen by angle.
-                auto road = RoadGeometry::create(
-                        *curve, RoadGeometry::Params(
-                                        std::max(config.width, 1e-3f), divisions,
-                                        std::max(config.uvLength, 1e-3f), config.closed));
-                // A curve with no length to it — two points dragged onto each
-                // other — has no alignment to sweep, and a geometry with no
-                // position attribute is not something to hand a renderer. The
-                // sync pass hides the mesh instead.
-                if (!road->getAttribute<float>("position")) return nullptr;
-                return road;
-            }
             case SplineConfig::MeshKind::None:
                 break;
         }

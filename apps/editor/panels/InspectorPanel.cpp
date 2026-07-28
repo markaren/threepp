@@ -1474,7 +1474,7 @@ void EditorApp::drawSplineSection(Object3D& object) {
     // SplineOverlay.cpp.
     ImGui::Spacing();
     {
-        static const char* kinds[] = {"None", "Tube", "Road"};
+        static const char* kinds[] = {"None", "Tube"};
         int mesh = static_cast<int>(config.mesh);
         if (ImGui::Combo("Mesh", &mesh, kinds, IM_ARRAYSIZE(kinds))) {
             auto after = config;
@@ -1509,16 +1509,6 @@ void EditorApp::drawSplineSection(Object3D& object) {
             commit(after, "Tube Radial Segments");
         }
         if (ImGui::IsItemDeactivated()) commands_.endTransaction();
-    } else if (config.mesh == SplineConfig::MeshKind::Road) {
-        floatField(
-                "Width", config.width, 0.02f, 0.001f, 200.f,
-                [](SplineConfig& c, float v) { c.width = v; }, "Road Width");
-    }
-
-    if (config.mesh != SplineConfig::MeshKind::None) {
-        floatField(
-                "UV Length", config.uvLength, 0.02f, 0.001f, 1000.f,
-                [](SplineConfig& c, float v) { c.uvLength = v; }, "Spline UV Length");
     }
 
     ImGui::PopItemWidth();

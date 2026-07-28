@@ -84,29 +84,31 @@ namespace {
         return GraphicsAPI::OpenGL;
     }
 
-    // The width a generated road actually came out at, measured at its
-    // NARROWEST cross-section.
-    //
-    // A road is laid down one cross-section at a time — vertices 2i and 2i + 1
-    // — so its width is a property of every one of them, and the narrowest is
-    // the honest number: a road that narrowed anywhere narrowed. This used to
-    // measure how far the vertices sat from the authored curve instead, because
-    // a trimmed offset had no cross-sections left to measure. Zero when there is
-    // nothing to measure. Selftest only.
-    float roadWidth(const Mesh& mesh) {
+    // The radius a generated tube actually came out at: the FARTHEST any of its
+    // vertices sits from the curve it was swept along. A tube is a ring of
+    // vertices per sample, so the maximum is the radius wherever the sweep is
+    // honest and larger wherever it is not. Zero when there is nothing to
+    // measure. Selftest only.
+    float tubeRadius(const Mesh& mesh, const Object3D& spline) {
 
         const auto geometry = mesh.geometry();
         if (!geometry) return 0.f;
         const auto* position = geometry->getAttribute<float>("position");
         if (!position || position->count() < 4) return 0.f;
 
-        float narrowest = std::numeric_limits<float>::max();
-        for (int i = 0; i + 1 < position->count(); i += 2) {
-            const Vector3 left(position->getX(i), position->getY(i), position->getZ(i));
-            const Vector3 right(position->getX(i + 1), position->getY(i + 1), position->getZ(i + 1));
-            narrowest = std::min(narrowest, left.distanceTo(right));
+        const auto config = editor::SplineConfig::read(spline);
+        const auto curve = config ? config->curve(spline) : nullptr;
+        if (!curve) return 0.f;
+        const auto spine = curve->getPoints(256);
+
+        float farthest = 0.f;
+        for (int i = 0; i < position->count(); ++i) {
+            const Vector3 vertex(position->getX(i), position->getY(i), position->getZ(i));
+            float nearest = std::numeric_limits<float>::max();
+            for (const auto& on : spine) nearest = std::min(nearest, vertex.distanceTo(on));
+            farthest = std::max(farthest, nearest);
         }
-        return narrowest;
+        return farthest;
     }
 
 }// namespace
@@ -372,20 +374,18 @@ int EditorApp::runScreenshot() {
 
     auto& scene = document_.scene();
 
-    // The roads this feature is judged on: the factory default at the default
-    // width (both bends tighter than the half-width), an S-curve whose opposite
-    // bends are far tighter than its, and a GRADED one that climbs into a crest
-    // inside a bend — elevation being the complaint the trimmed offset could not
-    // answer, since it invented a height at every corner it cut.
+    // The tubes this feature is judged on: the factory default, an S-curve, and
+    // a GRADED one that climbs into a crest inside a bend — a tube's closed
+    // cross-section has to survive all three.
     auto plain = ObjectFactory::createSpline(scene);
     {
         auto config = SplineConfig::read(*plain).value_or(SplineConfig{});
-        config.mesh = SplineConfig::MeshKind::Road;
-        config.width = 4.f;
+        config.mesh = SplineConfig::MeshKind::Tube;
+        config.radius = 0.5f;
         config.write(*plain);
     }
     plain->position.z = -6.f;
-    addObject(plain, scene, "Screenshot Road");
+    addObject(plain, scene, "Screenshot Tube");
 
     auto s = ObjectFactory::createSpline(scene);
     {
@@ -396,12 +396,12 @@ int EditorApp::runScreenshot() {
             nodes[i]->position.set(points[i][0], points[i][1], points[i][2]);
         }
         auto config = SplineConfig::read(*s).value_or(SplineConfig{});
-        config.mesh = SplineConfig::MeshKind::Road;
-        config.width = 6.f;
+        config.mesh = SplineConfig::MeshKind::Tube;
+        config.radius = 0.6f;
         config.write(*s);
     }
     s->position.z = 4.f;
-    addObject(s, scene, "Screenshot S Road");
+    addObject(s, scene, "Screenshot S Tube");
 
     auto hill = ObjectFactory::createSpline(scene);
     {
@@ -415,13 +415,13 @@ int EditorApp::runScreenshot() {
         for (std::size_t i = 0; i < nodes.size() && i < 5; ++i) {
             nodes[i]->position.set(points[i][0], points[i][1], points[i][2]);
         }
-        config.mesh = SplineConfig::MeshKind::Road;
-        config.width = 5.f;
+        config.mesh = SplineConfig::MeshKind::Tube;
+        config.radius = 0.4f;
         config.write(*hill);
     }
     hill->position.z = 12.f;
-    addObject(hill, scene, "Screenshot Hill Road");
-    playFor(0.1f);// the sync pass derives the road meshes
+    addObject(hill, scene, "Screenshot Hill Tube");
+    playFor(0.1f);// the sync pass derives the tube meshes
 
     for (auto* spline : {plain.get(), s.get(), hill.get()}) {
         if (auto* mesh = SplineConfig::derivedMesh(*spline)) {
@@ -1431,25 +1431,21 @@ int EditorApp::runSelfTest() {
                 step();
             }
 
-            // Tube to road: same node, different geometry, and the width the
-            // config asks for is the width the mesh has.
+            // A radius change rebuilds the geometry on the SAME node, which is
+            // what keeps a material and a physics setup attached through an
+            // edit.
             if (mesh) {
                 const auto geometry = mesh->geometry();
-                config.mesh = SplineConfig::MeshKind::Road;
-                config.width = 7.f;
+                config.radius = 0.75f;
                 setConfig(config, "Spline Mesh");
                 step();
                 spline = splineNow(splineUuid);
 
                 check(spline && SplineConfig::derivedMesh(*spline) == mesh,
-                      "switching tube to road keeps the node");
+                      "a radius change keeps the mesh node");
                 check(mesh->geometry() != geometry, "and rebuilds its geometry");
-
-                // Full width at EVERY cross-section, bends and all. The old
-                // road narrowed through a bend tighter than its half-width and
-                // this one cannot: no bend in an alignment is that tight.
-                check(std::abs(roadWidth(*mesh) - 7.f) < 0.02f,
-                      "at the width the config asks for, at its narrowest section");
+                check(std::abs(tubeRadius(*mesh, *spline) - 0.75f) < 0.02f,
+                      "at the radius the config asks for");
             }
 
             // mesh=none removes it — and undoing that config edit brings it
@@ -1548,9 +1544,9 @@ int EditorApp::runSelfTest() {
         // With a generated mesh, so the round trip proves the document carries
         // the geometry too — and that reloading ADOPTS it rather than adding a
         // second one beside it.
-        authored.mesh = SplineConfig::MeshKind::Road;
-        authored.width = 5.f;
-        authored.uvLength = 3.f;
+        authored.mesh = SplineConfig::MeshKind::Tube;
+        authored.radius = 0.45f;
+        authored.radialSegments = 10;
         std::vector<Vector3> authoredPoints;
 
         if (spline) {
@@ -1593,9 +1589,11 @@ int EditorApp::runSelfTest() {
                   "and the material they edited, both surviving the regeneration");
             bool sized = false;
             if (auto* asMesh = reloadedMesh ? reloadedMesh->as<Mesh>() : nullptr) {
-                sized = std::abs(roadWidth(*asMesh) - authored.width) < 0.02f;
+                if (auto* live = splineNow(splineUuid)) {
+                    sized = std::abs(tubeRadius(*asMesh, *live) - authored.radius) < 0.02f;
+                }
             }
-            check(sized, "rebuilt to the width the reloaded config asks for");
+            check(sized, "rebuilt to the radius the reloaded config asks for");
         }
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
@@ -1911,13 +1909,11 @@ int EditorApp::runSelfTest() {
         step(2);
         check(physicsDebugLines_ == nullptr, "a new scene with the toggle on leaves nothing behind");
 
-        // A road collides as one CONVEX per station interval of its own
-        // surface. This S bends twice, both tighter than half its six metre
-        // width — the case that used to be cooked as one sliver hull per sample
-        // of a folded ribbon, drawing a moiré of them. The alignment has no
-        // bend that tight, so every span is a box or a wedge, and the count is
-        // the road's shape rather than its sampling: `samples` is at its maximum
-        // here and the shapes still number in the low hundreds.
+        // A generated tube collides as its own triangles — a closed
+        // cross-section is exactly what a triangle mesh handles well — and the
+        // collider overlay draws them. Physics goes on the SPLINE here, not on
+        // the mesh: that is where a user puts it, and it used to produce a
+        // phantom 1 m box at the spline's origin instead of the tube.
         {
             auto created = ObjectFactory::createSpline(document_.scene());
             const auto splineUuid = created->uuid;
@@ -1932,24 +1928,21 @@ int EditorApp::runSelfTest() {
                     points[i]->position.copy(shape[i]);
                 }
                 auto config = SplineConfig::read(*spline).value_or(SplineConfig{});
-                config.mesh = SplineConfig::MeshKind::Road;
-                config.width = 6.f;
-                config.samples = SplineConfig::maxSamples;
+                config.mesh = SplineConfig::MeshKind::Tube;
+                config.radius = 0.5f;
                 config.write(*spline);
                 step();
 
-                if (auto* road = SplineConfig::derivedMesh(*spline)) {
-                    PhysicsConfig physics;
-                    physics.enabled = true;
-                    physics.body = PhysicsConfig::Body::Static;
-                    physics.shape = PhysicsConfig::Shape::Auto;
-                    physics.write(*road);
-                }
+                PhysicsConfig physics;
+                physics.enabled = true;
+                physics.body = PhysicsConfig::Body::Static;
+                physics.shape = PhysicsConfig::Shape::Auto;
+                physics.write(*spline);
             }
 
             startPlay();
             stepUntilColliders(600);
-            check(colliderVertices() > 0, "an S-curve road draws collider lines of its own");
+            check(colliderVertices() > 0, "an S-curve tube draws collider lines of its own");
 
             int shapes = -1;
             if (auto* world = physics_ ? physics_->world() : nullptr) {
@@ -1963,20 +1956,9 @@ int EditorApp::runSelfTest() {
                     shapes += static_cast<int>(static_cast<PxRigidActor*>(actor)->getNbShapes());
                 }
             }
-            int spans = -1;
-            if (spline) {
-                if (auto* road = SplineConfig::derivedMesh(*spline)) {
-                    if (auto* asMesh = road->as<Mesh>()) {
-                        if (const auto geometry = asMesh->geometry()) {
-                            if (const auto* position = geometry->getAttribute<float>("position")) {
-                                spans = position->count() / 2 - 1;
-                            }
-                        }
-                    }
-                }
-            }
-            check(spans > 4 && shapes == spans,
-                  "and collides as one convex per span of the surface, both bends and all");
+            // One shape, cooked from the tube the spline generated — not the
+            // unit-box placeholder a geometry-less group used to fall back on.
+            check(shapes == 1, "and physics on the SPLINE collides as the tube under it");
             stopPlay();
             step(2);
         }

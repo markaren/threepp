@@ -55,8 +55,7 @@ namespace threepp::editor {
         // What the spline generates as real geometry, if anything.
         enum class MeshKind {
             None,// default; the spline is a path and nothing else
-            Tube,// pipe / rail / cable, round cross-section
-            Road // flat surface of constant width, level side to side
+            Tube // pipe / rail / cable, round cross-section
         };
 
         Type type = Type::Centripetal;
@@ -70,8 +69,6 @@ namespace threepp::editor {
         MeshKind mesh = MeshKind::None;
         float radius = 0.25f;   // Tube
         int radialSegments = 8; // Tube
-        float width = 4.f;      // Road
-        float uvLength = 4.f;   // metres of curve per U tile, both kinds
 
         static constexpr const char* userDataKey = "spline";
         // Marks the generated mesh. Its presence is the whole tag; the value is

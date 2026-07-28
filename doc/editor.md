@@ -605,11 +605,9 @@ type=centripetal;closed=0;tension=0.5;samples=24;mesh=none;radius=0.25;radialSeg
 | `closed` | `0`, `1` | join the last point back to the first |
 | `tension` | `0`…`1` | `catmullrom` only — stored and inert for the other two, as in three.js |
 | `samples` | `1`…`200` | curve samples per segment; drives the overlay *and* what the mesh is fitted from |
-| `mesh` | `none`, `tube`, `road` | what the spline generates as real geometry |
+| `mesh` | `none`, `tube` | what the spline generates as real geometry
 | `radius` | metres | `tube` — cross-section radius |
 | `radialSegments` | `3`…`64` | `tube` — sides of the cross-section |
-| `width` | metres | `road` — surface width, kept through every bend |
-| `uvLength` | metres | metres of curve per U tile, both kinds |
 
 `SplineConfig::encode()` / `decode()` own that format, unknown keys are ignored
 on read, and — unlike `PhysicsConfig` — `write()` never erases the entry: the
@@ -629,74 +627,21 @@ config changes, which is what makes dragging a point redraw the curve live.
 Control points additionally get a marker icon through the same machinery
 cameras and lights use, so they are clickable in the viewport at all.
 
-**The mesh you generate is.** Set **Mesh** to Tube or Road in the spline section
-and the spline grows one more child: a real `Mesh`, with a
-`MeshStandardMaterial`, shadows on, carrying `userData["splineDerived"] = "1"`.
-That tag is the only thing separating it from a control point — every count and
-index in the editor goes through `SplineConfig::controlPoints()` /
-`pointIndexOf()` rather than `children`, so adding geometry never shifts a point
-index. It is a document node in every other respect: it saves, it reloads, and
-a scene with a road in it renders and collides in a plain viewer with no editor
-present. Select it and the ordinary Material and **Physics** sections apply —
-put a collider on a road and drive on it.
+**The mesh you generate is.** Set **Mesh** to Tube in the spline section and the
+spline grows one more child: a real `Mesh`, with a `MeshStandardMaterial`,
+shadows on, carrying `userData["splineDerived"] = "1"`. That tag is the only
+thing separating it from a control point — every count and index in the editor
+goes through `SplineConfig::controlPoints()` / `pointIndexOf()` rather than
+`children`, so adding geometry never shifts a point index. It is a document node
+in every other respect: it saves, it reloads, and a scene with a tube in it
+renders and collides in a plain viewer with no editor present. Select it and the
+ordinary Material and **Physics** sections apply — or put the physics on the
+spline itself, which collides as the tube underneath it.
 
-Tube sweeps `TubeGeometry` along the curve. Road sweeps an **alignment** fitted
-to it (`threepp/extras/curves/RoadAlignment.hpp`), and the difference is the
-whole feature.
-
-**The road is a shape, not an offset.** Offsetting a sampled curve sideways
-produces edges that cross themselves inside any bend tighter than the offset,
-and every answer to that — miter, trim, pin a cross-section to the apex, fan
-across it — is a repair to a shape that should not have been produced. So the
-road is built as a shape instead. Seeds taken off your curve are joined by
-**biarcs** (the classical pair of circular arcs), which means every joint is
-tangent-continuous *by construction* rather than within a fitting tolerance —
-there is no angle at a joint to hold under a threshold. Seeds are refined until
-the chain sits within 2 cm of what you drew. Elevation over distance is a second
-chain of the same kind, so grade is continuous too and a grade change is a
-vertical curve rather than a crease.
-
-**No bend is tighter than the half-width, so the road bends a little instead.**
-That single rule is what removes the whole family of artefacts: the inner edge
-of every bend has somewhere to be, so there is nothing to trim, no miter to
-widen, no apex, no fan. Where you drew a bend tighter than the road is wide, the
-alignment relaxes the seeds there and *re-solves* — never patching a radius in
-place, so the chain is still tangent-continuous afterwards — and the road takes
-a slightly wider line than your curve. The editor's default spline has a
-1.35 m curvature radius; at the default width 4 the floor is 2.1 m, so it bends,
-by about 0.8 m at the worst point, and the curve you drew still runs on the
-road. `RoadGeometry::alignment().report()` carries the figures: how far the fit
-sat from your curve, how far the finished road does, how many bends were
-relaxed, and the tightest radius that came out.
-
-The surface is then swept at **stations** chosen so neither the heading nor the
-grade breaks by more than a degree between neighbours. A cross-section is
-perpendicular to the road, level side to side, and **full width, always** —
-never narrowed, at any bend. `u` runs arc-length/`uvLength` along it, `v` runs
-0…1 across.
-
-**The collider is the same cross-sections.** A road with physics on it (or on
-the spline over it) collides as one **convex hull per station interval**: the
-four corners of that span plus the same four pushed 0.25 m down the
-cross-sections' own normals (`RoadGeometry::hulls`). Boxes on a straight,
-wedges through a bend, each sharing a whole joint cross-section with its
-neighbour, so there is no seam to fall through and no thickness-less surface for
-a fast body to pass through. The count follows the road's *shape*, not how
-finely you sampled the spline.
-
-Convex and not a triangle mesh for a reason: a triangle mesh comes back from
-PhysX as a static actor, which nothing can move. Set **Body** to Kinematic and
-the same road becomes a `PxRigidDynamic` you can drive, carrying whatever is
-standing on it — which is what makes a road and a conveyor belt the same
-feature.
-
-Two limitations. A spline that **loops vertically** has no plan view to align
-and is out of scope as a road — `RibbonGeometry`
-(`threepp/extras/curves/RibbonGeometry.hpp`) still sweeps a ribbon along
-anything, including that. And a road whose two far-apart lobes **cross each
-other** draws both, in the same plane, which may z-fight: each piece is correct
-and their overlap is not resolved. Neither is new; every version of this had
-both.
+Tube sweeps threepp's `TubeGeometry` along the curve, at the radius and radial
+segment count the config carries. A closed cross-section is also what a triangle
+mesh collider handles well, which is why a tube needs nothing special to stand
+on.
 
 **Regeneration is derived state, not a command.** The undoable step is the
 config edit; the sync pass then adds, rebuilds or removes the mesh to follow
@@ -879,9 +824,8 @@ their say.
   *new* mesh rather than restoring the old one, and the material, physics and
   name you had put on it are gone with the node. Undo covers the config edit,
   which is all it claims to. Nothing else loses that state — dragging points,
-  switching Tube to Road, reloading the document all rebuild through the same
-  node. There is also one generated mesh per spline: no per-span materials, no
-  varying width, and a road tunnels straight through whatever it crosses.
+  changing the radius, reloading the document all rebuild through the same node.
+  There is also one generated mesh per spline, and one material with it.
 * **Duplicate shares geometry.** `Object3D::clone()` shares both geometry and
   materials; the editor clones the materials afterwards so recolouring a copy
   does not recolour the original, but geometry stays shared. That is intentional

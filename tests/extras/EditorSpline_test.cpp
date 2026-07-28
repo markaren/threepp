@@ -27,11 +27,9 @@ TEST_CASE("SplineConfig round-trips through userData", "[editor]") {
     config.closed = true;
     config.tension = 0.25f;
     config.samples = 40;
-    config.mesh = SplineConfig::MeshKind::Road;
+    config.mesh = SplineConfig::MeshKind::Tube;
     config.radius = 0.75f;
     config.radialSegments = 12;
-    config.width = 6.5f;
-    config.uvLength = 2.f;
     config.write(*group);
 
     CHECK(SplineConfig::isSpline(*group));
@@ -44,7 +42,7 @@ TEST_CASE("SplineConfig round-trips through userData", "[editor]") {
     // Deterministic encoding: an unchanged value produces the same bytes every
     // time, which is what keeps saved documents diff-clean.
     CHECK(config.encode() == "type=catmullrom;closed=1;tension=0.25;samples=40;"
-                             "mesh=road;radius=0.75;radialSegments=12;width=6.5;uvLength=2");
+                             "mesh=tube;radius=0.75;radialSegments=12");
     CHECK(config.encode() == read->encode());
 
     // The key's presence is the definition, so an entry that says nothing is
@@ -66,7 +64,7 @@ TEST_CASE("SplineConfig round-trips through userData", "[editor]") {
     REQUIRE(legacy.has_value());
     CHECK(legacy->mesh == SplineConfig::MeshKind::None);
     CHECK(legacy->radius == SplineConfig{}.radius);
-    CHECK(legacy->width == SplineConfig{}.width);
+    CHECK(legacy->radialSegments == SplineConfig{}.radialSegments);
 
     SplineConfig::erase(*group);
     CHECK_FALSE(SplineConfig::isSpline(*group));

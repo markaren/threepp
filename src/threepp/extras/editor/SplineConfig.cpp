@@ -68,7 +68,6 @@ namespace {
 
         if (text == "none") return SplineConfig::MeshKind::None;
         if (text == "tube") return SplineConfig::MeshKind::Tube;
-        if (text == "road") return SplineConfig::MeshKind::Road;
         return fallback;
     }
 
@@ -77,7 +76,6 @@ namespace {
         switch (kind) {
             case SplineConfig::MeshKind::None: return "none";
             case SplineConfig::MeshKind::Tube: return "tube";
-            case SplineConfig::MeshKind::Road: return "road";
         }
         return "none";
     }
@@ -110,7 +108,6 @@ const char* SplineConfig::label(MeshKind kind) {
     switch (kind) {
         case MeshKind::None: return "None";
         case MeshKind::Tube: return "Tube";
-        case MeshKind::Road: return "Road";
     }
     return "None";
 }
@@ -132,10 +129,6 @@ std::string SplineConfig::encode() const {
     out += number(radius);
     out += ";radialSegments=";
     out += std::to_string(radialSegments);
-    out += ";width=";
-    out += number(width);
-    out += ";uvLength=";
-    out += number(uvLength);
     return out;
 }
 
@@ -166,11 +159,7 @@ std::optional<SplineConfig> SplineConfig::decode(const std::string& text) {
                 config.radius = toFloat(value, config.radius);
             } else if (key == "radialSegments") {
                 config.radialSegments = toInt(value, config.radialSegments);
-            } else if (key == "width") {
-                config.width = toFloat(value, config.width);
-            } else if (key == "uvLength") {
-                config.uvLength = toFloat(value, config.uvLength);
-            }
+                        }
             // Unknown keys ignored on purpose: a document written by a newer
             // editor still loads here.
         }
