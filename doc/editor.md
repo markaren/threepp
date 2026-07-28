@@ -587,40 +587,39 @@ a scene with a road in it renders and collides in a plain viewer with no editor
 present. Select it and the ordinary Material and **Physics** sections apply —
 put a static trimesh collider on a road and drive on it.
 
-Tube sweeps `TubeGeometry` along the curve. Road does **not** sweep a ribbon: it
-consolidates the sampled centreline into straights and circular arcs
-(`SplineConfig::roadPath`, `threepp/extras/curves/RoadPath.hpp`) and emits each
-piece's swept region directly (`RoadGeometry`). A straight is a rectangle, an
-arc an annular sector — outer radius R + `width`/2, inner radius
-max(R − `width`/2, 0). Everything is in **the spline's own space**, level side to
-side and rising with the grade, so a rotated spline rotates its road with it
-rather than twisting it back to world level. `u` runs arc-length/`uvLength`
-along it, `v` runs 0…1 across.
+Tube sweeps `TubeGeometry` along the curve. Road offsets it: the **same samples
+the overlay draws** are offset both sides by `width`/2 in the spline's own
+space, level side to side with the grade carried, so the road follows the curve
+you authored sample for sample — no fit, no consolidation, nothing that changes
+the shape. `u` runs arc-length/`uvLength` along it, `v` runs 0…1 across.
 
-**The road is full width everywhere.** That is the point of the consolidation: a
-cross-section offset from a dense polyline has no full-width answer at a bend
-tighter than its own half-width, because the inner edge runs backward past the
-curvature radius. An arc's region is known in closed form instead, and a bend
-tighter than the half-width simply takes the inner radius to zero — the annulus
-becomes a **pie sector** whose inner vertices sit on the centre of the bend,
-which is the region the road covers there. No narrowing, no fold, and the inside
-of the corner is covered by the pieces either side of it.
+**Bends tighter than the half-width are trimmed, not narrowed.** An offset
+polyline ties a *swallowtail* inside a bend tighter than the offset: the edge
+runs past the centre of curvature, turns back and crosses itself. That loop is
+not part of the road, so `RoadGeometry`
+(`threepp/extras/curves/RoadGeometry.hpp`) finds the crossing and **cuts it
+out**, continuing from the crossing point. The outer edge of a bend stays smooth
+the whole way round; the inner edge is smooth except for one crisp corner
+exactly where the swept region has one. No fans, no pinning, no narrowing — the
+editor's default spline at width 4 has one such corner per bend, and at width 2
+none at all. Trimming breaks the ring correspondence a ribbon relies on, so the
+surface is stitched between the two edge polylines by arc length; around a trim
+that is a fan out of the corner vertex.
 
-**The collider is the same list.** A road with physics on it (or on the spline
-over it) collides as one static actor carrying a box per straight — top face on
-the road, 0.25 m thick — and a bend tiled by convex annular wedges of about 15°
-that share each radial face exactly, the conveyor-belt treatment from
-`examples/projects/Fish`. Those primitives are recomputed from the config rather
-than read off the mesh; the segmentation is deterministic, so the two agree. The
-shape count follows the road's **shape**: the editor's default spline is three
-pieces whatever `samples` is set to, where the ribbon it replaced cooked one
-hull per sample.
+**The collider is the same triangles.** A road with physics on it (or on the
+spline over it) collides as **one** static triangle mesh, cooked from a closed
+solid built out of the road's own surface: the triangles you see, a copy of them
+0.25 m below with the winding reversed, and a wall along every boundary edge
+(`RoadGeometry::solid`). A surface has no thickness for a fast body to be
+stopped by, and a hull would swallow every bend. One shape per road, whatever
+the road does — and being static is what allows it: a triangle mesh cannot move.
 
-Two limitations follow from the fit being an XZ one. A spline that **loops
-vertically** has no XZ projection to consolidate and is out of scope as a road —
-`RibbonGeometry` still sweeps a ribbon along anything, including that. And a
-road that **crosses itself** at the same height renders two pieces in the same
-plane, which may z-fight; the pieces are correct, their overlap is not resolved.
+Two limitations. A spline that **loops vertically** has no plan view to offset
+and is out of scope as a road — `RibbonGeometry`
+(`threepp/extras/curves/RibbonGeometry.hpp`) still sweeps a ribbon along
+anything, including that. And only *local* self-intersection is trimmed: a road
+whose two far-apart lobes **cross each other** draws both, in the same plane,
+which may z-fight. Neither is new; the ribbon had both.
 
 **Regeneration is derived state, not a command.** The undoable step is the
 config edit; the sync pass then adds, rebuilds or removes the mesh to follow
