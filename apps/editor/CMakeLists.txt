@@ -9,6 +9,7 @@ endif ()
 add_executable(threepp_editor
         main.cpp
         EditorApp.cpp
+        EditorSelfTest.cpp
         EditorTheme.cpp
         ExternalScriptEdit.cpp
         FileBrowser.cpp

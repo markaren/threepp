@@ -155,10 +155,15 @@ namespace threepp::editor {
         // points — both are ordinary scene nodes, so the section is what tells
         // them apart.
         void drawSplineSection(Object3D& object);
-        void drawTextureSlot(Material& material, const char* label,
+        // `owner` is the object the material hangs off; the slot is identified
+        // by (owner uuid, label) whenever it has to outlive the frame.
+        void drawTextureSlot(const Object3D& owner, Material& material, const char* label,
                              const std::shared_ptr<Texture>& current,
                              const std::function<void(const std::shared_ptr<Texture>&)>& setter,
                              bool srgb);
+        // Thumbnails are cached per texture; drop the lot. Called when the scene
+        // is replaced, alongside every other cache that points into the old one.
+        void clearThumbnailCache();
 
         // Assets / console / sensors tabs
         void drawAssetsTab();
@@ -200,9 +205,9 @@ namespace threepp::editor {
         void launchExternalEditor(const std::filesystem::path& dir,
                                   const std::filesystem::path& file);
 
-        // Which material slot is being filled — by an inspector "Load..."
-        // button (the file dialog resolves a frame or more later, so the target
-        // has to survive across frames) or by a file dropped onto its row.
+        // A material slot resolved down to the pointers needed to write it.
+        // Valid for the frame that built it and no longer — see
+        // PendingTextureSlot for the form that survives a file dialog.
         struct TextureSlotTarget {
             Material* material = nullptr;
             std::function<void(const std::shared_ptr<Texture>&)> setter;
@@ -264,6 +269,21 @@ namespace threepp::editor {
         void duplicateSelected();
         void focusSelected();
         void reparent(Object3D& object, Object3D& newParent);
+        // Undo/redo as editor operations rather than raw stack calls: they are
+        // document mutations and go through the same Play gate as the rest.
+        // The self-test drives commands_ directly where it wants the stack.
+        void undo();
+        void redo();
+
+        // The gate every document-mutating operation passes through. Play runs
+        // on a snapshot and Stop rebuilds the authored scene from it, so an edit
+        // made while playing is thrown away on Stop while leaving an undo entry
+        // rebound against the restored graph. Worse, PlaySession's contract is
+        // that "the editor does not touch the graph while playing" — a delete
+        // pulls a node out from under a live PhysX actor. Refusing centrally is
+        // what makes that a contract rather than a hope; the disabled menu items
+        // are only the visible half. `what` names the action in the console line.
+        [[nodiscard]] bool rejectWhilePlaying(const char* what);
 
         // --- selection / picking -------------------------------------------
         void selectObject(Object3D* object);
@@ -539,7 +559,18 @@ namespace threepp::editor {
         // replaces the whole graph.
         std::string scriptTargetUuid_;
 
-        TextureSlotTarget textureSlotTarget_;
+        // Which material slot an inspector "Load..." button is filling. This
+        // cannot be the raw TextureSlotTarget the drop path below uses: that one
+        // lives for a single frame, while a file dialog spans many, and by the
+        // time it comes back the material may be gone (a Play/Stop rebuilds the
+        // whole graph, a delete takes the object with it). Recorded the way the
+        // script dialog records its target — by uuid — and re-resolved against
+        // the live scene on confirmation.
+        struct PendingTextureSlot {
+            std::string objectUuid;
+            std::string slot;
+        };
+        PendingTextureSlot pendingTextureSlot_;
 
         // Where each texture slot row landed on screen this frame, so a file
         // dropped from the OS can be hit-tested against them. Rebuilt every

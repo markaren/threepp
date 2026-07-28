@@ -109,15 +109,35 @@ namespace {
         return IM_COL32(byte(rgb[0]), byte(rgb[1]), byte(rgb[2]), 255);
     }
 
+    // Keyed by uuid, but stamped with the texture's version: a uuid alone says
+    // "the same texture", not "the same pixels", and an image edited in place
+    // keeps its uuid while everything the mosaic sampled changes.
+    struct CachedThumbnail {
+        unsigned int version = 0;
+        Thumbnail thumb;
+    };
+
+    std::unordered_map<std::string, CachedThumbnail>& thumbnailCache() {
+
+        static std::unordered_map<std::string, CachedThumbnail> cache;
+        return cache;
+    }
+
     const Thumbnail& thumbnailFor(const std::shared_ptr<Texture>& texture) {
 
-        static std::unordered_map<std::string, Thumbnail> cache;
+        auto& cache = thumbnailCache();
         static Thumbnail empty;
 
         if (!texture) return empty;
 
+        const auto version = texture->version();
         auto it = cache.find(texture->uuid());
-        if (it != cache.end()) return it->second;
+        if (it != cache.end() && it->second.version == version) return it->second.thumb;
+
+        // A long session opening one texture after another would otherwise grow
+        // this without bound. Dropping the lot costs one re-sample per visible
+        // row on the next frame — the inspector shows six at most.
+        if (cache.size() > 256) cache.clear();
 
         Thumbnail thumb;
         if (!texture->images().empty()) {
@@ -139,7 +159,10 @@ namespace {
             }
         }
 
-        return cache.emplace(texture->uuid(), thumb).first->second;
+        // insert_or_assign, not emplace: a stale entry for this uuid is exactly
+        // the case that got us here.
+        return cache.insert_or_assign(texture->uuid(), CachedThumbnail{version, thumb})
+                .first->second.thumb;
     }
 
     void drawThumbnail(const std::shared_ptr<Texture>& texture, float size) {
@@ -177,6 +200,11 @@ namespace {
 
 }// namespace
 
+
+void EditorApp::clearThumbnailCache() {
+
+    thumbnailCache().clear();
+}
 
 void EditorApp::drawInspector() {
 
@@ -380,7 +408,7 @@ void EditorApp::drawTransformSection(Object3D& object) {
 
 // ------------------------------------------------------------------ material
 
-void EditorApp::drawTextureSlot(Material& material, const char* label,
+void EditorApp::drawTextureSlot(const Object3D& owner, Material& material, const char* label,
                                 const std::shared_ptr<Texture>& current,
                                 const std::function<void(const std::shared_ptr<Texture>&)>& setter,
                                 bool srgb) {
@@ -400,8 +428,12 @@ void EditorApp::drawTextureSlot(Material& material, const char* label,
     ImGui::BeginGroup();
     ImGui::TextUnformatted(label);
     if (ImGui::SmallButton("Load...")) {
-        // The modal resolves in a later frame, so remember which slot asked.
-        textureSlotTarget_ = {&material, setter, current, label, srgb};
+        // The modal resolves in a later frame, so remember which slot asked —
+        // by uuid and slot name, never by pointer. Everything this row holds
+        // (material, setter, texture) belongs to the current frame; the dialog
+        // outlives it, and a delete or a play/stop in between would leave the
+        // pointer dangling. assignTextureToSlot() re-resolves both.
+        pendingTextureSlot_ = {owner.uuid, label};
         pendingDialog_ = PendingDialog::Texture;
         fileBrowser_.open("Load Texture", FileBrowser::Mode::Open, settings_.textureDir,
                           {".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif"});
@@ -622,7 +654,7 @@ void EditorApp::drawMaterialSection(Object3D& object) {
         // Same list the file-drop handler resolves against — see
         // MaterialTextureSlots.hpp for why it is not spelled out twice.
         for (const auto& slot : textureSlotsOf(*raw)) {
-            drawTextureSlot(*raw, slot.name.c_str(), slot.current, slot.set, slot.srgb);
+            drawTextureSlot(object, *raw, slot.name.c_str(), slot.current, slot.set, slot.srgb);
         }
 
         ImGui::TreePop();

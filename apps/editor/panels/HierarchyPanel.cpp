@@ -90,6 +90,10 @@ void EditorApp::drawHierarchyNode(Object3D& object) {
 
     const bool selected = selection_.get() == &object;
     const bool leaf = object.children.empty();
+    // Play runs on a snapshot Stop discards, so the tree is a viewer then, not
+    // an editor: selection, expansion and Focus stay, everything that changes
+    // the graph goes grey. EditorApp::rejectWhilePlaying() is the actual gate.
+    const bool editable = !isPlaying();
 
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
                                ImGuiTreeNodeFlags_OpenOnDoubleClick |
@@ -104,6 +108,10 @@ void EditorApp::drawHierarchyNode(Object3D& object) {
     }
 
     bool open = false;
+
+    // A rename in progress when Play starts is abandoned rather than left
+    // hanging over a row that can no longer accept it.
+    if (renaming_ == &object && !editable) renaming_ = nullptr;
 
     if (renaming_ == &object) {
         // Inline rename: the input replaces the whole row (children included)
@@ -147,13 +155,15 @@ void EditorApp::drawHierarchyNode(Object3D& object) {
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) {
             selectObject(&object);
         }
-        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        if (editable && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             renaming_ = &object;
             renameBuffer_ = object.name;
         }
 
         // --- drag & drop reparenting ----------------------------------------
-        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoHoldToOpenOthers)) {
+        // Suppressed at the source while playing: a drag that can only end in a
+        // refusal should not start. reparent() refuses anyway.
+        if (editable && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoHoldToOpenOthers)) {
             Object3D* payload = &object;
             ImGui::SetDragDropPayload("THREEPP_EDITOR_OBJECT", &payload, sizeof(payload));
             ImGui::TextUnformatted(displayName(object).c_str());
@@ -173,21 +183,22 @@ void EditorApp::drawHierarchyNode(Object3D& object) {
         // --- context menu ----------------------------------------------------
         if (ImGui::BeginPopupContextItem("##ctx")) {
             selectObject(&object);
-            if (ImGui::BeginMenu("Add")) {
+            if (ImGui::BeginMenu("Add", editable)) {
                 drawAddMenu(object);
                 ImGui::EndMenu();
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Rename")) {
+            if (ImGui::MenuItem("Rename", nullptr, false, editable)) {
                 renaming_ = &object;
                 renameBuffer_ = object.name;
             }
-            if (ImGui::MenuItem("Duplicate", "Ctrl+D")) {
+            if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, editable)) {
                 deferred_ = [this] { duplicateSelected(); };
             }
+            // Focus moves the camera, not the scene — it stays available.
             if (ImGui::MenuItem("Focus", "F")) focusSelected();
             ImGui::Separator();
-            if (ImGui::MenuItem("Delete", "Del")) {
+            if (ImGui::MenuItem("Delete", "Del", false, editable)) {
                 deferred_ = [this] { deleteSelected(); };
             }
             ImGui::EndPopup();
@@ -244,7 +255,7 @@ void EditorApp::drawHierarchy() {
             ImGui::EndDragDropTarget();
         }
         if (ImGui::BeginPopupContextItem("##sceneCtx")) {
-            if (ImGui::BeginMenu("Add")) {
+            if (ImGui::BeginMenu("Add", !isPlaying())) {
                 drawAddMenu(scene);
                 ImGui::EndMenu();
             }

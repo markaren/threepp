@@ -25,12 +25,18 @@ void EditorApp::drawMenuBar() {
 
         menuHeight_ = ImGui::GetWindowSize().y;
 
+        // Play runs on a snapshot that Stop throws away, so nothing that edits
+        // or writes the document is offered while it does — see
+        // EditorApp::rejectWhilePlaying(), which is what actually enforces it.
+        // Greying the items here is so the reason is visible before the click.
+        const bool editable = !isPlaying();
+
         if (ImGui::BeginMenu("File")) {
 
-            if (ImGui::MenuItem("New", "Ctrl+N")) pendingAction_ = PendingAction::New;
-            if (ImGui::MenuItem("Open...", "Ctrl+O")) pendingAction_ = PendingAction::Open;
+            if (ImGui::MenuItem("New", "Ctrl+N", false, editable)) pendingAction_ = PendingAction::New;
+            if (ImGui::MenuItem("Open...", "Ctrl+O", false, editable)) pendingAction_ = PendingAction::Open;
 
-            if (ImGui::BeginMenu("Open Recent", !settings_.recentFiles().empty())) {
+            if (ImGui::BeginMenu("Open Recent", editable && !settings_.recentFiles().empty())) {
                 for (const auto& recent : settings_.recentFiles()) {
                     if (ImGui::MenuItem(recent.c_str())) {
                         if (document_.dirty()) {
@@ -48,8 +54,8 @@ void EditorApp::drawMenuBar() {
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem("Save", "Ctrl+S")) saveScene();
-            if (ImGui::MenuItem("Save As...")) {
+            if (ImGui::MenuItem("Save", "Ctrl+S", false, editable)) saveScene();
+            if (ImGui::MenuItem("Save As...", nullptr, false, editable)) {
                 pendingDialog_ = PendingDialog::SaveAs;
                 fileBrowser_.open("Save Scene As", FileBrowser::Mode::Save,
                                   settings_.sceneDir, {".json"},
@@ -106,13 +112,13 @@ void EditorApp::drawMenuBar() {
             ImGui::Separator();
 
             ImGui::MenuItem("Also set as background", nullptr, &environmentAsBackground_);
-            if (ImGui::MenuItem("Set Environment...")) {
+            if (ImGui::MenuItem("Set Environment...", nullptr, false, editable)) {
                 pendingDialog_ = PendingDialog::Environment;
                 fileBrowser_.open("Set Environment", FileBrowser::Mode::Open,
                                   settings_.environmentDir, {".hdr"});
             }
             if (ImGui::MenuItem("Clear Environment", nullptr, false,
-                                document_.scene().environment != nullptr)) {
+                                editable && document_.scene().environment != nullptr)) {
                 clearEnvironment();
             }
 
@@ -128,14 +134,8 @@ void EditorApp::drawMenuBar() {
             const auto undoLabel = commands_.canUndo() ? "Undo " + commands_.undoName() : std::string("Undo");
             const auto redoLabel = commands_.canRedo() ? "Redo " + commands_.redoName() : std::string("Redo");
 
-            if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", false, commands_.canUndo())) {
-                commands_.undo();
-                document_.setDirty(true);
-            }
-            if (ImGui::MenuItem(redoLabel.c_str(), "Ctrl+Y", false, commands_.canRedo())) {
-                commands_.redo();
-                document_.setDirty(true);
-            }
+            if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", false, editable && commands_.canUndo())) undo();
+            if (ImGui::MenuItem(redoLabel.c_str(), "Ctrl+Y", false, editable && commands_.canRedo())) redo();
 
             ImGui::Separator();
 
@@ -145,7 +145,7 @@ void EditorApp::drawMenuBar() {
             {
                 auto* selected = selection_.get();
                 const bool linked = selected && !assetSource(*selected).empty();
-                if (ImGui::MenuItem("Unlink Imported Asset", nullptr, false, linked)) {
+                if (ImGui::MenuItem("Unlink Imported Asset", nullptr, false, editable && linked)) {
                     unlinkSelectedAsset();
                 }
                 if (linked && ImGui::IsItemHovered()) {
@@ -155,14 +155,15 @@ void EditorApp::drawMenuBar() {
 
             ImGui::Separator();
 
-            if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, !selection_.empty())) duplicateSelected();
-            if (ImGui::MenuItem("Delete", "Del", false, !selection_.empty())) deleteSelected();
+            if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, editable && !selection_.empty())) duplicateSelected();
+            if (ImGui::MenuItem("Delete", "Del", false, editable && !selection_.empty())) deleteSelected();
+            // Deselect stays: selection is editor state, not document state.
             if (ImGui::MenuItem("Deselect", "Esc", false, !selection_.empty())) selectObject(nullptr);
 
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("Add")) {
+        if (ImGui::BeginMenu("Add", editable)) {
             drawAddMenu(document_.scene());
             ImGui::EndMenu();
         }

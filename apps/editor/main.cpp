@@ -24,9 +24,14 @@ int main(int argc, char** argv) {
             options.screenshot = argument + 13;
         } else if (std::strcmp(argument, "--help") == 0 || std::strcmp(argument, "-h") == 0) {
             std::cout << "threepp editor\n"
-                      << "  usage: threepp_editor [--vulkan] [--frames=N] [scene.json]\n"
-                      << "  --vulkan     use the Vulkan backend (OpenGL is the default)\n"
-                      << "  --frames=N   render N frames and exit (smoke testing)\n";
+                      << "  usage: threepp_editor [options] [scene.json]\n"
+                      << "  --vulkan         use the Vulkan backend (OpenGL is the default)\n"
+                      << "  --frames=N       render N frames and exit (smoke testing)\n"
+                      << "  --selftest       drive the editor through its acceptance passes,\n"
+                      << "                   print each one and exit non-zero on a failure\n"
+                      << "  --urdf=PATH      import a URDF on start\n"
+                      << "  --screenshot=PNG build the spline-tube scenario, play it, and write\n"
+                      << "                   PNG plus one _<view>.png per camera, then exit\n";
             return 0;
         } else if (argument[0] != '-') {
             options.openOnStart = argument;
