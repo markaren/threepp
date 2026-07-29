@@ -8,11 +8,11 @@
 //     world.step(dt);
 //
 // Builds the kinematic tree by forward kinematics, creating a reduced-coordinate Articulation: collision
-// is box/sphere/cylinder(->capsule) directly and <mesh> by its bounding box; mass comes from <inertial>
-// (else default_density x shape volume); revolute/prismatic joints become DOFs (with limits + an optional
-// PD drive); fixed joints are collapsed into their parent (the child's collision is dropped, as in the
-// Python helper). An approximation (primitive/bbox collision), not a digital twin — but it turns
-// "hand-build the robot" into one call, from C++ as well as Python.
+// is box/sphere/cylinder(->capsule) directly and <mesh> by ONE convex hull of that mesh; mass comes from
+// <inertial> (else default_density x shape volume); revolute/prismatic joints become DOFs (with limits +
+// an optional PD drive); fixed joints are collapsed into their parent (the child's collision is dropped,
+// as in the Python helper). An approximation (primitive/convex-hull collision), not a digital twin — but
+// it turns "hand-build the robot" into one call, from C++ as well as Python.
 #ifndef THREEPP_PHYSX_URDFARTICULATION_HPP
 #define THREEPP_PHYSX_URDFARTICULATION_HPP
 

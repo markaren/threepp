@@ -183,7 +183,7 @@ double / string — see `ObjectExporter::writeUserData`), so a nested JSON objec
 is not available. The value is therefore one flat, deterministic string:
 
 ```
-body=dynamic;shape=convex;mass=12.5;friction=0.8;restitution=0.35;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0
+body=dynamic;shape=convex;mass=12.5;friction=0.8;restitution=0.35;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000
 ```
 
 `PhysicsConfig::encode()` / `decode()` own that format. Unknown keys are ignored
@@ -193,6 +193,55 @@ disabled body removes the entry entirely rather than writing `enabled=false`, so
 turning physics off leaves no trace in the file. Every key is written whatever
 the body type, so switching a body from `soft` to `dynamic` and back does not
 quietly discard the settings the other type was using.
+
+### Colliders
+
+The **Shape** picker decides what a body actually collides with. The primitives
+(**Box**, **Sphere**, **Capsule**) and **TriMesh** (a static/kinematic-only
+triangle mesh) are exact and cheap; the interesting cases are the convex ones,
+because PhysX dynamics can only use convex shapes and most real geometry is not
+convex.
+
+* **Auto** reads the geometry: a stock Box/Sphere/Capsule primitive gets its
+  analytic shape, a static shaped mesh gets a triangle mesh, and a moving shaped
+  mesh gets a single convex hull.
+* **Convex** is one convex hull — the smallest envelope around the vertices. It
+  roofs over any concavity, which is fine for a rock and wrong for a mug.
+* **Convex Pieces** runs **V-HACD** convex decomposition: the mesh is split into
+  several convex hulls that together approximate the concave shape, welded into
+  one rigid body. This is what lets a mug hold water, a pipe stay hollow, a chair
+  drop something between its legs. Three parameters ride in `userData`, always
+  written:
+
+  | Field | Meaning |
+  | --- | --- |
+  | **Max Hulls** (`hulls`) | The most pieces V-HACD produces (default 16). More hulls hug a concave shape more closely, at more narrowphase cost. |
+  | **Verts / Hull** (`hullverts`) | Vertices per hull (default 64, PhysX's GPU-compatible ceiling). |
+  | **Voxel Res** (`voxels`) | V-HACD's voxel grid resolution (default 100000). Higher resolves thin features but costs cook time. |
+
+**Imported models collide as themselves now.** An imported model is a `Group`
+with sub-meshes, and a `Group` has no geometry of its own — so a dynamic one
+used to fall back to a **1 m unit box** at the origin (a chair colliding as a
+cube). Authoring physics on the Group now gathers its sub-meshes into **one
+compound convex actor**: *Auto* (moving) or *Convex* gives one hull per
+sub-mesh, *Convex Pieces* decomposes each sub-mesh and divides the hull budget
+across them (with a log line when it is split, so nothing is truncated
+silently). Each sub-mesh's transform and scale bake into its shape's local pose,
+so the compound matches where the parts actually are. A **static** Group is
+unchanged: it still collides as its triangle-mesh subtree, which is exact.
+
+**Cooking is cached.** V-HACD on a dense mesh is *seconds*, so a decomposition
+is keyed on the geometry uuid **and** its parameters and reused for the rest of
+the Play session — duplicates of one model decompose once, exactly like the
+soft-body tet cache. The cook time is logged per geometry (so a Play that took a
+moment says why), and a mesh over ~200k triangles logs a warning before it
+starts rather than freezing silently. A build without V-HACD (no PhysX, or the
+`v-hacd` vcpkg dependency absent) falls back to a single hull with one log line,
+so *Convex Pieces* still simulates — just without the concavity.
+
+The cooked hulls are drawn by the **Physics Colliders** overlay (PhysX's own
+collision-shape visualization), so the quality of a decomposition is visible in
+the viewport, not just inferred from behaviour.
 
 ### Soft bodies
 
@@ -343,10 +392,13 @@ fixedbase=1;stiffness=500;damping=50;maxforce=1000000;selfcollision=0;iterations
 | `density` | fallback density for links whose URDF gives no `<inertial><mass>` |
 
 The colliders PhysX simulates are an **approximation**: box/sphere/capsule for a
-`<collision>` primitive, and a link's `<mesh>` collision by its *bounding box* —
-not the visual meshes, which still render exactly as imported. It is a physical
-twin, not a digital one, and that is the right trade for grasping, balancing and
-proprioception; a task that needs concave collision wants a different tool.
+`<collision>` primitive, and a link's `<mesh>` collision by **one convex hull**
+of that mesh — not the visual meshes, which still render exactly as imported. The
+hull is a large improvement on the *bounding box* this used to produce (a slab
+that swallowed every concavity between a robot's links); it is still a physical
+twin, not a digital one, which is the right trade for grasping, balancing and
+proprioception. A collision mesh with fewer than four vertices falls back to its
+bounding box so the link still becomes a body.
 
 `PhysicsPlaySession` builds the articulation from the same URDF the visual robot
 came from, at the robot's world pose. The two share `URDFLoader`'s frame handling
