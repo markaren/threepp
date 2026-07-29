@@ -2449,12 +2449,31 @@ int EditorApp::runSelfTest() {
                 return n > 0 ? sum / n : -1.0;
             };
 
+            // The deferred path resolves this shadow by TEMPORAL ACCUMULATION,
+            // and this scene is its worst case: the ambient was just zeroed, so
+            // the shadowed ground is lit only by the GI bounce — the
+            // slowest-converging term there is. Measured on the perspective
+            // view, the shadow reads 23.3 of 33 at 24 frames, 14.0 at 48, 7.6 at
+            // 96 and 2.9 once settled, so a 24-frame budget states the claim
+            // against a half-drawn image.
+            //
+            // That, not the projection, is what used to fail here. Whichever
+            // view was measured FIRST read an unconverged shadow and the other
+            // inherited its history and passed: perspective first failed at
+            // delta 9.7, and reversing the order failed perspective's way round
+            // instead — ortho first scraped 13.8 against a threshold of 12.
+            // Settle both properly and the order stops deciding the answer.
+            // 96 leaves the measurement at roughly twice the threshold. GL is
+            // unaffected either way; a shadow map is not temporal and reads 0
+            // on the first frame.
+            constexpr int kShadowSettleFrames = 96;
+
             // Perspective first — the reference for what "the sun casts a
             // shadow here" looks like in this scene at all.
             setOrthographic(false);
             camera_.position.set(1.f, 16.f, 14.f);
             orbit_->target.set(0.f, 0.f, 0.f);
-            step(24);// the deferred shadow denoiser needs a few frames to settle
+            step(kShadowSettleFrames);
             const double perspLit = lumaAt(lit);
             const double perspShadow = lumaAt(shadowed);
             // >= 0 is the on-screen test (lumaAt answers -1 when a probe would
@@ -2463,9 +2482,11 @@ int EditorApp::runSelfTest() {
             check(perspLit >= 0.0 && perspShadow >= 0.0 && perspLit - perspShadow > 12.0,
                   "the sun casts a visible shadow in the perspective view");
 
-            // Same claim, same points, parallel projection.
+            // Same claim, same points, parallel projection — and the same
+            // settle, so this one is not just reading the frames the
+            // perspective pass paid for.
             setOrthographic(true);
-            step(24);
+            step(kShadowSettleFrames);
             const double orthoLit = lumaAt(lit);
             const double orthoShadow = lumaAt(shadowed);
             check(orthoLit >= 0.0 && orthoShadow >= 0.0 && orthoLit - orthoShadow > 12.0,
