@@ -4,8 +4,15 @@
 // editor re-imports the URDF and transplants a live Robot over the frozen
 // placeholder. The transplant used to keep only the ROOT's userData, silently
 // dropping a sensor (or a physics entry) authored on a LINK. transplantRobot now
-// preserves each descendant's userData onto the same-named node of the fresh
-// robot, which is what makes "an encoder on a link" a durable authoring choice.
+// preserves each descendant's userData onto the node at the same position in the
+// fresh robot, which is what makes "an encoder on a link" a durable authoring
+// choice.
+//
+// Position and not name, because the second half of that bug outlived the first:
+// a URDF's visual and collision groups are unnamed, and so are the meshes under
+// them — and those are the nodes a viewport click actually drills down to. A
+// name-keyed carry-over skipped them, so a sensor authored by clicking the robot
+// in the viewport was thrown away on every Stop.
 //
 // PhysX-free: this is a URDFLoader + RobotConfig test, so it runs everywhere.
 
@@ -13,12 +20,14 @@
 
 #include "threepp/extras/editor/EditorCommands.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
+#include "threepp/extras/editor/SceneSnapshot.hpp"
 #include "threepp/loaders/URDFLoader.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Robot.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <any>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -122,6 +131,79 @@ TEST_CASE("transplantRobot preserves userData authored on a link, not just the r
     if (robot->numDOF() > 0) {
         CHECK(std::abs(robot->getJointValue(0) - 0.4f) < 1e-3f);
     }
+}
+
+TEST_CASE("a sensor on an unnamed node survives a play/stop round trip") {
+
+    // The whole path Stop takes: serialise the scene, parse it back, then
+    // re-articulate what came back — with the sensor authored on the unnamed
+    // Mesh a viewport click lands on rather than on the named link above it.
+    const auto path = std::filesystem::temp_directory_path() / "threepp_transplant_arm.urdf";
+    {
+        std::ofstream out(path);
+        out << kUrdf;
+    }
+
+    Scene scene;
+
+    auto robot = loadArm();
+    REQUIRE(robot);
+    robot->name = "arm";
+
+    RobotConfig robotConfig;
+    robotConfig.urdf = path.string();
+    robotConfig.joints = robot->jointValues();
+    robotConfig.write(*robot);
+
+    auto* link = findByName(*robot, "upper_link");
+    REQUIRE(link != nullptr);
+
+    Object3D* mesh = nullptr;
+    link->traverse([&](Object3D& node) {
+        if (!mesh && node.type() == "Mesh") mesh = &node;
+    });
+    REQUIRE(mesh != nullptr);
+    // The premise: URDFLoader names links and joints, nothing below them.
+    REQUIRE(mesh->name.empty());
+    mesh->userData["sensor"] = std::string("type=depth;width=160;height=120");
+
+    scene.add(robot);
+
+    // Play captures, Stop restores.
+    SceneSnapshot snapshot;
+    std::string error;
+    REQUIRE(snapshot.capture(scene, &error));
+    const auto restored = snapshot.restore(&error);
+    REQUIRE(restored);
+
+    // Stop then re-articulates whatever carries a urdf reference.
+    Object3D* placeholder = nullptr;
+    restored->traverse([&](Object3D& node) {
+        if (!placeholder && !node.as<Robot>() && RobotConfig::read(node)) placeholder = &node;
+    });
+    REQUIRE(placeholder != nullptr);
+
+    auto fresh = loadArm();
+    REQUIRE(fresh);
+    transplantRobot(*placeholder, fresh);
+
+    std::size_t sensors = 0;
+    Object3D* carrier = nullptr;
+    restored->traverse([&](Object3D& node) {
+        if (readString(node, "sensor").empty()) return;
+        ++sensors;
+        carrier = &node;
+    });
+
+    CHECK(sensors == 1);
+    REQUIRE(carrier != nullptr);
+    // On the mesh it was authored on, not smeared onto the named link above it.
+    CHECK(carrier->name.empty());
+    CHECK(carrier->type() == "Mesh");
+    CHECK(readString(*carrier, "sensor") == "type=depth;width=160;height=120");
+
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
 }
 
 TEST_CASE("transplantRobot reports a link name that no longer resolves") {

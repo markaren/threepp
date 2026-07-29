@@ -2131,6 +2131,68 @@ int EditorApp::runSelfTest() {
             check(live && std::abs(live->getJointValue(0) - 0.3f) < 1e-3f,
                   "the joint pose survives the round trip");
 
+            // A sensor authored INSIDE the robot rather than on its root has to
+            // survive the same rebuild. The node a viewport click drills down to
+            // is a mesh under a link's visual group, and a URDF leaves those
+            // unnamed — which is why the carry-over cannot key on the name. This
+            // is only about the authored entry outliving Stop, so the sensor is
+            // never asked to measure anything.
+            if (live) {
+
+                Object3D* anyMesh = nullptr;
+                Object3D* unnamedMesh = nullptr;
+                live->traverse([&](Object3D& node) {
+                    if (&node == live || node.type() != "Mesh") return;
+                    if (!anyMesh) anyMesh = &node;
+                    if (!unnamedMesh && node.name.empty()) unnamedMesh = &node;
+                });
+                // The unnamed one is the interesting case; a named mesh still
+                // exercises the carry-over if this URDF's loader names them.
+                Object3D* deep = unnamedMesh ? unnamedMesh : anyMesh;
+                check(deep != nullptr, "the robot has a mesh to author a sensor on");
+
+                if (deep) {
+                    SensorConfig deepSensor;
+                    deepSensor.enabled = true;
+                    deepSensor.type = SensorConfig::Type::Imu;
+                    deepSensor.rateHz = 0.f;
+                    deepSensor.write(*deep);
+
+                    startPlay();
+                    step(3);
+                    stopPlay();
+                    step();
+
+                    Object3D* rebuiltRobot = nullptr;
+                    document_.scene().traverse([&](Object3D& o) {
+                        if (!rebuiltRobot && o.uuid == uuid) rebuiltRobot = &o;
+                    });
+                    std::size_t authored = 0;
+                    bool onRoot = false;
+                    if (rebuiltRobot) {
+                        rebuiltRobot->traverse([&](Object3D& node) {
+                            if (!SensorConfig::read(node)) return;
+                            ++authored;
+                            if (&node == rebuiltRobot) onRoot = true;
+                        });
+                    }
+                    check(authored == 1 && !onRoot,
+                          "a sensor authored on a mesh inside the robot survives play/stop");
+
+                    // Leave the robot as this section found it: the PhysX pass
+                    // below authors its own encoder and counts live sensors.
+                    if (rebuiltRobot) {
+                        rebuiltRobot->traverse([](Object3D& node) { SensorConfig::erase(node); });
+                    }
+
+                    // Stop replaced the scene, so everything above points into a
+                    // graph that no longer exists. Re-seat the handles the rest
+                    // of this section uses.
+                    found = rebuiltRobot;
+                    live = rebuiltRobot ? rebuiltRobot->as<Robot>() : nullptr;
+                }
+            }
+
             // Collision hulls: hidden on import, and the opt-in has to outlive
             // the rebuild or it would reset every time play is pressed. A URDF
             // with no <collision> elements has nothing to toggle, so the checks

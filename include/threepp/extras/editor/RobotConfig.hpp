@@ -73,10 +73,14 @@ namespace threepp::editor {
     // the same child index. The placeholder is detached.
     //
     // Descendant userData is preserved too — a sensor or a physics entry authored
-    // on a LINK, not the root, would otherwise be silently dropped, because only
-    // the root's userData is part of RobotConfig. Each placeholder descendant's
-    // non-empty userData is re-applied to the same-named node in the fresh robot
-    // (first match wins). Names that do not resolve are reported through `log`.
+    // on a LINK or on one of its meshes, not on the root, would otherwise be
+    // silently dropped, because only the root's userData is part of RobotConfig.
+    // Each placeholder descendant's non-empty userData is re-applied to the node
+    // at the SAME POSITION in the fresh robot's pre-order walk, provided the two
+    // still agree on the name; a name that disagrees falls back to a lookup by
+    // name (first match wins). Position rather than name because a URDF's visual
+    // and collision groups and their meshes are unnamed, and those are the nodes a
+    // viewport click selects. What cannot be placed is reported through `log`.
     //
     // This is the headless core of EditorApp::rearticulateRobots, factored out so
     // it can be tested without the app; the app calls it inside its traversal.

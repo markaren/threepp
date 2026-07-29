@@ -6,7 +6,10 @@
 #include "threepp/objects/Robot.hpp"
 
 #include <any>
+#include <cstddef>
 #include <cstdio>
+#include <functional>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -28,6 +31,27 @@ namespace {
         while (!out.empty() && out.back() == '0') out.pop_back();
         if (!out.empty() && out.back() == '.') out.pop_back();
         return out.empty() ? "0" : out;
+    }
+
+    // Pre-order walk of everything below `root`, root excluded. Both sides of a
+    // transplant are built from the SAME URDF by the same loader, so a node's
+    // position in this walk identifies it — which is what makes carrying an
+    // authored entry across possible at all for the nodes that have no name.
+    // The same walk (and the same reasoning) is ObjectLoader::applyAssetOverrides'.
+    std::vector<Object3D*> flattenDescendants(Object3D& root) {
+
+        std::vector<Object3D*> flat;
+
+        std::function<void(Object3D&)> collect = [&](Object3D& node) {
+            for (auto* child : node.children) {
+                if (!child) continue;
+                flat.push_back(child);
+                collect(*child);
+            }
+        };
+        collect(root);
+
+        return flat;
     }
 
     std::string readString(const Object3D& object, const char* key) {
@@ -127,18 +151,30 @@ void threepp::editor::transplantRobot(Object3D& placeholder, const std::shared_p
 
     const auto config = RobotConfig::read(placeholder).value_or(RobotConfig{});
 
-    // Collect each placeholder DESCENDANT's non-empty userData by node name,
-    // before the swap. Only descendants: the root's userData is copied wholesale
-    // just below, and a sensor authored on the root rides with it. Skip nodes
-    // with no name (nothing to match them to) and empty userData (nothing to
-    // carry). First name wins on both sides, which is the same rule the transform
-    // override table uses for a URDF with duplicate link names.
-    std::vector<std::pair<std::string, std::unordered_map<std::string, std::any>>> descendantData;
-    placeholder.traverse([&](Object3D& node) {
-        if (&node == &placeholder) return;
-        if (node.name.empty() || node.userData.empty()) return;
-        descendantData.emplace_back(node.name, node.userData);
-    });
+    // Collect each placeholder DESCENDANT's non-empty userData before the swap,
+    // keyed by its POSITION in the pre-order walk. Only descendants: the root's
+    // userData is copied wholesale just below, and a sensor authored on the root
+    // rides with it.
+    //
+    // Position, not name. A URDF's visual and collision groups are unnamed, and
+    // so is every mesh the geometry loader hands back — and those are exactly the
+    // nodes a viewport click drills down to, so a name-keyed carry-over dropped a
+    // sensor authored by clicking the robot. The name is kept alongside as the
+    // check that the two trees still line up (see below).
+    struct Carried {
+        std::size_t index;
+        std::string name;
+        std::unordered_map<std::string, std::any> data;
+    };
+
+    std::vector<Carried> descendantData;
+    {
+        const auto flat = flattenDescendants(placeholder);
+        for (std::size_t i = 0; i < flat.size(); ++i) {
+            if (flat[i]->userData.empty()) continue;
+            descendantData.push_back({i, flat[i]->name, flat[i]->userData});
+        }
+    }
 
     // The root's identity, placement and userData move to the fresh robot.
     robot->name = placeholder.name;
@@ -149,23 +185,38 @@ void threepp::editor::transplantRobot(Object3D& placeholder, const std::shared_p
     robot->visible = placeholder.visible;
     robot->userData = placeholder.userData;
 
-    // Re-apply descendant userData onto same-named nodes in the fresh subtree.
-    // Build a name -> first node map once, then assign; a name that no longer
-    // exists (the URDF changed under the document) is reported, not lost silently.
+    // Re-apply descendant userData onto the fresh subtree. Same position AND the
+    // same name is the same node; when the name disagrees the file has changed
+    // underneath and the position no longer identifies anything, so fall back to
+    // a name lookup before giving up. What cannot be placed is reported, not lost
+    // silently — for an unnamed node that is all that can be said about it.
+    const auto fresh = flattenDescendants(*robot);
+
     std::unordered_map<std::string, Object3D*> byName;
-    robot->traverse([&](Object3D& node) {
-        if (&node == robot.get()) return;
-        if (node.name.empty()) return;
-        byName.emplace(node.name, &node);// first match wins
-    });
-    for (auto& [name, data] : descendantData) {
-        const auto it = byName.find(name);
-        if (it == byName.end()) {
-            if (log) log("robot \"" + robot->name + "\": userData on \"" + name +
-                         "\" did not resolve after re-articulation (node gone from the URDF)");
+    for (auto* node : fresh) {
+        if (node->name.empty()) continue;
+        byName.emplace(node->name, node);// first match wins
+    }
+
+    for (auto& entry : descendantData) {
+
+        Object3D* target = nullptr;
+        if (entry.index < fresh.size() && fresh[entry.index]->name == entry.name) {
+            target = fresh[entry.index];
+        } else if (!entry.name.empty()) {
+            if (const auto it = byName.find(entry.name); it != byName.end()) target = it->second;
+        }
+
+        if (!target) {
+            if (log) {
+                log("robot \"" + robot->name + "\": userData on " +
+                    (entry.name.empty() ? "node #" + std::to_string(entry.index)
+                                        : "\"" + entry.name + "\"") +
+                    " did not resolve after re-articulation (node gone from the URDF)");
+            }
             continue;
         }
-        for (auto& [key, value] : data) it->second->userData[key] = value;
+        for (auto& [key, value] : entry.data) target->userData[key] = value;
     }
 
     for (std::size_t i = 0; i < config.joints.size() && i < robot->numDOF(); ++i) {
