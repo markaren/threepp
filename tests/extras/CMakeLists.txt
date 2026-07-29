@@ -28,19 +28,25 @@ if (TARGET unofficial::omniverse-physx-sdk::sdk)
         target_link_libraries(${name} PRIVATE unofficial::omniverse-physx-sdk::sdk)
     endforeach ()
 
-    # The convex-collider tests (and the play session's decomposed/compound
-    # paths that the physics-play test now exercises) need V-HACD. Link it and
-    # flip the feature macro on the TUs that include PhysicsPlaySession.hpp.
+    # The convex-collider tests need V-HACD. Linking threepp_convex_decomp
+    # carries its INTERFACE THREEPP_EDITOR_WITH_VHACD, so the header's inline
+    # methods compile with the decomposition paths on — no per-target macro to
+    # keep in sync (and get wrong, an ODR trap since the header is header-only).
+    #
+    # EditorArticulationPlay_test and EditorSensorPlay_test also include the
+    # header but do NOT link this, so they compile it consistently WITHOUT the
+    # macro (a valid, single-definition-per-binary state); they exercise no
+    # decomposition path.
     if (TARGET threepp_convex_decomp)
         add_test_executable(EditorConvexDecomp_test)
         target_link_libraries(EditorConvexDecomp_test
                 PRIVATE unofficial::omniverse-physx-sdk::sdk threepp_convex_decomp)
-        target_compile_definitions(EditorConvexDecomp_test PRIVATE THREEPP_EDITOR_WITH_VHACD=1)
 
-        foreach (name EditorPhysicsPlay_test)
-            target_link_libraries(${name} PRIVATE threepp_convex_decomp)
-            target_compile_definitions(${name} PRIVATE THREEPP_EDITOR_WITH_VHACD=1)
-        endforeach ()
+        # EditorPhysicsPlay_test's own cases are Box/Auto-on-mesh (no decompose),
+        # but it must link V-HACD to compile the header the same way as any code
+        # it shares a binary with, and to keep the door open for a decomposition
+        # case here later.
+        target_link_libraries(EditorPhysicsPlay_test PRIVATE threepp_convex_decomp)
     endif ()
 else ()
     message(STATUS "physx not found, skipping the PhysX-backed sensor tests..")

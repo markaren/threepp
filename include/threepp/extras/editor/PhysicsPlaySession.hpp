@@ -699,6 +699,13 @@ namespace threepp::editor {
 
             std::vector<std::vector<float>> hulls;
             const auto* posAttr = geometry.getAttribute<float>("position");
+            if (!posAttr) {
+                // No positions to decompose. Cache an empty result so the caller
+                // (appendHullParts / the Pieces-on-Mesh path) produces no shapes
+                // and falls back gracefully, rather than dereferencing null here.
+                auto [it, _] = decompCache_.emplace(key, std::move(hulls));
+                return it->second;
+            }
             const auto& positions = posAttr->array();
 
             // Build a u32 index buffer (the geometry's, or 0..N-1 for unindexed).
@@ -794,7 +801,12 @@ namespace threepp::editor {
             Matrix4 actorFrameInv(actorFrame);
             actorFrameInv.invert();
 
-            // When decomposing, split the hull budget across the sub-meshes.
+            // When decomposing, split the hull budget across the sub-meshes. The
+            // floor of 1 wins over the budget: every sub-mesh must get at least
+            // one hull or it would vanish from the collider (a hole a body falls
+            // through), so a budget smaller than the sub-mesh count is rounded UP
+            // to one-each rather than dropping parts. The warning fires when the
+            // per-mesh share truncated, telling the user to raise the budget.
             PhysicsConfig perMesh = config;
             if (decomposed && meshes.size() > 1) {
                 const int per = std::max(1, config.hulls / static_cast<int>(meshes.size()));
@@ -824,7 +836,10 @@ namespace threepp::editor {
                     appendHullParts(decompose(*mesh->geometry(), perMesh), localPose, relScl, parts, cooked);
                 } else {
                     // One hull per sub-mesh: the raw positions, cooked to a hull.
+                    // gatherSubMeshes already filtered to meshes with a position
+                    // attribute, but re-check rather than trust that at a distance.
                     const auto* posAttr = mesh->geometry()->getAttribute<float>("position");
+                    if (!posAttr) continue;
                     if (auto* hull = world_->cookConvexHull(posAttr->array().data(), posAttr->count(),
                                                             static_cast<unsigned>(config.hullVerts <= 0 ? 64 : config.hullVerts))) {
                         cooked.push_back(hull);
@@ -923,8 +938,11 @@ namespace threepp::editor {
                 } else {
                     for (auto* m : cooked) m->release();
                 }
-                // Decomposition produced nothing usable: fall through to the
-                // single-hull path so the body still simulates.
+                // Nothing cooked (empty geometry, or every hull degenerate):
+                // fall through to the analytic path below, which gives the body
+                // a box of its bounds. Only reachable for genuinely unusable
+                // geometry — decompose() otherwise always yields at least the
+                // raw-positions single hull.
             }
 
             // A geometry-less Group gathers its sub-meshes into ONE compound

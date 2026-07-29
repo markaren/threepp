@@ -49,11 +49,12 @@ if (TARGET unofficial::omniverse-physx-sdk::sdk)
     target_link_libraries(threepp_editor PRIVATE unofficial::omniverse-physx-sdk::sdk)
     target_compile_definitions(threepp_editor PRIVATE THREEPP_EDITOR_WITH_PHYSX=1)
     # V-HACD convex decomposition (defined at the top level, gated on the same
-    # SDK). Its presence flips on the compound/decomposed collider paths in
-    # PhysicsPlaySession.
+    # SDK). Linking it flips on the compound/decomposed collider paths in
+    # PhysicsPlaySession via the library's INTERFACE THREEPP_EDITOR_WITH_VHACD.
+    # The scripting library below ALSO includes PhysicsPlaySession.hpp, so it
+    # must link this too or the two would compile the header differently (ODR).
     if (TARGET threepp_convex_decomp)
         target_link_libraries(threepp_editor PRIVATE threepp_convex_decomp)
-        target_compile_definitions(threepp_editor PRIVATE THREEPP_EDITOR_WITH_VHACD=1)
     endif ()
     message(STATUS "threepp_editor: PhysX play session enabled")
 
@@ -139,6 +140,15 @@ if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
                 PRIVATE "${PROJECT_SOURCE_DIR}/python/src/bind_editor_physics.cpp")
         target_link_libraries(threepp_editor_scripting PRIVATE unofficial::omniverse-physx-sdk::sdk)
         target_compile_definitions(threepp_editor_scripting PRIVATE THREEPP_EDITOR_WITH_PHYSX=1)
+        # bind_editor_physics.cpp includes PhysicsPlaySession.hpp, whose inline
+        # methods branch on THREEPP_EDITOR_WITH_VHACD. This library is linked into
+        # threepp_editor (which links V-HACD) AND into the script tests, so it and
+        # every consumer must compile the header the SAME way or they disagree in
+        # one binary (ODR). Linking V-HACD PUBLIC carries its INTERFACE macro out
+        # to every consumer of this library, keeping all the definitions identical.
+        if (TARGET threepp_convex_decomp)
+            target_link_libraries(threepp_editor_scripting PUBLIC threepp_convex_decomp)
+        endif ()
     endif ()
 
     target_link_libraries(threepp_editor_scripting PUBLIC threepp pybind11::headers Python3::Python)

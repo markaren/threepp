@@ -28,6 +28,16 @@ if (NOT TARGET threepp_convex_decomp)
                 PUBLIC "${PROJECT_SOURCE_DIR}/include"
                 PRIVATE "${V_HACD_INCLUDE_DIRS}")
         target_compile_features(threepp_convex_decomp PUBLIC cxx_std_20)
+        # THREEPP_EDITOR_WITH_VHACD rides on the library as an INTERFACE
+        # definition, NOT set per consumer. PhysicsPlaySession.hpp is header-only
+        # and its inline methods change under this macro, so every TU that
+        # includes it and links into one binary MUST see the same value — a
+        # binary that compiled the header with the macro in one library and
+        # without it in another (e.g. threepp_editor vs the scripting library it
+        # links) is an ODR violation. Tying the macro to the link means "you
+        # linked V-HACD" and "you compiled the V-HACD code path" can never
+        # disagree.
+        target_compile_definitions(threepp_convex_decomp INTERFACE THREEPP_EDITOR_WITH_VHACD=1)
         if (MSVC)
             # VHACD.h's implementation is one enormous object; it exceeds the
             # default COFF section limit exactly like the pybind TUs do.
