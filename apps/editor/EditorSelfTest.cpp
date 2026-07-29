@@ -2089,10 +2089,13 @@ int EditorApp::runSelfTest() {
                       "the collider toggle survives the round trip");
             }
 
+#ifdef THREEPP_EDITOR_WITH_PHYSX
             // Simulate the robot as a PhysX articulation and read a joint of it
             // with a live encoder, played headlessly the way the rest of this
-            // section drives play. Needs the physics sessions, so it is gated the
-            // same way — sensors_ is null in a build without PhysX.
+            // section drives play. The ifdef is not optional: without PhysX the
+            // session types are forward declarations, so touching their members
+            // is a compile error, not a false null check — CI builds the editor
+            // with Python and no PhysX.
             Object3D* current = nullptr;
             document_.scene().traverse([&](Object3D& o) {
                 if (!current && o.uuid == uuid) current = &o;
@@ -2215,6 +2218,7 @@ int EditorApp::runSelfTest() {
                 }
 #endif
             }
+#endif
         }
     }
 
