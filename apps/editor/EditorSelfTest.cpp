@@ -34,6 +34,7 @@
 
 #include "threepp/core/Clock.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
+#include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/helpers/CameraHelper.hpp"
 #include "threepp/lights/Light.hpp"
@@ -3382,6 +3383,77 @@ int EditorApp::runSelfTest() {
         check(!viewportMarkers_.empty(), "and a marker pass that still runs");
     }
 #endif
+
+    // ------------------------------------------------ scene-root userData
+    //
+    // Whether an authoring rule can live ON the scene rather than on a node
+    // depends entirely on this: the root is serialised as an object of type
+    // "Scene", so its userData should round-trip like any other node's. Play
+    // serialises and Stop reloads, which is the same path a save and open take,
+    // so this answers the question for both. Multi-line values are the case
+    // that matters — an inline script is newlines and quotes, not a scalar.
+    {
+        newScene();
+        step(2);
+
+        const std::string source = "count = 12\nfor i in range(count):\n    pass\n";
+        document_.scene().userData["generatorSource"] = source;
+        document_.scene().userData["generatorFields"] = std::string("count=12");
+
+        startPlay();
+        step(4);
+        stopPlay();
+        step(4);
+
+        const auto readBack = [this](const char* key) {
+            const auto it = document_.scene().userData.find(key);
+            if (it == document_.scene().userData.end()) return std::string{};
+            if (it->second.type() != typeid(std::string)) return std::string{};
+            return std::any_cast<const std::string&>(it->second);
+        };
+        check(readBack("generatorSource") == source,
+              "multi-line userData on the scene root survives a save and reload");
+        check(readBack("generatorFields") == "count=12", "and so do its fields");
+
+        // And the same thing through GeneratorConfig, which is what will actually
+        // carry it: read back after the reload, since that is the case that
+        // decides whether a generator can live on the scene at all.
+        const auto restored = GeneratorConfig::read(document_.scene());
+        check(restored.has_value(), "GeneratorConfig reads a reloaded scene generator");
+        check(restored && restored->source == source, "with its source verbatim");
+        check(restored && restored->field("count") == "12", "and its exposed parameter");
+        check(GeneratorConfig::isGenerator(document_.scene()), "and reports as a generator");
+
+        // A generator on a plain Group, since the config is object-agnostic.
+        auto scoped = Group::create();
+        scoped->name = "Scoped Generator";
+        GeneratorConfig scopedConfig;
+        scopedConfig.source = "pass\n";
+        scopedConfig.setField("n", "3");
+        scopedConfig.write(*scoped);
+        document_.scene().add(scoped);
+        step();
+        check(GeneratorConfig::isGenerator(*scoped), "a Group can carry one too");
+        check(GeneratorConfig::generatedChild(*scoped) == nullptr,
+              "with no output before it has run");
+
+        // The tagged-output contract: whichever child carries the mark is the one
+        // a regenerate replaces.
+        auto output = Group::create();
+        output->userData[GeneratorConfig::generatedKey] = std::string("1");
+        scoped->add(output);
+        step();
+        check(GeneratorConfig::generatedChild(*scoped) == output.get(),
+              "and finds its tagged output once there is one");
+
+        // Clearing leaves no trace, so a document does not carry a dead key.
+        GeneratorConfig::erase(*scoped);
+        check(!GeneratorConfig::isGenerator(*scoped), "erasing a generator clears it");
+        check(scoped->userData.find(GeneratorConfig::fieldsKey) == scoped->userData.end(),
+              "fields included");
+
+        GeneratorConfig::erase(document_.scene());
+    }
 
     // ---------------------------------------------------------- instancing
     //

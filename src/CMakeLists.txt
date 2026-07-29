@@ -370,6 +370,7 @@ set(sources
         "threepp/extras/editor/CommandStack.cpp"
         "threepp/extras/editor/EditorCommands.cpp"
         "threepp/extras/editor/EditorSettings.cpp"
+        "threepp/extras/editor/GeneratorConfig.cpp"
         "threepp/extras/editor/MaterialTextureSlots.cpp"
         "threepp/extras/editor/ObjectFactory.cpp"
         "threepp/extras/editor/PhysicsConfig.cpp"
