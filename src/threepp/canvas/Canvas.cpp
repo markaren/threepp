@@ -17,6 +17,7 @@
 
 #include <iostream>
 #include <optional>
+#include <stdexcept>
 
 using namespace threepp;
 
@@ -160,7 +161,8 @@ namespace {
         if (glfwRefCount()++ == 0) {
             glfwSetErrorCallback(error_callback);
             if (!glfwInit()) {
-                exit(EXIT_FAILURE);
+                --glfwRefCount();
+                throw std::runtime_error("Canvas: glfwInit() failed");
             }
         }
     }
@@ -210,9 +212,17 @@ struct Canvas::Impl {
         params_.graphicsApi_ = api;
 
 #ifndef __EMSCRIPTEN__
+        // GLFW window hints are sticky, process-global state: whatever the last
+        // canvas asked for still applies to the next glfwCreateWindow. A Vulkan
+        // canvas sets GLFW_CLIENT_API=GLFW_NO_API, so without this reset a GL
+        // canvas created afterwards silently got a window with no GL context
+        // (and the same leak applied to GLFW_SAMPLES). Start from a known state.
+        glfwDefaultWindowHints();
+
         if (api == GraphicsAPI::Vulkan) {
             glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         } else {
+            glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
             glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
             glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
             glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
@@ -234,7 +244,9 @@ struct Canvas::Impl {
         window = glfwCreateWindow(size_.width(), size_.height(), params_.title_.c_str(), nullptr, nullptr);
         if (!window) {
             termGLfw();
-            exit(EXIT_FAILURE);
+            throw std::runtime_error(
+                    "Canvas: glfwCreateWindow failed for '" + params_.title_ + "' (requested " +
+                    (api == GraphicsAPI::Vulkan ? "Vulkan" : "OpenGL") + ")");
         }
 
 #ifdef __EMSCRIPTEN__
@@ -259,6 +271,16 @@ struct Canvas::Impl {
         glfwSetDropCallback(window, drop_callback);
 
         if (api == GraphicsAPI::OpenGL) {
+#ifndef __EMSCRIPTEN__
+            // Belt and braces for the hint reset above: a context-less window
+            // would otherwise fail deep inside glad with no useful message.
+            if (glfwGetWindowAttrib(window, GLFW_CLIENT_API) == GLFW_NO_API) {
+                throw std::runtime_error(
+                        "Canvas: OpenGL was requested for '" + params_.title_ +
+                        "' but the window was created without a GL context "
+                        "(GLFW_CLIENT_API=GLFW_NO_API leaked from a Vulkan canvas)");
+            }
+#endif
             glfwMakeContextCurrent(window);
 
 #ifndef __EMSCRIPTEN__

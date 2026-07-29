@@ -33,4 +33,17 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     target_include_directories(VulkanCameraModel_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
     add_test(NAME VulkanCameraModel_test COMMAND VulkanCameraModel_test)
     set_tests_properties(VulkanCameraModel_test PROPERTIES SKIP_RETURN_CODE 42)
+
+    # Both backends in ONE process: GLFW window hints are sticky, so a Vulkan
+    # canvas used to leave GLFW_CLIENT_API=GLFW_NO_API set and any GL canvas
+    # created afterwards got a context-less window (hard exit, no traceback).
+    # Needs its own executable — every other test uses a single backend, and the
+    # hazard is invisible unless the Vulkan canvas comes first.
+    add_executable(CanvasApiOrder_test CanvasApiOrder_test.cpp)
+    target_link_libraries(CanvasApiOrder_test PRIVATE threepp)
+    target_include_directories(CanvasApiOrder_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME CanvasApiOrder_test COMMAND CanvasApiOrder_test)
+    set_tests_properties(CanvasApiOrder_test PROPERTIES
+            SKIP_RETURN_CODE 42
+            SKIP_REGULAR_EXPRESSION "WGL: The driver does not appear to support OpenGL")
 endif ()
