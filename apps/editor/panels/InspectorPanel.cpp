@@ -767,9 +767,30 @@ void EditorApp::drawGeneratorSection(Object3D& object) {
         // inside the ImGui tree that is reading it.
         pendingRegenerate_ = object.uuid;
     }
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    // The room the box above does not have, with completion for `import threepp`:
+    // the same scratch-file round trip an inline behaviour script gets, and a save
+    // re-runs the generator so the loop is edit-save-look.
+    ImGui::SameLine();
+    const bool editing = externalEditActive(object);
+    if (editing) ImGui::BeginDisabled();
+    if (ImGui::Button("Edit in VS Code")) {
+        startExternalEdit(object, ExternalEditKind::Generator);
+    }
+    if (editing) ImGui::EndDisabled();
+    if (editing) {
+        ImGui::SameLine();
+        if (ImGui::Button("Stop editing")) stopExternalEdit("closed from the inspector");
+    }
+#endif
     if (playing) ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Clear")) commit(GeneratorConfig{}, "Clear Generator");
+    // Deferred with the same one-frame hop as Regenerate: it removes the output
+    // node, which this panel and the hierarchy are mid-read of.
+    if (ImGui::Button("Clear")) pendingGeneratorClear_ = object.uuid;
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Removes the script and the objects it generated.");
+    }
 
     if (auto* generated = GeneratorConfig::generatedChild(object)) {
         ImGui::TextColored(theme::muted(), "Output: %d object(s)",

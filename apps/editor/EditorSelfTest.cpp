@@ -3558,6 +3558,28 @@ int EditorApp::runSelfTest() {
         check(GeneratorConfig::generatedChild(document_.scene()) == keep,
               "and commits none of what it had added");
 
+        // Clearing takes the OUTPUT with it. Leaving it behind was a real defect:
+        // orphaned content still carrying the generated tag, which the next
+        // generator on this object would silently adopt and replace.
+        commands_.redo();// back to the second generation
+        step();
+        check(GeneratorConfig::generatedChild(document_.scene()) != nullptr,
+              "there is output to clear");
+        const int childrenWithOutput = static_cast<int>(document_.scene().children.size());
+        clearGenerator(document_.scene());
+        step();
+        check(GeneratorConfig::generatedChild(document_.scene()) == nullptr,
+              "clearing a generator removes its output");
+        check(!GeneratorConfig::isGenerator(document_.scene()), "and the script with it");
+        check(static_cast<int>(document_.scene().children.size()) == childrenWithOutput - 1,
+              "leaving nothing behind in the scene");
+
+        // ONE undo step brings back both halves, not just one of them.
+        commands_.undo();
+        step();
+        check(GeneratorConfig::isGenerator(document_.scene()), "one undo restores the script");
+        check(GeneratorConfig::generatedChild(document_.scene()) != nullptr, "and its output");
+
         // Refused while playing, like every other document edit.
         GeneratorConfig::erase(document_.scene());
         config.write(document_.scene());
@@ -3566,6 +3588,76 @@ int EditorApp::runSelfTest() {
         check(!regenerate(document_.scene()), "regenerate is refused while playing");
         stopPlay();
         step(2);
+
+        // The VS Code loop: a save in the external editor syncs the source AND
+        // re-runs it, so the scene follows the file without a button press. The
+        // launch itself is suppressed in the self-test; everything after it is the
+        // real path.
+        {
+            GeneratorConfig::erase(document_.scene());
+            GeneratorConfig two;
+            two.source =
+                    "import threepp\n"
+                    "from threepp import editor\n"
+                    "for i in range(2):\n"
+                    "    editor.add(threepp.Mesh(threepp.BoxGeometry(1, 1, 1),\n"
+                    "                            threepp.MeshBasicMaterial()))\n";
+            two.write(document_.scene());
+            check(regenerate(document_.scene()), "a two-object generator runs");
+
+            startExternalEdit(document_.scene(), ExternalEditKind::Generator);
+            check(externalEdit_.active, "an external session starts on a generator");
+            check(externalEditActive(document_.scene()), "and reports as this object's");
+            const auto scratch = externalEdit_.file;
+            check(ScriptWorkspace::readSource(scratch) == two.source,
+                  "exporting the generator source byte for byte");
+
+            // Five objects instead of two: enough that "did the file win" cannot
+            // be confused with "did anything happen".
+            const auto edited = std::string(
+                    "import threepp\n"
+                    "from threepp import editor\n"
+                    "for i in range(5):\n"
+                    "    editor.add(threepp.Mesh(threepp.BoxGeometry(1, 1, 1),\n"
+                    "                            threepp.MeshBasicMaterial()))\n");
+            const int before = externalEdit_.syncs;
+            ScriptWorkspace::writeSource(scratch, edited);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (externalEdit_.syncs <= before && std::chrono::steady_clock::now() < deadline) {
+                step();
+            }
+            check(externalEdit_.syncs > before, "saving the file syncs it back");
+            const auto synced = GeneratorConfig::read(document_.scene());
+            check(synced && synced->source.find("range(5)") != std::string::npos,
+                  "the document takes the edited source");
+
+            // The re-run is deferred a frame, so give it one.
+            step(3);
+            auto* regrown = GeneratorConfig::generatedChild(document_.scene());
+            check(regrown && regrown->children.size() == 5,
+                  "and the scene re-runs it without a button press");
+
+            // A file that does not parse syncs but must NOT run — the previous
+            // output stands rather than being replaced by nothing.
+            ScriptWorkspace::writeSource(scratch, "def broken(\n");
+            const int beforeBad = externalEdit_.syncs;
+            const auto badDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (externalEdit_.syncs <= beforeBad &&
+                   std::chrono::steady_clock::now() < badDeadline) {
+                step();
+            }
+            step(3);
+            auto* kept = GeneratorConfig::generatedChild(document_.scene());
+            check(kept && kept->children.size() == 5,
+                  "a file that does not parse leaves the last good output alone");
+
+            stopExternalEdit("selftest done");
+            check(!externalEdit_.active, "the session stops");
+
+            GeneratorConfig::erase(document_.scene());
+            config.write(document_.scene());
+            check(regenerate(document_.scene()), "and the scene regenerates afterwards");
+        }
 
         // And the generated content survives the round trip, because it is
         // ordinary scene content and nothing re-runs on load.

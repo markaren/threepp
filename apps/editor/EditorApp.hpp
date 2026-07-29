@@ -197,9 +197,21 @@ namespace threepp::editor {
         // Tier 1: hand a .py to VS Code. No watcher — every Play recompiles the
         // file, so a file script is already hot.
         void openScriptFileExternally(const std::filesystem::path& file);
+        // Which inline source an external session is editing. A behaviour script
+        // and a generator live on the same object under different keys, so the
+        // session has to know which one it exported — and they commit through
+        // different paths (the Script Editor window vs the Generator's own
+        // property write).
+        enum class ExternalEditKind {
+            Script,
+            Generator
+        };
         // Tier 2: export the inline source to a scratch .py, open it, and poll
         // it back in through applyScriptEditor() on every save.
-        void startExternalEdit(Object3D& object);
+        void startExternalEdit(Object3D& object, ExternalEditKind kind = ExternalEditKind::Script);
+        // The undoable write behind a generator sync. Returns the normalized text
+        // as committed, which is what the poll compares against next time.
+        std::string applyGeneratorSource(Object3D& target, const std::string& text);
         void stopExternalEdit(const std::string& why = {});
         void pollExternalEdit(float dt);
         [[nodiscard]] bool externalEditActive() const { return externalEdit_.active; }
@@ -277,6 +289,8 @@ namespace threepp::editor {
         // False (with a console line) when there is no generator, the build has
         // no Python, or the script failed.
         bool regenerate(Object3D& carrier);
+        // Remove a generator AND the output it produced, as one undoable step.
+        void clearGenerator(Object3D& carrier);
         // Starting source for a scene generator, offered by the Generator section
         // when nothing is authored yet. Deliberately NOT inlineScriptTemplate():
         // a behaviour script is a class with update(dt) on one object, an
@@ -499,6 +513,8 @@ namespace threepp::editor {
         // that is reading it. By uuid, because a play/stop in between replaces the
         // graph — the same reason scriptTargetUuid_ is one.
         std::string pendingRegenerate_;
+        // Same deferral, for Clear — it removes the output node outright.
+        std::string pendingGeneratorClear_;
         std::optional<int> selectedInstance_;
         Box3 instanceBox_;
         std::shared_ptr<Box3Helper> instanceOutline_;
@@ -729,6 +745,7 @@ namespace threepp::editor {
             static constexpr float pollSeconds = 1.f;
 
             bool active = false;
+            ExternalEditKind kind = ExternalEditKind::Script;
             std::string uuid;
             std::string label;
             std::filesystem::path file;

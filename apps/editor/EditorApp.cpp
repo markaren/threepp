@@ -405,14 +405,23 @@ void EditorApp::frame(float dt) {
     play_.update(dt);
     // Before anything reads the graph: the Generator section asked for this last
     // frame, and it replaces a node the panel was drawing from.
-    if (!pendingRegenerate_.empty()) {
-        const auto uuid = std::exchange(pendingRegenerate_, {});
-        Object3D* carrier = nullptr;
+    const auto resolveCarrier = [this](const std::string& uuid) -> Object3D* {
+        if (document_.scene().uuid == uuid) return &document_.scene();
+        Object3D* found = nullptr;
         document_.scene().traverse([&](Object3D& o) {
-            if (!carrier && o.uuid == uuid) carrier = &o;
+            if (!found && o.uuid == uuid) found = &o;
         });
-        if (!carrier && document_.scene().uuid == uuid) carrier = &document_.scene();
-        if (carrier) regenerate(*carrier);
+        return found;
+    };
+    if (!pendingRegenerate_.empty()) {
+        if (auto* carrier = resolveCarrier(std::exchange(pendingRegenerate_, {}))) {
+            regenerate(*carrier);
+        }
+    }
+    if (!pendingGeneratorClear_.empty()) {
+        if (auto* carrier = resolveCarrier(std::exchange(pendingGeneratorClear_, {}))) {
+            clearGenerator(*carrier);
+        }
     }
     pollImports(dt);
     pollExternalEdit(dt);
@@ -1269,27 +1278,36 @@ namespace {
     // is what lets undo put the previous generation back rather than re-running
     // the script to approximate it. Targets re-resolve by uuid, so the command
     // survives the play-stop graph swap like every other one.
+    // Also carries the CONFIG, so that clearing a generator — which removes its
+    // script and its output together — stays one undo step. Regenerate passes the
+    // same config for before and after, where writing it is a no-op.
     class RegenerateCommand: public threepp::editor::Command {
 
     public:
         RegenerateCommand(Object3D& carrier, std::shared_ptr<Object3D> previous,
-                          std::shared_ptr<Object3D> next)
+                          std::shared_ptr<Object3D> next, GeneratorConfig before,
+                          GeneratorConfig after, std::string label)
             : carrier_(&carrier), previous_(std::move(previous)), next_(std::move(next)),
+              before_(std::move(before)), after_(std::move(after)), label_(std::move(label)),
               carrierUuid_(carrier.uuid) {}
 
         void redo() override {
 
             if (previous_) previous_->removeFromParent();
-            if (carrier_ && next_) carrier_->add(next_);
+            if (!carrier_) return;
+            if (next_) carrier_->add(next_);
+            after_.write(*carrier_);
         }
 
         void undo() override {
 
             if (next_) next_->removeFromParent();
-            if (carrier_ && previous_) carrier_->add(previous_);
+            if (!carrier_) return;
+            if (previous_) carrier_->add(previous_);
+            before_.write(*carrier_);
         }
 
-        [[nodiscard]] std::string name() const override { return "Regenerate"; }
+        [[nodiscard]] std::string name() const override { return label_; }
 
         // Never merged: two regenerates are two distinct generations of content,
         // and collapsing them would drop the middle one's output on the floor.
@@ -1310,6 +1328,9 @@ namespace {
         Object3D* carrier_;
         std::shared_ptr<Object3D> previous_;
         std::shared_ptr<Object3D> next_;
+        GeneratorConfig before_;
+        GeneratorConfig after_;
+        std::string label_;
         std::string carrierUuid_;
     };
 
@@ -1408,11 +1429,58 @@ bool EditorApp::regenerate(Object3D& carrier) {
         }
     }
 
-    commands_.execute(std::make_unique<RegenerateCommand>(carrier, previous, output));
+    commands_.execute(std::make_unique<RegenerateCommand>(carrier, previous, output, *config,
+                                                          *config, "Regenerate"));
     document_.setDirty(true);
     log("regenerate: " + std::to_string(output->children.size()) + " object(s) generated");
     return true;
 #endif
+}
+
+// The output goes with the script. Leaving it behind orphans content that still
+// carries the generated tag, which a later generator on the same object would
+// silently adopt and replace — and "clear the generator" plainly means the whole
+// thing. Same call the spline makes when its mesh kind goes to none: the derived
+// node is destroyed, and undo re-creates it.
+void EditorApp::clearGenerator(Object3D& carrier) {
+
+    if (rejectWhilePlaying("Clear Generator")) return;
+
+    const auto config = GeneratorConfig::read(carrier);
+    if (!config) return;
+
+    std::shared_ptr<Object3D> previous;
+    if (auto* old = GeneratorConfig::generatedChild(carrier)) {
+        for (auto& child : carrier.children) {
+            if (child == old) {
+                previous = old->shared_from_this();
+                break;
+            }
+        }
+    }
+
+    // Selecting the output and then clearing would leave the gizmo attached to a
+    // detached node ("must be a part of the scene graph" spam).
+    if (previous && selection_.get() == previous.get()) selectObject(nullptr);
+
+    commands_.execute(std::make_unique<RegenerateCommand>(carrier, previous, nullptr, *config,
+                                                          GeneratorConfig{}, "Clear Generator"));
+    document_.setDirty(true);
+    log("generator cleared" + std::string(previous ? " with its output" : ""));
+}
+
+std::string EditorApp::applyGeneratorSource(Object3D& target, const std::string& text) {
+
+    const auto before = GeneratorConfig::read(target).value_or(GeneratorConfig{});
+    auto after = before;
+    after.source = ScriptWorkspace::normalize(text);
+
+    auto* carrier = &target;
+    commands_.execute(makeProperty<GeneratorConfig>(
+            "Edit Generator", "generator:" + target.uuid,
+            [carrier](const GeneratorConfig& value) { value.write(*carrier); }, before, after));
+    document_.setDirty(true);
+    return after.source;
 }
 
 void EditorApp::addSplinePoint(Object3D& spline, std::size_t index, const std::string& label) {

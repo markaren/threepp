@@ -25,6 +25,7 @@
 #include "EditorApp.hpp"
 
 #include "threepp/extras/editor/EditorCommands.hpp"
+#include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
 
@@ -251,10 +252,18 @@ bool EditorApp::externalEditActive(const Object3D& object) const {
     return externalEdit_.active && externalEdit_.uuid == object.uuid;
 }
 
-void EditorApp::startExternalEdit(Object3D& object) {
+void EditorApp::startExternalEdit(Object3D& object, ExternalEditKind kind) {
 
-    const auto config = ScriptConfig::read(object).value_or(ScriptConfig{});
-    if (!config.isInline()) return;
+    std::string source;
+    if (kind == ExternalEditKind::Generator) {
+        const auto config = GeneratorConfig::read(object);
+        if (!config) return;
+        source = config->source;
+    } else {
+        const auto config = ScriptConfig::read(object).value_or(ScriptConfig{});
+        if (!config.isInline()) return;
+        source = config.source;
+    }
 
     // One session at a time — the same rule the Script Editor window follows,
     // and for the same reason: two of them would be two answers to "what is
@@ -274,7 +283,7 @@ void EditorApp::startExternalEdit(Object3D& object) {
 
     const auto label = object.name.empty() ? object.type() : object.name;
     const auto file = dir / ScriptWorkspace::scratchName(object.uuid, label);
-    if (!ScriptWorkspace::writeSource(file, config.source)) {
+    if (!ScriptWorkspace::writeSource(file, source)) {
         log("could not write " + file.generic_string());
         return;
     }
@@ -283,10 +292,11 @@ void EditorApp::startExternalEdit(Object3D& object) {
 
     externalEdit_ = ExternalEditState{};
     externalEdit_.active = true;
+    externalEdit_.kind = kind;
     externalEdit_.uuid = object.uuid;
     externalEdit_.label = label;
     externalEdit_.file = file;
-    externalEdit_.synced = ScriptWorkspace::normalize(config.source);
+    externalEdit_.synced = ScriptWorkspace::normalize(source);
 
     // Opened here and closed in stopExternalEdit: the first save lands as its
     // own undo entry (nothing merges into what preceded the transaction) and
@@ -338,10 +348,17 @@ void EditorApp::pollExternalEdit(float dt) {
         return;
     }
 
-    const auto config = ScriptConfig::read(*target).value_or(ScriptConfig{});
-    if (!config.isInline()) {
-        stopExternalEdit("the script was cleared");
-        return;
+    if (externalEdit_.kind == ExternalEditKind::Generator) {
+        if (!GeneratorConfig::isGenerator(*target)) {
+            stopExternalEdit("the generator was cleared");
+            return;
+        }
+    } else {
+        const auto config = ScriptConfig::read(*target).value_or(ScriptConfig{});
+        if (!config.isInline()) {
+            stopExternalEdit("the script was cleared");
+            return;
+        }
     }
 
     // The file's own text decides, not its write time. Two saves a millisecond
@@ -376,6 +393,31 @@ void EditorApp::pollExternalEdit(float dt) {
     }
 
     externalEdit_.waiting = false;
+
+    if (externalEdit_.kind == ExternalEditKind::Generator) {
+        // No Script Editor window in this path — a generator's source is not a
+        // behaviour script and does not belong in the window that owns those.
+        externalEdit_.synced = applyGeneratorSource(*target, text);
+        ++externalEdit_.syncs;
+
+        std::string note;
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+        const auto syntax = scripting::checkSyntax(text, externalEdit_.label);
+        if (!syntax.empty()) note = " - with a syntax error, not run";
+#endif
+        // Saving IS the ask: the user opened this session on this generator, and
+        // an edit-save-look loop that needs a button press in another window is
+        // not a loop. Deferred by a frame like the button, for the same reason —
+        // it replaces nodes, and panels are about to read them. A script that
+        // does not parse is synced but not run.
+        if (note.empty()) {
+            pendingRegenerate_ = externalEdit_.uuid;
+        }
+
+        log("synced " + externalEdit_.label + " from " +
+            externalEdit_.file.filename().string() + note);
+        return;
+    }
 
     // Through the window, not around it. Retargeting it first is for the case
     // where the user opened the Script Editor on some other object in the
