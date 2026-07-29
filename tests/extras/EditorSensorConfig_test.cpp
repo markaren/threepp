@@ -71,6 +71,7 @@ namespace {
         config.faceSize = 256;
         config.encoderResolution = 0.001f;
         config.contactForceThreshold = 2.5f;
+        config.joint = "shoulder_pan_joint";
         return config;
     }
 
@@ -104,6 +105,7 @@ TEST_CASE("A sensor config survives an encode/decode round trip") {
     CHECK(after->faceSize == before.faceSize);
     CHECK_THAT(after->encoderResolution, WithinAbs(before.encoderResolution, 1e-9));
     CHECK_THAT(after->contactForceThreshold, WithinAbs(before.contactForceThreshold, 1e-6));
+    CHECK(after->joint == before.joint);
 
     // Byte-identical on re-encode: the format has to be a fixed point, or a
     // save/load cycle dirties every document it touches.
@@ -120,7 +122,7 @@ TEST_CASE("Every type emits every key, so a type flip is not a data loss") {
             "near", "far", "rangestddev", "rangepermetre", "rangebias",
             "fov", "width", "height",
             "beams", "facesize",
-            "encoderres", "contactthreshold"};
+            "joint", "encoderres", "contactthreshold"};
 
     for (const auto type : {SensorConfig::Type::Imu, SensorConfig::Type::Depth,
                             SensorConfig::Type::Lidar, SensorConfig::Type::Encoder,
@@ -203,6 +205,27 @@ TEST_CASE("An unrecognised type token falls back rather than corrupting") {
     const auto config = SensorConfig::decode("type=neutrino;rate=10");
     REQUIRE(config.has_value());
     CHECK(config->type == SensorConfig{}.type);
+}
+
+TEST_CASE("The joint key carries a URDF joint name and an empty one round-trips") {
+
+    // A chosen joint rides verbatim, underscores and all.
+    SensorConfig chosen;
+    chosen.enabled = true;
+    chosen.type = SensorConfig::Type::Encoder;
+    chosen.joint = "arm_left_1_joint";
+    const auto back = SensorConfig::decode(chosen.encode());
+    REQUIRE(back.has_value());
+    CHECK(back->joint == "arm_left_1_joint");
+
+    // The default is empty, which still encodes (joint=;) and decodes to empty
+    // rather than crashing on a valueless token.
+    SensorConfig unset;
+    unset.enabled = true;
+    unset.type = SensorConfig::Type::ForceTorque;
+    const auto emptyBack = SensorConfig::decode(unset.encode());
+    REQUIRE(emptyBack.has_value());
+    CHECK(emptyBack->joint.empty());
 }
 
 TEST_CASE("Sub-streams of one authored seed are distinct and reproducible") {

@@ -167,17 +167,20 @@ namespace threepp::editor {
         // sensor nodes have to come out of its children list before they die.
         ~SensorPlaySession() override {
 
-            // If the world is still alive here (the editor drops this session
-            // before the physics session — see EditorApp's destructor), unregister
-            // the proprioceptive sensors so the Force/Torque cache is released
-            // through onUnregister while its articulation still exists, and the
-            // world is not left holding dangling sensor pointers.
+            // Same two paths as stop(): unregister cleanly while the world lives
+            // (the editor drops this session before the physics one — see
+            // EditorApp's destructor), otherwise abandon the Force/Torque cache so
+            // the sensor's destructor does not release it against a freed SDK.
             if (auto* world = liveWorld()) {
                 for (const auto& entry : entries_) {
                     if (entry->imu) world->unregisterSensor(entry->imu.get());
                     if (entry->contact) world->unregisterSensor(entry->contact.get());
                     if (entry->encoder) world->unregisterSensor(entry->encoder.get());
                     if (entry->forceTorque) world->unregisterSensor(entry->forceTorque.get());
+                }
+            } else {
+                for (const auto& entry : entries_) {
+                    if (entry->forceTorque) entry->forceTorque->abandonCache();
                 }
             }
             for (const auto& entry : entries_) {
@@ -302,17 +305,30 @@ namespace threepp::editor {
 
         void stop() override {
 
-            // Unregister only while the world is provably alive: physics stops
-            // first, and a stopped session has already destroyed it. This is what
-            // releases the Force/Torque sensor's PxArticulationCache (via
-            // onUnregister) BEFORE the articulation is gone — the teardown-order
-            // safety the whole liveWorld() guard exists for.
+            // Sessions stop in registration order, physics FIRST — so by the time
+            // this runs the PhysxWorld (and the PhysX SDK behind it) is usually
+            // already gone. Two paths:
+            //
+            //  world alive  — a mid-play teardown that reached us before physics.
+            //                 Unregister cleanly; the Force/Torque sensor releases
+            //                 its PxArticulationCache through onUnregister while the
+            //                 SDK still exists.
+            //  world gone   — the normal Stop. The cache's memory went with the SDK,
+            //                 so calling release() on it would touch a freed
+            //                 allocator (this is the SIGSEGV commit 689953e7's class
+            //                 of bug). Abandon the pointer instead: the SDK teardown
+            //                 already reclaimed the buffer, so nothing leaks that the
+            //                 process does not, and the destructor stays a no-op.
             if (auto* world = liveWorld()) {
                 for (const auto& entry : entries_) {
                     if (entry->imu) world->unregisterSensor(entry->imu.get());
                     if (entry->contact) world->unregisterSensor(entry->contact.get());
                     if (entry->encoder) world->unregisterSensor(entry->encoder.get());
                     if (entry->forceTorque) world->unregisterSensor(entry->forceTorque.get());
+                }
+            } else {
+                for (const auto& entry : entries_) {
+                    if (entry->forceTorque) entry->forceTorque->abandonCache();
                 }
             }
 

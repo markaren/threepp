@@ -15,20 +15,25 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include "threepp/extras/editor/ArticulationConfig.hpp"
 #include "threepp/extras/editor/ObjectFactory.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
+#include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 
+#include "threepp/loaders/URDFLoader.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Robot.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -102,6 +107,75 @@ namespace {
             sensors.stop();
         }
     };
+
+    // A two-link arm with one revolute joint, primitives only so the articulation
+    // builder can cook it with no external mesh files. Written to a temp file
+    // because loadArticulation (and the URDF re-parse) both take a path.
+    const char* kArmUrdf = R"(
+        <robot name="arm">
+          <link name="base_link">
+            <visual><geometry><box size="0.2 0.2 0.2"/></geometry></visual>
+            <collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision>
+          </link>
+          <link name="upper_link">
+            <visual><geometry><box size="0.1 0.4 0.1"/></geometry></visual>
+            <collision><geometry><box size="0.1 0.4 0.1"/></geometry></collision>
+          </link>
+          <joint name="shoulder" type="revolute">
+            <parent link="base_link"/>
+            <child link="upper_link"/>
+            <origin xyz="0 0 0.3" rpy="0 0 0"/>
+            <axis xyz="0 0 1"/>
+            <limit lower="-2.0" upper="2.0"/>
+          </joint>
+        </robot>)";
+
+    std::filesystem::path armFixture() {
+        const auto dir = std::filesystem::temp_directory_path() / "threepp-sensor-articulation";
+        std::filesystem::create_directories(dir);
+        const auto path = dir / "arm.urdf";
+        std::ofstream(path, std::ios::trunc) << kArmUrdf;
+        return path;
+    }
+
+    Object3D* findByName(Object3D& root, const std::string& name) {
+        Object3D* found = nullptr;
+        root.traverse([&](Object3D& node) {
+            if (!found && node.name == name) found = &node;
+        });
+        return found;
+    }
+
+    // A simulated arm added to the scene, with an authored joint pose.
+    std::shared_ptr<Robot> makeSimulatedArm(Scene& scene, const std::filesystem::path& path,
+                                            float shoulder = 0.5f) {
+        URDFLoader loader;
+        auto robot = loader.load(path);
+        RobotConfig rc;
+        rc.urdf = path.string();
+        rc.joints = std::vector<float>(robot->numDOF(), 0.f);
+        if (!rc.joints.empty()) rc.joints[0] = shoulder;
+        rc.write(*robot);
+        for (std::size_t i = 0; i < rc.joints.size() && i < robot->numDOF(); ++i) {
+            robot->setJointValue(i, rc.joints[i]);
+        }
+        ArticulationConfig ac;
+        ac.enabled = true;
+        ac.fixedBase = true;
+        ac.write(*robot);
+        scene.add(robot);
+        return robot;
+    }
+
+    // Author a joint sensor on a link of the robot.
+    void authorJointSensor(Object3D& linkNode, SensorConfig::Type type, const std::string& joint) {
+        SensorConfig sensor;
+        sensor.enabled = true;
+        sensor.type = type;
+        sensor.rateHz = 0.f;// every substep
+        sensor.joint = joint;
+        sensor.write(linkNode);
+    }
 
     // "At rest" in the accelerometer sense: proper acceleration zero while world
     // gravity is unchanged, i.e. a body on a table. Disabling gravity on the
@@ -440,7 +514,7 @@ TEST_CASE("An authored contact sensor reports landing on the ground") {
     rig.stop();
 }
 
-TEST_CASE("Types that need an articulation are authored, not simulated") {
+TEST_CASE("A joint sensor off an articulated robot says so, and does not crash") {
 
     Rig rig;
     auto arm = ObjectFactory::createPrimitive(Primitive::Box, rig.scene);
@@ -449,16 +523,118 @@ TEST_CASE("Types that need an articulation are authored, not simulated") {
     SensorConfig sensor;
     sensor.enabled = true;
     sensor.type = SensorConfig::Type::Encoder;
+    sensor.joint = "shoulder";
     sensor.write(*arm);
     rig.scene.add(arm);
 
     rig.start();
     CHECK(rig.sensors.sensorCount() == 1);
     CHECK(rig.sensors.liveCount() == 0);
-    CHECK(rig.sensors.entries().front()->status.find("articulated") != std::string::npos);
+    // The plain box is not an articulated robot, and the status names that.
+    CHECK(rig.sensors.entries().front()->status.find("articulated robot") != std::string::npos);
+    rig.update(10);
+    CHECK(rig.sensors.entries().front()->samples == 0);
     // And the authored config survived the round trip untouched.
     const auto config = SensorConfig::read(*arm);
     REQUIRE(config.has_value());
     CHECK(config->type == SensorConfig::Type::Encoder);
     rig.stop();
+}
+
+TEST_CASE("A joint encoder authored on a link produces samples during play") {
+
+    const auto path = armFixture();
+    Rig rig;
+    auto robot = makeSimulatedArm(rig.scene, path, /*shoulder*/ 0.5f);
+
+    // Author the encoder on the moving link, naming the joint it measures.
+    auto* link = findByName(*robot, "upper_link");
+    REQUIRE(link != nullptr);
+    authorJointSensor(*link, SensorConfig::Type::Encoder, "shoulder");
+
+    rig.start();
+    REQUIRE(rig.sensors.sensorCount() == 1);
+    const auto& entry = *rig.sensors.entries().front();
+    CHECK(entry.status.empty());
+    CHECK(entry.encoder != nullptr);
+
+    rig.update(30);
+    CHECK(entry.samples > 0);
+    const auto sample = entry.encoder->latest();
+    REQUIRE(sample.has_value());
+    // The encoder reads the shoulder held near its authored 0.5 rad by the drive.
+    CHECK(std::abs(sample->position - 0.5f) < 0.2f);
+
+    rig.stop();
+}
+
+TEST_CASE("A force/torque sensor authored on a link produces wrenches during play") {
+
+    const auto path = armFixture();
+    Rig rig;
+    auto robot = makeSimulatedArm(rig.scene, path, /*shoulder*/ 0.4f);
+
+    auto* link = findByName(*robot, "upper_link");
+    REQUIRE(link != nullptr);
+    authorJointSensor(*link, SensorConfig::Type::ForceTorque, "shoulder");
+
+    rig.start();
+    REQUIRE(rig.sensors.liveCount() == 1);
+    const auto& entry = *rig.sensors.entries().front();
+    CHECK(entry.status.empty());
+    CHECK(entry.forceTorque != nullptr);
+
+    rig.update(30);
+    CHECK(entry.samples > 0);
+    const auto sample = entry.forceTorque->latest();
+    REQUIRE(sample.has_value());
+    // The link has mass and the drive holds it against gravity, so a non-zero
+    // wrench is transmitted through the joint.
+    const float magnitude = sample->force.length() + sample->torque.length();
+    CHECK(magnitude > 0.f);
+
+    rig.stop();
+}
+
+TEST_CASE("An unknown joint name reports a status and does not crash") {
+
+    const auto path = armFixture();
+    Rig rig;
+    auto robot = makeSimulatedArm(rig.scene, path);
+
+    auto* link = findByName(*robot, "upper_link");
+    REQUIRE(link != nullptr);
+    authorJointSensor(*link, SensorConfig::Type::Encoder, "no_such_joint");
+
+    rig.start();
+    CHECK(rig.sensors.sensorCount() == 1);
+    CHECK(rig.sensors.liveCount() == 0);
+    CHECK(rig.sensors.entries().front()->status.find("no_such_joint") != std::string::npos);
+    rig.update(10);
+    CHECK(rig.sensors.entries().front()->samples == 0);
+    rig.stop();
+}
+
+TEST_CASE("A joint sensor survives a start/stop/start cycle (teardown order)") {
+
+    // The regression this guards: physics stops first, so the world AND the
+    // articulation are gone by the time the sensor session stops. The FT sensor's
+    // cache must be released while the world is alive (through unregisterSensor),
+    // or the second Stop reads freed memory.
+    const auto path = armFixture();
+    Rig rig;
+    auto robot = makeSimulatedArm(rig.scene, path);
+
+    auto* link = findByName(*robot, "upper_link");
+    REQUIRE(link != nullptr);
+    authorJointSensor(*link, SensorConfig::Type::ForceTorque, "shoulder");
+
+    for (int pass = 0; pass < 2; ++pass) {
+        rig.start();
+        CHECK(rig.sensors.liveCount() == 1);
+        rig.update(10);
+        CHECK(rig.sensors.entries().front()->samples > 0);
+        rig.stop();
+        CHECK(rig.sensors.sensorCount() == 0);
+    }
 }
