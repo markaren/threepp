@@ -2048,7 +2048,16 @@ int EditorApp::runSelfTest() {
                   "the joint pose survives the round trip");
 
             // Collision hulls: hidden on import, and the opt-in has to outlive
-            // the rebuild or it would reset every time play is pressed.
+            // the rebuild or it would reset every time play is pressed. A URDF
+            // with no <collision> elements has nothing to toggle, so the checks
+            // only run when collider nodes exist.
+            const auto hasColliders = [](Object3D& root) {
+                bool any = false;
+                root.traverse([&any](Object3D& node) {
+                    if (node.userData.contains("collider")) any = true;
+                });
+                return any;
+            };
             const auto colliderVisible = [](Object3D& root) {
                 bool visible = false;
                 root.traverse([&visible](Object3D& node) {
@@ -2056,7 +2065,9 @@ int EditorApp::runSelfTest() {
                 });
                 return visible;
             };
-            if (live) {
+            if (live && !hasColliders(*live)) {
+                check(true, "no collision geometry in this urdf - the collider toggle is skipped");
+            } else if (live) {
                 check(!colliderVisible(*live), "collision geometry is hidden by default");
 
                 live->showColliders(true);
