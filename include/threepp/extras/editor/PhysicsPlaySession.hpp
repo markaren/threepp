@@ -525,6 +525,44 @@ namespace threepp::editor {
             return unit;
         }
 
+        // Local-space AABB of a geometry-less Group: the union of every
+        // descendant mesh's geometry bounds in the ROOT's frame (each sub-mesh's
+        // relative transform applied; the root's own world transform excluded —
+        // the actor carries that). An explicit Box/Sphere/Capsule authored on an
+        // imported model means THAT shape fitted to the model, and sizing it
+        // from the unit-box placeholder instead is indistinguishable from
+        // ignoring the user's choice. Sub-meshes that own an actor are excluded,
+        // the same rule the compound and static-subtree paths follow. Empty
+        // (no usable sub-meshes) falls back to the unit box, which is still what
+        // a bare Group used as a trigger volume wants.
+        static Box3 subtreeLocalBounds(Object3D& root) {
+
+            root.updateWorldMatrix(true, false);
+            Matrix4 rootInv(*root.matrixWorld);
+            rootInv.invert();
+
+            Box3 bounds;
+            bounds.makeEmpty();
+            root.traverseType<Mesh>([&](Mesh& mesh) {
+                const auto geometry = mesh.geometry();
+                if (!geometry) return;
+                if (ownsActor(mesh)) return;
+                if (!geometry->boundingBox) geometry->computeBoundingBox();
+                if (!geometry->boundingBox) return;
+                mesh.updateWorldMatrix(true, false);
+                Matrix4 rel(rootInv);
+                rel.multiply(*mesh.matrixWorld);
+                Box3 b = *geometry->boundingBox;
+                b.applyMatrix4(rel);
+                bounds.union_(b);
+            });
+
+            if (bounds.isEmpty()) {
+                bounds.set(Vector3(-0.5f, -0.5f, -0.5f), Vector3(0.5f, 0.5f, 0.5f));
+            }
+            return bounds;
+        }
+
         ::physx::PxMaterial* materialFor(const PhysicsConfig& config) {
 
             const float friction = std::max(config.friction, 0.f);
@@ -982,8 +1020,12 @@ namespace threepp::editor {
             }
 
             // Analytic shapes: build the geometry from the local bounds so an
-            // off-centre mesh gets a correctly offset shape.
-            const Box3 bounds = localBounds(object);
+            // off-centre mesh gets a correctly offset shape. A geometry-less
+            // Group (an imported model with an explicit Box/Sphere/Capsule
+            // override) is sized from its SUBTREE — the placeholder unit box is
+            // only for a genuinely empty Group.
+            const Box3 bounds = object.geometry() ? localBounds(object)
+                                                  : subtreeLocalBounds(object);
             const Vector3 size = bounds.getSize();
             const Vector3 centre = bounds.getCenter();
             const Vector3 s = placement.scale;

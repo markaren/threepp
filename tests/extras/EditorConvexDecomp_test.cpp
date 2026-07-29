@@ -241,6 +241,52 @@ TEST_CASE("a Group of two boxes becomes one compound with a gap", "[editor][phys
     session.stop();
 }
 
+TEST_CASE("an explicit Box on a Group is honored, sized to the subtree", "[editor][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    // Same two-box imported-model stand-in as above — but the user OVERRODE the
+    // shape to Box. The compound path must step aside: an explicit analytic
+    // shape wins over the per-sub-mesh hulls, and it is sized to the subtree's
+    // bounds (x spans [-1.5, 1.5]), not the old 1 m unit-box placeholder.
+    auto model = Group::create();
+    model->name = "Model";
+    model->position.set(0.f, 3.f, 0.f);
+
+    auto left = Mesh::create(BoxGeometry::create(0.6f, 0.6f, 0.6f), MeshBasicMaterial::create());
+    left->position.set(-1.2f, 0.f, 0.f);
+    auto right = Mesh::create(BoxGeometry::create(0.6f, 0.6f, 0.6f), MeshBasicMaterial::create());
+    right->position.set(1.2f, 0.f, 0.f);
+    model->add(left);
+    model->add(right);
+
+    PhysicsConfig cfg;
+    cfg.enabled = true;
+    cfg.body = PhysicsConfig::Body::Dynamic;
+    cfg.shape = PhysicsConfig::Shape::Box;// manual override — no hulls
+    cfg.write(*model);
+    scene.add(model);
+
+    PhysicsPlaySession session;
+    session.start(scene);
+
+    auto* actor = session.findActor(model.get());
+    REQUIRE(actor != nullptr);
+    REQUIRE(actor->getNbShapes() == 1);
+    ::physx::PxShape* shape = nullptr;
+    actor->getShapes(&shape, 1);
+    REQUIRE(shape->getGeometry().getType() == ::physx::PxGeometryType::eBOX);
+
+    const auto& box = static_cast<const ::physx::PxBoxGeometry&>(shape->getGeometry());
+    INFO("half extents " << box.halfExtents.x << ", " << box.halfExtents.y << ", " << box.halfExtents.z);
+    CHECK(std::abs(box.halfExtents.x - 1.5f) < 1e-3f);
+    CHECK(std::abs(box.halfExtents.y - 0.3f) < 1e-3f);
+    CHECK(std::abs(box.halfExtents.z - 0.3f) < 1e-3f);
+
+    session.stop();
+}
+
 TEST_CASE("Pieces on a Group decomposes each sub-mesh and splits the budget", "[editor][physx][vhacd]") {
 
     SceneDocument document;
