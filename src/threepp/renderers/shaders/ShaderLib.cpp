@@ -181,7 +181,11 @@ ShaderLib::ShaderLib()
               mergeUniforms({// clang-format off
                                       UniformsLib::instance().envmap,
                                       UniformMap{
-                                              {"opacity", Uniform(1.f)}
+                                              {"opacity", Uniform(1.f)},
+                                              // xyz = the camera's world forward, w = 1 under an
+                                              // orthographic camera. The w=0 default leaves the
+                                              // perspective path exactly as it was.
+                                              {"orthoDirection", Uniform(Vector4(0.f, 0.f, -1.f, 0.f))}
                                       }
                               }),// clang-format on
 

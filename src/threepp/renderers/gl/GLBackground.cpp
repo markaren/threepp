@@ -7,6 +7,11 @@
 
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
+#include "threepp/cameras/OrthographicCamera.hpp"
+
+#include <algorithm>
+#include <cmath>
+
 using namespace threepp;
 using namespace threepp::gl;
 
@@ -75,6 +80,40 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
             boxMesh = std::make_unique<Mesh>(geometry, shaderMaterial);
 
             boxMesh->onBeforeRender = [&](void*, Object3D*, Camera* camera, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
+                // Under perspective the unit box fills the view at any size: the
+                // eye sits inside it and the divide expands whatever it hits. A
+                // parallel projection has no divide, so the box would project at
+                // its literal 1 unit — the environment rendered as a small box in
+                // the middle of an orthographic viewport. three.js has the same
+                // gap (its WebGLBackground never scales the box and has no
+                // orthographic branch), so there is no upstream behaviour to
+                // follow; match the Vulkan backend instead, where a parallel
+                // camera has ONE view direction for every pixel (camRayDir in
+                // camera_ray.glsl). Two parts: cover the frustum, and shade every
+                // pixel along the camera's forward.
+                auto* mat = boxMesh->materialAs<ShaderMaterial>();
+                if (auto* ortho = camera->as<OrthographicCamera>()) {
+                    const float halfExtent =
+                            std::max(std::max(std::abs(ortho->left), std::abs(ortho->right)),
+                                     std::max(std::abs(ortho->top), std::abs(ortho->bottom)));
+                    // The box is axis-aligned in WORLD space while the camera may
+                    // be turned any way, so size it off the shape that projects
+                    // identically from every angle: a cube of side s contains an
+                    // inscribed sphere of radius s/2, which always projects to a
+                    // disc of that radius. The frustum's bounding circle is at
+                    // most sqrt(2)*halfExtent, so s = 4*halfExtent clears it with
+                    // margin regardless of orientation.
+                    const float s = std::max(4.f * halfExtent, 1.f);
+                    boxMesh->matrixWorld->makeScale(s, s, s);
+
+                    Vector3 forward;
+                    camera->getWorldDirection(forward);
+                    mat->uniforms.at("orthoDirection")
+                            .setValue(Vector4(forward.x, forward.y, forward.z, 1.f));
+                } else {
+                    boxMesh->matrixWorld->identity();
+                    mat->uniforms.at("orthoDirection").setValue(Vector4(0.f, 0.f, -1.f, 0.f));
+                }
                 boxMesh->matrixWorld->copyPosition(*camera->matrixWorld);
             };
 
