@@ -61,6 +61,12 @@ namespace threepp {
         // rebuilding the add-order bookkeeping the loader already did. These are
         // small copyable handles into the articulation; valid while it lives.
         std::vector<ArticulationLink> links;
+        // Every URDF LINK name -> the articulation link that governs it, root and
+        // fixed-collapsed links included (a fixed child maps to the link it was
+        // welded into). What a caller needs to resolve "the body under this
+        // visual node" — e.g. the editor associating a robot's link nodes with
+        // their actors so an IMU or contact sensor authored on one resolves.
+        std::vector<std::pair<std::string, ArticulationLink>> linkForName;
 
         [[nodiscard]] std::size_t numDof() const { return jointNames.size(); }
     };
@@ -193,6 +199,14 @@ namespace threepp {
                 if (mesh->material()) mesh->material()->visible = false;
             }
             result.meshes.push_back(mesh);
+        }
+
+        // Every desc link, root and fixed-collapsed alike, mapped to the
+        // articulation link that governs it — artLinkOf already welded fixed
+        // children into their parents, so this is a read-out, not new
+        // bookkeeping.
+        for (std::size_t i = 0; i < n; ++i) {
+            if (artLinkOf[i]) result.linkForName.emplace_back(desc.links[i].name, *artLinkOf[i]);
         }
 
         art->finalize();

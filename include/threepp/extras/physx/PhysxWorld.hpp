@@ -599,6 +599,9 @@ namespace threepp {
                 for (const auto& b : objBindings_) {
                     if (b.obj == o) return b.actor;
                 }
+                for (const auto& a : associations_) {
+                    if (a.obj == o) return a.actor;
+                }
             }
             return nullptr;
         }
@@ -606,6 +609,23 @@ namespace threepp {
         // After each step, copy actor's world pose into Object3D.position/quaternion.
         void bind(Object3D& obj, ::physx::PxRigidActor& actor) {
             objBindings_.push_back({&obj, &actor});
+        }
+
+        // Make findActor resolve `obj` to `actor` WITHOUT mirroring the actor's
+        // pose into it. For nodes that already follow the simulation by other
+        // means — an articulated robot's visual links are driven by joint-space
+        // mirroring, where a world-pose write-back would fight the kinematic
+        // chain — but whose sensors (IMU, contact) still need to find the body
+        // that governs them.
+        void associate(Object3D& obj, ::physx::PxRigidActor& actor) {
+            associations_.push_back({&obj, &actor});
+        }
+
+        void unassociate(Object3D& obj) {
+            associations_.erase(
+                    std::remove_if(associations_.begin(), associations_.end(),
+                                   [&](const Association& a) { return a.obj == &obj; }),
+                    associations_.end());
         }
 
         // Each instance i mirrors the pose of actors[i]. Per-instance scale is preserved
@@ -638,6 +658,12 @@ namespace threepp {
                     std::remove_if(objBindings_.begin(), objBindings_.end(),
                                    [&](const ObjBinding& b) { return b.actor == actor; }),
                     objBindings_.end());
+            // Associations name actors too, and a stale one would hand a sensor
+            // a released body on the next findActor.
+            associations_.erase(
+                    std::remove_if(associations_.begin(), associations_.end(),
+                                   [&](const Association& a) { return a.actor == actor; }),
+                    associations_.end());
             // InstancedMesh bindings hold actor pointers too, and used to be
             // skipped here: the actor was released while instBindings_ still
             // named it, so the next sync dereferenced freed memory.
@@ -1142,6 +1168,13 @@ namespace threepp {
 
         std::vector<ObjBinding> objBindings_;
         std::vector<InstBinding> instBindings_;
+        // Resolution-only entries for findActor — no pose write-back, no
+        // interpolation state (which is all ObjBinding adds). See associate().
+        struct Association {
+            Object3D* obj;
+            ::physx::PxRigidActor* actor;
+        };
+        std::vector<Association> associations_;
         struct SubstepEntry {
             SubstepHandle handle;
             std::function<void(float)> fn;

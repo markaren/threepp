@@ -388,6 +388,17 @@ exactly like the IMU. Without the joint, or off a robot, the sensor is authored
 and saved but reports why it is not measuring — the same "counted, not live"
 contract every proprioceptive sensor has.
 
+An **IMU** or a **contact sensor** authored on a robot link works too. The
+visual link nodes are never bound to the world (the joint mirror drives them;
+a world-pose write-back would fight the kinematic chain), so the play session
+*associates* each link node with its articulation link — resolution only, no
+pose writes — and the sensor's usual walk-up-the-ancestry lookup finds the
+body. The IMU still measures in its authored node's frame, so an offset mount
+under a link measures at the offset; a URDF's fixed `imu_link` resolves to the
+link it was welded into, which is where the mount physically rides; and the
+robot node itself resolves to the root link, so a base IMU needs no link names
+at all.
+
 One teardown detail worth knowing, because it is a class of bug this codebase
 cares about: sessions stop physics-first, so by the time the sensor session stops
 the PhysX SDK is already gone. A Force/Torque sensor holds a `PxArticulationCache`

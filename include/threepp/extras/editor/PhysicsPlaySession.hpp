@@ -396,6 +396,24 @@ namespace threepp::editor {
             // writes their transforms wherever they are, and here they render
             // nowhere on purpose (the visual robot is what you see).
             played->meshes = std::move(built.meshes);
+
+            // A sensor authored on a LINK (an IMU on a base, a contact pad on a
+            // gripper) resolves its body by walking up the scene graph — but the
+            // visual link nodes are never bound (the joint mirror drives them; a
+            // world-pose write-back would fight the kinematic chain), so
+            // findActor cannot see them. Associate each URDF link's visual node
+            // with its articulation link instead: resolution only, no pose
+            // writes. A fixed link welded away by the builder maps to the link
+            // it collapsed into — which is where an "imu_link" mount actually
+            // rides. The robot node itself maps to the root link, so a base IMU
+            // can be authored on the robot without knowing its link names.
+            for (const auto& [linkName, artLink] : built.linkForName) {
+                if (auto* node = robot.getObjectByName(linkName)) {
+                    world_->associate(*node, *artLink.raw());
+                }
+                if (artLink.isRoot()) world_->associate(robot, *artLink.raw());
+            }
+
             played->owned = std::move(built.articulation);
             articulations_.push_back(std::move(played));
         }

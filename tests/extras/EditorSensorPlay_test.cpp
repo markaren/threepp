@@ -637,6 +637,52 @@ TEST_CASE("A force/torque sensor authored on a link produces wrenches during pla
     rig.stop();
 }
 
+TEST_CASE("An IMU and a contact sensor on robot links ride the articulation") {
+
+    // The visual link nodes are never bound (the joint mirror drives them), so
+    // this only works through the world's resolution-only associations. Three
+    // sensors, one per object: a base IMU on the ROBOT node (resolves to the
+    // root link), an IMU on the moving link, and a contact sensor on the base
+    // link. Before the associations existed, all three failed at registration
+    // with "no PhysxWorld-managed rigid body".
+    const auto path = armFixture();
+    Rig rig;
+    auto robot = makeSimulatedArm(rig.scene, path, /*shoulder*/ 0.3f);
+
+    SensorConfig imu;
+    imu.enabled = true;
+    imu.type = SensorConfig::Type::Imu;
+    imu.rateHz = 0.f;
+    imu.write(*robot);
+
+    auto* upper = findByName(*robot, "upper_link");
+    REQUIRE(upper != nullptr);
+    imu.write(*upper);
+
+    auto* base = findByName(*robot, "base_link");
+    REQUIRE(base != nullptr);
+    SensorConfig contact;
+    contact.enabled = true;
+    contact.type = SensorConfig::Type::Contact;
+    contact.rateHz = 0.f;
+    contact.write(*base);
+
+    rig.start();
+    REQUIRE(rig.sensors.sensorCount() == 3);
+    CHECK(rig.sensors.liveCount() == 3);
+    for (const auto& entry : rig.sensors.entries()) {
+        CHECK(entry->status.empty());
+    }
+
+    rig.update(30);
+    for (const auto& entry : rig.sensors.entries()) {
+        CHECK(entry->samples > 0);
+    }
+
+    rig.stop();
+    CHECK(rig.sensors.sensorCount() == 0);
+}
+
 TEST_CASE("An all-joints encoder fans out to one live encoder per DOF") {
 
     const auto path = twoJointFixture();
