@@ -303,6 +303,89 @@ written to the document, so a scene whose URDF has moved away (or one opened by
 another tool) renders exactly as saved — it just cannot be re-jointed, and says
 so in the console.
 
+**Descendant userData survives the transplant.** The swap keeps the placeholder
+root's identity and userData, but a sensor (or a physics entry) is often
+authored on a *link*, not the root — and the fresh robot's link nodes are new
+objects. So before the swap each placeholder descendant's userData is collected
+by node name and re-applied to the same-named node of the rebuilt robot (first
+match wins; a name the URDF no longer has is reported, not lost). That is what
+makes "an encoder on the wrist link" a durable authoring choice rather than
+something a document load quietly drops. The transplant is a free function,
+`transplantRobot`, so this rule is the same headless and in the app.
+
+#### Simulating a robot: `userData["articulation"]`
+
+By default a saved robot is a kinematic prop — Play renders it and its joints
+move only if a script drives them. Tick **Simulate** in the Robot section and it
+becomes a PhysX **reduced-coordinate articulation** while playing: the joints
+are real DOFs, gravity and contact act on the links, a PD drive holds the
+authored pose, and — the point of the whole thing — the joint sensors below have
+something to measure. Stop restores the pre-play snapshot, so nothing the
+simulation did survives, exactly like the rigid bodies `PhysicsConfig` authors.
+
+This is a separate entry from the URDF reference above because its fields are all
+scalars, so unlike the path/vector pair it rides the same flat `key=value;`
+format `PhysicsConfig` uses — one string in `userData["articulation"]`, every key
+written every time, unknown keys ignored on read, and the entry removed entirely
+when Simulate is off. Its *presence* is the "simulate this robot" signal.
+
+```
+fixedbase=1;stiffness=500;damping=50;maxforce=1000000;selfcollision=0;iterations=12;density=1000
+```
+
+| key | meaning |
+| --- | --- |
+| `fixedbase` | pin the base to the world (an arm) or let it float free (a quadruped, a drone) |
+| `stiffness`, `damping` | the per-joint PD drive that holds the authored pose; 0 stiffness is a passive/force-controlled robot |
+| `maxforce` | the drive's per-joint effort ceiling |
+| `selfcollision` | whether links of the same robot collide (off by default — the primitive colliders overlap at the joints) |
+| `iterations` | solver position iterations |
+| `density` | fallback density for links whose URDF gives no `<inertial><mass>` |
+
+The colliders PhysX simulates are an **approximation**: box/sphere/capsule for a
+`<collision>` primitive, and a link's `<mesh>` collision by its *bounding box* —
+not the visual meshes, which still render exactly as imported. It is a physical
+twin, not a digital one, and that is the right trade for grasping, balancing and
+proprioception; a task that needs concave collision wants a different tool.
+
+`PhysicsPlaySession` builds the articulation from the same URDF the visual robot
+came from, at the robot's world pose. The two share `URDFLoader`'s frame handling
+(URDF is Z-up and neither side rotates it), so no Z-up→Y-up correction is applied
+— a frame-consistency test pins the visual link and the simulated link to the
+same place. Each step, the solved joint positions are mirrored back onto the
+visual `Robot` (through a name map — the articulation's DOF add-order is not the
+robot's joint order, so the *joint name* is the bridge); a floating base also
+writes the solved root pose, so a walker actually travels. A link that carries
+its own `PhysicsConfig` is **not** given a second rigid body — the articulation
+link is already the body there — and a robot with a non-unit world scale is
+skipped with one log line, because PhysX links cannot be scaled.
+
+#### Joint sensors
+
+An **Encoder** or a **Force/Torque** sensor reads one joint of a simulated
+robot. Author it like any other sensor (Sensor section, on the robot or one of
+its links), and pick the joint from the combo the section grows for these two
+types — it lists the robot ancestor's articulated joints by name and writes the
+choice as `joint=<name>` in `userData["sensor"]`. The section says why when
+there is no robot ancestor, or when the robot has Simulate off.
+
+At Play the sensor session resolves that name against the played articulation and
+builds a live `JointEncoder` (position/velocity, quantized by the encoder's
+resolution) or `ForceTorqueSensor` (the six-axis wrench through the joint, in its
+child frame). Both are registered with the physics world and sampled on its
+fixed-substep loop, drained into the Sensor panel's traces and any CSV recording,
+exactly like the IMU. Without the joint, or off a robot, the sensor is authored
+and saved but reports why it is not measuring — the same "counted, not live"
+contract every proprioceptive sensor has.
+
+One teardown detail worth knowing, because it is a class of bug this codebase
+cares about: sessions stop physics-first, so by the time the sensor session stops
+the PhysX SDK is already gone. A Force/Torque sensor holds a `PxArticulationCache`
+whose memory went with it, so the session **abandons** that cache (drops the
+pointer without releasing it) on the normal Stop rather than releasing it against
+a freed allocator; the SDK teardown already reclaimed the buffer. On a mid-play
+teardown, where the world is still alive, it unregisters cleanly instead.
+
 ### Scripts in `userData`
 
 Attach a script to any object and it becomes a behaviour, MonoBehaviour style.

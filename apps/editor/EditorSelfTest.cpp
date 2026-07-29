@@ -17,6 +17,7 @@
 #include "ImportFormats.hpp"
 
 #include "threepp/extras/editor/AnimationConfig.hpp"
+#include "threepp/extras/editor/ArticulationConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
@@ -2075,6 +2076,81 @@ int EditorApp::runSelfTest() {
                 });
                 check(again && colliderVisible(*again),
                       "the collider toggle survives the round trip");
+            }
+
+            // Simulate the robot as a PhysX articulation and read a joint of it
+            // with a live encoder, played headlessly the way the rest of this
+            // section drives play. Needs the physics sessions, so it is gated the
+            // same way — sensors_ is null in a build without PhysX.
+            Object3D* current = nullptr;
+            document_.scene().traverse([&](Object3D& o) {
+                if (!current && o.uuid == uuid) current = &o;
+            });
+            auto* sim = current ? current->as<Robot>() : nullptr;
+            if (sim && physics_ && sensors_) {
+
+                const auto joints = sim->getArticulatedJointInfo();
+                check(!joints.empty(), "the simulated robot exposes a joint to read");
+                const std::string jointName = joints.empty() ? "" : joints.front().name;
+
+                // Author "Simulate" on the robot and an encoder on it, naming the
+                // joint. The encoder sits on the root, which findArticulation
+                // resolves by walking up from any node in the robot.
+                ArticulationConfig art;
+                art.enabled = true;
+                art.fixedBase = true;
+                art.write(*sim);
+
+                SensorConfig enc;
+                enc.enabled = true;
+                enc.type = SensorConfig::Type::Encoder;
+                enc.rateHz = 0.f;// every substep
+                enc.joint = jointName;
+                enc.write(*sim);
+
+                startPlay();
+                check(physics_->articulationCount() == 1,
+                      "the robot plays as one articulation");
+                check(sensors_->liveCount() >= 1, "the joint encoder comes up live");
+                // A handful of frames so the substep loop feeds the encoder.
+                step(20);
+
+                const SensorPlaySession::Entry* encEntry = nullptr;
+                for (const auto& e : sensors_->entries()) {
+                    if (e->encoder) encEntry = e.get();
+                }
+                check(encEntry && encEntry->samples > 0,
+                      "the encoder produced samples during play");
+                // The drive held the authored pose (0.3 rad on joint 0) rather
+                // than letting gravity collapse it.
+                if (encEntry && encEntry->encoder) {
+                    const auto sample = encEntry->encoder->latest();
+                    check(sample.has_value() && std::abs(sample->position - 0.3f) < 0.25f,
+                          "the encoder reads the pose the drive is holding");
+                }
+
+                stopPlay();
+                step();
+                // A second Play/Stop with a Force/Torque sensor exercises the
+                // teardown-order path (physics stops first, the FT cache must not
+                // be released against a dead world).
+                Object3D* rebuilt = nullptr;
+                document_.scene().traverse([&](Object3D& o) {
+                    if (!rebuilt && o.uuid == uuid) rebuilt = &o;
+                });
+                if (auto* sim2 = rebuilt ? rebuilt->as<Robot>() : nullptr) {
+                    SensorConfig ft;
+                    ft.enabled = true;
+                    ft.type = SensorConfig::Type::ForceTorque;
+                    ft.rateHz = 0.f;
+                    ft.joint = jointName;
+                    ft.write(*sim2);
+                    startPlay();
+                    step(10);
+                    stopPlay();
+                    step();
+                    check(true, "a Force/Torque sensor plays and stops without a crash");
+                }
             }
         }
     }
