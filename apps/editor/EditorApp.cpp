@@ -1484,22 +1484,10 @@ void EditorApp::rearticulateRobots(Scene& scene) {
             continue;
         }
 
-        robot->name = placeholder->name;
-        robot->uuid = placeholder->uuid;
-        robot->position.copy(placeholder->position);
-        robot->quaternion.copy(placeholder->quaternion);
-        robot->scale.copy(placeholder->scale);
-        robot->visible = placeholder->visible;
-        robot->userData = placeholder->userData;
-
-        for (std::size_t i = 0; i < config.joints.size() && i < robot->numDOF(); ++i) {
-            robot->setJointValue(i, config.joints[i]);
-        }
-        robot->showColliders(config.showColliders);
-
-        const auto index = childIndex(*parent, *placeholder);
-        placeholder->removeFromParent();
-        insertChildAt(*parent, robot, index);
+        // The identity/placement transplant AND the descendant-userData
+        // preservation (a sensor authored on a link, not the root) live in a free
+        // function so they can be tested headlessly — see transplantRobot.
+        transplantRobot(*placeholder, robot, [this](const std::string& m) { log(m); });
     }
 }
 

@@ -5,6 +5,7 @@
 #include "../PanelLayout.hpp"
 
 #include "threepp/extras/editor/AnimationConfig.hpp"
+#include "threepp/extras/editor/ArticulationConfig.hpp"
 #include "threepp/extras/editor/MaterialTextureSlots.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
@@ -929,6 +930,109 @@ void EditorApp::drawAnimationSection(Object3D& object) {
 }
 
 
+// ------------------------------------------------------------- articulation
+
+void EditorApp::drawArticulationBlock(Object3D& object, Robot& robot) {
+
+    auto* target = &object;
+    auto config = ArticulationConfig::read(object).value_or(ArticulationConfig{});
+    const auto before = config;
+
+    const auto commit = [&](ArticulationConfig after, const char* label) {
+        commands_.execute(makeProperty<ArticulationConfig>(
+                label, "articulation:" + object.uuid,
+                [target](const ArticulationConfig& value) { value.write(*target); },
+                before, after));
+        document_.setDirty(true);
+    };
+
+    ImGui::Spacing();
+
+    bool simulate = config.enabled;
+    if (ImGui::Checkbox("Simulate", &simulate)) {
+        auto after = config;
+        after.enabled = simulate;
+        commit(after, simulate ? "Simulate Robot" : "Stop Simulating Robot");
+        config.enabled = simulate;// so the widgets below reflect the toggle this frame
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Play as a PhysX reduced-coordinate articulation.\n"
+                          "Colliders are primitive/bbox approximations, not the visual meshes.");
+    }
+
+    if (!config.enabled) return;
+
+    ImGui::PushItemWidth(-110 * contentScale_);
+
+    bool fixedBase = config.fixedBase;
+    if (ImGui::Checkbox("Fixed Base", &fixedBase)) {
+        auto after = config;
+        after.fixedBase = fixedBase;
+        commit(after, "Articulation Fixed Base");
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("On: the base is bolted to the world (an arm).\n"
+                          "Off: the base floats free (a quadruped, a drone).");
+    }
+
+    const auto floatField = [&](const char* label, float value, float speed, float min, float max,
+                                void (*assign)(ArticulationConfig&, float), const char* action,
+                                ImGuiSliderFlags flags = 0) {
+        float edited = value;
+        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max, "%.3f", flags);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            assign(after, edited);
+            commit(after, action);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    floatField(
+            "Stiffness", config.stiffness, 1.f, 0.f, 100000.f,
+            [](ArticulationConfig& c, float v) { c.stiffness = v; }, "Articulation Stiffness",
+            ImGuiSliderFlags_Logarithmic);
+    floatField(
+            "Damping", config.damping, 0.5f, 0.f, 10000.f,
+            [](ArticulationConfig& c, float v) { c.damping = v; }, "Articulation Damping",
+            ImGuiSliderFlags_Logarithmic);
+    floatField(
+            "Max Force", config.maxForce, 100.f, 0.f, 1e7f,
+            [](ArticulationConfig& c, float v) { c.maxForce = v; }, "Articulation Max Force",
+            ImGuiSliderFlags_Logarithmic);
+
+    bool selfCollision = config.selfCollision;
+    if (ImGui::Checkbox("Self Collision", &selfCollision)) {
+        auto after = config;
+        after.selfCollision = selfCollision;
+        commit(after, "Articulation Self Collision");
+    }
+
+    {
+        int edited = config.iterations;
+        const bool changed = ImGui::DragInt("Iterations", &edited, 0.2f, 1, 255);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.iterations = edited;
+            commit(after, "Articulation Iterations");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+
+    floatField(
+            "Density", config.density, 5.f, 1.f, 100000.f,
+            [](ArticulationConfig& c, float v) { c.density = v; }, "Articulation Density");
+
+    ImGui::PopItemWidth();
+
+#ifndef THREEPP_EDITOR_WITH_PHYSX
+    ImGui::TextColored(theme::muted(), "Built without PhysX - authored and saved, not simulated.");
+#endif
+}
+
+
 // -------------------------------------------------------------------- joints
 
 void EditorApp::drawJointsSection(Object3D& object) {
@@ -956,6 +1060,12 @@ void EditorApp::drawJointsSection(Object3D& object) {
             document_.setDirty(true);
         }
     }
+
+    // Whether Play simulates this robot as a PhysX articulation (joints become
+    // real DOFs, gravity acts, and the joint sensors have something to read) or
+    // leaves it a kinematic prop. Same undoable command pattern as the Physics
+    // section, and PhysX-free authoring — the block draws without the SDK.
+    drawArticulationBlock(object, *robot);
 
     if (robot->numDOF() == 0) {
         ImGui::TextColored(theme::muted(), "No articulated joints.");
@@ -1706,6 +1816,53 @@ void EditorApp::drawSensorSection(Object3D& object) {
         if (ImGui::IsItemDeactivated()) commands_.endTransaction();
     };
 
+    // The joint an Encoder / Force-Torque sensor measures. Walk up to the Robot
+    // this sensor is authored on and offer its articulated joints by name; a
+    // sensor authored off a robot (or on a robot with Simulate off) is a mistake
+    // worth naming here, where the picker lives, rather than as silence at Play.
+    const auto jointPicker = [&]() {
+        Robot* robot = nullptr;
+        for (Object3D* o = &object; o != nullptr; o = o->parent) {
+            if (auto* r = o->as<Robot>()) {
+                robot = r;
+                break;
+            }
+        }
+        if (!robot) {
+            ImGui::TextColored(theme::warning(),
+                               "Author this sensor on a robot or one of its links.");
+            return;
+        }
+        if (!ArticulationConfig::read(*robot)) {
+            ImGui::TextColored(theme::warning(),
+                               "Turn Simulate on in the robot's Robot section to read a joint.");
+        }
+        const auto info = robot->getArticulatedJointInfo();
+        if (info.empty()) {
+            ImGui::TextColored(theme::muted(), "The robot has no articulated joints.");
+            return;
+        }
+        // The combo shows "(choose)" when nothing is picked yet, then the joint
+        // names in the robot's own order. Selecting one is one undoable edit.
+        std::vector<const char*> names;
+        names.reserve(info.size() + 1);
+        names.push_back("(choose)");
+        int current = 0;
+        for (std::size_t i = 0; i < info.size(); ++i) {
+            names.push_back(info[i].name.c_str());
+            if (info[i].name == config.joint) current = static_cast<int>(i) + 1;
+        }
+        if (ImGui::Combo("Joint", &current, names.data(), static_cast<int>(names.size()))) {
+            auto after = config;
+            after.joint = (current == 0) ? std::string{} : info[static_cast<std::size_t>(current - 1)].name;
+            commit(after, "Sensor Joint");
+            config = SensorConfig::read(object).value_or(config);
+        }
+        if (config.joint.empty()) {
+            ImGui::TextColored(theme::muted(), "Pick which joint this sensor reads.");
+        }
+    };
+
     floatField(
             "Rate (Hz)", config.rateHz, 0.25f, 0.f, 2000.f,
             [](SensorConfig& c, float v) { c.rateHz = v; }, "Sensor Rate", "%.1f");
@@ -1789,6 +1946,7 @@ void EditorApp::drawSensorSection(Object3D& object) {
         }
 
         case SensorConfig::Type::Encoder: {
+            jointPicker();
             floatField(
                     "Resolution", config.encoderResolution, 1e-5f, 0.f, 1.f,
                     [](SensorConfig& c, float v) { c.encoderResolution = v; },
@@ -1805,8 +1963,12 @@ void EditorApp::drawSensorSection(Object3D& object) {
             break;
         }
 
-        case SensorConfig::Type::ForceTorque:
+        case SensorConfig::Type::ForceTorque: {
+            jointPicker();
+            ImGui::TextColored(theme::muted(),
+                               "Reads the 6-axis wrench through the joint, in its child frame.");
             break;
+        }
     }
 
     // Shared by both ranging sensors: the frustum they see through and the

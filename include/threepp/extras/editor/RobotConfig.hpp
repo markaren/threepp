@@ -20,6 +20,8 @@
 #ifndef THREEPP_EDITOR_ROBOTCONFIG_HPP
 #define THREEPP_EDITOR_ROBOTCONFIG_HPP
 
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -27,6 +29,7 @@
 namespace threepp {
 
     class Object3D;
+    class Robot;
 
 }
 
@@ -62,6 +65,23 @@ namespace threepp::editor {
 
         static void erase(Object3D& object);
     };
+
+    // Transplant a freshly re-imported Robot over the frozen placeholder a
+    // document round trip left behind, in place: `robot` takes the placeholder's
+    // uuid, name, transform, visibility and userData, is posed from the
+    // placeholder's RobotConfig, and is swapped into the placeholder's parent at
+    // the same child index. The placeholder is detached.
+    //
+    // Descendant userData is preserved too — a sensor or a physics entry authored
+    // on a LINK, not the root, would otherwise be silently dropped, because only
+    // the root's userData is part of RobotConfig. Each placeholder descendant's
+    // non-empty userData is re-applied to the same-named node in the fresh robot
+    // (first match wins). Names that do not resolve are reported through `log`.
+    //
+    // This is the headless core of EditorApp::rearticulateRobots, factored out so
+    // it can be tested without the app; the app calls it inside its traversal.
+    void transplantRobot(Object3D& placeholder, const std::shared_ptr<Robot>& robot,
+                         const std::function<void(const std::string&)>& log = {});
 
 }// namespace threepp::editor
 

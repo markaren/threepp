@@ -2,10 +2,14 @@
 #include "threepp/extras/editor/RobotConfig.hpp"
 
 #include "threepp/core/Object3D.hpp"
+#include "threepp/extras/editor/EditorCommands.hpp"
+#include "threepp/objects/Robot.hpp"
 
 #include <any>
 #include <cstdio>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
 
 using namespace threepp;
 using namespace threepp::editor;
@@ -112,4 +116,64 @@ void RobotConfig::erase(Object3D& object) {
     object.userData.erase(urdfKey);
     object.userData.erase(jointsKey);
     object.userData.erase(collidersKey);
+}
+
+void threepp::editor::transplantRobot(Object3D& placeholder, const std::shared_ptr<Robot>& robot,
+                                      const std::function<void(const std::string&)>& log) {
+
+    if (!robot) return;
+    auto* parent = placeholder.parent;
+    if (!parent) return;
+
+    const auto config = RobotConfig::read(placeholder).value_or(RobotConfig{});
+
+    // Collect each placeholder DESCENDANT's non-empty userData by node name,
+    // before the swap. Only descendants: the root's userData is copied wholesale
+    // just below, and a sensor authored on the root rides with it. Skip nodes
+    // with no name (nothing to match them to) and empty userData (nothing to
+    // carry). First name wins on both sides, which is the same rule the transform
+    // override table uses for a URDF with duplicate link names.
+    std::vector<std::pair<std::string, std::unordered_map<std::string, std::any>>> descendantData;
+    placeholder.traverse([&](Object3D& node) {
+        if (&node == &placeholder) return;
+        if (node.name.empty() || node.userData.empty()) return;
+        descendantData.emplace_back(node.name, node.userData);
+    });
+
+    // The root's identity, placement and userData move to the fresh robot.
+    robot->name = placeholder.name;
+    robot->uuid = placeholder.uuid;
+    robot->position.copy(placeholder.position);
+    robot->quaternion.copy(placeholder.quaternion);
+    robot->scale.copy(placeholder.scale);
+    robot->visible = placeholder.visible;
+    robot->userData = placeholder.userData;
+
+    // Re-apply descendant userData onto same-named nodes in the fresh subtree.
+    // Build a name -> first node map once, then assign; a name that no longer
+    // exists (the URDF changed under the document) is reported, not lost silently.
+    std::unordered_map<std::string, Object3D*> byName;
+    robot->traverse([&](Object3D& node) {
+        if (&node == robot.get()) return;
+        if (node.name.empty()) return;
+        byName.emplace(node.name, &node);// first match wins
+    });
+    for (auto& [name, data] : descendantData) {
+        const auto it = byName.find(name);
+        if (it == byName.end()) {
+            if (log) log("robot \"" + robot->name + "\": userData on \"" + name +
+                         "\" did not resolve after re-articulation (node gone from the URDF)");
+            continue;
+        }
+        for (auto& [key, value] : data) it->second->userData[key] = value;
+    }
+
+    for (std::size_t i = 0; i < config.joints.size() && i < robot->numDOF(); ++i) {
+        robot->setJointValue(i, config.joints[i]);
+    }
+    robot->showColliders(config.showColliders);
+
+    const auto index = childIndex(*parent, placeholder);
+    placeholder.removeFromParent();
+    insertChildAt(*parent, robot, index);
 }

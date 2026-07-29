@@ -145,6 +145,9 @@ namespace threepp::editor {
         void drawCameraSection(Object3D& object);
         void drawAnimationSection(Object3D& object);
         void drawJointsSection(Object3D& object);
+        // Whether Play simulates this robot as a PhysX articulation, written into
+        // userData["articulation"]. Drawn inside the Robot section, PhysX-free.
+        void drawArticulationBlock(Object3D& object, Robot& robot);
         void drawScriptSection(Object3D& object);
         void drawPhysicsSection(Object3D& object);
         // Sensor authoring: type, rate, seed and the per-type noise model, all
