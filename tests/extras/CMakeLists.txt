@@ -27,6 +27,21 @@ if (TARGET unofficial::omniverse-physx-sdk::sdk)
         add_test_executable(${name})
         target_link_libraries(${name} PRIVATE unofficial::omniverse-physx-sdk::sdk)
     endforeach ()
+
+    # The convex-collider tests (and the play session's decomposed/compound
+    # paths that the physics-play test now exercises) need V-HACD. Link it and
+    # flip the feature macro on the TUs that include PhysicsPlaySession.hpp.
+    if (TARGET threepp_convex_decomp)
+        add_test_executable(EditorConvexDecomp_test)
+        target_link_libraries(EditorConvexDecomp_test
+                PRIVATE unofficial::omniverse-physx-sdk::sdk threepp_convex_decomp)
+        target_compile_definitions(EditorConvexDecomp_test PRIVATE THREEPP_EDITOR_WITH_VHACD=1)
+
+        foreach (name EditorPhysicsPlay_test)
+            target_link_libraries(${name} PRIVATE threepp_convex_decomp)
+            target_compile_definitions(${name} PRIVATE THREEPP_EDITOR_WITH_VHACD=1)
+        endforeach ()
+    endif ()
 else ()
     message(STATUS "physx not found, skipping the PhysX-backed sensor tests..")
 endif ()

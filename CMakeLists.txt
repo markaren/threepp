@@ -91,6 +91,11 @@ include(cmake/FetchOptionalDeps.cmake)
 
 add_subdirectory(src)
 
+# V-HACD convex decomposition, a small static library the editor and the PhysX
+# tests share. Self-gates on the PhysX SDK being present, so a build without
+# PhysX skips it entirely.
+include(cmake/ConvexDecomposition.cmake)
+
 # Python bindings (pybind11). Built only when explicitly enabled; pulls in
 # pybind11 via FetchContent and produces the `threepp` Python extension module.
 if (THREEPP_WITH_PYTHON)

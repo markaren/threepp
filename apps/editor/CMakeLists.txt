@@ -48,6 +48,13 @@ endif ()
 if (TARGET unofficial::omniverse-physx-sdk::sdk)
     target_link_libraries(threepp_editor PRIVATE unofficial::omniverse-physx-sdk::sdk)
     target_compile_definitions(threepp_editor PRIVATE THREEPP_EDITOR_WITH_PHYSX=1)
+    # V-HACD convex decomposition (defined at the top level, gated on the same
+    # SDK). Its presence flips on the compound/decomposed collider paths in
+    # PhysicsPlaySession.
+    if (TARGET threepp_convex_decomp)
+        target_link_libraries(threepp_editor PRIVATE threepp_convex_decomp)
+        target_compile_definitions(threepp_editor PRIVATE THREEPP_EDITOR_WITH_VHACD=1)
+    endif ()
     message(STATUS "threepp_editor: PhysX play session enabled")
 
     if (WIN32 AND TARGET unofficial::omniverse-physx-sdk::gpu-library)

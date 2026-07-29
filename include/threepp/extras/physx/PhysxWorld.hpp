@@ -862,6 +862,32 @@ namespace threepp {
             return out;
         }
 
+        // Cook a convex hull from raw positions (tightly packed x,y,z floats).
+        // The vertex-count limit is clamped to PhysX's hard ceiling of 255; 64 is
+        // the sane default the editor cooks decomposed hulls at (a hull with more
+        // than a few dozen planes buys precision no rigid-body contact needs and
+        // slows narrowphase). Returns nullptr on a degenerate input (< 4 points)
+        // or a cook failure; the caller owns the returned PxConvexMesh and must
+        // release() it once its shapes are built.
+        ::physx::PxConvexMesh* cookConvexHull(const float* positions, std::size_t vertCount,
+                                              unsigned maxVerts = 64) {
+            using namespace ::physx;
+            if (!positions || vertCount < 4) return nullptr;
+
+            PxConvexMeshDesc desc;
+            desc.points.count = static_cast<PxU32>(vertCount);
+            desc.points.stride = sizeof(float) * 3;
+            desc.points.data = positions;
+            desc.flags = PxConvexFlag::eCOMPUTE_CONVEX;
+            // Without ePLANE_SHIFTING the cooker's vertexLimit floor is 8, and 64
+            // is the ceiling for a GPU-compatible hull (the world may run GPU
+            // dynamics) — so clamp into [8, 64] rather than PhysX's raw [4, 255].
+            desc.vertexLimit = static_cast<PxU16>(std::clamp<unsigned>(maxVerts, 8u, 64u));
+
+            PxCookingParams params(physics_->getTolerancesScale());
+            return PxCreateConvexMesh(params, desc);
+        }
+
         // Cook a convex hull from the mesh vertices and add it as a dynamic actor.
         // PhysX dynamics require convex shapes — for non-convex visuals (a traffic
         // cone, an L-bracket) the hull is the smallest convex envelope. Pose and
@@ -875,17 +901,8 @@ namespace threepp {
             const auto* posAttr = g->getAttribute<float>("position");
             if (!posAttr) return nullptr;
             const auto& positions = posAttr->array();
-            const PxU32 vertCount = static_cast<PxU32>(posAttr->count());
-            if (vertCount < 4) return nullptr;
 
-            PxConvexMeshDesc desc;
-            desc.points.count = vertCount;
-            desc.points.stride = sizeof(float) * 3;
-            desc.points.data = positions.data();
-            desc.flags = PxConvexFlag::eCOMPUTE_CONVEX;
-
-            PxCookingParams params(physics_->getTolerancesScale());
-            PxConvexMesh* convex = PxCreateConvexMesh(params, desc);
+            PxConvexMesh* convex = cookConvexHull(positions.data(), posAttr->count());
             if (!convex) return nullptr;
 
             if (!mat) mat = defaultMat_;
@@ -905,6 +922,62 @@ namespace threepp {
             scene_->addActor(*body);
             bind(mesh, *body);
             return body;
+        }
+
+        // One convex shape in a compound actor: a cooked hull, where it sits in
+        // the actor's local frame, and the per-hull scale baked into that shape.
+        // The mesh is NOT owned here — cook it with cookConvexHull, hand the parts
+        // to addCompound, and release each hull afterwards (attachShape keeps its
+        // own reference, so the actor survives the release).
+        struct ConvexPart {
+            ::physx::PxConvexMesh* mesh = nullptr;
+            ::physx::PxTransform localPose{::physx::PxIdentity};
+            Vector3 scale{1.f, 1.f, 1.f};
+        };
+
+        // Build ONE rigid actor (dynamic or static) carrying several convex
+        // shapes, each at its own local pose. This is what a multi-hull collider
+        // is: an imported prop whose sub-meshes each become a hull, or a single
+        // concave mesh V-HACD split into convex pieces, all welded into one body
+        // so they move as a rigid whole.
+        //
+        // For a dynamic body the mass properties come from the UNION of the
+        // shapes via a single updateMassAndInertia after they all attach — the
+        // inertia of the whole, not of any one piece. `pose` is the actor's world
+        // transform; the parts' localPose/scale are relative to it. Binding (so a
+        // visual follows the sim) is the caller's job — it holds the Object3D.
+        ::physx::PxRigidActor* addCompound(const ::physx::PxTransform& pose,
+                                           const std::vector<ConvexPart>& parts,
+                                           bool dynamic, float density,
+                                           ::physx::PxMaterial* mat = nullptr) {
+            using namespace ::physx;
+            if (parts.empty()) return nullptr;
+            if (!mat) mat = defaultMat_;
+
+            PxRigidActor* actor = dynamic
+                                          ? static_cast<PxRigidActor*>(physics_->createRigidDynamic(pose))
+                                          : static_cast<PxRigidActor*>(physics_->createRigidStatic(pose));
+            std::size_t attached = 0;
+            for (const auto& part : parts) {
+                if (!part.mesh) continue;
+                PxConvexMeshGeometry geom(part.mesh, PxMeshScale(toPxVec3(part.scale)));
+                PxShape* shape = physics_->createShape(geom, *mat, true);
+                shape->setLocalPose(part.localPose);
+                actor->attachShape(*shape);
+                shape->release();
+                ++attached;
+            }
+            if (attached == 0) {
+                actor->release();
+                return nullptr;
+            }
+            if (dynamic) {
+                // Mass from the union of every hull, computed once — the whole
+                // body's inertia, not a per-piece sum that ignores the offsets.
+                PxRigidBodyExt::updateMassAndInertia(*static_cast<PxRigidDynamic*>(actor), density);
+            }
+            scene_->addActor(*actor);
+            return actor;
         }
 
         // One PxRigidDynamic per instance. Initial pose taken from each instance matrix.
