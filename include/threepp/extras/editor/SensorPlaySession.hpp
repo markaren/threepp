@@ -1,10 +1,21 @@
 // The PlaySession that turns authored SensorConfig entries into live sensors.
 //
-// Header-only and PhysX-dependent, exactly like PhysicsPlaySession — the threepp
-// library proper never links PhysX, so this file is included only by builds that
-// found the SDK (the editor sets THREEPP_EDITOR_WITH_PHYSX). Everything that is
-// PhysX-free lives in SensorConfig, which the inspector and the tests use on
-// every platform.
+// This header is PhysX-FREE, and that is the point of its shape. The vision
+// sensors — depth and lidar — are renderer constructs: a scan needs a Renderer
+// and a Scene, not a physics world, so a build without the PhysX SDK still
+// authors, plays, overlays and records them. The four body/joint sensors (IMU,
+// contact, encoder, force/torque) do need the world, so their construction and
+// draining are virtual hooks: this class answers with a status line naming the
+// missing build, and PhysxSensorPlaySession overrides them with the real thing.
+//
+// The split is by CLASS, not by #ifdef. A header-only class whose inline
+// methods change under a per-target macro is an ODR violation waiting for two
+// targets to disagree — the V-HACD macro rode exactly that path once — so each
+// header compiles the same way in every TU, and the one #ifdef left is the
+// editor choosing WHICH class to construct. Entry still carries the body
+// sensors' pointers (forward-declared, shared_ptr so destruction never needs
+// the complete type) because the panel, the overlay and the tests all consume
+// ONE entry list.
 //
 // Sensors are PLAY-TIME CONSTRUCTS. They are built from userData at Play and
 // dropped at Stop; nothing about a live sensor is ever serialized. That is not a
@@ -18,17 +29,10 @@
 //
 //   pushed  — Imu, ContactSensor: registered with the PhysxWorld that
 //             PhysicsPlaySession built, sampled from its fixed-substep loop the
-//             instant body state is fresh. This session does not step physics
-//             and does not touch the world's timestep.
+//             instant body state is fresh. Lives in PhysxSensorPlaySession.
 //   pulled  — DepthSensor, LidarSensor: a scan needs a Renderer, which the
 //             physics step loop has no business holding, so update() drives
 //             their clock and rate gate itself and scans when scanDue() says so.
-//
-// The world is borrowed, never owned: PlayController stops sessions in
-// registration order, and physics is registered FIRST, so by the time stop()
-// runs here the PhysxWorld may already be gone. Hence the lifetime token — the
-// world pointer is only ever dereferenced while PhysicsPlaySession's token is
-// still alive.
 //
 // Editor furniture is hidden for the duration of every scan. A depth camera
 // pointed at the viewport grid measures the grid; the sensor rig itself lives
@@ -37,14 +41,8 @@
 #ifndef THREEPP_EDITOR_SENSORPLAYSESSION_HPP
 #define THREEPP_EDITOR_SENSORPLAYSESSION_HPP
 
-#include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/PlaySession.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
-
-#include "threepp/extras/sensors/ContactSensor.hpp"
-#include "threepp/extras/sensors/ForceTorqueSensor.hpp"
-#include "threepp/extras/sensors/Imu.hpp"
-#include "threepp/extras/sensors/JointEncoder.hpp"
 
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/helpers/LidarSensor.hpp"
@@ -59,7 +57,6 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
-#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -67,6 +64,19 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+namespace threepp {
+
+    // The body/joint sensors are PhysX types; only their pointers appear here.
+    // shared_ptr rather than unique_ptr so ~Entry never needs the complete
+    // types — the deleter is captured where PhysxSensorPlaySession constructs
+    // them, which is the one place that includes their headers.
+    class ContactSensor;
+    class ForceTorqueSensor;
+    class Imu;
+    class JointEncoder;
+
+}// namespace threepp
 
 namespace threepp::editor {
 
@@ -115,10 +125,10 @@ namespace threepp::editor {
             SensorConfig config;
             Object3D* node = nullptr;
 
-            std::unique_ptr<Imu> imu;
-            std::unique_ptr<ContactSensor> contact;
-            std::unique_ptr<JointEncoder> encoder;
-            std::unique_ptr<ForceTorqueSensor> forceTorque;
+            std::shared_ptr<Imu> imu;
+            std::shared_ptr<ContactSensor> contact;
+            std::shared_ptr<JointEncoder> encoder;
+            std::shared_ptr<ForceTorqueSensor> forceTorque;
             // Object3D subclasses: parented into the rig, so they follow the
             // scene's world-matrix update and are never saved or picked.
             std::unique_ptr<DepthSensor> depth;
@@ -165,24 +175,10 @@ namespace threepp::editor {
         // The editor being torn down mid-Play never gets a stop(). The rig
         // outlives this session by construction (it is editor furniture), so the
         // sensor nodes have to come out of its children list before they die.
+        // The body sensors' unregistration is PhysxSensorPlaySession's half —
+        // its destructor body runs before this one.
         ~SensorPlaySession() override {
 
-            // Same two paths as stop(): unregister cleanly while the world lives
-            // (the editor drops this session before the physics one — see
-            // EditorApp's destructor), otherwise abandon the Force/Torque cache so
-            // the sensor's destructor does not release it against a freed SDK.
-            if (auto* world = liveWorld()) {
-                for (const auto& entry : entries_) {
-                    if (entry->imu) world->unregisterSensor(entry->imu.get());
-                    if (entry->contact) world->unregisterSensor(entry->contact.get());
-                    if (entry->encoder) world->unregisterSensor(entry->encoder.get());
-                    if (entry->forceTorque) world->unregisterSensor(entry->forceTorque.get());
-                }
-            } else {
-                for (const auto& entry : entries_) {
-                    if (entry->forceTorque) entry->forceTorque->abandonCache();
-                }
-            }
             for (const auto& entry : entries_) {
                 if (entry->depth) entry->depth->removeFromParent();
                 if (entry->lidar) entry->lidar->removeFromParent();
@@ -190,10 +186,6 @@ namespace threepp::editor {
         }
 
         // --- wiring (set once, before the first Play) ------------------------
-
-        // Where the pushed sensors register. Borrowed; the token this session
-        // reads from it is what keeps a stopped world from being dereferenced.
-        void setPhysics(PhysicsPlaySession* physics) { physics_ = physics; }
 
         // The renderer the vision sensors scan with. Without one they are still
         // built (and say so) but never scan — a headless test, or a build whose
@@ -229,8 +221,9 @@ namespace threepp::editor {
         }
 
         // The clock every measurement is stamped with: the physics world's
-        // accumulated substep time while one exists, otherwise this session's own
-        // accumulation of the frame delta. Sim time, never wall time.
+        // accumulated substep time while one exists (worldClock), otherwise this
+        // session's own accumulation of the frame delta. Sim time, never wall
+        // time.
         [[nodiscard]] double simTime() const { return simTime_; }
 
         // --- recording -------------------------------------------------------
@@ -260,13 +253,6 @@ namespace threepp::editor {
             scene_ = &scene;
             entries_.clear();
             simTime_ = 0.0;
-            world_ = nullptr;
-            worldLife_.reset();
-
-            if (physics_) {
-                world_ = physics_->world();
-                worldLife_ = physics_->lifetime();
-            }
 
             // Collect first, build second: registering a sensor can throw, and a
             // stable list keeps the build order (and therefore every seeded
@@ -293,45 +279,19 @@ namespace threepp::editor {
             // One clock for the whole rig. The pushed sensors are stamped by the
             // world itself; reading the same number here keeps a scan's timestamp
             // on the same time base as the IMU sample beside it.
-            if (auto* world = liveWorld()) {
-                simTime_ = world->simTime();
-            } else {
+            if (!worldClock(simTime_)) {
                 simTime_ += static_cast<double>(dt);
             }
 
             scanAll(dt);
-            drainAll();
+            drainBodies();
         }
 
         void stop() override {
 
-            // Sessions stop in registration order, physics FIRST — so by the time
-            // this runs the PhysxWorld (and the PhysX SDK behind it) is usually
-            // already gone. Two paths:
-            //
-            //  world alive  — a mid-play teardown that reached us before physics.
-            //                 Unregister cleanly; the Force/Torque sensor releases
-            //                 its PxArticulationCache through onUnregister while the
-            //                 SDK still exists.
-            //  world gone   — the normal Stop. The cache's memory went with the SDK,
-            //                 so calling release() on it would touch a freed
-            //                 allocator (this is the SIGSEGV commit 689953e7's class
-            //                 of bug). Abandon the pointer instead: the SDK teardown
-            //                 already reclaimed the buffer, so nothing leaks that the
-            //                 process does not, and the destructor stays a no-op.
-            if (auto* world = liveWorld()) {
-                for (const auto& entry : entries_) {
-                    if (entry->imu) world->unregisterSensor(entry->imu.get());
-                    if (entry->contact) world->unregisterSensor(entry->contact.get());
-                    if (entry->encoder) world->unregisterSensor(entry->encoder.get());
-                    if (entry->forceTorque) world->unregisterSensor(entry->forceTorque.get());
-                }
-            } else {
-                for (const auto& entry : entries_) {
-                    if (entry->forceTorque) entry->forceTorque->abandonCache();
-                }
-            }
-
+            // PhysxSensorPlaySession has already unregistered the body sensors
+            // (its stop() runs first and calls down here); what is left is the
+            // renderer half and the shared bookkeeping.
             closeFiles();
 
             // Detach the rig nodes before the sensors are destroyed: the rig
@@ -344,50 +304,95 @@ namespace threepp::editor {
 
             entries_.clear();
             scene_ = nullptr;
-            world_ = nullptr;
-            worldLife_.reset();
             simTime_ = 0.0;
         }
 
-    private:
+    protected:
+        // --- the PhysX seam --------------------------------------------------
+        //
+        // The three places a body/joint sensor differs from a vision one. The
+        // defaults are what a build without the SDK does; PhysxSensorPlaySession
+        // overrides all three.
+
+        // Build the sensors for one authored non-vision entry (the encoder
+        // fan-out can produce several). Here: one entry that says which build it
+        // is waiting for — authoring is respected everywhere, simulation is not
+        // pretended anywhere.
+        virtual void buildBodySensors(Object3D& node, const SensorConfig& config) {
+
+            auto entry = makeEntry(node, config);
+            entry->status = std::string(SensorConfig::label(config.type)) +
+                            " needs the PhysX build - authored and saved, not run";
+            commit(std::move(entry));
+        }
+
+        // Drain the pushed sensors into traces/CSV. Nothing to drain here.
+        virtual void drainBodies() {}
+
+        // Report the physics world's clock, if one is running. False leaves the
+        // session accumulating the frame delta itself.
+        virtual bool worldClock(double& /*time*/) { return false; }
+
+        // --- shared machinery for the subclass -------------------------------
+
+        std::unique_ptr<Entry> makeEntry(Object3D& node, const SensorConfig& config) {
+
+            auto entry = std::make_unique<Entry>();
+            entry->uuid = node.uuid;
+            entry->label = labelFor(node);
+            entry->config = config;
+            entry->node = &node;
+            return entry;
+        }
+
+        // Adopt a built entry: a non-empty status is worth a console line at
+        // Play — it is the moment the user is looking.
+        void commit(std::unique_ptr<Entry> entry) {
+
+            if (!entry->status.empty()) log("sensor: \"" + entry->label + "\" - " + entry->status);
+            entries_.push_back(std::move(entry));
+        }
+
         void log(const std::string& message) {
 
             if (logger_) logger_(message);
         }
 
-        // The borrowed world, or nullptr once PhysicsPlaySession has stopped.
-        [[nodiscard]] PhysxWorld* liveWorld() const {
+        // Opens the entry's CSV on first use, writing `header`. Returns false
+        // when recording is off or the file could not be opened (reported once).
+        bool openFile(Entry& entry, const char* header) {
 
-            if (!world_) return nullptr;
-            return worldLife_.expired() ? nullptr : world_;
+            if (!recording_) return false;
+            if (entry.csv.is_open()) return true;
+
+            std::error_code ec;
+            std::filesystem::create_directories(recordDir_, ec);
+
+            entry.csvPath = recordDir_ / (sanitize(entry.label) + "_" +
+                                          entry.uuid.substr(0, 8) + ".csv");
+            entry.csv.open(entry.csvPath, std::ios::out | std::ios::trunc);
+            if (!entry.csv.is_open()) {
+                log("sensor: cannot write " + entry.csvPath.string());
+                // Turn recording off wholesale rather than retry the open on
+                // every measurement of every frame.
+                recording_ = false;
+                return false;
+            }
+            // Default ostream precision is 6 SIGNIFICANT digits, which turns a
+            // sim time of 12.3456789 s into 12.3457 — a millisecond-resolution
+            // dataset quantized to a tenth of a millisecond for no reason.
+            entry.csv << std::setprecision(9);
+            entry.csv << header << '\n';
+            return true;
         }
 
+        std::vector<std::unique_ptr<Entry>> entries_;
+
+    private:
         static std::string labelFor(const Object3D& node) {
 
             if (!node.name.empty()) return node.name;
             return "sensor " + node.uuid.substr(0, 8);
-        }
-
-        NoiseModel gyroNoise(const SensorConfig& config) const {
-
-            NoiseModel model;
-            const float d = std::max(config.gyroNoiseDensity, 0.f);
-            const float w = std::max(config.gyroRandomWalk, 0.f);
-            model.whiteNoiseDensity.set(d, d, d);
-            model.randomWalk.set(w, w, w);
-            model.seed = config.streamSeed(0);
-            return model;
-        }
-
-        NoiseModel accelNoise(const SensorConfig& config) const {
-
-            NoiseModel model;
-            const float d = std::max(config.accelNoiseDensity, 0.f);
-            const float w = std::max(config.accelRandomWalk, 0.f);
-            model.whiteNoiseDensity.set(d, d, d);
-            model.randomWalk.set(w, w, w);
-            model.seed = config.streamSeed(1);
-            return model;
         }
 
         static RangeNoiseModel rangeNoise(const SensorConfig& config) {
@@ -414,237 +419,18 @@ namespace threepp::editor {
 
         void build(Object3D& node, const SensorConfig& config) {
 
-            // One authored entry normally becomes one sensor. The whole-robot
-            // encoder (joint == allJoints) is the exception: an object carries
-            // ONE sensor entry, so covering every DOF from the robot's root has
-            // to fan out — one live encoder per joint, each its own Entry so the
-            // traces, the counters and the CSV files stay per-joint.
-            if (config.type == SensorConfig::Type::Encoder &&
-                config.joint == SensorConfig::allJoints) {
-                buildEncoderFanout(node, config);
+            if (!SensorConfig::isVision(config.type)) {
+                buildBodySensors(node, config);
                 return;
             }
 
-            auto entry = std::make_unique<Entry>();
-            entry->uuid = node.uuid;
-            entry->label = labelFor(node);
-            entry->config = config;
-            entry->node = &node;
-
-            switch (config.type) {
-                case SensorConfig::Type::Imu: buildImu(*entry, node, config); break;
-                case SensorConfig::Type::Contact: buildContact(*entry, node, config); break;
-                case SensorConfig::Type::Depth: buildDepth(*entry, config); break;
-                case SensorConfig::Type::Lidar: buildLidar(*entry, config); break;
-                case SensorConfig::Type::Encoder: buildEncoder(*entry, node, config); break;
-                case SensorConfig::Type::ForceTorque: buildForceTorque(*entry, node, config); break;
+            auto entry = makeEntry(node, config);
+            if (config.type == SensorConfig::Type::Depth) {
+                buildDepth(*entry, config);
+            } else {
+                buildLidar(*entry, config);
             }
-
-            if (!entry->status.empty()) log("sensor: \"" + entry->label + "\" - " + entry->status);
-            entries_.push_back(std::move(entry));
-        }
-
-        void buildImu(Entry& entry, Object3D& node, const SensorConfig& config) {
-
-            auto* world = liveWorld();
-            if (!world) {
-                entry.status = "no physics world - an IMU rides a rigid body";
-                return;
-            }
-
-            auto imu = std::make_unique<Imu>(node, static_cast<double>(std::max(config.rateHz, 0.f)));
-            imu->gyroNoise = gyroNoise(config);
-            imu->accelNoise = accelNoise(config);
-            try {
-                // onRegister resolves the rigid body and throws when there is
-                // none, which is the mistake worth surfacing at Play rather than
-                // as a sensor that silently reads zeros.
-                world->registerSensor(imu.get());
-            } catch (const std::exception& e) {
-                entry.status = e.what();
-                return;
-            }
-            entry.imu = std::move(imu);
-
-            entry.traceNames = {"gyro x", "gyro y", "gyro z", "accel x", "accel y", "accel z"};
-            entry.traceCount = 6;
-        }
-
-        void buildContact(Entry& entry, Object3D& node, const SensorConfig& config) {
-
-            auto* world = liveWorld();
-            if (!world) {
-                entry.status = "no physics world - a contact sensor rides a rigid body";
-                return;
-            }
-
-            auto contact = std::make_unique<ContactSensor>(
-                    node, static_cast<double>(std::max(config.rateHz, 0.f)));
-            try {
-                world->registerSensor(contact.get());
-            } catch (const std::exception& e) {
-                entry.status = e.what();
-                return;
-            }
-            entry.contact = std::move(contact);
-
-            entry.traceNames = {"force (N)", "touching", nullptr, nullptr, nullptr, nullptr};
-            entry.traceCount = 2;
-        }
-
-        // Resolve the played articulation a joint sensor rides, or set a status
-        // that names exactly what is missing. Returns nullptr on any failure.
-        const PhysicsPlaySession::PlayedArticulation* resolveArticulation(Entry& entry, Object3D& node) {
-
-            if (!liveWorld()) {
-                entry.status = "no physics world - a joint sensor rides an articulated robot";
-                return nullptr;
-            }
-            if (!physics_) {
-                entry.status = "no physics session - a joint sensor rides an articulated robot";
-                return nullptr;
-            }
-            const auto* played = physics_->findArticulation(&node);
-            if (!played) {
-                entry.status = "no articulated robot - enable Simulate in the Robot section";
-            }
-            return played;
-        }
-
-        // Resolve the articulation link ONE joint sensor measures, or set a
-        // status that names exactly what is missing. Returns nullptr on any
-        // failure.
-        const ArticulationLink* resolveJoint(Entry& entry, Object3D& node, const SensorConfig& config) {
-
-            const auto* played = resolveArticulation(entry, node);
-            if (!played) return nullptr;
-            if (config.joint.empty()) {
-                entry.status = "no joint chosen - pick one in the Sensor section";
-                return nullptr;
-            }
-            if (config.joint == SensorConfig::allJoints) {
-                // Only the Force/Torque sensor gets here - the encoder's
-                // all-joints fan-out is intercepted in build() before any entry
-                // reaches this resolver.
-                entry.status = "All joints is an encoder thing - a load cell sits in one joint";
-                return nullptr;
-            }
-            const auto* link = played->linkFor(config.joint);
-            if (!link) {
-                entry.status = "joint \"" + config.joint + "\" is not a simulated DOF of this robot";
-                return nullptr;
-            }
-            return link;
-        }
-
-        NoiseModel encoderPositionNoise(const SensorConfig& config, int streamIndex) const {
-
-            // A joint encoder's error is dominated by quantization (encoderResolution
-            // below), so the position noise is left at the clean default here — no
-            // authored density/walk fields exist for it in this pass. Still seed it
-            // from a free stream index so a future field is reproducible and does not
-            // collide with the IMU's 0/1 or a range channel's 2. `streamIndex` is the
-            // DOF index under the all-joints fan-out (0 for a single encoder, so the
-            // authored seed keeps its meaning), so seven encoders from one authored
-            // seed do not draw correlated noise.
-            NoiseModel model;
-            model.seed = config.streamSeed(3 + streamIndex);
-            return model;
-        }
-
-        void buildEncoder(Entry& entry, Object3D& node, const SensorConfig& config) {
-
-            const auto* link = resolveJoint(entry, node, config);
-            if (!link) return;
-            buildEncoderFor(entry, node, config, *link, 0);
-        }
-
-        // The construction shared by the single named encoder and the all-joints
-        // fan-out.
-        void buildEncoderFor(Entry& entry, Object3D& node, const SensorConfig& config,
-                             const ArticulationLink& link, int streamIndex) {
-
-            auto encoder = std::make_unique<JointEncoder>(
-                    node, link, static_cast<double>(std::max(config.rateHz, 0.f)));
-            encoder->resolution = std::max(config.encoderResolution, 0.f);
-            encoder->positionNoise = encoderPositionNoise(config, streamIndex);
-            try {
-                liveWorld()->registerSensor(encoder.get());
-            } catch (const std::exception& e) {
-                entry.status = e.what();
-                return;
-            }
-            entry.encoder = std::move(encoder);
-
-            entry.traceNames = {"position", "velocity", nullptr, nullptr, nullptr, nullptr};
-            entry.traceCount = 2;
-        }
-
-        // One authored entry, one live encoder per articulated DOF. Each joint
-        // gets its own Entry: its own traces, its own sample counter, and its
-        // own CSV — the label carries the joint name, which is what keeps the
-        // readout rows and the recorded files apart when they all share a node.
-        void buildEncoderFanout(Object3D& node, const SensorConfig& config) {
-
-            // Resolve the robot once: a failure is ONE entry carrying the
-            // reason, not a copy of it for every DOF that does not exist.
-            auto probe = std::make_unique<Entry>();
-            probe->uuid = node.uuid;
-            probe->label = labelFor(node);
-            probe->config = config;
-            probe->node = &node;
-            const auto* played = resolveArticulation(*probe, node);
-            if (played && played->jointNames.empty()) {
-                probe->status = "the robot has no simulated DOFs";
-            }
-            if (!played || played->jointNames.empty()) {
-                log("sensor: \"" + probe->label + "\" - " + probe->status);
-                entries_.push_back(std::move(probe));
-                return;
-            }
-
-            for (std::size_t i = 0; i < played->jointNames.size() && i < played->links.size(); ++i) {
-                auto entry = std::make_unique<Entry>();
-                entry->uuid = node.uuid;
-                entry->label = labelFor(node) + " " + played->jointNames[i];
-                entry->config = config;
-                entry->config.joint = played->jointNames[i];// which joint this one became
-                entry->node = &node;
-                buildEncoderFor(*entry, node, config, played->links[i], static_cast<int>(i));
-                if (!entry->status.empty()) log("sensor: \"" + entry->label + "\" - " + entry->status);
-                entries_.push_back(std::move(entry));
-            }
-        }
-
-        void buildForceTorque(Entry& entry, Object3D& node, const SensorConfig& config) {
-
-            const auto* link = resolveJoint(entry, node, config);
-            if (!link) return;
-
-            // resolveJoint proved the articulation exists; fetch it for the sensor,
-            // which needs the Articulation to build its state cache.
-            const auto* played = physics_->findArticulation(&node);
-            if (!played || !played->articulation) {
-                entry.status = "no articulation to read a wrench from";
-                return;
-            }
-
-            auto ft = std::make_unique<ForceTorqueSensor>(
-                    node, *played->articulation, *link,
-                    static_cast<double>(std::max(config.rateHz, 0.f)));
-            try {
-                // onRegister creates the PxArticulationCache; unregisterSensor (in
-                // stop(), while the world is alive) releases it before the
-                // articulation is destroyed, so there is no use-after-free on Stop.
-                liveWorld()->registerSensor(ft.get());
-            } catch (const std::exception& e) {
-                entry.status = e.what();
-                return;
-            }
-            entry.forceTorque = std::move(ft);
-
-            entry.traceNames = {"force x", "force y", "force z", "torque x", "torque y", "torque z"};
-            entry.traceCount = 6;
+            commit(std::move(entry));
         }
 
         void buildDepth(Entry& entry, const SensorConfig& config) {
@@ -773,104 +559,6 @@ namespace threepp::editor {
             if (hidden_) hidden_->visible = wasVisible;
         }
 
-        void drainAll() {
-
-            for (const auto& entry : entries_) {
-                if (entry->imu) drainImu(*entry);
-                if (entry->contact) drainContact(*entry);
-                if (entry->encoder) drainEncoder(*entry);
-                if (entry->forceTorque) drainForceTorque(*entry);
-            }
-        }
-
-        void drainImu(Entry& entry) {
-
-            entry.imu->drain(imuScratch_);
-            if (imuScratch_.empty()) return;
-
-            for (const auto& sample : imuScratch_) {
-                entry.traces[0].push(sample.angularVelocity.x);
-                entry.traces[1].push(sample.angularVelocity.y);
-                entry.traces[2].push(sample.angularVelocity.z);
-                entry.traces[3].push(sample.linearAcceleration.x);
-                entry.traces[4].push(sample.linearAcceleration.y);
-                entry.traces[5].push(sample.linearAcceleration.z);
-                if (openFile(entry, "t,gyro_x,gyro_y,gyro_z,accel_x,accel_y,accel_z")) {
-                    entry.csv << sample.t << ','
-                              << sample.angularVelocity.x << ',' << sample.angularVelocity.y << ','
-                              << sample.angularVelocity.z << ','
-                              << sample.linearAcceleration.x << ',' << sample.linearAcceleration.y
-                              << ',' << sample.linearAcceleration.z << '\n';
-                    ++entry.rows;
-                }
-            }
-            entry.samples += imuScratch_.size();
-            entry.lastTime = imuScratch_.back().t;
-        }
-
-        void drainContact(Entry& entry) {
-
-            entry.contact->drain(contactScratch_);
-            if (contactScratch_.empty()) return;
-
-            for (const auto& sample : contactScratch_) {
-                const float force = sample.force.length();
-                entry.traces[0].push(force);
-                entry.traces[1].push(sample.inContact ? 1.f : 0.f);
-                if (openFile(entry, "t,in_contact,force,fx,fy,fz,points")) {
-                    entry.csv << sample.t << ',' << (sample.inContact ? 1 : 0) << ',' << force << ','
-                              << sample.force.x << ',' << sample.force.y << ',' << sample.force.z
-                              << ',' << sample.pointCount << '\n';
-                    ++entry.rows;
-                }
-            }
-            entry.samples += contactScratch_.size();
-            const auto& last = contactScratch_.back();
-            entry.inContact = last.inContact;
-            entry.contactForce = last.force.length();
-            entry.lastTime = last.t;
-        }
-
-        void drainEncoder(Entry& entry) {
-
-            entry.encoder->drain(encoderScratch_);
-            if (encoderScratch_.empty()) return;
-
-            for (const auto& sample : encoderScratch_) {
-                entry.traces[0].push(sample.position);
-                entry.traces[1].push(sample.velocity);
-                if (openFile(entry, "t,position,velocity")) {
-                    entry.csv << sample.t << ',' << sample.position << ',' << sample.velocity << '\n';
-                    ++entry.rows;
-                }
-            }
-            entry.samples += encoderScratch_.size();
-            entry.lastTime = encoderScratch_.back().t;
-        }
-
-        void drainForceTorque(Entry& entry) {
-
-            entry.forceTorque->drain(wrenchScratch_);
-            if (wrenchScratch_.empty()) return;
-
-            for (const auto& sample : wrenchScratch_) {
-                entry.traces[0].push(sample.force.x);
-                entry.traces[1].push(sample.force.y);
-                entry.traces[2].push(sample.force.z);
-                entry.traces[3].push(sample.torque.x);
-                entry.traces[4].push(sample.torque.y);
-                entry.traces[5].push(sample.torque.z);
-                if (openFile(entry, "t,fx,fy,fz,tx,ty,tz")) {
-                    entry.csv << sample.t << ','
-                              << sample.force.x << ',' << sample.force.y << ',' << sample.force.z << ','
-                              << sample.torque.x << ',' << sample.torque.y << ',' << sample.torque.z << '\n';
-                    ++entry.rows;
-                }
-            }
-            entry.samples += wrenchScratch_.size();
-            entry.lastTime = wrenchScratch_.back().t;
-        }
-
         // One row per scan: time, count and the cloud's gross shape. A row per
         // RETURN would be tens of thousands of lines a second and is a point-
         // cloud format's job, not a time series'.
@@ -906,34 +594,6 @@ namespace threepp::editor {
             entry.csv << entry.lastTime << ',' << count << ',' << sum.x << ',' << sum.y << ','
                       << sum.z << ',' << rmin << ',' << rmax << '\n';
             ++entry.rows;
-        }
-
-        // Opens the entry's CSV on first use, writing `header`. Returns false
-        // when recording is off or the file could not be opened (reported once).
-        bool openFile(Entry& entry, const char* header) {
-
-            if (!recording_) return false;
-            if (entry.csv.is_open()) return true;
-
-            std::error_code ec;
-            std::filesystem::create_directories(recordDir_, ec);
-
-            entry.csvPath = recordDir_ / (sanitize(entry.label) + "_" +
-                                          entry.uuid.substr(0, 8) + ".csv");
-            entry.csv.open(entry.csvPath, std::ios::out | std::ios::trunc);
-            if (!entry.csv.is_open()) {
-                log("sensor: cannot write " + entry.csvPath.string());
-                // Turn recording off wholesale rather than retry the open on
-                // every measurement of every frame.
-                recording_ = false;
-                return false;
-            }
-            // Default ostream precision is 6 SIGNIFICANT digits, which turns a
-            // sim time of 12.3456789 s into 12.3457 — a millisecond-resolution
-            // dataset quantized to a tenth of a millisecond for no reason.
-            entry.csv << std::setprecision(9);
-            entry.csv << header << '\n';
-            return true;
         }
 
         void closeFiles() {
@@ -989,27 +649,16 @@ namespace threepp::editor {
             return out;
         }
 
-        PhysicsPlaySession* physics_ = nullptr;
         Renderer* renderer_ = nullptr;
         Object3D* rig_ = nullptr;
         Object3D* hidden_ = nullptr;
         Scene* scene_ = nullptr;
         std::function<void(const std::string&)> logger_;
 
-        PhysxWorld* world_ = nullptr;
-        std::weak_ptr<const void> worldLife_;
-
-        std::vector<std::unique_ptr<Entry>> entries_;
         double simTime_ = 0.0;
 
         bool recording_ = false;
         std::filesystem::path recordDir_ = std::filesystem::temp_directory_path() / "threepp-sensors";
-
-        // Drain targets, reused so a 1 kHz sensor does not allocate per frame.
-        std::vector<ImuSample> imuScratch_;
-        std::vector<ContactSample> contactScratch_;
-        std::vector<JointSample> encoderScratch_;
-        std::vector<WrenchSample> wrenchScratch_;
     };
 
 }// namespace threepp::editor

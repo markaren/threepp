@@ -15,9 +15,10 @@
 
 #include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
 
+#include "threepp/extras/editor/SensorPlaySession.hpp"
 #ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
-#include "threepp/extras/editor/SensorPlaySession.hpp"
+#include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
 #endif
 
 #include "threepp/canvas/Monitor.hpp"
@@ -276,20 +277,28 @@ EditorApp::EditorApp(const Options& options)
     play_.addSession(physics_);
 #endif
     play_.addSession(std::make_shared<AnimationPlaySession>());
-#ifdef THREEPP_EDITOR_WITH_PHYSX
     // After physics (whose world the pushed sensors register with) and after the
     // animation player, so a scan sees the pose the frame ended on. Before the
     // script session, which stays last by rule — a script that moves a sensor's
     // object is therefore read one frame later, which is the price of "scripts
     // are the frame's final word".
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    {
+        auto sensors = std::make_shared<PhysxSensorPlaySession>();
+        sensors->setPhysics(physics_.get());
+        sensors_ = std::move(sensors);
+    }
+#else
+    // The base session runs the vision sensors: a depth or lidar scan needs a
+    // renderer, not a physics world. Body and joint sensors author, and say at
+    // Play which build they are waiting for.
     sensors_ = std::make_shared<SensorPlaySession>();
-    sensors_->setPhysics(physics_.get());
+#endif
     sensors_->setRenderer(renderer_.get());
     sensors_->setRig(sensorRig_.get());
     sensors_->setHiddenDuringScan(overlay_.get());
     sensors_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(sensors_);
-#endif
 #ifdef THREEPP_EDITOR_WITH_PYTHON
     // Last, so a script's transform edits are the final word for the frame —
     // physics and the animation player have already had their say.
@@ -317,7 +326,7 @@ EditorApp::EditorApp(const Options& options)
 
     log("threepp editor ready");
 #ifndef THREEPP_EDITOR_WITH_PHYSX
-    log("built without PhysX - Play runs with no physics session");
+    log("built without PhysX - no physics session; vision sensors still scan");
 #endif
 #ifndef THREEPP_EDITOR_WITH_PYTHON
     log("built without Python scripting - scripts are authored and saved, not run");

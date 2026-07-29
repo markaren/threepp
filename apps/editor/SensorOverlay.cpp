@@ -22,9 +22,7 @@
 
 #include "EditorApp.hpp"
 
-#ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/SensorPlaySession.hpp"
-#endif
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/PointsMaterial.hpp"
@@ -68,8 +66,6 @@ namespace {
 
 
 void EditorApp::syncSensorOverlay() {
-
-#ifdef THREEPP_EDITOR_WITH_PHYSX
 
     // entries() is empty between plays: the session drops them in stop().
     const bool wanted = sensorCloudVisible_ && sensors_ && sensors_->sensorCount() > 0;
@@ -168,10 +164,6 @@ void EditorApp::syncSensorOverlay() {
     color->needsUpdate();
     // The tail beyond `written` still holds whatever a busier frame left there.
     sensorCloud_->geometry()->drawRange = {0, written};
-
-#else
-    clearSensorOverlay();
-#endif
 }
 
 void EditorApp::clearSensorOverlay() {

@@ -107,7 +107,7 @@ namespace threepp {
         // it): calling release() then would touch a freed allocator. A host that
         // stops its physics world before this sensor - which is the editor's
         // session stop order - uses this instead of the destructor's release().
-        // See ForceTorqueSensor's use in SensorPlaySession.
+        // See ForceTorqueSensor's use in PhysxSensorPlaySession.
         void abandonCache() { cache_ = nullptr; }
 
         /// Re-arm: clear the buffer and re-seed the noise from the current configs.

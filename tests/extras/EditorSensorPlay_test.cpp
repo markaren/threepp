@@ -1,13 +1,15 @@
 // Sensor authoring, played.
 //
-// Drives the real SensorPlaySession against a real PhysicsPlaySession, headless
-// (no renderer), so the assertions are about the seam the editor actually uses:
-// userData in, live sensors out, measurements stamped with SIM time, and
-// everything gone again after Stop.
+// Drives the real PhysxSensorPlaySession against a real PhysicsPlaySession,
+// headless (no renderer), so the assertions are about the seam the editor
+// actually uses: userData in, live sensors out, measurements stamped with SIM
+// time, and everything gone again after Stop.
 //
 // Needs the PhysX SDK, so this target only exists where the SDK was found (see
 // tests/extras/CMakeLists.txt). The format half — the userData round trip and
-// the always-emit-all-keys rule — is EditorSensorConfig_test and runs everywhere.
+// the always-emit-all-keys rule — is EditorSensorConfig_test, and the PhysX-free
+// session half (vision sensors, the dt clock, the authored-only statuses) is
+// EditorVisionPlay_test; both run everywhere.
 //
 // What is deliberately NOT here: the vision sensors' clouds. A scan needs a GL
 // context, so that half is asserted in the editor's --selftest, which has one.
@@ -19,9 +21,9 @@
 #include "threepp/extras/editor/ObjectFactory.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
+#include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
-#include "threepp/extras/editor/SensorPlaySession.hpp"
 
 #include "threepp/loaders/URDFLoader.hpp"
 #include "threepp/objects/Group.hpp"
@@ -80,7 +82,7 @@ namespace {
         Scene scene;
         std::shared_ptr<Group> rig = Group::create();
         PhysicsPlaySession physics;
-        SensorPlaySession sensors;
+        PhysxSensorPlaySession sensors;
 
         Rig() {
             scene.addRef(*rig);
@@ -456,34 +458,9 @@ TEST_CASE("Recording writes a CSV with rows") {
     std::filesystem::remove_all(dir, ec);
 }
 
-TEST_CASE("A vision sensor without a renderer is built and says so") {
-
-    Rig rig;
-    auto post = ObjectFactory::createPrimitive(Primitive::Box, rig.scene);
-    post->name = "Mast";
-
-    SensorConfig sensor;
-    sensor.enabled = true;
-    sensor.type = SensorConfig::Type::Lidar;
-    sensor.beams = SensorConfig::Beams::VLP16;
-    sensor.faceSize = 32;
-    sensor.rateHz = 10.f;
-    sensor.write(*post);
-    rig.scene.add(post);
-
-    rig.start();
-    REQUIRE(rig.sensors.liveCount() == 1);
-    const auto& entry = *rig.sensors.entries().front();
-    CHECK(entry.lidar != nullptr);
-    CHECK_FALSE(entry.status.empty());// "no renderer"
-    // It IS in the rig, so the editor's export/snapshot filter covers it.
-    CHECK(entry.lidar->parent == rig.rig.get());
-
-    rig.update(30);
-    CHECK(entry.scans == 0);// nothing to scan with
-    rig.stop();
-    CHECK(rig.rig->children.empty());
-}
+// "A vision sensor without a renderer is built and says so" lives in
+// EditorVisionPlay_test now — it never needed the SDK, and there it runs on
+// every platform.
 
 TEST_CASE("An authored contact sensor reports landing on the ground") {
 

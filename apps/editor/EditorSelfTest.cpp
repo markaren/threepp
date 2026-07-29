@@ -26,15 +26,14 @@
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
+#include "threepp/extras/editor/SensorPlaySession.hpp"
 #ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
-#include "threepp/extras/editor/SensorPlaySession.hpp"
+#include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
 #endif
 
 #include "threepp/core/Clock.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
-// Directly, not via DepthSensor.hpp: that route is behind THREEPP_EDITOR_WITH_PHYSX,
-// and outlineCount() casts the helper to Object3D on every build.
 #include "threepp/helpers/CameraHelper.hpp"
 #include "threepp/lights/Light.hpp"
 #include "threepp/loaders/AssetSource.hpp"
@@ -306,9 +305,8 @@ int EditorApp::runScreenshot() {
         };
         // Wall-clock, and waiting on the CLOUD rather than on a frame count: a
         // scan is rate-gated off the physics accumulator, so how many frames it
-        // takes depends on the machine.
-        // `sensors_` is null in a build without PhysX, where no scan will ever
-        // arrive — waiting the full budget for one would burn twenty seconds.
+        // takes depends on the machine. Vision sensors scan in every build —
+        // the session no longer needs PhysX — so the wait is unconditional.
         for (int i = 0; i < 400 && sensors_ && cloudPoints() == 0; ++i) playFor(0.05f);
         camera_.position.set(-11.f, 9.f, 20.f);
         orbit_->target.set(0.f, 1.5f, 6.f);

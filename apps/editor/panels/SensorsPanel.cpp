@@ -18,11 +18,8 @@
 #include "../EditorApp.hpp"
 #include "../EditorTheme.hpp"
 
-#ifdef THREEPP_EDITOR_WITH_PHYSX
-#include "threepp/extras/editor/SensorPlaySession.hpp"
-#endif
-
 #include "threepp/extras/editor/SensorConfig.hpp"
+#include "threepp/extras/editor/SensorPlaySession.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
@@ -47,10 +44,11 @@ void EditorApp::drawSensorsTab() {
     });
 
 #ifndef THREEPP_EDITOR_WITH_PHYSX
-    ImGui::TextColored(theme::muted(), "Built without PhysX - sensors are authored and saved, not run.");
-    ImGui::Text("%zu sensor%s authored", authored, authored == 1 ? "" : "s");
-    return;
-#else
+    // The session still runs the vision sensors; the body/joint entries carry a
+    // per-sensor status at Play, so this is the only build-wide note needed.
+    ImGui::TextColored(theme::muted(),
+                       "Built without PhysX - body and joint sensors are authored, not run.");
+#endif
 
     const float s = contentScale_;
 
@@ -185,5 +183,4 @@ void EditorApp::drawSensorsTab() {
     }
 
     ImGui::EndChild();
-#endif
 }

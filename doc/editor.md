@@ -1025,7 +1025,12 @@ soft body's deformable volume), and lets `PhysxWorld` write the poses back into
 the scene graph each step. It is
 header-only and compiled only when the PhysX SDK is found (vcpkg feature
 `physx`); without it the editor still authors and saves physics settings, and
-Play simply runs with no physics session.
+Play simply runs with no physics session. The sensor session is split along the
+same line: `SensorPlaySession` is PhysX-free and runs the vision sensors (a
+depth or lidar scan needs a renderer, not a physics world) in every build, while
+`PhysxSensorPlaySession` — the subclass a PhysX build constructs instead — adds
+the live IMU/contact/joint sensors. In a build without the SDK a body or joint
+sensor is authored, counted, and carries a status naming the missing build.
 
 Three sessions ship, and they start in this order: physics, then the animation
 player, then scripts. Scripts run last on purpose — a script's transform edits

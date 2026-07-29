@@ -72,7 +72,9 @@ namespace threepp::editor {
     // Forward-declared: PhysicsPlaySession pulls in the whole PhysX SDK, and
     // every panel includes this header.
     class PhysicsPlaySession;
-    // Same reason: SensorPlaySession includes Imu.hpp, which includes PhysX.
+    // PhysX-free (the PhysX half is PhysxSensorPlaySession, constructed in
+    // EditorApp.cpp), but still heavy — it pulls in the depth/lidar sensors and
+    // the renderer, which the panels have no business recompiling against.
     class SensorPlaySession;
 
     class EditorApp {
