@@ -4,6 +4,10 @@
 // body PhysX is actually simulating for that object, so a MonoBehaviour-style
 // script can push, steer and read it instead of fighting the simulation by
 // writing transforms it will overwrite next step.
+// articulation_from_object(obj) is the same idea for a robot the session
+// simulates as a reduced-coordinate articulation: joint state in, drive
+// targets out — the surface a policy deployment loop needs, which is exactly
+// what a script standing in for one wants.
 //
 // Three things about the contract, stated once:
 //
@@ -25,13 +29,19 @@
 
 #include "bindings.hpp"
 
+// The articulation handle answers in lists (joint names, positions, targets),
+// which the RigidBody/SoftBody halves never needed.
+#include <pybind11/stl.h>
+
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using namespace threepp;
 
@@ -253,6 +263,140 @@ namespace {
     };
 
 
+    // A robot the play session simulates as a reduced-coordinate articulation,
+    // as a script sees it: the JOINT-SPACE face. Positions and velocities read
+    // back in the articulation's own DOF order (`joint_names`), radians for a
+    // revolute joint and metres for a prismatic one; drive targets go out the
+    // same way. Fixed URDF joints are collapsed by the articulation builder, so
+    // this order is NOT the visual Robot's joint order — the names are the
+    // bridge, which is why they are exposed at all.
+    class ArticulationHandle {
+
+    public:
+        ArticulationHandle(std::shared_ptr<Object3D> object,
+                           const editor::PhysicsPlaySession::PlayedArticulation* played,
+                           Lifetime lifetime)
+            : object_(std::move(object)), played_(played), lifetime_(std::move(lifetime)) {}
+
+        [[nodiscard]] bool valid() const { return lifetime_.alive(); }
+
+        [[nodiscard]] std::shared_ptr<Object3D> object() const { return object_; }
+
+        [[nodiscard]] std::vector<std::string> jointNames() const {
+
+            require();
+            return played_->jointNames;
+        }
+
+        [[nodiscard]] std::size_t numDof() const {
+
+            require();
+            return played_->jointNames.size();
+        }
+
+        [[nodiscard]] std::vector<float> jointPositions() const {
+
+            require();
+            return played_->articulation->jointPositions();
+        }
+
+        [[nodiscard]] std::vector<float> jointVelocities() const {
+
+            require();
+            return played_->articulation->jointVelocities();
+        }
+
+        // One target per DOF, in joint_names order. The PD drive authored in the
+        // robot's Articulation section pulls each joint toward its target — this
+        // is a setpoint, not a teleport, and with zero authored stiffness the
+        // drive is off and targets are inert.
+        void setDriveTargets(const std::vector<float>& targets) {
+
+            require();
+            if (targets.size() != played_->jointNames.size()) {
+                throw std::runtime_error(
+                        "set_drive_targets: got " + std::to_string(targets.size()) +
+                        " values for " + std::to_string(played_->jointNames.size()) +
+                        " DOFs - one per entry of joint_names");
+            }
+            played_->articulation->setDriveTargets(targets.data(), targets.size());
+        }
+
+        void setDriveTargetByIndex(std::size_t index, float value) {
+
+            require();
+            if (index >= played_->links.size()) {
+                throw std::runtime_error("set_drive_target: index " + std::to_string(index) +
+                                         " out of range for " +
+                                         std::to_string(played_->links.size()) + " DOFs");
+            }
+            // ArticulationLink is a value handle onto the PhysX joint, so a copy
+            // drives the same joint — and it drives the joint's actual motion
+            // axis, so this is correct for revolute and prismatic alike.
+            ArticulationLink link = played_->links[index];
+            link.setDriveTarget(value);
+        }
+
+        void setDriveTargetByName(const std::string& joint, float value) {
+
+            require();
+            for (std::size_t i = 0; i < played_->jointNames.size(); ++i) {
+                if (played_->jointNames[i] == joint) {
+                    setDriveTargetByIndex(i, value);
+                    return;
+                }
+            }
+            throw std::runtime_error("set_drive_target: \"" + joint +
+                                     "\" is not a simulated DOF of this robot (see joint_names)");
+        }
+
+        [[nodiscard]] Vector3 rootPosition() const {
+
+            require();
+            const auto s = played_->articulation->rootState();
+            return {s[0], s[1], s[2]};
+        }
+
+        [[nodiscard]] Quaternion rootRotation() const {
+
+            require();
+            const auto s = played_->articulation->rootState();
+            return Quaternion(s[3], s[4], s[5], s[6]);
+        }
+
+        [[nodiscard]] Vector3 rootVelocity() const {
+
+            require();
+            const auto v = played_->articulation->rootVelocity();
+            return {v[0], v[1], v[2]};
+        }
+
+        [[nodiscard]] Vector3 rootAngularVelocity() const {
+
+            require();
+            const auto v = played_->articulation->rootVelocity();
+            return {v[3], v[4], v[5]};
+        }
+
+        [[nodiscard]] std::string repr() const {
+
+            if (!valid()) return "<Articulation (session stopped)>";
+            return "<Articulation '" + object_->name + "' " +
+                   std::to_string(played_->jointNames.size()) + " dof>";
+        }
+
+    private:
+        std::shared_ptr<Object3D> object_;
+        const editor::PhysicsPlaySession::PlayedArticulation* played_;
+        Lifetime lifetime_;
+
+        // played_ points into the session's own list, freed on stop() — the
+        // lifetime gate is what makes dereferencing it safe, same contract as
+        // RigidBody's raw actor pointer.
+        void require() const { lifetime_.require("articulation"); }
+    };
+
+
     // The world the editor is playing right now, or nullptr outside Play.
     editor::PhysicsPlaySession* playing() {
 
@@ -324,6 +468,42 @@ namespace threepp_py {
                               "soft body's CPU cost, and pointless for a flat-shaded body.")
                 .def("__repr__", &SoftBodyHandle::repr);
 
+        py::class_<ArticulationHandle, std::shared_ptr<ArticulationHandle>>(sub, "Articulation")
+                .def_property_readonly("object", &ArticulationHandle::object,
+                                       "The Robot this articulation simulates — the robot itself, "
+                                       "even when the handle was asked for from one of its links.")
+                .def_property_readonly("valid", &ArticulationHandle::valid,
+                                       "False once the play session that created it has stopped.")
+                .def_property_readonly("joint_names", &ArticulationHandle::jointNames,
+                                       "The simulated DOFs, in the articulation's own order. Fixed "
+                                       "URDF joints are collapsed, so this is NOT the visual Robot's "
+                                       "joint order — match by name.")
+                .def_property_readonly("num_dof", &ArticulationHandle::numDof)
+                .def_property_readonly("joint_positions", &ArticulationHandle::jointPositions,
+                                       "Joint positions in joint_names order: radians for a revolute "
+                                       "joint, metres for a prismatic one.")
+                .def_property_readonly("joint_velocities", &ArticulationHandle::jointVelocities,
+                                       "Joint velocities in joint_names order: rad/s or m/s.")
+                .def("set_drive_targets", &ArticulationHandle::setDriveTargets, py::arg("targets"),
+                     "One PD setpoint per DOF, in joint_names order. The drive authored in the "
+                     "Articulation section pulls each joint toward its target over the coming "
+                     "steps - a setpoint, not a teleport, and inert with zero authored stiffness.")
+                .def("set_drive_target", &ArticulationHandle::setDriveTargetByName,
+                     py::arg("joint"), py::arg("value"),
+                     "PD setpoint for one DOF, by its URDF joint name.")
+                .def("set_drive_target", &ArticulationHandle::setDriveTargetByIndex,
+                     py::arg("index"), py::arg("value"),
+                     "PD setpoint for one DOF, by its index in joint_names.")
+                .def_property_readonly("root_position", &ArticulationHandle::rootPosition,
+                                       "WORLD-SPACE position of the root link.")
+                .def_property_readonly("root_rotation", &ArticulationHandle::rootRotation,
+                                       "WORLD-SPACE orientation of the root link.")
+                .def_property_readonly("root_velocity", &ArticulationHandle::rootVelocity,
+                                       "Root link linear velocity in m/s, world frame.")
+                .def_property_readonly("root_angular_velocity", &ArticulationHandle::rootAngularVelocity,
+                                       "Root link angular velocity in rad/s, world frame.")
+                .def("__repr__", &ArticulationHandle::repr);
+
         sub.def(
                 "rigid_body_from_object", [](const py::handle& h) -> py::object {
                     auto object = as_object3d(h);
@@ -355,6 +535,26 @@ namespace threepp_py {
                 py::arg("object"),
                 "The SoftBody PhysX is simulating for `object`, or None when Play is not running "
                 "or the object is not a soft body.");
+
+        sub.def(
+                "articulation_from_object", [](const py::handle& h) -> py::object {
+                    auto object = as_object3d(h);
+                    auto* session = playing();
+                    if (!object || !session) return py::none();
+                    const auto* played = session->findArticulation(object.get());
+                    if (!played || !played->robot) return py::none();
+                    // The handle's object is the ROBOT, whatever node asked: the
+                    // articulation governs the whole subtree, and a script on a
+                    // link wants the robot's joint table, not the link.
+                    return py::cast(std::make_shared<ArticulationHandle>(
+                            played->robot->shared_from_this(), played,
+                            Lifetime{session->lifetime()}));
+                },
+                py::arg("object"),
+                "The Articulation PhysX is simulating for `object`, or None when Play is not "
+                "running or no articulated robot governs it. The lookup walks up the scene "
+                "graph, so a script on any link of a robot finds the robot's articulation. "
+                "Robots simulate only when their Articulation section says Simulate.");
     }
 
 }// namespace threepp_py

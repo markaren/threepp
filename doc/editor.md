@@ -832,6 +832,47 @@ body's object sits at the origin for the whole of Play — the mesh carries
 world-space vertices — so `obj.position` is useless for following it and
 `body.center` is the answer.
 
+Robots being simulated (see [Robots](#robots-urdf-in-userdata)) get
+`threepp.editor.articulation_from_object` — the joint-space face of the same
+idea, and the seam a policy-playback script stands on. Read `joint_names`,
+`num_dof`, `joint_positions` and `joint_velocities` (radians/metres, in the
+articulation's own DOF order — fixed URDF joints are collapsed, so match by
+name rather than assuming the inspector's slider order), plus the root link's
+world `root_position` / `root_rotation` / `root_velocity` /
+`root_angular_velocity`. Command it with `set_drive_targets(values)` (one per
+DOF) or `set_drive_target(joint, value)` by name or index. Targets are PD
+setpoints for the drive authored in the robot's Articulation section — the
+joint is pulled there over the coming steps, not teleported, and with zero
+authored stiffness the drive is off and targets are inert. Do **not** call
+`robot.set_joint_value` from a script while the robot simulates: the mirror
+writes the solved pose back every frame, so the simulation overwrites you —
+the drive target is the steering wheel.
+
+```python
+import threepp
+
+
+class Waver:
+    amplitude = 0.6
+    period = 4.0
+
+    def start(self, obj: threepp.Robot):
+        self.art = threepp.editor.articulation_from_object(obj)
+        self.t = 0.0
+
+    def update(self, dt: float):
+        if self.art is None:
+            return
+        self.t += dt
+        import math
+        target = self.amplitude * math.sin(2 * math.pi * self.t / self.period)
+        self.art.set_drive_targets([target] * self.art.num_dof)
+```
+
+The handle resolves from the robot *or any node inside it* — a script on a
+gripper link gets the whole robot's joint table, which is what a controller
+wants.
+
 Three things separate these from `spline_from_object`:
 
 * **They only exist during Play.** A spline is authoring data and reads back any

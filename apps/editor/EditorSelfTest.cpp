@@ -2151,6 +2151,58 @@ int EditorApp::runSelfTest() {
                     step();
                     check(true, "a Force/Torque sensor plays and stops without a crash");
                 }
+
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+                // threepp.editor.articulation_from_object: a script commanding
+                // the articulation the physics session is simulating — the seam
+                // a policy-playback script stands on. The script raises if the
+                // handle does not arrive, so a broken lookup fails the error
+                // check rather than reading as "the drive was slow".
+                Object3D* scripted = nullptr;
+                document_.scene().traverse([&](Object3D& o) {
+                    if (!scripted && o.uuid == uuid) scripted = &o;
+                });
+                if (auto* sim3 = scripted ? scripted->as<Robot>() : nullptr) {
+                    setInlineScript(*sim3,
+                                    "import threepp\n"
+                                    "\n"
+                                    "class Waver:\n"
+                                    "    def start(self, obj):\n"
+                                    "        self.art = threepp.editor.articulation_from_object(obj)\n"
+                                    "        assert self.art is not None, 'no articulation handle'\n"
+                                    "        assert self.art.num_dof == len(self.art.joint_names)\n"
+                                    "        assert len(self.art.joint_positions) == self.art.num_dof\n"
+                                    "\n"
+                                    "    def update(self, dt):\n"
+                                    "        self.art.set_drive_target('" + jointName + "', 0.8)\n",
+                                    "Waver Script");
+                    step();
+
+                    startPlay();
+                    // Fixed dt: 90 frames are 1.5 s, plenty for the default
+                    // 500/50 drive to swing the joint from its authored 0.3 rad
+                    // most of the way to the scripted 0.8 setpoint.
+                    stepFixed(90);
+                    Object3D* live = nullptr;
+                    document_.scene().traverse([&](Object3D& o) {
+                        if (!live && o.uuid == uuid) live = &o;
+                    });
+                    auto* liveRobot = live ? live->as<Robot>() : nullptr;
+                    check(liveRobot && liveRobot->numDOF() > 0 &&
+                                  liveRobot->getJointValue(0) > 0.55f,
+                          "a script drives the articulation the physics session is simulating");
+                    // The error text in the message, because "it raised" without
+                    // WHAT it raised is a failure you cannot act on.
+                    const std::string scriptError =
+                            scripts_ ? scripts_->errorFor(uuid) : "no script host";
+                    const std::string raisedMsg =
+                            "and reaching it raised nothing" +
+                            (scriptError.empty() ? "" : " - " + scriptError);
+                    check(scripts_ && scriptError.empty(), raisedMsg.c_str());
+                    stopPlay();
+                    step();
+                }
+#endif
             }
         }
     }
