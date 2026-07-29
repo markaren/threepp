@@ -101,6 +101,16 @@ namespace threepp::editor {
         // table aliases; 128 keeps an editor-rate scan affordable.
         int faceSize = 128;
 
+        // --- Encoder and Force/Torque (shared) ------------------------------
+        // Which articulation joint this sensor measures, by its URDF joint name.
+        // Both the Encoder and the Force/Torque sensor read one joint of the
+        // robot they are authored on; the play session resolves the name against
+        // the played articulation's joint table. Empty means "not chosen yet",
+        // which the inspector's joint picker is where you fix. URDF joint names
+        // never contain the flat format's `;`/`=` delimiters, so the name rides
+        // the string as-is.
+        std::string joint;
+
         // --- Encoder --------------------------------------------------------
         float encoderResolution = 0.f;// rad (or m) per tick; 0 = ideal
 

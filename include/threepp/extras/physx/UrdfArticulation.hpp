@@ -54,6 +54,13 @@ namespace threepp {
         std::unique_ptr<Articulation> articulation;
         std::vector<std::shared_ptr<Mesh>> meshes;// collider meshes, bound to the sim (add them to a scene)
         std::vector<std::string> jointNames;      // actuated joints, in add order (== drive-target order)
+        // One handle per actuated joint, index-aligned with jointNames — the link
+        // whose INBOUND joint that name refers to. A joint sensor (JointEncoder,
+        // ForceTorqueSensor) takes an ArticulationLink; this is how a caller that
+        // only knows a URDF joint name reaches the link to measure without
+        // rebuilding the add-order bookkeeping the loader already did. These are
+        // small copyable handles into the articulation; valid while it lives.
+        std::vector<ArticulationLink> links;
 
         [[nodiscard]] std::size_t numDof() const { return jointNames.size(); }
     };
@@ -159,7 +166,12 @@ namespace threepp {
                                     {axisW.x, axisW.y, axisW.z}, {posI.x, posI.y, posI.z},
                                     limited, lo, hi, opts.stiffness, opts.damping, opts.maxForce, 0.f, jt, 0.f, nullptr);
             }();
-            if (!isRoot) result.jointNames.push_back(L.jointName.empty() ? L.name : L.jointName);
+            if (!isRoot) {
+                result.jointNames.push_back(L.jointName.empty() ? L.name : L.jointName);
+                // Index-aligned with jointNames: a sensor that knows a joint name
+                // gets the link to measure without redoing the add-order walk.
+                result.links.push_back(linkResult);
+            }
 
             linkStore.push_back(linkResult);
             artLinkOf[i] = &linkStore.back();

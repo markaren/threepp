@@ -42,7 +42,9 @@
 #include "threepp/extras/editor/SensorConfig.hpp"
 
 #include "threepp/extras/sensors/ContactSensor.hpp"
+#include "threepp/extras/sensors/ForceTorqueSensor.hpp"
 #include "threepp/extras/sensors/Imu.hpp"
+#include "threepp/extras/sensors/JointEncoder.hpp"
 
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/helpers/LidarSensor.hpp"
@@ -115,6 +117,8 @@ namespace threepp::editor {
 
             std::unique_ptr<Imu> imu;
             std::unique_ptr<ContactSensor> contact;
+            std::unique_ptr<JointEncoder> encoder;
+            std::unique_ptr<ForceTorqueSensor> forceTorque;
             // Object3D subclasses: parented into the rig, so they follow the
             // scene's world-matrix update and are never saved or picked.
             std::unique_ptr<DepthSensor> depth;
@@ -147,7 +151,7 @@ namespace threepp::editor {
             std::size_t rows = 0;
 
             [[nodiscard]] bool live() const {
-                return imu || contact || depth || lidar;
+                return imu || contact || encoder || forceTorque || depth || lidar;
             }
 
             // Points the newest scan produced, whichever vision kind this is.
@@ -163,6 +167,19 @@ namespace threepp::editor {
         // sensor nodes have to come out of its children list before they die.
         ~SensorPlaySession() override {
 
+            // If the world is still alive here (the editor drops this session
+            // before the physics session — see EditorApp's destructor), unregister
+            // the proprioceptive sensors so the Force/Torque cache is released
+            // through onUnregister while its articulation still exists, and the
+            // world is not left holding dangling sensor pointers.
+            if (auto* world = liveWorld()) {
+                for (const auto& entry : entries_) {
+                    if (entry->imu) world->unregisterSensor(entry->imu.get());
+                    if (entry->contact) world->unregisterSensor(entry->contact.get());
+                    if (entry->encoder) world->unregisterSensor(entry->encoder.get());
+                    if (entry->forceTorque) world->unregisterSensor(entry->forceTorque.get());
+                }
+            }
             for (const auto& entry : entries_) {
                 if (entry->depth) entry->depth->removeFromParent();
                 if (entry->lidar) entry->lidar->removeFromParent();
@@ -286,11 +303,16 @@ namespace threepp::editor {
         void stop() override {
 
             // Unregister only while the world is provably alive: physics stops
-            // first, and a stopped session has already destroyed it.
+            // first, and a stopped session has already destroyed it. This is what
+            // releases the Force/Torque sensor's PxArticulationCache (via
+            // onUnregister) BEFORE the articulation is gone — the teardown-order
+            // safety the whole liveWorld() guard exists for.
             if (auto* world = liveWorld()) {
                 for (const auto& entry : entries_) {
                     if (entry->imu) world->unregisterSensor(entry->imu.get());
                     if (entry->contact) world->unregisterSensor(entry->contact.get());
+                    if (entry->encoder) world->unregisterSensor(entry->encoder.get());
+                    if (entry->forceTorque) world->unregisterSensor(entry->forceTorque.get());
                 }
             }
 
@@ -387,14 +409,8 @@ namespace threepp::editor {
                 case SensorConfig::Type::Contact: buildContact(*entry, node, config); break;
                 case SensorConfig::Type::Depth: buildDepth(*entry, config); break;
                 case SensorConfig::Type::Lidar: buildLidar(*entry, config); break;
-                case SensorConfig::Type::Encoder:
-                case SensorConfig::Type::ForceTorque:
-                    // Both measure an ARTICULATION joint, and the editor's
-                    // physics session builds rigid bodies only — there is no
-                    // joint to read. Authored and saved, not simulated.
-                    entry->status = std::string(SensorConfig::label(config.type)) +
-                                    " needs an articulated robot - authored, not simulated";
-                    break;
+                case SensorConfig::Type::Encoder: buildEncoder(*entry, node, config); break;
+                case SensorConfig::Type::ForceTorque: buildForceTorque(*entry, node, config); break;
             }
 
             if (!entry->status.empty()) log("sensor: \"" + entry->label + "\" - " + entry->status);
@@ -447,6 +463,99 @@ namespace threepp::editor {
 
             entry.traceNames = {"force (N)", "touching", nullptr, nullptr, nullptr, nullptr};
             entry.traceCount = 2;
+        }
+
+        // Resolve the articulation link a joint sensor measures, or set a status
+        // that names exactly what is missing. Returns nullptr on any failure.
+        const ArticulationLink* resolveJoint(Entry& entry, Object3D& node, const SensorConfig& config) {
+
+            if (!liveWorld()) {
+                entry.status = "no physics world - a joint sensor rides an articulated robot";
+                return nullptr;
+            }
+            if (!physics_) {
+                entry.status = "no physics session - a joint sensor rides an articulated robot";
+                return nullptr;
+            }
+            const auto* played = physics_->findArticulation(&node);
+            if (!played) {
+                entry.status = "no articulated robot - enable Simulate in the Robot section";
+                return nullptr;
+            }
+            if (config.joint.empty()) {
+                entry.status = "no joint chosen - pick one in the Sensor section";
+                return nullptr;
+            }
+            const auto* link = played->linkFor(config.joint);
+            if (!link) {
+                entry.status = "joint \"" + config.joint + "\" is not a simulated DOF of this robot";
+                return nullptr;
+            }
+            return link;
+        }
+
+        NoiseModel encoderPositionNoise(const SensorConfig& config) const {
+
+            // A joint encoder's error is dominated by quantization (encoderResolution
+            // below), so the position noise is left at the clean default here — no
+            // authored density/walk fields exist for it in this pass. Still seed it
+            // from a free stream index so a future field is reproducible and does not
+            // collide with the IMU's 0/1 or a range channel's 2.
+            NoiseModel model;
+            model.seed = config.streamSeed(3);
+            return model;
+        }
+
+        void buildEncoder(Entry& entry, Object3D& node, const SensorConfig& config) {
+
+            const auto* link = resolveJoint(entry, node, config);
+            if (!link) return;
+
+            auto encoder = std::make_unique<JointEncoder>(
+                    node, *link, static_cast<double>(std::max(config.rateHz, 0.f)));
+            encoder->resolution = std::max(config.encoderResolution, 0.f);
+            encoder->positionNoise = encoderPositionNoise(config);
+            try {
+                liveWorld()->registerSensor(encoder.get());
+            } catch (const std::exception& e) {
+                entry.status = e.what();
+                return;
+            }
+            entry.encoder = std::move(encoder);
+
+            entry.traceNames = {"position", "velocity", nullptr, nullptr, nullptr, nullptr};
+            entry.traceCount = 2;
+        }
+
+        void buildForceTorque(Entry& entry, Object3D& node, const SensorConfig& config) {
+
+            const auto* link = resolveJoint(entry, node, config);
+            if (!link) return;
+
+            // resolveJoint proved the articulation exists; fetch it for the sensor,
+            // which needs the Articulation to build its state cache.
+            const auto* played = physics_->findArticulation(&node);
+            if (!played || !played->articulation) {
+                entry.status = "no articulation to read a wrench from";
+                return;
+            }
+
+            auto ft = std::make_unique<ForceTorqueSensor>(
+                    node, *played->articulation, *link,
+                    static_cast<double>(std::max(config.rateHz, 0.f)));
+            try {
+                // onRegister creates the PxArticulationCache; unregisterSensor (in
+                // stop(), while the world is alive) releases it before the
+                // articulation is destroyed, so there is no use-after-free on Stop.
+                liveWorld()->registerSensor(ft.get());
+            } catch (const std::exception& e) {
+                entry.status = e.what();
+                return;
+            }
+            entry.forceTorque = std::move(ft);
+
+            entry.traceNames = {"force x", "force y", "force z", "torque x", "torque y", "torque z"};
+            entry.traceCount = 6;
         }
 
         void buildDepth(Entry& entry, const SensorConfig& config) {
@@ -580,6 +689,8 @@ namespace threepp::editor {
             for (const auto& entry : entries_) {
                 if (entry->imu) drainImu(*entry);
                 if (entry->contact) drainContact(*entry);
+                if (entry->encoder) drainEncoder(*entry);
+                if (entry->forceTorque) drainForceTorque(*entry);
             }
         }
 
@@ -629,6 +740,46 @@ namespace threepp::editor {
             entry.inContact = last.inContact;
             entry.contactForce = last.force.length();
             entry.lastTime = last.t;
+        }
+
+        void drainEncoder(Entry& entry) {
+
+            entry.encoder->drain(encoderScratch_);
+            if (encoderScratch_.empty()) return;
+
+            for (const auto& sample : encoderScratch_) {
+                entry.traces[0].push(sample.position);
+                entry.traces[1].push(sample.velocity);
+                if (openFile(entry, "t,position,velocity")) {
+                    entry.csv << sample.t << ',' << sample.position << ',' << sample.velocity << '\n';
+                    ++entry.rows;
+                }
+            }
+            entry.samples += encoderScratch_.size();
+            entry.lastTime = encoderScratch_.back().t;
+        }
+
+        void drainForceTorque(Entry& entry) {
+
+            entry.forceTorque->drain(wrenchScratch_);
+            if (wrenchScratch_.empty()) return;
+
+            for (const auto& sample : wrenchScratch_) {
+                entry.traces[0].push(sample.force.x);
+                entry.traces[1].push(sample.force.y);
+                entry.traces[2].push(sample.force.z);
+                entry.traces[3].push(sample.torque.x);
+                entry.traces[4].push(sample.torque.y);
+                entry.traces[5].push(sample.torque.z);
+                if (openFile(entry, "t,fx,fy,fz,tx,ty,tz")) {
+                    entry.csv << sample.t << ','
+                              << sample.force.x << ',' << sample.force.y << ',' << sample.force.z << ','
+                              << sample.torque.x << ',' << sample.torque.y << ',' << sample.torque.z << '\n';
+                    ++entry.rows;
+                }
+            }
+            entry.samples += wrenchScratch_.size();
+            entry.lastTime = wrenchScratch_.back().t;
         }
 
         // One row per scan: time, count and the cloud's gross shape. A row per
@@ -768,6 +919,8 @@ namespace threepp::editor {
         // Drain targets, reused so a 1 kHz sensor does not allocate per frame.
         std::vector<ImuSample> imuScratch_;
         std::vector<ContactSample> contactScratch_;
+        std::vector<JointSample> encoderScratch_;
+        std::vector<WrenchSample> wrenchScratch_;
     };
 
 }// namespace threepp::editor

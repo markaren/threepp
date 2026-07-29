@@ -21,20 +21,25 @@
 #ifndef THREEPP_EDITOR_PHYSICSPLAYSESSION_HPP
 #define THREEPP_EDITOR_PHYSICSPLAYSESSION_HPP
 
+#include "threepp/extras/editor/ArticulationConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/PlaySession.hpp"
+#include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 
 
 #include "threepp/extras/physx/PhysxSoftBody.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
+#include "threepp/extras/physx/UrdfArticulation.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/CapsuleGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/math/Box3.hpp"
+#include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Robot.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <algorithm>
@@ -107,6 +112,50 @@ namespace threepp::editor {
         // dereferencing a released actor.
         [[nodiscard]] std::weak_ptr<const void> lifetime() const { return lifetime_; }
 
+        // One simulated robot: the visual Robot the editor authored, the PhysX
+        // articulation driving it, and the joint-name <-> link mapping the joint
+        // sensors resolve against. `links` and `jointNames` are index-aligned (the
+        // articulation's add order); the visual robot's own joint order can differ,
+        // which is exactly why linkFor() is keyed by NAME, not by index.
+        struct PlayedArticulation {
+            Robot* robot = nullptr;
+            Articulation* articulation = nullptr;
+            std::vector<std::string> jointNames;
+            std::vector<ArticulationLink> links;
+
+            [[nodiscard]] const ArticulationLink* linkFor(const std::string& jointName) const {
+                for (std::size_t i = 0; i < jointNames.size() && i < links.size(); ++i) {
+                    if (jointNames[i] == jointName) return &links[i];
+                }
+                return nullptr;
+            }
+
+            // Session-owned bookkeeping (not part of the read contract above).
+            // owned: the articulation is destroyed with the session, before the
+            // world it belongs to (see stop()). meshes: proxy colliders kept alive
+            // but never added to the scene. visualIndexOfDof: DOF add-order ->
+            // visual robot joint index, so update() mirrors through the name map.
+            std::unique_ptr<Articulation> owned;
+            std::vector<std::shared_ptr<Mesh>> meshes;
+            std::vector<int> visualIndexOfDof;
+        };
+
+        // The articulation governing `object`, or the nearest ancestor of it that
+        // is a simulated robot — the same walk-up-parents contract as findActor,
+        // so a sensor authored on a link resolves to the robot that owns it.
+        [[nodiscard]] const PlayedArticulation* findArticulation(const Object3D* object) const {
+
+            for (const Object3D* o = object; o != nullptr; o = o->parent) {
+                for (const auto& played : articulations_) {
+                    if (played->robot == o) return played.get();
+                }
+            }
+            return nullptr;
+        }
+
+        // How many robots this session is simulating, for the status readout.
+        [[nodiscard]] std::size_t articulationCount() const { return articulations_.size(); }
+
         // A session destroyed without a stop() — the editor tearing down mid-Play
         // — must not leave active() pointing at freed memory.
         ~PhysicsPlaySession() override {
@@ -127,16 +176,37 @@ namespace threepp::editor {
             bodyCount_ = 0;
             softBodyCount_ = 0;
             actors_.clear();
+            articulations_.clear();
 
             // Collect first, create second: creating an actor binds the object,
             // and PhysxWorld writes transforms during step(), not during
             // traversal — but a stable list also keeps behaviour independent of
             // any graph edit a later hook might make.
+            scene.updateMatrixWorld(true);
+
+            // The robots to simulate: a Robot carrying both a urdf reference and an
+            // articulation opt-in. Found first, because a link of one must NOT also
+            // pick up a rigid body from its own PhysicsConfig — the articulation
+            // link is the body for that node.
+            std::vector<Robot*> articulatedRobots;
+            scene.traverse([&](Object3D& object) {
+                if (auto* robot = object.as<Robot>()) {
+                    const auto robotConfig = RobotConfig::read(object);
+                    const auto artConfig = ArticulationConfig::read(object);
+                    if (robotConfig && !robotConfig->urdf.empty() && artConfig && artConfig->enabled) {
+                        articulatedRobots.push_back(robot);
+                    }
+                }
+            });
+
             std::vector<Object3D*> targets;
             bool wantsSoftBodies = false;
-            scene.updateMatrixWorld(true);
             scene.traverse([&](Object3D& object) {
                 if (const auto config = PhysicsConfig::read(object); config && config->enabled) {
+                    // A node inside an articulated robot's subtree is already a
+                    // simulated link; a second rigid body over it would double the
+                    // dynamics at that spot.
+                    if (insideArticulatedRobot(object, articulatedRobots)) return;
                     targets.push_back(&object);
                     if (config->body == PhysicsConfig::Body::Soft) wantsSoftBodies = true;
                 }
@@ -145,6 +215,13 @@ namespace threepp::editor {
             createWorld(wantsSoftBodies);
             lifetime_ = std::make_shared<const char>('\0');
             active_ = this;
+
+            // Articulations before rigid bodies: they add themselves to the same
+            // scene and share the world's material/timestep, and building one can
+            // log — do it while the log context is the robot, not a stray box.
+            for (auto* robot : articulatedRobots) {
+                buildArticulation(*robot);
+            }
 
             for (auto* object : targets) {
                 const auto config = PhysicsConfig::read(*object);
@@ -155,7 +232,12 @@ namespace threepp::editor {
 
         void update(float dt) override {
 
-            if (world_) world_->step(dt);
+            if (!world_) return;
+            world_->step(dt);
+            // Mirror each articulation's solved state back onto the visual robot,
+            // AFTER the step, so the inspector and any sensor read the pose the
+            // frame ended on. The play snapshot undoes all of it on Stop.
+            for (const auto& played : articulations_) mirrorArticulation(*played);
         }
 
         void stop() override {
@@ -165,6 +247,12 @@ namespace threepp::editor {
             lifetime_.reset();
             if (active_ == this) active_ = nullptr;
             actors_.clear();
+            // Destroy the articulations while the world is still alive: an
+            // Articulation releases itself back into the scene it belongs to, so
+            // it must go before the world it was added to. (The sensor session,
+            // which stops after us, already dropped its FT caches — it stops
+            // world-touching the instant our lifetime token expires below.)
+            articulations_.clear();
             world_.reset();
             bodyCount_ = 0;
             softBodyCount_ = 0;
@@ -174,6 +262,177 @@ namespace threepp::editor {
         void log(const std::string& message) {
 
             if (logger_) logger_(message);
+        }
+
+        // Is `object` this robot, or a descendant of one of the articulated
+        // robots we are about to simulate? Walks up parents so a link mesh deep in
+        // the URDF subtree is caught.
+        static bool insideArticulatedRobot(const Object3D& object, const std::vector<Robot*>& robots) {
+
+            for (const Object3D* o = &object; o != nullptr; o = o->parent) {
+                for (const auto* robot : robots) {
+                    if (o == robot) return true;
+                }
+            }
+            return false;
+        }
+
+        // Build one reduced-coordinate articulation for a visual robot and wire it
+        // to that robot so update() can mirror the solved joints back.
+        //
+        // Frame convention (verified against a test): both URDFLoader::load (the
+        // visual Robot) and loadArticulation's forward kinematics consume URDF's
+        // native frame with NO Z-up->Y-up rotation baked in — they share the same
+        // originMatrix/parseInfo code. So the two agree at the origin, and the only
+        // offset is the robot's own placement in the scene: pass basePosition /
+        // baseRotation straight from the robot's decomposed WORLD matrix, no extra
+        // rotation. A double-rotation here would poison every downstream reading.
+        void buildArticulation(Robot& robot) {
+
+            const auto robotConfig = RobotConfig::read(robot);
+            const auto artConfig = ArticulationConfig::read(robot);
+            if (!robotConfig || robotConfig->urdf.empty() || !artConfig || !artConfig->enabled) return;
+
+            robot.updateWorldMatrix(true, false);
+            Vector3 basePos, baseScale;
+            Quaternion baseRot;
+            robot.matrixWorld->decompose(basePos, baseRot, baseScale);
+
+            // A scaled robot cannot become an articulation: PhysX links have no
+            // scale, so the collider primitives would sit at the unscaled size
+            // while the visual meshes render scaled. Skip with one line rather
+            // than build something that visibly disagrees with itself.
+            const auto isUnit = [](float v) { return std::abs(v - 1.f) < 1e-3f; };
+            if (!isUnit(baseScale.x) || !isUnit(baseScale.y) || !isUnit(baseScale.z)) {
+                log("physics: \"" + robot.name + "\" has a non-unit world scale - "
+                    "PhysX articulation links cannot be scaled, so it is not simulated");
+                return;
+            }
+
+            URDFArticulationOptions opts;
+            opts.fixedBase = artConfig->fixedBase;
+            opts.basePosition = basePos;
+            opts.baseRotation = baseRot;
+            opts.defaultDensity = std::max(artConfig->density, 1e-3f);
+            opts.stiffness = std::max(artConfig->stiffness, 0.f);
+            opts.damping = std::max(artConfig->damping, 0.f);
+            opts.maxForce = std::max(artConfig->maxForce, 0.f);
+            opts.selfCollision = artConfig->selfCollision;
+            opts.solverPositionIterations = std::max(artConfig->iterations, 1);
+            // The visual robot IS what renders; the articulation's colliders are
+            // an invisible physical twin bound to the sim. Never load or add them.
+            opts.renderVisuals = false;
+
+            URDFArticulationResult built;
+            try {
+                built = loadArticulation(*world_, robotConfig->urdf, opts);
+            } catch (const std::exception& e) {
+                log("physics: \"" + robot.name + "\" could not be articulated - " + e.what());
+                return;
+            }
+            if (!built.articulation) {
+                log("physics: \"" + robot.name + "\" could not be articulated - the URDF at \"" +
+                    robotConfig->urdf + "\" is unreadable");
+                return;
+            }
+
+            auto played = std::make_unique<PlayedArticulation>();
+            played->robot = &robot;
+            played->articulation = built.articulation.get();
+            played->jointNames = built.jointNames;
+            played->links = built.links;
+
+            // Map the articulation's DOF add-order onto the visual robot's joint
+            // order. Never assume they match: the loader walks the URDF tree
+            // breadth-first while the Robot's articulated-joint list follows the
+            // <joint> declaration order. Both are keyed by URDF joint name, so the
+            // name is the bridge.
+            const auto info = robot.getArticulatedJointInfo();
+            std::vector<int> visualIndexOfDof(built.jointNames.size(), -1);// dof -> visual joint index
+            for (std::size_t d = 0; d < built.jointNames.size(); ++d) {
+                for (std::size_t v = 0; v < info.size(); ++v) {
+                    if (info[v].name == built.jointNames[d]) {
+                        visualIndexOfDof[d] = static_cast<int>(v);
+                        break;
+                    }
+                }
+                if (visualIndexOfDof[d] < 0) {
+                    log("physics: \"" + robot.name + "\" articulation joint \"" + built.jointNames[d] +
+                        "\" has no matching visual joint - it will simulate but not drive the mesh");
+                }
+            }
+            // And the reverse: a visual joint the articulation collapsed (a fixed
+            // joint, or one the loader dropped) is worth one line too.
+            for (const auto& j : info) {
+                bool found = false;
+                for (const auto& name : built.jointNames) found = found || name == j.name;
+                if (!found) {
+                    log("physics: \"" + robot.name + "\" joint \"" + j.name +
+                        "\" is not an articulation DOF (fixed or collapsed) - not simulated");
+                }
+            }
+            played->visualIndexOfDof = std::move(visualIndexOfDof);
+
+            // Apply the authored pose to the DOFs, reordered through the name map:
+            // the articulation is built at the URDF zero config, but the document's
+            // pose is what the user placed the robot in.
+            const auto& joints = robotConfig->joints;
+            std::vector<float> dofPose(built.jointNames.size(), 0.f);
+            for (std::size_t d = 0; d < dofPose.size(); ++d) {
+                const int v = played->visualIndexOfDof[d];
+                if (v >= 0 && static_cast<std::size_t>(v) < joints.size()) dofPose[d] = joints[v];
+            }
+            if (!dofPose.empty()) {
+                built.articulation->setJointPositions(dofPose.data(), dofPose.size());
+                // With a live drive, also target the authored pose so the PD holds
+                // it rather than letting gravity pull the arm down from t=0.
+                if (opts.stiffness > 0.f) {
+                    built.articulation->setDriveTargets(dofPose.data(), dofPose.size());
+                }
+            }
+
+            // The proxy colliders are bound to the sim and must stay alive for the
+            // whole session, but they are NOT added to the scene: PhysxWorld::bind
+            // writes their transforms wherever they are, and here they render
+            // nowhere on purpose (the visual robot is what you see).
+            played->meshes = std::move(built.meshes);
+            played->owned = std::move(built.articulation);
+            articulations_.push_back(std::move(played));
+        }
+
+        // Read the solved joint positions and root pose back onto the visual robot.
+        void mirrorArticulation(PlayedArticulation& played) {
+
+            if (!played.robot || !played.articulation) return;
+
+            const auto positions = played.articulation->jointPositions();// DOF add-order
+            for (std::size_t d = 0; d < positions.size() && d < played.visualIndexOfDof.size(); ++d) {
+                const int v = played.visualIndexOfDof[d];
+                if (v >= 0) played.robot->setJointValue(static_cast<std::size_t>(v), positions[d]);
+            }
+
+            // A floating base also moves the whole robot: write the solved root
+            // world pose into the robot's local frame (through its parent's inverse
+            // world matrix), so a walker or a drone actually travels.
+            const auto artConfig = ArticulationConfig::read(*played.robot);
+            if (artConfig && !artConfig->fixedBase) {
+                const auto s = played.articulation->rootState();// px,py,pz, qx,qy,qz,qw
+                const Vector3 worldPos(s[0], s[1], s[2]);
+                const Quaternion worldRot(s[3], s[4], s[5], s[6]);
+                Matrix4 worldMat;
+                worldMat.compose(worldPos, worldRot, Vector3(1.f, 1.f, 1.f));
+                if (played.robot->parent) {
+                    played.robot->parent->updateWorldMatrix(true, false);
+                    Matrix4 parentInv(*played.robot->parent->matrixWorld);
+                    parentInv.invert();
+                    worldMat.premultiply(parentInv);
+                }
+                Vector3 localPos, localScale;
+                Quaternion localRot;
+                worldMat.decompose(localPos, localRot, localScale);
+                played.robot->position.copy(localPos);
+                played.robot->quaternion.copy(localRot);
+            }
         }
 
         // GPU dynamics is switched on only for a scene that actually needs it:
@@ -485,6 +744,7 @@ namespace threepp::editor {
         bool gpu_ = false;
         std::shared_ptr<const void> lifetime_;
         std::unordered_map<const Object3D*, ::physx::PxRigidActor*> actors_;
+        std::vector<std::unique_ptr<PlayedArticulation>> articulations_;
         inline static PhysicsPlaySession* active_ = nullptr;
     };
 

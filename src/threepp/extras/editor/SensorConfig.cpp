@@ -185,6 +185,8 @@ std::string SensorConfig::encode() const {
     out += ";facesize=";
     out += std::to_string(faceSize);
 
+    out += ";joint=";
+    out += joint;// a URDF joint name; never carries ';' or '=', so it rides verbatim
     out += ";encoderres=";
     out += number(encoderResolution);
     out += ";contactthreshold=";
@@ -242,6 +244,8 @@ std::optional<SensorConfig> SensorConfig::decode(const std::string& text) {
                 config.beams = beamsFrom(value, config.beams);
             } else if (key == "facesize") {
                 config.faceSize = toInt(value, config.faceSize);
+            } else if (key == "joint") {
+                config.joint = std::string(value);
             } else if (key == "encoderres") {
                 config.encoderResolution = toFloat(value, config.encoderResolution);
             } else if (key == "contactthreshold") {
