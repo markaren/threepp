@@ -241,6 +241,50 @@ TEST_CASE("a Group of two boxes becomes one compound with a gap", "[editor][phys
     session.stop();
 }
 
+TEST_CASE("Pieces on a Group decomposes each sub-mesh and splits the budget", "[editor][physx][vhacd]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+    addGround(scene);
+
+    // A Group of two DISTINCT concave trays. Shape::Pieces on the Group takes
+    // the decomposed-Group path: V-HACD each sub-mesh, divide the hull budget
+    // across them, weld into one compound actor.
+    auto model = Group::create();
+    model->name = "Trays";
+    model->position.set(0.f, 3.f, 0.f);
+    for (int i = 0; i < 2; ++i) {
+        auto tray = Mesh::create(makeTray(), MeshBasicMaterial::create());// fresh geometry each
+        tray->position.set(static_cast<float>(i) * 3.f - 1.5f, 0.f, 0.f);
+        model->add(tray);
+    }
+    PhysicsConfig cfg;
+    cfg.enabled = true;
+    cfg.body = PhysicsConfig::Body::Dynamic;
+    cfg.shape = PhysicsConfig::Shape::Pieces;
+    cfg.hulls = 8;// 8 / 2 sub-meshes = 4 each
+    cfg.mass = 2.f;
+    cfg.write(*model);
+    scene.add(model);
+
+    std::vector<std::string> log;
+    PhysicsPlaySession session;
+    session.setLogger([&](const std::string& m) { log.push_back(m); });
+    session.start(scene);
+
+    // Ground + the one compound model. Two distinct geometries decompose, so
+    // two cooks (the cache is keyed per geometry uuid).
+    CHECK(session.bodyCount() == 2);
+    CHECK(session.decompositionCookCount() == 2);
+
+    // It settles on the ground as a real multi-hull body, not a unit box.
+    run(session, 240);
+    INFO("model rest height " << model->position.y);
+    CHECK(model->position.y < 1.5f);
+
+    session.stop();
+}
+
 TEST_CASE("duplicate geometries decompose once", "[editor][physx][vhacd]") {
 
     SceneDocument document;
