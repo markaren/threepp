@@ -10,6 +10,7 @@ package structure:
 
     python/threepp/threepp/__init__.pyi   # the threepp.threepp module
     python/threepp/threepp/imgui.pyi      # the threepp.threepp.imgui submodule
+    python/threepp/threepp/editor.pyi     # HAND-MAINTAINED — see HAND_MAINTAINED
 
 A single flat `threepp.pyi` cannot express the `imgui` submodule, which is why
 the package dir is the layout this repo standardises on. The dir sits next to
@@ -44,7 +45,24 @@ MODULE = "threepp.threepp"
 # Files the generator is expected to produce, relative to the package dir. An
 # exact match is required: a new native submodule (or a dropped one) should
 # surface here as a hard failure rather than as a silently half-updated stub.
-EXPECTED = {"__init__.pyi", "imgui.pyi"}
+EXPECTED = {"__init__.pyi", "editor.pyi", "imgui.pyi"}
+
+# HAND-MAINTAINED stubs: restored verbatim after stubgen runs, never generated.
+#
+# editor.pyi is the one file the "stubs are a superset of the module" rule runs
+# backwards on. `threepp.editor` is served by TWO modules built from the same
+# binding sources: the wheel (python/CMakeLists.txt) and the editor app's
+# embedded interpreter (apps/editor/CMakeLists.txt + scripting/ScriptModule.cpp).
+# Only the editor compiles bind_editor_physics.cpp — RigidBody, SoftBody,
+# Articulation and the three *_from_object lookups are handles onto a live
+# PhysicsPlaySession, which nothing outside a running editor has. So the wheel
+# has the spline half and the editor has both, and the stub has to describe the
+# UNION for a script author's completion to be right.
+#
+# stubgen can only introspect the wheel, so regenerating this file silently
+# deletes the physics half (41 symbols; _check_no_regression catches it). Edit it
+# BY HAND to match bind_editor_physics.cpp, as commit c70e92be did.
+HAND_MAINTAINED = {"editor.pyi"}
 
 # pybind11 bakes a function's signature at def() time, so a parameter whose C++
 # type is registered later in the binding TU is rendered as a raw C++ name
@@ -53,9 +71,15 @@ EXPECTED = {"__init__.pyi", "imgui.pyi"}
 # build failure. Shrinking this regex means fixing binding declaration order.
 IGNORE_INVALID_EXPRESSIONS = r"threepp::|<threepp\.threepp\."
 
-# AnimationBlendMode is used as a default argument value before stubgen can
-# infer where the enum class lives; point it at the right module.
-ENUM_CLASS_LOCATIONS = f"AnimationBlendMode:{MODULE}"
+# An enum used as a DEFAULT ARGUMENT VALUE reaches stubgen only as its repr
+# ("<CurveType.centripetal: 0>"), which carries no module or owning class. Every
+# such enum needs a mapping here, or stubgen reports an invalid expression and
+# --exit-code aborts the run before a single file is written. Nested enums take
+# the owning class in the path.
+ENUM_CLASS_LOCATIONS = [
+    f"AnimationBlendMode:{MODULE}",
+    f"CurveType:{MODULE}.CatmullRomCurve3",
+]
 
 # A bound name that is a Python keyword cannot appear literally in a stub (or in
 # user code), and one such name makes the whole file unparseable. No binding
@@ -94,8 +118,7 @@ def _run_stubgen(pkg_dir: Path) -> None:
         MODULE,
         "--output-dir",
         str(pkg_dir),
-        "--enum-class-locations",
-        ENUM_CLASS_LOCATIONS,
+        *[arg for loc in ENUM_CLASS_LOCATIONS for arg in ("--enum-class-locations", loc)],
         "--ignore-invalid-expressions",
         IGNORE_INVALID_EXPRESSIONS,
         # Exit non-zero on any error stubgen did not expect, and skip writing
@@ -200,6 +223,39 @@ def _fix_keyword_params(line: str) -> str | None:
     if not any(p.strip() == "/" for p in parts[last_kw + 1 :]):
         parts.insert(last_kw + 1, " /")
     return f"{head}{','.join(parts)}{tail}\n"
+
+
+def _strip_self_qualification(path: Path) -> int:
+    """Drop the module's own `threepp.threepp.` prefix from its annotations.
+
+    pybind11 spells every type fully qualified, and stubgen leaves that spelling
+    alone inside a composed annotation (`Optional[...]`, `Union[...]`) — so
+    `__init__.pyi` ends up referring to `threepp.threepp.Color` while importing
+    no `threepp` at all. pyright resolves that to **Unknown**, silently: no
+    completion, no checking, no error to notice it by.
+
+    Bare names are right under both layouts the stubs serve — the wheel, where
+    this file is `threepp.threepp`, and the editor's `stubPath`, where the very
+    same file is imported as `threepp` (see doc/editor.md). Every type so
+    qualified is declared in this file, so the prefix is pure self-reference.
+
+    Docstrings are left alone: prose naming `threepp.threepp.Foo` means it.
+    """
+    prefix = f"{MODULE}."
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    fixed = 0
+    in_docstring = False
+    for i, line in enumerate(lines):
+        was_in_docstring = in_docstring
+        if line.count('"""') % 2:
+            in_docstring = not in_docstring
+        if was_in_docstring or in_docstring or prefix not in line:
+            continue
+        lines[i] = line.replace(prefix, "")
+        fixed += line.count(prefix)
+    if fixed:
+        path.write_text("".join(lines), encoding="utf-8")
+    return fixed
 
 
 def _validate(path: Path) -> None:
@@ -314,6 +370,9 @@ def main() -> int:
     _check_version()
     # Snapshot before stubgen overwrites, so a feature-set regression is visible.
     before = _snapshot(stub_dir) if stub_dir.is_dir() else {}
+    # Verbatim bytes of the hand-maintained stubs — stubgen overwrites every file
+    # it emits, and for these its output is the wrong (wheel-only) answer.
+    preserved = {n: (stub_dir / n).read_bytes() for n in HAND_MAINTAINED if (stub_dir / n).is_file()}
     _run_stubgen(pkg_dir)
 
     produced = {p.name for p in stub_dir.glob("*.pyi")} if stub_dir.is_dir() else set()
@@ -323,11 +382,26 @@ def main() -> int:
             f"       If the native module gained or lost a submodule, update EXPECTED in {__file__}."
         )
 
+    # After the EXPECTED check, so a hand-maintained stub whose submodule vanished
+    # from the module still fails loudly rather than being restored over silence.
+    for name, blob in preserved.items():
+        (stub_dir / name).write_bytes(blob)
+
     for name in sorted(produced):
         path = stub_dir / name
+        if name in preserved:
+            print(f"  {path.relative_to(pkg_dir)}: hand-maintained, left as committed")
+            _validate(path)
+            continue
         repaired = _repair_keyword_names(path)
+        unqualified = _strip_self_qualification(path)
         _validate(path)
-        note = f" ({repaired} keyword-named binding(s) repaired)" if repaired else ""
+        notes = []
+        if repaired:
+            notes.append(f"{repaired} keyword-named binding(s) repaired")
+        if unqualified:
+            notes.append(f"{unqualified} self-qualified name(s) unqualified")
+        note = f" ({', '.join(notes)})" if notes else ""
         print(f"  {path.relative_to(pkg_dir)}: {len(path.read_text(encoding='utf-8').splitlines())} lines{note}")
 
     # After repair/validation: compare only stubs that are known to parse.

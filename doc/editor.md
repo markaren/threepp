@@ -683,16 +683,38 @@ class Spinner:
 
     def start(self, obj: threepp.Mesh) -> None:   # or threepp.Robot, threepp.Light, ...
         self.obj = obj
-        self.obj.material.color.set_hex(0xff8844)  # completes, and is checked
+        mat = obj.material
+        assert isinstance(mat, threepp.MeshBasicMaterial)
+        mat.color.set_hex(0xff8844)                # completes, and is checked
 
     def update(self, dt: float) -> None:
         self.obj.rotation.y += self.speed * dt
 ```
 
+The `assert` is not ceremony. `.material` is typed `Material | None`, and
+`Material` carries only what every material shares — `name`, `opacity`, `side`,
+`blending`, `needs_update()`, and so on. `color` is not among them: a
+`MeshNormalMaterial` has none, so a checker is right to reject it until you say
+which material you mean. `isinstance` does that and opens up the rest of the
+concrete surface. The same move works on an `Object3D` from
+`get_object_by_name`, which is likewise typed as the base while the runtime
+object is the concrete subclass.
+
 The stubs are a *superset* of what the editor serves: they are generated from
 the full wheel module, which also binds the renderers, loaders, physics and
 sensors that the script host deliberately leaves out. `threepp.Mesh` completes
 and works; `threepp.GLTFLoader` completes and raises `AttributeError` at Play.
+
+`threepp/editor.pyi` is the exception, and the reason it is **hand-maintained**.
+`threepp.editor` runs the superset the other way: `RigidBody`, `SoftBody`,
+`Articulation` and the three `*_from_object` lookups come from
+`python/src/bind_editor_physics.cpp`, which only *this* app compiles
+(`apps/editor/CMakeLists.txt`, registered by `ScriptModule.cpp` behind
+`THREEPP_EDITOR_WITH_PHYSX`). They are handles onto a live `PhysicsPlaySession`,
+so the wheel has no use for them and does not bind them — and a stub generated
+from the wheel would therefore delete them. `python/scripts/gen_stubs.py` lists
+the file in `HAND_MAINTAINED` and restores it verbatim after every run. Change
+`bind_editor_physics.cpp`, and edit `editor.pyi` by hand to match.
 
 **Errors are never fatal.** Every call into Python is wrapped; a traceback goes
 to the console, the offending instance is disabled for the rest of the session,

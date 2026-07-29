@@ -213,6 +213,7 @@ native module's own structure:
 threepp/py.typed                 # PEP 561 marker (makes the types count once installed)
 threepp/threepp/__init__.pyi     # the threepp.threepp extension module
 threepp/threepp/imgui.pyi        # the threepp.threepp.imgui submodule
+threepp/threepp/editor.pyi       # the threepp.threepp.editor submodule — HAND-MAINTAINED
 ```
 
 This replaces the old flat `threepp/threepp.pyi`, which could not describe the
@@ -261,6 +262,25 @@ genuinely intended, say so:
 ```sh
 python python/scripts/gen_stubs.py --allow-removals
 ```
+
+#### `editor.pyi` is hand-maintained
+
+Every other stub here is generated; `editor.pyi` is written by hand, and
+`gen_stubs.py` restores it verbatim after each run (`HAND_MAINTAINED`).
+
+`threepp.editor` is served by two modules built from the same binding sources:
+this wheel, and the editor app's embedded interpreter. Only the editor compiles
+[`src/bind_editor_physics.cpp`](src/bind_editor_physics.cpp) — `RigidBody`,
+`SoftBody`, `Articulation` and the three `*_from_object` lookups are handles onto
+a live `PhysicsPlaySession`, which nothing outside a running editor has, so the
+wheel does not bind them. The stub has to describe the **union** for a script
+author's completion to be right, and a stub generated from the wheel alone would
+delete the physics half (41 symbols).
+
+So: change `bind_editor_physics.cpp`, and edit `editor.pyi` to match. The
+restore happens *after* the produced-files check, so a `threepp.editor` that
+disappeared from the module still fails the run rather than being papered over
+by the committed copy.
 
 #### Keyword-named bindings
 

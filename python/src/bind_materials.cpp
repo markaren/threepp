@@ -111,10 +111,44 @@ namespace threepp_py {
                 .value("RGBA", DepthPacking::RGBA);
 
         // ---- Material base ---------------------------------------------------
-        // Abstract; never instantiated. Registered only so concrete materials
-        // can declare it as a pybind base (for isinstance and the as_material /
-        // material_to_py shared_ptr<Material> bridge).
-        py::class_<Material, std::shared_ptr<Material>>(m, "Material");
+        // Abstract; never instantiated. Registered so concrete materials can
+        // declare it as a pybind base (for isinstance and the as_material /
+        // material_to_py shared_ptr<Material> bridge) — and carrying the shared
+        // fields, so `Mesh.material` can be typed `Material | None` rather than a
+        // union of every concrete class. A type checker then offers exactly the
+        // fields EVERY material has, and `isinstance` narrows to the rest.
+        //
+        // These handlers take `py::object` and reach the fields through
+        // as_material(), so the Derived -> Material step is a C++ shared_ptr
+        // conversion, which resolves the VIRTUAL base correctly. Never
+        // `[](Material& self)`: that asks pybind11 for the adjustment, which is
+        // the corruption the note above bind_material_base_fields warns about.
+        //
+        // Runtime cost is nil: every concrete material binds these directly, and
+        // those shadow these in the Python MRO. This is the base's *declaration*.
+        auto material = py::class_<Material, std::shared_ptr<Material>>(m, "Material");
+#define THREEPP_MAT_FIELD(pyname, field)                                                        \
+    material.def_property(                                                                      \
+            pyname,                                                                             \
+            [](const py::object& self) { return as_material(self)->field; },                    \
+            [](const py::object& self, decltype(Material::field) v) { as_material(self)->field = v; })
+        THREEPP_MAT_FIELD("name", name);
+        THREEPP_MAT_FIELD("opacity", opacity);
+        THREEPP_MAT_FIELD("transparent", transparent);
+        THREEPP_MAT_FIELD("side", side);
+        THREEPP_MAT_FIELD("vertex_colors", vertexColors);
+        THREEPP_MAT_FIELD("depth_test", depthTest);
+        THREEPP_MAT_FIELD("depth_write", depthWrite);
+        THREEPP_MAT_FIELD("visible", visible);
+        THREEPP_MAT_FIELD("fog", fog);
+        THREEPP_MAT_FIELD("blending", blending);
+        THREEPP_MAT_FIELD("alpha_test", alphaTest);
+        THREEPP_MAT_FIELD("tone_mapped", toneMapped);
+        THREEPP_MAT_FIELD("premultiplied_alpha", premultipliedAlpha);
+#undef THREEPP_MAT_FIELD
+        material.def("needs_update", [](const py::object& self) { as_material(self)->needsUpdate(); })
+                .def("dispose", [](const py::object& self) { as_material(self)->dispose(); })
+                .def("__repr__", [](const py::object& self) { return "<threepp." + as_material(self)->type() + ">"; });
 
         // ---- MeshBasicMaterial ----------------------------------------------
         auto basic = py::class_<MeshBasicMaterial, Material, std::shared_ptr<MeshBasicMaterial>>(m, "MeshBasicMaterial");

@@ -3,6 +3,7 @@
 
 #include <pybind11/functional.h>
 #include <pybind11/stl.h>
+#include <pybind11/typing.h>
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/Material.hpp"
@@ -24,6 +25,22 @@
 using namespace threepp;
 
 namespace threepp_py {
+
+    // What a `.material` property hands back, for the STUB'S benefit only.
+    //
+    // The object itself is still produced by material_to_py's
+    // dynamic_pointer_cast chain, which is not an accident: concrete materials
+    // derive from Material VIRTUALLY, so pybind11 must never be handed a
+    // shared_ptr<Material> and asked to downcast it — it reinterprets the holder
+    // and the virtual-base offset makes that pointer wrong. Casting the already
+    // downcast shared_ptr<Concrete> is the safe form (see bind_materials.cpp).
+    //
+    // That returns py::object, which pybind11 annotates `typing.Any` — a type
+    // checker then offers NO completion and checks nothing. Saying `Material`
+    // gives back the fields every material shares (name, opacity, side, ...),
+    // which the base carries for exactly this purpose, and `isinstance` narrows
+    // to a concrete class for the rest (color, roughness, ...).
+    using PyMaterial = py::typing::Optional<Material>;
 
     // Mesh/Points/Line derive from Object3D *virtually*. pybind11 mishandles
     // EVERY access that crosses that virtual base: inherited def_readwrite
@@ -101,7 +118,7 @@ namespace threepp_py {
                 }),
                  py::arg("geometry") = std::shared_ptr<BufferGeometry>{}, py::arg("material") = py::none())
                 .def_property_readonly("geometry", &Mesh::geometry)
-                .def_property_readonly("material", [](Mesh& self) { return material_to_py(self.material()); })
+                .def_property_readonly("material", [](Mesh& self) { return PyMaterial(material_to_py(self.material())); })
                 .def("set_geometry", &Mesh::setGeometry, py::arg("geometry"))
                 .def("set_material", [](Mesh& self, const py::object& mat) { self.setMaterial(as_material(mat)); }, py::arg("material"));
 
@@ -165,7 +182,7 @@ namespace threepp_py {
                 }),
                    py::arg("geometry") = std::shared_ptr<BufferGeometry>{}, py::arg("material") = py::none())
                 .def_property_readonly("geometry", &Points::geometry)
-                .def_property_readonly("material", [](Points& p) { return material_to_py(p.material()); });
+                .def_property_readonly("material", [](Points& p) { return PyMaterial(material_to_py(p.material())); });
 
         // ---- Line / LineSegments ---------------------------------------------
         auto line = py::class_<Line, Object3D, std::shared_ptr<Line>>(m, "Line");
@@ -175,7 +192,7 @@ namespace threepp_py {
                 }),
                  py::arg("geometry") = std::shared_ptr<BufferGeometry>{}, py::arg("material") = py::none())
                 .def_property_readonly("geometry", &Line::geometry)
-                .def_property_readonly("material", [](Line& l) { return material_to_py(l.material()); })
+                .def_property_readonly("material", [](Line& l) { return PyMaterial(material_to_py(l.material())); })
                 .def("compute_line_distances", &Line::computeLineDistances);
 
         // LineSegments inherits Line's concrete Object3D API (non-virtual base).
@@ -194,7 +211,7 @@ namespace threepp_py {
                 .def_readwrite("center", &Sprite::center)
                 .def_readwrite("screen_space", &Sprite::screenSpace)
                 .def_readwrite("screen_anchor", &Sprite::screenAnchor)
-                .def_property_readonly("material", [](Sprite& s) { return material_to_py(s.material()); });
+                .def_property_readonly("material", [](Sprite& s) { return PyMaterial(material_to_py(s.material())); });
 
         // ---- Background / Fog ------------------------------------------------
         py::class_<Background>(m, "Background")

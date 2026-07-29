@@ -120,7 +120,7 @@ class AnimationClip:
 class AnimationMixer:
     def __init__(self, root: typing.Any) -> None:
         ...
-    def clip_action(self, clip: AnimationClip, blend_mode: threepp.threepp.AnimationBlendMode | None = None) -> AnimationAction:
+    def clip_action(self, clip: AnimationClip, blend_mode: AnimationBlendMode | None = None) -> AnimationAction:
         """
         Return (creating if needed) the AnimationAction for a clip on this mixer's root.
         """
@@ -576,11 +576,11 @@ class CatmullRomCurve3:
     class CurveType:
         """
         Members:
-
+        
           centripetal
-
+        
           chordal
-
+        
           catmullrom
         """
         __members__: typing.ClassVar[dict[str, CatmullRomCurve3.CurveType]]  # value = {'centripetal': <CurveType.centripetal: 0>, 'chordal': <CurveType.chordal: 1>, 'catmullrom': <CurveType.catmullrom: 2>}
@@ -613,15 +613,12 @@ class CatmullRomCurve3:
         @property
         def value(self) -> int:
             ...
-    arc_length_divisions: int
     catmullrom: typing.ClassVar[CatmullRomCurve3.CurveType]  # value = <CurveType.catmullrom: 2>
     centripetal: typing.ClassVar[CatmullRomCurve3.CurveType]  # value = <CurveType.centripetal: 0>
     chordal: typing.ClassVar[CatmullRomCurve3.CurveType]  # value = <CurveType.chordal: 1>
     closed: bool
     curve_type: CatmullRomCurve3.CurveType
-    points: list[Vector3]
-    tension: float
-    def __init__(self, points: collections.abc.Sequence[Vector3] = [], closed: bool = False, curve_type: CatmullRomCurve3.CurveType = ..., tension: typing.SupportsFloat | typing.SupportsIndex = 0.5) -> None:
+    def __init__(self, points: collections.abc.Sequence[Vector3] = [], closed: bool = False, curve_type: CatmullRomCurve3.CurveType = CatmullRomCurve3.CurveType.centripetal, tension: typing.SupportsFloat | typing.SupportsIndex = 0.5) -> None:
         ...
     def __repr__(self) -> str:
         ...
@@ -661,6 +658,24 @@ class CatmullRomCurve3:
         """
         Rebuild the arc-length table after editing points in place.
         """
+    @property
+    def arc_length_divisions(self) -> int:
+        ...
+    @arc_length_divisions.setter
+    def arc_length_divisions(self, arg0: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def points(self) -> list[Vector3]:
+        ...
+    @points.setter
+    def points(self, arg0: collections.abc.Sequence[Vector3]) -> None:
+        ...
+    @property
+    def tension(self) -> float:
+        ...
+    @tension.setter
+    def tension(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class CircleGeometry(BufferGeometry):
     def __init__(self, radius: typing.SupportsFloat | typing.SupportsIndex = 1.0, segments: typing.SupportsInt | typing.SupportsIndex = 16, theta_start: typing.SupportsFloat | typing.SupportsIndex = 0.0, theta_length: typing.SupportsFloat | typing.SupportsIndex = 6.2831854820251465) -> None:
         ...
@@ -735,7 +750,7 @@ class Color:
     def r(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class ColorKeyframeTrack(KeyframeTrack):
-    def __init__(self, name: str, times: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], interpolation: threepp.threepp.Interpolation | None = None) -> None:
+    def __init__(self, name: str, times: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], interpolation: Interpolation | None = None) -> None:
         ...
 class ColorSpace:
     """
@@ -884,7 +899,7 @@ class ContactSensor(Sensor):
         """
         Move all buffered ContactSamples (oldest-first) out as a list; empties the buffer.
         """
-    def latest(self) -> threepp.threepp.ContactSample | None:
+    def latest(self) -> ContactSample | None:
         """
         The most recent ContactSample, or None. Survives drain().
         """
@@ -1081,7 +1096,7 @@ class DirectionalLight(Light):
     def set_target(self, target: Object3D) -> None:
         ...
 class DirectionalLightHelper(Object3D):
-    def __init__(self, light: DirectionalLight, size: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: threepp.threepp.Color | None = None) -> None:
+    def __init__(self, light: DirectionalLight, size: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: Color | None = None) -> None:
         ...
     def update(self) -> None:
         ...
@@ -1466,7 +1481,7 @@ class ForceTorqueSensor(Sensor):
         """
         Drain all buffered samples as a (N, 7) float64 numpy array with columns [t, fx, fy, fz, tx, ty, tz]. Empties the buffer.
         """
-    def latest(self) -> threepp.threepp.WrenchSample | None:
+    def latest(self) -> WrenchSample | None:
         """
         The most recent WrenchSample, or None. Survives drain().
         """
@@ -1583,8 +1598,8 @@ class HemisphereLight(Light):
     def __init__(self, sky_color: Color = ..., ground_color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
 class HemisphereLightHelper(Object3D):
-    color: threepp.threepp.Color | None
-    def __init__(self, light: HemisphereLight, size: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: threepp.threepp.Color | None = None) -> None:
+    color: Color | None
+    def __init__(self, light: HemisphereLight, size: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: Color | None = None) -> None:
         ...
     def update(self) -> None:
         ...
@@ -1658,6 +1673,18 @@ class IcpOptions:
     @robust_sigma.setter
     def robust_sigma(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
+    @property
+    def rotation_tolerance(self) -> float:
+        ...
+    @rotation_tolerance.setter
+    def rotation_tolerance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def translation_tolerance(self) -> float:
+        ...
+    @translation_tolerance.setter
+    def translation_tolerance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class IcpResult:
     def __repr__(self) -> str:
         ...
@@ -1703,7 +1730,7 @@ class Imu(Sensor):
         """
         Drain all buffered samples as a (N, 7) float64 numpy array with columns [t, gx, gy, gz, ax, ay, az]. Empties the buffer.
         """
-    def latest(self) -> threepp.threepp.ImuSample | None:
+    def latest(self) -> ImuSample | None:
         """
         The most recent ImuSample, or None. Survives drain().
         """
@@ -1850,7 +1877,7 @@ class JointEncoder(Sensor):
         """
         Drain all buffered samples as a (N, 3) float64 numpy array with columns [t, position, velocity]. Empties the buffer.
         """
-    def latest(self) -> threepp.threepp.JointSample | None:
+    def latest(self) -> JointSample | None:
         """
         The most recent JointSample, or None. Survives drain().
         """
@@ -2254,7 +2281,7 @@ class Line(Object3D):
         ...
     def get_object_by_name(self, name: str) -> Object3D:
         ...
-    def get_user_data(self, key: str) -> str | None:
+    def get_user_data(self, key: str) -> typing.Any:
         ...
     def get_world_direction(self) -> Vector3:
         ...
@@ -2308,7 +2335,7 @@ class Line(Object3D):
     def id(self) -> int:
         ...
     @property
-    def material(self) -> typing.Any:
+    def material(self) -> Material | None:
         ...
     @property
     def matrix_world(self) -> Matrix4:
@@ -2456,7 +2483,35 @@ class Mapping:
     def value(self) -> int:
         ...
 class Material:
-    pass
+    blending: Blending
+    depth_test: bool
+    depth_write: bool
+    fog: bool
+    name: str
+    premultiplied_alpha: bool
+    side: Side
+    tone_mapped: bool
+    transparent: bool
+    vertex_colors: bool
+    visible: bool
+    def __repr__(self) -> str:
+        ...
+    def dispose(self) -> None:
+        ...
+    def needs_update(self) -> None:
+        ...
+    @property
+    def alpha_test(self) -> float:
+        ...
+    @alpha_test.setter
+    def alpha_test(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def opacity(self) -> float:
+        ...
+    @opacity.setter
+    def opacity(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
 class Matrix3:
     def __init__(self) -> None:
         ...
@@ -2525,7 +2580,7 @@ class Mesh(Object3D):
         ...
     def get_object_by_name(self, name: str) -> Object3D:
         ...
-    def get_user_data(self, key: str) -> str | None:
+    def get_user_data(self, key: str) -> typing.Any:
         ...
     def get_world_direction(self) -> Vector3:
         ...
@@ -2583,7 +2638,7 @@ class Mesh(Object3D):
     def id(self) -> int:
         ...
     @property
-    def material(self) -> typing.Any:
+    def material(self) -> Material | None:
         ...
     @property
     def matrix_world(self) -> Matrix4:
@@ -3103,7 +3158,7 @@ class NoiseType:
     def value(self) -> int:
         ...
 class NumberKeyframeTrack(KeyframeTrack):
-    def __init__(self, name: str, times: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], interpolation: threepp.threepp.Interpolation | None = None) -> None:
+    def __init__(self, name: str, times: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], interpolation: Interpolation | None = None) -> None:
         ...
 class OBJLoader:
     def __init__(self) -> None:
@@ -3136,8 +3191,10 @@ class Object3D:
         ...
     def get_object_by_name(self, name: str) -> Object3D:
         ...
-    def get_user_data(self, key: str) -> str | None:
-        ...
+    def get_user_data(self, key: str) -> typing.Any:
+        """
+        String userData entry for `key`, or None when absent or not a string. The editor's spline/physics/script configs live here as flat 'key=value;...' strings.
+        """
     def get_world_direction(self) -> Vector3:
         ...
     def get_world_position(self) -> Vector3:
@@ -3570,7 +3627,7 @@ class PointLight(Light):
     def distance(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class PointLightHelper(Mesh):
-    def __init__(self, light: PointLight, sphere_size: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: threepp.threepp.Color | None = None) -> None:
+    def __init__(self, light: PointLight, sphere_size: typing.SupportsFloat | typing.SupportsIndex = 1.0, color: Color | None = None) -> None:
         ...
     def update(self) -> None:
         ...
@@ -3596,7 +3653,7 @@ class Points(Object3D):
         ...
     def get_object_by_name(self, name: str) -> Object3D:
         ...
-    def get_user_data(self, key: str) -> str | None:
+    def get_user_data(self, key: str) -> typing.Any:
         ...
     def get_world_direction(self) -> Vector3:
         ...
@@ -3650,7 +3707,7 @@ class Points(Object3D):
     def id(self) -> int:
         ...
     @property
-    def material(self) -> typing.Any:
+    def material(self) -> Material | None:
         ...
     @property
     def matrix_world(self) -> Matrix4:
@@ -3782,7 +3839,7 @@ class Quaternion:
     def z(self, arg1: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class QuaternionKeyframeTrack(KeyframeTrack):
-    def __init__(self, name: str, times: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], interpolation: threepp.threepp.Interpolation | None = None) -> None:
+    def __init__(self, name: str, times: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], interpolation: Interpolation | None = None) -> None:
         ...
 class RGBELoader:
     def __init__(self) -> None:
@@ -4161,7 +4218,7 @@ class SpotLight(Light):
     def penumbra(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class SpotLightHelper(Object3D):
-    def __init__(self, light: SpotLight, color: threepp.threepp.Color | None = None) -> None:
+    def __init__(self, light: SpotLight, color: Color | None = None) -> None:
         ...
     def update(self) -> None:
         ...
@@ -4172,7 +4229,7 @@ class Sprite(Object3D):
     def __init__(self, material: SpriteMaterial = None) -> None:
         ...
     @property
-    def material(self) -> typing.Any:
+    def material(self) -> Material | None:
         ...
 class SpriteMaterial(Material):
     alpha_map: Texture
@@ -5158,7 +5215,7 @@ class Vector4:
     def z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
 class VectorKeyframeTrack(KeyframeTrack):
-    def __init__(self, name: str, times: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], interpolation: threepp.threepp.Interpolation | None = None) -> None:
+    def __init__(self, name: str, times: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], values: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], interpolation: Interpolation | None = None) -> None:
         ...
 class VerticalAlignment:
     """
@@ -5384,6 +5441,19 @@ class VulkanRenderer:
     @auto_exposure.setter
     def auto_exposure(self, arg1: bool) -> None:
         ...
+    @property
+    def auto_lod(self) -> bool:
+        """
+        Toggle automatic mesh LOD (background-simplified chains chosen by projected screen-space error). Default ON; False pins every mesh to full detail.
+        """
+    @auto_lod.setter
+    def auto_lod(self, arg1: bool) -> None:
+        ...
+    @property
+    def auto_lod_stats(self) -> dict:
+        """
+        Auto-LOD counters: resident index/BLAS bytes, chains ready/queued, and the per-level entry histogram.
+        """
     @property
     def bloom_clamp(self) -> float:
         """
