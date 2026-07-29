@@ -27,8 +27,6 @@
 #include "threepp/threepp.hpp"
 
 #include "threepp/animation/AnimationMixer.hpp"
-#include "threepp/audio/Audio.hpp"
-#include "threepp/audio/WavFile.hpp"
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/extras/SpriteInteractor.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
@@ -38,11 +36,12 @@
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
-#include "threepp/loaders/SVGLoader.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/TextSprite.hpp"
+
+#ifdef FPS_DEMO_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
-#include "threepp/textures/DataTexture.hpp"
+#endif
 
 #include <PxPhysicsAPI.h>
 
@@ -187,9 +186,11 @@ int main(int argc, char** argv) {
     renderer->toneMapping = ToneMapping::ACESFilmic;
     renderer->toneMappingExposure = 0.9f;
 
+#ifdef FPS_DEMO_WITH_VULKAN
     if (auto vk = dynamic_cast<VulkanRenderer*>(renderer.get())) {
         vk->setMotionBlur(0.35f);
     }
+#endif
 
     // Pointer-lock mouse-look; released on game-over for the restart button.
     Vector2 lastMouse{-1, -1};
@@ -236,7 +237,9 @@ int main(int argc, char** argv) {
     scene->add(sun);
     // ONE-SUN: the Vulkan deferred resolves the HDR env's sun itself; the
     // raster stand-in would override the measured one (see tps_shooter).
+#ifdef FPS_DEMO_WITH_VULKAN
     if (dynamic_cast<VulkanRenderer*>(renderer.get())) sun->visible = false;
+#endif
 
     // ===== audio =============================================================
     SoundBank sfx;
@@ -1477,8 +1480,10 @@ int main(int argc, char** argv) {
                       << " ammo=" << ammo << (reloading ? " RELOAD" : "")
                       << " casings=" << casings.size()
                       << " decals=" << std::count_if(decalSlots.begin(), decalSlots.end(), [](const auto& d) { return d.target != nullptr; });
+#ifdef FPS_DEMO_WITH_VULKAN
             if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get()))
                 std::cout << " overlayMs=" << vk->lastFrameTimings().overlayMs;
+#endif
             // Bot state machine, one token per live enemy: <state><range>/<aim>.
             // A/E/R = Advance/Engage/Reposition — a column of frozen tokens is
             // the tell that a state stopped transitioning.

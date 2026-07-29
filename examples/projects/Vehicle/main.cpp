@@ -17,6 +17,10 @@
 #include "LandRoverScene.hpp"
 #include "VehicleSounds.hpp"
 
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
+
 #include <PxPhysicsAPI.h>
 
 #include <cmath>
@@ -30,9 +34,11 @@ int main() {
     Canvas canvas("PhysX Vehicle", {{"aa", 4}, {"vsync", true}});
     auto renderer = createRenderer(canvas);
 
+#ifdef THREEPP_WITH_VULKAN
     if (auto pt = dynamic_cast<VulkanRenderer*>(renderer.get())) {
         pt->setMotionBlur(0.4f);
     }
+#endif
 
     auto scene = Scene::create();
     auto sensorScene = Scene::create();

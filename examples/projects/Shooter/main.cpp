@@ -23,8 +23,6 @@
 #include "threepp/threepp.hpp"
 
 #include "threepp/animation/AnimationMixer.hpp"
-#include "threepp/audio/Audio.hpp"
-#include "threepp/audio/WavFile.hpp"
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/extras/SpriteInteractor.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
@@ -33,10 +31,12 @@
 #include "threepp/geometries/DecalGeometry.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
-#include "threepp/loaders/SVGLoader.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/TextSprite.hpp"
+
+#ifdef TPS_SHOOTER_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
+#endif
 
 #include <PxPhysicsAPI.h>
 
@@ -127,9 +127,11 @@ int main(int argc, char** argv) {
     renderer->toneMapping = ToneMapping::ACESFilmic;// HDR env needs tone mapping
     renderer->toneMappingExposure = 1.0f;
 
+#ifdef TPS_SHOOTER_WITH_VULKAN
     if (auto pt = dynamic_cast<VulkanRenderer*>(renderer.get())) {
         pt->setMotionBlur(shotNoBlur ? 0.f : 0.4f);
     }
+#endif
 
     // Pointer-lock mouse-look: cursor hidden + grabbed while playing (raw,
     // unbounded deltas), released on game-over so the restart button is
@@ -191,7 +193,9 @@ int main(int argc, char** argv) {
     // measured sun (Auto defers to scene lights) with this hand-tuned
     // approximation — hide it there so the env IS the sun. GL keeps it: raster
     // cannot cast shadows from an env map.
+#ifdef TPS_SHOOTER_WITH_VULKAN
     if (dynamic_cast<VulkanRenderer*>(renderer.get())) sun->visible = false;
+#endif
 
     // ===== audio ============================================================
     SoundBank sfx;
@@ -2114,7 +2118,9 @@ int main(int argc, char** argv) {
         if (!shotPath.empty() && ++shotFrame >= shotFrames) {
             const bool second = shotFrame > shotFrames;// --pair second write (frame N+1)
             const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / (second ? "b_" + shotPath : shotPath);
+#ifdef TPS_SHOOTER_WITH_VULKAN
             if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get())) vk->writeFramebuffer(path);
+#endif
             std::cout << "wrote " << path.string() << std::endl;
             if (!shotPair || second) {
                 setCursorLocked(false);// std::exit runs no destructors — Canvas's
