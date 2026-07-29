@@ -1,3 +1,4 @@
 ﻿*.pt
+!spot_steps.pt
 __pycache__/
 *.csv
