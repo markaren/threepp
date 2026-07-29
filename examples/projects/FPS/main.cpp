@@ -27,6 +27,8 @@
 #include "threepp/threepp.hpp"
 
 #include "threepp/animation/AnimationMixer.hpp"
+#include "threepp/audio/Audio.hpp"
+#include "threepp/audio/WavFile.hpp"
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/extras/SpriteInteractor.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
@@ -36,6 +38,7 @@
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/loaders/SVGLoader.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/TextSprite.hpp"
 
