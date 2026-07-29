@@ -85,6 +85,13 @@ degenerate speck at the origin.
 nodes — drag them with the gizmo, insert and delete them, and the sampled curve
 redraws live. See [Splines in `userData`](#splines-in-userdata).
 
+**Generators.** A scene can carry inline Python that BUILDS it: select `Scene`,
+write a rule, press Regenerate, and what the script creates becomes ordinary
+saved scene content. Editable in VS Code with completion, where a save re-runs it.
+This is how you author at counts a mouse cannot — a few hundred instanced props
+placed by rule, reproducible from a seed. See
+[Generators in `userData`](#generators-in-userdata).
+
 **Hierarchy.** The full `Object3D` tree, selection synced both ways with the
 viewport, double-click to rename, drag-and-drop to reparent (undoable, world
 transform preserved), and a right-click menu with Add ▸ / Duplicate / Delete /
@@ -755,6 +762,94 @@ materials, objects, animation, cameras, lights, robot — and the renderer,
 loader, physics, sensor and Vulkan areas are deliberately left out: a script has
 no business creating a window, and the editor already owns the ones that exist.
 
+### Generators in `userData`
+
+A **generator** is inline Python that AUTHORS content, as opposed to a script,
+which is behaviour that runs during Play. It normally belongs to the **scene** — a
+generated scene's rule is a property of that scene, and the root is where you
+would look for it — so select `Scene` in the hierarchy and the inspector offers a
+Generator section. Any `Group` can carry one too, for a scene that wants several
+independently re-runnable ones (props, then clutter on top).
+
+```
+userData["generatorSource"]  count = 400\nfor i in range(count): ...
+userData["generatorFields"]  count=400;seed=7
+```
+
+Source is newlines and arbitrary Python, so like a script's it gets its own plain
+entry rather than riding in the flat `key=value` format `PhysicsConfig` uses.
+Inline is the only form on purpose: the point is a document that carries the rule
+that built it, and a path into another machine's disk gives that up.
+
+Press **Regenerate** and what the script builds lands under ONE child tagged
+`userData["generated"]`, replaced wholesale on every run:
+
+```python
+import math, random
+import threepp
+from threepp import editor
+
+random.seed(7)                       # determinism is yours to declare
+
+geometry = threepp.BoxGeometry(0.5, 0.5, 0.5)
+material = threepp.MeshStandardMaterial()
+material.color = threepp.Color(0x88aa55)
+
+field = threepp.InstancedMesh(geometry, material, 400)
+for i in range(400):
+    angle = random.uniform(0, 2 * math.pi)
+    r = 8.0 * math.sqrt(random.random())     # uniform over a disc
+    m = threepp.Matrix4()
+    m.make_rotation_y(random.uniform(0, 2 * math.pi))
+    m.set_position(r * math.cos(angle), 0.25, r * math.sin(angle))
+    field.set_matrix_at(i, m)
+field.instance_matrix_needs_update()
+
+editor.add(field)
+```
+
+`editor.add(object, parent=None)` is the only authoring verb, and it returns what
+you passed so you can nest into it. It appends to a node that is **not in the
+document yet**; the editor attaches that node only once the script finishes. Two
+consequences worth relying on: a script that raises — immediately, or after
+adding half its objects — commits nothing at all, and calling `add()` outside a
+generator run raises rather than quietly doing nothing. `editor.scene()` reads the
+live scene, for placing content relative to what already exists; objects reached
+that way are not this generator's output and survive its re-runs.
+
+**Opening a scene never runs a generator**, exactly as for scripts. The output is
+ordinary saved scene content, so loading a generated `.json` shows the result
+without executing anything — and *that* is what makes such a file safe to open at
+all. Regenerating is always something you asked for. It follows that a scene from
+somebody else is data until you press the button, and pressing it runs their code
+with your privileges; read it first, the same as any script.
+
+The script is the source of truth for its output. Because a run replaces the
+output wholesale, a material or a physics config hand-edited onto generated
+content is gone at the next Regenerate — set it in the script instead. (The
+spline's tube sync can preserve a uuid and a material because it knows the output
+is one mesh; a generator's output is arbitrary.) **Clear** removes the script and
+its output together, in one undo step, rather than leaving orphaned content
+carrying the generated tag for a later generator to adopt.
+
+**Edit in VS Code** exports the source to a scratch `.py`, opens it, and polls it
+back once a second, committing each save through the undo stack — the same round
+trip an inline behaviour script gets, including the `.vscode/settings.json` that
+makes Pylance complete `import threepp`. A save also re-runs the generator, so
+the loop is edit-save-look; a file that does not parse is synced but not run, so
+the last good output stands.
+
+Determinism is *your* declaration, not the editor's guarantee: seed your RNG (as
+above) and a regenerate reproduces the scene exactly, which is what makes a
+generated scene usable as reproducible training data. An unseeded script is a
+different scene every run, and nothing stops you writing one.
+
+Known gaps: `generatorFields` round-trips but is not yet injected into the run, so
+there are no inspector inputs for parameters — a script's own module-level
+`count = 400` would overwrite an injected global, and resolving that needs a
+convention rather than plumbing. There is also no headless entry point yet, so
+batch generation over many seeds is not a one-liner.
+
 ### Splines in `userData`
 
 **Add ▸ Spline** creates a `Group` carrying `userData["spline"]`, with four
@@ -1106,6 +1201,18 @@ their say.
   The stubs are also a superset of what a script can reach — they come from the
   full wheel module, while the script host binds ten areas of it — so a name
   that completes is not proof that it exists at Play.
+* **Generators have no parameters yet.** `userData["generatorFields"]` round-trips,
+  but the values are not injected into the run and the inspector shows no inputs
+  for them, so changing a count means editing the line. This is a design gap, not
+  missing plumbing: a script's own module-level `count = 400` would overwrite any
+  value injected as a global, so making the field authoritative needs a convention
+  (read-with-default, or rewriting the assignment) rather than a wire-up.
+* **Generators are one-shot, and only from the UI.** A run appends nothing and
+  replaces everything: re-running rebuilds the whole output, so there is no
+  incremental or partial regeneration, and no headless entry point — batch
+  generation over many seeds is not a one-liner yet. There is also no bake step,
+  so keeping generated content while dropping its rule means clearing the script
+  and accepting that Clear takes the output with it.
 * **Splines are Catmull-Rom only.** One curve type, parameterised three ways —
   no Bézier handles, no per-point tangents or twist, and no closed-form
   reordering of control points beyond dragging them in the hierarchy. A spline
