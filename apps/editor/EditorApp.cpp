@@ -233,12 +233,20 @@ EditorApp::EditorApp(const Options& options)
         const auto uuid = selection_.uuid();
         selection_.set(nullptr);
         gizmo_->detach();
-        // The overlay group survives the scene swap, so the outline must be
-        // detached from it, not just dropped.
+        // The overlay group survives the scene swap, so the outlines must be
+        // detached from it, not just dropped. The instance index goes with them:
+        // it indexed into a mesh that is about to be freed, and the reselect
+        // below re-derives whatever the restored graph actually has.
         if (selectionBox_) {
             selectionBox_->removeFromParent();
             selectionBox_.reset();
         }
+        if (instanceOutline_) {
+            instanceOutline_->removeFromParent();
+            instanceOutline_.reset();
+        }
+        selectedInstance_.reset();
+        instanceBox_.makeEmpty();
 
         // Before rebinding: this replaces nodes, and the command stack should
         // resolve its targets against the final graph.
@@ -1397,7 +1405,24 @@ void EditorApp::reparent(Object3D& object, Object3D& newParent) {
 
 // ------------------------------------------------------------------ selection
 
-void EditorApp::selectObject(Object3D* object) {
+Box3 EditorApp::instanceWorldBox(const InstancedMesh& mesh, int instance) {
+
+    Box3 box;
+    if (instance < 0 || static_cast<std::size_t>(instance) >= mesh.count()) return box;
+    auto geometry = mesh.geometry();
+    if (!geometry) return box;
+    if (!geometry->boundingBox) geometry->computeBoundingBox();
+    if (!geometry->boundingBox || geometry->boundingBox->isEmpty()) return box;
+
+    Matrix4 instanceMatrix;
+    mesh.getMatrixAt(static_cast<std::size_t>(instance), instanceMatrix);
+
+    box.copy(*geometry->boundingBox);
+    box.applyMatrix4(instanceMatrix.premultiply(*mesh.matrixWorld));
+    return box;
+}
+
+void EditorApp::selectObject(Object3D* object, std::optional<int> instance) {
 
     if (object && document_.isEditorOnly(*object)) object = nullptr;
 
@@ -1407,25 +1432,46 @@ void EditorApp::selectObject(Object3D* object) {
 
     selection_.set(object);
 
-    // Always drop the previous outline first: the overlay group co-owns it, so
-    // overwriting the pointer alone would leave the old box in the scene.
+    // Always drop the previous outlines first: the overlay group co-owns them,
+    // so overwriting the pointer alone would leave the old box in the scene.
     if (selectionBox_) {
         selectionBox_->removeFromParent();
         selectionBox_.reset();
     }
+    if (instanceOutline_) {
+        instanceOutline_->removeFromParent();
+        instanceOutline_.reset();
+    }
+    selectedInstance_.reset();
 
     if (object && object != &document_.scene()) {
         gizmo_->attach(*object);
-        // A camera or a light bounds to nothing, and BoxHelper silently keeps
-        // its degenerate initial geometry in that case — a speck at the origin.
-        // Those objects carry a marker icon (and cameras a frustum) instead.
-        Box3 bounds;
-        bounds.setFromObject(*object);
-        if (!bounds.isEmpty()) {
-            selectionBox_ = BoxHelper::create(*object, 0xffcc44);
-            // The outline is editor furniture: it lives under the overlay so it
-            // is never saved and never picked.
-            overlay_->add(selectionBox_);
+        // An InstancedMesh gets its picked instance boxed instead of the whole
+        // cloud. Selecting one from the hierarchy (no instance to speak of)
+        // falls through to the whole-object outline, which is the honest answer
+        // there — nothing was pointed at.
+        auto* instanced = object->as<InstancedMesh>();
+        if (instanced && instance && *instance >= 0 &&
+            static_cast<std::size_t>(*instance) < instanced->count()) {
+
+            selectedInstance_ = instance;
+            instanceBox_.copy(instanceWorldBox(*instanced, *instance));
+            if (!instanceBox_.isEmpty()) {
+                instanceOutline_ = Box3Helper::create(instanceBox_, 0xffcc44);
+                overlay_->add(instanceOutline_);
+            }
+        } else {
+            // A camera or a light bounds to nothing, and BoxHelper silently keeps
+            // its degenerate initial geometry in that case — a speck at the origin.
+            // Those objects carry a marker icon (and cameras a frustum) instead.
+            Box3 bounds;
+            bounds.setFromObject(*object);
+            if (!bounds.isEmpty()) {
+                selectionBox_ = BoxHelper::create(*object, 0xffcc44);
+                // The outline is editor furniture: it lives under the overlay so
+                // it is never saved and never picked.
+                overlay_->add(selectionBox_);
+            }
         }
     } else {
         gizmo_->detach();
@@ -1635,6 +1681,20 @@ void EditorApp::refreshSelectionHelpers() {
         selectionBox_->update();
     }
 
+    // Box3Helper reads instanceBox_ by reference, so re-deriving the box here is
+    // what makes the outline follow an instance whose mesh (or whose instance
+    // matrix) moved. An instance that went away — count shrank under the
+    // selection — leaves an empty box, and Box3Helper::updateMatrixWorld
+    // early-returns on empty, so hide it rather than stranding the last shape.
+    if (instanceOutline_ && selectedInstance_) {
+        if (auto* instanced = selection_.get() ? selection_.get()->as<InstancedMesh>() : nullptr) {
+            instanceBox_.copy(instanceWorldBox(*instanced, *selectedInstance_));
+        } else {
+            instanceBox_.makeEmpty();
+        }
+        instanceOutline_->visible = !instanceBox_.isEmpty();
+    }
+
     syncViewportMarkers();
     syncSplineOverlays();
     syncPhysicsDebug();
@@ -1710,7 +1770,13 @@ void EditorApp::pickAt(float mouseX, float mouseY) {
         if (!hit.object) continue;
         if (document_.isEditorOnly(*hit.object)) continue;
         if (!hit.object->visible) continue;
-        selectObject(resolveSelectable(hit.object));
+        auto* selectable = resolveSelectable(hit.object);
+        // The instance index only means anything when the thing being selected
+        // is the InstancedMesh that was hit. resolveSelectable can walk UP to an
+        // import root, and instance 7 of a child says nothing about the root.
+        std::optional<int> instance;
+        if (selectable == hit.object && hit.object->is<InstancedMesh>()) instance = hit.instanceId;
+        selectObject(selectable, instance);
         return;
     }
 

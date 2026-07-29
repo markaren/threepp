@@ -234,6 +234,15 @@ void EditorApp::drawInspector() {
         ImGui::TextColored(theme::accent(), "%s", selected->type().c_str());
         ImGui::SameLine();
         ImGui::TextColored(theme::muted(), "id %u", selected->id);
+        // How many objects this one node is standing in for belongs with the
+        // type and the id: it is what the node IS. The Instancing section below
+        // carries the rest, but it sits under Material and Geometry, and the
+        // count is the fact you want without hunting for it.
+        if (auto* instanced = selected->as<InstancedMesh>()) {
+            ImGui::SameLine();
+            ImGui::TextColored(theme::muted(), "· %d instances",
+                               static_cast<int>(instanced->count()));
+        }
 
         // A running simulation owns the transforms; editing them from here
         // would be silently overwritten on the next step.
@@ -249,6 +258,7 @@ void EditorApp::drawInspector() {
         drawTransformSection(*selected);
         drawMaterialSection(*selected);
         drawGeometrySection(*selected);
+        drawInstancingSection(*selected);
         drawLightSection(*selected);
         drawCameraSection(*selected);
         drawAnimationSection(*selected);
@@ -685,6 +695,33 @@ void EditorApp::drawGeometrySection(Object3D& object) {
     ImGui::Text("Vertices  %d", vertices);
     ImGui::Text("Indices   %d", indices);
     ImGui::Text("Triangles %d", (indices ? indices : vertices) / 3);
+
+    ImGui::TreePop();
+}
+
+
+// --------------------------------------------------------------- instancing
+
+void EditorApp::drawInstancingSection(Object3D& object) {
+
+    auto* instanced = object.as<InstancedMesh>();
+    if (!instanced) return;
+    if (!section("Instancing")) return;
+
+    // The count is what makes one draw call stand in for N objects, so it leads.
+    // It is read-only here: the instance transforms are the payload, and there is
+    // no authoring verb for them yet (picking one is all this pass offers).
+    ImGui::Text("Instances %d", static_cast<int>(instanced->count()));
+
+    if (selectedInstance_) {
+        ImGui::TextColored(theme::accent(), "Picked instance %d", *selectedInstance_);
+        const auto size = instanceBox_.getSize();
+        ImGui::TextColored(theme::muted(), "Bounds %.2f x %.2f x %.2f", size.x, size.y, size.z);
+    } else {
+        ImGui::TextColored(theme::muted(), "Click an instance in the viewport to single it out.");
+    }
+    ImGui::TextColored(theme::muted(), "The gizmo moves all %d together.",
+                       static_cast<int>(instanced->count()));
 
     ImGui::TreePop();
 }

@@ -36,15 +36,18 @@
 #include "threepp/controls/OrbitControls.hpp"
 #include "threepp/controls/TransformControls.hpp"
 #include "threepp/core/Raycaster.hpp"
+#include "threepp/helpers/Box3Helper.hpp"
 #include "threepp/helpers/BoxHelper.hpp"
 #include "threepp/input/IOCapture.hpp"
 #include "threepp/objects/Group.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/renderers/Renderer.hpp"
 
 #include <deque>
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -143,6 +146,7 @@ namespace threepp::editor {
         void drawTransformSection(Object3D& object);
         void drawMaterialSection(Object3D& object);
         void drawGeometrySection(Object3D& object);
+        void drawInstancingSection(Object3D& object);
         void drawLightSection(Object3D& object);
         void drawCameraSection(Object3D& object);
         void drawAnimationSection(Object3D& object);
@@ -291,8 +295,17 @@ namespace threepp::editor {
         [[nodiscard]] bool rejectWhilePlaying(const char* what);
 
         // --- selection / picking -------------------------------------------
-        void selectObject(Object3D* object);
+        // `instance` is the InstancedMesh sub-instance the pick landed on, when
+        // the selection IS an InstancedMesh. It only changes which instance the
+        // outline boxes — the selection, the gizmo and every edit still address
+        // the whole object, because one instance is not an Object3D and has
+        // nothing to carry a transform edit on.
+        void selectObject(Object3D* object, std::optional<int> instance = std::nullopt);
         void refreshSelectionHelpers();
+        // World-space bounds of `instance` of `mesh`: the geometry's own box
+        // through matrixWorld * instanceMatrix[instance]. Empty when the index
+        // is out of range or the geometry has no bounds to take.
+        [[nodiscard]] static Box3 instanceWorldBox(const InstancedMesh& mesh, int instance);
 
         // --- viewport markers ----------------------------------------------
         // Billboarded SVG icons standing in for objects that draw nothing
@@ -460,6 +473,15 @@ namespace threepp::editor {
         std::shared_ptr<Object3D> grid_;
         std::shared_ptr<Object3D> axes_;
         std::shared_ptr<BoxHelper> selectionBox_;
+        // A selected InstancedMesh outlines the ONE instance that was picked,
+        // not the whole cloud — a box around 500 scattered rocks says nothing.
+        // Box3Helper keeps a reference to the box, so instanceBox_ must outlive
+        // the helper (both are members; the helper is also dropped whenever the
+        // selection changes) and is refreshed each frame in
+        // refreshSelectionHelpers so the outline tracks a moving instance.
+        std::optional<int> selectedInstance_;
+        Box3 instanceBox_;
+        std::shared_ptr<Box3Helper> instanceOutline_;
         std::unique_ptr<TransformControls> gizmo_;
 
         // Marker icons. One node per owner, all parented to markers_, which is

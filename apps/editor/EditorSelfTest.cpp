@@ -34,9 +34,11 @@
 
 #include "threepp/core/Clock.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
+#include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/helpers/CameraHelper.hpp"
 #include "threepp/lights/Light.hpp"
 #include "threepp/loaders/AssetSource.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Box3.hpp"
@@ -385,6 +387,46 @@ int EditorApp::runScreenshot() {
     }
     playFor(0.3f);
     wrote = shoot(sibling("_campreview")) && wrote;
+
+    // And instancing. The question a screenshot answers here is the one the
+    // assertions cannot: a grid of instances drawn from one object, with the
+    // outline sitting around ONE of them. A box around the whole cloud and a box
+    // around the right instance both satisfy "an outline exists" — only the
+    // picture distinguishes them.
+    {
+        constexpr int kCols = 6;
+        constexpr int kRows = 4;
+        auto instanced = InstancedMesh::create(
+                BoxGeometry::create(0.8f, 0.8f, 0.8f),
+                MeshStandardMaterial::create({{"color", Color(0x66aaff)}}),
+                kCols * kRows);
+        instanced->name = "Instanced Grid";
+        for (int r = 0; r < kRows; ++r) {
+            for (int c = 0; c < kCols; ++c) {
+                Matrix4 m;
+                // A little height variation, so the shot reads as many objects
+                // rather than as one flat wall that could be a single mesh.
+                const float y = 0.6f + 0.35f * static_cast<float>((r + c) % 3);
+                m.setPosition(-5.f + 2.f * static_cast<float>(c), y,
+                              -4.f + 2.f * static_cast<float>(r));
+                instanced->setMatrixAt(static_cast<std::size_t>(r * kCols + c), m);
+            }
+        }
+        instanced->instanceMatrix()->needsUpdate();
+        addObject(instanced, document_.scene(), "Add Instanced Grid");
+        playFor(0.2f);
+
+        // A middle instance, so the outline has neighbours on every side: an
+        // outline one cell off is obvious here and invisible at a corner.
+        const int picked = 2 * kCols + 3;
+        selectObject(instanced.get(), picked);
+        camera_.position.set(-2.f, 7.f, 11.f);
+        orbit_->target.set(0.f, 1.f, -1.f);
+        playFor(0.3f);
+        std::cout << "[screenshot] instanced grid: " << instanced->count()
+                  << " instances, outlining " << picked << std::endl;
+        wrote = shoot(sibling("_instancing")) && wrote;
+    }
 
     return wrote ? 0 : 1;
 }
@@ -3340,6 +3382,94 @@ int EditorApp::runSelfTest() {
         check(!viewportMarkers_.empty(), "and a marker pass that still runs");
     }
 #endif
+
+    // ---------------------------------------------------------- instancing
+    //
+    // An InstancedMesh is one object standing in for N, so the two things worth
+    // pinning are that a pick can tell WHICH of the N it landed on, and that the
+    // selection outline then boxes that one instead of the whole cloud. No
+    // PhysX: this block sits outside the gate above so it runs in every build.
+    {
+        newScene();
+        step(2);
+
+        constexpr int kInstances = 3;
+        constexpr float kSpacing = 4.f;
+        constexpr float kHeight = 10.f;// clear of the template Ground
+
+        auto instanced = InstancedMesh::create(
+                BoxGeometry::create(1, 1, 1), MeshBasicMaterial::create(), kInstances);
+        instanced->name = "Instances";
+        for (int i = 0; i < kInstances; ++i) {
+            Matrix4 m;
+            m.setPosition((static_cast<float>(i) - 1.f) * kSpacing, kHeight, 0.f);
+            instanced->setMatrixAt(static_cast<std::size_t>(i), m);
+        }
+        instanced->instanceMatrix()->needsUpdate();
+        document_.scene().add(instanced);
+        step(2);
+
+        check(instanced->count() == kInstances, "an InstancedMesh joins the scene");
+
+        // Per-instance hit reporting: straight down onto the LAST instance. The
+        // instances are 4 apart and 1 wide, so nothing else is under this ray.
+        raycaster_.set({kSpacing, kHeight + 10.f, 0.f}, {0.f, -1.f, 0.f});
+        auto hits = raycaster_.intersectObject(*instanced);
+        const bool hitLast = !hits.empty() && hits.front().instanceId &&
+                             *hits.front().instanceId == kInstances - 1;
+        check(hitLast, "a ray reports which instance it hit");
+
+        // The whole point: the outline follows the picked instance, and there is
+        // exactly ONE of them (the cloud box must not also be standing there).
+        selectObject(instanced.get(), kInstances - 1);
+        step();
+        check(selection_.get() == instanced.get(), "selecting an instance selects the mesh");
+        check(selectedInstance_ && *selectedInstance_ == kInstances - 1,
+              "and remembers which instance was picked");
+        check(outlineCount() == 1, "with exactly one outline");
+        const auto lastCentre = instanceBox_.getCenter();
+        check(std::abs(lastCentre.x - kSpacing) < 0.1f &&
+                      std::abs(lastCentre.y - kHeight) < 0.1f,
+              "boxing that instance, not the cloud");
+        // A 3-instance row spans 2*kSpacing+1; one instance is 1 across. Boxing
+        // the cloud instead of the instance is exactly the bug this catches.
+        check(instanceBox_.getSize().x < kSpacing, "so the box is instance-sized");
+
+        // Picking a different instance moves the box rather than adding one.
+        selectObject(instanced.get(), 0);
+        step();
+        const auto firstCentre = instanceBox_.getCenter();
+        check(std::abs(firstCentre.x + kSpacing) < 0.1f, "picking another instance moves the box");
+        check(outlineCount() == 1, "and still leaves one outline");
+
+        // Selected from the hierarchy there is no instance to speak of, so the
+        // honest answer is the whole-object outline.
+        selectObject(instanced.get());
+        step();
+        check(!selectedInstance_, "selecting the mesh alone picks no instance");
+        check(outlineCount() == 1, "and outlines the whole cloud once");
+
+        // An out-of-range index is a caller bug, not a crash or a stale box.
+        selectObject(instanced.get(), kInstances + 5);
+        step();
+        check(!selectedInstance_, "an out-of-range instance falls back to the whole mesh");
+
+        // A plain Mesh must never come back carrying an instance index.
+        if (auto* templateBox = document_.scene().getObjectByName("Box")) {
+            selectObject(templateBox, 1);
+            step();
+            check(!selectedInstance_, "a plain Mesh reports no instance");
+        }
+
+        // Scene replace while an instance is outlined: the index pointed into a
+        // mesh that is being freed, and the overlay outlives the swap.
+        selectObject(instanced.get(), 1);
+        step();
+        newScene();
+        step(2);
+        check(!selectedInstance_, "a scene replace drops the instance index");
+        check(instanceOutline_ == nullptr, "and the instance outline with it");
+    }
 
     std::cout << "[selftest] " << (failed == 0 ? "ALL PASS" : "FAILED") << std::endl;
     return failed == 0 ? 0 : 1;
