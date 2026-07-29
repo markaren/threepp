@@ -466,6 +466,24 @@ namespace threepp {
         // be whatever the last perspective frame left behind.
         const bool orthoSceneView = core()->orthoSceneRender(camera);
         if ((!camera.is<OrthographicCamera>() || orthoSceneView) && !secondaryOverlayPane) {
+            // A full-frame render while the PREVIOUS frame is still open (the
+            // caller drives render() directly rather than from the canvas
+            // frame-end callback, as the renderer tests do). renderFrame() below
+            // finalizes it itself — "second full-frame perspective render" —
+            // but that is too late to be safe: ensureSceneBuilt's
+            // structural-rebuild branch destroys the TLAS/BLAS and their buffers,
+            // and the open command buffer still has them BOUND. Destroying a
+            // bound object invalidates the buffer, so the next vkCmd* on it and
+            // the vkEndCommandBuffer inside endFrame() both fail, and the frame
+            // dies as an uncaught throw far from the cause. vkDeviceWaitIdle in
+            // the rebuild does not cover this: the buffer is open on the HOST,
+            // not in flight, so there is nothing to wait for. Close it first,
+            // and the rebuild is then free to destroy anything.
+            //
+            // Scoped to exactly the case that runs the scene build — the HUD
+            // ortho pass and the split-screen secondary pane both skip this
+            // block and must keep extending the open frame, not end it.
+            if (core()->frameState_ != Impl::FrameState::Idle) core()->endFrame();
             const auto sceneStart = std::chrono::high_resolution_clock::now();
             core()->ensureSceneBuilt(scene, camera);
             // World-space Sprites (screenSpace == false) are drawn by the overlay
