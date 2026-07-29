@@ -3461,9 +3461,33 @@ int EditorApp::runSelfTest() {
             check(!selectedInstance_, "a plain Mesh reports no instance");
         }
 
+        // Instances have to SURVIVE. Play serialises the document and Stop
+        // reloads it, so a play/stop round trip is the editor driving its own
+        // save-and-open path — if an InstancedMesh comes back as N lost objects
+        // or as one box, an imported instanced asset would not survive a save
+        // either. Assert the count AND a specific instance's translation: a
+        // count that round-trips over a zeroed instanceMatrix is the failure
+        // this catches.
+        selectObject(nullptr);
+        startPlay();
+        step(4);
+        stopPlay();
+        step(4);
+        auto* reloaded = document_.scene().getObjectByName("Instances");
+        auto* reloadedInstanced = reloaded ? reloaded->as<InstancedMesh>() : nullptr;
+        check(reloadedInstanced != nullptr, "an InstancedMesh survives play/stop as one");
+        if (reloadedInstanced) {
+            check(reloadedInstanced->count() == kInstances, "with every instance still there");
+            Matrix4 restored;
+            reloadedInstanced->getMatrixAt(kInstances - 1, restored);
+            const auto p = Vector3().setFromMatrixPosition(restored);
+            check(std::abs(p.x - kSpacing) < 1e-3f && std::abs(p.y - kHeight) < 1e-3f,
+                  "and the instance transforms intact");
+        }
+
         // Scene replace while an instance is outlined: the index pointed into a
         // mesh that is being freed, and the overlay outlives the swap.
-        selectObject(instanced.get(), 1);
+        if (reloadedInstanced) selectObject(reloadedInstanced, 1);
         step();
         newScene();
         step(2);
