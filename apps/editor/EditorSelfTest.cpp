@@ -32,6 +32,9 @@
 
 #include "threepp/core/Clock.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
+// Directly, not via DepthSensor.hpp: that route is behind THREEPP_EDITOR_WITH_PHYSX,
+// and outlineCount() casts the helper to Object3D on every build.
+#include "threepp/helpers/CameraHelper.hpp"
 #include "threepp/lights/Light.hpp"
 #include "threepp/loaders/AssetSource.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
