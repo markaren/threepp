@@ -49,7 +49,6 @@ cmake_dependent_option(THREEPP_BUILD_EDITOR "Build the threepp scene editor"
         ${PROJECT_IS_TOP_LEVEL} "THREEPP_WITH_GLFW AND NOT DEFINED EMSCRIPTEN" OFF)
 
 cmake_dependent_option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" ON "THREEPP_BUILD_EXAMPLES" OFF)
-cmake_dependent_option(THREEPP_FETCH_ASSIMP "Make assimp available for examples" OFF "THREEPP_BUILD_EXAMPLES" OFF)
 
 
 # ==============================================================================
