@@ -428,6 +428,18 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
         } else {
 
             used = setValue(key, value);
+
+            if (!used && key == "envMapIntensity") {
+
+                // envMapIntensity lives on the mixin, so copy() and the exporter carry it for
+                // every env-map material. Only the standard materials name it in setValue, so
+                // catch it here rather than have a basic/phong/lambert round-trip report it unused.
+                if (auto* m = dynamic_cast<MaterialWithEnvMap*>(this)) {
+
+                    m->envMapIntensity = extractFloat(value);
+                    used = true;
+                }
+            }
         }
 
         if (!used) {

@@ -14,6 +14,9 @@
 #include "threepp/loaders/ObjectExporter.hpp"
 #include "threepp/loaders/ObjectLoader.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
+#include "threepp/materials/MeshLambertMaterial.hpp"
+#include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/PointsMaterial.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
@@ -1040,6 +1043,34 @@ TEST_CASE("threepp-only material fields survive the round-trip") {
     CHECK_THAT(parsedMaterial->detailRoughStrength, WithinAbs(0.4f, 1e-5));
     CHECK_THAT(parsedMaterial->translucency, WithinAbs(0.6f, 1e-5));
     CHECK(parsedMaterial->translucencyColor.getHex() == 0x22aa44);
+}
+
+
+TEST_CASE("envMapIntensity round-trips on every env-map material, not just the standard ones") {
+
+    // The field sits on the mixin, so the exporter writes it for all of them, but only the
+    // standard materials name it in their own setValue.
+    auto roundTrip = [](const std::shared_ptr<Material>& material) {
+        auto* envMap = dynamic_cast<MaterialWithEnvMap*>(material.get());
+        REQUIRE(envMap != nullptr);
+        envMap->envMapIntensity = 0.35f;
+
+        auto mesh = Mesh::create(makeDataGeometry(), material);
+
+        ObjectExporter exporter;
+        ObjectLoader loader;
+        auto parsed = loader.parse(exporter.toJson(*mesh));
+        REQUIRE(parsed != nullptr);
+
+        auto* parsedEnvMap = parsed->materialAs<MaterialWithEnvMap>();
+        REQUIRE(parsedEnvMap != nullptr);
+        CHECK_THAT(parsedEnvMap->envMapIntensity, WithinAbs(0.35f, 1e-5));
+    };
+
+    SECTION("MeshBasicMaterial") { roundTrip(MeshBasicMaterial::create()); }
+    SECTION("MeshLambertMaterial") { roundTrip(MeshLambertMaterial::create()); }
+    SECTION("MeshPhongMaterial") { roundTrip(MeshPhongMaterial::create()); }
+    SECTION("MeshStandardMaterial") { roundTrip(MeshStandardMaterial::create()); }
 }
 
 
