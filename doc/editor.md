@@ -369,6 +369,16 @@ types — it lists the robot ancestor's articulated joints by name and writes th
 choice as `joint=<name>` in `userData["sensor"]`. The section says why when
 there is no robot ancestor, or when the robot has Simulate off.
 
+The encoder's combo has one more entry: **All joints** (`joint=*`), which fans
+one authored sensor out to one live encoder per articulated DOF at Play — the
+joint-state sensor a whole robot reports itself with. It exists because an
+object carries exactly one sensor entry, so without it instrumenting a 7-DOF
+arm means seven encoders on seven link nodes. Each fanned-out encoder is its
+own row in the Sensors panel and its own CSV, labelled with its joint name,
+and each draws from its own seeded noise stream so one authored seed does not
+correlate seven channels. The Force/Torque sensor deliberately does not take
+it — a load cell is one piece of hardware bolted into one joint.
+
 At Play the sensor session resolves that name against the played articulation and
 builds a live `JointEncoder` (position/velocity, quantized by the encoder's
 resolution) or `ForceTorqueSensor` (the six-axis wrench through the joint, in its

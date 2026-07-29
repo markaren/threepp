@@ -414,6 +414,17 @@ namespace threepp::editor {
 
         void build(Object3D& node, const SensorConfig& config) {
 
+            // One authored entry normally becomes one sensor. The whole-robot
+            // encoder (joint == allJoints) is the exception: an object carries
+            // ONE sensor entry, so covering every DOF from the robot's root has
+            // to fan out — one live encoder per joint, each its own Entry so the
+            // traces, the counters and the CSV files stay per-joint.
+            if (config.type == SensorConfig::Type::Encoder &&
+                config.joint == SensorConfig::allJoints) {
+                buildEncoderFanout(node, config);
+                return;
+            }
+
             auto entry = std::make_unique<Entry>();
             entry->uuid = node.uuid;
             entry->label = labelFor(node);
@@ -481,9 +492,9 @@ namespace threepp::editor {
             entry.traceCount = 2;
         }
 
-        // Resolve the articulation link a joint sensor measures, or set a status
+        // Resolve the played articulation a joint sensor rides, or set a status
         // that names exactly what is missing. Returns nullptr on any failure.
-        const ArticulationLink* resolveJoint(Entry& entry, Object3D& node, const SensorConfig& config) {
+        const PhysicsPlaySession::PlayedArticulation* resolveArticulation(Entry& entry, Object3D& node) {
 
             if (!liveWorld()) {
                 entry.status = "no physics world - a joint sensor rides an articulated robot";
@@ -496,10 +507,26 @@ namespace threepp::editor {
             const auto* played = physics_->findArticulation(&node);
             if (!played) {
                 entry.status = "no articulated robot - enable Simulate in the Robot section";
-                return nullptr;
             }
+            return played;
+        }
+
+        // Resolve the articulation link ONE joint sensor measures, or set a
+        // status that names exactly what is missing. Returns nullptr on any
+        // failure.
+        const ArticulationLink* resolveJoint(Entry& entry, Object3D& node, const SensorConfig& config) {
+
+            const auto* played = resolveArticulation(entry, node);
+            if (!played) return nullptr;
             if (config.joint.empty()) {
                 entry.status = "no joint chosen - pick one in the Sensor section";
+                return nullptr;
+            }
+            if (config.joint == SensorConfig::allJoints) {
+                // Only the Force/Torque sensor gets here - the encoder's
+                // all-joints fan-out is intercepted in build() before any entry
+                // reaches this resolver.
+                entry.status = "All joints is an encoder thing - a load cell sits in one joint";
                 return nullptr;
             }
             const auto* link = played->linkFor(config.joint);
@@ -510,15 +537,18 @@ namespace threepp::editor {
             return link;
         }
 
-        NoiseModel encoderPositionNoise(const SensorConfig& config) const {
+        NoiseModel encoderPositionNoise(const SensorConfig& config, int streamIndex) const {
 
             // A joint encoder's error is dominated by quantization (encoderResolution
             // below), so the position noise is left at the clean default here — no
             // authored density/walk fields exist for it in this pass. Still seed it
             // from a free stream index so a future field is reproducible and does not
-            // collide with the IMU's 0/1 or a range channel's 2.
+            // collide with the IMU's 0/1 or a range channel's 2. `streamIndex` is the
+            // DOF index under the all-joints fan-out (0 for a single encoder, so the
+            // authored seed keeps its meaning), so seven encoders from one authored
+            // seed do not draw correlated noise.
             NoiseModel model;
-            model.seed = config.streamSeed(3);
+            model.seed = config.streamSeed(3 + streamIndex);
             return model;
         }
 
@@ -526,11 +556,18 @@ namespace threepp::editor {
 
             const auto* link = resolveJoint(entry, node, config);
             if (!link) return;
+            buildEncoderFor(entry, node, config, *link, 0);
+        }
+
+        // The construction shared by the single named encoder and the all-joints
+        // fan-out.
+        void buildEncoderFor(Entry& entry, Object3D& node, const SensorConfig& config,
+                             const ArticulationLink& link, int streamIndex) {
 
             auto encoder = std::make_unique<JointEncoder>(
-                    node, *link, static_cast<double>(std::max(config.rateHz, 0.f)));
+                    node, link, static_cast<double>(std::max(config.rateHz, 0.f)));
             encoder->resolution = std::max(config.encoderResolution, 0.f);
-            encoder->positionNoise = encoderPositionNoise(config);
+            encoder->positionNoise = encoderPositionNoise(config, streamIndex);
             try {
                 liveWorld()->registerSensor(encoder.get());
             } catch (const std::exception& e) {
@@ -541,6 +578,42 @@ namespace threepp::editor {
 
             entry.traceNames = {"position", "velocity", nullptr, nullptr, nullptr, nullptr};
             entry.traceCount = 2;
+        }
+
+        // One authored entry, one live encoder per articulated DOF. Each joint
+        // gets its own Entry: its own traces, its own sample counter, and its
+        // own CSV — the label carries the joint name, which is what keeps the
+        // readout rows and the recorded files apart when they all share a node.
+        void buildEncoderFanout(Object3D& node, const SensorConfig& config) {
+
+            // Resolve the robot once: a failure is ONE entry carrying the
+            // reason, not a copy of it for every DOF that does not exist.
+            auto probe = std::make_unique<Entry>();
+            probe->uuid = node.uuid;
+            probe->label = labelFor(node);
+            probe->config = config;
+            probe->node = &node;
+            const auto* played = resolveArticulation(*probe, node);
+            if (played && played->jointNames.empty()) {
+                probe->status = "the robot has no simulated DOFs";
+            }
+            if (!played || played->jointNames.empty()) {
+                log("sensor: \"" + probe->label + "\" - " + probe->status);
+                entries_.push_back(std::move(probe));
+                return;
+            }
+
+            for (std::size_t i = 0; i < played->jointNames.size() && i < played->links.size(); ++i) {
+                auto entry = std::make_unique<Entry>();
+                entry->uuid = node.uuid;
+                entry->label = labelFor(node) + " " + played->jointNames[i];
+                entry->config = config;
+                entry->config.joint = played->jointNames[i];// which joint this one became
+                entry->node = &node;
+                buildEncoderFor(*entry, node, config, played->links[i], static_cast<int>(i));
+                if (!entry->status.empty()) log("sensor: \"" + entry->label + "\" - " + entry->status);
+                entries_.push_back(std::move(entry));
+            }
         }
 
         void buildForceTorque(Entry& entry, Object3D& node, const SensorConfig& config) {

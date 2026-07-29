@@ -34,6 +34,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -135,6 +136,46 @@ namespace {
         std::filesystem::create_directories(dir);
         const auto path = dir / "arm.urdf";
         std::ofstream(path, std::ios::trunc) << kArmUrdf;
+        return path;
+    }
+
+    // A three-link, two-joint arm for the all-joints fan-out: one encoder
+    // entry must become TWO live encoders, which a one-joint arm cannot show.
+    const char* kTwoJointUrdf = R"(
+        <robot name="arm2">
+          <link name="base_link">
+            <visual><geometry><box size="0.2 0.2 0.2"/></geometry></visual>
+            <collision><geometry><box size="0.2 0.2 0.2"/></geometry></collision>
+          </link>
+          <link name="upper_link">
+            <visual><geometry><box size="0.1 0.4 0.1"/></geometry></visual>
+            <collision><geometry><box size="0.1 0.4 0.1"/></geometry></collision>
+          </link>
+          <link name="fore_link">
+            <visual><geometry><box size="0.1 0.3 0.1"/></geometry></visual>
+            <collision><geometry><box size="0.1 0.3 0.1"/></geometry></collision>
+          </link>
+          <joint name="shoulder" type="revolute">
+            <parent link="base_link"/>
+            <child link="upper_link"/>
+            <origin xyz="0 0 0.3" rpy="0 0 0"/>
+            <axis xyz="0 0 1"/>
+            <limit lower="-2.0" upper="2.0"/>
+          </joint>
+          <joint name="elbow" type="revolute">
+            <parent link="upper_link"/>
+            <child link="fore_link"/>
+            <origin xyz="0 0.4 0" rpy="0 0 0"/>
+            <axis xyz="0 0 1"/>
+            <limit lower="-2.0" upper="2.0"/>
+          </joint>
+        </robot>)";
+
+    std::filesystem::path twoJointFixture() {
+        const auto dir = std::filesystem::temp_directory_path() / "threepp-sensor-articulation";
+        std::filesystem::create_directories(dir);
+        const auto path = dir / "arm2.urdf";
+        std::ofstream(path, std::ios::trunc) << kTwoJointUrdf;
         return path;
     }
 
@@ -593,6 +634,59 @@ TEST_CASE("A force/torque sensor authored on a link produces wrenches during pla
     const float magnitude = sample->force.length() + sample->torque.length();
     CHECK(magnitude > 0.f);
 
+    rig.stop();
+}
+
+TEST_CASE("An all-joints encoder fans out to one live encoder per DOF") {
+
+    const auto path = twoJointFixture();
+    Rig rig;
+    auto robot = makeSimulatedArm(rig.scene, path, /*shoulder*/ 0.4f);
+    REQUIRE(robot->numDOF() == 2);
+
+    // ONE authored entry, on the robot's root — the point of the fan-out is
+    // that an object carries one sensor, and this covers the whole robot.
+    authorJointSensor(*robot, SensorConfig::Type::Encoder, SensorConfig::allJoints);
+
+    rig.start();
+    REQUIRE(rig.physics.articulationCount() == 1);
+    CHECK(rig.sensors.sensorCount() == 2);
+    CHECK(rig.sensors.liveCount() == 2);
+
+    std::set<std::string> joints;
+    for (const auto& entry : rig.sensors.entries()) {
+        CHECK(entry->encoder != nullptr);
+        CHECK(entry->status.empty());
+        CHECK(entry->uuid == robot->uuid);
+        // The label carries the joint name — it is what keeps the readout rows
+        // and the per-sensor CSV files apart when they all share one node.
+        CHECK(entry->label.find(entry->config.joint) != std::string::npos);
+        joints.insert(entry->config.joint);
+    }
+    CHECK(joints == std::set<std::string>{"shoulder", "elbow"});
+
+    rig.update(30);
+    for (const auto& entry : rig.sensors.entries()) {
+        CHECK(entry->samples > 0);
+    }
+
+    rig.stop();
+    CHECK(rig.sensors.sensorCount() == 0);
+}
+
+TEST_CASE("All joints on a Force/Torque sensor is refused with a reason") {
+
+    const auto path = armFixture();
+    Rig rig;
+    auto robot = makeSimulatedArm(rig.scene, path);
+    authorJointSensor(*robot, SensorConfig::Type::ForceTorque, SensorConfig::allJoints);
+
+    rig.start();
+    CHECK(rig.sensors.sensorCount() == 1);
+    CHECK(rig.sensors.liveCount() == 0);
+    CHECK(rig.sensors.entries().front()->status.find("one joint") != std::string::npos);
+    rig.update(10);
+    CHECK(rig.sensors.entries().front()->samples == 0);
     rig.stop();
 }
 

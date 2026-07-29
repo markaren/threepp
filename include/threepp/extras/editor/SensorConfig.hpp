@@ -109,7 +109,18 @@ namespace threepp::editor {
         // which the inspector's joint picker is where you fix. URDF joint names
         // never contain the flat format's `;`/`=` delimiters, so the name rides
         // the string as-is.
+        //
+        // The ENCODER additionally takes `allJoints`: one authored entry fans
+        // out to one live encoder per articulated DOF at Play — the joint-state
+        // sensor a whole robot reports itself with. An object carries ONE
+        // sensor entry, so without this a 7-DOF arm means seven encoders on
+        // seven link nodes. The Force/Torque sensor does not take it: a load
+        // cell is one piece of hardware bolted into one joint.
         std::string joint;
+
+        // The Encoder's every-DOF selector (see `joint`). Deliberately not a
+        // legal URDF name.
+        static constexpr const char* allJoints = "*";
 
         // --- Encoder --------------------------------------------------------
         float encoderResolution = 0.f;// rad (or m) per tick; 0 = ideal

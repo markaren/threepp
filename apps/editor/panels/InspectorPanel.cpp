@@ -1820,7 +1820,10 @@ void EditorApp::drawSensorSection(Object3D& object) {
     // this sensor is authored on and offer its articulated joints by name; a
     // sensor authored off a robot (or on a robot with Simulate off) is a mistake
     // worth naming here, where the picker lives, rather than as silence at Play.
-    const auto jointPicker = [&]() {
+    // `offerAll` adds the encoder's "All joints" entry — one authored sensor,
+    // one live encoder per DOF at Play. A load cell sits in one joint, so the
+    // Force/Torque picker does not offer it.
+    const auto jointPicker = [&](bool offerAll) {
         Robot* robot = nullptr;
         for (Object3D* o = &object; o != nullptr; o = o->parent) {
             if (auto* r = o->as<Robot>()) {
@@ -1845,21 +1848,42 @@ void EditorApp::drawSensorSection(Object3D& object) {
         // The combo shows "(choose)" when nothing is picked yet, then the joint
         // names in the robot's own order. Selecting one is one undoable edit.
         std::vector<const char*> names;
-        names.reserve(info.size() + 1);
+        names.reserve(info.size() + 2);
         names.push_back("(choose)");
+        if (offerAll) names.push_back("All joints");
+        const int base = offerAll ? 2 : 1;
         int current = 0;
+        if (offerAll && config.joint == SensorConfig::allJoints) current = 1;
         for (std::size_t i = 0; i < info.size(); ++i) {
             names.push_back(info[i].name.c_str());
-            if (info[i].name == config.joint) current = static_cast<int>(i) + 1;
+            if (info[i].name == config.joint) current = static_cast<int>(i) + base;
         }
         if (ImGui::Combo("Joint", &current, names.data(), static_cast<int>(names.size()))) {
             auto after = config;
-            after.joint = (current == 0) ? std::string{} : info[static_cast<std::size_t>(current - 1)].name;
+            if (current == 0) {
+                after.joint.clear();
+            } else if (offerAll && current == 1) {
+                after.joint = SensorConfig::allJoints;
+            } else {
+                after.joint = info[static_cast<std::size_t>(current - base)].name;
+            }
             commit(after, "Sensor Joint");
             config = SensorConfig::read(object).value_or(config);
         }
         if (config.joint.empty()) {
             ImGui::TextColored(theme::muted(), "Pick which joint this sensor reads.");
+        } else if (config.joint == SensorConfig::allJoints) {
+            if (offerAll) {
+                ImGui::TextColored(theme::muted(),
+                                   "One live encoder per articulated DOF at Play.");
+            } else {
+                // A leftover from flipping the type combo away from Encoder —
+                // the settings of the other type are still your settings, but
+                // this one has no meaning here.
+                ImGui::TextColored(theme::warning(),
+                                   "All joints is an encoder thing - pick the one this "
+                                   "load cell sits in.");
+            }
         }
     };
 
@@ -1946,7 +1970,7 @@ void EditorApp::drawSensorSection(Object3D& object) {
         }
 
         case SensorConfig::Type::Encoder: {
-            jointPicker();
+            jointPicker(true);
             floatField(
                     "Resolution", config.encoderResolution, 1e-5f, 0.f, 1.f,
                     [](SensorConfig& c, float v) { c.encoderResolution = v; },
@@ -1964,7 +1988,7 @@ void EditorApp::drawSensorSection(Object3D& object) {
         }
 
         case SensorConfig::Type::ForceTorque: {
-            jointPicker();
+            jointPicker(false);
             ImGui::TextColored(theme::muted(),
                                "Reads the 6-axis wrench through the joint, in its child frame.");
             break;
@@ -2017,13 +2041,6 @@ void EditorApp::drawSensorSection(Object3D& object) {
                                "measure. Add Physics to this object or a parent.");
         }
     }
-    if (config.type == SensorConfig::Type::Encoder ||
-        config.type == SensorConfig::Type::ForceTorque) {
-        ImGui::TextColored(theme::warning(),
-                           "Reads an articulation joint. The editor's physics builds rigid "
-                           "bodies only, so this is authored and saved, not simulated yet.");
-    }
-
     ImGui::TextColored(theme::muted(),
                        "Rebuilt from this config on every Play, so the seed replays exactly.");
     ImGui::TextColored(theme::muted(), "Stored in userData[\"sensor\"]");
