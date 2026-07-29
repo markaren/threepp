@@ -591,3 +591,47 @@ URDFArticulationDesc URDFLoader::parseArticulation(const std::filesystem::path& 
 }
 
 URDFLoader::~URDFLoader() = default;
+
+void threepp::scaleArticulationDesc(URDFArticulationDesc& desc, float scale) {
+
+    if (!(scale > 0.f) || scale == 1.f) return;
+
+    // Translation only. The rotation columns are direction cosines and the
+    // matrices carry no scale of their own (originMatrix composes with unit
+    // scale), so the position column is the whole length content of a frame.
+    const auto scaleTranslation = [scale](Matrix4& m) {
+        m.elements[12] *= scale;
+        m.elements[13] *= scale;
+        m.elements[14] *= scale;
+    };
+
+    for (auto& link : desc.links) {
+
+        scaleTranslation(link.jointOrigin);
+
+        auto& collision = link.collision;
+        collision.halfExtents.multiplyScalar(scale);
+        collision.radius *= scale;
+        collision.halfHeight *= scale;
+        scaleTranslation(collision.origin);
+        // Already in the collision frame with the <mesh scale> baked in, so the
+        // points are plain lengths.
+        for (auto& component : collision.hullPoints) component *= scale;
+
+        // A prismatic limit is a distance; a revolute one is an angle.
+        if (link.jointType == Robot::JointType::Prismatic && link.range) {
+            link.range->min *= scale;
+            link.range->max *= scale;
+        }
+
+        // The visual subtree is geometry in the URDF's units hanging off a
+        // link-frame node. Scaling that node (and the origin offset that places
+        // it) rescales the meshes without touching the geometry itself, which
+        // CachingLoader shares between links — mutating vertices here would
+        // resize every other link that references the same file.
+        if (link.visual) {
+            link.visual->position.multiplyScalar(scale);
+            link.visual->scale.multiplyScalar(scale);
+        }
+    }
+}

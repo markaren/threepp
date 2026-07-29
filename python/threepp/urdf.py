@@ -59,12 +59,18 @@ class UrdfArticulation:
 
 def load_articulation(world, path, *, fixed_base=False, base_position=(0, 0, 0),
                       default_density=1000.0, stiffness=0.0, damping=0.0, max_force=1e6,
-                      self_collision=False, solver_position_iterations=12, render_visuals=True):
+                      self_collision=False, solver_position_iterations=12, render_visuals=True,
+                      scale=1.0):
     """Import a URDF/xacro as a reduced-coordinate `Articulation`. Returns a UrdfArticulation.
 
     The articulation is built at the zero joint configuration. `stiffness`/`damping`/`max_force`
     configure a PD position drive on every actuated joint (leave stiffness 0 for passive/force-controlled
     joints). `base_position` places the root link.
+
+    `scale` reinterprets the file's length units — a URDF drawn in millimetres in a metre world is
+    0.001. Shapes, joint frames and prismatic limits are built scaled; masses stay as authored (URDF
+    states kilograms whatever the geometry was drawn in) and inertia follows from the scaled shapes.
+    A prismatic joint then reads and drives in the SCALED units.
     """
     if not tp.HAS_PHYSX:
         raise RuntimeError("threepp.urdf.load_articulation needs a PhysX-enabled threepp build")
@@ -78,5 +84,6 @@ def load_articulation(world, path, *, fixed_base=False, base_position=(0, 0, 0),
         max_force=float(max_force),
         self_collision=self_collision,
         solver_position_iterations=int(solver_position_iterations),
-        render_visuals=render_visuals)
+        render_visuals=render_visuals,
+        scale=float(scale))
     return UrdfArticulation(art, meshes, joint_names, world)

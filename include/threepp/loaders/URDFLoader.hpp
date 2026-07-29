@@ -59,6 +59,27 @@ namespace threepp {
         std::vector<Link> links;
     };
 
+    // Reinterpret a parsed description in different length units — a URDF drawn in
+    // millimetres dropped into a metre scene is `scale = 0.001`.
+    //
+    // Everything with a LENGTH in it is multiplied: collision extents and hull
+    // points, the translation of every joint and collision origin, and the limits
+    // of a PRISMATIC joint (a revolute limit is radians and is left alone, as is
+    // the joint axis, which is a direction).
+    //
+    // `mass` is deliberately NOT touched. URDF states mass in kilograms whatever
+    // unit the geometry was drawn in, so a file authored in millimetres still
+    // means 2.5 kg by `<mass value="2.5"/>`. The inertia tensor needs no attention
+    // either: the desc does not carry one, and the articulation builder derives it
+    // from the (now scaled) shapes, so it stays consistent by construction. Where
+    // a link has no <inertial> at all, mass falls out of density x volume, which
+    // scales as s^3 on its own — also right.
+    //
+    // Uniform only, by nature: a sphere, a capsule and a joint frame have no way
+    // to take a per-axis scale. A caller with a non-uniform scale in hand has to
+    // refuse it rather than pick an axis. A non-positive or unit scale is a no-op.
+    void scaleArticulationDesc(URDFArticulationDesc& desc, float scale);
+
     class URDFLoader {
 
     public:

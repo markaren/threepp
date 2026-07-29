@@ -49,6 +49,15 @@ namespace threepp {
         bool selfCollision = false;
         int solverPositionIterations = 12;
         bool renderVisuals = true;          // parent each link's <visual> under its collider so it renders as real meshes
+        // Uniform length scale for the whole robot — a URDF drawn in millimetres
+        // in a metre world is 0.001. Folded into the description before a single
+        // actor exists (see scaleArticulationDesc), because a PhysX actor has no
+        // scale of its own: shapes, joint frames and prismatic limits are built at
+        // the scaled size instead. Masses stay as authored; inertia is derived
+        // from the scaled shapes, so it follows. NOTE that a prismatic DOF then
+        // solves in SCALED units, which is what a caller mirroring joint values
+        // onto an unscaled kinematic model has to undo.
+        float scale = 1.f;
     };
 
     struct URDFArticulationResult {
@@ -141,8 +150,11 @@ namespace threepp {
         URDFLoader loader;
         // only load each link's <visual> mesh from disk when we will actually render it — otherwise this
         // dominates a large batch build (~0.45 s/env for a detailed arm that never renders in training).
-        const URDFArticulationDesc desc = loader.parseArticulation(path, opts.renderVisuals);
+        URDFArticulationDesc desc = loader.parseArticulation(path, opts.renderVisuals);
         if (desc.links.empty()) return result;// unreadable / no single root
+
+        // Units, before anything is built from the description.
+        scaleArticulationDesc(desc, opts.scale);
 
         auto art = std::make_unique<Articulation>(world, opts.fixedBase, opts.solverPositionIterations, !opts.selfCollision);
 

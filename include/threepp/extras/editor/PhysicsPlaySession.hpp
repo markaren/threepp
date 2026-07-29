@@ -155,6 +155,21 @@ namespace threepp::editor {
             std::unique_ptr<Articulation> owned;
             std::vector<std::shared_ptr<Mesh>> meshes;
             std::vector<int> visualIndexOfDof;
+
+            // The robot's uniform world scale, folded into the articulation at
+            // build time. It makes the two sides of the mirror speak different
+            // units for a PRISMATIC DOF: the articulation solves in SCENE units
+            // (its shapes and joint frames were scaled), while Robot::setJointValue
+            // slides along the joint axis in the URDF's OWN units, which the node's
+            // scale then multiplies on the way to the screen. So a prismatic value
+            // is divided by this coming back and multiplied by it going in. A
+            // revolute DOF is an angle and rides through untouched.
+            float lengthScale = 1.f;
+            std::vector<char> prismaticDof;// DOF add-order, like visualIndexOfDof
+
+            [[nodiscard]] bool isPrismatic(std::size_t dof) const {
+                return dof < prismaticDof.size() && prismaticDof[dof] != 0;
+            }
         };
 
         // The articulation governing `object`, or the nearest ancestor of it that
@@ -317,14 +332,22 @@ namespace threepp::editor {
             Quaternion baseRot;
             robot.matrixWorld->decompose(basePos, baseRot, baseScale);
 
-            // A scaled robot cannot become an articulation: PhysX links have no
-            // scale, so the collider primitives would sit at the unscaled size
-            // while the visual meshes render scaled. Skip with one line rather
-            // than build something that visibly disagrees with itself.
-            const auto isUnit = [](float v) { return std::abs(v - 1.f) < 1e-3f; };
-            if (!isUnit(baseScale.x) || !isUnit(baseScale.y) || !isUnit(baseScale.z)) {
-                log("physics: \"" + robot.name + "\" has a non-unit world scale - "
-                    "PhysX articulation links cannot be scaled, so it is not simulated");
+            // A PhysX link has no scale of its own, so a scaled robot is built at
+            // the scaled size instead: the world scale is folded into the URDF
+            // description (shapes, joint frames, prismatic limits) before any
+            // actor exists. That is what makes "import a millimetre robot into a
+            // metre scene, set 0.001, press Play" work.
+            //
+            // Uniform only. A sphere, a capsule and a joint frame have no way to
+            // take a per-axis scale, and picking an axis would build something
+            // that silently disagrees with what renders.
+            const float scale = baseScale.x;
+            const auto matches = [scale](float v) {
+                return std::abs(v - scale) <= 1e-3f * std::max(1.f, std::abs(scale));
+            };
+            if (!matches(baseScale.y) || !matches(baseScale.z) || !(scale > 0.f)) {
+                log("physics: \"" + robot.name + "\" has a non-uniform world scale - "
+                    "PhysX articulation links can be scaled but not stretched, so it is not simulated");
                 return;
             }
 
@@ -338,6 +361,7 @@ namespace threepp::editor {
             opts.maxForce = std::max(artConfig->maxForce, 0.f);
             opts.selfCollision = artConfig->selfCollision;
             opts.solverPositionIterations = std::max(artConfig->iterations, 1);
+            opts.scale = scale;
             // The visual robot IS what renders; the articulation's colliders are
             // an invisible physical twin bound to the sim. Never load or add them.
             opts.renderVisuals = false;
@@ -391,15 +415,30 @@ namespace threepp::editor {
                 }
             }
             played->visualIndexOfDof = std::move(visualIndexOfDof);
+            played->lengthScale = scale;
+
+            // Which DOFs slide rather than turn, in the articulation's add order.
+            // Read off the visual robot through the same name map, since that is
+            // where the joint types live.
+            played->prismaticDof.assign(built.jointNames.size(), 0);
+            for (std::size_t d = 0; d < built.jointNames.size(); ++d) {
+                const int v = played->visualIndexOfDof[d];
+                if (v < 0 || static_cast<std::size_t>(v) >= info.size()) continue;
+                played->prismaticDof[d] = info[v].type == Robot::JointType::Prismatic ? 1 : 0;
+            }
 
             // Apply the authored pose to the DOFs, reordered through the name map:
             // the articulation is built at the URDF zero config, but the document's
-            // pose is what the user placed the robot in.
+            // pose is what the user placed the robot in. The document stores joint
+            // values in the robot's native units, so a prismatic one crosses into
+            // the articulation's scaled units here.
             const auto& joints = robotConfig->joints;
             std::vector<float> dofPose(built.jointNames.size(), 0.f);
             for (std::size_t d = 0; d < dofPose.size(); ++d) {
                 const int v = played->visualIndexOfDof[d];
-                if (v >= 0 && static_cast<std::size_t>(v) < joints.size()) dofPose[d] = joints[v];
+                if (v >= 0 && static_cast<std::size_t>(v) < joints.size()) {
+                    dofPose[d] = played->isPrismatic(d) ? joints[v] * scale : joints[v];
+                }
             }
             if (!dofPose.empty()) {
                 built.articulation->setJointPositions(dofPose.data(), dofPose.size());
@@ -445,7 +484,12 @@ namespace threepp::editor {
             const auto positions = played.articulation->jointPositions();// DOF add-order
             for (std::size_t d = 0; d < positions.size() && d < played.visualIndexOfDof.size(); ++d) {
                 const int v = played.visualIndexOfDof[d];
-                if (v >= 0) played.robot->setJointValue(static_cast<std::size_t>(v), positions[d]);
+                if (v < 0) continue;
+                // Back into the robot's own units (see PlayedArticulation::lengthScale).
+                const float q = played.isPrismatic(d) && played.lengthScale > 0.f
+                                        ? positions[d] / played.lengthScale
+                                        : positions[d];
+                played.robot->setJointValue(static_cast<std::size_t>(v), q);
             }
 
             // A floating base also moves the whole robot: write the solved root

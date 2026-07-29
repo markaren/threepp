@@ -10,8 +10,9 @@
 //   the play seam       PhysicsPlaySession builds an articulation from a robot's
 //                       ArticulationConfig, holds the authored pose with the PD
 //                       drive, mirrors the solved joints back onto the visual
-//                       robot, skips a robot's links in the rigid-body scan, and
-//                       refuses a scaled robot.
+//                       robot, skips a robot's links in the rigid-body scan, folds
+//                       a uniform scale into the build (the millimetre-URDF case)
+//                       and refuses a non-uniform one.
 //
 // Needs the PhysX SDK, so this target only exists where the SDK was found.
 
@@ -77,6 +78,38 @@ namespace {
           </joint>
         </robot>)";
 
+    // The same arm drawn in millimetres — every length x1000, every angle left
+    // alone. What a CAD export looks like when it lands in a metre scene.
+    const char* kUrdfMillimetres = R"(
+        <robot name="arm">
+          <link name="base_link">
+            <visual><geometry><box size="200 200 200"/></geometry></visual>
+            <collision><geometry><box size="200 200 200"/></geometry></collision>
+          </link>
+          <link name="upper_link">
+            <visual><geometry><box size="100 400 100"/></geometry></visual>
+            <collision><geometry><box size="100 400 100"/></geometry></collision>
+          </link>
+          <link name="slider_link">
+            <visual><geometry><box size="50 200 50"/></geometry></visual>
+            <collision><geometry><box size="50 200 50"/></geometry></collision>
+          </link>
+          <joint name="shoulder" type="revolute">
+            <parent link="base_link"/>
+            <child link="upper_link"/>
+            <origin xyz="0 0 300" rpy="0 0 0"/>
+            <axis xyz="0 0 1"/>
+            <limit lower="-2.0" upper="2.0"/>
+          </joint>
+          <joint name="extend" type="prismatic">
+            <parent link="upper_link"/>
+            <child link="slider_link"/>
+            <origin xyz="0 400 0" rpy="0 0 0"/>
+            <axis xyz="0 1 0"/>
+            <limit lower="0.0" upper="500.0"/>
+          </joint>
+        </robot>)";
+
     // loadArticulation and the URDF re-parse both take a path, so the fixture has
     // to be on disk. One temp file, reused by every test.
     std::filesystem::path writeFixture() {
@@ -84,6 +117,14 @@ namespace {
         std::filesystem::create_directories(dir);
         const auto path = dir / "arm.urdf";
         std::ofstream(path, std::ios::trunc) << kUrdf;
+        return path;
+    }
+
+    std::filesystem::path writeMillimetreFixture() {
+        const auto dir = std::filesystem::temp_directory_path() / "threepp-articulation-test";
+        std::filesystem::create_directories(dir);
+        const auto path = dir / "arm_mm.urdf";
+        std::ofstream(path, std::ios::trunc) << kUrdfMillimetres;
         return path;
     }
 
@@ -275,13 +316,15 @@ TEST_CASE("A PhysicsConfig on a robot link does not create a second body") {
     physics.stop();
 }
 
-TEST_CASE("A non-unit-scale robot is skipped with a log line") {
+TEST_CASE("A non-uniformly scaled robot is skipped with a log line") {
 
     const auto path = writeFixture();
     Scene scene;
 
     auto robot = authorRobot(scene, path, {0.0f, 0.0f}, /*fixedBase*/ true);
-    robot->scale.set(2.f, 2.f, 2.f);// PhysX links cannot scale
+    // A sphere, a capsule and a joint frame have no way to take a per-axis
+    // scale, so this one has to be refused rather than approximated.
+    robot->scale.set(2.f, 1.f, 2.f);
 
     std::string logged;
     PhysicsPlaySession physics;
@@ -290,6 +333,84 @@ TEST_CASE("A non-unit-scale robot is skipped with a log line") {
 
     CHECK(physics.articulationCount() == 0);
     CHECK(logged.find("scale") != std::string::npos);
+
+    physics.stop();
+}
+
+TEST_CASE("A millimetre robot scaled into a metre scene simulates in the right place") {
+
+    // The whole point of the units support, end to end: the SAME arm drawn in
+    // millimetres, dropped in at 0.001, must simulate where the metre arm does.
+    const auto metrePath = writeFixture();
+    const auto mmPath = writeMillimetreFixture();
+
+    const std::vector<float> metrePose{0.6f, 0.2f};    // rad, metres
+    const std::vector<float> mmPose{0.6f, 200.f};      // rad, millimetres - the
+                                                       // robot's own units, which
+                                                       // is what the document stores
+    constexpr float unit = 0.001f;
+
+    // Where the metre robot puts its distal link, kinematically.
+    auto metreVisual = loadArm(metrePath);
+    REQUIRE(metreVisual);
+    for (std::size_t i = 0; i < metrePose.size() && i < metreVisual->numDOF(); ++i) {
+        metreVisual->setJointValue(i, metrePose[i]);
+    }
+    metreVisual->updateMatrixWorld(true);
+    auto* metreLink = findByName(*metreVisual, "slider_link");
+    REQUIRE(metreLink != nullptr);
+    Vector3 expected;
+    metreLink->getWorldPosition(expected);
+
+    // The millimetre robot, scaled into the scene the way a user would.
+    Scene scene;
+    auto robot = authorRobot(scene, mmPath, mmPose, /*fixedBase*/ true);
+    robot->scale.set(unit, unit, unit);
+
+    std::string logged;
+    PhysicsPlaySession physics;
+    physics.setLogger([&](const std::string& m) { logged += m + "\n"; });
+    physics.start(scene);
+
+    INFO(logged);
+    REQUIRE(physics.articulationCount() == 1);
+
+    const auto* played = physics.findArticulation(robot.get());
+    REQUIRE(played != nullptr);
+    const auto* extend = played->linkFor("extend");
+    REQUIRE(extend != nullptr);
+
+    // A few frames so the drive settles and the bound poses are current.
+    for (int i = 0; i < 60; ++i) physics.update(kFrame);
+
+    // The articulation link sits where the metre robot's link does - the shapes,
+    // the joint frames and the prismatic offset were all built at scene size.
+    const Vector3 artPos = extend->position();
+    CHECK_THAT(artPos.x, WithinAbs(expected.x, 2e-2f));
+    CHECK_THAT(artPos.y, WithinAbs(expected.y, 2e-2f));
+    CHECK_THAT(artPos.z, WithinAbs(expected.z, 2e-2f));
+
+    // And the mirror came back in the ROBOT's units, not the scene's: a
+    // prismatic DOF solves in metres here, and the visual robot slides in
+    // millimetres. Without the conversion this reads ~0.2 instead of ~200 and
+    // the arm silently collapses to its zero pose on screen.
+    const auto info = robot->getArticulatedJointInfo();
+    std::size_t prismatic = info.size();
+    for (std::size_t v = 0; v < info.size(); ++v) {
+        if (info[v].name == "extend") prismatic = v;
+    }
+    REQUIRE(prismatic < info.size());
+    CHECK_THAT(robot->getJointValue(prismatic), WithinAbs(200.f, 40.f));
+
+    // Which is the same thing as saying the visual link agrees with the sim.
+    robot->updateMatrixWorld(true);
+    auto* visualLink = findByName(*robot, "slider_link");
+    REQUIRE(visualLink != nullptr);
+    Vector3 visualPos;
+    visualLink->getWorldPosition(visualPos);
+    CHECK_THAT(visualPos.x, WithinAbs(artPos.x, 3e-2f));
+    CHECK_THAT(visualPos.y, WithinAbs(artPos.y, 3e-2f));
+    CHECK_THAT(visualPos.z, WithinAbs(artPos.z, 3e-2f));
 
     physics.stop();
 }

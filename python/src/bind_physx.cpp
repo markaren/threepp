@@ -436,7 +436,7 @@ namespace threepp_py {
                      [](PhysxWorld& w, const std::string& path, bool fixed_base,
                         const std::array<float, 3>& base_position, float default_density,
                         float stiffness, float damping, float max_force, bool self_collision,
-                        int solver_position_iterations, bool render_visuals) {
+                        int solver_position_iterations, bool render_visuals, float scale) {
                          URDFArticulationOptions opts;
                          opts.fixedBase = fixed_base;
                          opts.basePosition = Vector3(base_position[0], base_position[1], base_position[2]);
@@ -447,6 +447,7 @@ namespace threepp_py {
                          opts.selfCollision = self_collision;
                          opts.solverPositionIterations = solver_position_iterations;
                          opts.renderVisuals = render_visuals;
+                         opts.scale = scale;
                          auto r = loadArticulation(w, std::filesystem::path(path), opts);
                          if (!r.articulation) throw std::runtime_error("load_articulation: could not read URDF: " + path);
                          return std::make_tuple(std::move(r.articulation), std::move(r.meshes), std::move(r.jointNames));
@@ -456,6 +457,7 @@ namespace threepp_py {
                      py::arg("default_density") = 1000.f, py::arg("stiffness") = 0.f, py::arg("damping") = 0.f,
                      py::arg("max_force") = 1e6f, py::arg("self_collision") = false,
                      py::arg("solver_position_iterations") = 12, py::arg("render_visuals") = true,
+                     py::arg("scale") = 1.f,
                      // No keep_alive: the result is a tuple (can't be a weakref nurse). The returned
                      // articulation holds a PhysxWorld& — the caller must keep the world alive (urdf.py does).
                      "Import a URDF/xacro as a finalized Articulation (one shared parser with the C++ "
@@ -463,7 +465,10 @@ namespace threepp_py {
                      "collider meshes are bound to the sim (add them to a scene to render), joint_names "
                      "lists the actuated joints in drive-target order. Collision is primitive/bbox, mass "
                      "from <inertial> (else default_density x volume); fixed joints are collapsed. "
-                     "stiffness/damping/max_force set a PD drive on every joint.");
+                     "stiffness/damping/max_force set a PD drive on every joint. scale reinterprets the "
+                     "file's length units (a millimetre URDF in a metre world is 0.001) - shapes, joint "
+                     "frames and prismatic limits are built scaled, masses stay as authored, and a "
+                     "prismatic DOF then reads and drives in the SCALED units.");
 
         // GPU-resident batched articulation state I/O (the direct-GPU API). Build one
         // over many identical finalized articulations in a PhysxWorld(direct_gpu=True),

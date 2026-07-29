@@ -2368,6 +2368,97 @@ int EditorApp::runSelfTest() {
         }
     }
 
+    // --- a millimetre robot lands in a metre scene --------------------------
+    // The CAD-export story end to end: import a URDF drawn in millimetres, set
+    // the scale the way you would for any other import, and have the thing
+    // SIMULATE at the size it renders. A PhysX link has no scale of its own, so
+    // the factor is folded into the URDF description at build time; before that
+    // a scaled robot was refused outright and just sat there.
+    {
+        newScene();
+        step(2);
+
+        const auto dir = std::filesystem::temp_directory_path() / "threepp-editor-units";
+        std::filesystem::create_directories(dir);
+        const auto path = dir / "mm_arm.urdf";
+        {
+            std::ofstream out(path, std::ios::trunc);
+            out << R"(
+        <robot name="mm_arm">
+          <link name="base_link">
+            <visual><geometry><box size="200 200 200"/></geometry></visual>
+            <collision><geometry><box size="200 200 200"/></geometry></collision>
+          </link>
+          <link name="upper_link">
+            <visual><geometry><box size="100 400 100"/></geometry></visual>
+            <collision><geometry><box size="100 400 100"/></geometry></collision>
+          </link>
+          <joint name="shoulder" type="revolute">
+            <parent link="base_link"/><child link="upper_link"/>
+            <origin xyz="0 0 300" rpy="0 0 0"/><axis xyz="0 0 1"/>
+            <limit lower="-2.0" upper="2.0"/>
+          </joint>
+        </robot>)";
+        }
+
+        importModel(path);
+        int budget = 6000;
+        while ((activeImport_ || !importQueue_.empty()) && budget-- > 0) step();
+        check(budget > 0 && importError_.empty(), "the millimetre urdf imported");
+
+        auto* robot = selection_.get() ? selection_.get()->as<Robot>() : nullptr;
+        check(robot != nullptr, "and came in as a Robot");
+
+        // Scaling it is the user's call and the user's job — the same scale
+        // field as any other import, through the command stack because that is
+        // the path the inspector takes.
+        if (robot) {
+            const auto before = SetTransformCommand::read(*robot);
+            auto after = before;
+            after.scale.set(0.001f, 0.001f, 0.001f);
+            commands_.execute(std::make_unique<SetTransformCommand>(*robot, before, after, "Scale"));
+            step();
+        }
+        check(robot && std::abs(robot->scale.x - 0.001f) < 1e-6f, "scaled into metres");
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        if (robot && physics_) {
+
+            // Play replaces the scene, so the robot has to be found again after.
+            const std::string uuid = robot->uuid;
+
+            ArticulationConfig art;
+            art.enabled = true;
+            art.fixedBase = true;
+            art.write(*robot);
+            // Authored well off zero so a robot that fails to simulate (or one
+            // whose drive collapses it) is visibly different from one that holds.
+            setJointValue(*robot, 0, 0.5f);
+            step();
+
+            startPlay();
+            check(physics_->articulationCount() == 1,
+                  "a uniformly scaled robot now plays as an articulation");
+            step(30);
+
+            Object3D* live = nullptr;
+            document_.scene().traverse([&](Object3D& o) {
+                if (!live && o.uuid == uuid) live = &o;
+            });
+            auto* liveRobot = live ? live->as<Robot>() : nullptr;
+            check(liveRobot && liveRobot->numDOF() > 0 &&
+                          std::abs(liveRobot->getJointValue(0) - 0.5f) < 0.2f,
+                  "and holds its authored pose at millimetre scale");
+
+            stopPlay();
+            step();
+        }
+#endif
+
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+
     // --- dropped textures find the right slot -------------------------------
     // A file dropped from the OS carries no ImGui payload, so the slot has to
     // be worked out: from the row the cursor is over, else from the file name.
