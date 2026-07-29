@@ -429,6 +429,34 @@ int EditorApp::runScreenshot() {
         wrote = shoot(sibling("_instancing")) && wrote;
     }
 
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    // And the generator, running the SAME template the Add-generator-script
+    // button hands the user. If that template does not produce a field, the first
+    // thing anyone tries is broken — so run exactly it, and look at the result.
+    {
+        GeneratorConfig config;
+        config.source = generatorTemplate();
+        config.write(document_.scene());
+        const bool ran = regenerate(document_.scene());
+        auto* output = GeneratorConfig::generatedChild(document_.scene());
+        std::cout << "[screenshot] generator: " << (ran ? "ran" : "FAILED") << ", output "
+                  << (output ? output->children.size() : 0) << " node(s)" << std::endl;
+        if (!ran) {
+            for (const auto& line : console_) {
+                if (line.find("regenerate") != std::string::npos) {
+                    std::cout << "[screenshot] " << line.substr(0, 1200) << std::endl;
+                }
+            }
+        }
+
+        selectObject(output);
+        camera_.position.set(-3.f, 8.f, 14.f);
+        orbit_->target.set(0.f, 0.5f, 0.f);
+        playFor(0.3f);
+        wrote = shoot(sibling("_generator")) && wrote;
+    }
+#endif
+
     return wrote ? 0 : 1;
 }
 
@@ -3454,6 +3482,100 @@ int EditorApp::runSelfTest() {
 
         GeneratorConfig::erase(document_.scene());
     }
+
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    // ------------------------------------------------ generator, actually run
+    //
+    // The whole point, driven through the real button path: author a script on
+    // the scene, regenerate, and check that what the script built is in the
+    // document as ordinary content.
+    {
+        newScene();
+        step(2);
+
+        GeneratorConfig config;
+        config.source =
+                "import threepp\n"
+                "from threepp import editor\n"
+                "for i in range(4):\n"
+                "    m = threepp.Mesh(threepp.BoxGeometry(1, 1, 1),\n"
+                "                     threepp.MeshBasicMaterial())\n"
+                "    m.name = \"Gen %d\" % i\n"
+                "    m.position.set(i * 2.0, 0.5, 0.0)\n"
+                "    editor.add(m)\n";
+        config.write(document_.scene());
+
+        const int before = static_cast<int>(document_.scene().children.size());
+        check(regenerate(document_.scene()), "a generator script runs");
+
+        auto* output = GeneratorConfig::generatedChild(document_.scene());
+        check(output != nullptr, "and leaves a tagged output node");
+        check(output && output->children.size() == 4, "holding what the script built");
+        check(document_.scene().getObjectByName("Gen 2") != nullptr,
+              "as findable scene content");
+        check(static_cast<int>(document_.scene().children.size()) == before + 1,
+              "under one new child, not four loose ones");
+
+        // Re-running REPLACES rather than accumulates — the failure here would be
+        // 8 boxes, which is what makes a generator unusable.
+        check(regenerate(document_.scene()), "it runs again");
+        auto* second = GeneratorConfig::generatedChild(document_.scene());
+        check(second && second->children.size() == 4, "replacing its output, not adding to it");
+        check(static_cast<int>(document_.scene().children.size()) == before + 1,
+              "still one output node");
+
+        // One undo step, and it puts the PREVIOUS generation back rather than
+        // leaving the scene empty.
+        check(commands_.canUndo(), "a regenerate is undoable");
+        commands_.undo();
+        step();
+        auto* restored = GeneratorConfig::generatedChild(document_.scene());
+        check(restored != nullptr && restored != second,
+              "undo restores the previous generation");
+        check(restored && restored->children.size() == 4, "with its content");
+
+        // A script that raises must commit NOTHING. The scene keeps the output it
+        // had, and the console carries the reason.
+        const auto* keep = GeneratorConfig::generatedChild(document_.scene());
+        GeneratorConfig broken;
+        broken.source = "import threepp\nraise ValueError(\"nope\")\n";
+        broken.write(document_.scene());
+        check(!regenerate(document_.scene()), "a raising script fails");
+        check(GeneratorConfig::generatedChild(document_.scene()) == keep,
+              "and changes nothing in the document");
+
+        // A half-built script is the case the detached-sink design exists for:
+        // it adds, THEN raises.
+        GeneratorConfig halfway;
+        halfway.source =
+                "import threepp\n"
+                "from threepp import editor\n"
+                "editor.add(threepp.Mesh(threepp.BoxGeometry(1, 1, 1),\n"
+                "                        threepp.MeshBasicMaterial()))\n"
+                "raise RuntimeError(\"halfway\")\n";
+        halfway.write(document_.scene());
+        check(!regenerate(document_.scene()), "a script that adds then raises fails");
+        check(GeneratorConfig::generatedChild(document_.scene()) == keep,
+              "and commits none of what it had added");
+
+        // Refused while playing, like every other document edit.
+        GeneratorConfig::erase(document_.scene());
+        config.write(document_.scene());
+        startPlay();
+        step(2);
+        check(!regenerate(document_.scene()), "regenerate is refused while playing");
+        stopPlay();
+        step(2);
+
+        // And the generated content survives the round trip, because it is
+        // ordinary scene content and nothing re-runs on load.
+        auto* afterStop = GeneratorConfig::generatedChild(document_.scene());
+        check(afterStop != nullptr, "generated output survives play/stop");
+        check(afterStop && afterStop->children.size() == 4, "with its objects");
+        check(GeneratorConfig::isGenerator(document_.scene()),
+              "and the script is still on the scene");
+    }
+#endif
 
     // ---------------------------------------------------------- instancing
     //

@@ -47,6 +47,16 @@ namespace threepp::editor::scripting {
     // GIL must be held.
     py::object handleFor(Object3D& object);
 
+    // Runs an AUTHORING script: a module body, executed once for its side effects
+    // on the document, with no class and no update() contract. Returns "" on
+    // success, or a description of the failure (a Python traceback, or why the
+    // interpreter is unavailable) — never throws, because the caller's job is to
+    // put the reason in the console.
+    //
+    // Fresh globals per run, so a second Regenerate cannot behave differently
+    // from the first by inheriting state. Acquires the GIL itself.
+    std::string runAuthoringSource(const std::string& source, const std::string& label);
+
     // Loads `path` with fresh module state and returns the script class.
     // Throws py::error_already_set (a Python-level failure) or
     // std::runtime_error (no usable class). GIL must be held.

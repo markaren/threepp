@@ -146,6 +146,7 @@ namespace threepp::editor {
         void drawTransformSection(Object3D& object);
         void drawMaterialSection(Object3D& object);
         void drawGeometrySection(Object3D& object);
+        void drawGeneratorSection(Object3D& object);
         void drawInstancingSection(Object3D& object);
         void drawLightSection(Object3D& object);
         void drawCameraSection(Object3D& object);
@@ -268,6 +269,19 @@ namespace threepp::editor {
         [[nodiscard]] static std::string inlineScriptTemplate();
 
         void addObject(const std::shared_ptr<Object3D>& object, Object3D& parent, const std::string& label);
+
+        // Run the generator script `carrier` holds and replace its output with
+        // what the script built. One undoable step; nothing is committed if the
+        // script raises, because it fills a detached node that is only attached
+        // on success. Refused while playing, like every other document edit.
+        // False (with a console line) when there is no generator, the build has
+        // no Python, or the script failed.
+        bool regenerate(Object3D& carrier);
+        // Starting source for a scene generator, offered by the Generator section
+        // when nothing is authored yet. Deliberately NOT inlineScriptTemplate():
+        // a behaviour script is a class with update(dt) on one object, an
+        // authoring script is a module body that builds content.
+        [[nodiscard]] static std::string generatorTemplate();
         // A new control point for `spline`, at `index` among its siblings
         // (AddObjectCommand::atEnd appends). Placed midway to the neighbour it
         // is inserted next to, or past the end along the last segment, so the
@@ -479,6 +493,12 @@ namespace threepp::editor {
         // the helper (both are members; the helper is also dropped whenever the
         // selection changes) and is refreshed each frame in
         // refreshSelectionHelpers so the outline tracks a moving instance.
+        // Set by the Generator section's button, consumed once at the top of the
+        // next frame. Regenerate replaces the node the panel is drawing from, and
+        // the selection re-resolve that follows must not run inside the ImGui tree
+        // that is reading it. By uuid, because a play/stop in between replaces the
+        // graph — the same reason scriptTargetUuid_ is one.
+        std::string pendingRegenerate_;
         std::optional<int> selectedInstance_;
         Box3 instanceBox_;
         std::shared_ptr<Box3Helper> instanceOutline_;

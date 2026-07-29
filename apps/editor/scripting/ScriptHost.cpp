@@ -297,6 +297,30 @@ namespace threepp::editor::scripting {
         return helpers().attr("fields")(cls);
     }
 
+    std::string runAuthoringSource(const std::string& source, const std::string& label) {
+
+        std::string error;
+        if (!ensureInterpreter(&error)) {
+            return error.empty() ? std::string("Python is unavailable") : error;
+        }
+
+        py::gil_scoped_acquire gil;
+        try {
+            py::dict globals;
+            // Tracebacks name the code after this, and __name__ being set is what
+            // stops a script's `if __name__ == "__main__"` guard from surprising
+            // whoever copied it in from a file.
+            globals["__name__"] = label;
+            globals["__builtins__"] = py::module_::import("builtins");
+            py::exec(source, globals);
+        } catch (py::error_already_set& e) {
+            return describeError(e);
+        } catch (const std::exception& e) {
+            return e.what();
+        }
+        return {};
+    }
+
     std::string describeError(py::error_already_set& error) {
 
         // what() carries type, message and the traceback, and it is the one

@@ -6,12 +6,17 @@
 #include "PanelLayout.hpp"
 
 #include "threepp/extras/editor/AnimationPlaySession.hpp"
+#include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/extras/editor/MaterialTextureSlots.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
+
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+#include "ScriptHost.hpp"// runAuthoringSource, for the Generator's Regenerate
+#endif
 
 #include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
 
@@ -398,6 +403,17 @@ int EditorApp::run() {
 void EditorApp::frame(float dt) {
 
     play_.update(dt);
+    // Before anything reads the graph: the Generator section asked for this last
+    // frame, and it replaces a node the panel was drawing from.
+    if (!pendingRegenerate_.empty()) {
+        const auto uuid = std::exchange(pendingRegenerate_, {});
+        Object3D* carrier = nullptr;
+        document_.scene().traverse([&](Object3D& o) {
+            if (!carrier && o.uuid == uuid) carrier = &o;
+        });
+        if (!carrier && document_.scene().uuid == uuid) carrier = &document_.scene();
+        if (carrier) regenerate(*carrier);
+    }
     pollImports(dt);
     pollExternalEdit(dt);
     if (animPreview_) animPreview_->mixer->update(dt);
@@ -1240,6 +1256,163 @@ void EditorApp::addObject(const std::shared_ptr<Object3D>& object, Object3D& par
     document_.setDirty(true);
     selectObject(raw);
     scrollTo_ = raw;
+}
+
+namespace {
+
+    // Replace a generator's output in ONE undo step. Two commands (remove the old,
+    // add the new) would be two, because the stack's transactions coalesce by
+    // merge key and these do not share one — and half-undoing a regenerate leaves
+    // a scene with two generations of content in it.
+    //
+    // Both nodes are held by shared_ptr for the whole life of the command, which
+    // is what lets undo put the previous generation back rather than re-running
+    // the script to approximate it. Targets re-resolve by uuid, so the command
+    // survives the play-stop graph swap like every other one.
+    class RegenerateCommand: public threepp::editor::Command {
+
+    public:
+        RegenerateCommand(Object3D& carrier, std::shared_ptr<Object3D> previous,
+                          std::shared_ptr<Object3D> next)
+            : carrier_(&carrier), previous_(std::move(previous)), next_(std::move(next)),
+              carrierUuid_(carrier.uuid) {}
+
+        void redo() override {
+
+            if (previous_) previous_->removeFromParent();
+            if (carrier_ && next_) carrier_->add(next_);
+        }
+
+        void undo() override {
+
+            if (next_) next_->removeFromParent();
+            if (carrier_ && previous_) carrier_->add(previous_);
+        }
+
+        [[nodiscard]] std::string name() const override { return "Regenerate"; }
+
+        // Never merged: two regenerates are two distinct generations of content,
+        // and collapsing them would drop the middle one's output on the floor.
+        bool mergeWith(const Command&) override { return false; }
+
+        [[nodiscard]] bool rebind(Object3D& root) override {
+
+            Object3D* found = nullptr;
+            root.traverse([&](Object3D& o) {
+                if (!found && o.uuid == carrierUuid_) found = &o;
+            });
+            if (!found) return false;
+            carrier_ = found;
+            return true;
+        }
+
+    private:
+        Object3D* carrier_;
+        std::shared_ptr<Object3D> previous_;
+        std::shared_ptr<Object3D> next_;
+        std::string carrierUuid_;
+    };
+
+}// namespace
+
+std::string EditorApp::generatorTemplate() {
+
+    return "# Scene generator. Runs when you press Regenerate, never on open.\n"
+           "# Module-level names become editable parameters in the inspector.\n"
+           "import math\n"
+           "import random\n"
+           "import threepp\n"
+           "from threepp import editor\n"
+           "\n"
+           "count = 60\n"
+           "seed = 1\n"
+           "radius = 8.0\n"
+           "\n"
+           "random.seed(seed)  # same seed, same scene\n"
+           "\n"
+           "geometry = threepp.BoxGeometry(0.5, 0.5, 0.5)\n"
+           "material = threepp.MeshStandardMaterial()\n"
+           "material.color = threepp.Color(0x88aa55)\n"
+           "\n"
+           "field = threepp.InstancedMesh(geometry, material, count)\n"
+           "field.name = \"Scatter\"\n"
+           "for i in range(count):\n"
+           "    angle = random.uniform(0, 2 * math.pi)\n"
+           "    r = radius * math.sqrt(random.random())\n"
+           "    m = threepp.Matrix4()\n"
+           "    m.make_rotation_y(random.uniform(0, 2 * math.pi))\n"
+           "    m.set_position(r * math.cos(angle), 0.25, r * math.sin(angle))\n"
+           "    field.set_matrix_at(i, m)\n"
+           "field.instance_matrix_needs_update()\n"
+           "\n"
+           "editor.add(field)\n";
+}
+
+bool EditorApp::regenerate(Object3D& carrier) {
+
+    if (rejectWhilePlaying("Regenerate")) return false;
+
+    const auto config = GeneratorConfig::read(carrier);
+    if (!config) {
+        log("regenerate: no generator script on this object");
+        return false;
+    }
+
+#ifndef THREEPP_EDITOR_WITH_PYTHON
+    log("regenerate: built without Python scripting - the script is saved, not run");
+    return false;
+#else
+    // The output is built DETACHED and attached only on success, so a script that
+    // raises leaves the document exactly as it was. This is why there is no
+    // rollback path below: there is nothing to roll back.
+    auto output = Group::create();
+    output->name = "Generated";
+    output->userData[GeneratorConfig::generatedKey] = std::string("1");
+
+    std::string error;
+    {
+        scripting::authoringSink() = output.get();
+        scripting::authoringScene() = &document_.scene();
+        // Cleared on every exit path: a stale sink would let a later behaviour
+        // script append into a node nobody is going to commit.
+        struct SinkGuard {
+            ~SinkGuard() {
+                scripting::authoringSink() = nullptr;
+                scripting::authoringScene() = nullptr;
+            }
+        } guard;
+
+        error = scripting::runAuthoringSource(config->source, "generator");
+    }
+
+    if (!error.empty()) {
+        log("regenerate failed: " + error);
+        return false;
+    }
+
+    if (output->children.empty()) {
+        // Not an error — a script may legitimately have decided to build nothing
+        // — but silence here reads as a broken button, so say it.
+        log("regenerate: the script added nothing");
+    }
+
+    // Hold the outgoing generation alive for undo. `generatedChild` returns a raw
+    // pointer into the graph, and removeFromParent would be the last owner.
+    std::shared_ptr<Object3D> previous;
+    if (auto* old = GeneratorConfig::generatedChild(carrier)) {
+        for (auto& child : carrier.children) {
+            if (child == old) {
+                previous = old->shared_from_this();
+                break;
+            }
+        }
+    }
+
+    commands_.execute(std::make_unique<RegenerateCommand>(carrier, previous, output));
+    document_.setDirty(true);
+    log("regenerate: " + std::to_string(output->children.size()) + " object(s) generated");
+    return true;
+#endif
 }
 
 void EditorApp::addSplinePoint(Object3D& spline, std::size_t index, const std::string& label) {

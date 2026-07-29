@@ -6,6 +6,7 @@
 
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/ArticulationConfig.hpp"
+#include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/extras/editor/MaterialTextureSlots.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
@@ -258,6 +259,7 @@ void EditorApp::drawInspector() {
         drawTransformSection(*selected);
         drawMaterialSection(*selected);
         drawGeometrySection(*selected);
+        drawGeneratorSection(*selected);
         drawInstancingSection(*selected);
         drawLightSection(*selected);
         drawCameraSection(*selected);
@@ -695,6 +697,91 @@ void EditorApp::drawGeometrySection(Object3D& object) {
     ImGui::Text("Vertices  %d", vertices);
     ImGui::Text("Indices   %d", indices);
     ImGui::Text("Triangles %d", (indices ? indices : vertices) / 3);
+
+    ImGui::TreePop();
+}
+
+
+// --------------------------------------------------------------- generator
+
+void EditorApp::drawGeneratorSection(Object3D& object) {
+
+    // Offered on the SCENE by default — a generated scene's rule belongs to the
+    // scene — and on a Group, for a scene wanting several independently
+    // re-runnable ones. Not on a mesh: generated content goes in a child, and a
+    // mesh with a generated child is a confusing thing to have built by accident.
+    const bool isScene = &object == &document_.scene();
+    // Not on generated output: a generator there would be wiped by the next run of
+    // the generator above it, which is a trap rather than a feature.
+    const bool isGeneratedOutput =
+            object.userData.find(GeneratorConfig::generatedKey) != object.userData.end();
+    const bool eligible = !isGeneratedOutput && (isScene || object.as<Group>() != nullptr);
+    const auto stored = GeneratorConfig::read(object);
+    if (!eligible && !stored) return;
+    if (!section("Generator", stored.has_value())) return;
+
+    auto* target = &object;
+    const auto config = stored.value_or(GeneratorConfig{});
+    // Same shape every other config section uses: one undoable property write per
+    // edit, coalesced by a per-object merge key so typing is not 400 undo steps.
+    const auto commit = [&](GeneratorConfig after, const std::string& label) {
+        commands_.execute(makeProperty<GeneratorConfig>(
+                label, "generator:" + object.uuid,
+                [target](const GeneratorConfig& value) { value.write(*target); },
+                config, std::move(after)));
+        document_.setDirty(true);
+    };
+
+    if (!stored) {
+        ImGui::TextColored(theme::muted(), "Build this %s with a Python script.",
+                           isScene ? "scene" : "group");
+        if (ImGui::Button("Add generator script")) {
+            GeneratorConfig fresh;
+            fresh.source = generatorTemplate();
+            commit(fresh, "Add Generator");
+        }
+        ImGui::TreePop();
+        return;
+    }
+
+    // The source itself. A modest box: this is for reading and small edits, and
+    // anything longer wants the Script Editor's room (below).
+    ImGui::TextColored(theme::muted(), "%d lines",
+                       1 + static_cast<int>(std::count(config.source.begin(),
+                                                       config.source.end(), '\n')));
+    std::string buffer = config.source;
+    buffer.resize(std::max<std::size_t>(buffer.size() + 4096, 8192));
+    const float height = ImGui::GetTextLineHeight() * 12.f;
+    if (ImGui::InputTextMultiline("##generatorSource", buffer.data(), buffer.size(),
+                                  {-1.f, height})) {
+        auto edited = config;
+        edited.source = buffer.c_str();
+        commit(edited, "Edit Generator");
+    }
+
+    const bool playing = isPlaying();
+    if (playing) ImGui::BeginDisabled();
+    if (ImGui::Button("Regenerate")) {
+        // Deferred by one frame: regenerate replaces the node this panel may be
+        // drawing from, and the selection re-resolve that follows must not run
+        // inside the ImGui tree that is reading it.
+        pendingRegenerate_ = object.uuid;
+    }
+    if (playing) ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Clear")) commit(GeneratorConfig{}, "Clear Generator");
+
+    if (auto* generated = GeneratorConfig::generatedChild(object)) {
+        ImGui::TextColored(theme::muted(), "Output: %d object(s)",
+                           static_cast<int>(generated->children.size()));
+    } else {
+        ImGui::TextColored(theme::muted(), "No output yet - press Regenerate.");
+    }
+    // The rule that makes the script the source of truth, said where it bites.
+    ImGui::TextColored(theme::muted(), "Regenerating replaces the output; edits to it are lost.");
+#ifndef THREEPP_EDITOR_WITH_PYTHON
+    ImGui::TextColored(theme::warning(), "Built without Python - saved, but cannot run.");
+#endif
 
     ImGui::TreePop();
 }

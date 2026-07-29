@@ -15,6 +15,8 @@
 
 #include "threepp/extras/editor/PlaySession.hpp"
 
+#include "threepp/core/Object3D.hpp"
+
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -42,6 +44,36 @@ namespace threepp::editor {
     };
 
     namespace scripting {
+
+        // Where threepp.editor.add() puts what a GENERATOR script builds, for the
+        // duration of one run. Null outside a run, and add() then refuses rather
+        // than guessing — an authoring call from a behaviour script during Play
+        // has no business mutating the document.
+        //
+        // The sink is deliberately a node that is NOT yet in the document: the
+        // script fills it off-graph, and the editor commits the finished subtree
+        // as ONE undoable step afterwards. A script that raises halfway therefore
+        // commits nothing at all, with no rollback machinery needed.
+        //
+        // One instance across every TU (inline function-local static), so the
+        // binding in python/src and the editor app agree without a link-time
+        // dependency between them.
+        inline Object3D*& authoringSink() {
+
+            static Object3D* sink = nullptr;
+            return sink;
+        }
+
+        // The live scene the current generator is authoring INTO, for scripts that
+        // place content relative to what is already there. Carried separately from
+        // the sink precisely because the sink is detached during the run, so it
+        // cannot be reached by walking up from it. Set and cleared together with
+        // the sink.
+        inline Object3D*& authoringScene() {
+
+            static Object3D* scene = nullptr;
+            return scene;
+        }
 
         // Result of looking at a script without running any of its behaviour.
         struct Inspection {
