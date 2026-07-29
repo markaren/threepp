@@ -41,6 +41,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Box3.hpp"
+#include "threepp/objects/Group.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/ObjectWithMaterials.hpp"
@@ -815,6 +816,91 @@ int EditorApp::runSelfTest() {
         step();
     }
 #endif
+
+    // Compound / decomposed convex colliders: an imported model is a Group with
+    // sub-meshes, and before this it fell back to a 1 m unit box. Authored the
+    // way the inspector authors it (physics on the GROUP), then played headlessly
+    // with stepFixed for a determinstic drop. Added and removed inside this block
+    // so the later passes still see the template scene.
+    {
+        // The template Ground is a plain mesh; give it a static box collider to
+        // land on for the duration.
+        PhysicsConfig floorConfig;
+        floorConfig.enabled = true;
+        floorConfig.body = PhysicsConfig::Body::Static;
+        floorConfig.shape = PhysicsConfig::Shape::Box;
+        if (auto* floor = document_.scene().getObjectByName("Ground")) floorConfig.write(*floor);
+
+        // A "model": one Group, two box sub-meshes with a gap between them. A
+        // unit-box fallback would fill that gap; a real compound leaves it open.
+        auto model = Group::create();
+        model->name = "Compound Model";
+        model->position.set(0.f, 3.f, 6.f);
+        auto* modelRaw = model.get();
+        for (int i = 0; i < 2; ++i) {
+            auto part = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+            part->scale.set(0.6f, 0.6f, 0.6f);
+            part->position.set(i == 0 ? -1.2f : 1.2f, 0.f, 0.f);
+            model->add(part);
+        }
+        PhysicsConfig modelConfig;
+        modelConfig.enabled = true;
+        modelConfig.body = PhysicsConfig::Body::Dynamic;
+        modelConfig.shape = PhysicsConfig::Shape::Auto;// -> per-sub-mesh compound
+        modelConfig.mass = 2.f;
+        modelConfig.restitution = 0.f;
+        modelConfig.write(*modelRaw);
+        addObject(model, document_.scene(), "Add Compound Model");
+
+        // A probe dropped through the gap at the model's centre line.
+        auto probe = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        probe->name = "Gap Probe";
+        probe->scale.set(0.3f, 0.3f, 0.3f);
+        probe->position.set(0.f, 6.f, 6.f);
+        auto* probeRaw = probe.get();
+        PhysicsConfig probeConfig;
+        probeConfig.enabled = true;
+        probeConfig.body = PhysicsConfig::Body::Dynamic;
+        probeConfig.shape = PhysicsConfig::Shape::Box;
+        probeConfig.mass = 1.f;
+        probeConfig.restitution = 0.f;
+        probeConfig.write(*probeRaw);
+        addObject(probe, document_.scene(), "Add Gap Probe");
+
+        const auto modelUuid = modelRaw->uuid;
+        const auto probeUuid = probeRaw->uuid;
+        startPlay();
+        // 3 s of fixed-step fall: both bodies settle. Fixed dt so the resting
+        // heights are a property of the sim, not the frame rate.
+        stepFixed(180);
+
+        auto* liveModel = findByUuid(document_.scene(), modelUuid);
+        auto* liveProbe = findByUuid(document_.scene(), probeUuid);
+        // The model landed low on its two boxes (~0.3), not at the ~0.7 a unit
+        // box would give — the compound is real.
+        check(liveModel && liveModel->position.y < 0.6f,
+              "a Group of sub-meshes lands as a compound, not a unit box");
+        // The probe fell through the gap to the ground rather than onto the model.
+        check(liveProbe && liveProbe->position.y < 0.5f,
+              "a body falls through the gap between the compound's hulls");
+        stopPlay();
+        step();
+
+        // Restore the template scene for the passes that follow.
+        if (auto* done = findByUuid(document_.scene(), modelUuid)) {
+            selectObject(done);
+            deleteSelected();
+        }
+        if (auto* done = findByUuid(document_.scene(), probeUuid)) {
+            selectObject(done);
+            deleteSelected();
+        }
+        if (auto* groundNow = document_.scene().getObjectByName("Ground")) {
+            PhysicsConfig::erase(*groundNow);
+        }
+        selectObject(nullptr);
+        step();
+    }
 #endif
 
     // Viewport markers and the camera frustum. The marker count is also the
