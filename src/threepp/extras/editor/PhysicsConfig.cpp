@@ -62,6 +62,7 @@ namespace {
         if (text == "capsule") return PhysicsConfig::Shape::Capsule;
         if (text == "convex") return PhysicsConfig::Shape::Convex;
         if (text == "trimesh") return PhysicsConfig::Shape::TriMesh;
+        if (text == "pieces") return PhysicsConfig::Shape::Pieces;
         return fallback;
     }
 
@@ -85,6 +86,7 @@ namespace {
             case PhysicsConfig::Shape::Capsule: return "capsule";
             case PhysicsConfig::Shape::Convex: return "convex";
             case PhysicsConfig::Shape::TriMesh: return "trimesh";
+            case PhysicsConfig::Shape::Pieces: return "pieces";
         }
         return "auto";
     }
@@ -112,6 +114,7 @@ const char* PhysicsConfig::label(Shape shape) {
         case Shape::Capsule: return "Capsule";
         case Shape::Convex: return "Convex";
         case Shape::TriMesh: return "TriMesh";
+        case Shape::Pieces: return "Convex Pieces";
     }
     return "Auto";
 }
@@ -141,6 +144,14 @@ std::string PhysicsConfig::encode() const {
     out += std::to_string(solverIterations);
     out += ";selfcollision=";
     out += (selfCollision ? "1" : "0");
+    // Convex-pieces (V-HACD) parameters, always written for the same reason the
+    // soft-body ones are: switching shape away from Pieces and back keeps them.
+    out += ";hulls=";
+    out += std::to_string(hulls);
+    out += ";hullverts=";
+    out += std::to_string(hullVerts);
+    out += ";voxels=";
+    out += std::to_string(voxels);
     return out;
 }
 
@@ -180,6 +191,12 @@ std::optional<PhysicsConfig> PhysicsConfig::decode(const std::string& text) {
                 config.solverIterations = toInt(value, config.solverIterations);
             } else if (key == "selfcollision") {
                 config.selfCollision = toInt(value, config.selfCollision ? 1 : 0) != 0;
+            } else if (key == "hulls") {
+                config.hulls = toInt(value, config.hulls);
+            } else if (key == "hullverts") {
+                config.hullVerts = toInt(value, config.hullVerts);
+            } else if (key == "voxels") {
+                config.voxels = toInt(value, config.voxels);
             }
             // Unknown keys ignored on purpose: a document written by a newer
             // editor still loads here.

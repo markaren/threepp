@@ -43,8 +43,9 @@ namespace threepp::editor {
             Box,
             Sphere,
             Capsule,
-            Convex,
-            TriMesh // static/kinematic only — PhysX dynamics need a convex shape
+            Convex, // ONE convex hull (a Group: one hull per sub-mesh, welded into a compound)
+            TriMesh,// static/kinematic only — PhysX dynamics need a convex shape
+            Pieces  // V-HACD convex decomposition: many hulls approximating a concave shape
         };
 
         bool enabled = false;
@@ -62,6 +63,14 @@ namespace threepp::editor {
         int voxelResolution = 10;   // simulation-mesh cells along the longest axis
         int solverIterations = 20;  // per step; more = stiffer, slower
         bool selfCollision = false; // let folds of the body collide with each other
+
+        // --- Shape::Pieces only (V-HACD convex decomposition). Like the soft-body
+        // parameters above, these ride along whatever the shape is, so switching
+        // shape and back does not discard them.
+
+        int hulls = 16;      // max convex hulls V-HACD produces
+        int hullVerts = 64;  // max vertices per hull (also the PhysX cook target)
+        int voxels = 100000; // V-HACD voxel resolution; higher = finer, slower
 
         static constexpr const char* userDataKey = "physics";
 

@@ -32,7 +32,16 @@
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/physx/UrdfArticulation.hpp"
 
+// V-HACD convex decomposition, gated exactly like the physics play session
+// itself: it is linked (and the macro defined) only for a build that found both
+// the PhysX SDK and the v-hacd header. Without it, Shape::Pieces and the
+// decomposed-Group paths fall back to a single hull with one log line.
+#ifdef THREEPP_EDITOR_WITH_VHACD
+#include "threepp/extras/physx/ConvexDecomposition.hpp"
+#endif
+
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/core/Clock.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/CapsuleGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
@@ -46,6 +55,8 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <cstdio>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -72,6 +83,12 @@ namespace threepp::editor {
 
         // Of those, how many are deformable volumes.
         [[nodiscard]] std::size_t softBodyCount() const { return softBodyCount_; }
+
+        // How many geometries this session ran V-HACD on since start(). A cached
+        // decomposition (a second object sharing a geometry uuid and parameters)
+        // does NOT bump it — which is exactly what a test asserting the cache
+        // works reads. Reset by start().
+        [[nodiscard]] std::size_t decompositionCookCount() const { return decompCookCount_; }
 
         // False when the scene asked for soft bodies but the machine could not
         // give us a CUDA context; the rigid half of the scene still ran.
@@ -175,8 +192,10 @@ namespace threepp::editor {
 
             bodyCount_ = 0;
             softBodyCount_ = 0;
+            decompCookCount_ = 0;
             actors_.clear();
             articulations_.clear();
+            decompCache_.clear();
 
             // Collect first, create second: creating an actor binds the object,
             // and PhysxWorld writes transforms during step(), not during
@@ -640,6 +659,210 @@ namespace threepp::editor {
             return true;
         }
 
+        // --- Compound / decomposed convex colliders --------------------------
+
+        // The sub-meshes of `root` whose geometry should become collider hulls.
+        // Skips the root itself (a Group has none anyway) and any descendant that
+        // owns its own actor — putting physics on a Mesh nested in an imported
+        // model gives that Mesh its own body, and a compound over the parent
+        // must not cook it a second time. Same guard as the static subtree path.
+        static std::vector<Mesh*> gatherSubMeshes(Object3D& root) {
+
+            std::vector<Mesh*> out;
+            root.traverseType<Mesh>([&](Mesh& mesh) {
+                if (&mesh == &root) return;
+                if (!mesh.geometry()) return;
+                if (!mesh.geometry()->hasAttribute("position")) return;
+                if (ownsActor(mesh)) return;
+                out.push_back(&mesh);
+            });
+            return out;
+        }
+
+        // Decompose a geometry into convex hulls (each a flat x,y,z array in the
+        // geometry's own local frame), cached on (uuid, parameters). Returns a
+        // const reference into the cache so duplicates share the vectors. A cook
+        // is timed and logged; a cache hit is silent and does not bump the cook
+        // counter.
+        //
+        // Without V-HACD compiled in, or on a decomposition failure, falls back
+        // to the geometry's raw positions as a single hull — the caller cooks
+        // that into one convex mesh, i.e. the old single-hull behaviour, so the
+        // body still simulates (just without the concavity).
+        const std::vector<std::vector<float>>& decompose(const BufferGeometry& geometry,
+                                                         const PhysicsConfig& config) {
+
+            const std::string key = geometry.uuid + "|h=" + std::to_string(std::max(config.hulls, 1)) +
+                                    ";v=" + std::to_string(std::max(config.hullVerts, 8)) +
+                                    ";r=" + std::to_string(std::max(config.voxels, 10000));
+            if (const auto it = decompCache_.find(key); it != decompCache_.end()) return it->second;
+
+            std::vector<std::vector<float>> hulls;
+            const auto* posAttr = geometry.getAttribute<float>("position");
+            const auto& positions = posAttr->array();
+
+            // Build a u32 index buffer (the geometry's, or 0..N-1 for unindexed).
+            std::vector<::physx::PxU32> indices;
+            if (const auto* idxAttr = geometry.getIndex()) {
+                const auto& src = idxAttr->array();
+                indices.assign(src.begin(), src.end());
+            } else {
+                indices.resize(posAttr->count());
+                for (std::size_t i = 0; i < indices.size(); ++i) indices[i] = static_cast<::physx::PxU32>(i);
+            }
+
+#ifdef THREEPP_EDITOR_WITH_VHACD
+            const std::size_t tris = indices.size() / 3;
+            // A triangle-count guard: V-HACD's cost scales with the mesh, and a
+            // multi-hundred-thousand-triangle import would stall Play for tens of
+            // seconds. Warn once and decompose the raw mesh anyway — a coarse
+            // result beats an unbounded freeze, and the voxel step already caps
+            // the real work.
+            if (tris > 200000) {
+                log("physics: decomposing a " + std::to_string(tris) +
+                    "-triangle mesh - this may take a while");
+            }
+            ConvexDecompositionParams p;
+            p.maxHulls = static_cast<std::uint32_t>(std::max(config.hulls, 1));
+            p.maxVertsPerHull = static_cast<std::uint32_t>(std::clamp(config.hullVerts, 8, 64));
+            p.voxelResolution = static_cast<std::uint32_t>(std::max(config.voxels, 10000));
+
+            Clock clock;
+            clock.start();
+            hulls = decomposeConvex(positions.data(), posAttr->count(),
+                                    indices.data(), indices.size(), p);
+            const float seconds = clock.getElapsedTime();
+            if (!hulls.empty()) {
+                ++decompCookCount_;
+                log("physics: decomposed a mesh into " + std::to_string(hulls.size()) +
+                    " convex hull(s) in " + formatSeconds(seconds));
+            }
+#endif
+            if (hulls.empty()) {
+                // No V-HACD, or it failed: one hull from the raw positions.
+                hulls.emplace_back(positions.begin(), positions.end());
+            }
+
+            auto [it, _] = decompCache_.emplace(key, std::move(hulls));
+            return it->second;
+        }
+
+        // Turn each flat hull-point array into a cooked PxConvexMesh, positioned
+        // by `localPose` and scaled by `scale`, and append the parts. Points are
+        // in the hull's local frame; scale is applied by the cooked shape (via
+        // PxMeshScale) so cached unscaled hulls serve any instance. Cooked meshes
+        // are collected so the caller can release them after the actor is built.
+        void appendHullParts(const std::vector<std::vector<float>>& hulls,
+                             const ::physx::PxTransform& localPose, const Vector3& scale,
+                             std::vector<PhysxWorld::ConvexPart>& parts,
+                             std::vector<::physx::PxConvexMesh*>& cooked) {
+
+            for (const auto& hull : hulls) {
+                if (hull.size() < 12) continue;// < 4 points
+                auto* mesh = world_->cookConvexHull(hull.data(), hull.size() / 3,
+                                                    static_cast<unsigned>(64));
+                if (!mesh) continue;
+                cooked.push_back(mesh);
+                parts.push_back({mesh, localPose, scale});
+            }
+        }
+
+        // Build ONE compound convex actor for `root` out of its sub-meshes.
+        // `decomposed` picks the shape of each part: false = one hull per
+        // sub-mesh (Convex/Auto on a Group), true = V-HACD each sub-mesh into
+        // several hulls (Pieces on a Group). `budgetPerMesh`, when decomposed,
+        // divides the total hull budget across the sub-meshes so a five-part
+        // model does not ask for `hulls` pieces five times over.
+        bool buildCompoundFromSubMeshes(Object3D& root, const PhysicsConfig& config,
+                                        bool decomposed, ::physx::PxMaterial* material) {
+
+            using namespace ::physx;
+
+            const auto meshes = gatherSubMeshes(root);
+            if (meshes.empty()) return false;
+
+            // The actor's world frame: root world position + rotation, NO scale.
+            // Root scale (and each sub-mesh's own scale relative to the root) is
+            // baked into the per-part hull scale below, so the actor itself is
+            // unscaled — which is what PhysX wants (a rigid actor has no scale).
+            root.updateWorldMatrix(true, false);
+            Vector3 rootPos, rootScl;
+            Quaternion rootRot;
+            root.matrixWorld->decompose(rootPos, rootRot, rootScl);
+            Matrix4 actorFrame;
+            actorFrame.compose(rootPos, rootRot, Vector3(1.f, 1.f, 1.f));
+            Matrix4 actorFrameInv(actorFrame);
+            actorFrameInv.invert();
+
+            // When decomposing, split the hull budget across the sub-meshes.
+            PhysicsConfig perMesh = config;
+            if (decomposed && meshes.size() > 1) {
+                const int per = std::max(1, config.hulls / static_cast<int>(meshes.size()));
+                if (per * static_cast<int>(meshes.size()) < config.hulls) {
+                    log("physics: \"" + root.name + "\" hull budget " + std::to_string(config.hulls) +
+                        " split across " + std::to_string(meshes.size()) + " sub-meshes (" +
+                        std::to_string(per) + " each) - raise it to keep more detail");
+                }
+                perMesh.hulls = per;
+            }
+
+            std::vector<PhysxWorld::ConvexPart> parts;
+            std::vector<PxConvexMesh*> cooked;
+            for (auto* mesh : meshes) {
+                mesh->updateWorldMatrix(true, false);
+                // The sub-mesh relative to the actor frame: this carries the
+                // sub-mesh's placement within the model AND any scale (root's and
+                // its own), which we bake into the hull scale.
+                Matrix4 rel;
+                rel.multiplyMatrices(actorFrameInv, *mesh->matrixWorld);
+                Vector3 relPos, relScl;
+                Quaternion relRot;
+                rel.decompose(relPos, relRot, relScl);
+                const PxTransform localPose(toPxVec3(relPos), toPxQuat(relRot));
+
+                if (decomposed) {
+                    appendHullParts(decompose(*mesh->geometry(), perMesh), localPose, relScl, parts, cooked);
+                } else {
+                    // One hull per sub-mesh: the raw positions, cooked to a hull.
+                    const auto* posAttr = mesh->geometry()->getAttribute<float>("position");
+                    if (auto* hull = world_->cookConvexHull(posAttr->array().data(), posAttr->count(),
+                                                            static_cast<unsigned>(config.hullVerts <= 0 ? 64 : config.hullVerts))) {
+                        cooked.push_back(hull);
+                        parts.push_back({hull, localPose, relScl});
+                    }
+                }
+            }
+
+            if (parts.empty()) {
+                for (auto* m : cooked) m->release();
+                return false;
+            }
+
+            const bool dynamic = config.body != PhysicsConfig::Body::Static;
+            const PxTransform actorPose(toPxVec3(rootPos), toPxQuat(rootRot));
+            auto* actor = world_->addCompound(actorPose, parts, dynamic,
+                                              1000.f, material);
+            // attachShape keeps its own reference to each convex mesh, so our
+            // local ones are done once the actor exists.
+            for (auto* m : cooked) m->release();
+            if (!actor) return false;
+
+            if (dynamic) {
+                auto* body = static_cast<PxRigidDynamic*>(actor);
+                finishDynamic(*body, config);
+                world_->bind(root, *body);
+            }
+            return record(root, actor);
+        }
+
+        // "1.23 s" / "840 ms" — a cook time a human reads at a glance.
+        static std::string formatSeconds(float seconds) {
+            char buf[32];
+            if (seconds < 1.f) std::snprintf(buf, sizeof(buf), "%d ms", static_cast<int>(seconds * 1000.f));
+            else std::snprintf(buf, sizeof(buf), "%.2f s", static_cast<double>(seconds));
+            return buf;
+        }
+
         bool createActor(Object3D& object, const PhysicsConfig& config) {
 
             using namespace ::physx;
@@ -670,6 +893,58 @@ namespace threepp::editor {
                 if (addSubtree(object, material) > 0) return true;
                 // Nothing under it: fall through to the placeholder, which is
                 // still what a bare Group used as a trigger volume wants.
+            }
+
+            // Convex-pieces (V-HACD) on a Mesh: decompose its own geometry into
+            // several hulls, welded into one compound actor. This is the shape a
+            // concave prop wants — the mug that holds water, the pipe that is
+            // hollow. A Group with Pieces is handled by the compound path below.
+            if (config.shape == PhysicsConfig::Shape::Pieces && mesh) {
+                mesh->updateWorldMatrix(true, false);
+                Vector3 mpos, mscl;
+                Quaternion mrot;
+                mesh->matrixWorld->decompose(mpos, mrot, mscl);
+                std::vector<PhysxWorld::ConvexPart> parts;
+                std::vector<PxConvexMesh*> cooked;
+                appendHullParts(decompose(*mesh->geometry(), config),
+                                PxTransform(PxIdentity), mscl, parts, cooked);
+                if (!parts.empty()) {
+                    auto* actor = world_->addCompound(
+                            PxTransform(toPxVec3(mpos), toPxQuat(mrot)), parts, moving, 1000.f, material);
+                    for (auto* m : cooked) m->release();
+                    if (actor) {
+                        if (moving) {
+                            auto* body = static_cast<PxRigidDynamic*>(actor);
+                            finishDynamic(*body, config);
+                            world_->bind(*mesh, *body);
+                        }
+                        return record(object, actor);
+                    }
+                } else {
+                    for (auto* m : cooked) m->release();
+                }
+                // Decomposition produced nothing usable: fall through to the
+                // single-hull path so the body still simulates.
+            }
+
+            // A geometry-less Group gathers its sub-meshes into ONE compound
+            // convex actor — the fix for the headline bug, where an imported
+            // model (a Group with sub-meshes) fell back to a 1 m unit box.
+            //   * Pieces on a Group  -> V-HACD each sub-mesh (many hulls each)
+            //   * Convex on a Group  -> one hull per sub-mesh
+            //   * Auto on a Group    -> one hull per sub-mesh, for a MOVING body
+            //     (a static Group already collided as its trimesh subtree above)
+            if (!object.geometry()) {
+                const bool pieces = config.shape == PhysicsConfig::Shape::Pieces;
+                const bool wantsCompound =
+                        pieces ||
+                        config.shape == PhysicsConfig::Shape::Convex ||
+                        (config.shape == PhysicsConfig::Shape::Auto && moving);
+                if (wantsCompound && buildCompoundFromSubMeshes(object, config, pieces, material)) {
+                    return true;
+                }
+                // No usable sub-meshes: fall through to the unit-box placeholder,
+                // which is still what a bare Group used as a trigger wants.
             }
 
             if (shape == PhysicsConfig::Shape::TriMesh && mesh) {
@@ -759,10 +1034,20 @@ namespace threepp::editor {
         std::function<void(const std::string&)> logger_;
         std::size_t bodyCount_ = 0;
         std::size_t softBodyCount_ = 0;
+        std::size_t decompCookCount_ = 0;
         bool gpu_ = false;
         std::shared_ptr<const void> lifetime_;
         std::unordered_map<const Object3D*, ::physx::PxRigidActor*> actors_;
         std::vector<std::unique_ptr<PlayedArticulation>> articulations_;
+
+        // V-HACD is the expensive part of a Pieces cook (seconds on a dense
+        // mesh), so N copies of one geometry decompose once — keyed on the
+        // geometry uuid AND the parameters, since a different hull budget is a
+        // different decomposition. Value is one flat x,y,z array per hull, in the
+        // geometry's local (unscaled) frame; the caller applies scale at cook
+        // time. Mirrors PhysxWorld's soft-body tet cache. Lives for the session.
+        std::unordered_map<std::string, std::vector<std::vector<float>>> decompCache_;
+
         inline static PhysicsPlaySession* active_ = nullptr;
     };
 

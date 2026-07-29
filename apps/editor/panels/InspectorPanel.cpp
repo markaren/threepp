@@ -1453,7 +1453,8 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
     // A soft body's collider is always a tetrahedral volume cooked from the
     // mesh, so the shape picker has nothing to offer it.
     if (!soft) {
-        static const char* shapes[] = {"Auto", "Box", "Sphere", "Capsule", "Convex", "TriMesh"};
+        static const char* shapes[] = {"Auto", "Box", "Sphere", "Capsule",
+                                       "Convex", "TriMesh", "Convex Pieces"};
         int shape = static_cast<int>(config.shape);
         if (ImGui::Combo("Shape", &shape, shapes, IM_ARRAYSIZE(shapes))) {
             auto after = config;
@@ -1507,6 +1508,21 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
                 [](PhysicsConfig& c, float v) { c.restitution = v; }, "Physics Restitution");
     }
 
+    // Convex-pieces (V-HACD) parameters, shown only while that shape is picked —
+    // the same reveal-on-selection the soft-body section uses.
+    if (!soft && config.shape == PhysicsConfig::Shape::Pieces) {
+        ImGui::Spacing();
+        intField(
+                "Max Hulls", config.hulls, 0.2f, 1, 128,
+                [](PhysicsConfig& c, int v) { c.hulls = v; }, "Convex Pieces Hulls");
+        intField(
+                "Verts / Hull", config.hullVerts, 0.2f, 8, 64,
+                [](PhysicsConfig& c, int v) { c.hullVerts = v; }, "Convex Pieces Hull Verts");
+        intField(
+                "Voxel Res", config.voxels, 500.f, 10000, 1000000,
+                [](PhysicsConfig& c, int v) { c.voxels = v; }, "Convex Pieces Resolution");
+    }
+
     if (soft) {
         ImGui::Spacing();
         // Stiffness spans four decades between jelly and hard rubber, so the
@@ -1538,6 +1554,11 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
     if (soft) {
         ImGui::TextWrapped("Deformable volume: the mesh itself bends. Cooked from a closed "
                            "triangle surface, simulated on the GPU (needs CUDA).");
+    }
+    if (!soft && config.shape == PhysicsConfig::Shape::Pieces) {
+        ImGui::TextWrapped("V-HACD splits the mesh into convex hulls so a concave shape "
+                           "collides like itself (a mug holds water). Cooked once per "
+                           "geometry on Play; a dense mesh can take a moment.");
     }
 
     ImGui::TextColored(theme::muted(), "Stored in userData[\"physics\"]");
