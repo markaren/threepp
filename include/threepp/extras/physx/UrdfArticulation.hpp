@@ -17,6 +17,7 @@
 #define THREEPP_PHYSX_URDFARTICULATION_HPP
 
 #include "threepp/extras/physx/Articulation.hpp"
+#include "threepp/core/BufferGeometry.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/CapsuleGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
@@ -96,6 +97,28 @@ namespace threepp {
                     const float len = 2.f * c.halfHeight;
                     mesh = Mesh::create(CapsuleGeometry::create(c.radius, len), mat);
                     vol = math::PI * c.radius * c.radius * len + 4.f / 3.f * math::PI * c.radius * c.radius * c.radius;
+                    break;
+                }
+                case Shape::Hull: {
+                    // A <mesh> collision: wrap the collected hull points in a
+                    // geometry the link builder cooks into a convex shape. The
+                    // material is hidden — like the None proxy, only the visual
+                    // subtree should render. Volume is approximated from the
+                    // point AABB (it only sets the density fallback, and the
+                    // link usually carries an <inertial><mass> anyway).
+                    auto geometry = BufferGeometry::create();
+                    geometry->setAttribute("position",
+                                           FloatBufferAttribute::create(c.hullPoints, 3));
+                    geometry->computeBoundingBox();
+                    mesh = Mesh::create(geometry, mat);
+                    mat->visible = false;
+                    if (geometry->boundingBox) {
+                        Vector3 size;
+                        geometry->boundingBox->getSize(size);
+                        vol = std::max(std::abs(size.x * size.y * size.z), 1e-6f);
+                    } else {
+                        vol = 1e-6f;
+                    }
                     break;
                 }
                 default: {// None -> a tiny invisible proxy so a frame-only link still becomes a body

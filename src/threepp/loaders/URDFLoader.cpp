@@ -267,7 +267,7 @@ namespace {
             c.halfHeight = utils::parseFloat(cylinder.attribute("length").value()) * 0.5f;
             return c;
         }
-        if (const auto mesh = geometry.child("mesh")) {// trimesh -> bounding box
+        if (const auto mesh = geometry.child("mesh")) {// trimesh -> ONE convex hull
             const auto fileName = getModelPath(path.parent_path(), mesh.attribute("filename").value());
             if (!fileName.empty() && loader) {
                 if (auto obj = loader->load(fileName)) {
@@ -275,6 +275,31 @@ namespace {
                         obj->scale.copy(parseTupleString(scale.value()));
                     }
                     obj->updateMatrixWorld(true);
+                    // Gather every sub-mesh's vertices in the collision frame,
+                    // scale baked in via each sub-mesh's world matrix. The
+                    // articulation builder cooks the union into one convex hull —
+                    // a far better collider than the bounding box this used to
+                    // produce (a chair leg no longer collides as a solid slab).
+                    std::vector<float> points;
+                    obj->traverseType<Mesh>([&](Mesh& m) {
+                        const auto* pos = m.geometry() ? m.geometry()->getAttribute<float>("position") : nullptr;
+                        if (!pos) return;
+                        m.updateMatrixWorld();
+                        for (unsigned i = 0; i < pos->count(); ++i) {
+                            Vector3 v(pos->getX(i), pos->getY(i), pos->getZ(i));
+                            v.applyMatrix4(*m.matrixWorld);
+                            points.push_back(v.x);
+                            points.push_back(v.y);
+                            points.push_back(v.z);
+                        }
+                    });
+                    if (points.size() >= 12) {// >= 4 vertices
+                        c.shape = Coll::Shape::Hull;
+                        c.hullPoints = std::move(points);
+                        return c;
+                    }
+                    // Too few vertices to cook: fall back to the bounding box so
+                    // the link still becomes a body.
                     Box3 bb;
                     bb.setFromObject(*obj);
                     if (!bb.isEmpty()) {

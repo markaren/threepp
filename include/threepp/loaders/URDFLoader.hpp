@@ -29,12 +29,19 @@ namespace threepp {
             enum class Shape { None,
                                Box,
                                Sphere,
-                               Capsule };
+                               Capsule,
+                               Hull };// a <mesh> collision, cooked to ONE convex hull
             Shape shape = Shape::None;
             Vector3 halfExtents;   // Box: half-size per axis
             float radius = 0.f;    // Sphere / Capsule
             float halfHeight = 0.f;// Capsule: half the cylinder length (caps added on top)
             Matrix4 origin;        // collision frame in the link frame (<collision><origin>)
+            // Hull: the collision mesh's vertices as tightly packed x,y,z floats,
+            // already in the collision frame (the <mesh scale> baked in, the
+            // <origin> NOT — that stays in `origin` like the primitives). The
+            // articulation builder cooks these into a convex hull shape. Empty
+            // for every non-Hull shape.
+            std::vector<float> hullPoints;
         };
         struct Link {
             std::string name;

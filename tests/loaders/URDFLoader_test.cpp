@@ -91,6 +91,49 @@ TEST_CASE("URDFLoader loads a real robot with DAE visuals and STL collisions") {
     CHECK(meshes > 0);
 }
 
+TEST_CASE("parseArticulation turns a mesh collision into a convex hull") {
+
+    // A <mesh> collision used to become its bounding box (a chair leg collided
+    // as a solid slab). It now becomes a Hull carrying the mesh's vertices, so
+    // the articulation builder can cook one convex hull instead.
+    const auto dir = std::filesystem::temp_directory_path() / "threepp_urdf_hull";
+    std::filesystem::create_directories(dir);
+
+    {
+        // A tetrahedron: 4 vertices, enough to cook a hull.
+        std::ofstream obj(dir / "tetra.obj", std::ios::trunc);
+        obj << "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\n"
+            << "f 1 2 3\nf 1 2 4\nf 1 3 4\nf 2 3 4\n";
+    }
+    {
+        std::ofstream urdf(dir / "robot.urdf", std::ios::trunc);
+        urdf << R"(
+        <robot name="test">
+          <link name="base">
+            <collision>
+              <geometry><mesh filename="tetra.obj"/></geometry>
+            </collision>
+          </link>
+        </robot>)";
+    }
+
+    URDFLoader loader;
+    const auto desc = loader.parseArticulation(dir / "robot.urdf", false);
+    REQUIRE(desc.links.size() == 1);
+
+    using Shape = URDFArticulationDesc::Collision::Shape;
+    const auto& coll = desc.links[0].collision;
+    CHECK(coll.shape == Shape::Hull);
+    // The mesh's vertices survive as flat x,y,z floats. The OBJ loader
+    // de-indexes the four triangular faces (12 vertices, 36 floats); whatever
+    // the exact count, it must be a non-empty multiple of 3 and enough to cook
+    // a hull (>= 4 points).
+    CHECK(coll.hullPoints.size() % 3 == 0);
+    CHECK(coll.hullPoints.size() >= 12);
+
+    std::filesystem::remove_all(dir);
+}
+
 TEST_CASE("URDFLoader shares mesh resources between visual and collision") {
 
     // The same mesh referenced from <visual> and <collision> should be loaded

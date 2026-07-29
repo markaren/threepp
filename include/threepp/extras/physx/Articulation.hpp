@@ -178,7 +178,21 @@ namespace threepp {
             auto* g = mesh.geometry().get();
             if (!g) throw std::runtime_error("Articulation.add_link: mesh has no geometry");
             const auto shape = physx_detail::inferLinkShape(*g);
-            if (!shape.valid) throw std::runtime_error("Articulation.add_link: unsupported geometry (use Box/Sphere/Capsule)");
+
+            // A non-primitive geometry (a <mesh> collision from a URDF) cooks to
+            // ONE convex hull rather than throwing. Primitives keep the exact,
+            // cheaper analytic path above — this only widens what add_link
+            // accepts, it does not change any existing link.
+            PxConvexMesh* convex = nullptr;
+            if (!shape.valid) {
+                const auto* pos = g->getAttribute<float>("position");
+                if (!pos || pos->count() < 4) {
+                    throw std::runtime_error("Articulation.add_link: unsupported geometry "
+                                             "(use Box/Sphere/Capsule, or a mesh with >= 4 vertices for a convex hull)");
+                }
+                convex = world_.cookConvexHull(pos->array().data(), pos->count(), 64);
+                if (!convex) throw std::runtime_error("Articulation.add_link: convex hull cook failed");
+            }
 
             mesh.updateMatrixWorld();
             Vector3 pos, scl;
@@ -188,14 +202,22 @@ namespace threepp {
 
             PxArticulationLink* parentLink = parent ? parent->raw() : nullptr;
             PxArticulationLink* link = art_->createLink(parentLink, linkPose);
-            if (!link) throw std::runtime_error("Articulation.add_link: createLink failed");
+            if (!link) {
+                if (convex) convex->release();
+                throw std::runtime_error("Articulation.add_link: createLink failed");
+            }
             if (!parentLink) rootLink_ = link;// the root link (for batched root_state)
 
-            PxShape* s = world_.physics().createShape(shape.geom.any(),
-                                                      material ? *material : world_.defaultMaterial(), true);
-            s->setLocalPose(shape.localPose);
+            PxShape* s = convex
+                                 ? world_.physics().createShape(
+                                           PxConvexMeshGeometry(convex, PxMeshScale(toPxVec3(scl))),
+                                           material ? *material : world_.defaultMaterial(), true)
+                                 : world_.physics().createShape(shape.geom.any(),
+                                                                material ? *material : world_.defaultMaterial(), true);
+            if (!convex) s->setLocalPose(shape.localPose);
             link->attachShape(*s);
             s->release();
+            if (convex) convex->release();// the shape keeps its own reference
             PxRigidBodyExt::updateMassAndInertia(*link, density);
 
             // Revolute (hinge, rotation about the axis) or prismatic (slider,
