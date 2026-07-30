@@ -750,6 +750,16 @@ click, so the canvas's held-key set would be stale exactly when someone is watch
 viewport. In a build or a pass with no window (no provider installed) it answers False rather
 than raising, so a script that steers still *runs* headlessly, just uncommanded.
 
+**A script that reads the keyboard takes it over.** The keys a controller reaches for are the
+keys the editor already uses: `W`/`E`/`R` are the gizmo modes, `Q` is local/world, and the
+numpad is the axis viewpoints. Both firing on one press means driving a robot forward also
+retargets the gizmo and snaps the camera to a front view. So the first `is_key_down` call of a
+play session hands the **plain keys** to the scripts for the rest of it — one console line says
+so — and the shortcuts come back on Stop. Modified commands are untouched: `Ctrl+S`, `Ctrl+Z`
+and the `Alt`+digit viewpoints keep working while playing, because a script polls unmodified
+keys and silently losing save-while-playing would be its own surprise. A scene whose scripts
+never ask keeps every shortcut.
+
 This is the only input a script gets, and it is a poll, not an event: there is no key-press
 callback, no mouse, and the inspector is read-only while playing — so a parameter is something
 you set *before* pressing Play, not a live control.

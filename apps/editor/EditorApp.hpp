@@ -775,6 +775,13 @@ namespace threepp::editor {
         // "what went wrong in this script last session".
         std::shared_ptr<ScriptPlaySession> scripts_;
 
+        // Has a script polled the keyboard during THIS play session? Set by the
+        // is_key_down provider, cleared by startPlay. While it is set, the plain
+        // (unmodified) editor shortcuts yield to the script — teleop keys and
+        // the gizmo/viewpoint bindings are the same keys, and both acting on one
+        // press means driving the robot also retargets the gizmo.
+        bool scriptsPolledKeys_ = false;
+
         // Discovering a script's fields means importing the file, which the
         // inspector cannot do sixty times a second. Cached per path and
         // invalidated by the file's write time, so saving the .py in an editor

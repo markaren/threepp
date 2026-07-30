@@ -365,6 +365,14 @@ EditorApp::EditorApp(const Options& options)
     // file browser) rather than on WantCaptureKeyboard, for the same reason: gating on that
     // made every shortcut dead until the viewport was clicked again.
     scripting::keyStateProvider() = [this](const std::string& name) {
+        // Asking at all is the signal: a script that polls the keyboard takes the plain keys
+        // off the editor for the rest of the session (see handleShortcuts). Recorded on the
+        // first poll, which happens on the script's first update() — before anyone has had
+        // time to press anything.
+        if (isPlaying() && !scriptsPolledKeys_) {
+            scriptsPolledKeys_ = true;
+            log("a script is reading the keyboard - editor key shortcuts yield until Stop");
+        }
         const ImGuiIO& io = ImGui::GetIO();
         if (io.WantTextInput) return false;
         if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return false;
@@ -2364,6 +2372,9 @@ void EditorApp::startPlay() {
     // The play snapshot must capture the authored pose, not the preview's.
     stopAnimationPreview();
 
+    // Per-session, so a scene whose script does not read the keyboard keeps its shortcuts.
+    scriptsPolledKeys_ = false;
+
     std::string error;
     if (!play_.play(document_, &error)) {
         log("play failed: " + error);
@@ -2429,6 +2440,14 @@ void EditorApp::handleShortcuts() {
     const bool ctrl = io.KeyCtrl;
     const bool shift = io.KeyShift;
     const bool alt = io.KeyAlt;
+
+    // A playing script that reads the keyboard owns the PLAIN keys. Teleop reaches for
+    // W/A/S/D, Q/E and the numpad; those are the gizmo modes and the axis viewpoints, so
+    // without this, driving a robot forward also switched the gizmo to translate and snapped
+    // the camera to a front view. Modified commands stay live — Ctrl+S, Ctrl+Z and the
+    // Alt+digit viewpoints are not what a script polls, and silently losing save-while-playing
+    // would be its own surprise.
+    if (scriptsPolledKeys_ && isPlaying() && !ctrl && !alt && !io.KeySuper) return;
 
     // --- viewpoints -------------------------------------------------------
     // The numpad bindings every 3D editor shares, with Ctrl for the opposite
