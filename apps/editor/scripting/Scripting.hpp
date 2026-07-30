@@ -75,6 +75,24 @@ namespace threepp::editor {
             return scene;
         }
 
+        // Key state for a script that wants to be DRIVEN — threepp.editor.is_key_down.
+        //
+        // Installed by the editor app, which owns the window and the ImGui context and is
+        // therefore the only thing that can say both "is this key held" and "is the user
+        // actually typing into a text field right now". Unset (a headless test, a front end
+        // with no window) means no input is available and the binding answers False rather
+        // than guessing.
+        //
+        // Takes the key NAME, not a keycode: the app answers from ImGui's key state, whose
+        // enum python/src has no business knowing about. Same inline function-local static
+        // as authoringSink() — the binding lives in python/src and the app in apps/editor,
+        // and neither links the other.
+        inline std::function<bool(const std::string&)>& keyStateProvider() {
+
+            static std::function<bool(const std::string&)> provider;
+            return provider;
+        }
+
         // Result of looking at a script without running any of its behaviour.
         struct Inspection {
             std::string className;

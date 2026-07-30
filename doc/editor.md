@@ -731,6 +731,29 @@ reported once, not sixty times a second. Syntax errors, a missing class, a file
 that has moved away and an `update()` that throws are all just messages — the
 last one is also shown in red in that object's Script section.
 
+**Input: `threepp.editor.is_key_down(key)`.** A play session is something you can *drive*.
+Poll it from `update()` — `'W'`, `'UP'`, `'KP8'`, `'SPACE'`, the same key names
+`Canvas.is_key_down` takes — and a script becomes a controller: teleop a robot, nudge a
+body, cycle a mode.
+
+```python
+def update(self, dt):
+    from threepp import editor
+    vx = (1.0 if editor.is_key_down("UP") else 0.0) - (1.0 if editor.is_key_down("DOWN") else 0.0)
+```
+
+It answers **False while ImGui wants the keyboard** — real text entry, an open popup, the file
+browser — on the same rule the editor's own shortcuts follow, so driving a robot can never eat
+somebody's rename. It reads ImGui's key state rather than the canvas's: `preventKeyboardEvent`
+gates on `WantCaptureKeyboard`, which stays true for as long as a panel keeps focus after a
+click, so the canvas's held-key set would be stale exactly when someone is watching the
+viewport. In a build or a pass with no window (no provider installed) it answers False rather
+than raising, so a script that steers still *runs* headlessly, just uncommanded.
+
+This is the only input a script gets, and it is a poll, not an event: there is no key-press
+callback, no mouse, and the inspector is read-only while playing — so a parameter is something
+you set *before* pressing Play, not a live control.
+
 **The GIL, and threads.** The editor holds the GIL only inside a sweep and
 acquires it once for the whole frame, not once per script. A script must
 therefore only touch the scene from `start` / `update` / `stop`: work handed to a

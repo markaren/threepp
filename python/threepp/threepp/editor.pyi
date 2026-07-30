@@ -4,7 +4,7 @@ The runtime face of editor-authored data.
 from __future__ import annotations
 import typing
 import threepp
-__all__: list[str] = ['Articulation', 'RigidBody', 'SoftBody', 'SplinePath', 'articulation_from_object', 'rigid_body_from_object', 'soft_body_from_object', 'spline_from_object']
+__all__: list[str] = ['Articulation', 'RigidBody', 'SoftBody', 'SplinePath', 'add', 'articulation_from_object', 'is_key_down', 'rigid_body_from_object', 'scene', 'soft_body_from_object', 'spline_from_object']
 class SplinePath:
     def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> threepp.Vector3:
         """
@@ -239,4 +239,16 @@ def soft_body_from_object(object: threepp.Object3D | None) -> SoftBody | None:
 def spline_from_object(object: threepp.Object3D | None) -> SplinePath | None:
     """
     The SplinePath an authored spline describes, or None when `object` is not a spline or has fewer than two control points.
+    """
+def add(object: threepp.Object3D, parent: threepp.Object3D | None = None) -> threepp.Object3D:
+    """
+    Add `object` to what this generator is building, and return it. With no `parent` it goes at the generator's root; pass one of your own earlier adds to nest. Raises outside a generator run.
+    """
+def scene() -> threepp.Object3D:
+    """
+    The scene this generator is authoring into. READ it to place content relative to what already exists. Objects reached this way are NOT this generator's output and are not replaced when it re-runs.
+    """
+def is_key_down(key: str) -> bool:
+    """
+    Poll whether a key is currently held — 'W', 'SPACE', 'UP', 'LEFT', 'KP8', the same names Canvas.is_key_down takes. Answers False while the user is typing into a field, and False in a build or a pass with no window. Query it every update() for continuous control; it never sticks.
     """

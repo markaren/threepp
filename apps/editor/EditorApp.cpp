@@ -77,6 +77,42 @@ namespace {
 
     constexpr std::size_t kConsoleLimit = 400;
 
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    // A key NAME (as a script writes it) -> ImGuiKey. The vocabulary is deliberately the one
+    // python/src/bind_render.cpp's keyFromName accepts, so a script that polls 'UP' or 'KP8'
+    // reads the same in the editor as it does against a Canvas in the wheel. The enums differ
+    // (ImGuiKey here, threepp::Key there), so this is a parallel mapping rather than shared
+    // code; keep the accepted spellings in step.
+    ImGuiKey imguiKeyFromName(std::string name) {
+
+        for (auto& ch : name) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        if (name.size() == 1 && name[0] >= 'A' && name[0] <= 'Z') {
+            return static_cast<ImGuiKey>(ImGuiKey_A + (name[0] - 'A'));
+        }
+        if (name.size() == 1 && name[0] >= '0' && name[0] <= '9') {
+            return static_cast<ImGuiKey>(ImGuiKey_0 + (name[0] - '0'));
+        }
+        // Numpad: "KP8" / "NUM8" / "NUMPAD8" -> keypad 8, distinct from the top-row digit.
+        for (const std::string& prefix : {std::string("KP"), std::string("NUMPAD"), std::string("NUM")}) {
+            if (name.size() == prefix.size() + 1 && name.compare(0, prefix.size(), prefix) == 0 &&
+                name.back() >= '0' && name.back() <= '9') {
+                return static_cast<ImGuiKey>(ImGuiKey_Keypad0 + (name.back() - '0'));
+            }
+        }
+        if (name == "SPACE") return ImGuiKey_Space;
+        if (name == "UP") return ImGuiKey_UpArrow;
+        if (name == "DOWN") return ImGuiKey_DownArrow;
+        if (name == "LEFT") return ImGuiKey_LeftArrow;
+        if (name == "RIGHT") return ImGuiKey_RightArrow;
+        if (name == "ESCAPE" || name == "ESC") return ImGuiKey_Escape;
+        if (name == "ENTER") return ImGuiKey_Enter;
+        if (name == "TAB") return ImGuiKey_Tab;
+        if (name == "SHIFT") return ImGuiKey_LeftShift;
+        if (name == "CTRL" || name == "CONTROL") return ImGuiKey_LeftCtrl;
+        return ImGuiKey_None;
+    }
+#endif
+
     // Always names a backend. Handing createRenderer no preference makes it
     // print a console menu and block on std::cin, which a windowed app must
     // never do — it stalls the editor behind a prompt nobody sees and hangs
@@ -318,6 +354,24 @@ EditorApp::EditorApp(const Options& options)
     scripts_ = std::make_shared<ScriptPlaySession>();
     scripts_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(scripts_);
+
+    // threepp.editor.is_key_down: let a playing script be DRIVEN. Answered from ImGui's key
+    // state, not the canvas's — `ioCapture_.preventKeyboardEvent` gates on
+    // WantCaptureKeyboard, which stays true for as long as a panel keeps focus after a click,
+    // so the canvas's held-key set would be stale exactly when somebody is watching the
+    // viewport. ImGui's own state is fed by the backend regardless of who is capturing.
+    //
+    // Suppressed on the same rule handleShortcuts() uses (real text entry, an open popup, the
+    // file browser) rather than on WantCaptureKeyboard, for the same reason: gating on that
+    // made every shortcut dead until the viewport was clicked again.
+    scripting::keyStateProvider() = [this](const std::string& name) {
+        const ImGuiIO& io = ImGui::GetIO();
+        if (io.WantTextInput) return false;
+        if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return false;
+        if (fileBrowser_.isOpen()) return false;
+        const ImGuiKey key = imguiKeyFromName(name);
+        return key != ImGuiKey_None && ImGui::IsKeyDown(key);
+    };
 #endif
 
     loadSettings();

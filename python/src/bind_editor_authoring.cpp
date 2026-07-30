@@ -99,6 +99,23 @@ namespace {
                 "relative to what already exists — a marker to put a crate on, a surface to "
                 "scatter over. Objects reached this way are NOT this generator's output and "
                 "are not replaced when it re-runs; only what you pass to add() is.");
+
+        // Input, for a BEHAVIOUR script during Play — the other half of "a play session is a
+        // thing you can drive". Poll it from update(); it never sticks.
+        sub.def(
+                "is_key_down", [](const std::string& key) {
+                    auto& provider = editor::scripting::keyStateProvider();
+                    // No window (headless, or a front end that installed no provider) reads as
+                    // "nothing is held" rather than raising: a script that steers with the
+                    // arrow keys should still RUN in a headless pass, just uncommanded.
+                    return provider ? provider(key) : false;
+                },
+                py::arg("key"),
+                "Poll whether a key is currently held — 'W', 'SPACE', 'UP', 'LEFT', 'KP8', the "
+                "same names Canvas.is_key_down takes. Answers False while the user is typing "
+                "into a field, so driving a robot cannot eat somebody's rename, and False in a "
+                "build or a pass with no window. Query it every update() for continuous "
+                "control; it never sticks.");
     }
 
 }// namespace threepp_py
