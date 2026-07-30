@@ -91,17 +91,43 @@ class EditorAdapter(Adapter):
         return self._ground
 
 
+def _parse_route(text):
+    """"secs:vx,vy,wz|secs:vx,vy,wz" -> [(secs, (vx,vy,wz)), ...]. Empty text -> [].
+
+    Segments are '|'-separated, NOT ';'-separated: scriptFields is itself a flat
+    `key=value;...` string, so a ';' inside a value would be eaten by that format.
+    """
+    out = []
+    for seg in (text or "").replace(";", "|").split("|"):
+        seg = seg.strip()
+        if not seg:
+            continue
+        try:
+            secs, cmd = seg.split(":")
+            vx, vy, wz = (float(v) for v in cmd.split(","))
+            out.append((float(secs), (vx, vy, wz)))
+        except ValueError:
+            print(f"[policy] route segment '{seg}' is not secs:vx,vy,wz - ignored")
+    return out
+
+
 class PolicyDrive:
 
     bundle = ""          # folder holding spec.json + policy.npz (default: ./bundle_spot_steps)
-    vx = 0.8             # forward command (m/s, body frame)
+    vx = 0.8             # forward command (m/s, body frame) - used when `route` is empty
     vy = 0.0             # strafe command (m/s, +y = left)
     wz = 0.0             # yaw-rate command (rad/s)
     settle = 100         # control ticks of default-pose hold before the policy takes over
     log = ""             # CSV path for the trace (empty = no file)
+    chase = ""           # name of a camera to trail behind the robot (empty = leave cameras alone)
+    # An authored command sequence, because a play session CANNOT be steered by hand: the
+    # inspector is read-only while playing and the script host binds no keyboard. So the
+    # steering envelope is demonstrated by driving through it on a timer.
+    route = ""           # "secs:vx,vy,wz;..."  empty = hold (vx, vy, wz) forever
 
-    def start(self, obj):
+    def start(self, obj, scene):
         self.obj = obj
+        self.scene = scene
         self.ctrl = None
         self.held = 0
         self.t = 0.0
@@ -125,6 +151,12 @@ class PolicyDrive:
             return
         self.adapter = adapter
         self.bundle_obj = b
+        self.plan = _parse_route(self.route)
+        self.cam = None
+        if self.chase:
+            self.cam = scene.get_object_by_name(self.chase)
+            if self.cam is None:
+                print(f"[policy] no camera named '{self.chase}' in the scene")
         # The plant this policy wants vs what the scene actually authored. A silent mismatch here
         # is the classic reason a policy that trained fine "doesn't work" after a port.
         want = b.spec.get("plant", {})
@@ -152,15 +184,44 @@ class PolicyDrive:
             self.csv = open(self.log, "w", buffering=1)
             self.csv.write("tick,t,x,y,z,upright,height,vx_cmd,vx_meas\n")
 
+    def command(self):
+        """The velocity command for right now: the route's current segment, or the fixed one."""
+        if not self.plan:
+            return self.vx, self.vy, self.wz
+        t = self.t
+        for secs, cmd in self.plan:
+            if t < secs:
+                return cmd
+            t -= secs
+        return self.plan[-1][1]        # route exhausted: hold the last segment
+
+    def follow(self):
+        """Trail the chase camera behind the robot, in whatever world up this scene has."""
+        R = self.adapter.root_rotation_matrix
+        p = self.adapter.root_position
+        up = -self.adapter.gravity_direction
+        fwd = R[:, 0] - up * float(np.dot(R[:, 0], up))       # heading, flattened into the ground
+        n = np.linalg.norm(fwd)
+        fwd = fwd / n if n > 1e-6 else np.array([1.0, 0.0, 0.0])
+        want = p - fwd * 3.0 + up * 1.5
+        here = np.array([self.cam.position.x, self.cam.position.y, self.cam.position.z])
+        now = here + (want - here) * 0.12                     # lerp, so it trails rather than snaps
+        self.cam.position.set(float(now[0]), float(now[1]), float(now[2]))
+        at = p + fwd * 0.4 + up * 0.1
+        self.cam.look_at(float(at[0]), float(at[1]), float(at[2]))
+
     def update(self, dt):
         if self.ctrl is None:
             return
+        if self.cam is not None:
+            self.follow()
         # Hold the authored pose first: the policy expects to start from a settled stand, and the
         # articulation spawns a few centimetres above the ground.
         if self.held < int(self.settle):
             self.held += 1
             self.ctrl.hold_default()
             return
+        self.vx, self.vy, self.wz = self.command()
         cmd = np.array([self.vx, self.vy, self.wz], np.float32)
         n = self.ctrl.tick(dt, cmd)
         if n == 0:

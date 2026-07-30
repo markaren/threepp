@@ -8,9 +8,9 @@
     {
       "uuid": "d0fe2c0a-a209-564b-b3c9-16190ca0231c",
       "type": "BoxGeometry",
-      "width": 400,
+      "width": 120,
       "height": 1,
-      "depth": 400
+      "depth": 120
     }
   ],
   "materials": [
@@ -94,19 +94,34 @@
           0,
           1,
           0,
+          6,
+          11,
           5,
-          9,
-          -4,
           1
-        ]
+        ],
+        "shadow": {
+          "mapSize": [
+            2048,
+            2048
+          ],
+          "bias": -0.0005,
+          "camera": {
+            "left": -18,
+            "right": 18,
+            "top": 18,
+            "bottom": -18,
+            "near": 0.5,
+            "far": 60
+          }
+        }
       },
       {
         "uuid": "e6e9fcff-c169-542b-ad65-c38e14d7f111",
         "type": "HemisphereLight",
         "name": "Sky",
-        "color": 14477558,
-        "groundColor": 5595244,
-        "intensity": 1.1,
+        "color": 13690103,
+        "groundColor": 4872810,
+        "intensity": 1.15,
         "matrix": [
           1,
           0,
@@ -148,8 +163,8 @@
           1,
           0,
           -3.0,
-          1.4,
-          2.6,
+          1.5,
+          0,
           1
         ]
       },
@@ -180,7 +195,7 @@
           "jointValues": "0.1,0.9,-1.5,-0.1,0.9,-1.5,0.1,1.1,-1.5,-0.1,1.1,-1.5",
           "articulation": "fixedbase=0;stiffness=90;damping=1.5;maxforce=115;selfcollision=0;iterations=12;density=1000",
           "script": "C:/dev/threepp-spot-editor/python/examples/spot/editor_deploy/spot_editor_script.py",
-          "scriptFields": "bundle=C:/dev/threepp-spot-editor/python/examples/spot/editor_deploy/bundle_spot_steps;vx=0.8;vy=0;wz=0;settle=100;log=C:/dev/threepp-spot-editor/python/examples/spot/editor_deploy/spot_editor_trace.csv"
+          "scriptFields": "bundle=C:/dev/threepp-spot-editor/python/examples/spot/editor_deploy/bundle_spot_steps;vx=0.8;vy=0;wz=0;settle=100;log=C:/dev/threepp-spot-editor/python/examples/spot/editor_deploy/spot_editor_trace.csv;chase=Chase;route=5:0.8,0,0|4:0.5,0,0.5|4:0.8,0,0|3:0,0.5,0|4:1.2,0,0"
         }
       }
     ]

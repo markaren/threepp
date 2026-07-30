@@ -100,17 +100,44 @@ Worth naming as real editor gaps rather than glossing them:
 3. **The physics rate is not authorable.** `PhysicsPlaySession` is constructed with defaults
    (1/60, no TGS/PCM); a policy trained at 0.005 with TGS+PCM has no way to ask for its own
    contact model. It worked here; it will not always.
+4. **Scripts get no input.** The script host binds math/core/objects/cameras/lights/robot but
+   nothing for the keyboard or mouse, and the inspector is read-only during Play — so a play
+   session cannot be driven interactively at all. Hence `route`. A bound `is_key_down` (or
+   writable inspector fields during Play) would turn this scene into a teleop demo.
+
+And one authoring trap worth knowing, because it is silent: a lighting mistake reads as "the
+renderer is broken". A `DirectionalLight`'s shadow camera is an **ortho box defaulting to ±5 m**,
+so a large `receiveShadow` ground sampled outside that box comes back shadowed and the whole scene
+looks dark. `make_scene.py` keeps the ground at 120 m and authors the shadow camera (±18 m,
+2048² map) explicitly.
 
 ## Watch it
 
 ```bash
-threepp_editor spot_policy.json          # then press Play
-threepp_editor spot_policy.json --play --frames=700   # headless; writes spot_editor_trace.csv
+threepp_editor spot_policy.json           # then press Play
+threepp_editor spot_policy.json --play --frames=1400   # headless; writes spot_editor_trace.csv
 ```
 
-The script exposes `vx`, `vy`, `wz` as inspector parameters, so the robot is steerable from the
-inspector while it plays. `spot_editor_trace.csv` logs position, height, tilt and measured forward
-speed per control tick; `spot_editor_trace_diag.txt` records the contract that was resolved.
+**A play session cannot be steered by hand.** The inspector is read-only while playing, and the
+script host binds no keyboard or mouse — so `vx`/`vy`/`wz` are set *before* Play, not during it.
+The command sequence is therefore authored: the `route` parameter is `secs:vx,vy,wz` segments
+(`|`-separated, because `scriptFields` is itself a `;`-delimited format), and the default route
+drives the whole steering envelope in one session. Measured, in the editor:
+
+| segment | command | measured forward |
+|---|---|---|
+| 0–5 s | vx 0.8 | 0.80 m/s |
+| 5–9 s | vx 0.5, wz 0.5 | 0.51 m/s, heading swings ~115° |
+| 9–13 s | vx 0.8 | 0.80 m/s |
+| 13–16 s | vy 0.5 (strafe) | 0.07 m/s — moving sideways instead |
+| 16–20 s | vx 1.2 | 1.15 m/s |
+
+Tilt cosine stayed above 0.98 for all of it. Set `route=` empty to hold a fixed `vx` instead.
+
+The `chase` parameter names a camera the script trails behind the robot; **select that camera** and
+the camera dock shows the trot from behind (a camera in a document is just an object — nothing
+follows anything until something drives it). `spot_editor_trace.csv` logs position, height, tilt and
+measured forward speed per control tick; `spot_editor_trace_diag.txt` records the resolved contract.
 
 ## Notes
 

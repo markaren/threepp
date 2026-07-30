@@ -53,6 +53,11 @@ def main():
     ap.add_argument("--out", default=os.path.join(_HERE, "spot_policy.json"))
     ap.add_argument("--vx", type=float, default=0.8)
     ap.add_argument("--settle", type=int, default=100)
+    # A play session cannot be steered by hand (the inspector is read-only while playing and
+    # scripts have no input access), so the command sequence is authored instead.
+    # '|'-separated, not ';': scriptFields is itself a flat key=value; string.
+    ap.add_argument("--route", default="5:0.8,0,0|4:0.5,0,0.5|4:0.8,0,0|3:0,0.5,0|4:1.2,0,0",
+                    help="seconds:vx,vy,wz segments, '|'-separated. Empty = hold vx forever.")
     args = ap.parse_args()
     if not os.path.exists(args.urdf):
         print(f"no physics URDF at {args.urdf} - run make_spot_urdf.py first")
@@ -70,13 +75,18 @@ def main():
     articulation = (f"fixedbase=0;stiffness={STIFF_GAINS['hx'][0]:g};damping={STIFF_GAINS['hx'][1]:g};"
                     f"maxforce={STIFF_GAINS['kn'][2]:g};selfcollision=0;iterations=12;density=1000")
     script_fields = (f"bundle={fwd(args.bundle)};vx={args.vx:g};vy=0;wz=0;"
-                     f"settle={args.settle};log={fwd(args.log)}")
+                     f"settle={args.settle};log={fwd(args.log)};"
+                     f"chase=Chase;route={args.route}")
 
     doc = {
         "metadata": {"version": 4.5, "type": "Object", "generator": "make_scene.py"},
         "geometries": [
+            # 120 m of ground, not 400: a directional light's shadow camera is an ORTHO box, so
+            # the ground has to stay within a shadow frustum you can actually afford. A huge
+            # receiveShadow floor outside that box samples the shadow map's clamped edge and
+            # reads as shadowed almost everywhere — which looks exactly like "the scene is dark".
             {"uuid": uid("geo-ground"), "type": "BoxGeometry",
-             "width": 400, "height": 1, "depth": 400},
+             "width": 120, "height": 1, "depth": 120},
         ],
         "materials": [
             {"uuid": uid("mat-ground"), "type": "MeshStandardMaterial",
@@ -94,13 +104,21 @@ def main():
                  "userData": {"physics": "body=static;shape=box;friction=1;restitution=0"}},
                 {"uuid": uid("sun"), "type": "DirectionalLight", "name": "Sun",
                  "color": 0xffffff, "intensity": 2.6, "castShadow": True,
-                 "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 9, -4, 1]},
+                 "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 6, 11, 5, 1],
+                 # The default shadow camera is +-5 m, which would leave everything the robot
+                 # walks to unshadowed-or-worse. Cover the whole route explicitly.
+                 "shadow": {"mapSize": [2048, 2048], "bias": -0.0005,
+                            "camera": {"left": -18, "right": 18, "top": 18, "bottom": -18,
+                                       "near": 0.5, "far": 60}}},
                 {"uuid": uid("hemi"), "type": "HemisphereLight", "name": "Sky",
-                 "color": 0xdce8f6, "groundColor": 0x55606c, "intensity": 1.1,
+                 "color": 0xd0e4f7, "groundColor": 0x4a5a6a, "intensity": 1.15,
                  "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]},
+                # Driven by the script (its `chase` parameter): select it and the camera dock
+                # shows the trot from behind. Nothing follows it otherwise — a camera in a
+                # document is just an object.
                 {"uuid": uid("cam"), "type": "PerspectiveCamera", "name": "Chase",
                  "fov": 46, "aspect": 1.0, "near": 0.05, "far": 200,
-                 "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -3.0, 1.4, 2.6, 1]},
+                 "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -3.0, 1.5, 0, 1]},
                 {"uuid": uid("spot"), "type": "Object3D", "name": "Spot",
                  "matrix": robot_matrix,
                  "userData": {
