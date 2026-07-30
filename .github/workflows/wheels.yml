@@ -25,7 +25,7 @@ jobs:
         os: [ ubuntu-22.04, windows-2022, macos-14 ]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # PEP 440 needs dots, not dashes: 2026-06-17 -> 2026.06.17 (pip normalises
       # the leading zeros). On dispatch (no tag) the pyproject default version is
@@ -78,7 +78,7 @@ jobs:
     name: Source distribution
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Derive version from the date tag
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
