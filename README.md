@@ -344,3 +344,11 @@ set_languages("c++20")
 | <img src="doc/screenshots/spline_editor.png" width="400" alt="Spline Editor"><br>*Spline editor* | <img src="doc/screenshots/robot_cell_capture.png" width="400" alt="SVG UI"><br>*SVG-based UI* |
 | <img src="doc/screenshots/tiger_svg.png" width="400" alt="SVG"><br>*SVG loader* | <img src="doc/screenshots/fonts.png" width="400" alt="Fonts"><br>*Text rendering* |
 | <img src="doc/screenshots/fly.PNG" width="400" alt="FlyControls"><br>*Fly controls* | <img src="doc/screenshots/chess.png" width="400" alt="Chess"><br>*glTF Chessboard under HDRi sky* |
+
+## License
+
+threepp is [MIT-licensed](LICENSE). It ports the API and shaders of
+[three.js](https://github.com/mrdoob/three.js) (MIT) and bundles or fetches a number of
+third-party libraries and assets — see [THIRD_PARTY.md](THIRD_PARTY.md) for the complete
+index, including the components that are *not* MIT (the optional NVIDIA DLSS SDK, and the
+Boston Dynamics Spot model in `threepp_data`).
