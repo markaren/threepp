@@ -199,30 +199,80 @@ covering everything from geometries and loaders to full demo applications.
 
 ## How to build
 
-`threepp` comes bundled with all required core dependencies.
+`threepp` comes bundled with all required core dependencies. Use CMake for project
+configuration and building.
 
-Use CMake for project configuration and building.
-
-Do note that you may also use a system installation of GLFW3 if you want or have issues with the bundled setup by passing
-`-DTHREEPP_USE_EXTERNAL_GLFW=ON` to CMake.
-
-### Windows
+The project ships a `CMakePresets.json` holding the configurations that are actually
+built and tested in CI, so you don't have to assemble a flag list yourself:
 
 ```shell
+cmake --list-presets
+```
+
+| Preset       | What you get                                                          |
+|--------------|-----------------------------------------------------------------------|
+| `gl`         | OpenGL 3.3 backend, with examples, tests and the editor — start here  |
+| `gl-debug`   | as `gl`, unoptimised and with debug info                              |
+| `vulkan`     | the deferred Vulkan renderer (needs the Vulkan SDK)                   |
+| `vulkan-aaa` | as `vulkan`, plus the FSR 3.1 and DLSS upscalers (Windows)            |
+| `python`     | the pybind11 `threepp` module                                         |
+| `no-glfw`    | build check only: no GLFW frontend, and so no rendering at all        |
+| `wasm`       | Emscripten/WebGL2 examples (needs an activated emsdk)                 |
+
+```shell
+cmake --preset gl
+cmake --build --preset gl
+ctest --preset gl
+```
+
+Each preset builds into `build/<preset-name>`, so configurations don't clobber each other.
+The presets above deliberately leave the generator unset, so each platform uses its default.
+
+Local configurations of your own belong in `CMakeUserPresets.json`, which is untracked and
+whose presets can `inherit` from the ones above — this is where machine-specific paths and
+personal preferences go. To build with Ninja, for instance (CI does, but it needs `cl.exe`
+on `PATH` on Windows, so it is not the default here):
+
+```json
+{
+  "version": 3,
+  "configurePresets": [
+    { "name": "my-gl", "inherits": "gl", "generator": "Ninja" }
+  ]
+}
+```
+
+### Configuring by hand
+
+Presets are a convenience, not a requirement — and they don't apply when you consume
+`threepp` from another project via `FetchContent`/`add_subdirectory`. Everything a preset
+sets is an ordinary CMake option, so the classic invocation still works:
+
+```shell
+# Windows
 cmake . -A x64 -B build
 cmake --build build --config "Release"
 ```
 
-### Unix
-
 ```shell
+# Unix
 cmake . -B build -DCMAKE_BUILD_TYPE="Release"
 cmake --build build
 ```
 
+On a single-config generator (Ninja, Makefiles), a top-level build with no `CMAKE_BUILD_TYPE`
+given defaults to `Release` rather than to a build with no optimisation flags at all — so the
+flag above is explicit rather than required. Visual Studio picks the configuration at build
+time instead (`--config`), and on Windows MSVC supplies its own default. Consumed as a
+subproject, `threepp` leaves the build type entirely to the parent project.
+
+Do note that you may also use a system installation of GLFW3 if you want or have issues with the bundled setup by passing
+`-DTHREEPP_USE_EXTERNAL_GLFW=ON` to CMake.
+
 ### Building examples with Emscripten
 
-Pass to CMake:
+With an activated emsdk (`EMSDK` set in your environment), `cmake --preset wasm` does this
+for you. By hand, pass to CMake:
 ```shell
 -DCMAKE_TOOLCHAIN_FILE="[path to emscripten]\emsdk\upstream\emscripten\cmake\Modules\Platform\Emscripten.cmake"
 ```

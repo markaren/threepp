@@ -7,6 +7,11 @@ build-asan
 cmake-build-*
 compile_commands.json
 
+# CMakePresets.json is the project's, and is tracked. CMakeUserPresets.json is
+# yours: machine-specific paths, your own configurations. Presets in it may
+# `inherit` from the tracked ones. IDEs (CLion) write it for you.
+CMakeUserPresets.json
+
 # Python packaging / wheel-build artifacts (scikit-build-core)
 dist/
 wheelhouse/
