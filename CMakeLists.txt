@@ -109,7 +109,7 @@ if (THREEPP_BUILD_EXAMPLES OR THREEPP_BUILD_TESTS)
     FetchContent_Declare(
             threepp_data
             GIT_REPOSITORY https://github.com/markaren/threepp_data.git
-            GIT_TAG fa89638a1904d677307ebdf0bb01c2527738d271
+            GIT_TAG 4124491045dadc1e24bf465eaf142993d7dfe1f8
             GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(threepp_data)
