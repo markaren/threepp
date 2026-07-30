@@ -92,6 +92,9 @@ namespace threepp::editor {
             // Drive select/delete/undo through the UI code paths and exit
             // non-zero on failure. Diagnostic, not part of the test suite.
             bool selfTest = false;
+            // Press Play as soon as the scene is open. With --frames this
+            // makes a play session scriptable end to end: open, play, exit.
+            bool play = false;
             // Optional robot for the selftest's URDF pass.
             std::filesystem::path urdf;
             // Render the road-acceptance scene to this PNG and exit. Exists so

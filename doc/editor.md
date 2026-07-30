@@ -23,6 +23,7 @@ Command line:
 | `--vulkan` | use the Vulkan backend (OpenGL is the default and the supported path) |
 | `--urdf=<file>` | selftest only: also exercise the URDF import and round trip |
 | `--frames=N` | render N frames and exit — for smoke tests |
+| `--play` | press Play as soon as the scene is open — with `--frames`, a whole play session without a hand on the mouse |
 
 ---
 

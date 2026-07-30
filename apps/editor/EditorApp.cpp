@@ -386,6 +386,8 @@ int EditorApp::run() {
     if (options_.selfTest) return runSelfTest();
     if (!options_.screenshot.empty()) return runScreenshot();
 
+    if (options_.play) startPlay();
+
     if (options_.maxFrames > 0) {
         for (int i = 0; i < options_.maxFrames; ++i) {
             if (!canvas_.animateOnce([&] { frame(clock.getDelta()); })) break;
