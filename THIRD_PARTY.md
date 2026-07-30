@@ -79,10 +79,12 @@ reproduced here because the JSON conversion has no header to carry it:
 
 ---
 
-## Vendored source (`src/external/`)
+## Vendored source
 
 Each library's own license text is retained inside the vendored files; the paths below point at
-where it sits.
+where it sits. Everything under `src/external/` is compiled **into the threepp library itself**;
+Dear ImGui, under `examples/external/`, builds only the examples and the editor — a project
+consuming threepp as a library does not link it.
 
 | Library | License | Copyright | Notice location |
 |---|---|---|---|
@@ -96,14 +98,7 @@ where it sits.
 | [pugixml](src/external/pugixml/pugixml.hpp) | MIT | © 2006-2023 Arseny Kapoulkine; based on work © 2003 Kristen Wegner | end of file |
 | [quickhull](src/external/quickhull/quickhull.hpp) | BSD-style (single retain-notice condition) | © 2014-2015 Anatoliy V. Tomilov | file header |
 | [stb](src/external/stb) (`stb_image`, `stb_image_write`, `stb_truetype`) | your choice of public domain (Unlicense) or MIT | © Sean Barrett and contributors | end of each file |
-
-## Vendored source (`examples/external/`)
-
-| Library | License | Copyright | Notice location |
-|---|---|---|---|
-| [Dear ImGui](examples/external/imgui) v1.92.6 | MIT | © 2014-2024 Omar Cornut | [LICENSE.txt](examples/external/imgui/LICENSE.txt) |
-
-The threepp editor (`apps/editor`) also builds against Dear ImGui from this copy.
+| [Dear ImGui](examples/external/imgui) v1.92.6 — examples + editor only | MIT | © 2014-2024 Omar Cornut | [LICENSE.txt](examples/external/imgui/LICENSE.txt) |
 
 ---
 
