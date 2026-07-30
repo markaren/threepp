@@ -44,6 +44,15 @@ namespace threepp_py {
     // bind_objects.cpp.
     py::object user_data_string(const threepp::Object3D& o, const std::string& key);
 
+    // The write side of the same escape hatch, and the reason it exists: a
+    // GENERATOR script builds real scene content, and content that cannot carry
+    // `userData["physics"]` is content the play session will never simulate.
+    // Strings only, for the reason the reader gives — and an empty value ERASES
+    // the entry, which is how every editor config spells "off". Defined in
+    // bind_core.cpp and re-bound concretely in bind_objects.cpp, exactly like
+    // the reader.
+    void set_user_data_string(threepp::Object3D& o, const std::string& key, const std::string& value);
+
     void init_math(py::module_& m);
     void init_textures(py::module_& m);
     void init_core(py::module_& m);

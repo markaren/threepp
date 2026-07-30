@@ -100,6 +100,8 @@ namespace threepp_py {
                 // The lambda takes T& so pybind extracts a correct self pointer;
                 // the T& -> Object3D& upcast inside is plain C++ and safe.
                 .def("get_user_data", [](const T& o, const std::string& key) { return user_data_string(o, key); }, py::arg("key"))
+                .def("set_user_data", [](T& o, const std::string& key, const std::string& value) { set_user_data_string(o, key, value); },
+                     py::arg("key"), py::arg("value"))
                 .def("traverse", [](T& self, const std::function<void(py::object)>& cb) {
                     self.traverse([&cb](Object3D& o) { cb(py::cast(&o, py::return_value_policy::reference)); });
                 }, py::arg("callback"))

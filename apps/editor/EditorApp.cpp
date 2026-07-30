@@ -2,6 +2,7 @@
 #include "EditorApp.hpp"
 
 #include "EditorTheme.hpp"
+#include "ExampleScenes.hpp"
 #include "ImportFormats.hpp"
 #include "PanelLayout.hpp"
 
@@ -387,7 +388,9 @@ EditorApp::EditorApp(const Options& options)
     assetDir_ = settings_.sceneDir.empty() ? std::filesystem::current_path()
                                            : std::filesystem::path(settings_.sceneDir);
 
-    if (!options_.openOnStart.empty() && options_.openOnStart.extension() == ".json") {
+    if (!options_.example.empty()) {
+        openExample(options_.example);
+    } else if (!options_.openOnStart.empty() && options_.openOnStart.extension() == ".json") {
         openScene(options_.openOnStart);
     } else {
         buildTemplateScene();
@@ -645,6 +648,7 @@ void EditorApp::drawUi() {
                                   settings_.sceneDir, {".json"});
                 break;
             case PendingAction::OpenPath: openScene(pendingPath_); break;
+            case PendingAction::OpenExample: openExample(pendingExample_); break;
             case PendingAction::Quit: canvas_.close(); break;
             case PendingAction::None: break;
         }
@@ -784,6 +788,57 @@ void EditorApp::openScene(const std::filesystem::path& path) {
     settings_.addRecentFile(path);
     settings_.sceneDir = path.parent_path().string();
     log("opened " + path.filename().string());
+}
+
+void EditorApp::openExample(const std::string& slug) {
+
+    if (rejectWhilePlaying("Open Example")) return;
+
+    const auto* example = examples::find(slug);
+    const auto json = examples::json(slug);
+    if (!example || json.empty()) {
+        log("no example named \"" + slug + "\" ships with this build");
+        return;
+    }
+
+    selectObject(nullptr);
+    std::string error;
+    // The same loader path a file goes through — and the same listeners fire,
+    // so the markers, the overlays and (for a scene that had one) the robot
+    // rearticulation all happen exactly as they do for Open.
+    if (!document_.openJson(json, &error)) {
+        log("open example failed: " + error);
+        return;
+    }
+    commands_.clear();
+    logWarnings();
+    // Untitled and clean: it came from the binary, not from a file, so Save
+    // will ask where to put it rather than writing over anything.
+    frameDocument();
+    log("opened example \"" + std::string(example->label) + "\" - " + std::string(example->summary));
+}
+
+void EditorApp::frameDocument() {
+
+    Box3 box;
+    box.setFromObject(document_.scene());
+    if (box.isEmpty()) return;
+
+    const Vector3 centre = box.getCenter();
+    const Vector3 size = box.getSize();
+    const float radius = std::max({size.x, size.y, size.z}) * 0.5f;
+    const float distance =
+            std::max(radius / std::tan(math::degToRad(camera_.fov) * 0.5f), 1.f) * 1.15f;
+
+    // A three-quarter view from above, rather than "keep the current angle":
+    // there is no previous framing to preserve, the document was just replaced.
+    Vector3 direction(0.45f, 0.5f, 1.f);
+    direction.normalize();
+
+    setOrthographic(false);
+    setViewPreset(ViewPreset::User);
+    orbit_->target.copy(centre);
+    camera_.position.copy(centre).add(direction.multiplyScalar(distance));
 }
 
 void EditorApp::saveScene() {

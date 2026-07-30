@@ -56,6 +56,15 @@ namespace threepp::editor {
         void newScene();
 
         bool open(const std::filesystem::path& path, std::string* error = nullptr);
+
+        // The same parse, from text the caller already has — a scene compiled
+        // into the binary (see the editor's shipped examples), a document that
+        // came over a socket. Everything after the parse is open()'s: the same
+        // adopt-a-non-Scene-root rule, the same listeners, the same warnings.
+        // The document has NO PATH afterwards, so it is untitled and the first
+        // Save asks where to put it; that is the whole difference, and it is
+        // what stops "open the example" from meaning "overwrite the example".
+        bool openJson(const std::string& jsonText, std::string* error = nullptr);
         bool save(std::string* error = nullptr);
         bool saveAs(const std::filesystem::path& path, std::string* error = nullptr);
 

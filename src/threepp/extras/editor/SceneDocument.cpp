@@ -28,6 +28,20 @@ namespace {
         std::function<void()> attach_;
     };
 
+    // A document whose root is a Group or a Mesh is perfectly legal three.js
+    // JSON (ObjectExporter writes whatever root it is given). Adopt it as scene
+    // content rather than refusing to open it. Shared by both parse paths so
+    // "opened from a file" and "opened from text" cannot drift apart.
+    std::shared_ptr<Scene> asScene(std::shared_ptr<Object3D> parsed) {
+
+        if (auto scene = std::dynamic_pointer_cast<Scene>(parsed)) return scene;
+
+        auto scene = Scene::create();
+        scene->name = "Scene";
+        scene->add(std::move(parsed));
+        return scene;
+    }
+
 }// namespace
 
 
@@ -82,18 +96,40 @@ bool SceneDocument::open(const std::filesystem::path& path, std::string* error) 
         return false;
     }
 
-    auto scene = std::dynamic_pointer_cast<Scene>(parsed);
-    if (!scene) {
-        // A document whose root is a Group or a Mesh is perfectly legal three.js
-        // JSON (ObjectExporter writes whatever root it is given). Adopt it as
-        // scene content rather than refusing to open the file.
-        scene = Scene::create();
-        scene->name = "Scene";
-        scene->add(parsed);
+    path_ = path;
+    replaceScene(asScene(std::move(parsed)));
+    dirty_ = false;
+    return true;
+}
+
+bool SceneDocument::openJson(const std::string& jsonText, std::string* error) {
+
+    warnings_.clear();
+
+    if (jsonText.empty()) {
+        if (error) *error = "empty document";
+        return false;
     }
 
-    path_ = path;
-    replaceScene(std::move(scene));
+    ObjectLoader loader;
+    std::shared_ptr<Object3D> parsed;
+    try {
+        parsed = loader.parse(jsonText);
+    } catch (const std::exception& e) {
+        if (error) *error = e.what();
+        return false;
+    }
+
+    warnings_ = loader.warnings();
+
+    if (!parsed) {
+        if (error) *error = "could not parse the document";
+        return false;
+    }
+
+    // No path: this document came from nowhere on disk, and Save has to ask.
+    path_.clear();
+    replaceScene(asScene(std::move(parsed)));
     dirty_ = false;
     return true;
 }

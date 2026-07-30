@@ -83,6 +83,17 @@ if (TARGET threepp_editor_scripting)
             target_link_libraries(${name}
                     PRIVATE threepp_editor_scripting unofficial::omniverse-physx-sdk::sdk)
         endforeach ()
+
+        # The shipped example scene, loaded from the string compiled into the
+        # editor and played through the real sessions. It needs all three: the
+        # document (threepp_editor_examples), the script host, and the SDK whose
+        # world the drone's controller pushes against.
+        if (TARGET threepp_editor_examples)
+            add_test_executable(EditorExampleScene_test)
+            target_link_libraries(EditorExampleScene_test
+                    PRIVATE threepp_editor_examples threepp_editor_scripting
+                    unofficial::omniverse-physx-sdk::sdk)
+        endif ()
     endif ()
 else ()
     message(STATUS "editor scripting not built, skipping EditorScriptPlay_test..")

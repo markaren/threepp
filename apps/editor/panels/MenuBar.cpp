@@ -1,7 +1,8 @@
 
 #include "../EditorApp.hpp"
-#include "../ImportFormats.hpp"
 #include "../EditorTheme.hpp"
+#include "../ExampleScenes.hpp"
+#include "../ImportFormats.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/imgui/RendererSettings.hpp"
@@ -49,6 +50,26 @@ void EditorApp::drawMenuBar() {
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Clear")) settings_.clearRecentFiles();
+                ImGui::EndMenu();
+            }
+
+            // The scenes that ship inside the binary. Through the same
+            // unsaved-changes guard as Open, and to an UNTITLED document — an
+            // example is a starting point, not a file you can save over.
+            if (ImGui::BeginMenu("Open Example", editable)) {
+                for (const auto& example : examples::all()) {
+                    if (ImGui::MenuItem(std::string(example.label).c_str())) {
+                        if (document_.dirty()) {
+                            pendingAction_ = PendingAction::OpenExample;
+                            pendingExample_ = std::string(example.slug);
+                        } else {
+                            openExample(std::string(example.slug));
+                        }
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", std::string(example.summary).c_str());
+                    }
+                }
                 ImGui::EndMenu();
             }
 

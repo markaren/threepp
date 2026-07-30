@@ -111,7 +111,126 @@ extern "C" {
     void stbi_flip_vertically_on_write(int flag);
 }
 
+// The pixels the renderer just produced, written as a PNG. Shared by both
+// screenshot passes; the row order is the BACKEND's, not a constant (GL hands
+// back a bottom-up framebuffer and needs the flip, the Vulkan swapchain
+// readback is already top-down).
+bool EditorApp::shootTo(const std::filesystem::path& path) {
+
+    const auto size = canvas_.size();
+    bool bottomUpPixels = true;
+#ifdef THREEPP_WITH_VULKAN
+    if (dynamic_cast<VulkanRenderer*>(renderer_.get())) bottomUpPixels = false;
+#endif
+    stbi_flip_vertically_on_write(bottomUpPixels ? 1 : 0);
+
+    const auto pixels = renderer_->readRGBPixels();
+    const bool wrote =
+            pixels.size() >= static_cast<std::size_t>(size.width()) * size.height() * 3 &&
+            stbi_write_png(path.string().c_str(), size.width(), size.height(), 3,
+                           pixels.data(), size.width() * 3) != 0;
+    std::cout << "[screenshot] " << (wrote ? "wrote " : "FAILED to write ") << path.string()
+              << std::endl;
+    return wrote;
+}
+
+// --screenshot over WHATEVER IS OPEN: a scene file, or one of the shipped
+// examples. The pass below it builds a fixed spline scenario and is what
+// `--screenshot` alone still means; this one exists because a scene you cannot
+// photograph is a scene nobody will look at, and adding a bespoke code path per
+// scene is how a review harness stops being used.
+//
+// Everything about it is the command line's: --play decides whether it plays,
+// --seconds how long it settles, --shot where the camera stands. With no shots
+// it frames the document, which is at least an honest establishing view.
+int EditorApp::runSceneScreenshot() {
+
+    Clock clock;
+    const auto playFor = [&](float seconds) {
+        float elapsed = 0.f;
+        for (int i = 0; i < 20000 && elapsed < seconds; ++i) {
+            const float dt = clock.getDelta();
+            elapsed += std::max(dt, 0.f);
+            canvas_.animateOnce([&] { frame(dt); });
+        }
+    };
+
+    sensorCloudVisible_ = true;
+    // Editor furniture off: the grid and the origin axes are drawn ON the
+    // scene's own floor, and a shot meant to answer "does this arena read" must
+    // not be answered through a wireframe lying across it.
+    if (grid_) grid_->visible = false;
+    if (axes_) axes_->visible = false;
+    // Marker icons too. A hemisphere light and an ambient light both sit at the
+    // origin, so their billboards hang in mid-air in the middle of the arena —
+    // useful when you are authoring, noise when you are judging a picture. The
+    // point cloud stays: it is what the scene is DOING, not furniture.
+    if (markers_) markers_->visible = false;
+    // One frame before Play so the scene's own materials and shadow maps exist.
+    playFor(0.05f);
+    if (options_.play) startPlay();
+
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    // Hold the requested keys for the settle, then let go. The provider the app
+    // installed reads ImGui, and nothing is going to press a key here.
+    if (!options_.keys.empty()) {
+        const auto held = options_.keys;
+        scripting::keyStateProvider() = [held](const std::string& key) {
+            return std::find(held.begin(), held.end(), key) != held.end();
+        };
+    }
+#endif
+    playFor(std::max(options_.settle, 0.05f));
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    if (!options_.keys.empty()) {
+        scripting::keyStateProvider() = [](const std::string&) { return false; };
+        // Long enough for whatever was commanded to settle back to a hover.
+        playFor(1.2f);
+    }
+#endif
+
+    auto shots = options_.shots;
+    if (shots.empty()) {
+        frameDocument();
+        shots.push_back({camera_.position, orbit_->target, ""});
+    }
+
+    const auto sibling = [&](const std::string& suffix) {
+        if (suffix.empty()) return options_.screenshot;
+        auto path = options_.screenshot;
+        path.replace_filename(options_.screenshot.stem().string() + "_" + suffix +
+                              options_.screenshot.extension().string());
+        return path;
+    };
+
+    bool wrote = true;
+    for (const auto& shot : shots) {
+        camera_.position.copy(shot.position);
+        orbit_->target.copy(shot.target);
+        // Long enough for the point cloud to refill from the new pose and for
+        // any script-driven emissive to reach its current value.
+        playFor(0.35f);
+        wrote = shootTo(sibling(shot.label)) && wrote;
+    }
+
+    if (sensorCloud_ && sensorCloud_->geometry()) {
+        std::cout << "[screenshot] sensor cloud: "
+                  << sensorCloud_->geometry()->drawRange.count << " points" << std::endl;
+    }
+    if (isPlaying()) stopPlay();
+    return wrote ? 0 : 1;
+}
+
 int EditorApp::runScreenshot() {
+
+    // A document of its own to photograph beats the built-in scenario. The
+    // scenario is the DEFAULT, not the contract: `--screenshot=x.png` with
+    // nothing else on the line still builds the tubes and writes every sibling
+    // view, which is what the road/spline acceptance passes ask for.
+    if (!options_.example.empty() ||
+        (!options_.openOnStart.empty() && options_.openOnStart.extension() == ".json")) {
+        return runSceneScreenshot();
+    }
 
     Clock clock;
     const auto playFor = [&](float seconds) {
@@ -251,26 +370,7 @@ int EditorApp::runScreenshot() {
     orbit_->target.set(0.f, 0.f, 5.f);
     playFor(0.2f);
 
-    const auto size = canvas_.size();
-    // Row order is the backend's, not a constant. GL hands back a bottom-up
-    // framebuffer and needs the flip; the Vulkan swapchain readback is already
-    // top-down (VulkanRenderer::writeFramebuffer writes it straight out), so
-    // flipping there turned every --vulkan screenshot upside down.
-    bool bottomUpPixels = true;
-#ifdef THREEPP_WITH_VULKAN
-    if (dynamic_cast<VulkanRenderer*>(renderer_.get())) bottomUpPixels = false;
-#endif
-    stbi_flip_vertically_on_write(bottomUpPixels ? 1 : 0);
-    const auto shoot = [&](const std::filesystem::path& path) {
-        const auto pixels = renderer_->readRGBPixels();
-        const bool wrote =
-                pixels.size() >= static_cast<std::size_t>(size.width()) * size.height() * 3 &&
-                stbi_write_png(path.string().c_str(), size.width(), size.height(), 3,
-                               pixels.data(), size.width() * 3) != 0;
-        std::cout << "[screenshot] " << (wrote ? "wrote " : "FAILED to write ") << path.string()
-                  << std::endl;
-        return wrote;
-    };
+    const auto shoot = [&](const std::filesystem::path& path) { return shootTo(path); };
 
     // Two shots, because one cannot answer both questions. A road drawn under
     // its own collider overlay is a wall of lines — good for asking whether the
@@ -4177,6 +4277,80 @@ int EditorApp::runSelfTest() {
         step(2);
         check(!selectedInstance_, "a scene replace drops the instance index");
         check(instanceOutline_ == nullptr, "and the instance outline with it");
+    }
+
+    // --- File ▸ Open Example --------------------------------------------------
+    // The shipped scene, opened through the SAME call the menu makes, and then
+    // flown. tests/extras/EditorExampleScene_test.cpp asserts the document and
+    // the controller headlessly; what only this pass can see is the app half —
+    // the open path, the untitled document, and a play session that actually
+    // runs the sensors, because a vision sensor needs a renderer to scan with.
+    {
+        newScene();
+        step(2);
+        openExample("hover-arena");
+        step(2);
+
+        auto* drone = document_.scene().getObjectByName("Drone");
+        check(drone != nullptr, "Open Example loads Hover Arena");
+        check(!document_.hasPath(), "and leaves the document untitled");
+        check(!document_.dirty(), "and clean, so Save prompts for a path");
+        check(document_.scene().getObjectByName("Arena Floor") != nullptr,
+              "with the generator's committed output in it");
+
+        openExample("no-such-example");
+        step();
+        check(document_.scene().getObjectByName("Drone") != nullptr,
+              "an unknown example is a console line, not a lost scene");
+
+        if (drone) {
+            const float before = drone->position.y;
+            startPlay();
+            // stepFixed, not step: this asserts on where a controller SETTLES,
+            // which is accumulated simulated time (see the note above).
+            stepFixed(120);
+
+            auto* playing = document_.scene().getObjectByName("Drone");
+            check(playing != nullptr, "the drone survives Play");
+            if (playing) {
+                Vector3 world;
+                playing->getWorldPosition(world);
+                // It is holding a 2.2 m hover over a floor whose top is y = 0,
+                // hands off, on the noisy IMU. Anything outside this band is a
+                // controller that has stopped controlling.
+                check(world.y > 1.4f && world.y < 3.2f, "and holds its hover band");
+                check(std::abs(world.y - before) < 1.5f, "without drifting off its start height");
+            }
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+            check(scripts_ && scripts_->errorCount() == 0, "with no script errors");
+            check(scripts_ && scripts_->instanceCount() == 7, "and all seven scripts live");
+#endif
+            // The sensors are the other half of the example, and the only half
+            // the headless test cannot reach: a LIDAR scan needs a renderer.
+            std::size_t samples = 0;
+            std::size_t scans = 0;
+            if (sensors_) {
+                for (const auto& entry : sensors_->entries()) {
+                    samples += entry->samples;
+                    scans += entry->scans;
+                }
+            }
+            check(sensors_ && sensors_->sensorCount() == 2, "two sensors authored on the drone");
+            check(samples > 0, "the IMU is measuring");
+            // Rate-gated at 10 Hz off the physics accumulator, so wait rather
+            // than assume 120 frames covered a scan on this machine.
+            for (int i = 0; i < 200 && scans == 0; ++i) {
+                stepFixed(4);
+                scans = 0;
+                for (const auto& entry : sensors_->entries()) scans += entry->scans;
+            }
+            check(scans > 0, "and the LIDAR has scanned");
+
+            stopPlay();
+            step(2);
+            check(document_.scene().getObjectByName("Drone") != nullptr,
+                  "and Stop puts the authored scene back");
+        }
     }
 
     std::cout << "[selftest] " << (failed == 0 ? "ALL PASS" : "FAILED") << std::endl;

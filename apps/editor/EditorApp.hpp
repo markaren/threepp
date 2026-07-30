@@ -101,6 +101,29 @@ namespace threepp::editor {
             // a person — or a tool — can LOOK at what the geometry does before
             // anyone claims it works.
             std::filesystem::path screenshot;
+            // Open a shipped example on start, by slug (see ExampleScenes.hpp).
+            // Composes with --screenshot: with a document of its own to shoot,
+            // --screenshot skips its built-in spline scenario and photographs
+            // what is loaded, which is what makes an arbitrary scene reviewable
+            // without a new code path per scene.
+            std::string example;
+            // Camera placements for that pass, as position/target pairs. Empty
+            // means one automatically framed three-quarter view. On the command
+            // line: --shot=px,py,pz@tx,ty,tz, repeatable.
+            struct Shot {
+                Vector3 position;
+                Vector3 target;
+                // Suffix on the file name; the first shot writes the bare path.
+                std::string label;
+            };
+            std::vector<Shot> shots;
+            // Seconds of play before the first shot of that pass.
+            float settle = 3.f;
+            // Keys held for that settle, by name ("W", "SPACE", ...), then
+            // released before the shots. A scene whose whole point is that you
+            // drive it cannot be reviewed standing still, and pressing a key by
+            // hand is not something a capture script can do.
+            std::vector<std::string> keys;
         };
 
         // The standard editor viewpoints. `User` is any freely orbited angle;
@@ -245,6 +268,16 @@ namespace threepp::editor {
         void newScene();
         void buildTemplateScene();
         void openScene(const std::filesystem::path& path);
+        // Open one of the scenes compiled into the binary (ExampleScenes.hpp).
+        // Everything openScene does, minus the two things that are about a file:
+        // the document keeps no path (so Save prompts Save As) and the slug is
+        // not a recent file. Framing is added instead, because an example is
+        // something you asked to LOOK at.
+        void openExample(const std::string& slug);
+        // Put the viewport where the whole document is visible, from wherever
+        // the camera currently stands. focusSelected() with the scene as the
+        // subject; separate because it must work with nothing selected.
+        void frameDocument();
         void saveScene();
         void saveSceneAs(const std::filesystem::path& path);
         void importModel(const std::filesystem::path& path);
@@ -449,6 +482,12 @@ namespace threepp::editor {
         // --- misc ----------------------------------------------------------
         int runSelfTest();
         int runScreenshot();
+        // --screenshot over the document that is already open (a scene.json on
+        // the command line, or --example). Honours --play / --seconds / --shot.
+        int runSceneScreenshot();
+        // One PNG of whatever the renderer last produced, right way up for the
+        // backend in use.
+        bool shootTo(const std::filesystem::path& path);
         void handleShortcuts();
         void handleFileDrop(const std::vector<std::string>& paths);
         void log(const std::string& message);
@@ -667,10 +706,14 @@ namespace threepp::editor {
             New,
             Open,
             OpenPath,
+            OpenExample,
             Quit
         };
         PendingAction pendingAction_ = PendingAction::None;
         std::filesystem::path pendingPath_;
+        // Which shipped example File ▸ Open Example picked, held across the
+        // unsaved-changes modal exactly as pendingPath_ is.
+        std::string pendingExample_;
 
         // UI state
         float contentScale_ = 1.f;

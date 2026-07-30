@@ -52,6 +52,18 @@ namespace threepp_py {
         return py::none();
     }
 
+    // An empty value removes the entry rather than storing "", because that is
+    // what every editor config means by off: PhysicsConfig::write erases when
+    // the body is disabled, and a document with `physics=""` on it would be a
+    // document carrying a config nothing can decode.
+    void set_user_data_string(Object3D& o, const std::string& key, const std::string& value) {
+        if (value.empty()) {
+            o.userData.erase(key);
+            return;
+        }
+        o.userData[key] = value;
+    }
+
     void init_core(py::module_& m) {
 
         // ---- Object3D --------------------------------------------------------
@@ -133,6 +145,12 @@ namespace threepp_py {
                 .def("get_user_data", [](const Object3D& o, const std::string& key) { return user_data_string(o, key); }, py::arg("key"),
                      "String userData entry for `key`, or None when absent or not a string. "
                      "The editor's spline/physics/script configs live here as flat 'key=value;...' strings.")
+                .def("set_user_data", [](Object3D& o, const std::string& key, const std::string& value) { set_user_data_string(o, key, value); },
+                     py::arg("key"), py::arg("value"),
+                     "Set the string userData entry for `key`; an empty value removes it. "
+                     "This is how a GENERATOR script authors physics, a sensor or a script onto "
+                     "the content it builds - the same flat 'key=value;...' strings the "
+                     "inspector writes.")
                 // Pass each visited object by reference (Object3D is non-copyable)
                 // and let polymorphic_type_hook hand back the concrete subclass.
                 .def("traverse", [](Object3D& self, const std::function<void(py::object)>& cb) {

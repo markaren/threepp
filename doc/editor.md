@@ -24,6 +24,11 @@ Command line:
 | `--urdf=<file>` | selftest only: also exercise the URDF import and round trip |
 | `--frames=N` | render N frames and exit — for smoke tests |
 | `--play` | press Play as soon as the scene is open — with `--frames`, a whole play session without a hand on the mouse |
+| `--example=<slug>` | open a [shipped example](#shipped-examples) instead of the template scene (`hover-arena`) |
+| `--screenshot=<png>` | write PNGs and exit. With no document of its own it builds the spline-tube acceptance scenario and writes one file per view; **with a `scene.json` or `--example` it photographs that instead**, honouring the three flags below |
+| `--seconds=N` | how long that pass plays before the first shot (default 3) |
+| `--keys=W,A` | hold these keys for those seconds, then let go — a scene you are meant to *drive* cannot be reviewed standing still |
+| `--shot=px,py,pz@tx,ty,tz[:tag]` | camera position and target for that pass, repeatable; `tag` becomes a file-name suffix. None given frames the whole document |
 
 ---
 
@@ -130,6 +135,60 @@ base-colour map.
 **Play mode.** ▶ snapshots the scene and starts the runtimes, ⏸ suspends
 stepping, ⏹ stops them and restores the snapshot. The inspector is read-only
 while playing and a banner sits over the viewport.
+
+---
+
+## Shipped examples
+
+**File ▸ Open Example** lists the scenes that ship *inside the binary*. They go
+through the same unsaved-changes guard as Open and the same loader, and they
+arrive as an **untitled** document — no path, not dirty — so the first Save asks
+where to put it and nothing can write over an example in place. The JSON is
+embedded as source (`apps/editor/ExampleScenes.cpp`) for the reason
+`ViewportMarkers.cpp` embeds its SVG: the editor does not depend on finding
+asset files at runtime.
+
+### Hover Arena
+
+A physics drone you fly through five glowing goal rings, in a generated arena of
+pillars. It exists because every feature below is easy to *describe* and hard to
+believe until something is using all of them at once:
+
+| what you see | what it is |
+| --- | --- |
+| the drone holds a 2.2 m hover, hands off, with a slight wobble | [`fixed_update`](#the-physics-clock-fixed_update) applying `apply_force`/`apply_torque` through [`rigid_body_from_object`](#physics-from-a-script), on the physics clock so the gains mean the same thing on any machine |
+| it knows how high it is | a short downward [`threepp.editor.raycast`](#raycasts-threeppeditorraycast) with `ignore=self` — without the `ignore` the ray starts inside the hull and finds it at range zero |
+| **the wobble itself** | the attitude damping closes on the authored IMU's reading through [`imu_from_object`](#sensors-from-a-script) — noisy, seeded and rate-gated. It is not a controller that has never met a sensor, and the seed makes the same wobble happen on the next run |
+| the coloured cloud sweeping the floor | a VLP-16 [LIDAR](#joint-sensors) authored on the drone, drawn by the Sensor Point Cloud overlay (on by default) |
+| a ring turns amber and the beacon warms toward gold | each ring's hole is an invisible **[trigger volume](#trigger-volumes)**; its `on_trigger_enter` flashes the torus and calls the scoreboard's live instance through [`script_from_object`](#talking-to-other-scripts-threeppeditorscript_from_object). Take all five and every ring pulses |
+| the hull flashes when you clip a pillar | [`on_collision_enter`](#collisions-on_collision_enter--on_collision_exit), which nobody had to tick a box for |
+| the floor, walls, pillars and crates | a seeded **[generator](#generators-in-userdata)** on the scene root. Its committed output ships in the document — opening a scene never runs anything — and the rule travels with it, so Regenerate rebuilds the arena from `SEED` without moving the hand-placed course |
+
+Controls, which the drone's script also prints to the console at Play:
+
+| key | |
+| --- | --- |
+| `W` / `S` | forward / back |
+| `A` / `D` | yaw left / right |
+| `Q` / `E` | strafe left / right |
+| `R` / `F` | climb / descend — the stick sets a *height*, and lets go holding it |
+
+Remember that [a script reading the keyboard takes the plain keys](#the-script-editor)
+off the editor for the rest of the session; `Ctrl+S` and friends still work.
+
+**Without the PhysX build** there is no body to push, no ray to cast and no IMU
+to read, and those names are *absent* from `threepp.editor` rather than present
+and answering `None`. The scripts ask with `getattr` before reaching, so the
+scene loads, renders and plays; the drone sits where it was put, and the console
+says `Hover Arena needs the PhysX build to fly` once. **Without Python** nothing
+runs at all — the scene is still a scene, the scripts are still saved, and the
+Script section says which build would run them.
+
+The document is regenerable end to end: `apps/editor/tools/HoverArenaAuthor.cpp`
+builds it through the editor core, runs the generator exactly as **Regenerate**
+does, and writes both the `.json` and the translation unit that embeds it.
+`tests/extras/EditorExampleScene_test.cpp` loads that same embedded string and
+flies it headlessly, and `--selftest` opens it through the menu's own code path.
 
 ---
 
@@ -1345,6 +1404,21 @@ field.instance_matrix_needs_update()
 editor.add(field)
 ```
 
+**Generated content can carry configs.** `Object3D.set_user_data(key, value)` is
+the write side of the `get_user_data` escape hatch, and it is what makes a
+generated level *playable*: physics, a sensor, a script and an animation all ride
+in `userData` as one flat `key=value;…` string, so the generator writes exactly
+what the inspector would have.
+
+```python
+pillar.set_user_data("physics", "body=static;shape=box;friction=0.6;restitution=0.05")
+```
+
+Strings only, for the reason the reader gives — `userData` round-trips scalars
+and the editor's own configs are all one string — and an empty value **removes**
+the entry, which is how every config spells "off". Without this a generator could
+build a hundred pillars and not one of them would collide with anything.
+
 `editor.add(object, parent=None)` is the only authoring verb, and it returns what
 you passed so you can nest into it. It appends to a node that is **not in the
 document yet**; the editor attaches that node only once the script finishes. Two
@@ -1871,8 +1945,11 @@ their say.
   (read-with-default, or rewriting the assignment) rather than a wire-up.
 * **Generators are one-shot, and only from the UI.** A run appends nothing and
   replaces everything: re-running rebuilds the whole output, so there is no
-  incremental or partial regeneration, and no headless entry point — batch
-  generation over many seeds is not a one-liner yet. There is also no bake step,
+  incremental or partial regeneration, and no *general* headless entry point —
+  batch generation over many seeds is not a one-liner yet.
+  (`apps/editor/tools/HoverArenaAuthor.cpp` is one for exactly one scene, and it
+  is the shape a general one would take: set the sink, run the source, attach on
+  success.) There is also no bake step,
   so keeping generated content while dropping its rule means clearing the script
   and accepting that Clear takes the output with it.
 * **Splines are Catmull-Rom only.** One curve type, parameterised three ways —

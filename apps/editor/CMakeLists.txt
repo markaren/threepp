@@ -6,6 +6,14 @@ if (NOT TARGET imgui)
     add_subdirectory("${PROJECT_SOURCE_DIR}/examples/external" "${CMAKE_BINARY_DIR}/imgui")
 endif ()
 
+# The shipped example scenes, as JSON compiled into the binary. Its own library
+# so the headless test can load the same string File ▸ Open Example does without
+# linking the app; nothing in it depends on ImGui, PhysX or Python.
+add_library(threepp_editor_examples STATIC ExampleScenes.cpp)
+target_link_libraries(threepp_editor_examples PUBLIC threepp)
+target_include_directories(threepp_editor_examples PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(threepp_editor_examples PUBLIC cxx_std_20)
+
 add_executable(threepp_editor
         main.cpp
         EditorApp.cpp
@@ -27,7 +35,7 @@ add_executable(threepp_editor
         panels/Toolbar.cpp
 )
 
-target_link_libraries(threepp_editor PRIVATE threepp imgui::imgui)
+target_link_libraries(threepp_editor PRIVATE threepp imgui::imgui threepp_editor_examples)
 target_include_directories(threepp_editor PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Where "Edit in VS Code" points Pylance: the PEP 561 stub package that ships
@@ -170,6 +178,15 @@ if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
     endif ()
 
     target_link_libraries(threepp_editor PRIVATE threepp_editor_scripting)
+
+    # The program that authors the shipped Hover Arena document and writes
+    # ExampleScenes.cpp from it. Not part of the editor, and not a test: it is
+    # the scene's SOURCE, kept in the tree so the example can be changed by
+    # changing code rather than by hand-editing 60 KB of JSON. Gated here
+    # because the arena is a generator, and a generator needs the interpreter.
+    add_executable(hover_arena_author tools/HoverArenaAuthor.cpp)
+    target_link_libraries(hover_arena_author PRIVATE threepp threepp_editor_scripting)
+
     message(STATUS "threepp_editor: Python scripting enabled (${Python3_VERSION})")
 elseif (THREEPP_EDITOR_WITH_PYTHON)
     message(STATUS "threepp_editor: Python3 Development.Embed not found, scripting disabled")

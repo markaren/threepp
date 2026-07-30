@@ -5,6 +5,51 @@
 #include <cstring>
 #include <exception>
 #include <iostream>
+#include <optional>
+#include <sstream>
+#include <string>
+
+namespace {
+
+    // "px,py,pz@tx,ty,tz[:label]" — a camera placement for the --screenshot
+    // pass over a loaded scene. Deliberately terse: this is iterated on from a
+    // shell while looking at PNGs, not typed once.
+    std::optional<threepp::editor::EditorApp::Options::Shot> parseShot(const std::string& text) {
+
+        const auto at = text.find('@');
+        if (at == std::string::npos) return std::nullopt;
+
+        auto tail = text.substr(at + 1);
+        std::string label;
+        if (const auto colon = tail.find(':'); colon != std::string::npos) {
+            label = tail.substr(colon + 1);
+            tail = tail.substr(0, colon);
+        }
+
+        const auto triple = [](const std::string& s, threepp::Vector3& out) {
+            std::istringstream stream(s);
+            std::string part;
+            float values[3];
+            for (float& value : values) {
+                if (!std::getline(stream, part, ',')) return false;
+                try {
+                    value = std::stof(part);
+                } catch (const std::exception&) {
+                    return false;
+                }
+            }
+            out.set(values[0], values[1], values[2]);
+            return true;
+        };
+
+        threepp::editor::EditorApp::Options::Shot shot;
+        if (!triple(text.substr(0, at), shot.position)) return std::nullopt;
+        if (!triple(tail, shot.target)) return std::nullopt;
+        shot.label = std::move(label);
+        return shot;
+    }
+
+}// namespace
 
 int main(int argc, char** argv) {
 
@@ -24,6 +69,25 @@ int main(int argc, char** argv) {
             options.urdf = argument + 7;
         } else if (std::strncmp(argument, "--screenshot=", 13) == 0) {
             options.screenshot = argument + 13;
+        } else if (std::strncmp(argument, "--example=", 10) == 0) {
+            options.example = argument + 10;
+        } else if (std::strncmp(argument, "--seconds=", 10) == 0) {
+            options.settle = static_cast<float>(std::atof(argument + 10));
+        } else if (std::strncmp(argument, "--keys=", 7) == 0) {
+            std::istringstream held(argument + 7);
+            std::string key;
+            while (std::getline(held, key, ',')) {
+                if (!key.empty()) options.keys.push_back(key);
+            }
+        } else if (std::strncmp(argument, "--shot=", 7) == 0) {
+            // px,py,pz@tx,ty,tz[:label]
+            if (auto shot = parseShot(argument + 7)) {
+                options.shots.push_back(*shot);
+            } else {
+                std::cerr << "threepp editor: cannot read --shot=" << (argument + 7)
+                          << " (want px,py,pz@tx,ty,tz[:label])" << std::endl;
+                return 2;
+            }
         } else if (std::strcmp(argument, "--help") == 0 || std::strcmp(argument, "-h") == 0) {
             std::cout << "threepp editor\n"
                       << "  usage: threepp_editor [options] [scene.json]\n"
@@ -33,8 +97,16 @@ int main(int argc, char** argv) {
                       << "  --selftest       drive the editor through its acceptance passes,\n"
                       << "                   print each one and exit non-zero on a failure\n"
                       << "  --urdf=PATH      import a URDF on start\n"
-                      << "  --screenshot=PNG build the spline-tube scenario, play it, and write\n"
-                      << "                   PNG plus one _<view>.png per camera, then exit\n";
+                      << "  --example=SLUG   open a scene that ships in the binary (hover-arena)\n"
+                      << "  --screenshot=PNG with no scene of its own: build the spline-tube\n"
+                      << "                   scenario, play it and write PNG plus one _<view>.png\n"
+                      << "                   per camera. With a scene.json or --example, photograph\n"
+                      << "                   THAT instead, honouring --play/--seconds/--shot\n"
+                      << "  --seconds=N      how long to play before the first shot (default 3)\n"
+                      << "  --keys=W,A       hold these keys for that time, then let go, so a\n"
+                      << "                   scene you are meant to DRIVE can be photographed moving\n"
+                      << "  --shot=P@T[:tag] camera position@target for that pass, repeatable;\n"
+                      << "                   e.g. --shot=0,18,34@0,2,-2:wide. None = auto-framed\n";
             return 0;
         } else if (argument[0] != '-') {
             options.openOnStart = argument;
