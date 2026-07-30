@@ -265,6 +265,15 @@ namespace {
             c.shape = Coll::Shape::Capsule;// cylinder -> capsule (articulation links don't take raw cylinders)
             c.radius = utils::parseFloat(cylinder.attribute("radius").value());
             c.halfHeight = utils::parseFloat(cylinder.attribute("length").value()) * 0.5f;
+            // A URDF cylinder is Z-aligned; a threepp Capsule is Y-aligned. Fold the
+            // difference into the origin, so `origin` means "where to put a threepp
+            // capsule" and every consumer gets a collider that agrees with the spec —
+            // and with the VISUAL cylinder, which applyGeometry already rotates the
+            // same way. Without this a spec-conforming leg or strut collided across
+            // its own axis: ninety degrees wrong, in the right place, silently.
+            Matrix4 yToZ;
+            yToZ.makeRotationX(math::PI / 2);
+            c.origin.multiply(yToZ);
             return c;
         }
         if (const auto mesh = geometry.child("mesh")) {// trimesh -> ONE convex hull

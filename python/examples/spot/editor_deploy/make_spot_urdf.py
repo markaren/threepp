@@ -10,15 +10,14 @@ injected into every link, taken from spot_deploy's own constants — so the file
 plant the policy was trained against, and everything else (visual meshes, joint origins, axes,
 per-leg limits) is the original's, untouched.
 
-    python make_spot_urdf.py                       # -> ~/.cache/threepp/spot/spot_physics.urdf
-    python make_spot_urdf.py --collision-axis urdf # spec-correct cylinders (see below)
+    python make_spot_urdf.py    # -> <threepp_data>/urdf/spot/spot_physics.urdf
 
-COLLISION AXIS. A URDF <cylinder> is Z-aligned by spec. threepp's loader honours that for VISUAL
-cylinders (URDFLoader.cpp rotates them +PI/2 about X) but NOT for COLLISION ones: a collision
-cylinder becomes a threepp CapsuleGeometry, which is Y-aligned, with no correction. So today's
-threepp needs the leg capsules authored against Y (`--collision-axis threepp`, the default here) and
-any spec-conforming tool needs Z (`--collision-axis urdf`). When the loader is fixed, `urdf` becomes
-the correct default and this flag can go. The masses, radii and lengths are identical either way.
+The leg capsules are authored as SPEC-CONFORMING Z-aligned `<cylinder>` collisions, so the file is
+correct in any URDF tool. It briefly was not: threepp's loader used to rotate VISUAL cylinders into
+URDF's Z convention but not COLLISION ones, so this generator had a `--collision-axis` flag to
+author the legs against Y and cancel the bug out. The loader folds that rotation into the collision
+origin now (URDFLoader.cpp, parseCollisionShape), so the workaround is gone and there is one
+correct answer again.
 """
 import argparse
 import math
@@ -99,20 +98,18 @@ def main():
     spot = os.path.join(data_dir(), "urdf", "spot") if data_dir() else ""
     ap.add_argument("--urdf", default=os.path.join(spot, "model.urdf") if spot else "")
     ap.add_argument("--out", default=os.path.join(spot, "spot_physics.urdf") if spot else "")
-    ap.add_argument("--collision-axis", choices=("threepp", "urdf"), default="threepp")
     args = ap.parse_args()
     if not args.urdf or not os.path.exists(args.urdf):
         print(f"no Spot URDF at {args.urdf or '<threepp_data not found>'} - point "
               f"THREEPP_DATA_DIR at your threepp_data checkout (it ships urdf/spot/)")
         return 1
 
-    # A capsule's local axis before <origin rpy> is applied: Y in threepp, Z per URDF spec.
-    if args.collision_axis == "threepp":
-        along_y, along_z = (0.0, 0.0, 0.0), (HALF_PI, 0.0, 0.0)
-        uleg_rpy = (HALF_PI, ULEG_PITCH, 0.0)
-    else:
-        along_y, along_z = (-HALF_PI, 0.0, 0.0), (0.0, 0.0, 0.0)
-        uleg_rpy = (0.0, ULEG_PITCH, 0.0)
+    # A <cylinder> collision is Z-aligned, per the URDF spec. `rpy` therefore rotates the
+    # segment's Z axis onto where the segment actually runs: the hip capsule sideways (+-90 deg
+    # about X), the lower leg straight down (no rotation), the upper leg pitched slightly
+    # forward of straight down by the knee offset.
+    along_y, along_z = (-HALF_PI, 0.0, 0.0), (0.0, 0.0, 0.0)
+    uleg_rpy = (0.0, ULEG_PITCH, 0.0)
 
     tree = ET.parse(args.urdf)
     root = tree.getroot()
@@ -137,9 +134,11 @@ def main():
         ]
         for name, mass, radius, length, xyz, rpy in segs:
             link = links[name]
-            ia, ib, ic = _capsule_inertia(mass, radius, length)
-            # rotate the inertia's "along" axis with the capsule; diagonal either way
-            i3 = (ia, ib, ic) if rpy is along_y else (ib, ia, ic)
+            across, along, _ = _capsule_inertia(mass, radius, length)
+            # The "along" term belongs on the capsule's own axis, which for a URDF cylinder is
+            # local Z. (threepp's loader converts <mass> to a density and lets PhysX derive the
+            # real inertia from the shape, so this tensor is for other tools' benefit.)
+            i3 = (across, across, along)
             link.append(_inertial(mass, xyz, *i3))
             link.append(_collision(xyz, rpy, ("cylinder", radius, length)))
             touched.append(name)
@@ -178,8 +177,7 @@ def main():
     total = MASS["base"] + 4 * (MASS["hip"] + MASS["uleg"] + MASS["lleg"])
     print(f"[urdf] {args.out}")
     print(f"  {len(touched)} links given <inertial> + <collision>   total mass {total:.1f} kg")
-    print(f"  collision axis: {args.collision_axis}"
-          f"{'  (threepp capsules are Y-aligned; see the module docstring)' if args.collision_axis == 'threepp' else '  (spec-correct Z cylinders)'}")
+    print(f"  collisions: spec-conforming Z-aligned cylinders")
     print(f"  uleg pitch {ULEG_PITCH:+.6f} rad  (knee offset {tuple(KN)})")
     return 0
 

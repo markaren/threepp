@@ -187,7 +187,8 @@ measured forward speed per control tick; `spot_editor_trace_diag.txt` records th
 * The bundle is torch-free at run time; `export_bundle.py` and `ab_check.py` need torch.
 * `ab_check.py` needs a PhysX-enabled `threepp` native module. It lives in the main checkout's
   `python/threepp` as a build artifact; `THREEPP_DLL_DIR` points the DLL loader at it.
-* `make_spot_urdf.py --collision-axis` exists because threepp's URDF loader rotates **visual**
-  cylinders into URDF's Z convention but not **collision** ones (they become Y-aligned threepp
-  capsules). The default `threepp` matches today's loader; `urdf` is spec-correct for when that
-  is fixed. Masses, radii and lengths are identical either way.
+* The generated URDF's leg capsules are spec-conforming Z-aligned `<cylinder>` collisions, so the
+  file is correct in any URDF tool. `make_spot_urdf.py` briefly carried a `--collision-axis` flag
+  to author them against Y instead, cancelling out a loader bug that rotated **visual** cylinders
+  into URDF's Z convention but not **collision** ones; the loader folds that rotation into the
+  collision origin now, so the flag is gone and there is one correct answer.
