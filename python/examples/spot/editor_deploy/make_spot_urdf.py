@@ -32,8 +32,10 @@ _SPOT = os.path.dirname(_HERE)
 sys.path.insert(0, _SPOT)
 sys.path.insert(0, os.path.dirname(os.path.dirname(_SPOT)))
 
-# spot_deploy imports threepp, whose PhysX DLLs sit beside the built .pyd in the main checkout.
-_dll = os.environ.get("THREEPP_DLL_DIR", r"C:\dev\threepp\python\threepp")
+# spot_deploy imports threepp, whose PhysX DLLs sit beside the built .pyd in this checkout's
+# python/threepp. Usually already found; THREEPP_DLL_DIR is for a .pyd copied elsewhere.
+_dll = os.environ.get("THREEPP_DLL_DIR",
+                      os.path.join(os.path.dirname(os.path.dirname(_SPOT)), "threepp"))
 if os.path.isdir(_dll):
     os.add_dll_directory(_dll)
 

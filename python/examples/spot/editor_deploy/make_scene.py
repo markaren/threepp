@@ -27,7 +27,9 @@ _SPOT = os.path.dirname(_HERE)
 sys.path.insert(0, _SPOT)
 sys.path.insert(0, os.path.dirname(os.path.dirname(_SPOT)))
 
-_dll = os.environ.get("THREEPP_DLL_DIR", r"C:\dev\threepp\python\threepp")
+# See make_spot_urdf: usually a no-op, and THREEPP_DLL_DIR is for a .pyd copied out of its build.
+_dll = os.environ.get("THREEPP_DLL_DIR",
+                      os.path.join(os.path.dirname(os.path.dirname(_SPOT)), "threepp"))
 if os.path.isdir(_dll):
     os.add_dll_directory(_dll)
 

@@ -29,8 +29,11 @@ sys.path.insert(0, _SPOT)
 sys.path.insert(0, os.path.join(_SPOT, "scratch_distillation"))
 sys.path.insert(0, _HERE)
 
-# PhysX's DLLs sit beside the built .pyd in the main checkout.
-_dll = os.environ.get("THREEPP_DLL_DIR", r"C:\dev\threepp\python\threepp")
+# PhysX's DLLs sit beside the built .pyd, in this checkout's python/threepp. Normally they are
+# already found (the .pyd's own directory is searched), so this is a no-op; it matters when the
+# .pyd was copied somewhere else — a git worktree, say — and THREEPP_DLL_DIR points back at the
+# checkout that actually built it.
+_dll = os.environ.get("THREEPP_DLL_DIR", os.path.join(_PYROOT, "threepp"))
 if os.path.isdir(_dll):
     os.add_dll_directory(_dll)
 
