@@ -1,12 +1,18 @@
 // Play a trained Boston Dynamics Spot policy natively in C++ — no Python, no
 // torch — under either the OpenGL or the Vulkan renderer. The policy is loaded
-// from a flat .tpnn (exported by export_spot_policy.py) and run by SpotPolicy;
-// the scene/contract is SpotScene.hpp. This is the C++ twin of
-// python/examples/spot/spot_deploy.py.
+// from a flat .tpnn (checked in; regenerate with export_spot_policy.py) and run by
+// SpotPolicy; the robot and the observation contract are SpotScene.hpp. This is
+// the C++ twin of python/examples/spot/play_spot_steps.py.
+//
+// Both halves ship, so this runs from a fresh checkout with nothing downloaded:
+// the policy is spot_policy.tpnn beside this file, and the robot is
+// threepp_data's urdf/spot (which carries its own Boston Dynamics license — see
+// the NOTICE there).
 //
 //   spot_play                 # interactive window, OpenGL
 //   spot_play --vulkan        # interactive window, Vulkan (if built with it)
 //   spot_play --policy P.tpnn # use a specific exported policy
+//   spot_play --urdf R.urdf   # use a specific robot description
 //   spot_play --check 200     # headless smoke: walk forward, assert upright + moved
 //
 // DRIVE (body frame, +x fwd / +y left):  arrows move/strafe, N / M turn.
@@ -37,11 +43,14 @@ namespace {
 #endif
     }
 
-    // Where spot_deploy.py caches the URDF link visuals (link_models/*.obj).
-    std::string defaultAssetsDir() {
-        const char* home = std::getenv("USERPROFILE");
-        if (!home) home = std::getenv("HOME");
-        return home ? std::string(home) + "/.cache/threepp/spot" : std::string();
+    // The robot ships in threepp_data (urdf/spot), fetched by the build — nothing is
+    // downloaded at run time and no cache has to be warmed first.
+    std::string defaultUrdfPath() {
+#ifdef DATA_FOLDER
+        return std::string(DATA_FOLDER) + "/urdf/spot/spot_physics.urdf";
+#else
+        return "spot_physics.urdf";
+#endif
     }
 
     // Track currently-held keys so the per-frame command can poll them.
@@ -61,14 +70,14 @@ namespace {
     }
 
     // Headless: stand, walk forward N ticks, report base pose + uprightness.
-    int runCheck(const SpotPolicy& policy, int steps) {
+    int runCheck(const SpotPolicy& policy, const std::string& urdf, int steps) {
         PhysxWorld world(spotWorldSettings());
         auto ground = Mesh::create(BoxGeometry::create(80, 80, 1.0f), MeshStandardMaterial::create());
         ground->position.set(0, 0, -0.5f);
         world.addStatic(*ground);
 
-        SpotRobot spot = buildSpot(world);
-        SpotController ctrl(*spot.art, policy);
+        SpotRobot spot = loadSpot(world, urdf);
+        SpotController ctrl(spot, policy);
         ctrl.hold(world, 150);// stand up
         for (int i = 0; i < steps; ++i) ctrl.step(world, {1.0f, 0.0f, 0.0f});
 
@@ -87,15 +96,15 @@ namespace {
         return ok ? 0 : 1;
     }
 
-    int runInteractive(const SpotPolicy& policy, const std::string& assetsDir) {
+    int runInteractive(const SpotPolicy& policy, const std::string& urdf) {
 
         PhysxWorld world(spotWorldSettings());
         auto ground = Mesh::create(BoxGeometry::create(80, 80, 1.0f), MeshStandardMaterial::create());
         ground->position.set(0, 0, -0.5f);
         world.addStatic(*ground);
 
-        SpotRobot spot = buildSpot(world, 0.f, 0.f, assetsDir);// assetsDir -> render the URDF visuals
-        SpotController ctrl(*spot.art, policy);
+        SpotRobot spot = loadSpot(world, urdf);// the URDF's own <visual> meshes render
+        SpotController ctrl(spot, policy);
         ctrl.hold(world, 150);
 
         Canvas canvas(Canvas::Parameters().title("threepp - Spot (native C++ policy)").size(1100, 640).antialiasing(4));
@@ -211,13 +220,12 @@ namespace {
 
 int main(int argc, char** argv) {
     std::string policyPath = defaultPolicyPath();
-    std::string assetsDir = defaultAssetsDir();
+    std::string urdfPath = defaultUrdfPath();
     int checkSteps = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--policy" && i + 1 < argc) policyPath = argv[++i];
-        else if (a == "--assets" && i + 1 < argc) assetsDir = argv[++i];
-        else if (a == "--no-visuals") assetsDir.clear();
+        else if (a == "--urdf" && i + 1 < argc) urdfPath = argv[++i];
         else if (a == "--check") checkSteps = (i + 1 < argc) ? std::stoi(argv[++i]) : 200;
     }
 
@@ -226,11 +234,22 @@ int main(int argc, char** argv) {
         policy = SpotPolicy::load(policyPath);
     } catch (const std::exception& e) {
         std::cerr << "failed to load policy: " << e.what()
-                  << "\n(run export_spot_policy.py first, or pass --policy <path>)\n";
+                  << "\n(spot_policy.tpnn ships beside this example; regenerate with "
+                     "export_spot_policy.py, or pass --policy <path>)\n";
         return 1;
     }
     std::cout << "[spot] policy " << policyPath << "  in=" << policy.inputDim()
               << " out=" << policy.outputDim() << "\n";
+    std::cout << "[spot] robot  " << urdfPath << "\n";
 
-    return checkSteps > 0 ? runCheck(policy, checkSteps) : runInteractive(policy, assetsDir);
+    // The plant and the contract can disagree (a URDF missing a joint the policy
+    // drives, a policy exported for a different observation) — both throw with the
+    // mismatch named rather than driving the wrong leg or reading past an array.
+    try {
+        return checkSteps > 0 ? runCheck(policy, urdfPath, checkSteps)
+                              : runInteractive(policy, urdfPath);
+    } catch (const std::exception& e) {
+        std::cerr << "spot: " << e.what() << "\n";
+        return 1;
+    }
 }

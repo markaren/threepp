@@ -1,19 +1,27 @@
-// Native C++ port of the Spot flat-ground deploy scene + controller, mirroring
-// python/examples/spot/spot_deploy.py (build_spot + SpotController) so a trained
-// Isaac Lab Spot policy drives the robot with no Python/torch in the loop. The
-// policy forward pass is SpotPolicy (SpotPolicy.hpp); everything here is the
-// physics build and the exact observation/action contract around it.
+// Native C++ port of the Spot deploy scene + controller, mirroring
+// python/examples/spot/play_spot_steps.py (the plant, and the exact 96-d
+// observation/action contract around it) so a trained policy drives the robot with
+// no Python and no torch in the loop. The forward pass is SpotPolicy
+// (SpotPolicy.hpp); everything here is the physics build and the contract.
 //
-// World is Z-up (gravity (0,0,-9.81)), matching Isaac and the Python deploy.
-// The robot is a reduced-coordinate PhysX articulation of a box torso + 4 legs
-// (hip/upper/lower capsules), built from the SAME hardcoded kinematics and PD
-// gains as the Python version. No URDF/assets are needed — the primitive
-// colliders ARE the robot.
+// World is Z-up (gravity (0,0,-9.81)), matching the trainer and the Python deploy,
+// so the URDF's own frame is the world's frame and no rotation is applied.
 //
-// Joint ordering, the subtle part: the policy ("ISAAC" order) groups joints by
-// TYPE (all hip-x, then all hip-y, then all knee), while we add links per-leg
-// ("ADD" order). The two index maps below convert between them; the observation
-// is built in ISAAC order, the drive targets are written back in ADD order.
+// THE PLANT COMES FROM THE URDF. threepp_data ships urdf/spot with <collision> and
+// <inertial> on every link (see that directory's NOTICE), so the robot is
+// loadArticulation() over that file rather than kinematics retyped here. Before,
+// this header hardcoded the hip offsets, capsule sizes and link masses — a third
+// copy of numbers that also live in spot_deploy.build_spot and in the URDF, kept in
+// step by hand. One consequence worth naming: loadArticulation applies ONE set of
+// PD gains to every joint, so the per-joint effort ceiling the hand-built version
+// had (45 on the hips, 115 on the knees) is now 115 everywhere. It is a ceiling,
+// not a target, and the policy does not saturate the hips.
+//
+// JOINT ORDER, the subtle part. The policy speaks "ISAAC" order: joints grouped by
+// TYPE (all hip-x, then all hip-y, then all knee). A simulator's DOF order is its
+// own business — the hand-built version added links per leg and needed a fixed
+// permutation, while the URDF articulation happens to report them type-grouped —
+// so the mapping is resolved BY NAME at load time and no permutation is baked in.
 
 #ifndef THREEPP_EXAMPLES_SPOT_SCENE_HPP
 #define THREEPP_EXAMPLES_SPOT_SCENE_HPP
@@ -22,41 +30,54 @@
 
 #include "threepp/extras/physx/Articulation.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
-#include "threepp/geometries/BoxGeometry.hpp"
-#include "threepp/geometries/CapsuleGeometry.hpp"
-#include "threepp/loaders/OBJLoader.hpp"
-#include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/extras/physx/UrdfArticulation.hpp"
 #include "threepp/math/MathUtils.hpp"
-#include "threepp/math/Matrix4.hpp"
-#include "threepp/math/Quaternion.hpp"
-#include "threepp/math/Vector3.hpp"
-#include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace spot {
 
-    // ── Isaac Spot velocity-task contract ──────────────────────────────────
+    // ── The trained contract (python/examples/spot) ─────────────────────────
     constexpr float ACTION_SCALE = 0.2f;
-    constexpr float Z0 = 0.72f;// build height (straight-leg stance just above ground)
-    constexpr float GAIT_PERIOD = 0.5f;// phase-clock period (s); matches scratch_clock.GAIT_PERIOD
+    constexpr float Z0 = 0.72f;        // build height: straight legs, feet just above ground
+    constexpr float GAIT_PERIOD = 0.5f;// phase-clock period (s); = scratch_clock.GAIT_PERIOD
+    constexpr float STIFFNESS = 90.f;  // = scratch_env.STIFF_GAINS; Isaac's default 60 sags this plant
+    constexpr float DAMPING = 1.5f;
+    constexpr float MAX_FORCE = 115.f;// the knee's effort; uniform here (see the header note)
 
-    // Default joint pose in ISAAC (type-grouped) order: [hx×4, hy×4, kn×4].
-    // hips: left +0.1 / right -0.1; thighs: front 0.9 / hind 1.1; knees -1.5.
+    // The policy's joint order, by URDF joint name: type-grouped, four legs each.
+    constexpr std::array<const char*, 12> ISAAC_JOINTS{
+            "fl.hx", "fr.hx", "hl.hx", "hr.hx",
+            "fl.hy", "fr.hy", "hl.hy", "hr.hy",
+            "fl.kn", "fr.kn", "hl.kn", "hr.kn"};
+    // Default pose in that order. hips: left +0.1 / right -0.1; thighs: front 0.9 /
+    // hind 1.1; knees -1.5.
     constexpr std::array<float, 12> DEFAULT_Q{
             0.1f, -0.1f, 0.1f, -0.1f, 0.9f, 0.9f, 1.1f, 1.1f, -1.5f, -1.5f, -1.5f, -1.5f};
-    // ISAAC index i -> its slot in ADD (per-leg) order, and the inverse.
-    constexpr std::array<int, 12> ISAAC_TO_ADD{0, 3, 6, 9, 1, 4, 7, 10, 2, 5, 8, 11};
-    constexpr std::array<int, 12> ADD_TO_ISAAC{0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11};
 
-    // Body->world rotation from a quaternion [x,y,z,w] (row-major 3x3),
-    // matching spot_deploy.py:_quat_to_R exactly.
+    // ── The 2-D height scan (spot_terrain_env.PROBE_DX / PROBE_DY) ──────────
+    // A heading-relative grid: 9 forward offsets x 5 lateral, flattened FORWARD-MAJOR
+    // (index = fi*5 + dj), sampled as terrain height MINUS the height under the base.
+    // On flat ground every cell is 0, which is what the default height function gives;
+    // the grid is spelled out anyway because it is part of the observation contract,
+    // and a terrain scene only has to supply a height function.
+    constexpr std::array<float, 9> PROBE_DX{-0.35f, -0.15f, 0.05f, 0.2f, 0.35f, 0.5f, 0.7f, 0.9f, 1.1f};
+    constexpr std::array<float, 5> PROBE_DY{-0.30f, -0.15f, 0.0f, 0.15f, 0.30f};
+    constexpr int N_SCAN = 45;// 9 * 5
+    constexpr int OBS_DIM = 3 + 3 + 3 + 3 + 12 + 12 + 12 + 2 + 1 + N_SCAN;// = 96
+    constexpr int ACT_DIM = 12;
+
+    // Body->world rotation from a quaternion [x,y,z,w] (row-major 3x3), matching
+    // spot_deploy.py:_quat_to_R exactly.
     inline void quatToR(float x, float y, float z, float w, float R[3][3]) {
         R[0][0] = 1 - 2 * (y * y + z * z);
         R[0][1] = 2 * (x * y - z * w);
@@ -71,182 +92,95 @@ namespace spot {
 
     struct SpotRobot {
         std::unique_ptr<threepp::Articulation> art;
-        std::vector<std::shared_ptr<threepp::Mesh>> meshes;// torso, then per leg: hip, upper, lower
+        std::vector<std::shared_ptr<threepp::Mesh>> meshes;// add these to the scene
+        std::vector<std::string> jointNames;               // the articulation's own DOF order
+        std::array<int, 12> isaacToSim{};                  // policy index -> DOF index, resolved by name
     };
 
-    namespace detail {
-        // A capsule link mesh oriented so its (Y-aligned) axis points along `dir`,
-        // centred at `center`. Mirrors spot_deploy.py:_capsule; `volOut` is the
-        // capsule volume used to back out a density from a target mass.
-        inline std::shared_ptr<threepp::Mesh> capsule(float length, float radius,
-                                                      const threepp::Vector3& center,
-                                                      const threepp::Vector3& dir, int color, float& volOut) {
-            using namespace threepp;
-            auto mat = MeshStandardMaterial::create();
-            mat->color = Color(color);
-            auto m = Mesh::create(CapsuleGeometry::create(radius, length), mat);
-            m->position.copy(center);
-            Vector3 d;
-            d.copy(dir).normalize();
-            const Vector3 yax(0, 1, 0);
-            Vector3 axis;
-            axis.crossVectors(yax, d);
-            const float s = axis.length();
-            const float c = yax.dot(d);
-            if (s < 1e-8f) {
-                if (c < 0) m->rotation.z = math::PI;// antiparallel: flip
-            } else {
-                axis.normalize();
-                m->quaternion.setFromAxisAngle(axis, std::atan2(s, c));
-            }
-            volOut = math::PI * radius * radius * length + 4.f / 3.f * math::PI * radius * radius * radius;
-            return m;
+    // Build Spot from threepp_data's urdf/spot/spot_physics.urdf as a free-base PhysX
+    // articulation standing at (baseX, baseY). Throws if the file is unreadable or does
+    // not carry the 12 joints the policy drives.
+    inline SpotRobot loadSpot(threepp::PhysxWorld& world, const std::filesystem::path& urdf,
+                              float baseX = 0.f, float baseY = 0.f) {
+        threepp::URDFArticulationOptions opts;
+        opts.fixedBase = false;
+        opts.basePosition = threepp::Vector3(baseX, baseY, Z0);
+        opts.stiffness = STIFFNESS;
+        opts.damping = DAMPING;
+        opts.maxForce = MAX_FORCE;
+        opts.solverPositionIterations = 12;
+        opts.selfCollision = false;// the primitive colliders overlap at the joints
+        opts.renderVisuals = true; // parent each link's <visual> under its collider
+
+        auto result = threepp::loadArticulation(world, urdf, opts);
+        if (!result.articulation) {
+            throw std::runtime_error("loadSpot: could not build an articulation from " + urdf.string());
         }
-
-        // Parent a URDF visual mesh (link_models/<name>.obj, authored in the link
-        // frame) under its bound collider so it tracks the physics, then hide the
-        // collider's primitive. Mirrors spot_deploy.py:_attach_obj. Spot's visual
-        // origins are identity, so the link frame is (linkPos, no rotation). Missing
-        // OBJs are tolerated — the primitive collider just stays visible.
-        inline void attachObj(threepp::Mesh& collider, const threepp::Vector3& linkPos,
-                              const std::string& name, int color, const std::string& assetsDir) {
-            using namespace threepp;
-            std::shared_ptr<Group> grp;
-            try {
-                grp = OBJLoader().load(std::filesystem::path(assetsDir) / "link_models" / (name + ".obj"), false);
-            } catch (...) {
-                grp = nullptr;
-            }
-            if (!grp) return;
-
-            // local = collider_world^-1 · link_frame_world
-            Matrix4 cw, lf, invCw, loc;
-            cw.compose(collider.position, collider.quaternion, Vector3(1, 1, 1));
-            lf.compose(linkPos, Quaternion(), Vector3(1, 1, 1));
-            invCw.copy(cw).invert();
-            loc.multiplyMatrices(invCw, lf);
-            Vector3 p, s;
-            Quaternion q;
-            loc.decompose(p, q, s);
-            grp->position.copy(p);
-            grp->quaternion.copy(q);
-
-            grp->traverseType<Mesh>([&](Mesh& o) {
-                auto mat = MeshStandardMaterial::create();
-                mat->color = Color(color);
-                mat->roughness = 0.5f;
-                mat->metalness = 0.0f;
-                o.setMaterial(mat);
-                o.castShadow = true;
-            });
-            collider.add(grp);
-            if (auto m = collider.material()) m->visible = false;// hide the primitive; the OBJ renders
-            collider.castShadow = false;                        // only the OBJ casts (avoid a double shadow)
-        }
-    }// namespace detail
-
-    // Build Spot as a free-base PhysX articulation at (baseX, baseY). Mirrors
-    // spot_deploy.py:build_spot. When `assetsDir` is given (a folder with
-    // link_models/*.obj, e.g. ~/.cache/threepp/spot), each link's URDF visual mesh
-    // is parented under its collider so Spot renders as the real robot; otherwise
-    // the primitive colliders are shown and cast shadows.
-    inline SpotRobot buildSpot(threepp::PhysxWorld& world, float baseX = 0.f, float baseY = 0.f,
-                               const std::string& assetsDir = "") {
-        using namespace threepp;
-
-        // kinematics + stiff PD gains (stiffness 90, damping, effort) + link masses — stiffness 90
-        // matches scratch_env.STIFF_GAINS, the plant the clock base gait was trained on (Isaac default 60 sags)
-        constexpr float HIP_X = 0.29785f, HIP_Y = 0.055f, HY_Y = 0.1108f;
-        constexpr float MASS_BASE = 13.0f, MASS_HIP = 1.2f, MASS_ULEG = 2.0f, MASS_LLEG = 0.55f;
-        const float ox = baseX, oy = baseY;
 
         SpotRobot robot;
-        robot.art = std::make_unique<Articulation>(world, /*fixedBase*/ false,
-                                                   /*solverPositionIters*/ 12, /*disableSelfCollision*/ true);
-        Articulation& art = *robot.art;
+        robot.art = std::move(result.articulation);
+        robot.meshes = std::move(result.meshes);
+        robot.jointNames = std::move(result.jointNames);
 
-        auto bmat = MeshStandardMaterial::create();
-        bmat->color = Color(0xffc24d);
-        auto bm = Mesh::create(BoxGeometry::create(0.70f, 0.18f, 0.19f), bmat);
-        bm->position.set(ox, oy, Z0);
-        const float baseDensity = MASS_BASE / (0.70f * 0.18f * 0.19f);
-        ArticulationLink base = art.addLink(nullptr, *bm, baseDensity, {1, 0, 0}, {0, 0, 0},
-                                            false, 0, 0, 0, 0, 1e6f, 0, "revolute", 0.f, nullptr);
-        robot.meshes.push_back(bm);
-        if (!assetsDir.empty()) detail::attachObj(*bm, Vector3(ox, oy, Z0), "base", 0xffc24d, assetsDir);
-
-        // legs front/left signs (sx, sy); joints added per-leg => ADD order.
-        struct Leg {
-            const char* name;
-            float sx, sy;
-        };
-        const std::array<Leg, 4> legs{Leg{"fl", +1, +1}, Leg{"fr", +1, -1}, Leg{"hl", -1, +1}, Leg{"hr", -1, -1}};
-        for (const Leg& L : legs) {
-            const float sx = L.sx, sy = L.sy;
-            Vector3 Jhx(ox + sx * HIP_X, oy + sy * HIP_Y, Z0);
-            Vector3 Jhy;
-            Jhy.copy(Jhx).add(Vector3(0, sy * HY_Y, 0));
-            Vector3 Jkn;
-            Jkn.copy(Jhy).add(Vector3(0.025f, 0.f, -0.32f));
-            Vector3 Jft;
-            Jft.copy(Jkn).add(Vector3(0.f, 0.f, -0.34f));
-
-            const float hxDef = sy > 0 ? 0.1f : -0.1f;
-            const float hyDef = sx > 0 ? 0.9f : 1.1f;
-
-            float hv = 0, uv = 0, lv = 0;
-            Vector3 mid, dir;
-            auto hm = detail::capsule(0.06f, 0.045f, mid.addVectors(Jhx, Jhy).multiplyScalar(0.5f),
-                                      dir.subVectors(Jhy, Jhx), 0x303030, hv);
-            ArticulationLink hip = art.addLink(&base, *hm, MASS_HIP / hv, {1, 0, 0}, {Jhx.x, Jhx.y, Jhx.z},
-                                               true, -0.7854f, 0.7854f, 90.f, 1.5f, 45.f, hxDef, "revolute", 0.f, nullptr);
-
-            auto um = detail::capsule(0.30f, 0.045f, mid.addVectors(Jhy, Jkn).multiplyScalar(0.5f),
-                                      dir.subVectors(Jkn, Jhy), 0xffc24d, uv);
-            ArticulationLink uleg = art.addLink(&hip, *um, MASS_ULEG / uv, {0, 1, 0}, {Jhy.x, Jhy.y, Jhy.z},
-                                                true, -0.8988f, 2.295f, 90.f, 1.5f, 45.f, hyDef, "revolute", 0.f, nullptr);
-
-            auto lm = detail::capsule(0.30f, 0.028f, mid.addVectors(Jkn, Jft).multiplyScalar(0.5f),
-                                      dir.subVectors(Jft, Jkn), 0x303030, lv);
-            art.addLink(&uleg, *lm, MASS_LLEG / lv, {0, 1, 0}, {Jkn.x, Jkn.y, Jkn.z},
-                        true, -2.7929f, -0.247f, 90.f, 1.5f, 115.f, -1.5f, "revolute", 0.f, nullptr);
-
-            robot.meshes.push_back(hm);
-            robot.meshes.push_back(um);
-            robot.meshes.push_back(lm);
-
-            if (!assetsDir.empty()) {
-                detail::attachObj(*hm, Jhx, std::string(L.name) + ".hip", 0x303030, assetsDir);
-                detail::attachObj(*um, Jhy, std::string(L.name) + ".uleg", 0xffc24d, assetsDir);
-                detail::attachObj(*lm, Jkn, std::string(L.name) + ".lleg", 0x303030, assetsDir);
+        // Resolve the policy's joint order against whatever order this articulation
+        // reports. By NAME, never by position: the DOF order is the loader's business
+        // (fixed joints collapse, links are walked breadth-first) and a baked-in
+        // permutation is how a policy ends up driving the wrong leg.
+        for (int i = 0; i < 12; ++i) {
+            const auto it = std::find(robot.jointNames.begin(), robot.jointNames.end(),
+                                      std::string(ISAAC_JOINTS[i]));
+            if (it == robot.jointNames.end()) {
+                throw std::runtime_error("loadSpot: " + urdf.string() + " has no joint named '" +
+                                         ISAAC_JOINTS[i] + "'");
             }
+            robot.isaacToSim[i] = static_cast<int>(std::distance(robot.jointNames.begin(), it));
         }
-        art.finalize();
-        // Cast shadows from whatever is actually visible: a still-visible primitive
-        // collider (no OBJ attached) casts; where attachObj hid the primitive, the
-        // OBJ it parented is the caster instead. Robust to a missing assets folder.
-        for (auto& m : robot.meshes)
-            if (const auto mat = m->material(); mat && mat->visible) m->castShadow = true;
+        // Cast shadows from whatever actually renders. loadArticulation hides a
+        // collider's own primitive once it has parented that link's <visual> under it,
+        // so the visual is the caster there; a link with no visual keeps its primitive
+        // and casts from that. Walking the subtree covers both without asking which
+        // happened.
+        for (auto& m : robot.meshes) {
+            m->traverseType<threepp::Mesh>([](threepp::Mesh& o) {
+                const auto mat = o.material();
+                o.castShadow = !mat || mat->visible;
+            });
+        }
         return robot;
     }
 
-    // Builds the 50-d clock observation, runs the policy, applies joint targets.
-    // Mirrors python/examples/spot/scratch_distillation (SpotScratchEnv): the flat clock base gait.
+    // Builds the 96-d observation, runs the policy, writes joint targets.
+    // Mirrors play_spot_steps.v2_obs:
+    //   [lin_b(3) | ang_b(3) | proj_g(3) | cmd(3) | qpos(12) | qvel(12) | last_action(12)
+    //    | clock(2) | base_above(1) | scan(45)]
+    // velocities and gravity rotated into the body frame; qpos/qvel/action in the
+    // policy's order; clock = [sin, cos] of the gait phase.
     class SpotController {
     public:
-        SpotController(threepp::Articulation& art, const SpotPolicy& policy)
-            : art_(art), policy_(policy) { last_.fill(0.f); }
+        // `terrainHeight(x, y)` is the ground height under a world point — flat by
+        // default. A terrain scene passes its own and the scan follows; nothing else
+        // in the observation changes.
+        SpotController(const SpotRobot& robot, const SpotPolicy& policy,
+                       std::function<float(float, float)> terrainHeight = nullptr)
+            : art_(*robot.art), map_(robot.isaacToSim), policy_(policy),
+              height_(std::move(terrainHeight)) {
+            last_.fill(0.f);
+            if (policy_.inputDim() != OBS_DIM) {
+                throw std::runtime_error("SpotController: policy expects " +
+                                         std::to_string(policy_.inputDim()) + " observations, this contract is " +
+                                         std::to_string(OBS_DIM) + " - export the 96-d terrain policy");
+            }
+        }
 
-        // 50-d obs: [lin_b(3), ang_b(3), proj_g(3), cmd(3), qpos(12), qvel(12), last_action(12), clock(2)],
-        // velocities + gravity rotated into the body frame; qpos/qvel/action in ISAAC order; clock =
-        // [sin(2*pi*phi), cos(2*pi*phi)] — the gait phase the base policy was trained with (scratch_clock).
-        [[nodiscard]] std::array<float, 50> obs(const std::array<float, 3>& cmd) const {
-            const auto rs = art_.rootState();    // [px,py,pz, qx,qy,qz,qw]
+        [[nodiscard]] float heightAt(float x, float y) const { return height_ ? height_(x, y) : 0.f; }
+
+        [[nodiscard]] std::array<float, OBS_DIM> obs(const std::array<float, 3>& cmd) const {
+            const auto rs = art_.rootState();   // [px,py,pz, qx,qy,qz,qw]
             const auto rv = art_.rootVelocity();// [vx,vy,vz, wx,wy,wz]
             float R[3][3];
             quatToR(rs[3], rs[4], rs[5], rs[6], R);// body->world; R^T = world->body
 
-            std::array<float, 50> o{};
+            std::array<float, OBS_DIM> o{};
             int k = 0;
             for (int i = 0; i < 3; ++i) {// lin_b = R^T · v_lin
                 float s = 0;
@@ -261,14 +195,37 @@ namespace spot {
             for (int i = 0; i < 3; ++i) o[k++] = -R[2][i];// proj_g = R^T · (0,0,-1)
             for (int i = 0; i < 3; ++i) o[k++] = cmd[i];
 
-            const auto jp = art_.jointPositions();// ADD order
+            const auto jp = art_.jointPositions();// the articulation's own DOF order
             const auto jv = art_.jointVelocities();
-            for (int i = 0; i < 12; ++i) o[k++] = jp[ISAAC_TO_ADD[i]] - DEFAULT_Q[i];
-            for (int i = 0; i < 12; ++i) o[k++] = jv[ISAAC_TO_ADD[i]];
+            for (int i = 0; i < 12; ++i) o[k++] = jp[map_[i]] - DEFAULT_Q[i];
+            for (int i = 0; i < 12; ++i) o[k++] = jv[map_[i]];
             for (int i = 0; i < 12; ++i) o[k++] = last_[i];
-            const float ang = 2.0f * threepp::math::PI * phi_;// clock = [sin, cos] of the gait phase
+
+            const float ang = 2.0f * threepp::math::PI * phi_;
             o[k++] = std::sin(ang);
             o[k++] = std::cos(ang);
+
+            // Heading in the ground plane, from the body +x axis — the frame the scan
+            // grid is expressed in (spot_terrain_env.scan_xy).
+            float hx = R[0][0], hy = R[1][0];
+            const float n = std::hypot(hx, hy);
+            if (n > 1e-6f) {
+                hx /= n;
+                hy /= n;
+            } else {
+                hx = 1.f;
+                hy = 0.f;
+            }
+            const float h0 = heightAt(rs[0], rs[1]);
+            o[k++] = rs[2] - h0;// base height above the ground under it
+
+            for (const float gx : PROBE_DX) {// forward-major, as the trainer flattens it
+                for (const float gy : PROBE_DY) {
+                    const float px = rs[0] + gx * hx - gy * hy;
+                    const float py = rs[1] + gx * hy + gy * hx;
+                    o[k++] = std::clamp(heightAt(px, py) - h0, -1.f, 1.f);
+                }
+            }
             return o;
         }
 
@@ -276,26 +233,23 @@ namespace spot {
         // (10 × 0.002 substeps, matching Isaac's decimation).
         void step(threepp::PhysxWorld& world, const std::array<float, 3>& cmd) {
             const auto o = obs(cmd);
-            const std::vector<float> a = policy_.act(o.data(), o.size());// 12, ISAAC order
+            const std::vector<float> a = policy_.act(o.data(), o.size());// 12, policy order
             for (int i = 0; i < 12; ++i) last_[i] = a[i];
-            float tgt[12];// drive targets in ADD order
-            for (int i = 0; i < 12; ++i) {
-                const int j = ADD_TO_ISAAC[i];
-                tgt[i] = DEFAULT_Q[j] + ACTION_SCALE * a[j];
-            }
-            art_.setDriveTargets(tgt, 12);
+            std::vector<float> tgt(art_.numDof(), 0.f);
+            for (int i = 0; i < 12; ++i) tgt[map_[i]] = DEFAULT_Q[i] + ACTION_SCALE * a[i];
+            art_.setDriveTargets(tgt.data(), tgt.size());
             world.step(0.02f);
-            // advance the phase clock AFTER the substep so phi aligns with the NEXT obs (matches training)
+            // advance the phase clock AFTER the step so phi aligns with the NEXT obs
             phi_ = std::fmod(phi_ + 0.02f / GAIT_PERIOD, 1.0f);
         }
 
         // Hold the default stand pose for n ticks (settle on spawn).
         void hold(threepp::PhysxWorld& world, int n) {
-            phi_ = 0.f;// reset the phase clock; the settle does NOT advance it (matches training reset)
-            float tgt[12];
-            for (int i = 0; i < 12; ++i) tgt[i] = DEFAULT_Q[ADD_TO_ISAAC[i]];
+            phi_ = 0.f;// the settle does NOT advance the clock (matches the training reset)
+            std::vector<float> tgt(art_.numDof(), 0.f);
+            for (int i = 0; i < 12; ++i) tgt[map_[i]] = DEFAULT_Q[i];
             for (int k = 0; k < n; ++k) {
-                art_.setDriveTargets(tgt, 12);
+                art_.setDriveTargets(tgt.data(), tgt.size());
                 world.step(0.02f);
             }
         }
@@ -304,9 +258,11 @@ namespace spot {
 
     private:
         threepp::Articulation& art_;
+        std::array<int, 12> map_;// policy index -> DOF index
         const SpotPolicy& policy_;
+        std::function<float(float, float)> height_;
         std::array<float, 12> last_{};
-        float phi_ = 0.f;// gait phase clock in [0,1); advanced +DT/GAIT_PERIOD each step()
+        float phi_ = 0.f;// gait phase in [0,1), advanced +DT/GAIT_PERIOD each step()
     };
 
 }// namespace spot

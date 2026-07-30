@@ -1,4 +1,12 @@
-# Trained/exported policy artifacts — derivatives of the Isaac Lab Spot walker
-# (NVIDIA Isaac Sim license); regenerate locally, never commit.
+# Exported policy artifacts. spot_policy.tpnn and spot_policy_ref.bin ARE checked in:
+# they are exported from python/examples/spot/spot_steps.pt, which is our own trained
+# policy — the Isaac Lab walker was a reward oracle during that training, not a parent
+# of these weights — and which is itself in the repo. The demo is worth nothing without
+# a policy to run, so it ships with one.
+#
+# Anything exported from an Isaac-derived checkpoint is a different matter and must not
+# be committed: export it under another name and these rules keep ignoring it.
 *.tpnn
 *_ref.bin
+!spot_policy.tpnn
+!spot_policy_ref.bin

@@ -172,11 +172,15 @@ def write_ref(path, module, layers, in_dim, out_dim, n, norm=None, seed=0):
 
 
 def main():
-    default_pt = os.path.join(_REPO, "python", "examples", "spot", "scratch_distillation",
-                              "scratch_flat_best.pt")
+    # spot_steps.pt is the checkpoint that is IN THE REPO: the 96-d terrain policy, trained here
+    # (the Isaac walker was a reward oracle during training, not a parent of these weights), so
+    # its exports can be version-controlled. The old default named
+    # scratch_distillation/scratch_flat_best.pt, which train_scratch.py does not write - it saves
+    # scratch_flat.pt - so `python export_spot_policy.py` could not run at all.
+    default_pt = os.path.join(_REPO, "python", "examples", "spot", "spot_steps.pt")
     ap = argparse.ArgumentParser()
     ap.add_argument("policy", nargs="?", default=default_pt,
-                    help="input .pt (TorchScript or save_policy checkpoint; default scratch_flat_best.pt)")
+                    help="input .pt (TorchScript or save_policy checkpoint; default spot_steps.pt)")
     ap.add_argument("-o", "--out-dir", default=_HERE)
     ap.add_argument("--ref-n", type=int, default=64, help="number of golden obs/action pairs")
     args = ap.parse_args()
