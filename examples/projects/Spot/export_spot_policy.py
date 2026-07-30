@@ -174,9 +174,13 @@ def write_ref(path, module, layers, in_dim, out_dim, n, norm=None, seed=0):
 def main():
     # spot_steps.pt is the checkpoint that is IN THE REPO: the 96-d terrain policy, trained here
     # (the Isaac walker was a reward oracle during training, not a parent of these weights), so
-    # its exports can be version-controlled. The old default named
-    # scratch_distillation/scratch_flat_best.pt, which train_scratch.py does not write - it saves
-    # scratch_flat.pt - so `python export_spot_policy.py` could not run at all.
+    # its exports can be version-controlled and this example ships one.
+    #
+    # The previous default was scratch_distillation/scratch_flat_best.pt — the from-scratch flat
+    # walker spot_steps.pt was warm-started from. That is the honest lineage parent, but it lives
+    # only on the machine that trained it: it is not in the repo, and train_scratch.py writes it
+    # only when you pass --out (its default is scratch_flat.pt). Pass it explicitly if you have
+    # it; the default has to be something a fresh checkout actually has.
     default_pt = os.path.join(_REPO, "python", "examples", "spot", "spot_steps.pt")
     ap = argparse.ArgumentParser()
     ap.add_argument("policy", nargs="?", default=default_pt,
