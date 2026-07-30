@@ -120,10 +120,14 @@ class PolicyDrive:
     settle = 100         # control ticks of default-pose hold before the policy takes over
     log = ""             # CSV path for the trace (empty = no file)
     chase = ""           # name of a camera to trail behind the robot (empty = leave cameras alone)
-    # An authored command sequence, because a play session CANNOT be steered by hand: the
-    # inspector is read-only while playing and the script host binds no keyboard. So the
-    # steering envelope is demonstrated by driving through it on a timer.
-    route = ""           # "secs:vx,vy,wz;..."  empty = hold (vx, vy, wz) forever
+    # Teleop. With keys on, the keyboard is authoritative and nothing held means STAND STILL
+    # (which the policy was trained to do on command) — so the robot never wanders off on its
+    # own. Turn it off and the `route` below drives instead.
+    #   forward  UP / KP8 / W        back      DOWN / KP2 / S
+    #   strafe L LEFT / KP4 / A      strafe R  RIGHT / KP6 / D
+    #   turn L   N / KP7 / Q         turn R    M / KP9 / E
+    keys = 1             # 1 = drive it with the keyboard, 0 = follow `route`
+    route = ""           # "secs:vx,vy,wz|..."  used when keys=0; empty = hold (vx, vy, wz)
 
     def start(self, obj, scene):
         self.obj = obj
@@ -152,6 +156,9 @@ class PolicyDrive:
         self.adapter = adapter
         self.bundle_obj = b
         self.plan = _parse_route(self.route)
+        # Older editor builds have no input binding at all; a script that asks politely still
+        # runs there, just uncommanded.
+        self.keydown = getattr(editor, "is_key_down", None)
         self.cam = None
         if self.chase:
             self.cam = scene.get_object_by_name(self.chase)
@@ -168,6 +175,9 @@ class PolicyDrive:
             f"policy order     {b.joints}",
             f"policy->sim map  {list(self.ctrl.p2s)}",
             f"command          vx={self.vx} vy={self.vy} wz={self.wz}, settle={self.settle} ticks",
+            f"input            is_key_down {'bound' if self.keydown else 'MISSING (older build)'}"
+            f", teleop {'on' if int(self.keys) else 'off'}"
+            f", probe W={self.keydown('W') if self.keydown else 'n/a'}",
             f"plant wanted     gains={want.get('gains', {}).get('stiffness')}/"
             f"{want.get('gains', {}).get('damping')} physics_dt={want.get('physics_dt')} "
             f"iters={want.get('solver_position_iterations')}",
@@ -184,8 +194,25 @@ class PolicyDrive:
             self.csv = open(self.log, "w", buffering=1)
             self.csv.write("tick,t,x,y,z,upright,height,vx_cmd,vx_meas\n")
 
+    def teleop(self):
+        """Keyboard command, or None when this build/session offers no input at all."""
+        k = self.keydown
+        if k is None:
+            return None
+        held = lambda *names: any(k(n) for n in names)
+        vx = (1.2 if held("UP", "KP8", "W") else 0.0) - (0.8 if held("DOWN", "KP2", "S") else 0.0)
+        vy = (0.6 if held("LEFT", "KP4", "A") else 0.0) - (0.6 if held("RIGHT", "KP6", "D") else 0.0)
+        wz = (1.0 if held("N", "KP7", "Q") else 0.0) - (1.0 if held("M", "KP9", "E") else 0.0)
+        return vx, vy, wz
+
     def command(self):
-        """The velocity command for right now: the route's current segment, or the fixed one."""
+        """The velocity command for right now: the keyboard, the route's segment, or the fixed one."""
+        if int(self.keys):
+            cmd = self.teleop()
+            # Nothing held is a real command (stand), not "no opinion" — a teleop robot that
+            # keeps walking when you let go is a runaway.
+            if cmd is not None:
+                return cmd
         if not self.plan:
             return self.vx, self.vy, self.wz
         t = self.t

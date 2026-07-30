@@ -55,6 +55,8 @@ def main():
     ap.add_argument("--settle", type=int, default=100)
     # A play session cannot be steered by hand (the inspector is read-only while playing and
     # scripts have no input access), so the command sequence is authored instead.
+    ap.add_argument("--keys", type=int, default=1,
+                    help="1 = drive it with the keyboard (arrows/WASD), 0 = follow --route")
     # '|'-separated, not ';': scriptFields is itself a flat key=value; string.
     ap.add_argument("--route", default="5:0.8,0,0|4:0.5,0,0.5|4:0.8,0,0|3:0,0.5,0|4:1.2,0,0",
                     help="seconds:vx,vy,wz segments, '|'-separated. Empty = hold vx forever.")
@@ -76,7 +78,7 @@ def main():
                     f"maxforce={STIFF_GAINS['kn'][2]:g};selfcollision=0;iterations=12;density=1000")
     script_fields = (f"bundle={fwd(args.bundle)};vx={args.vx:g};vy=0;wz=0;"
                      f"settle={args.settle};log={fwd(args.log)};"
-                     f"chase=Chase;route={args.route}")
+                     f"chase=Chase;keys={args.keys};route={args.route}")
 
     doc = {
         "metadata": {"version": 4.5, "type": "Object", "generator": "make_scene.py"},
@@ -110,9 +112,15 @@ def main():
                  "shadow": {"mapSize": [2048, 2048], "bias": -0.0005,
                             "camera": {"left": -18, "right": 18, "top": 18, "bottom": -18,
                                        "near": 0.5, "far": 60}}},
+                # A HemisphereLight's POSITION is its sky direction, not a location: the renderer
+                # takes the normalized world position as the axis to blend sky->ground along
+                # (Lights.cpp, setFromMatrixPosition + normalize). At the origin that axis is
+                # zero, every surface gets the flat 50/50 average instead of full sky, and the
+                # scene reads as dark. threepp's constructor defaults it to (0,1,0) for exactly
+                # this reason - authoring an identity matrix throws that default away.
                 {"uuid": uid("hemi"), "type": "HemisphereLight", "name": "Sky",
                  "color": 0xd0e4f7, "groundColor": 0x4a5a6a, "intensity": 1.15,
-                 "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]},
+                 "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1]},
                 # Driven by the script (its `chase` parameter): select it and the camera dock
                 # shows the trot from behind. Nothing follows it otherwise — a camera in a
                 # document is just an object.

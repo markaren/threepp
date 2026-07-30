@@ -136,7 +136,7 @@
           1,
           0,
           0,
-          0,
+          1,
           0,
           1
         ]
@@ -195,7 +195,7 @@
           "jointValues": "0.1,0.9,-1.5,-0.1,0.9,-1.5,0.1,1.1,-1.5,-0.1,1.1,-1.5",
           "articulation": "fixedbase=0;stiffness=90;damping=1.5;maxforce=115;selfcollision=0;iterations=12;density=1000",
           "script": "C:/dev/threepp-spot-editor/python/examples/spot/editor_deploy/spot_editor_script.py",
-          "scriptFields": "bundle=C:/dev/threepp-spot-editor/python/examples/spot/editor_deploy/bundle_spot_steps;vx=0.8;vy=0;wz=0;settle=100;log=C:/dev/threepp-spot-editor/python/examples/spot/editor_deploy/spot_editor_trace.csv;chase=Chase;route=5:0.8,0,0|4:0.5,0,0.5|4:0.8,0,0|3:0,0.5,0|4:1.2,0,0"
+          "scriptFields": "bundle=C:/dev/threepp-spot-editor/python/examples/spot/editor_deploy/bundle_spot_steps;vx=0.8;vy=0;wz=0;settle=100;log=C:/dev/threepp-spot-editor/python/examples/spot/editor_deploy/spot_editor_trace.csv;chase=Chase;keys=1;route=5:0.8,0,0|4:0.5,0,0.5|4:0.8,0,0|3:0,0.5,0|4:1.2,0,0"
         }
       }
     ]

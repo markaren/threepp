@@ -100,16 +100,22 @@ Worth naming as real editor gaps rather than glossing them:
 3. **The physics rate is not authorable.** `PhysicsPlaySession` is constructed with defaults
    (1/60, no TGS/PCM); a policy trained at 0.005 with TGS+PCM has no way to ask for its own
    contact model. It worked here; it will not always.
-4. **Scripts get no input.** The script host binds math/core/objects/cameras/lights/robot but
-   nothing for the keyboard or mouse, and the inspector is read-only during Play — so a play
-   session cannot be driven interactively at all. Hence `route`. A bound `is_key_down` (or
-   writable inspector fields during Play) would turn this scene into a teleop demo.
+4. **Input is a poll, and only a poll.** `threepp.editor.is_key_down` now exists (that is what
+   makes teleop above work), but there is no key-press event, no mouse, and inspector parameters
+   are still read-only during Play — so a live *value* (a speed slider you drag while it walks)
+   has no path yet.
 
-And one authoring trap worth knowing, because it is silent: a lighting mistake reads as "the
-renderer is broken". A `DirectionalLight`'s shadow camera is an **ortho box defaulting to ±5 m**,
-so a large `receiveShadow` ground sampled outside that box comes back shadowed and the whole scene
-looks dark. `make_scene.py` keeps the ground at 120 m and authors the shadow camera (±18 m,
-2048² map) explicitly.
+And two authoring traps worth knowing, because both are silent and both read as "the renderer is
+broken" rather than "the scene is wrong":
+
+* A `DirectionalLight`'s shadow camera is an **ortho box defaulting to ±5 m**. A large
+  `receiveShadow` ground sampled outside that box comes back shadowed, so the scene goes dark.
+  `make_scene.py` keeps the ground at 120 m and authors the shadow camera (±18 m, 2048² map).
+* A `HemisphereLight`'s **position is its sky direction, not a location** — the renderer
+  normalizes the world position to get the axis it blends sky→ground along. At the origin that
+  axis is zero, every surface gets the flat 50/50 average instead of full sky, and the scene goes
+  dark. threepp's constructor defaults it to (0,1,0); authoring an identity `matrix` in a
+  hand-written document throws that default away.
 
 ## Watch it
 
@@ -118,11 +124,22 @@ threepp_editor spot_policy.json           # then press Play
 threepp_editor spot_policy.json --play --frames=1400   # headless; writes spot_editor_trace.csv
 ```
 
-**A play session cannot be steered by hand.** The inspector is read-only while playing, and the
-script host binds no keyboard or mouse — so `vx`/`vy`/`wz` are set *before* Play, not during it.
-The command sequence is therefore authored: the `route` parameter is `secs:vx,vy,wz` segments
-(`|`-separated, because `scriptFields` is itself a `;`-delimited format), and the default route
-drives the whole steering envelope in one session. Measured, in the editor:
+**Drive it with the keyboard** (`keys=1`, the default), via `threepp.editor.is_key_down`:
+
+```
+forward  UP / KP8 / W        back      DOWN / KP2 / S
+strafe L LEFT / KP4 / A      strafe R  RIGHT / KP6 / D
+turn L   N / KP7 / Q         turn R    M / KP9 / E
+```
+
+Nothing held is a real command — *stand still* — which the policy was trained to do, so it never
+runs away when you let go. (Verified headlessly: commanded zero, it drifts 9 cm in 6.7 s and stays
+upright.) Keys answer False while a text field has focus, so steering can't eat a rename.
+
+Set `keys=0` and an authored **route** drives instead — `secs:vx,vy,wz` segments, `|`-separated
+because `scriptFields` is itself a `;`-delimited format. Note that a script parameter is set
+*before* Play (the inspector is read-only while playing), which is why the route exists at all.
+Measured, in the editor:
 
 | segment | command | measured forward |
 |---|---|---|
