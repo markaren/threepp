@@ -507,10 +507,12 @@ class Spinner:
         pass
 ```
 
-All three methods are optional; missing ones are skipped. In a file, the class is
-the one whose name matches it (`spinner.py` → `Spinner`, case-insensitively), or
-— failing that — the single class in the file that defines `update()`. Anything
-else is reported rather than guessed at.
+Every method is optional; missing ones are skipped. There is a fourth,
+`fixed_update(self, dt)`, which runs on the *physics* clock rather than on the
+frame — see [The physics clock](#the-physics-clock-fixed_update). In a file, the
+class is the one whose name matches it (`spinner.py` → `Spinner`,
+case-insensitively), or — failing that — the single class in the file that
+defines `update()`. Anything else is reported rather than guessed at.
 
 `start` may also ask for the scene — `def start(self, obj, scene):` — and the
 editor passes it only when the signature does (`*args` counts as asking), so the
@@ -553,6 +555,73 @@ whose `__pycache__` entry is validated against `(mtime, size)` — both of which
 survive a same-second edit that happens not to change the file's length. That
 one case is exactly the edit-run-edit loop this feature exists for, so there is
 no bytecode cache to go stale.
+
+#### The physics clock: `fixed_update`
+
+`update(dt)` is called once per **frame**, with the real delta between two
+drawn images. That is right for anything visual and wrong for anything
+physical: a force applied per frame is a force scaled by your frame rate, so
+the same script settles at a different height on a different machine — and
+gives a different answer on the same machine when a texture load stutters.
+
+A script may therefore also define `fixed_update(self, dt)`. It runs from
+*inside* the physics step, once per fixed substep, and its `dt` is the world's
+timestep — the same number on every call, every run, every machine:
+
+```python
+import threepp
+
+
+class Thrust:
+    height = 3.0
+    stiffness = 40.0
+
+    def start(self, obj: threepp.Object3D):
+        self.body = threepp.editor.rigid_body_from_object(obj)
+
+    def fixed_update(self, dt: float):
+        if self.body is None:
+            return
+        # Once per substep, at 1/60 s whatever the window is doing.
+        error = self.height - self.body.position.y
+        lift = self.stiffness * error - 5.0 * self.body.velocity.y
+        self.body.apply_force(threepp.Vector3(0, lift * self.body.mass, 0))
+```
+
+* **Forces, impulses, drive targets and sensor reads belong here.** `update(dt)`
+  stays the frame's final word on transforms — it runs after physics, the
+  animation player and the sensors, and it is where you move a camera, a marker
+  or anything else you are looking at.
+* **It fires per substep, not per frame.** A frame longer than the timestep runs
+  it several times; a frame shorter than one runs it not at all, and the
+  leftover is carried over. `PhysxWorld` caps the catch-up at 4 substeps per
+  frame, so a genuine hitch drops simulated time rather than spiralling.
+* **It runs before that frame's `update()`**, because the physics session is
+  updated first and `fixed_update` happens inside that call.
+* **The measurements it reads are the ones the frame started with.** Sensors are
+  sampled at the *end* of each substep, and the sensor session hands its retained
+  copies to script handles once per frame (`drain()` empties a sensor's ring, so
+  there is exactly one drainer — see [Sensors from a
+  script](#sensors-from-a-script)). So `latest()` inside `fixed_update` is the
+  newest measurement that existed when the frame began: one substep old at a
+  matched frame rate, and the same value for both substeps of a double-length
+  frame, with the pair arriving together on the next one. A controller is
+  unbothered — acting on the last measurement is what a real one does, and the
+  command written here lands in the solve that starts immediately after — but
+  do not expect one new sample per call. `latest()` is `None` until the first
+  substep of the session has been taken.
+* **No physics world, no fixed clock.** Without the PhysX build, or with no
+  physics session playing, `fixed_update` never runs and the console says so
+  once when Play starts. Nothing here invents a clock of its own: a
+  `fixed_update` that is not on the physics clock would be a lie about the one
+  thing the name promises. (A scene with no physics *objects* is fine — the
+  session builds a world regardless, and the clock is the world's, not any
+  body's.)
+* **Pause pauses it**, for free: paused means no session is updated, which means
+  no step, which means no substeps.
+* **Errors work as everywhere else.** The first raise is reported once with its
+  traceback and disables that instance for the rest of the session — all of its
+  methods, not just this one. Other scripts keep running.
 
 #### The Script Editor
 
@@ -1049,7 +1118,11 @@ should act. Asking a **static** body for velocity, mass or forces raises rather
 than answering a zero.
 
 Scripts run *after* physics each frame, so a read sees the step that just
-happened and a force lands on the next one.
+happened and a force lands on the next one. Which also means a force applied
+from `update` is applied once per *frame*, at whatever rate the window happens
+to be running — put it in
+[`fixed_update`](#the-physics-clock-fixed_update) instead and it is applied once
+per substep, at a constant dt.
 
 Soft bodies get `threepp.editor.soft_body_from_object`, which is deliberately
 thinner — PhysX drives a deformable volume through per-vertex GPU buffers, so
@@ -1152,6 +1225,15 @@ class ElbowHold:
         command = reading.position + self.gain * (self.target - reading.position)
         self.art.set_drive_target(self.enc.joint, command)
 ```
+
+Written in `update` this loop closes once per drawn frame, at whatever rate the
+window happens to run. Rename the method to
+[`fixed_update`](#the-physics-clock-fixed_update) — nothing else about the
+script changes — and it closes once per physics substep instead, at a constant
+dt, which is the clock the measurements themselves are stamped on and the one a
+deployed controller runs on. What it reads is still the batch drained at the end
+of the last frame; what changes is that the command goes out at a rate the frame
+rate cannot move.
 
 Four lookups, one per proprioceptive sensor type:
 

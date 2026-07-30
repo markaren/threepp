@@ -884,6 +884,72 @@ int EditorApp::runSelfTest() {
         selectObject(nullptr);
         step();
     }
+
+    // fixed_update: the script session hooked onto the physics world's substep
+    // loop. The unit tests drive the sessions by hand; this is the pass that
+    // proves the registration finds the world through the real PlayController,
+    // where the two sessions are started in registration order and know nothing
+    // about each other. stepFixed makes one frame exactly one substep, so the
+    // two counters must agree AND agree with the frame count.
+    {
+        auto ticker = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        ticker->name = "Ticker";
+        ticker->position.set(3.f, 2.f, 0.f);
+        auto* raw = ticker.get();
+        addObject(ticker, document_.scene(), "Add Ticker");
+
+        // No physics of its own: the fixed clock belongs to the world the
+        // session builds, not to any body in it. Publishes into its own
+        // transform, which is all a script can hand back to this test.
+        setInlineScript(*raw,
+                        "class Ticker:\n"
+                        "    def start(self, obj):\n"
+                        "        self.obj = obj\n"
+                        "        self.n = 0\n"
+                        "        self.frames = 0\n"
+                        "        self.odd = 0\n"
+                        "        self.dt0 = 0.0\n"
+                        "\n"
+                        "    def fixed_update(self, dt):\n"
+                        "        if self.n == 0:\n"
+                        "            self.dt0 = dt\n"
+                        "        elif dt != self.dt0:\n"
+                        "            self.odd += 1\n"
+                        "        self.n += 1\n"
+                        "        self.obj.position.set(float(self.n), float(self.odd), self.dt0)\n"
+                        "\n"
+                        "    def update(self, dt):\n"
+                        "        self.frames += 1\n"
+                        "        # fixed_update runs inside the physics step, so it has\n"
+                        "        # already had its turn for this frame.\n"
+                        "        self.obj.scale.set(float(self.frames), float(self.n - self.frames), 1.0)\n",
+                        "Ticker Script");
+        step();
+
+        const auto tickerUuid = raw->uuid;
+        startPlay();
+        stepFixed(60);
+        auto* live = findByUuid(document_.scene(), tickerUuid);
+        check(live && static_cast<int>(live->position.x) == 60,
+              "fixed_update runs once per physics substep");
+        check(live && static_cast<int>(live->position.y) == 0 &&
+                      std::abs(live->position.z - kFixedDt) < 1e-6f,
+              "and always with the world's fixed timestep");
+        check(live && static_cast<int>(live->scale.x) == 60 &&
+                      static_cast<int>(live->scale.y) == 0,
+              "before that frame's update, one for one");
+        check(scripts_ && scripts_->errorFor(tickerUuid).empty(),
+              "and the substep sweep raised nothing");
+        stopPlay();
+        step();
+
+        if (auto* done = findByUuid(document_.scene(), tickerUuid)) {
+            selectObject(done);
+            deleteSelected();
+        }
+        selectObject(nullptr);
+        step();
+    }
 #endif
 
     // Compound / decomposed convex colliders: an imported model is a Group with

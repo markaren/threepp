@@ -63,9 +63,10 @@ if (TARGET threepp_editor_scripting)
 
     # threepp.editor's RigidBody/SoftBody handles need both halves: the script
     # host above, and the PhysX SDK the play session is built on. The sensor
-    # handles are the same story one session over.
+    # handles are the same story one session over, and fixed_update is a script
+    # session driven BY the physics world's substep loop — no SDK, no clock.
     if (TARGET unofficial::omniverse-physx-sdk::sdk)
-        foreach (name EditorScriptPhysics_test EditorScriptSensors_test)
+        foreach (name EditorScriptPhysics_test EditorScriptSensors_test EditorScriptFixedUpdate_test)
             add_test_executable(${name})
             target_link_libraries(${name}
                     PRIVATE threepp_editor_scripting unofficial::omniverse-physx-sdk::sdk)

@@ -140,8 +140,19 @@ namespace threepp::editor {
     //          whole sweep.
     // stop()   calls stop() and drops every instance while holding the GIL.
     //
+    // A script may also define fixed_update(dt), which does NOT run per frame:
+    // start() registers ONE pre-substep callback with the PhysxWorld the physics
+    // session is playing (only when some live instance defines the method), and
+    // that callback sweeps them once per fixed substep with the world's constant
+    // timestep. It is where forces, impulses and drive targets belong — writing
+    // those from update(dt) makes a controller frame-rate dependent. Without a
+    // playing physics world there is no fixed clock, so the method never fires
+    // and start() says so once; a fabricated clock would be a lie about the only
+    // thing the name promises.
+    //
     // A script that raises is logged once, disabled for the rest of the session
     // and left behind; the others keep running and the editor keeps playing.
+    // That covers fixed_update too, and disables the instance whole.
     class ScriptPlaySession: public PlaySession {
 
     public:

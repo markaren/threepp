@@ -68,7 +68,8 @@ std::string EditorApp::inlineScriptTemplate() {
     // type-specific API.
     return "# Inline Python script. Stored in this scene, runs when you press Play.\n"
            "#\n"
-           "# One class with any of start(obj) / update(dt) / stop(). Plain class\n"
+           "# One class with any of start(obj) / update(dt) / fixed_update(dt) /\n"
+           "# stop() - fixed_update runs on the physics clock. Plain class\n"
            "# attributes (int, float, bool, str) appear as parameters in the\n"
            "# inspector, where their values are saved with the scene.\n"
            "#\n"
