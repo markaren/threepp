@@ -625,6 +625,28 @@ class Scoreboard:
         // ObjectLoader reads it back, so the depth cue survives a save.
         scene->fog = Fog(Color(kNight), 42.f, 135.f);
 
+        // --- how it opens ----------------------------------------------------
+        // The two keys the editor reads when a document is OPENED (see
+        // doc/editor.md). Without them the arena is framed automatically, which
+        // for a course laid out along -Z means arriving pointed at a wall.
+        //
+        // The vantage is 7 m behind the drone and 2.4 m over it, looking down
+        // the course: the drone in the foreground third above its pad, the first
+        // gate right behind it, the rest of the rings receding and the beacon
+        // standing at the far end. Two numbers are not free choices — the
+        // perimeter wall is at z = 22.4, so a camera much further back is a
+        // camera outside the arena photographing masonry, and a camera much
+        // higher pitches the far end of the course out of frame.
+        //
+        // It is also the CHASE offset: Follow keeps whatever offset the camera
+        // has when the document opens, so this one placement has to read as an
+        // establishing shot AND fly as a chase cam. The target sits ON the drone
+        // for the same reason — it is where Follow puts it a fraction of a
+        // second later, and a view that lurches as soon as you look at it is
+        // not a view anybody authored.
+        scene->userData["editorView"] = std::string("0,4.6,21@0,2.2,14");
+        scene->userData["editorFollow"] = std::string("Drone");
+
         // --- lights ---------------------------------------------------------
         // One key light with shadows, and just enough fill to keep the far side
         // of a pillar from being a silhouette.

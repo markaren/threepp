@@ -41,6 +41,12 @@ void EditorApp::drawToolbar() {
 
         const ImVec2 button{86 * s, 0};
 
+        // The gizmo is parked for the duration of Play (see startPlay), so the
+        // buttons that aim it are greyed rather than left live over nothing.
+        // Snap, below, is a preference and stays.
+        const bool gizmoAvailable = !isPlaying();
+        if (!gizmoAvailable) ImGui::BeginDisabled();
+
         if (modeButton("Select", gizmoMode_ == "select", button)) {
             gizmoMode_ = "select";
             applyGizmoMode();
@@ -69,6 +75,7 @@ void EditorApp::drawToolbar() {
             gizmoWorldSpace_ = !gizmoWorldSpace_;
             applyGizmoMode();
         }
+        if (!gizmoAvailable) ImGui::EndDisabled();
         ImGui::SameLine();
         if (modeButton("Snap", snapEnabled_, {76 * s, 0})) {
             snapEnabled_ = !snapEnabled_;

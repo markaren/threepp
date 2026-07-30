@@ -28,7 +28,7 @@ Command line:
 | `--screenshot=<png>` | write PNGs and exit. With no document of its own it builds the spline-tube acceptance scenario and writes one file per view; **with a `scene.json` or `--example` it photographs that instead**, honouring the three flags below |
 | `--seconds=N` | how long that pass plays before the first shot (default 3) |
 | `--keys=W,A` | hold these keys for those seconds, then let go — a scene you are meant to *drive* cannot be reviewed standing still |
-| `--shot=px,py,pz@tx,ty,tz[:tag]` | camera position and target for that pass, repeatable; `tag` becomes a file-name suffix. None given frames the whole document |
+| `--shot=px,py,pz@tx,ty,tz[:tag]` | camera position and target for that pass, repeatable; `tag` becomes a file-name suffix. None given keeps the camera the session already has — an authored [`editorView`](#opening-a-document-editorview--editorfollow), or wherever Follow Selection has chased to — and frames the whole document only when there is neither |
 
 ---
 
@@ -71,6 +71,22 @@ being dragged.
 Picking selects the top-level object of whatever was hit — clicking an imported
 model selects the model, not one of its sub-meshes. Click again inside the same
 subtree to drill down to the exact node.
+
+**Follow Selection.** View ▸ Follow Selection (`Shift+F`) turns the viewport
+into a chase camera: every frame the orbit target walks towards the selection's
+world position and the camera is translated by the *same* delta, so the angle,
+the distance and the projection you orbited to are kept and orbiting, panning and
+zooming keep working while it follows. The approach is exponential with a ~90 ms
+time constant rather than a hard lock — a rigid body has a tremble, and a camera
+bolted to it inherits it.
+
+It works while **playing**, which is the point: a drone you fly with `W`/`A`/`S`/`D`
+leaves the frame in about two seconds otherwise. `Shift+F` is answered even while
+[a script owns the plain keys](#the-script-editor) — deciding to watch what you
+are flying is a view command, not teleop. Deselecting *pauses* the chase (there
+is nothing to chase, and the view stays where the chase left it); selecting
+something again resumes it. It is session state, not a saved preference, and a
+document can ask for it on open — see [`editorView`](#opening-a-document-editorview--editorfollow).
 
 **Markers.** Cameras and lights render nothing, so each one gets a billboarded
 icon at a constant screen size, tinted with the accent colour while selected.
@@ -136,6 +152,17 @@ base-colour map.
 stepping, ⏹ stops them and restores the snapshot. The inspector is read-only
 while playing and a banner sits over the viewport.
 
+The **transform gizmo is parked for the whole session**: Play detaches it, and
+the toolbar's Select/Move/Rotate/Scale and Local/World buttons grey out with it.
+Hiding it would not have been enough — attached, it rides a body the solver is
+moving and keeps offering handles for an edit that Play would only refuse (every
+document mutation goes through one gate; the greyed menu items are the visible
+half of it). Picking still works and
+the selection outline stays, because watching what the simulation does to an
+object is half of why anyone presses Play; only the handles go. Stop puts the
+gizmo back on the selection (re-resolved by uuid across the scene swap) with the
+mode, the space and the snap it had.
+
 ---
 
 ## Shipped examples
@@ -153,6 +180,15 @@ asset files at runtime.
 A physics drone you fly through five glowing goal rings, in a generated arena of
 pillars. It exists because every feature below is easy to *describe* and hard to
 believe until something is using all of them at once:
+
+**It opens ready to fly.** The document carries an
+[`editorView`](#opening-a-document-editorview--editorfollow): 7 m behind the
+drone and 2.4 m above it, looking down the course with the first gate behind the
+drone, the rest of the rings receding and the beacon standing at the far end. It
+also carries `editorFollow = Drone`, so the drone is selected and
+[Follow Selection](#features) is on — and because Follow keeps the offset the
+camera has when the document opens, that one authored vantage *is* the chase
+camera. Press Play and the view goes with the drone.
 
 | what you see | what it is |
 | --- | --- |
@@ -174,7 +210,9 @@ Controls, which the drone's script also prints to the console at Play:
 | `R` / `F` | climb / descend — the stick sets a *height*, and lets go holding it |
 
 Remember that [a script reading the keyboard takes the plain keys](#the-script-editor)
-off the editor for the rest of the session; `Ctrl+S` and friends still work.
+off the editor for the rest of the session; `Ctrl+S` and friends still work, and
+so does `Shift+F` — switching the chase camera on and off is the one view command
+you want *while* flying.
 
 **Without the PhysX build** there is no body to push, no ray to cast and no IMU
 to read, and those names are *absent* from `threepp.editor` rather than present
@@ -200,6 +238,7 @@ flies it headlessly, and `--selftest` opens it through the menu's own code path.
 | `Q` | toggle local / world space |
 | `Shift` (hold) | snap while dragging |
 | `F` | frame selection |
+| `Shift+F` | follow selection — chase camera, works while playing |
 | `Del` | delete selection |
 | `Esc` | deselect |
 | `Ctrl+D` | duplicate |
@@ -241,6 +280,36 @@ all of them under a single overlay `Group` registered with
 duration of every export (save *and* play snapshot) and re-attaches it
 afterwards. The cost is one detach/attach per save; the benefit is that
 `ObjectExporter` stays a pure serializer.
+
+### Opening a document: `editorView` / `editorFollow`
+
+Two optional keys on the **scene root** say how a document wants to be looked at.
+They are read by the open paths — File ▸ Open, File ▸ Open Example, a `.json`
+dropped on the window, a scene named on the command line — and by nothing else:
+
+```
+userData["editorView"]    0,4.6,21@0,2.2,14        (camera position @ orbit target)
+userData["editorFollow"]  Drone                     (an object name)
+```
+
+`editorView` is the same `px,py,pz@tx,ty,tz` the `--shot` command line speaks,
+parsed by the same function (`EditorApp::parseViewSpec`), so a vantage found by
+orbiting can be copied into a scene and back out again. It places the camera and
+the orbit target in a perspective view; a malformed value is a console line and
+is otherwise ignored. `editorFollow` names an object to select and
+[follow](#features) on open — a name that is not in the scene is a console line
+too.
+
+Two rules make them safe rather than surprising:
+
+* **They apply when a document is OPENED, and never again.** In particular they
+  are not applied by the scene-replaced listener, which is also what Stop goes
+  through: restoring the play snapshot must never teleport the camera away from
+  wherever the user drove it while watching the simulation.
+* **A document that says nothing gets nothing.** No `editorView` leaves the
+  camera where it was (an example, having nothing to preserve, frames itself
+  instead); no `editorFollow` switches following *off*, since following belongs
+  to a subject and a new document is a new subject.
 
 ### Physics in `userData`
 
@@ -1319,8 +1388,10 @@ retargets the gizmo and snaps the camera to a front view. So the first `is_key_d
 play session hands the **plain keys** to the scripts for the rest of it — one console line says
 so — and the shortcuts come back on Stop. Modified commands are untouched: `Ctrl+S`, `Ctrl+Z`
 and the `Alt`+digit viewpoints keep working while playing, because a script polls unmodified
-keys and silently losing save-while-playing would be its own surprise. A scene whose scripts
-never ask keeps every shortcut.
+keys and silently losing save-while-playing would be its own surprise. `Shift+F`
+([Follow Selection](#features)) is answered ahead of the hand-over for the same reason and one
+more: the session where you most want to chase the thing you are flying is exactly this one.
+A scene whose scripts never ask keeps every shortcut.
 
 This is the only input a script gets, and it is a poll, not an event: there is no key-press
 callback, no mouse, and the inspector is read-only while playing — so a parameter is something

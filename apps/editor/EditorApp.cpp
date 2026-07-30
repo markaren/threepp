@@ -62,6 +62,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <sstream>
 
 // GLFW's window-title setter. Declared rather than included: the GLFW headers
 // are private to the threepp target, but the symbol is linked into it and the
@@ -493,6 +494,9 @@ void EditorApp::frame(float dt) {
     pollImports(dt);
     pollExternalEdit(dt);
     if (animPreview_) animPreview_->mixer->update(dt);
+    // Before the orbit update, and a rigid translation of target AND camera, so
+    // the damping the orbit is carrying still resolves against the same offset.
+    updateFollow(dt);
     orbit_->update();
     updateViewPreset();
     // The nudge that keeps the grid off a coplanar ground is measured against
@@ -763,11 +767,14 @@ void EditorApp::buildTemplateScene() {
     box->receiveShadow = true;
     scene.add(box);
 
-    // A new document starts where the editor started: a free perspective view.
+    // A new document starts where the editor started: a free perspective view,
+    // and nothing to chase.
     setOrthographic(false);
     setViewPreset(ViewPreset::User);
     camera_.position.set(6, 5, 8);
     orbit_->target.set(0, 0.5f, 0);
+    followSelection_ = false;
+    documentView_ = false;
 
     document_.setDirty(false);
     selectObject(box.get());
@@ -785,6 +792,10 @@ void EditorApp::openScene(const std::filesystem::path& path) {
     }
     commands_.clear();
     logWarnings();
+    // Where this document asks to be seen from, if it says. A file that says
+    // nothing keeps the camera where it was, which is what every version of the
+    // editor before this one did.
+    applyDocumentView();
     settings_.addRecentFile(path);
     settings_.sceneDir = path.parent_path().string();
     log("opened " + path.filename().string());
@@ -814,8 +825,92 @@ void EditorApp::openExample(const std::string& slug) {
     logWarnings();
     // Untitled and clean: it came from the binary, not from a file, so Save
     // will ask where to put it rather than writing over anything.
-    frameDocument();
+    //
+    // An example is something you asked to LOOK at, so it is framed — unless it
+    // authored a vantage of its own, which is a considered answer to the same
+    // question and beats an automatic three-quarter view.
+    if (!applyDocumentView()) frameDocument();
     log("opened example \"" + std::string(example->label) + "\" - " + std::string(example->summary));
+}
+
+bool EditorApp::parseViewSpec(const std::string& text, Vector3& position, Vector3& target) {
+
+    const auto at = text.find('@');
+    if (at == std::string::npos) return false;
+
+    const auto triple = [](const std::string& part, Vector3& out) {
+        std::istringstream stream(part);
+        std::string field;
+        float values[3];
+        for (float& value : values) {
+            if (!std::getline(stream, field, ',')) return false;
+            try {
+                value = std::stof(field);
+            } catch (const std::exception&) {
+                return false;
+            }
+        }
+        // Everything after the third number is a typo, not a fourth axis.
+        if (std::getline(stream, field, ',')) return false;
+        out.set(values[0], values[1], values[2]);
+        return true;
+    };
+
+    Vector3 wantPosition;
+    Vector3 wantTarget;
+    if (!triple(text.substr(0, at), wantPosition)) return false;
+    if (!triple(text.substr(at + 1), wantTarget)) return false;
+
+    position.copy(wantPosition);
+    target.copy(wantTarget);
+    return true;
+}
+
+bool EditorApp::applyDocumentView() {
+
+    documentView_ = false;
+    // A document that says nothing about following clears it: follow belongs to
+    // a subject, and opening a different document is a different subject. It is
+    // deliberately not sticky across an Open for the same reason the selection
+    // is not.
+    followSelection_ = false;
+
+    const auto& userData = document_.scene().userData;
+    const auto read = [&](const char* key) {
+        const auto it = userData.find(key);
+        if (it == userData.end() || it->second.type() != typeid(std::string)) return std::string();
+        return std::any_cast<const std::string&>(it->second);
+    };
+
+    if (const auto follow = read("editorFollow"); !follow.empty()) {
+        if (auto* subject = document_.scene().getObjectByName(follow)) {
+            selectObject(subject);
+            followSelection_ = true;
+        } else {
+            log("editorFollow names \"" + follow + "\", which is not in this scene - ignored");
+        }
+    }
+
+    const auto view = read("editorView");
+    if (view.empty()) return false;
+
+    Vector3 position;
+    Vector3 target;
+    if (!parseViewSpec(view, position, target)) {
+        log("editorView is \"" + view + "\" - want px,py,pz@tx,ty,tz; ignored");
+        return false;
+    }
+
+    // A placement, not a projection: an authored vantage is a perspective one,
+    // and arriving in a leftover axis view would be a different picture than
+    // the one that was authored.
+    setOrthographic(false);
+    setViewPreset(ViewPreset::User);
+    camera_.position.copy(position);
+    orbit_->target.copy(target);
+    camera_.lookAt(target);
+    documentView_ = true;
+    return true;
 }
 
 void EditorApp::frameDocument() {
@@ -1805,7 +1900,14 @@ void EditorApp::selectObject(Object3D* object, std::optional<int> instance) {
     selectedInstance_.reset();
 
     if (object && object != &document_.scene()) {
-        gizmo_->attach(*object);
+        // Picking keeps working while playing — watching what a simulation does
+        // to an object is half of why anyone presses Play — but the handles
+        // stay parked for the session, and the outline is what says "this one".
+        if (isPlaying()) {
+            gizmo_->detach();
+        } else {
+            gizmo_->attach(*object);
+        }
         // An InstancedMesh gets its picked instance boxed instead of the whole
         // cloud. Selecting one from the hierarchy (no instance to speak of)
         // falls through to the whole-object outline, which is the honest answer
@@ -2074,8 +2176,10 @@ void EditorApp::refreshSelectionHelpers() {
     }
 
     // The gizmo is a nuisance while the simulation owns the transforms, and
-    // pointless with nothing selected or in Select mode.
-    gizmo_->enabled = !isPlaying() && gizmoMode_ != "select" && !selection_.empty();
+    // pointless with nothing selected or in Select mode. `enabled` is what the
+    // mouse listeners gate on, so this is also what makes it inert; being
+    // detached for the whole session (see startPlay) is the other half.
+    gizmo_->enabled = gizmoActive();
     gizmo_->visible = gizmo_->enabled;
 }
 
@@ -2381,9 +2485,63 @@ void EditorApp::bindViewportControls() {
     overlay_->addRef(*gizmo_);
     gizmo_->addEventListener("dragging-changed", *gizmoDragListener_);
     // Snap and enabled/visible are re-applied every frame by
-    // refreshSelectionHelpers(); mode, space and the attachment are not.
-    if (auto* selected = selection_.get()) gizmo_->attach(*selected);
+    // refreshSelectionHelpers(); mode, space and the attachment are not. A
+    // projection switch while playing rebuilds a gizmo that has to arrive
+    // parked like the one it replaces — Stop is what puts it back.
+    if (auto* selected = selection_.get(); selected && !isPlaying()) gizmo_->attach(*selected);
     applyGizmoMode();
+}
+
+void EditorApp::setFollowSelection(bool follow) {
+
+    if (followSelection_ == follow) return;
+
+    followSelection_ = follow;
+    if (!follow) {
+        log("follow selection off");
+        return;
+    }
+    if (auto* selected = selection_.get()) {
+        log("following " + (selected->name.empty() ? selected->type() : selected->name));
+    } else {
+        // Armed rather than refused: selecting something is what starts it, and
+        // that is one click away.
+        log("follow selection on - select something to chase");
+    }
+}
+
+void EditorApp::updateFollow(float dt) {
+
+    if (!followSelection_) return;
+
+    // Nothing selected is a PAUSE, not an off: the target stays where the
+    // chase left it and reselecting picks the chase back up.
+    auto* selected = selection_.get();
+    if (!selected) return;
+
+    Vector3 world;
+    selected->getWorldPosition(world);
+
+    // Exponential approach with a ~90 ms time constant, framed as
+    // 1 - exp(-dt/tau) so the rate is the same at 30 fps and at 300 rather than
+    // a per-frame fraction that makes the camera lag on a slow machine. Short
+    // enough to read as attached to the subject, long enough that the IMU-level
+    // tremble of a hovering physics body does not reach the picture: a hard
+    // lock on a rigid body is not a chase cam, it is a vibration.
+    constexpr float kTau = 0.09f;
+    // A hitch (a shader compile, a breakpoint) must not fling the camera; the
+    // clamp costs nothing and bounds the step to one settled frame.
+    const float step = std::clamp(dt, 0.f, 0.1f);
+
+    Vector3 delta;
+    delta.subVectors(world, orbit_->target).multiplyScalar(1.f - std::exp(-step / kTau));
+
+    // The same delta on both: what the user orbited to — the angle, the
+    // distance, the projection's framing — is theirs, and following must not
+    // quietly take it back. In a parallel projection the translation means the
+    // same thing, so an axis view chases too.
+    orbit_->target.add(delta);
+    viewCamera().position.add(delta);
 }
 
 float EditorApp::viewportWorldPerPixel(const Vector3& world) const {
@@ -2435,6 +2593,17 @@ void EditorApp::startPlay() {
         log("play failed: " + error);
         return;
     }
+
+    // Park the gizmo for the session — after the session is known to have
+    // started, so a refused Play leaves the editor exactly as it was. Hiding it
+    // would not be enough: attached, it keeps riding a body the simulation is
+    // moving and keeps offering handles that the edit gate would only refuse.
+    // It comes back on Stop through the scene-replaced listener, which
+    // re-resolves the selection by uuid and re-attaches on the way; the mode,
+    // the space and the snap are the editor's own state and were never touched.
+    gizmo_->detach();
+    applyGizmoMode();
+
     log("play started");
 }
 
@@ -2470,6 +2639,11 @@ void EditorApp::stopPlay() {
 
 // ------------------------------------------------------------------- plumbing
 
+bool EditorApp::gizmoActive() const {
+
+    return !isPlaying() && gizmoMode_ != "select" && !selection_.empty();
+}
+
 void EditorApp::applyGizmoMode() {
 
     // "select" is not a TransformControls mode — it is the absence of one. The
@@ -2478,7 +2652,10 @@ void EditorApp::applyGizmoMode() {
     const bool selectOnly = gizmoMode_ == "select";
     if (!selectOnly) gizmo_->setMode(gizmoMode_.empty() ? "translate" : gizmoMode_);
     gizmo_->setSpace(gizmoWorldSpace_ ? "world" : "local");
-    gizmo_->visible = !selectOnly && !selection_.empty();
+    // Through the same predicate the frame loop uses: this runs from the
+    // toolbar buttons and the W/E/R/Q shortcuts, and a mode change while
+    // playing records the mode without putting the parked gizmo back on screen.
+    gizmo_->visible = gizmoActive();
 }
 
 void EditorApp::handleShortcuts() {
@@ -2495,6 +2672,16 @@ void EditorApp::handleShortcuts() {
     const bool ctrl = io.KeyCtrl;
     const bool shift = io.KeyShift;
     const bool alt = io.KeyAlt;
+
+    // Follow Selection, ahead of the yield below on purpose. Chasing the thing
+    // you are flying is a VIEW command, and the session it is wanted in most is
+    // exactly the one that hands the plain keys to a script — a chase cam you
+    // can only switch on before you start flying is not much of a chase cam.
+    // Shift+F rather than a key of its own, so no teleop binding is spent on it
+    // and it reads as "Frame selection, but keep doing it".
+    if (shift && !ctrl && !alt && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+        setFollowSelection(!followSelection_);
+    }
 
     // A playing script that reads the keyboard owns the PLAIN keys. Teleop reaches for
     // W/A/S/D, Q/E and the numpad; those are the gizmo modes and the axis viewpoints, so
@@ -2556,7 +2743,8 @@ void EditorApp::handleShortcuts() {
         gizmoWorldSpace_ = !gizmoWorldSpace_;
         applyGizmoMode();
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_F, false)) focusSelected();
+    // Shift+F is Follow Selection, handled above; one press must not also frame.
+    if (!shift && ImGui::IsKeyPressed(ImGuiKey_F, false)) focusSelected();
     if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) deleteSelected();
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) selectObject(nullptr);
 }

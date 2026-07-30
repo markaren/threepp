@@ -192,6 +192,17 @@ void EditorApp::drawMenuBar() {
         if (ImGui::BeginMenu("View")) {
 
             if (ImGui::MenuItem("Frame Selection", "F", false, !selection_.empty())) focusSelected();
+            // Frame Selection, but every frame. Enabled with nothing selected:
+            // it is armed then, and the next click starts the chase.
+            {
+                bool follow = followSelection();
+                if (ImGui::MenuItem("Follow Selection", "Shift+F", &follow)) setFollowSelection(follow);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Keep the selection in view: the orbit target tracks it and the\n"
+                                      "camera rides along, so your angle and distance are kept and you\n"
+                                      "can still orbit and zoom. Works while playing - that is the point.");
+                }
+            }
             ImGui::Separator();
 
             if (ImGui::BeginMenu("Viewpoint")) {
@@ -280,6 +291,7 @@ void EditorApp::drawMenuBar() {
                     {"Q", "Toggle local / world space"},
                     {"Shift (hold)", "Snap while dragging"},
                     {"F", "Frame selection"},
+                    {"Shift+F", "Follow selection (chase camera, works while playing)"},
                     {"Num1 / 3 / 7", "Front / right / top orthographic view"},
                     {"Ctrl+Num1 / 3 / 7", "Back / left / bottom"},
                     {"Num5", "Toggle orthographic / perspective"},

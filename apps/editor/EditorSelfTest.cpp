@@ -166,6 +166,14 @@ int EditorApp::runSceneScreenshot() {
     // useful when you are authoring, noise when you are judging a picture. The
     // point cloud stays: it is what the scene is DOING, not furniture.
     if (markers_) markers_->visible = false;
+    // And the selection furniture, for the same reason: a document that opens
+    // with something selected (userData["editorFollow"]) would otherwise be
+    // photographed through a yellow box and a set of transform handles. Select
+    // mode is how the toolbar itself spells "no gizmo", and the outline nodes
+    // are only rebuilt when the selection changes, which it does not here.
+    gizmoMode_ = "select";
+    applyGizmoMode();
+    if (selectionBox_) selectionBox_->visible = false;
     // One frame before Play so the scene's own materials and shadow maps exist.
     playFor(0.05f);
     if (options_.play) startPlay();
@@ -191,7 +199,12 @@ int EditorApp::runSceneScreenshot() {
 
     auto shots = options_.shots;
     if (shots.empty()) {
-        frameDocument();
+        // Nothing asked for, so take what the session already has: a document
+        // that authored its own editorView has ANSWERED the framing question,
+        // and with Follow on the camera has been chasing the subject through
+        // the settle and IS the shot. Framing the document would throw both
+        // away. Anything else has nothing to keep, and gets the automatic view.
+        if (!documentView_ && !followSelection_) frameDocument();
         shots.push_back({camera_.position, orbit_->target, ""});
     }
 
@@ -734,6 +747,129 @@ int EditorApp::runSelfTest() {
 
         selectObject(nullptr);
         step();
+    }
+
+    // The gizmo is parked for the duration of Play. Not merely hidden: attached
+    // handles on a body the solver is moving invite an edit that the gate would
+    // refuse, so the attachment itself is what goes — and comes back on Stop
+    // with the mode and the space it had, on the selection re-resolved by uuid.
+    {
+        auto* target = document_.scene().getObjectByName("Box");
+        auto* other = document_.scene().getObjectByName("Ground");
+        check(target != nullptr && other != nullptr, "Box and Ground available for the gizmo drive");
+
+        gizmoMode_ = "rotate";
+        gizmoWorldSpace_ = true;
+        selectObject(target);
+        step();
+        check(gizmo_->attachedObject() == target, "the gizmo is attached to the selection");
+        check(gizmo_->visible && gizmo_->enabled, "and on screen while editing");
+
+        startPlay();
+        step(2);
+        check(gizmo_->attachedObject() == nullptr, "play detaches the gizmo");
+        check(!gizmo_->visible && !gizmo_->enabled, "and leaves it hidden and inert");
+
+        // W/E/R and the toolbar buttons both land here. They may record a mode
+        // — that is editor state — but they must not put the gizmo back.
+        gizmoMode_ = "translate";
+        applyGizmoMode();
+        step();
+        check(!gizmo_->visible && gizmo_->attachedObject() == nullptr,
+              "a mode change while playing does not resurrect it");
+
+        // A projection switch builds NEW controls (both hold a Camera& for
+        // life), and the replacement has to arrive parked like the one it
+        // replaced rather than re-attaching itself on the way in.
+        setOrthographic(true);
+        step();
+        check(gizmo_->attachedObject() == nullptr,
+              "nor does switching projection while playing");
+        setOrthographic(false);
+        step();
+
+        // Picking still works while playing, and still outlines what it picked.
+        selectObject(other);
+        step();
+        check(selection_.get() == other, "selecting during play still selects");
+        check(outlineCount() == 1, "and still outlines the selection");
+        check(gizmo_->attachedObject() == nullptr, "without attaching the gizmo");
+
+        stopPlay();
+        step(2);
+        auto* restored = document_.scene().getObjectByName("Ground");
+        check(selection_.get() == restored, "stop re-resolves the selection by uuid");
+        check(gizmo_->attachedObject() == restored, "and the gizmo comes back on it");
+        check(gizmo_->visible && gizmo_->enabled, "on screen again");
+        check(gizmoMode_ == "translate" && gizmo_->getSpace() == "world",
+              "with the mode and space it had while playing");
+
+        gizmoMode_ = "translate";
+        gizmoWorldSpace_ = false;
+        selectObject(nullptr);
+        step();
+    }
+
+    // Follow Selection: the orbit target chases what is selected, the camera
+    // rides along keeping the user's angle and distance, and it keeps doing it
+    // while a Play session owns the transform. Driven with a hand-moved object
+    // rather than a simulated one so the assertion is about the CAMERA and not
+    // about whatever a solver did this frame.
+    {
+        auto* subject = document_.scene().getObjectByName("Box");
+        check(subject != nullptr, "Box available for the follow drive");
+
+        // The approach is exponential and the frame rate is the machine's, so
+        // convergence is waited for rather than assumed after a frame count.
+        Vector3 world;
+        const auto settle = [&](Object3D& node, float tolerance) {
+            for (int i = 0; i < 900; ++i) {
+                node.getWorldPosition(world);
+                if (orbit_->target.distanceTo(world) <= tolerance) break;
+                step();
+            }
+            node.getWorldPosition(world);
+        };
+
+        selectObject(subject);
+        setFollowSelection(true);
+        check(followSelection(), "Follow Selection is on");
+        if (subject) settle(*subject, 0.02f);
+        check(orbit_->target.distanceTo(world) < 0.05f,
+              "follow brings the orbit target onto the selection");
+
+        Vector3 offset;
+        offset.subVectors(camera_.position, orbit_->target);
+
+        startPlay();
+        step(2);
+        // The play session runs on this same graph, so this is the node the
+        // chase is watching — a script or a solver moving it looks like this.
+        if (auto* playing = document_.scene().getObjectByName("Box")) {
+            playing->position.x += 6.f;
+            settle(*playing, 0.02f);
+            check(orbit_->target.distanceTo(world) < 0.1f, "and keeps chasing it while playing");
+
+            Vector3 nowOffset;
+            nowOffset.subVectors(camera_.position, orbit_->target);
+            check(nowOffset.distanceTo(offset) < 1e-2f,
+                  "translating the camera by the same delta, so the orbit is untouched");
+
+            // Deselect pauses it: there is nothing to chase, and the view stays
+            // where the chase left it rather than snapping anywhere.
+            selectObject(nullptr);
+            const Vector3 parked = orbit_->target;
+            playing->position.x += 6.f;
+            step(30);
+            check(orbit_->target.distanceTo(parked) < 1e-3f, "deselect pauses the chase");
+        } else {
+            check(false, "Box survives into the follow drive's play session");
+        }
+
+        stopPlay();
+        step(2);
+        setFollowSelection(false);
+        check(!followSelection(), "and Follow Selection switches off again");
     }
 
     // A texture dialog outliving its target. The picker records (uuid, slot)
@@ -4288,7 +4424,26 @@ int EditorApp::runSelfTest() {
     {
         newScene();
         step(2);
+        check(!followSelection(), "a new document follows nothing");
         openExample("hover-arena");
+
+        // Asserted before a single frame is drawn: the open path places the
+        // camera, and after that the chase below is entitled to move it.
+        {
+            const auto& userData = document_.scene().userData;
+            const auto it = userData.find("editorView");
+            const auto spec = it != userData.end() && it->second.type() == typeid(std::string)
+                                      ? std::any_cast<const std::string&>(it->second)
+                                      : std::string();
+            Vector3 wantPosition;
+            Vector3 wantTarget;
+            check(parseViewSpec(spec, wantPosition, wantTarget),
+                  "the example authors an editorView");
+            check(camera_.position.distanceTo(wantPosition) < 1e-3f,
+                  "and opening puts the camera where it says");
+            check(orbit_->target.distanceTo(wantTarget) < 1e-3f, "aimed where it says");
+            check(!orthographic(), "in the projection an authored vantage is written for");
+        }
         step(2);
 
         auto* drone = document_.scene().getObjectByName("Drone");
@@ -4297,6 +4452,10 @@ int EditorApp::runSelfTest() {
         check(!document_.dirty(), "and clean, so Save prompts for a path");
         check(document_.scene().getObjectByName("Arena Floor") != nullptr,
               "with the generator's committed output in it");
+        // Ready to fly: the document names what the viewport chases, so Play is
+        // a chase cam without anyone reaching for the View menu first.
+        check(selection_.get() == drone, "and opens with the Drone selected");
+        check(followSelection(), "and Follow Selection on");
 
         openExample("no-such-example");
         step();
@@ -4346,10 +4505,26 @@ int EditorApp::runSelfTest() {
             }
             check(scans > 0, "and the LIDAR has scanned");
 
+            // Stop restores the scene, NOT the camera. An authored editorView
+            // is applied when a document is opened and never again — a Stop
+            // that teleported the view back to the document's idea of a good
+            // vantage would throw away wherever the user had flown to look.
+            // Follow is switched off first so the only thing that could move
+            // the camera here is the thing being tested.
+            setFollowSelection(false);
+            const Vector3 drovePosition(-14.f, 11.f, -19.f);
+            const Vector3 droveTarget(-3.f, 1.5f, -6.f);
+            camera_.position.copy(drovePosition);
+            orbit_->target.copy(droveTarget);
+            step(2);
+
             stopPlay();
             step(2);
             check(document_.scene().getObjectByName("Drone") != nullptr,
                   "and Stop puts the authored scene back");
+            check(camera_.position.distanceTo(drovePosition) < 1e-2f &&
+                          orbit_->target.distanceTo(droveTarget) < 1e-2f,
+                  "leaving the camera where the user drove it");
         }
     }
 

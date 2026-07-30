@@ -139,6 +139,13 @@ namespace threepp::editor {
             Bottom
         };
 
+        // "px,py,pz@tx,ty,tz" -> two points. The format a document's
+        // userData["editorView"] and the command line's --shot both speak,
+        // parsed in one place so the two cannot drift. False on anything it
+        // cannot read, leaving both outputs untouched.
+        [[nodiscard]] static bool parseViewSpec(const std::string& text,
+                                                Vector3& position, Vector3& target);
+
         explicit EditorApp(const Options& options);
         ~EditorApp();
 
@@ -278,6 +285,20 @@ namespace threepp::editor {
         // the camera currently stands. focusSelected() with the scene as the
         // subject; separate because it must work with nothing selected.
         void frameDocument();
+        // How a document asks to be SEEN when it is opened, off the scene root:
+        //
+        //   userData["editorView"]   "px,py,pz@tx,ty,tz" - camera and orbit target
+        //   userData["editorFollow"] "<object name>"     - select it, chase it
+        //
+        // Called from the OPEN paths only (openScene, openExample, the file on
+        // the command line) and never from the scene-replaced listener: Stop
+        // restores a snapshot, and a Stop that teleports the camera away from
+        // wherever the user drove it is worse than no framing at all.
+        //
+        // Returns whether a view was applied, which is what tells openExample
+        // whether it still has to frame the document itself. A malformed value
+        // is a console line and nothing else.
+        bool applyDocumentView();
         void saveScene();
         void saveSceneAs(const std::filesystem::path& path);
         void importModel(const std::filesystem::path& path);
@@ -444,6 +465,21 @@ namespace threepp::editor {
         // active. Both hold a Camera& for life, so switching projection means
         // building new ones.
         void bindViewportControls();
+        // --- follow selection -----------------------------------------------
+        // Chase camera. While it is on and something is selected, every frame
+        // walks the orbit target towards the selection's world position and
+        // translates the camera by the SAME delta, so the angle and distance
+        // the user orbited to are theirs and orbiting/zooming keeps working
+        // while it follows. Works in both projections (a parallel projection is
+        // translated exactly like a perspective one) and, above all, while
+        // playing — chasing a body the physics is moving is the point.
+        void setFollowSelection(bool follow);
+        [[nodiscard]] bool followSelection() const { return followSelection_; }
+        // One frame of that chase. Deselecting pauses it (there is nothing to
+        // chase) and reselecting resumes; the approach is exponential rather
+        // than a hard lock, because a hard lock on a physics body reads as
+        // jitter.
+        void updateFollow(float dt);
         // Sets the ortho frustum to `height` world units tall at the current
         // aspect, with zoom reset.
         void setOrthoHeight(float height);
@@ -493,6 +529,15 @@ namespace threepp::editor {
         void log(const std::string& message);
         void logWarnings();
         void applyGizmoMode();
+        // Whether the transform handles belong on screen at all: something is
+        // selected, the toolbar is not in Select mode, and play is stopped.
+        // Play runs on a snapshot the simulation owns, so a gizmo inviting a
+        // transform edit on a moving body is an invitation to nothing — the
+        // edit would be refused, and dragging handles across a falling crate
+        // is not a thing anyone means to do. One predicate, because
+        // applyGizmoMode() and refreshSelectionHelpers() both decide it and a
+        // gizmo that comes back for one frame is a gizmo that came back.
+        [[nodiscard]] bool gizmoActive() const;
         void loadSettings();
         void persistSettings();
         [[nodiscard]] float scale() const { return contentScale_; }
@@ -530,6 +575,14 @@ namespace threepp::editor {
         std::unique_ptr<OrbitControls> orbit_;
         bool orthographic_ = false;
         ViewPreset viewPreset_ = ViewPreset::User;
+        // Follow Selection (View menu, Shift+F). Session state on purpose: it
+        // belongs to what is open and what is selected, not to the editor's
+        // saved preferences.
+        bool followSelection_ = false;
+        // Whether the document that is open placed the camera itself, through
+        // userData["editorView"]. Only the --screenshot pass asks: a considered
+        // vantage is not something to overwrite with an automatic framing.
+        bool documentView_ = false;
 
         SceneDocument document_;
         Selection selection_;

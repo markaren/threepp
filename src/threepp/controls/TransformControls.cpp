@@ -591,4 +591,9 @@ TransformControls& TransformControls::detach() {
     return *this;
 }
 
+Object3D* TransformControls::attachedObject() const {
+
+    return pimpl_->object;
+}
+
 TransformControls::~TransformControls() = default;

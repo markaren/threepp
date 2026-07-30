@@ -201,6 +201,27 @@ TEST_CASE("the shipped Hover Arena document is what it claims to be", "[editor][
         }
     }
 
+    SECTION("the document says how it wants to be opened") {
+        // Two flat strings on the ROOT, read by the editor's open path and by
+        // nothing else — an authored vantage plus what the viewport chases.
+        // Asserted here because they are part of what the example IS: without
+        // them the arena is framed automatically and opens facing a wall.
+        auto& root = rig.scene().userData;
+        REQUIRE(root.count("editorView") == 1);
+        REQUIRE(root.at("editorView").type() == typeid(std::string));
+        const auto view = std::any_cast<const std::string&>(root.at("editorView"));
+        // "px,py,pz@tx,ty,tz" - behind and above the drone, looking down the
+        // course. The editor parses it; this only asks that it is that shape.
+        REQUIRE(view.find('@') != std::string::npos);
+        REQUIRE(std::count(view.begin(), view.end(), ',') == 4);
+
+        REQUIRE(root.count("editorFollow") == 1);
+        REQUIRE(std::any_cast<const std::string&>(root.at("editorFollow")) == "Drone");
+        // What it names has to be in the scene, or the chase has nothing to
+        // chase and the editor says so instead of doing it.
+        REQUIRE(rig.node("Drone") != nullptr);
+    }
+
     SECTION("the arena is generated content, and the rule travels with it") {
         // The generator is on the ROOT, and its output is committed as ordinary
         // saved scene content — opening the document runs nothing.

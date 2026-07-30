@@ -14,37 +14,25 @@ namespace {
     // "px,py,pz@tx,ty,tz[:label]" — a camera placement for the --screenshot
     // pass over a loaded scene. Deliberately terse: this is iterated on from a
     // shell while looking at PNGs, not typed once.
+    //
+    // The placement itself is EditorApp::parseViewSpec, which is also what a
+    // document's userData["editorView"] is read with: one format, one parser,
+    // so a vantage can be copied from a shell into a scene and back.
     std::optional<threepp::editor::EditorApp::Options::Shot> parseShot(const std::string& text) {
 
-        const auto at = text.find('@');
-        if (at == std::string::npos) return std::nullopt;
-
-        auto tail = text.substr(at + 1);
+        auto placement = text;
         std::string label;
-        if (const auto colon = tail.find(':'); colon != std::string::npos) {
-            label = tail.substr(colon + 1);
-            tail = tail.substr(0, colon);
+        // The label is the tail after the LAST colon, which cannot be part of a
+        // number and so cannot be part of the placement.
+        if (const auto colon = placement.rfind(':'); colon != std::string::npos) {
+            label = placement.substr(colon + 1);
+            placement = placement.substr(0, colon);
         }
 
-        const auto triple = [](const std::string& s, threepp::Vector3& out) {
-            std::istringstream stream(s);
-            std::string part;
-            float values[3];
-            for (float& value : values) {
-                if (!std::getline(stream, part, ',')) return false;
-                try {
-                    value = std::stof(part);
-                } catch (const std::exception&) {
-                    return false;
-                }
-            }
-            out.set(values[0], values[1], values[2]);
-            return true;
-        };
-
         threepp::editor::EditorApp::Options::Shot shot;
-        if (!triple(text.substr(0, at), shot.position)) return std::nullopt;
-        if (!triple(tail, shot.target)) return std::nullopt;
+        if (!threepp::editor::EditorApp::parseViewSpec(placement, shot.position, shot.target)) {
+            return std::nullopt;
+        }
         shot.label = std::move(label);
         return shot;
     }
