@@ -18,13 +18,27 @@ ab_check.py           proves the bundle reproduces torch, on the training plant
 
 ## The four steps
 
+**To just watch it**, the bundle and the robot both ship — one command, then press Play:
+
 ```bash
-python export_bundle.py         # -> bundle_spot_steps/
-python ab_check.py              # PARITY + WALK must both pass before trusting the bundle
-python make_spot_urdf.py        # -> <threepp_data>/urdf/spot/spot_physics.urdf
-python make_scene.py            # -> spot_policy.json
+python make_scene.py            # -> spot_policy.json  (paths are absolute, so it is generated)
 threepp_editor spot_policy.json # press Play (or: --play --frames=1400)
 ```
+
+The full pipeline, for a *different* policy — or to re-export this one after retraining:
+
+```bash
+python export_bundle.py         # -> bundle_spot_steps/   (committed; this overwrites it)
+python ab_check.py              # PARITY + WALK must both pass before trusting the bundle
+python make_spot_urdf.py        # -> <threepp_data>/urdf/spot/spot_physics.urdf  (also committed)
+python make_scene.py
+```
+
+`bundle_spot_steps/` is checked in (856 KB) because this is a demo and the weights are its source —
+the same reason `spot_steps.pt` is checked in beside the trainer. The committed bundle is the one
+that passed the A/B: `max |obs diff| = 0.000e+00`, `max |action diff| = 4.8e-07`. Re-exporting
+rewrites `policy.npz` byte-for-byte differently even from identical weights (`np.savez` stamps zip
+entries with the current time), so re-export when the policy changes, not as a habit.
 
 **The robot ships with threepp_data** (`urdf/spot/`), so there is nothing to download. Both
 generators find it via `THREEPP_DATA_DIR`, then a sibling `threepp_data` checkout, then the

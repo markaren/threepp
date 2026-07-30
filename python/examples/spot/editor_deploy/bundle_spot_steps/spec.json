@@ -1,0 +1,272 @@
+{
+  "format": "threepp-policy-bundle/1",
+  "source": {
+    "checkpoint": "spot_steps.pt",
+    "trainer": "threepp.rl PPO"
+  },
+  "policy": {
+    "file": "policy.npz",
+    "layers": [
+      [
+        96,
+        512
+      ],
+      [
+        512,
+        256
+      ],
+      [
+        256,
+        128
+      ],
+      [
+        128,
+        12
+      ]
+    ],
+    "activation": "elu",
+    "deterministic": true
+  },
+  "normalizer": {
+    "kind": "running_mean_var",
+    "eps": 1e-08,
+    "clip": 10.0
+  },
+  "control": {
+    "hz": 50,
+    "dt": 0.02
+  },
+  "action": {
+    "kind": "joint_position_offset",
+    "scale": 0.2,
+    "clip": null
+  },
+  "joints": [
+    "fl.hx",
+    "fr.hx",
+    "hl.hx",
+    "hr.hx",
+    "fl.hy",
+    "fr.hy",
+    "hl.hy",
+    "hr.hy",
+    "fl.kn",
+    "fr.kn",
+    "hl.kn",
+    "hr.kn"
+  ],
+  "default_q": [
+    0.1,
+    -0.1,
+    0.1,
+    -0.1,
+    0.9,
+    0.9,
+    1.1,
+    1.1,
+    -1.5,
+    -1.5,
+    -1.5,
+    -1.5
+  ],
+  "limits": {
+    "fl.hx": null,
+    "fr.hx": null,
+    "hl.hx": null,
+    "hr.hx": null,
+    "fl.hy": null,
+    "fr.hy": null,
+    "hl.hy": null,
+    "hr.hy": null,
+    "fl.kn": null,
+    "fr.kn": null,
+    "hl.kn": null,
+    "hr.kn": null
+  },
+  "plant": {
+    "gains": {
+      "stiffness": 90.0,
+      "damping": 1.5,
+      "max_force_by_joint": {
+        "fl.hx": 45.0,
+        "fl.hy": 45.0,
+        "fl.kn": 115.0,
+        "fr.hx": 45.0,
+        "fr.hy": 45.0,
+        "fr.kn": 115.0,
+        "hl.hx": 45.0,
+        "hl.hy": 45.0,
+        "hl.kn": 115.0,
+        "hr.hx": 45.0,
+        "hr.hy": 45.0,
+        "hr.kn": 115.0
+      }
+    },
+    "fixed_base": false,
+    "self_collision": false,
+    "physics_dt": 0.005,
+    "solver_position_iterations": 12,
+    "spawn_height": 0.72,
+    "up_axis": "z"
+  },
+  "obs": [
+    {
+      "term": "base_lin_vel_body",
+      "dim": 3
+    },
+    {
+      "term": "base_ang_vel_body",
+      "dim": 3
+    },
+    {
+      "term": "projected_gravity",
+      "dim": 3
+    },
+    {
+      "term": "command",
+      "dim": 3,
+      "fields": [
+        "vx",
+        "vy",
+        "wz"
+      ]
+    },
+    {
+      "term": "joint_pos_rel_default",
+      "dim": 12
+    },
+    {
+      "term": "joint_vel",
+      "dim": 12
+    },
+    {
+      "term": "last_action",
+      "dim": 12
+    },
+    {
+      "term": "gait_clock",
+      "dim": 2,
+      "period": 0.5,
+      "encoding": "sin_cos",
+      "advance": "after_step"
+    },
+    {
+      "term": "base_height_above_ground",
+      "dim": 1
+    },
+    {
+      "term": "height_scan",
+      "dim": 45,
+      "grid_x": [
+        -0.35,
+        -0.35,
+        -0.35,
+        -0.35,
+        -0.35,
+        -0.15,
+        -0.15,
+        -0.15,
+        -0.15,
+        -0.15,
+        0.05,
+        0.05,
+        0.05,
+        0.05,
+        0.05,
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+        0.35,
+        0.35,
+        0.35,
+        0.35,
+        0.35,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.7,
+        0.7,
+        0.7,
+        0.7,
+        0.7,
+        0.9,
+        0.9,
+        0.9,
+        0.9,
+        0.9,
+        1.1,
+        1.1,
+        1.1,
+        1.1,
+        1.1
+      ],
+      "grid_y": [
+        -0.3,
+        -0.15,
+        0.0,
+        0.15,
+        0.3,
+        -0.3,
+        -0.15,
+        0.0,
+        0.15,
+        0.3,
+        -0.3,
+        -0.15,
+        0.0,
+        0.15,
+        0.3,
+        -0.3,
+        -0.15,
+        0.0,
+        0.15,
+        0.3,
+        -0.3,
+        -0.15,
+        0.0,
+        0.15,
+        0.3,
+        -0.3,
+        -0.15,
+        0.0,
+        0.15,
+        0.3,
+        -0.3,
+        -0.15,
+        0.0,
+        0.15,
+        0.3,
+        -0.3,
+        -0.15,
+        0.0,
+        0.15,
+        0.3,
+        -0.3,
+        -0.15,
+        0.0,
+        0.15,
+        0.3
+      ],
+      "relative_to": "height_under_base",
+      "clip": [
+        -1.0,
+        1.0
+      ],
+      "frame": "heading"
+    }
+  ],
+  "obs_dim": 96,
+  "act_dim": 12,
+  "command_envelope": {
+    "vx": [
+      -1.0,
+      1.5
+    ],
+    "vy": 0.8,
+    "wz": 1.2
+  }
+}
