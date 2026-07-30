@@ -8,6 +8,10 @@
 // simulates as a reduced-coordinate articulation: joint state in, drive
 // targets out — the surface a policy deployment loop needs, which is exactly
 // what a script standing in for one wants.
+// raycast(origin, direction, ...) is the other direction entirely: not a handle
+// onto one authored body but a QUESTION put to the whole playing world — what is
+// under my feet, what is in front of me, what am I aiming at. The ground check
+// every character controller opens with.
 //
 // Three things about the contract, stated once:
 //
@@ -25,7 +29,9 @@
 // This file is compiled only where the PhysX SDK was found, and registers into
 // the same threepp.editor submodule bind_editor.cpp creates — so in a build
 // without PhysX the names simply are not there, rather than existing and
-// always failing.
+// always failing. It is also EDITOR-only: unlike most of python/src it is not
+// one of the wheel's translation units, only one of threepp_editor_scripting's
+// — which is what lets it reach the script host's handleFor below.
 
 #include "bindings.hpp"
 
@@ -33,10 +39,18 @@
 // which the RigidBody/SoftBody halves never needed.
 #include <pybind11/stl.h>
 
+// handleFor: a raycast hands back an object the script never passed IN, so it
+// has to be cast to its concrete leaf type here (see the header's comment on
+// why casting one as Object3D across the virtual base is a heap bug waiting to
+// happen). The only such factory in the process, shared with the collision
+// payload, and in this same static library.
+#include "ScriptHost.hpp"
+
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <memory>
 #include <stdexcept>
@@ -46,6 +60,10 @@
 using namespace threepp;
 
 namespace {
+
+    // bindings.hpp puts the alias inside threepp_py; RaycastHit holds a Python
+    // object and lives out here, with the other handle types.
+    namespace py = pybind11;
 
     Vector3 toVector3(const ::physx::PxVec3& v) { return {v.x, v.y, v.z}; }
 
@@ -397,6 +415,69 @@ namespace {
     };
 
 
+    // What a raycast that hit something answers with. A value, entirely: the
+    // shape it came off may be gone by the next step, so nothing here points
+    // into PhysX.
+    struct RaycastHit {
+
+        // The authored object the hit actor belongs to, as its concrete type —
+        // or None when the actor answers to nothing the script can name.
+        py::object object;
+        Vector3 point;
+        Vector3 normal;
+        float distance = 0.f;
+    };
+
+
+    // Actors a query must not see.
+    //
+    // A PRE-filter, not a post-filter, because what is being excluded is an
+    // IDENTITY: which actor, known before a single triangle is touched. Rejecting
+    // the shape ahead of the exact intersection test is both the cheaper answer
+    // and the one PhysX documents for this; post-filtering would compute the
+    // intersection and then throw it away.
+    //
+    // A callback rather than query filter DATA, because the shapes' query filter
+    // data is not ours to write. PhysxWorld leaves it zero — its one filter bit
+    // (kContactReportFilterBit) is SIMULATION data, read by the filter shader —
+    // and a query whose own data is zero skips the hardcoded equation entirely,
+    // so every shape reaches this callback. Marking an ignore in per-shape data
+    // would mean editing the world, and unediting it afterwards, to ask one
+    // question.
+    class IgnoreActors: public ::physx::PxQueryFilterCallback {
+
+    public:
+        explicit IgnoreActors(const std::vector<const ::physx::PxRigidActor*>& actors)
+            : actors_(actors) {}
+
+        ::physx::PxQueryHitType::Enum preFilter(const ::physx::PxFilterData&,
+                                                const ::physx::PxShape*,
+                                                const ::physx::PxRigidActor* actor,
+                                                ::physx::PxHitFlags&) override {
+
+            for (const auto* ignored : actors_) {
+                if (ignored == actor) return ::physx::PxQueryHitType::eNONE;
+            }
+            // eBLOCK, not eTOUCH: with a prefilter installed PhysX stops
+            // defaulting the hit type, and only a blocking hit reaches
+            // PxRaycastBuffer::block — which is the nearest-hit answer this
+            // function is.
+            return ::physx::PxQueryHitType::eBLOCK;
+        }
+
+        ::physx::PxQueryHitType::Enum postFilter(const ::physx::PxFilterData&,
+                                                 const ::physx::PxQueryHit&,
+                                                 const ::physx::PxShape*,
+                                                 const ::physx::PxRigidActor*) override {
+
+            return ::physx::PxQueryHitType::eBLOCK;// never asked for; ePOSTFILTER is off
+        }
+
+    private:
+        const std::vector<const ::physx::PxRigidActor*>& actors_;
+    };
+
+
     // The world the editor is playing right now, or nullptr outside Play.
     editor::PhysicsPlaySession* playing() {
 
@@ -555,6 +636,105 @@ namespace threepp_py {
                 "running or no articulated robot governs it. The lookup walks up the scene "
                 "graph, so a script on any link of a robot finds the robot's articulation. "
                 "Robots simulate only when their Articulation section says Simulate.");
+
+        py::class_<RaycastHit>(
+                sub, "RaycastHit",
+                "What threepp.editor.raycast answers with when the ray hit something.\n\n"
+                "Values, all of it - nothing here points into PhysX, so keeping one is safe.")
+                .def_property_readonly(
+                        "object", [](const RaycastHit& h) { return h.object; },
+                        "The object the physics was authored on, as its concrete type (Mesh, "
+                        "Group, Robot, ...) - or None when the actor answers to nothing the "
+                        "script can name.")
+                .def_readonly("point", &RaycastHit::point, "WORLD-SPACE point of the hit.")
+                .def_readonly("normal", &RaycastHit::normal,
+                              "Unit surface normal there, pointing OUT of the surface hit.")
+                .def_readonly("distance", &RaycastHit::distance,
+                              "Metres from `origin` to `point`, along the ray.")
+                .def("__repr__", [](const RaycastHit& h) {
+                    std::string name = "None";
+                    if (!h.object.is_none()) {
+                        try {
+                            name = "'" + py::cast<std::string>(h.object.attr("name")) + "'";
+                        } catch (const py::error_already_set&) {
+                            name = "?";
+                        }
+                    }
+                    return "<threepp.editor.RaycastHit " + name + " at " +
+                           std::to_string(h.distance) + " m>";
+                });
+
+        sub.def(
+                "raycast", [](const Vector3& origin, const Vector3& direction, float maxDistance,
+                              const py::handle& ignore) -> py::object {
+                    using namespace ::physx;
+
+                    auto* session = playing();
+                    if (!session) {
+                        // A miss is None, so "not playing" must NOT be: the two
+                        // would be indistinguishable, and a ground check that
+                        // silently answers "nothing there" outside Play is a
+                        // script that looks like it works.
+                        throw std::runtime_error(
+                                "raycast needs a playing physics world - there is none "
+                                "(no PhysX build, or Play is not running)");
+                    }
+
+                    Vector3 unit(direction);
+                    const float length = unit.length();
+                    if (!(length > 0.f) || !std::isfinite(length)) {
+                        throw std::invalid_argument(
+                                "raycast: direction has no length - a ray needs somewhere to go");
+                    }
+                    unit.divideScalar(length);
+                    if (!(maxDistance > 0.f)) {
+                        throw std::invalid_argument("raycast: max_distance must be greater than zero");
+                    }
+
+                    // ALL the actors governing the ignored object, not just the
+                    // one a handle would name: a subtree collider or a compound
+                    // is several actors under one authored node, and skipping the
+                    // first of them would skip almost nothing.
+                    std::vector<const PxRigidActor*> ignored;
+                    if (!ignore.is_none()) {
+                        if (const auto object = as_object3d(ignore)) {
+                            ignored = session->findActors(object.get());
+                        }
+                    }
+
+                    PxQueryFilterData filter;// eSTATIC | eDYNAMIC
+                    IgnoreActors exclude(ignored);
+                    if (!ignored.empty()) filter.flags |= PxQueryFlag::ePREFILTER;
+
+                    PxRaycastBuffer buffer;
+                    const bool hit = session->world()->scene().raycast(
+                            toPxVec3(origin), toPxVec3(unit), maxDistance, buffer,
+                            PxHitFlag::eDEFAULT, filter,
+                            ignored.empty() ? nullptr : &exclude);
+                    if (!hit || !buffer.hasBlock) return py::none();
+
+                    const auto& block = buffer.block;
+                    RaycastHit result;
+                    result.object = py::none();
+                    if (auto* object = session->findObject(block.actor)) {
+                        result.object = editor::scripting::handleFor(*object);
+                    }
+                    result.point = toVector3(block.position);
+                    result.normal = toVector3(block.normal);
+                    result.distance = block.distance;
+                    return py::cast(result);
+                },
+                py::arg("origin"), py::arg("direction"),
+                py::arg("max_distance") = PX_MAX_F32, py::arg("ignore") = py::none(),
+                "Cast a ray through the playing physics world and return the NEAREST "
+                "RaycastHit, or None when it hits nothing.\n\n"
+                "`origin` and `direction` are Vector3, world space; direction is normalised "
+                "here, and a zero-length one raises ValueError. `max_distance` is in metres "
+                "and defaults to unbounded. `ignore` excludes every actor governing that "
+                "object - pass your own object for a ground check, or the ray starts inside "
+                "your own collider and hits it.\n\n"
+                "Raises RuntimeError when no physics world is playing: a miss is None, so "
+                "'not playing' cannot also be None without making the two the same answer.");
     }
 
 }// namespace threepp_py

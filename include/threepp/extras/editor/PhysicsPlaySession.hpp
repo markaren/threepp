@@ -123,21 +123,67 @@ namespace threepp::editor {
             return nullptr;
         }
 
+        // Every actor governing `object` — findActor, but plural.
+        //
+        // findActor answers with ONE actor because a handle needs one. An
+        // EXCLUSION needs them all: a subtree collider is a dozen cooked meshes
+        // under the single node the user authored, and ignoring only the first
+        // of them in a scene query would ignore almost nothing. Walks up the
+        // ancestry exactly as findActor does, then gathers every actor recorded
+        // against the node it lands on.
+        //
+        // Empty for an articulated robot: its links belong to the articulation,
+        // not to this registry (see findObject).
+        [[nodiscard]] std::vector<const ::physx::PxRigidActor*> findActors(const Object3D* object) const {
+
+            std::vector<const ::physx::PxRigidActor*> found;
+            const Object3D* owner = nullptr;
+            for (const Object3D* o = object; o != nullptr; o = o->parent) {
+                if (actors_.find(o) != actors_.end()) {
+                    owner = o;
+                    break;
+                }
+            }
+            if (!owner) return found;
+            for (const auto& [actor, node] : objects_) {
+                if (node == owner) found.push_back(actor);
+            }
+            return found;
+        }
+
         // The object an actor belongs to — findActor read backwards.
         //
         // For anything handed an actor by PhysX rather than by the scene graph: a
-        // contact report names two actors, and the script that has to be told
-        // what it hit wants the OBJECT. The answer is the node the PhysicsConfig
-        // was authored on, i.e. exactly the node findActor resolves TO, so the
-        // two directions agree by construction. A subtree collider (one authored
-        // static body, many cooked meshes) answers as its root for every actor it
-        // produced — a contact with any of them is a contact with the one thing
-        // the user put physics on.
+        // contact report names two actors, a scene query names the one it hit,
+        // and the script that has to be told what it touched wants the OBJECT.
+        // The answer is the node the PhysicsConfig was authored on, i.e. exactly
+        // the node findActor resolves TO, so the two directions agree by
+        // construction. A subtree collider (one authored static body, many cooked
+        // meshes) answers as its root for every actor it produced — a contact
+        // with any of them is a contact with the one thing the user put physics
+        // on.
         [[nodiscard]] Object3D* findObject(const ::physx::PxRigidActor* actor) const {
 
             if (!actor) return nullptr;
-            const auto it = objects_.find(actor);
-            return it == objects_.end() ? nullptr : it->second;
+            if (const auto it = objects_.find(actor); it != objects_.end()) return it->second;
+
+            // An articulation's links were never recorded here — an articulation
+            // builds its own actors, and the registry above only holds what
+            // createActor made. But the session knows its articulations, and a
+            // link carries the articulation it belongs to, so the robot is one
+            // pointer comparison away. Answering the ROBOT (not the link) is the
+            // same contract findArticulation already keeps: the articulation
+            // governs the whole subtree, and the robot is the node the user
+            // authored.
+            if (const auto* link = actor->is<::physx::PxArticulationLink>()) {
+                const auto* owner = &link->getArticulation();
+                for (const auto& played : articulations_) {
+                    if (played->articulation && played->articulation->rawArt() == owner) {
+                        return played->robot;
+                    }
+                }
+            }
+            return nullptr;
         }
 
         // A token that lives exactly as long as the world built by the last

@@ -1042,6 +1042,99 @@ int EditorApp::runSelfTest() {
         selectObject(nullptr);
         step();
     }
+
+    // threepp.editor.raycast: a query put to the same world, from a script that
+    // owns a body of its own — so the pass covers the case the API exists for,
+    // a ground check cast from INSIDE the caller's own collider. Nothing here is
+    // authored beyond a static floor and a falling box.
+    {
+        PhysicsConfig floorConfig;
+        floorConfig.enabled = true;
+        floorConfig.body = PhysicsConfig::Body::Static;
+        floorConfig.shape = PhysicsConfig::Shape::Box;
+        if (auto* floor = document_.scene().getObjectByName("Ground")) floorConfig.write(*floor);
+
+        auto prober = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        prober->name = "Prober";
+        prober->position.set(-3.f, 2.f, 0.f);
+        auto* raw = prober.get();
+
+        PhysicsConfig falling;
+        falling.enabled = true;
+        falling.body = PhysicsConfig::Body::Dynamic;
+        falling.shape = PhysicsConfig::Shape::Box;
+        falling.mass = 2.f;
+        falling.restitution = 0.f;
+        falling.write(*raw);
+        addObject(prober, document_.scene(), "Add Prober");
+
+        // Publishes into its own SCALE, like the collision pass: position is the
+        // simulation's for as long as this plays, and scale is not.
+        //   x  casts that named the floor with ignore
+        //   y  casts that named THIS body without it — the footgun, demonstrated
+        //   z  worst disagreement (x1000) between the ray's distance and the
+        //      body's own height, over the whole fall
+        setInlineScript(*raw,
+                        "import threepp\n"
+                        "\n"
+                        "class Prober:\n"
+                        "    def start(self, obj):\n"
+                        "        self.obj = obj\n"
+                        "        self.body = threepp.editor.rigid_body_from_object(obj)\n"
+                        "        self.found = 0\n"
+                        "        self.itself = 0\n"
+                        "        self.worst = 0.0\n"
+                        "\n"
+                        "    def fixed_update(self, dt):\n"
+                        "        if self.body is None:\n"
+                        "            return\n"
+                        "        p = self.body.position\n"
+                        "        down = threepp.Vector3(0.0, -1.0, 0.0)\n"
+                        "        hit = threepp.editor.raycast(p, down, 50.0, ignore=self.obj)\n"
+                        "        if hit is not None and hit.object is not None and \\\n"
+                        "                hit.object.name == \"Ground\" and hit.normal.y > 0.9:\n"
+                        "            self.found += 1\n"
+                        "            err = abs(hit.distance - p.y)\n"
+                        "            if err > self.worst:\n"
+                        "                self.worst = err\n"
+                        "        naive = threepp.editor.raycast(p, down, 50.0)\n"
+                        "        if naive is not None and naive.object is not None and \\\n"
+                        "                naive.object.name == \"Prober\":\n"
+                        "            self.itself += 1\n"
+                        "\n"
+                        "    def update(self, dt):\n"
+                        "        self.obj.scale.set(float(self.found), float(self.itself),\n"
+                        "                           self.worst * 1000.0)\n",
+                        "Prober Script");
+        step();
+
+        const auto proberUuid = raw->uuid;
+        startPlay();
+        stepFixed(120);
+
+        auto* live = findByUuid(document_.scene(), proberUuid);
+        check(live && static_cast<int>(live->scale.x) == 120,
+              "a raycast from fixed_update finds the floor on every substep");
+        check(live && static_cast<int>(live->scale.y) == 120,
+              "and without ignore the same ray finds the caller's own collider");
+        check(live && live->scale.z < 10.f,
+              "and the distance it reports agrees with the body's own pose");
+        check(scripts_ && scripts_->errorFor(proberUuid).empty(),
+              "and the queries raised nothing");
+
+        stopPlay();
+        step();
+
+        if (auto* done = findByUuid(document_.scene(), proberUuid)) {
+            selectObject(done);
+            deleteSelected();
+        }
+        if (auto* groundNow = document_.scene().getObjectByName("Ground")) {
+            PhysicsConfig::erase(*groundNow);
+        }
+        selectObject(nullptr);
+        step();
+    }
 #endif
 
     // Compound / decomposed convex colliders: an imported model is a Group with

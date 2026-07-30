@@ -65,10 +65,11 @@ if (TARGET threepp_editor_scripting)
     # host above, and the PhysX SDK the play session is built on. The sensor
     # handles are the same story one session over, and fixed_update is a script
     # session driven BY the physics world's substep loop — no SDK, no clock. The
-    # collision callbacks are driven by that world's contact reports, likewise.
+    # collision callbacks are driven by that world's contact reports, likewise,
+    # and raycast is a query put to that same world.
     if (TARGET unofficial::omniverse-physx-sdk::sdk)
         foreach (name EditorScriptPhysics_test EditorScriptSensors_test EditorScriptFixedUpdate_test
-                EditorScriptCollision_test)
+                EditorScriptCollision_test EditorScriptRaycast_test)
             add_test_executable(${name})
             target_link_libraries(${name}
                     PRIVATE threepp_editor_scripting unofficial::omniverse-physx-sdk::sdk)

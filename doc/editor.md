@@ -667,9 +667,9 @@ class Impact:
 * **`other` is the object the physics was authored on**, found by walking up the
   scene graph exactly as
   [`rigid_body_from_object`](#physics-from-a-script) does — so a contact against
-  one cooked mesh of a spline's tube names the spline, not the mesh. It is a
-  handle like any other: use it during the session, do not stash it across Play
-  sessions.
+  one cooked mesh of a spline's tube names the spline, not the mesh, and a
+  contact against a simulated robot's link names the robot. It is a handle like
+  any other: use it during the session, do not stash it across Play sessions.
 * **Reporting turns itself on.** There is no box to tick. At Play the session
   finds the body governing every scripted object whose class defines either
   method and enables PhysX contact reporting on it. An object with the callbacks
@@ -710,9 +710,91 @@ collide), **`on_collision_stay`** (a resting contact stops being re-reported the
 moment PhysX puts the pair to sleep, so a per-frame "still touching" callback
 would lie), **per-contact-point lists** beyond the single representative point
 above, **soft bodies** (a deformable volume has no rigid actor to watch), and
-**articulation links** — a simulated robot's links are the articulation's, not
-the session's actor registry's, so a script on a robot resolves no body and gets
-the no-body line.
+**watching a robot** — a simulated robot's links are the articulation's, not the
+session's actor registry's, so a script on a robot resolves no body of its own
+and gets the no-body line. (Being *hit* by one is fine: a contact against a link
+names the robot, the same way a raycast does.)
+
+#### Raycasts: `threepp.editor.raycast`
+
+A collision tells you what already happened. A **raycast** asks a question about
+the world *now* — what is under my feet, what is in front of me, what am I
+aiming at — and answers synchronously, wherever you call it from:
+
+```python
+hit = threepp.editor.raycast(origin, direction, max_distance=100.0, ignore=self.obj)
+if hit is not None:
+    hit.object      # the object the physics was authored on, as its concrete type, or None
+    hit.point       # threepp.Vector3, world space
+    hit.normal      # threepp.Vector3, unit, pointing out of the surface hit
+    hit.distance    # float, metres from origin along the ray
+```
+
+The whole ground check, which is what it is mostly for:
+
+```python
+import threepp
+
+
+class Hopper:
+    probe = 0.6              # metres: just past the bottom of a unit box
+
+    def start(self, obj: threepp.Object3D):
+        self.obj = obj
+        self.body = threepp.editor.rigid_body_from_object(obj)
+
+    def fixed_update(self, dt: float):
+        if self.body is None:
+            return
+        down = threepp.Vector3(0, -1, 0)
+        hit = threepp.editor.raycast(self.body.position, down, self.probe, ignore=self.obj)
+        if hit is not None and self.body.velocity.y <= 0.0:
+            self.body.apply_impulse(threepp.Vector3(0, 4.0 * self.body.mass, 0))
+```
+
+* **A miss is `None`. Not playing is a `RuntimeError`.** Those are two different
+  answers and they are kept different: if "no physics world" also came back as
+  `None`, a ground check written outside Play would look like it worked and
+  silently report empty air forever. Same reasoning as
+  [`encoder_from_object`](#sensors-from-a-script) raising for an unknown joint.
+  A zero-length `direction` is a `ValueError`, as is a `max_distance` of zero or
+  less.
+* **`ignore=obj` excludes every actor governing that object** — the walk up the
+  ancestry that finds its body, and then *all* of the actors recorded against
+  the node it lands on, since a subtree collider or a compound is many actors
+  under one authored node. **Pass your own object for any cast that starts
+  inside your own collider**, which a cast from `body.position` always does: a
+  ray that starts inside a box hits that box at distance zero, and a ground
+  check without `ignore` is a ground check that has found itself.
+* **`origin` and `direction` are `Vector3`s in world space.** The direction is
+  normalised for you, so `Vector3(0, -1, 0)` and `Vector3(0, -37, 0)` are the
+  same ray. `max_distance` is in metres and defaults to unbounded, so a miss
+  means the ray genuinely left the world rather than ran out of budget.
+* **The nearest hit, and only that one.** There is no all-hits form and no
+  sweep; this is the primitive, not a query library.
+* **`hit.object` is the object the physics was authored on**, as its concrete
+  type (`Mesh`, `Group`, `Robot`, …) — the same answer `contact.other` gives, so
+  a hit on the fourth cooked mesh of a spline's tube names the spline, and a hit
+  on a robot's forearm names the robot. It is `None` only when the actor answers
+  to nothing the scene can name; `hit.point`, `hit.normal` and `hit.distance`
+  are still valid in that case.
+* **Call it from anywhere a script runs**: `update`, `fixed_update`,
+  `on_collision_enter` / `on_collision_exit`. All of those run on the editor
+  thread with the GIL held and *outside* `simulate()` — a substep is
+  `pre-hook → simulate → fetchResults → post-hook`, so the pre-substep hook
+  `fixed_update` runs from sits between one substep's results and the next
+  solve, which is exactly where a scene query is legal. A cast from
+  `fixed_update` reads the substep it is standing in, not last frame's pose.
+
+What the query sees in this world, stated rather than assumed:
+
+| body | seen? |
+| --- | --- |
+| static | yes |
+| dynamic | yes |
+| kinematic | yes — a kinematic actor is a `PxRigidDynamic`, and the query asks for static and dynamic both |
+| an articulated robot's links | yes, and each one answers as the **robot** |
+| soft bodies | **no** — a deformable volume's shape is created without PhysX's scene-query flag, so it is not in the query structures at all |
 
 #### The Script Editor
 
@@ -1218,7 +1300,9 @@ per substep, at a constant dt.
 The body is also what
 [`on_collision_enter` / `on_collision_exit`](#collisions-on_collision_enter--on_collision_exit)
 watch: same lookup, same object, and no handle to ask for — the session resolves
-it at Play for any script that defines either method.
+it at Play for any script that defines either method. To ask about a body that
+is *not* yours — what is under your feet, what is in front of you — cast a ray:
+[`threepp.editor.raycast`](#raycasts-threeppeditorraycast).
 
 Soft bodies get `threepp.editor.soft_body_from_object`, which is deliberately
 thinner — PhysX drives a deformable volume through per-vertex GPU buffers, so

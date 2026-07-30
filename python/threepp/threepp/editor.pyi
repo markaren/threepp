@@ -4,7 +4,7 @@ The runtime face of editor-authored data.
 from __future__ import annotations
 import typing
 import threepp
-__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'RigidBody', 'SoftBody', 'SplinePath', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'rigid_body_from_object', 'scene', 'soft_body_from_object', 'spline_from_object']
+__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'raycast', 'rigid_body_from_object', 'scene', 'soft_body_from_object', 'spline_from_object']
 class SplinePath:
     def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> threepp.Vector3:
         """
@@ -223,6 +223,32 @@ class Articulation:
     def root_angular_velocity(self) -> threepp.Vector3:
         """
         Root link angular velocity in rad/s, world frame.
+        """
+class RaycastHit:
+    """
+    What threepp.editor.raycast answers with when the ray hit something.
+
+    Values, all of it - nothing here points into PhysX, so keeping one is safe.
+    """
+    @property
+    def object(self) -> threepp.Object3D | None:
+        """
+        The object the physics was authored on, as its concrete type (Mesh, Group, Robot, ...) - or None when the actor answers to nothing the script can name.
+        """
+    @property
+    def point(self) -> threepp.Vector3:
+        """
+        WORLD-SPACE point of the hit.
+        """
+    @property
+    def normal(self) -> threepp.Vector3:
+        """
+        Unit surface normal there, pointing OUT of the surface hit.
+        """
+    @property
+    def distance(self) -> float:
+        """
+        Metres from `origin` to `point`, along the ray.
         """
 class ImuSample:
     """
@@ -452,6 +478,14 @@ def force_torque_from_object(object: threepp.Object3D | None) -> ForceTorque | N
 def imu_from_object(object: threepp.Object3D | None) -> Imu | None:
     """
     The live IMU authored on `object`, or None when Play is not running or no IMU measures it. The lookup walks up the scene graph, so a script on a child finds the sensor on its link.
+    """
+def raycast(origin: threepp.Vector3, direction: threepp.Vector3, max_distance: float = 3.4028234663852886e+38, ignore: threepp.Object3D | None = None) -> RaycastHit | None:
+    """
+    Cast a ray through the playing physics world and return the NEAREST RaycastHit, or None when it hits nothing.
+
+    `origin` and `direction` are Vector3, world space; direction is normalised here, and a zero-length one raises ValueError. `max_distance` is in metres and defaults to unbounded. `ignore` excludes every actor governing that object - pass your own object for a ground check, or the ray starts inside your own collider and hits it.
+
+    Raises RuntimeError when no physics world is playing: a miss is None, so 'not playing' cannot also be None without making the two the same answer.
     """
 def rigid_body_from_object(object: threepp.Object3D | None) -> RigidBody | None:
     """
