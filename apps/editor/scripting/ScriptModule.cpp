@@ -48,6 +48,7 @@
 #include "threepp/scenes/Scene.hpp"
 
 #include <memory>
+#include <string>
 
 using namespace threepp;
 
@@ -83,10 +84,54 @@ PYBIND11_EMBEDDED_MODULE(threepp, m) {
     // sensors the play session is running, which is how a script closes a loop
     // on NOISY measurements rather than on the simulation's ground truth.
     tp::init_editor_sensors(m);
+    // threepp.editor.Collision — the payload of on_collision_enter /
+    // on_collision_exit. Nothing produces one without a physics world, so like
+    // the handles above the name is simply absent in a build without the SDK.
+    threepp::editor::scripting::initCollision(m);
 #endif
 }
 
 namespace threepp::editor::scripting {
+
+    void initCollision(py::module_& m) {
+
+        // The submodule init_editor already made — never a second one, or the
+        // names would land somewhere no script imports.
+        auto sub = m.attr("editor");
+
+        py::class_<Collision>(
+                sub, "Collision",
+                "One touch, as on_collision_enter / on_collision_exit are handed it.\n\n"
+                "A value copied out of the physics report that produced it, so keeping it "
+                "is safe. `other` is the object on the far side of the touch, as its "
+                "concrete type - or None when that body belongs to nothing the script can "
+                "see. The contact geometry describes the ENTER only; an exit has no "
+                "manifold left to read and carries zeros.")
+                .def_property_readonly(
+                        "other", [](const Collision& c) { return c.other; },
+                        "The other object, as its concrete type (Mesh, Robot, ...), or None.")
+                .def_readonly("point", &Collision::point,
+                              "WORLD-SPACE point of the hardest-hit manifold point, at the "
+                              "substep the touch began.")
+                .def_readonly("normal", &Collision::normal,
+                              "Unit contact normal at that point, pointing INTO this script's "
+                              "body - the direction the other body is pushing it.")
+                .def_readonly("impulse", &Collision::impulse,
+                              "Total impulse over the manifold (N*s), same orientation. Divide "
+                              "by the substep to read it as a force.")
+                .def("__repr__", [](const Collision& c) {
+                    std::string other = "None";
+                    if (!c.other.is_none()) {
+                        try {
+                            other = py::cast<std::string>(
+                                    c.other.attr("__class__").attr("__name__"));
+                        } catch (const py::error_already_set&) {
+                            other = "?";
+                        }
+                    }
+                    return "<threepp.editor.Collision other=" + other + ">";
+                });
+    }
 
     void registerEmbeddedModule() {
 

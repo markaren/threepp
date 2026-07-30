@@ -950,6 +950,98 @@ int EditorApp::runSelfTest() {
         selectObject(nullptr);
         step();
     }
+
+    // on_collision_enter / on_collision_exit: the same registration story one
+    // step further out. Here nothing is authored beyond two physics bodies and a
+    // script — the contact-report opt-in, the actor lookup and the queue are all
+    // the session's doing — so this is the pass that proves Play alone is enough
+    // to make the callbacks fire, through the real PlayController.
+    {
+        // The template Ground is a plain mesh; give it a static collider for the
+        // duration, exactly as the soft-body pass above does.
+        PhysicsConfig floorConfig;
+        floorConfig.enabled = true;
+        floorConfig.body = PhysicsConfig::Body::Static;
+        floorConfig.shape = PhysicsConfig::Shape::Box;
+        if (auto* floor = document_.scene().getObjectByName("Ground")) floorConfig.write(*floor);
+
+        auto bumper = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        bumper->name = "Bumper";
+        // Beside the template Box, which has no collider of its own.
+        bumper->position.set(3.f, 2.f, 0.f);
+        auto* raw = bumper.get();
+
+        PhysicsConfig falling;
+        falling.enabled = true;
+        falling.body = PhysicsConfig::Body::Dynamic;
+        falling.shape = PhysicsConfig::Shape::Box;
+        falling.mass = 2.f;
+        falling.restitution = 0.05f;
+        falling.write(*raw);
+        addObject(bumper, document_.scene(), "Add Bumper");
+
+        // Publishes into its own SCALE: position and orientation belong to the
+        // simulation for as long as this is playing, and scale does not.
+        // `ok` folds the whole payload contract into one number — the other
+        // object resolved, as its concrete type, under the right name, with a
+        // normal pointing up out of the ground and a real impulse behind it.
+        setInlineScript(*raw,
+                        "class Bumper:\n"
+                        "    def start(self, obj):\n"
+                        "        self.obj = obj\n"
+                        "        self.enters = 0\n"
+                        "        self.exits = 0\n"
+                        "        self.ok = 0\n"
+                        "\n"
+                        "    def on_collision_enter(self, contact):\n"
+                        "        self.enters += 1\n"
+                        "        i = contact.impulse\n"
+                        "        strength = (i.x * i.x + i.y * i.y + i.z * i.z) ** 0.5\n"
+                        "        other = contact.other\n"
+                        "        if (other is not None and other.name == \"Ground\" and\n"
+                        "                type(other).__name__ == \"Mesh\" and\n"
+                        "                contact.normal.y > 0.9 and strength > 0.0):\n"
+                        "            self.ok += 1\n"
+                        "\n"
+                        "    def on_collision_exit(self, contact):\n"
+                        "        self.exits += 1\n"
+                        "\n"
+                        "    def update(self, dt):\n"
+                        "        self.obj.scale.set(float(self.enters), float(self.ok),\n"
+                        "                           float(self.exits))\n",
+                        "Bumper Script");
+        step();
+
+        const auto bumperUuid = raw->uuid;
+        startPlay();
+        // 1.5 m of fall at one substep per frame, then a while resting on it:
+        // PhysX re-reports the manifold every substep until the pair sleeps, and
+        // not one of those may read as a second touch.
+        stepFixed(150);
+
+        auto* live = findByUuid(document_.scene(), bumperUuid);
+        check(live && static_cast<int>(live->scale.x) == 1,
+              "a landing body's script gets exactly one on_collision_enter");
+        check(live && static_cast<int>(live->scale.y) == 1,
+              "and the contact names the other object, with a normal and an impulse");
+        check(live && static_cast<int>(live->scale.z) == 0,
+              "and no exit while it is still standing on it");
+        check(scripts_ && scripts_->errorFor(bumperUuid).empty(),
+              "and the collision sweep raised nothing");
+
+        stopPlay();
+        step();
+
+        if (auto* done = findByUuid(document_.scene(), bumperUuid)) {
+            selectObject(done);
+            deleteSelected();
+        }
+        if (auto* groundNow = document_.scene().getObjectByName("Ground")) {
+            PhysicsConfig::erase(*groundNow);
+        }
+        selectObject(nullptr);
+        step();
+    }
 #endif
 
     // Compound / decomposed convex colliders: an imported model is a Group with

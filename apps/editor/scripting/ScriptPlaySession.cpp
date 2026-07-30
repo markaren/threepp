@@ -7,16 +7,18 @@
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/scenes/Scene.hpp"
 
-// fixed_update rides the physics world's substep loop, so this session has to
-// reach the world the PhysicsPlaySession is playing. Same seam
-// bind_editor_physics.cpp uses — the static active() on the session, plus its
-// lifetime token — and gated on the same SDK: without PhysX there is no fixed
-// clock to run on, and the session says so once instead of inventing one.
+// fixed_update rides the physics world's substep loop, and the collision
+// callbacks ride its contact reports, so this session has to reach the world the
+// PhysicsPlaySession is playing. Same seam bind_editor_physics.cpp uses — the
+// static active() on the session, plus its lifetime token — and gated on the
+// same SDK: without PhysX there is no fixed clock to run on and no contact to
+// report, and the session says so once instead of inventing either.
 #ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #endif
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -83,11 +85,20 @@ struct ScriptPlaySession::Impl {
         std::string origin;
         // The script object itself. Created and destroyed with the GIL held.
         py::object self;
+        // The object the script is attached to. Weak, because a script instance
+        // outlives nothing but the session and the scene is not ours: this is
+        // only ever used to resolve the body at start().
+        std::weak_ptr<Object3D> object;
         bool hasUpdate = false;
         bool hasStop = false;
         // Cached like the others, and for the same reason: hasattr is a dict
         // lookup down the MRO, and this one would otherwise be paid per SUBSTEP.
         bool hasFixedUpdate = false;
+        // Cached for the same reason one step harder: these are consulted from
+        // inside PhysX's contact callback, where a dict lookup down the MRO is
+        // paid per reported pair per substep.
+        bool hasCollisionEnter = false;
+        bool hasCollisionExit = false;
         // Set the first time this script raises. It stays set for the rest of
         // the session: a script that throws every frame must not fill the
         // console with the same traceback sixty times a second.
@@ -174,9 +185,27 @@ struct ScriptPlaySession::Impl {
     // makes "is my registration still there to remove" answerable without ever
     // dereferencing a dead pointer.
     PhysxWorld* world = nullptr;
+    PhysicsPlaySession* physics = nullptr;
     std::weak_ptr<const void> worldLife;
     PhysxWorld::SubstepHandle substep = 0;
     bool registered = false;
+
+    // Take hold of the playing world, if there is one. Both the substep hook and
+    // the contact watches want it, and both want the same token guarding it.
+    bool bindWorld() {
+
+        if (world) return true;
+        // PhysicsPlaySession::start() always builds a world, even for a scene
+        // with nothing physical in it — so "a session is playing" is the whole
+        // condition. Sessions start in registration order and physics is first,
+        // so it is already up by the time we get here.
+        auto* session = PhysicsPlaySession::active();
+        if (!session || !session->world()) return false;
+        physics = session;
+        world = session->world();
+        worldLife = session->lifetime();
+        return true;
+    }
 #endif
 
     // Live instances that define fixed_update.
@@ -197,13 +226,7 @@ struct ScriptPlaySession::Impl {
         if (wanted == 0) return;
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-        // PhysicsPlaySession::start() always builds a world, even for a scene
-        // with nothing physical in it — so "a session is playing" is the whole
-        // condition. Sessions start in registration order and physics is first,
-        // so it is already up by the time we get here.
-        if (auto* physics = PhysicsPlaySession::active(); physics && physics->world()) {
-            world = physics->world();
-            worldLife = physics->lifetime();
+        if (bindWorld()) {
             substep = world->onPreSubstep([this](float dt) { fixedUpdate(dt); });
             registered = true;
             return;
@@ -222,11 +245,25 @@ struct ScriptPlaySession::Impl {
     void detachFromPhysics() {
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-        if (registered && world && !worldLife.expired()) {
+        const bool alive = world && !worldLife.expired();
+        if (registered && alive) {
             world->removeSubstepCallback(substep);
         }
+        for (auto& watch : watches) {
+            if (watch.handle && alive) world->unwatchContacts(watch.handle);
+            // The actor's contact-report bit is deliberately LEFT SET. It is one
+            // bit shared by every watcher of that body, so clearing it here
+            // would silence a ContactSensor authored on the same object — the
+            // same reasoning ContactSensor::detach() applies in the other
+            // direction. It dies with the actor.
+        }
+        // The queues hold nothing Python-shaped (see QueuedCollision), so this
+        // needs no GIL and is safe from stop(), from the destructor, and from a
+        // teardown where the interpreter was never started at all.
+        watches.clear();
         registered = false;
         world = nullptr;
+        physics = nullptr;
         worldLife.reset();
 #endif
     }
@@ -258,6 +295,276 @@ struct ScriptPlaySession::Impl {
         }
     }
 
+    // --- collisions --------------------------------------------------------
+    //
+    // on_collision_enter / on_collision_exit fire when the body governing a
+    // script's object starts and stops touching another body. Three things make
+    // that harder than it sounds, and all three are settled here.
+    //
+    // 1. PhysX reports contacts from inside fetchResults(), i.e. mid-simulate.
+    //    Calling into Python there would let a script mutate the scene, or the
+    //    world, while the solver still owns it — and would take the GIL inside
+    //    the physics step. So the report is COPIED into a queue (nothing but
+    //    values and a weak object reference; the manifold PhysX hands over is
+    //    valid for the duration of the callback and no longer), and the queue is
+    //    delivered from the frame sweep.
+    //
+    //    The queue is a LIST, never a state flag. A touch that begins and ends
+    //    between two deliveries — a fast bounce, or two substeps in one frame —
+    //    must still produce enter followed by exit, and collapsing the pair into
+    //    "no change" would drop exactly the event a script cares most about.
+    //
+    // 2. Reporting is opt-in per actor (a bit in the shape's word3), and nobody
+    //    ticks a box: start() turns it on for every live instance whose class
+    //    defines either method, resolving the actor the same way
+    //    rigid_body_from_object does. An object with the callbacks and no body
+    //    gets one line and never fires.
+    //
+    // 3. One touch is one PAIR OF BODIES, not one shape pair. A box lands on the
+    //    ground through four manifold points and possibly several shapes; that is
+    //    ONE enter. The refcount below is what keeps a LOST on one shape from
+    //    reporting an exit the others are still holding — the same bug
+    //    ContactSensor's latch was written to avoid, for the same reason.
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+
+    // One other body this watch is currently touching, and through how many
+    // shape pairs.
+    struct Touch {
+        ::physx::PxRigidActor* other = nullptr;
+        int pairs = 0;
+    };
+
+    // One reported edge, copied at report time and waiting for the sweep.
+    // Deliberately free of py::object: it is built in PhysX's callback, where
+    // this session holds no GIL, and cleared at stop, where there may be no
+    // interpreter at all.
+    struct QueuedCollision {
+        bool enter = false;
+        // The far side, as the object the physics was authored on. Weak because
+        // the delivery is a sweep later; empty when that actor belongs to
+        // nothing a script can see.
+        std::weak_ptr<Object3D> other;
+        Vector3 point;
+        Vector3 normal;
+        Vector3 impulse;
+    };
+
+    struct CollisionWatch {
+        std::size_t instance = 0;// index into instances, stable after start()
+        ::physx::PxRigidActor* actor = nullptr;
+        PhysxWorld::ContactHandle handle = 0;
+        std::vector<Touch> touching;
+        std::vector<QueuedCollision> queue;
+    };
+
+    std::vector<CollisionWatch> watches;
+
+    // 0 -> 1 for this body? (The caller only reports an enter on the edge.)
+    static bool acquireTouch(std::vector<Touch>& touching, ::physx::PxRigidActor* other) {
+
+        for (auto& touch : touching) {
+            if (touch.other == other) {
+                ++touch.pairs;
+                return false;
+            }
+        }
+        touching.push_back({other, 1});
+        return true;
+    }
+
+    // ...and back to 0?
+    static bool releaseTouch(std::vector<Touch>& touching, const ::physx::PxRigidActor* other) {
+
+        for (auto it = touching.begin(); it != touching.end(); ++it) {
+            if (it->other != other) continue;
+            if (--it->pairs <= 0) {
+                touching.erase(it);
+                return true;
+            }
+            return false;
+        }
+        return false;
+    }
+
+    // The object on the far side, weakly. Resolved HERE rather than at delivery
+    // because the actor pointer is only meaningful while the world that owns it
+    // is; the object outlives both.
+    [[nodiscard]] std::weak_ptr<Object3D> objectFor(const ::physx::PxRigidActor* actor) const {
+
+        if (!physics || worldLife.expired()) return {};
+        auto* object = physics->findObject(actor);
+        // weak_from_this, not shared_from_this: a node somehow not owned by a
+        // shared_ptr answers "nothing" instead of throwing into the solver.
+        return object ? object->weak_from_this() : std::weak_ptr<Object3D>{};
+    }
+
+    // Called from inside fetchResults(), once per reported pair per substep.
+    // Everything here is pointer arithmetic and vector pushes — no Python, no
+    // allocation that can throw into PhysX's lap beyond the queue's own growth.
+    void onContact(std::size_t watchIndex, const ContactEvent& event) {
+
+        auto& watch = watches[watchIndex];
+        const auto& instance = instances[watch.instance];
+        // A disabled instance still gets its latch maintained — cheap, and it
+        // keeps the state honest — but nothing is queued for it.
+        const bool live = !instance.failed;
+
+        if (event.touchFound && acquireTouch(watch.touching, event.other)) {
+            if (live && instance.hasCollisionEnter) queueEnter(watch, event);
+        }
+        if (event.touchLost && releaseTouch(watch.touching, event.other)) {
+            if (live && instance.hasCollisionExit) queueExit(watch, event);
+        }
+    }
+
+    void queueEnter(CollisionWatch& watch, const ContactEvent& event) {
+
+        QueuedCollision queued;
+        queued.enter = true;
+        queued.other = objectFor(event.other);
+
+        // PhysX expresses a pair's normal and impulse relative to the pair's
+        // FIRST actor. Flip when the watched body is the second, so `normal`
+        // always points into the script's own body whichever order PhysX
+        // happened to put the pair in.
+        const float sign = event.selfIsFirst ? 1.f : -1.f;
+        float hardest = -1.f;
+        for (::physx::PxU32 i = 0; i < event.pointCount; ++i) {
+            const auto& point = event.points[i];
+            const Vector3 impulse(point.impulse.x * sign, point.impulse.y * sign,
+                                  point.impulse.z * sign);
+            queued.impulse.add(impulse);
+            // One representative point, and the one worth having: where the hit
+            // was hardest. (A first-point rule would pick a manifold corner.)
+            const float magnitude = impulse.length();
+            if (magnitude > hardest) {
+                hardest = magnitude;
+                queued.point.set(point.position.x, point.position.y, point.position.z);
+                queued.normal.set(point.normal.x * sign, point.normal.y * sign,
+                                  point.normal.z * sign);
+            }
+        }
+        watch.queue.push_back(std::move(queued));
+    }
+
+    void queueExit(CollisionWatch& watch, const ContactEvent& event) {
+
+        QueuedCollision queued;
+        queued.enter = false;
+        queued.other = objectFor(event.other);
+        // No geometry: a lost touch has no manifold left to extract, which is
+        // why PhysX does not offer one and why `contact` carries zeros here.
+        watch.queue.push_back(std::move(queued));
+    }
+
+#endif
+
+    [[nodiscard]] bool collisionsPending() const {
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        for (const auto& watch : watches) {
+            if (!watch.queue.empty()) return true;
+        }
+#endif
+        return false;
+    }
+
+    // Live instances whose class defines either callback.
+    [[nodiscard]] std::size_t collisionsWanted() const {
+
+        std::size_t wanted = 0;
+        for (const auto& instance : instances) {
+            if (instance.failed) continue;
+            if (instance.hasCollisionEnter || instance.hasCollisionExit) ++wanted;
+        }
+        return wanted;
+    }
+
+    // Turn contact reporting on for every scripted body that asked for it, in
+    // instance order — which is the order the sweeps run in, so the whole
+    // feature stays as deterministic as the substep it rides on.
+    void attachCollisions() {
+
+        const auto wanted = collisionsWanted();
+        if (wanted == 0) return;
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        if (bindWorld()) {
+            for (std::size_t i = 0; i < instances.size(); ++i) {
+                const auto& instance = instances[i];
+                if (instance.failed) continue;
+                if (!instance.hasCollisionEnter && !instance.hasCollisionExit) continue;
+
+                const auto object = instance.object.lock();
+                // The same walk up the ancestry rigid_body_from_object does, so
+                // a script on a child of a physics object watches the body that
+                // governs it — and covers static bodies, which are never bound
+                // and would be invisible to PhysxWorld::findActor.
+                auto* actor = object ? physics->findActor(object.get()) : nullptr;
+                if (!actor) {
+                    log("collision callbacks need a physics body - " + instance.label +
+                        " has none, so they never fire");
+                    continue;
+                }
+                watches.push_back(CollisionWatch{i, actor, 0, {}, {}});
+            }
+            // Registered only once the vector is final: watchContacts takes a
+            // callback that has to name its watch, and an index survives the
+            // reallocation a pointer would not.
+            for (std::size_t w = 0; w < watches.size(); ++w) {
+                watches[w].handle = world->watchContacts(
+                        watches[w].actor,
+                        [this, w](const ContactEvent& event) { onContact(w, event); });
+            }
+            return;
+        }
+#endif
+        // No world, no contacts. Same shape as fixed_update's line, and the same
+        // reason: the methods are not quietly dropped, they are reported once.
+        log("collision callbacks need a playing physics world - they never run on " +
+            std::to_string(wanted) + (wanted == 1 ? " script" : " scripts"));
+    }
+
+    // One sweep of everything queued since the last one, in instance order and
+    // in queue order within an instance. GIL must be held by the caller — this
+    // shares the frame sweep's single acquisition.
+    void deliverCollisions() {
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        for (auto& watch : watches) {
+            if (watch.queue.empty()) continue;
+            // Moved out first: whatever a callback does, it cannot be handed the
+            // same event twice, and the queue is empty again from here on.
+            const auto queued = std::move(watch.queue);
+            watch.queue.clear();
+
+            auto& instance = instances[watch.instance];
+            for (const auto& event : queued) {
+                if (instance.failed) break;// disabled by an earlier event
+                const char* method = event.enter ? "on_collision_enter" : "on_collision_exit";
+                if (event.enter ? !instance.hasCollisionEnter : !instance.hasCollisionExit) continue;
+                try {
+                    scripting::Collision contact;
+                    contact.point = event.point;
+                    contact.normal = event.normal;
+                    contact.impulse = event.impulse;
+                    if (const auto other = event.other.lock()) {
+                        contact.other = scripting::handleFor(*other);
+                    } else {
+                        contact.other = py::none();
+                    }
+                    instance.self.attr(method)(py::cast(contact));
+                } catch (py::error_already_set& e) {
+                    fail(instance, method, scripting::describeError(e));
+                } catch (const std::exception& e) {
+                    fail(instance, method, e.what());
+                }
+            }
+        }
+#endif
+    }
+
     // Drops every interpreter-side object. GIL is acquired here rather than by
     // the caller so this is safe from the destructor too.
     void release() {
@@ -280,8 +587,9 @@ ScriptPlaySession::ScriptPlaySession()
 ScriptPlaySession::~ScriptPlaySession() {
 
     // The editor torn down mid-Play never gets a stop(), and a substep callback
-    // outliving the object it captured is exactly what PhysxWorld's "anything
-    // that registers must unregister in its destructor" rule is about.
+    // — or a contact watch — outliving the object it captured is exactly what
+    // PhysxWorld's "anything that registers must unregister in its destructor"
+    // rule is about.
     impl_->detachFromPhysics();
     impl_->release();
 }
@@ -314,9 +622,10 @@ std::size_t ScriptPlaySession::instanceCount() const {
 
 void ScriptPlaySession::start(Scene& scene) {
 
-    // A previous session's registration goes before its instances do. Replaying
-    // without it would leave the old callback in a world that has since been
-    // rebuilt — and the handle stale for the new one.
+    // A previous session's registrations go before its instances do. Replaying
+    // without that would leave the old callbacks in a world that has since been
+    // rebuilt — and every handle stale for the new one — and would deliver the
+    // last session's queued contacts to this one's scripts.
     impl_->detachFromPhysics();
     impl_->release();
     impl_->errors.clear();
@@ -375,7 +684,12 @@ void ScriptPlaySession::start(Scene& scene) {
             instance.hasUpdate = py::hasattr(self, "update");
             instance.hasStop = py::hasattr(self, "stop");
             instance.hasFixedUpdate = py::hasattr(self, "fixed_update");
+            instance.hasCollisionEnter = py::hasattr(self, "on_collision_enter");
+            instance.hasCollisionExit = py::hasattr(self, "on_collision_exit");
             instance.self = self;
+            // Kept so attachCollisions() can resolve the body governing it,
+            // without a second traversal of the scene to find the object again.
+            instance.object = entry.object->weak_from_this();
 
             // Every method is optional; a script that only wants update() — or
             // only fixed_update() — is a perfectly good script.
@@ -403,9 +717,11 @@ void ScriptPlaySession::start(Scene& scene) {
                    (live == 1 ? " instance" : " instances"));
     }
 
-    // Last, so it only ever considers instances that actually came up: a script
-    // whose start() raised is disabled, and its fixed_update with it.
+    // Last, so they only ever consider instances that actually came up: a script
+    // whose start() raised is disabled, and its fixed_update and its collision
+    // callbacks with it.
     impl_->attachToPhysics();
+    impl_->attachCollisions();
 }
 
 void ScriptPlaySession::update(float dt) {
@@ -416,11 +732,27 @@ void ScriptPlaySession::update(float dt) {
     for (const auto& instance : impl_->instances) {
         if (!instance.failed && instance.hasUpdate) any = true;
     }
-    if (!any) return;
+    // Contacts queued by this frame's substeps are delivered here even when no
+    // script defines update() at all.
+    const bool collisions = impl_->collisionsPending();
+    if (!any && !collisions) return;
 
     // Once for the whole sweep, not once per script: acquiring the GIL is the
     // expensive part, and there is nothing else running that wants it.
     py::gil_scoped_acquire gil;
+
+    // BEFORE update(dt), and in the same acquisition.
+    //
+    // Contacts are events, not a clock — which is the whole difference from
+    // fixed_update. Delivered here they arrive where update() lives: after the
+    // physics session has stepped and mirrored, so a callback reads the settled
+    // world this frame will draw rather than a pose halfway through a solve.
+    // Every edge this frame's substeps produced is delivered in this frame (a
+    // per-substep delivery would strand the last substep's events until the next
+    // one, and longer still on a frame that takes no substep at all), and the
+    // whole sweep shares the acquisition above instead of taking the GIL inside
+    // the physics step once per substep.
+    if (collisions) impl_->deliverCollisions();
 
     for (auto& instance : impl_->instances) {
         if (instance.failed || !instance.hasUpdate) continue;

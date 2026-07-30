@@ -140,6 +140,15 @@ namespace threepp::editor {
     //          whole sweep.
     // stop()   calls stop() and drops every instance while holding the GIL.
     //
+    // A script may also define on_collision_enter(contact) /
+    // on_collision_exit(contact), fired when the body governing its object
+    // starts and stops touching another body. start() enables PhysX contact
+    // reporting on that body for it — nobody ticks a box — and the reports,
+    // which arrive from inside the solver, are QUEUED there and delivered from
+    // update()'s sweep, before update(dt). The queue is a list rather than a
+    // state flag, so a touch that begins and ends inside one frame still
+    // produces enter followed by exit rather than nothing at all.
+    //
     // A script may also define fixed_update(dt), which does NOT run per frame:
     // start() registers ONE pre-substep callback with the PhysxWorld the physics
     // session is playing (only when some live instance defines the method), and

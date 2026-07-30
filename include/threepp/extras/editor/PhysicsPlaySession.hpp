@@ -123,6 +123,23 @@ namespace threepp::editor {
             return nullptr;
         }
 
+        // The object an actor belongs to — findActor read backwards.
+        //
+        // For anything handed an actor by PhysX rather than by the scene graph: a
+        // contact report names two actors, and the script that has to be told
+        // what it hit wants the OBJECT. The answer is the node the PhysicsConfig
+        // was authored on, i.e. exactly the node findActor resolves TO, so the
+        // two directions agree by construction. A subtree collider (one authored
+        // static body, many cooked meshes) answers as its root for every actor it
+        // produced — a contact with any of them is a contact with the one thing
+        // the user put physics on.
+        [[nodiscard]] Object3D* findObject(const ::physx::PxRigidActor* actor) const {
+
+            if (!actor) return nullptr;
+            const auto it = objects_.find(actor);
+            return it == objects_.end() ? nullptr : it->second;
+        }
+
         // A token that lives exactly as long as the world built by the last
         // start(). Handles handed to scripts keep a weak_ptr to it, so a body
         // still referenced after Stop reports that it is gone instead of
@@ -209,6 +226,7 @@ namespace threepp::editor {
             softBodyCount_ = 0;
             decompCookCount_ = 0;
             actors_.clear();
+            objects_.clear();
             articulations_.clear();
             decompCache_.clear();
 
@@ -281,6 +299,7 @@ namespace threepp::editor {
             lifetime_.reset();
             if (active_ == this) active_ = nullptr;
             actors_.clear();
+            objects_.clear();
             // Destroy the articulations while the world is still alive: an
             // Articulation releases itself back into the scene it belongs to, so
             // it must go before the world it was added to. (The sensor session,
@@ -667,14 +686,25 @@ namespace threepp::editor {
             // asking the root for "its" body gets the first — enough to answer
             // is_static and where it is, which is all a static collider has.
             if (!actors.empty()) record(root, actors.front());
+            // Backwards, though, ALL of them answer as the root: a contact
+            // against the fourth cooked mesh of a spline's tube is a contact
+            // with the spline, and there is nothing else to call it.
+            for (auto* actor : actors) {
+                if (actor) objects_.emplace(actor, &root);
+            }
             return actors.size();
         }
 
-        // Remember the actor governing `object`, so a script can find it later.
-        // Returns true so the creation sites can `return record(...)`.
-        bool record(const Object3D& object, ::physx::PxRigidActor* actor) {
+        // Remember the actor governing `object`, so a script can find it later —
+        // and the object governed by that actor, so something handed the actor
+        // can name the object. Returns true so the creation sites can
+        // `return record(...)`.
+        bool record(Object3D& object, ::physx::PxRigidActor* actor) {
 
-            if (actor) actors_.emplace(&object, actor);
+            if (actor) {
+                actors_.emplace(&object, actor);
+                objects_.emplace(actor, &object);
+            }
             return actor != nullptr;
         }
 
@@ -1142,6 +1172,10 @@ namespace threepp::editor {
         bool gpu_ = false;
         std::shared_ptr<const void> lifetime_;
         std::unordered_map<const Object3D*, ::physx::PxRigidActor*> actors_;
+        // The same records the other way round (see findObject). Not the exact
+        // inverse of actors_: a subtree collider puts every one of its actors in
+        // here against the one root that owns them.
+        std::unordered_map<const ::physx::PxRigidActor*, Object3D*> objects_;
         std::vector<std::unique_ptr<PlayedArticulation>> articulations_;
 
         // V-HACD is the expensive part of a Pieces cook (seconds on a dense

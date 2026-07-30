@@ -10,6 +10,8 @@
 #include <pybind11/embed.h>
 #include <pybind11/pybind11.h>
 
+#include "threepp/math/Vector3.hpp"
+
 #include <filesystem>
 #include <string>
 
@@ -22,6 +24,27 @@ namespace threepp {
 namespace threepp::editor::scripting {
 
     namespace py = pybind11;
+
+    // What on_collision_enter / on_collision_exit are handed, bound as
+    // `threepp.editor.Collision`.
+    //
+    // Deliberately small and already copied. The PhysX manifold it came from is
+    // valid only for the duration of the contact callback, and this is delivered
+    // a whole sweep later — so everything here is a value, taken at report time.
+    // Built only at delivery, with the GIL held, which is the one moment `other`
+    // (a concrete-typed object handle, or None) can exist at all.
+    struct Collision {
+
+        py::object other;
+        // Zero on an exit event: a lost touch has no manifold left to read.
+        Vector3 point;
+        Vector3 normal;
+        Vector3 impulse;
+    };
+
+    // Registers `Collision` into the threepp.editor submodule of `m`. Called
+    // from the embedded module's body, after the submodule exists.
+    void initCollision(py::module_& m);
 
     // Pulls the PYBIND11_EMBEDDED_MODULE translation unit into the link.
     //

@@ -4,7 +4,7 @@ The runtime face of editor-authored data.
 from __future__ import annotations
 import typing
 import threepp
-__all__: list[str] = ['Articulation', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'RigidBody', 'SoftBody', 'SplinePath', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'rigid_body_from_object', 'scene', 'soft_body_from_object', 'spline_from_object']
+__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'RigidBody', 'SoftBody', 'SplinePath', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'rigid_body_from_object', 'scene', 'soft_body_from_object', 'spline_from_object']
 class SplinePath:
     def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> threepp.Vector3:
         """
@@ -402,6 +402,32 @@ class Contact:
     def read_new(self) -> list[ContactSample]:
         """
         Every reading since this handle last read, oldest first, and advances its cursor. A fresh handle starts empty.
+        """
+class Collision:
+    """
+    One touch, as on_collision_enter / on_collision_exit are handed it.
+
+    A value copied out of the physics report that produced it, so keeping it is safe. `other` is the object on the far side of the touch, as its concrete type - or None when that body belongs to nothing the script can see. The contact geometry describes the ENTER only; an exit has no manifold left to read and carries zeros.
+    """
+    @property
+    def other(self) -> threepp.Object3D | None:
+        """
+        The other object, as its concrete type (Mesh, Robot, ...), or None.
+        """
+    @property
+    def point(self) -> threepp.Vector3:
+        """
+        WORLD-SPACE point of the hardest-hit manifold point, at the substep the touch began.
+        """
+    @property
+    def normal(self) -> threepp.Vector3:
+        """
+        Unit contact normal at that point, pointing INTO this script's body - the direction the other body is pushing it.
+        """
+    @property
+    def impulse(self) -> threepp.Vector3:
+        """
+        Total impulse over the manifold (N*s), same orientation. Divide by the substep to read it as a force.
         """
 def articulation_from_object(object: threepp.Object3D | None) -> Articulation | None:
     """

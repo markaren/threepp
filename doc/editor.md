@@ -507,9 +507,12 @@ class Spinner:
         pass
 ```
 
-Every method is optional; missing ones are skipped. There is a fourth,
+Every method is optional; missing ones are skipped. There are three more:
 `fixed_update(self, dt)`, which runs on the *physics* clock rather than on the
-frame — see [The physics clock](#the-physics-clock-fixed_update). In a file, the
+frame (see [The physics clock](#the-physics-clock-fixed_update)), and
+`on_collision_enter(self, contact)` / `on_collision_exit(self, contact)`, which
+run when the body governing the object starts and stops touching another (see
+[Collisions](#collisions-on_collision_enter--on_collision_exit)). In a file, the
 class is the one whose name matches it (`spinner.py` → `Spinner`,
 case-insensitively), or — failing that — the single class in the file that
 defines `update()`. Anything else is reported rather than guessed at.
@@ -622,6 +625,94 @@ class Thrust:
 * **Errors work as everywhere else.** The first raise is reported once with its
   traceback and disables that instance for the rest of the session — all of its
   methods, not just this one. Other scripts keep running.
+
+#### Collisions: `on_collision_enter` / `on_collision_exit`
+
+Two more optional methods, fired when the body governing the script's object
+**starts** and **stops** touching another body:
+
+```python
+import threepp
+
+
+class Impact:
+    threshold = 2.0          # N*s; below this it is a nudge, not a hit
+
+    def start(self, obj: threepp.Object3D):
+        self.obj = obj
+        self.material = obj.material
+        self.rest = self.material.color.get_hex()
+
+    def on_collision_enter(self, contact: threepp.editor.Collision):
+        i = contact.impulse
+        strength = (i.x * i.x + i.y * i.y + i.z * i.z) ** 0.5
+        if strength >= self.threshold:
+            print(self.obj.name, "hit", contact.other.name if contact.other else "?",
+                  "at", strength)
+        self.material.color.set_hex(0xff3020)
+
+    def on_collision_exit(self, contact: threepp.editor.Collision):
+        self.material.color.set_hex(self.rest)
+```
+
+`contact` is a `threepp.editor.Collision`, and it carries:
+
+| field | meaning |
+| --- | --- |
+| `other` | the object on the far side, as its **concrete type** (`Mesh`, `Robot`, …) — or `None` when that body belongs to nothing the script can see |
+| `point` | world-space position of the hardest-hit manifold point |
+| `normal` | unit normal there, pointing **into this script's body** — the direction the other body is pushing it |
+| `impulse` | total impulse over the manifold, in N·s, same orientation. Divide by the timestep to read it as a force |
+
+* **`other` is the object the physics was authored on**, found by walking up the
+  scene graph exactly as
+  [`rigid_body_from_object`](#physics-from-a-script) does — so a contact against
+  one cooked mesh of a spline's tube names the spline, not the mesh. It is a
+  handle like any other: use it during the session, do not stash it across Play
+  sessions.
+* **Reporting turns itself on.** There is no box to tick. At Play the session
+  finds the body governing every scripted object whose class defines either
+  method and enables PhysX contact reporting on it. An object with the callbacks
+  and **no body** gets one line in the console at Play and never fires — the
+  same voice, and the same reason, as `fixed_update`'s missing clock.
+* **Both sides are called.** If both objects in a pair carry scripts, each gets
+  its own callback with its own `other`, and each `normal` points into its own
+  body.
+* **One touch is one pair of bodies.** A box landing on the ground touches
+  through four manifold points, possibly through several shapes: that is *one*
+  `on_collision_enter`. Settling on a surface does not re-fire it — only a
+  genuine separation followed by a new touch does.
+* **They are delivered from the frame sweep, just before `update(dt)`.** PhysX
+  reports contacts from inside the solver; calling into Python there would let a
+  script mutate a world the solver still owns. So the reports are copied into a
+  queue and handed over where `update()` runs — after physics has stepped and
+  mirrored, so a callback reads the settled world this frame will draw. Every
+  edge this frame's substeps produced arrives in this frame.
+* **Both edges always survive.** A touch that begins *and* ends between two
+  deliveries — a fast bounce, or two substeps of one long frame — still produces
+  `on_collision_enter` followed by `on_collision_exit`. The queue is a list, not
+  a state flag; nothing collapses a whole touch into "no change".
+* **Errors work as everywhere else.** The first raise is reported once with its
+  traceback and disables that instance whole for the rest of the session.
+* **A `ContactSensor` on the same body keeps working.** The opt-in is one bit per
+  actor, shared: the sensor's noisy, rate-gated
+  [readings](#sensors-from-a-script) and the script's edges come out of the same
+  reports, and neither starves the other.
+
+What is reported is what the physics world already generates: **dynamic against
+dynamic, dynamic against static, and dynamic against kinematic**. PhysX does not
+generate contacts for kinematic-against-static or kinematic-against-kinematic
+pairs unless the scene asks for them, and this one does not — so a script on a
+*kinematic* body hears about the dynamic bodies it pushes and about nothing else.
+
+Out of scope, deliberately: **trigger volumes** (an overlap that does not
+collide), **`on_collision_stay`** (a resting contact stops being re-reported the
+moment PhysX puts the pair to sleep, so a per-frame "still touching" callback
+would lie), **per-contact-point lists** beyond the single representative point
+above, **soft bodies** (a deformable volume has no rigid actor to watch), and
+**articulation links** — a simulated robot's links are the articulation's, not
+the session's actor registry's, so a script on a robot resolves no body and gets
+the no-body line.
 
 #### The Script Editor
 
@@ -1123,6 +1214,11 @@ from `update` is applied once per *frame*, at whatever rate the window happens
 to be running — put it in
 [`fixed_update`](#the-physics-clock-fixed_update) instead and it is applied once
 per substep, at a constant dt.
+
+The body is also what
+[`on_collision_enter` / `on_collision_exit`](#collisions-on_collision_enter--on_collision_exit)
+watch: same lookup, same object, and no handle to ask for — the session resolves
+it at Play for any script that defines either method.
 
 Soft bodies get `threepp.editor.soft_body_from_object`, which is deliberately
 thinner — PhysX drives a deformable volume through per-vertex GPU buffers, so
