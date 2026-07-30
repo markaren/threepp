@@ -130,12 +130,19 @@ namespace threepp::editor {
 
     // Runs every object's attached script for the duration of a Play.
     //
-    // start()  compiles each script fresh — the referenced .py, or the inline
-    //          source the document carries — instantiates its class, applies
-    //          the authored field values and calls start(obj) with a handle to
+    // start()  runs in TWO PHASES. Phase 1 compiles each script fresh — the
+    //          referenced .py, or the inline source the document carries —
+    //          instantiates its class and applies the authored field values.
+    //          Phase 2 then calls start(obj) on every instance, with a handle to
     //          the object — always its CONCRETE type (Mesh, Robot, Light, ...),
     //          held by shared_ptr, so a script that stashes it outlives the
     //          session safely.
+    //
+    //          The split is what makes the guarantee behind
+    //          threepp.editor.script_from_object true: BY THE TIME ANY start()
+    //          RUNS, EVERY SCRIPT INSTANCE EXISTS, fields applied. Interleaved,
+    //          a script resolving a neighbour in its own start() would succeed
+    //          or fail on scene order alone.
     // update() calls update(dt) on each live instance, GIL acquired once for the
     //          whole sweep.
     // stop()   calls stop() and drops every instance while holding the GIL.

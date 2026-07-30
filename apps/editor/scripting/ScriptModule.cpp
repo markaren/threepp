@@ -22,6 +22,10 @@
 // the matching read handles onto the sensors it is already running. That is the
 // editor's own state, handed over, not a second physics or sensor stack. Both
 // are compiled only where the PhysX SDK was found.
+//
+// threepp.editor.script_from_object is the same idea pointed at the session's
+// own instances rather than at physics, and is therefore NOT gated on anything:
+// scripts exist wherever this module does.
 
 #include "ScriptHost.hpp"
 
@@ -68,6 +72,10 @@ PYBIND11_EMBEDDED_MODULE(threepp, m) {
     tp::init_curves(m);// CatmullRomCurve3 — what an authored spline reads back as
     tp::init_editor(m);// threepp.editor — SplinePath, the no-boilerplate way to read one
     tp::init_editor_authoring(m);// threepp.editor.add — what a generator builds into
+    // threepp.editor.script_from_object — one script reaching another's live
+    // instance. Registered unconditionally, unlike the handles below it: this
+    // needs nothing but a running session.
+    threepp::editor::scripting::initScriptLookup(m);
     tp::init_materials(m);
     tp::init_objects(m);
     tp::init_animation(m);
@@ -131,6 +139,42 @@ namespace threepp::editor::scripting {
                     }
                     return "<threepp.editor.Collision other=" + other + ">";
                 });
+    }
+
+    void initScriptLookup(py::module_& m) {
+
+        // def_submodule hands back the submodule init_editor already created
+        // (PyImport_AddModule is idempotent), so this adds a name to it rather
+        // than shadowing it — the same call bind_editor_authoring.cpp makes.
+        auto sub = m.def_submodule("editor");
+
+        sub.def(
+                "script_from_object", [](const py::handle& h) -> py::object {
+                    const auto& resolver = scriptResolver();
+                    // Nothing playing: no session has installed one. None rather
+                    // than a raise, because "the neighbour is not there" is a
+                    // normal condition a script tests for, exactly as it is for
+                    // rigid_body_from_object.
+                    if (!resolver.lookup) return py::none();
+                    const auto object = threepp_py::as_object3d(h);
+                    if (!object) return py::none();
+                    // The EXACT node, by uuid — no walk up the ancestry. A
+                    // physics lookup walks because a collider governs a whole
+                    // subtree; a script does not govern anything but the object
+                    // it was authored on, and answering with a parent's script
+                    // would invent a relationship nobody wrote down.
+                    return resolver.lookup(object->uuid);
+                },
+                py::arg("object"),
+                "The live script instance running on `object`, or None.\n\n"
+                "The instance IS the API: call its methods and read or write its attributes "
+                "to signal it. Returns None when nothing is playing, when `object` carries no "
+                "script, or when that script's instance failed - a disabled script is dead to "
+                "a lookup. The object must be the exact one the script is authored on; unlike "
+                "rigid_body_from_object this does not walk up the scene graph.\n\n"
+                "Every instance exists before any start() runs, so resolving a neighbour in "
+                "start() works whatever order the scene is in. Do not keep the reference "
+                "across Play sessions - the next Play builds new instances.");
     }
 
     void registerEmbeddedModule() {

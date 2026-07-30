@@ -4,7 +4,7 @@ The runtime face of editor-authored data.
 from __future__ import annotations
 import typing
 import threepp
-__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'raycast', 'rigid_body_from_object', 'scene', 'soft_body_from_object', 'spline_from_object']
+__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object']
 class SplinePath:
     def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> threepp.Vector3:
         """
@@ -486,6 +486,16 @@ def raycast(origin: threepp.Vector3, direction: threepp.Vector3, max_distance: f
     `origin` and `direction` are Vector3, world space; direction is normalised here, and a zero-length one raises ValueError. `max_distance` is in metres and defaults to unbounded. `ignore` excludes every actor governing that object - pass your own object for a ground check, or the ray starts inside your own collider and hits it.
 
     Raises RuntimeError when no physics world is playing: a miss is None, so 'not playing' cannot also be None without making the two the same answer.
+    """
+def script_from_object(object: threepp.Object3D | None) -> typing.Any | None:
+    """
+    The live script instance running on `object`, or None.
+
+    The instance IS the API: call its methods and read or write its attributes to signal it. Returns None when nothing is playing, when `object` carries no script, or when that script's instance failed - a disabled script is dead to a lookup. The object must be the exact one the script is authored on; unlike rigid_body_from_object this does not walk up the scene graph.
+
+    Every instance exists before any start() runs, so resolving a neighbour in start() works whatever order the scene is in. Do not keep the reference across Play sessions - the next Play builds new instances.
+
+    Typed Any because it honestly is: what comes back is your own script class, which this stub has never seen. `X | None` rather than a bare Any so the None case still reads as a case a checker will make you handle.
     """
 def rigid_body_from_object(object: threepp.Object3D | None) -> RigidBody | None:
     """

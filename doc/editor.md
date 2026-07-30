@@ -523,6 +523,9 @@ one-argument form keeps working untouched. The scene handle is the ordinary
 `threepp.Scene`: `scene.get_object_by_name("Ground")`, `scene.children`, and so
 on. The same lifetime rule as every handle applies — resolve neighbours in
 `start`, use them during the session, never stash them across Play sessions.
+That is also where a script reaches another script's *running instance*, rather
+than its node: see [Talking to other
+scripts](#talking-to-other-scripts-threeppeditorscript_from_object).
 
 **Exposed parameters** are the class's plain `int` / `float` / `bool` / `str`
 attributes: no leading underscore, not callable, no properties or descriptors.
@@ -795,6 +798,85 @@ What the query sees in this world, stated rather than assumed:
 | kinematic | yes — a kinematic actor is a `PxRigidDynamic`, and the query asks for static and dynamic both |
 | an articulated robot's links | yes, and each one answers as the **robot** |
 | soft bodies | **no** — a deformable volume's shape is created without PhysX's scene-query flag, so it is not in the query structures at all |
+
+#### Talking to other scripts: `threepp.editor.script_from_object`
+
+`scene.get_object_by_name("Door")` gives you the door's *node*.
+`threepp.editor.script_from_object(...)` gives you the door's **live script
+instance** — the actual Python object this Play session is driving:
+
+`door.py`, on the door:
+
+```python
+import threepp
+
+
+class Door:
+    open = False
+
+    def start(self, obj: threepp.Object3D):
+        self.obj = obj
+
+    def on_opened(self):
+        self.obj.position.y += 1.0
+```
+
+`button.py`, on whatever opens it:
+
+```python
+import threepp
+
+
+class Button:
+    def start(self, obj: threepp.Object3D, scene: threepp.Scene):
+        # Resolve neighbours here, once: every instance exists by now.
+        self.door = threepp.editor.script_from_object(scene.get_object_by_name("Door"))
+
+    def update(self, dt: float):
+        if self.door is None or self.door.open:
+            return
+        if threepp.editor.is_key_down("SPACE"):
+            self.door.on_opened()      # calling a method IS the signal
+            self.door.open = True      # and so is setting an attribute
+```
+
+There is **no event bus and no message type**, deliberately. What comes back is
+the instance, so its methods and its attributes are the whole API — this is
+Unity's `GetComponent` without the component-type dance, since an object carries
+exactly one script.
+
+* **Every instance exists before any `start()` runs.** Play brings every script
+  up first — compile, construct, apply the authored field values — and only then
+  calls `start()` on all of them. So resolving a neighbour in `start()` works
+  whichever way round the scene happens to be, and the neighbour's parameters are
+  already the ones the inspector shows rather than the class defaults. What is
+  *not* guaranteed is that its `start()` has run: if you need state a neighbour
+  builds there, resolve in `start()` and use it from `update()`. That is the
+  pattern above, and it is the one to copy.
+* **`None` is a normal answer**, never an exception — a missing neighbour is
+  something a script checks for, exactly as it is for
+  `rigid_body_from_object`. You get `None` when nothing is playing, when the
+  object carries no script, and when that script's instance is dead: a
+  constructor that raised, or a `start` / `update` / `fixed_update` that raised
+  later. A disabled script is disabled whole, so it stops answering lookups as
+  well. That is about the *lookup*, though: a reference you are already holding
+  onto a script that has since been disabled stays perfectly good Python. It is
+  simply not being driven any more.
+* **The exact object, never an ancestor.** `rigid_body_from_object` walks up the
+  scene graph because a collider governs a whole subtree; a script governs
+  nothing but the node it was authored on, so this asks for that node and no
+  other. Pass the object the script is on.
+* **Do not keep it across sessions.** Same rule as every other handle: resolve in
+  `start()`, use it during the session, ask again after the next Play. A
+  reference held past Stop is a harmless dead object — the session has dropped
+  it and nothing calls it again — not a dangling pointer, but it is not the new
+  session's instance either, and the new session will never see your writes to
+  it.
+* **Call it from anywhere a script runs** — `start`, `update`, `fixed_update`,
+  the collision callbacks, and `stop`, where every instance is still alive. It
+  reads the session's own instance list and touches neither the scene nor the
+  physics world, so it needs no PhysX build: unlike the handles above it, this
+  is there in every build that has scripts at all.
 
 #### The Script Editor
 

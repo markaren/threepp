@@ -61,6 +61,13 @@ if (TARGET threepp_editor_scripting)
     add_test_executable(EditorScriptPlay_test)
     target_link_libraries(EditorScriptPlay_test PRIVATE threepp_editor_scripting)
 
+    # script_from_object is deliberately NOT PhysX-gated — scripts exist in every
+    # Python build, and so does the one verb that lets them find each other — so
+    # its test sits here beside EditorScriptPlay_test rather than in the SDK
+    # block below.
+    add_test_executable(EditorScriptLookup_test)
+    target_link_libraries(EditorScriptLookup_test PRIVATE threepp_editor_scripting)
+
     # threepp.editor's RigidBody/SoftBody handles need both halves: the script
     # host above, and the PhysX SDK the play session is built on. The sensor
     # handles are the same story one session over, and fixed_update is a script

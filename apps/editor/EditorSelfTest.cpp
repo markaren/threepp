@@ -1616,6 +1616,60 @@ int EditorApp::runSelfTest() {
                           "stop restores what a scene-reaching script moved");
                 }
 
+                // threepp.editor.script_from_object: reaching another object's
+                // live INSTANCE rather than its node. No event bus and no
+                // message type — the Button calls a method on the Door's own
+                // Python object, and that is the whole signal.
+                //
+                // The roles are this way round deliberately. The Button sits on
+                // Ground, which the template scene adds BEFORE Box, so the Door
+                // it resolves in start() has not been started — or, before the
+                // two-phase split, even constructed — when it asks. Swap them
+                // and the test passes for the wrong reason.
+                if (auto* button = document_.scene().getObjectByName("Ground")) {
+                    setInlineScript(*button,
+                                    "import threepp\n"
+                                    "\n"
+                                    "class Button:\n"
+                                    "    def start(self, obj, scene):\n"
+                                    "        self.door = threepp.editor.script_from_object(\n"
+                                    "            scene.get_object_by_name('Box'))\n"
+                                    "\n"
+                                    "    def update(self, dt):\n"
+                                    "        if self.door is not None:\n"
+                                    "            self.door.on_opened()\n",
+                                    "Button Script");
+                    if (auto* door = document_.scene().getObjectByName("Box")) {
+                        setInlineScript(*door,
+                                        "class Door:\n"
+                                        "    def start(self, obj):\n"
+                                        "        self.obj = obj\n"
+                                        "\n"
+                                        "    def on_opened(self):\n"
+                                        "        self.obj.position.y += 0.01\n",
+                                        "Door Script");
+                    }
+                    const auto buttonUuid = button->uuid;
+                    step();
+                    const float doorBefore = document_.scene().getObjectByName("Box")->position.y;
+                    startPlay();
+                    stepFixed(30);
+                    auto* opened = document_.scene().getObjectByName("Box");
+                    check(opened && opened->position.y > doorBefore + 1e-3f,
+                          "one script drives another's live instance through script_from_object");
+                    check(scripts_ && opened && scripts_->errorFor(opened->uuid).empty() &&
+                                  scripts_->errorFor(buttonUuid).empty(),
+                          "and neither side of the handshake raised");
+                    stopPlay();
+                    step();
+                    // The Button was only ever for this pass; the Door on Box is
+                    // cleared by the block below.
+                    if (auto* restored = document_.scene().getObjectByName("Ground")) {
+                        assignScript(*restored, {});
+                    }
+                    step();
+                }
+
                 if (auto* clear = document_.scene().getObjectByName("Box")) {
                     assignScript(*clear, {});
                     step();

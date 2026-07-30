@@ -13,6 +13,7 @@
 #include "threepp/math/Vector3.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <string>
 
 namespace threepp {
@@ -24,6 +25,39 @@ namespace threepp {
 namespace threepp::editor::scripting {
 
     namespace py = pybind11;
+
+    // The seam behind threepp.editor.script_from_object: the live script
+    // instance driving one object, by uuid.
+    //
+    // The question is asked in ScriptModule.cpp (the binding) and answered in
+    // ScriptPlaySession.cpp (which owns the instance list), and neither is
+    // willing to include the other. Same shape as scripting::keyStateProvider()
+    // — an inline function-local static in a header both halves include — but it
+    // lives HERE rather than in Scripting.hpp, because the answer is a
+    // py::object and that header is deliberately free of Python. It is
+    // deliberately NOT the PhysicsPlaySession::active() shape either: that works
+    // because a PhysicsPlaySession is reachable through a Python-free header,
+    // and a ScriptPlaySession's instances never will be.
+    //
+    // `lookup` is only ever reached from script code, which by construction is
+    // already holding the GIL — so it neither acquires nor releases one. It
+    // captures nothing Python-shaped, which is what makes clearing it safe from
+    // a destructor with no interpreter left.
+    struct ScriptResolver {
+
+        // Who installed it. Compared before releasing, which is the
+        // `if (active_ == this)` rule PhysicsPlaySession keeps, spelled out: a
+        // session tearing down late must not take back the resolver a newer one
+        // has since installed.
+        const void* owner = nullptr;
+        std::function<py::object(const std::string& uuid)> lookup;
+    };
+
+    inline ScriptResolver& scriptResolver() {
+
+        static ScriptResolver resolver;
+        return resolver;
+    }
 
     // What on_collision_enter / on_collision_exit are handed, bound as
     // `threepp.editor.Collision`.
@@ -45,6 +79,12 @@ namespace threepp::editor::scripting {
     // Registers `Collision` into the threepp.editor submodule of `m`. Called
     // from the embedded module's body, after the submodule exists.
     void initCollision(py::module_& m);
+
+    // Registers threepp.editor.script_from_object into the same submodule.
+    // Unlike initCollision this is NOT gated on the PhysX SDK: scripts exist in
+    // every Python build, so the one verb that lets them find each other must
+    // too. Called after the submodule exists.
+    void initScriptLookup(py::module_& m);
 
     // Pulls the PYBIND11_EMBEDDED_MODULE translation unit into the link.
     //

@@ -89,6 +89,9 @@ struct ScriptPlaySession::Impl {
         // outlives nothing but the session and the scene is not ours: this is
         // only ever used to resolve the body at start().
         std::weak_ptr<Object3D> object;
+        // Cached in phase 1 with the rest, so phase 2 is a pure dispatch loop
+        // over instances that already exist.
+        bool hasStart = false;
         bool hasUpdate = false;
         bool hasStop = false;
         // Cached like the others, and for the same reason: hasattr is a dict
@@ -148,6 +151,57 @@ struct ScriptPlaySession::Impl {
                 py::setattr(self, name.c_str(), py::cast(*stored));
             }
         }
+    }
+
+    // --- one script reaching another ---------------------------------------
+    //
+    // threepp.editor.script_from_object(obj) hands back the live instance this
+    // session is driving for `obj`. There is no event bus and no message type on
+    // purpose: what comes back is the actual Python object, so calling a method
+    // on it or setting an attribute IS the signalling. Unity's GetComponent,
+    // minus the component-type dance — an object carries exactly one script.
+    //
+    // What makes it usable from start() is the two-phase start below: every
+    // instance exists before any start() runs, so which order the scene happens
+    // to be in stops mattering.
+    //
+    // A failed instance answers None rather than a corpse. fail() has already
+    // dropped its `self`, and a script disabled halfway through a session is
+    // disabled for the rest of it — handing one out would let a neighbour keep
+    // driving something the console has already reported as dead.
+
+    [[nodiscard]] py::object resolve(const std::string& uuid) const {
+
+        // Linear, over the tens of scripts a scene has. The instance vector is
+        // the authority on what is live; a uuid index beside it would be a
+        // second thing to keep in step with fail(), for a lookup the doc tells
+        // people to do once in start().
+        for (const auto& instance : instances) {
+            if (instance.uuid != uuid) continue;
+            if (instance.failed) return py::none();
+            return instance.self;
+        }
+        return py::none();
+    }
+
+    // Installed between the two phases of start() and taken back at stop, so a
+    // resolver can never answer for a session that is not running. The lambda
+    // captures `this` and nothing Python-shaped, which is what lets the release
+    // below run from a destructor with no interpreter left.
+    void installResolver() {
+
+        auto& resolver = scripting::scriptResolver();
+        resolver.owner = this;
+        resolver.lookup = [this](const std::string& uuid) { return resolve(uuid); };
+    }
+
+    void clearResolver() {
+
+        auto& resolver = scripting::scriptResolver();
+        // Ours to take back only while it still is ours.
+        if (resolver.owner != this) return;
+        resolver.owner = nullptr;
+        resolver.lookup = nullptr;
     }
 
     // --- the physics clock -------------------------------------------------
@@ -591,6 +645,9 @@ ScriptPlaySession::~ScriptPlaySession() {
     // PhysxWorld's "anything that registers must unregister in its destructor"
     // rule is about.
     impl_->detachFromPhysics();
+    // Same rule: a resolver outliving the instance list it closes over would
+    // answer out of freed memory the moment anything asked.
+    impl_->clearResolver();
     impl_->release();
 }
 
@@ -627,6 +684,9 @@ void ScriptPlaySession::start(Scene& scene) {
     // rebuilt — and every handle stale for the new one — and would deliver the
     // last session's queued contacts to this one's scripts.
     impl_->detachFromPhysics();
+    // Same reasoning one door over: a resolver still answering out of the list
+    // release() is about to empty would hand this Play the last one's instances.
+    impl_->clearResolver();
     impl_->release();
     impl_->errors.clear();
 
@@ -653,10 +713,23 @@ void ScriptPlaySession::start(Scene& scene) {
 
     py::gil_scoped_acquire gil;
 
+    // ---- phase 1: bring every instance up ---------------------------------
+    //
+    // Compile, construct, apply the authored fields — and stop there. Nothing
+    // in a script's own code runs yet beyond its class body and its __init__.
+    //
+    // This is the whole reason the loop is split. Interleaved with start(), a
+    // script looking a neighbour up in its own start() would find one only when
+    // the traverse happened to reach the neighbour first, which is a scene
+    // ordering nobody authored deliberately and the inspector does not show. Two
+    // phases turn that into a guarantee worth writing down: BY THE TIME ANY
+    // start() RUNS, EVERY SCRIPT INSTANCE EXISTS, with its authored field values
+    // already on it.
     for (auto& entry : attached) {
 
         // Recorded before anything can go wrong, so a failure has somewhere to
-        // be recorded against.
+        // be recorded against — and unconditionally, so instances[i] is
+        // attached[i] for phase 2 below, failures included.
         const auto label = labelOf(*entry.object);
         impl_->instances.push_back(
                 Impl::Instance{entry.object->uuid, label, originOf(entry.config)});
@@ -681,6 +754,7 @@ void ScriptPlaySession::start(Scene& scene) {
             auto self = cls();
             impl_->applyFields(cls, self, entry.config);
 
+            instance.hasStart = py::hasattr(self, "start");
             instance.hasUpdate = py::hasattr(self, "update");
             instance.hasStop = py::hasattr(self, "stop");
             instance.hasFixedUpdate = py::hasattr(self, "fixed_update");
@@ -690,16 +764,39 @@ void ScriptPlaySession::start(Scene& scene) {
             // Kept so attachCollisions() can resolve the body governing it,
             // without a second traversal of the scene to find the object again.
             instance.object = entry.object->weak_from_this();
+        } catch (py::error_already_set& e) {
+            // A constructor or a field that raised disables this instance
+            // exactly as a failing start() does — one report, no instance, and
+            // therefore None to anyone who looks it up.
+            impl_->fail(instance, "load", scripting::describeError(e));
+        } catch (const std::exception& e) {
+            impl_->fail(instance, "load", e.what());
+        }
+    }
 
-            // Every method is optional; a script that only wants update() — or
-            // only fixed_update() — is a perfectly good script.
-            if (py::hasattr(self, "start")) {
-                const auto start = self.attr("start");
-                if (startWantsScene(start)) {
-                    start(scripting::handleFor(*entry.object), scripting::handleFor(scene));
-                } else {
-                    start(scripting::handleFor(*entry.object));
-                }
+    // Between the phases, and not a line later: the first thing a start() may
+    // want to do is find a neighbour, and every neighbour now exists.
+    impl_->installResolver();
+
+    // ---- phase 2: start them ----------------------------------------------
+    //
+    // Same order as phase 1, so the sequence a scene's start()s run in is still
+    // the traverse order the sweeps use — deterministic, just no longer load
+    // bearing. instances[i] is attached[i]; phase 1 pushes exactly one instance
+    // per attachment.
+    for (std::size_t i = 0; i < impl_->instances.size(); ++i) {
+
+        auto& instance = impl_->instances[i];
+        // Every method is optional; a script that only wants update() — or only
+        // fixed_update() — is a perfectly good script.
+        if (instance.failed || !instance.hasStart) continue;
+
+        try {
+            const auto start = instance.self.attr("start");
+            if (startWantsScene(start)) {
+                start(scripting::handleFor(*attached[i].object), scripting::handleFor(scene));
+            } else {
+                start(scripting::handleFor(*attached[i].object));
             }
         } catch (py::error_already_set& e) {
             impl_->fail(instance, "start", scripting::describeError(e));
@@ -717,9 +814,11 @@ void ScriptPlaySession::start(Scene& scene) {
                    (live == 1 ? " instance" : " instances"));
     }
 
-    // Last, so they only ever consider instances that actually came up: a script
-    // whose start() raised is disabled, and its fixed_update and its collision
-    // callbacks with it.
+    // After BOTH phases, so they only ever consider instances that actually came
+    // up: a script whose start() raised is disabled, and its fixed_update and
+    // its collision callbacks with it. (The hasattr results they read are phase
+    // 1's, but `failed` is not final until phase 2 has run — which is exactly
+    // why these stay down here rather than moving up with the resolver.)
     impl_->attachToPhysics();
     impl_->attachCollisions();
 }
@@ -772,9 +871,7 @@ void ScriptPlaySession::stop() {
     // being empty says nothing about whether a callback is still registered.
     impl_->detachFromPhysics();
 
-    if (impl_->instances.empty()) return;
-
-    if (scripting::interpreterStarted()) {
+    if (!impl_->instances.empty() && scripting::interpreterStarted()) {
         py::gil_scoped_acquire gil;
         for (auto& instance : impl_->instances) {
             if (instance.failed || !instance.hasStop) continue;
@@ -786,10 +883,19 @@ void ScriptPlaySession::stop() {
                 impl_->fail(instance, "stop", e.what());
             }
         }
+        // The resolver goes down WITH the list it answers from, not before it: a
+        // stop() is still inside the session, every instance is still alive
+        // until the line below, and a script tidying up after a neighbour is a
+        // reasonable last act. Nothing may resolve after this returns.
+        impl_->clearResolver();
         // Inside the same GIL scope: dropping the last reference to a script
         // instance runs its __del__ and frees Python memory.
         impl_->instances.clear();
         return;
     }
+    // No instances, or no interpreter to run stop() in. The release is still
+    // unconditional, for the reason detachFromPhysics above is: an empty list
+    // says nothing about what is still installed.
+    impl_->clearResolver();
     impl_->instances.clear();
 }
