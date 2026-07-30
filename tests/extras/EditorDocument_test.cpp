@@ -80,6 +80,7 @@ TEST_CASE("PhysicsConfig round-trips through userData", "[editor]") {
     config.enabled = true;
     config.body = PhysicsConfig::Body::Kinematic;
     config.shape = PhysicsConfig::Shape::Capsule;
+    config.trigger = true;
     config.mass = 3.25f;
     config.friction = 0.9f;
     config.restitution = 0.125f;
@@ -90,6 +91,7 @@ TEST_CASE("PhysicsConfig round-trips through userData", "[editor]") {
     CHECK(read->enabled);
     CHECK(read->body == PhysicsConfig::Body::Kinematic);
     CHECK(read->shape == PhysicsConfig::Shape::Capsule);
+    CHECK(read->trigger);
     CHECK(read->mass == 3.25f);
     CHECK(read->friction == 0.9f);
     CHECK(read->restitution == 0.125f);
@@ -112,13 +114,50 @@ TEST_CASE("PhysicsConfig tolerates unknown and malformed input", "[editor]") {
     REQUIRE(forward.has_value());
     CHECK(forward->body == PhysicsConfig::Body::Static);
     CHECK(forward->mass == 2.f);
+    // A key this build knows, beside one it does not, in any order.
+    const auto mixed = PhysicsConfig::decode("newKey=whatever;trigger=1;body=static;alsoNew=7");
+    REQUIRE(mixed.has_value());
+    CHECK(mixed->trigger);
+    CHECK(mixed->body == PhysicsConfig::Body::Static);
 
     // Garbage values fall back to the defaults rather than throwing.
-    const auto broken = PhysicsConfig::decode("body=;shape=;mass=abc");
+    const auto broken = PhysicsConfig::decode("body=;shape=;mass=abc;trigger=yes");
     REQUIRE(broken.has_value());
     CHECK(broken->body == PhysicsConfig::Body::Dynamic);
     CHECK(broken->shape == PhysicsConfig::Shape::Auto);
     CHECK(broken->mass == 1.f);
+    CHECK_FALSE(broken->trigger);
+}
+
+TEST_CASE("a trigger volume round-trips through the flat physics string", "[editor]") {
+
+    // The key is written EVERY time, whatever the body type — the same contract
+    // the soft-body and V-HACD parameters keep — so ticking Trigger, switching
+    // the body to Soft (where the checkbox is hidden because a cooked tet volume
+    // cannot be a trigger) and switching back does not lose the tick.
+    PhysicsConfig config;
+    config.enabled = true;
+    config.body = PhysicsConfig::Body::Static;
+    config.trigger = true;
+    CHECK(config.encode().find("trigger=1") != std::string::npos);
+
+    config.body = PhysicsConfig::Body::Soft;
+    const auto asSoft = PhysicsConfig::decode(config.encode());
+    REQUIRE(asSoft.has_value());
+    CHECK(asSoft->trigger);
+
+    // And the default is off, written as such rather than omitted.
+    PhysicsConfig plain;
+    plain.enabled = true;
+    CHECK(plain.encode().find("trigger=0") != std::string::npos);
+    const auto back = PhysicsConfig::decode(plain.encode());
+    REQUIRE(back.has_value());
+    CHECK_FALSE(back->trigger);
+
+    // An older document, with no trigger key at all, is not a trigger.
+    const auto legacy = PhysicsConfig::decode("body=static;shape=box;mass=1");
+    REQUIRE(legacy.has_value());
+    CHECK_FALSE(legacy->trigger);
 }
 
 TEST_CASE("an editor scene round-trips through the document format", "[editor]") {

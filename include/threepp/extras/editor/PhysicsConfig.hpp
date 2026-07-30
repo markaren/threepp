@@ -51,6 +51,14 @@ namespace threepp::editor {
         bool enabled = false;
         Body body = Body::Dynamic;
         Shape shape = Shape::Auto;
+
+        // A volume that OVERLAPS instead of colliding: bodies pass straight
+        // through it, and it reports who is inside (on_trigger_enter /
+        // on_trigger_exit on a play script). Static, Dynamic and Kinematic alike;
+        // ignored for Soft, whose collider is the cooked tetrahedral volume and
+        // not a trigger candidate.
+        bool trigger = false;
+
         float mass = 1.f;       // kg, dynamic and soft bodies
         float friction = 0.5f;  // static == dynamic friction
         float restitution = 0.2f;// rigid bodies only

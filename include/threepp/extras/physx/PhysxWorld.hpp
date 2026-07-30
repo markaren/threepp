@@ -64,6 +64,33 @@ namespace threepp {
     };
 
     /**
+     * One reported overlap involving a watched actor and a TRIGGER shape,
+     * delivered from inside fetchResults() exactly as a ContactEvent is.
+     *
+     * A trigger volume generates no contacts at all — that is the whole point of
+     * it — so there is no manifold here, no normal and no impulse: PhysX reports
+     * only that the two started or stopped overlapping.
+     *
+     * `self` is the watched actor and `other` is the one on the far side.
+     * `selfIsTrigger` says which of the two the watcher was, since BOTH sides of
+     * a trigger pair are dispatched: the volume wants to know who walked in, and
+     * whoever walked in wants to know it did.
+     *
+     * PhysX reports TOUCH_FOUND and TOUCH_LOST only — there is no PERSISTS for a
+     * trigger (see PxPairFlag::eNOTIFY_TOUCH_PERSISTS, "Triggers do not support
+     * this event"), so an overlap that has already been reported goes quiet until
+     * it ends. That makes the found/lost pair the ONLY state there is, and losing
+     * one of them loses the state.
+     */
+    struct TriggerEvent {
+        ::physx::PxRigidActor* self = nullptr;
+        ::physx::PxRigidActor* other = nullptr;
+        bool selfIsTrigger = true;
+        bool touchFound = false;// this pair started overlapping in this substep
+        bool touchLost = false; // this pair stopped overlapping in this substep
+    };
+
+    /**
      * Routes PhysX contact notifications to per-actor callbacks.
      *
      * Owned by PhysxWorld and installed as the scene's simulation event
@@ -71,6 +98,12 @@ namespace threepp {
      * PhysxWorld::watchContacts): PhysX only generates these notifications for
      * pairs whose filter data asks for them, so a world with no contact
      * watchers pays nothing beyond the branch in the filter shader.
+     *
+     * TRIGGER notifications (see PhysxWorld::watchTriggers) are the other half,
+     * and they are NOT opt-in: the stock filter shader gives every pair
+     * involving a trigger shape PxPairFlag::eTRIGGER_DEFAULT unconditionally, so
+     * a scene with a trigger volume in it reports that volume's overlaps whether
+     * anything is listening or not. What is opt-in is the delivery below.
      */
     class ContactDispatcher: public ::physx::PxSimulationEventCallback {
 
@@ -94,15 +127,31 @@ namespace threepp {
                            entries_.end());
         }
 
+        Handle addTrigger(::physx::PxRigidActor* watch, std::function<void(const TriggerEvent&)> fn) {
+            const Handle h = next_++;
+            triggers_.push_back({h, watch, std::move(fn)});
+            return h;
+        }
+
+        void removeTrigger(Handle handle) {
+            triggers_.erase(std::remove_if(triggers_.begin(), triggers_.end(),
+                                           [handle](const TriggerEntry& e) { return e.handle == handle; }),
+                            triggers_.end());
+        }
+
         // Drop every watcher of `actor` — called when the actor is released, so
-        // a stale watch entry cannot match a recycled pointer later.
+        // a stale watch entry cannot match a recycled pointer later. Both kinds:
+        // one released actor invalidates every entry naming it.
         void forget(const ::physx::PxRigidActor* actor) {
             entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
                                           [actor](const Entry& e) { return e.watch == actor; }),
                            entries_.end());
+            triggers_.erase(std::remove_if(triggers_.begin(), triggers_.end(),
+                                           [actor](const TriggerEntry& e) { return e.watch == actor; }),
+                            triggers_.end());
         }
 
-        [[nodiscard]] bool empty() const { return entries_.empty(); }
+        [[nodiscard]] bool empty() const { return entries_.empty() && triggers_.empty(); }
 
         void onContact(const ::physx::PxContactPairHeader& header,
                        const ::physx::PxContactPair* pairs, ::physx::PxU32 nbPairs) override {
@@ -150,11 +199,53 @@ namespace threepp {
             }
         }
 
+        // Trigger overlaps. Unlike onContact this is not gated on a filter bit —
+        // the stock shader flags every trigger pair for reporting — so the
+        // early-out on an empty watcher list is what a world with triggers but no
+        // listeners pays.
+        void onTrigger(::physx::PxTriggerPair* pairs, ::physx::PxU32 count) override {
+            using namespace ::physx;
+            if (triggers_.empty()) return;
+
+            for (PxU32 i = 0; i < count; ++i) {
+                const PxTriggerPair& tp = pairs[i];
+                // Either shape deleted during simulate(): the actor pointers are
+                // only good for identity comparison, and the event is about a
+                // shape that no longer exists.
+                if (tp.flags & (PxTriggerPairFlag::eREMOVED_SHAPE_TRIGGER |
+                                PxTriggerPairFlag::eREMOVED_SHAPE_OTHER)) {
+                    continue;
+                }
+
+                const bool found = tp.status == PxPairFlag::eNOTIFY_TOUCH_FOUND;
+                const bool lost = tp.status == PxPairFlag::eNOTIFY_TOUCH_LOST;
+                if (!found && !lost) continue;// PERSISTS does not exist for triggers
+
+                // Trigger pairs are always rigid actors, so the downcasts are safe.
+                auto* trigger = static_cast<PxRigidActor*>(tp.triggerActor);
+                auto* other = static_cast<PxRigidActor*>(tp.otherActor);
+
+                // BOTH sides are dispatched. The volume wants to know who walked
+                // in; whoever walked in is not itself a trigger and would
+                // otherwise never hear about it.
+                for (const auto& e: triggers_) {
+                    const bool isTrigger = (e.watch == trigger);
+                    if (!isTrigger && e.watch != other) continue;
+                    TriggerEvent ev;
+                    ev.self = e.watch;
+                    ev.other = isTrigger ? other : trigger;
+                    ev.selfIsTrigger = isTrigger;
+                    ev.touchFound = found;
+                    ev.touchLost = lost;
+                    e.fn(ev);
+                }
+            }
+        }
+
         // Unused halves of the interface. PhysX requires all of them.
         void onConstraintBreak(::physx::PxConstraintInfo*, ::physx::PxU32) override {}
         void onWake(::physx::PxActor**, ::physx::PxU32) override {}
         void onSleep(::physx::PxActor**, ::physx::PxU32) override {}
-        void onTrigger(::physx::PxTriggerPair*, ::physx::PxU32) override {}
         void onAdvance(const ::physx::PxRigidBody* const*, const ::physx::PxTransform*,
                        const ::physx::PxU32) override {}
 
@@ -164,7 +255,15 @@ namespace threepp {
             ::physx::PxRigidActor* watch;
             std::function<void(const ContactEvent&)> fn;
         };
+        struct TriggerEntry {
+            Handle handle;
+            ::physx::PxRigidActor* watch;
+            std::function<void(const TriggerEvent&)> fn;
+        };
         std::vector<Entry> entries_;
+        std::vector<TriggerEntry> triggers_;
+        // Shared by both lists, so a handle names exactly one entry whichever
+        // kind it is and unwatch cannot cross the streams.
         Handle next_ = 1;// 0 reserved as "no handle"
         ::physx::PxContactPairPoint pointBuf_[maxPointsPerPair]{};
     };
@@ -183,6 +282,21 @@ namespace threepp {
      * it) keeps collision behaviour bit-identical to before this existed: the
      * only change is the extra pair flags, and only for pairs where one side
      * asked for them.
+     *
+     * Trigger pairs are LEFT ALONE. The stock shader already assigns them
+     * PxPairFlag::eTRIGGER_DEFAULT (found | lost | detect-discrete), which is
+     * what makes trigger reporting work here with no opt-in bit at all — and it
+     * is also the complete set of flags a trigger pair may carry.
+     * Sc::TriggerInteraction::setTriggerFlags masks whatever it is handed down
+     * to found|lost, and warns once under PX_CHECKED that eNOTIFY_TOUCH_PERSISTS
+     * is not supported for triggers. So OR-ing the contact-report set onto a
+     * trigger pair is not a crash, it is a request for something the SDK drops —
+     * and a warning in any checked build. A body watched for CONTACTS that walks
+     * into a trigger volume is an ordinary thing to author (the same script can
+     * define both callbacks), so the pair is common enough to get right rather
+     * than tolerate. Which pair is which is not the shape flags but
+     * PxFilterObjectIsTrigger on the attributes — the same test the stock shader
+     * makes one line earlier.
      */
     inline ::physx::PxFilterFlags contactReportFilterShader(
             ::physx::PxFilterObjectAttributes attributes0, ::physx::PxFilterData filterData0,
@@ -194,7 +308,10 @@ namespace threepp {
                 attributes0, filterData0, attributes1, filterData1,
                 pairFlags, constantBlock, constantBlockSize);
 
-        if ((filterData0.word3 | filterData1.word3) & kContactReportFilterBit) {
+        const bool trigger = PxFilterObjectIsTrigger(attributes0) ||
+                             PxFilterObjectIsTrigger(attributes1);
+
+        if (!trigger && ((filterData0.word3 | filterData1.word3) & kContactReportFilterBit)) {
             pairFlags |= PxPairFlag::eNOTIFY_TOUCH_FOUND |
                          PxPairFlag::eNOTIFY_TOUCH_PERSISTS |
                          PxPairFlag::eNOTIFY_TOUCH_LOST |
@@ -582,6 +699,92 @@ namespace threepp {
             // Existing broad-phase pairs were filtered under the old data; without
             // this they would keep their old pair flags until they separate.
             scene_->resetFiltering(*actor);
+        }
+
+        // --- Trigger reporting -------------------------------------------------
+        // A trigger volume is a shape carrying PxShapeFlag::eTRIGGER_SHAPE
+        // INSTEAD of eSIMULATION_SHAPE (the two are mutually exclusive on one
+        // shape): it generates no contacts, resolves nothing, and things pass
+        // straight through it — what it does is report who is inside.
+        //
+        // Unlike contacts this needs no opt-in bit. The filter shader hands every
+        // pair involving a trigger shape eTRIGGER_DEFAULT, so the notifications
+        // exist as soon as the scene contains a trigger; watching is only about
+        // delivery. Watch EITHER side: the volume, to hear who entered it, or the
+        // entering body, to hear that it entered something. Both are dispatched
+        // from one PxTriggerPair.
+        //
+        // The callback fires from inside fetchResults(), same rule as contacts:
+        // copy what you need, and do not add or remove actors from in there.
+        //
+        // Two behaviours worth knowing, both PhysX's and neither worked around:
+        //   * A trigger pair reports TOUCH_FOUND and TOUCH_LOST and nothing
+        //     else — there is no PERSISTS event for a trigger. An overlap that is
+        //     simply continuing produces no callbacks at all.
+        //   * A dynamic actor resting inside a trigger goes to sleep, and a
+        //     sleeping pair produces no further events. That is harmless here
+        //     BECAUSE there is no persist event to lose: found has already been
+        //     delivered, and the lost still arrives when the actor is woken and
+        //     leaves. What would break is a design that re-derived "inside" from
+        //     a per-step event; track the found/lost transitions instead.
+        using TriggerHandle = ContactDispatcher::Handle;
+
+        TriggerHandle watchTriggers(::physx::PxRigidActor* actor,
+                                    std::function<void(const TriggerEvent&)> cb) {
+            if (!actor || !cb) return 0;
+            return contacts_.addTrigger(actor, std::move(cb));
+        }
+
+        void unwatchTriggers(TriggerHandle handle) { contacts_.removeTrigger(handle); }
+
+        // Turn every shape of `actor` into a trigger shape, or back into a
+        // simulation shape. Returns false if any shape refused.
+        //
+        // PhysX rejects eTRIGGER_SHAPE on triangle-mesh and heightfield geometry:
+        // "PxShape::setFlag(s): triangle mesh and heightfield triggers are not
+        // supported!", verbatim from NpShape.cpp in 5.5. A trigger asks whether a
+        // point is INSIDE it, and those two are surfaces. (Planes are refused by
+        // the older documentation but accepted by 5.5 — measured, not assumed —
+        // so they are not excluded here.)
+        //
+        // The check is ahead of the setFlag rather than after it for a reason
+        // stronger than tidiness. The SDK's refusal is an error-stream message,
+        // not a return value, and the two flags are mutually exclusive: the
+        // caller must lower eSIMULATION_SHAPE before raising eTRIGGER_SHAPE, so
+        // a refused raise leaves the shape with NEITHER — neither colliding nor
+        // triggering, silently. Asking first is what keeps that state
+        // unreachable. A caller that wants a trigger out of a triangle mesh must
+        // cook something else (a convex hull) and pass THAT actor.
+        static bool setTriggerShapes(::physx::PxRigidActor& actor, bool enabled) {
+            using namespace ::physx;
+            const PxU32 n = actor.getNbShapes();
+            if (n == 0) return false;
+            std::vector<PxShape*> shapes(n);
+            actor.getShapes(shapes.data(), n);
+
+            bool all = true;
+            for (auto* s: shapes) {
+                if (!s) continue;
+                if (enabled && !canBeTrigger(s->getGeometry().getType())) {
+                    all = false;
+                    continue;
+                }
+                if (enabled) {
+                    s->setFlag(PxShapeFlag::eSIMULATION_SHAPE, false);
+                    s->setFlag(PxShapeFlag::eTRIGGER_SHAPE, true);
+                } else {
+                    s->setFlag(PxShapeFlag::eTRIGGER_SHAPE, false);
+                    s->setFlag(PxShapeFlag::eSIMULATION_SHAPE, true);
+                }
+            }
+            return all;
+        }
+
+        // The geometries PhysX will accept as a trigger. See setTriggerShapes.
+        static bool canBeTrigger(::physx::PxGeometryType::Enum type) {
+            using namespace ::physx;
+            return type != PxGeometryType::eTRIANGLEMESH &&
+                   type != PxGeometryType::eHEIGHTFIELD;
         }
 
         [[nodiscard]] ContactDispatcher& contactDispatcher() { return contacts_; }

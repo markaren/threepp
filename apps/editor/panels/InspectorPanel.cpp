@@ -1610,6 +1610,17 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
             config.body != PhysicsConfig::Body::Static) {
             ImGui::TextColored(theme::warning(), "TriMesh is static-only");
         }
+
+        // Beside the shape, because that is what it changes: a trigger's shape
+        // is cooked as an overlap volume instead of a collider. Hidden for a
+        // soft body (whose collider is the cooked tet volume — see below), and
+        // the key still round-trips, so the tick survives a trip through Soft.
+        bool trigger = config.trigger;
+        if (ImGui::Checkbox("Trigger", &trigger)) {
+            auto after = config;
+            after.trigger = trigger;
+            commit(after, trigger ? "Make Trigger Volume" : "Clear Trigger Volume");
+        }
     }
 
     const auto floatField = [&](const char* label, float value, float speed, float min, float max,
@@ -1704,6 +1715,20 @@ void EditorApp::drawPhysicsSection(Object3D& object) {
         ImGui::TextWrapped("V-HACD splits the mesh into convex hulls so a concave shape "
                            "collides like itself (a mug holds water). Cooked once per "
                            "geometry on Play; a dense mesh can take a moment.");
+    }
+    if (!soft && config.trigger) {
+        ImGui::TextWrapped("Overlap volume: bodies pass straight through it, and a script "
+                           "on either side gets on_trigger_enter / on_trigger_exit. It "
+                           "generates no contacts at all, so on_collision_* never fires "
+                           "for it.");
+        // PhysX has no triangle-mesh trigger; the play session substitutes a
+        // convex hull and logs one line. Flagged here for the shape that says
+        // so outright — whether *Auto* resolves to one depends on the geometry,
+        // which only the cook knows, so that case is left to the console.
+        if (config.shape == PhysicsConfig::Shape::TriMesh) {
+            ImGui::TextColored(theme::warning(),
+                               "PhysX has no triangle-mesh trigger - a convex hull is used");
+        }
     }
 
     ImGui::TextColored(theme::muted(), "Stored in userData[\"physics\"]");

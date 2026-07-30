@@ -1043,6 +1043,99 @@ int EditorApp::runSelfTest() {
         step();
     }
 
+    // on_trigger_enter / on_trigger_exit, one door over. Nothing is enabled on
+    // any actor for these: the volume reports because the DOCUMENT says it is a
+    // trigger, and the pass proves the whole chain from that tick to the
+    // callback — plus the two things that make it a trigger rather than a
+    // collider, that the body PASSED THROUGH and that the script hearing about
+    // it is the one on the body that walked in, which is not itself a trigger.
+    {
+        auto gate = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        gate->name = "Gate";
+        // Off to one side, with nothing underneath: what the volume does NOT do
+        // is half the assertion.
+        gate->position.set(6.f, 1.f, 0.f);
+        gate->scale.set(2.f, 0.4f, 2.f);
+        auto* gateRaw = gate.get();
+
+        PhysicsConfig volume;
+        volume.enabled = true;
+        volume.body = PhysicsConfig::Body::Static;
+        volume.shape = PhysicsConfig::Shape::Box;
+        volume.trigger = true;
+        volume.write(*gateRaw);
+        addObject(gate, document_.scene(), "Add Gate");
+
+        auto dropper = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        dropper->name = "Dropper";
+        dropper->position.set(6.f, 4.f, 0.f);
+        auto* raw = dropper.get();
+
+        PhysicsConfig falling;
+        falling.enabled = true;
+        falling.body = PhysicsConfig::Body::Dynamic;
+        falling.shape = PhysicsConfig::Shape::Box;
+        falling.mass = 2.f;
+        falling.write(*raw);
+        addObject(dropper, document_.scene(), "Add Dropper");
+
+        // Publishes into its own SCALE, like the collision pass: position
+        // belongs to the simulation while this plays, and scale does not. `ok`
+        // folds the payload contract into one number — the volume resolved, as
+        // its concrete type, under the right name.
+        setInlineScript(*raw,
+                        "class Dropper:\n"
+                        "    def start(self, obj):\n"
+                        "        self.obj = obj\n"
+                        "        self.enters = 0\n"
+                        "        self.exits = 0\n"
+                        "        self.ok = 0\n"
+                        "\n"
+                        "    def on_trigger_enter(self, other):\n"
+                        "        self.enters += 1\n"
+                        "        if (other is not None and other.name == \"Gate\" and\n"
+                        "                type(other).__name__ == \"Mesh\"):\n"
+                        "            self.ok += 1\n"
+                        "\n"
+                        "    def on_trigger_exit(self, other):\n"
+                        "        self.exits += 1\n"
+                        "\n"
+                        "    def update(self, dt):\n"
+                        "        self.obj.scale.set(float(self.enters), float(self.ok),\n"
+                        "                           float(self.exits))\n",
+                        "Dropper Script");
+        step();
+
+        const auto dropperUuid = raw->uuid;
+        startPlay();
+        // Long enough to fall the 2.4 m to the gate, cross it, and keep going.
+        stepFixed(150);
+
+        auto* live = findByUuid(document_.scene(), dropperUuid);
+        check(live && static_cast<int>(live->scale.x) == 1,
+              "a body crossing a trigger volume gets exactly one on_trigger_enter");
+        check(live && static_cast<int>(live->scale.y) == 1,
+              "and the callback names the volume it entered");
+        check(live && static_cast<int>(live->scale.z) == 1,
+              "and one on_trigger_exit when it leaves the far side");
+        check(live && live->position.y < 0.f,
+              "and it fell straight through - a trigger collides with nothing");
+        check(scripts_ && scripts_->errorFor(dropperUuid).empty(),
+              "and the trigger sweep raised nothing");
+
+        stopPlay();
+        step();
+
+        for (const char* name : {"Dropper", "Gate"}) {
+            if (auto* done = document_.scene().getObjectByName(name)) {
+                selectObject(done);
+                deleteSelected();
+            }
+        }
+        selectObject(nullptr);
+        step();
+    }
+
     // threepp.editor.raycast: a query put to the same world, from a script that
     // owns a body of its own — so the pass covers the case the API exists for,
     // a ground check cast from INSIDE the caller's own collider. Nothing here is

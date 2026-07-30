@@ -7,12 +7,13 @@
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/scenes/Scene.hpp"
 
-// fixed_update rides the physics world's substep loop, and the collision
-// callbacks ride its contact reports, so this session has to reach the world the
-// PhysicsPlaySession is playing. Same seam bind_editor_physics.cpp uses — the
-// static active() on the session, plus its lifetime token — and gated on the
-// same SDK: without PhysX there is no fixed clock to run on and no contact to
-// report, and the session says so once instead of inventing either.
+// fixed_update rides the physics world's substep loop, and the collision and
+// trigger callbacks ride its contact and trigger reports, so this session has to
+// reach the world the PhysicsPlaySession is playing. Same seam
+// bind_editor_physics.cpp uses — the static active() on the session, plus its
+// lifetime token — and gated on the same SDK: without PhysX there is no fixed
+// clock to run on and nothing to report, and the session says so once instead of
+// inventing either.
 #ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #endif
@@ -102,6 +103,9 @@ struct ScriptPlaySession::Impl {
         // paid per reported pair per substep.
         bool hasCollisionEnter = false;
         bool hasCollisionExit = false;
+        // The trigger half of the same story, read from inside onTrigger().
+        bool hasTriggerEnter = false;
+        bool hasTriggerExit = false;
         // Set the first time this script raises. It stays set for the rest of
         // the session: a script that throws every frame must not fill the
         // console with the same traceback sixty times a second.
@@ -311,10 +315,18 @@ struct ScriptPlaySession::Impl {
             // same reasoning ContactSensor::detach() applies in the other
             // direction. It dies with the actor.
         }
+        for (auto& watch : triggerWatches) {
+            if (watch.handle && alive) world->unwatchTriggers(watch.handle);
+            // Nothing to undo on the actor: trigger reporting was never turned
+            // ON here. It is the shape's own eTRIGGER_SHAPE flag, authored in
+            // the document and cooked by the physics session, and it belongs to
+            // the volume rather than to any watcher of it.
+        }
         // The queues hold nothing Python-shaped (see QueuedCollision), so this
         // needs no GIL and is safe from stop(), from the destructor, and from a
         // teardown where the interpreter was never started at all.
         watches.clear();
+        triggerWatches.clear();
         registered = false;
         world = nullptr;
         physics = nullptr;
@@ -512,6 +524,70 @@ struct ScriptPlaySession::Impl {
         watch.queue.push_back(std::move(queued));
     }
 
+    // --- triggers ----------------------------------------------------------
+    //
+    // on_trigger_enter / on_trigger_exit are the collision callbacks' overlap
+    // twin, and everything above about the queue holds here word for word: the
+    // report arrives from inside fetchResults(), so it is COPIED and delivered
+    // from the frame sweep; the queue is a LIST, so a body that crosses a thin
+    // volume between two deliveries still yields enter then exit; one crossing
+    // is one PAIR OF BODIES, refcounted per shape pair so a compound volume does
+    // not report four of them.
+    //
+    // Three things differ, and each is deliberate.
+    //
+    // 1. There is nothing to turn on. Contact reporting is an opt-in bit per
+    //    actor; trigger reporting is the SHAPE being a trigger, which the
+    //    document authored and the physics session cooked. So the watch is
+    //    delivery only, and a script's methods on a body that is not a trigger
+    //    and never gets entered simply never fire.
+    //
+    // 2. BOTH SIDES are watched, and only one of them is the volume. The script
+    //    on the trigger wants to know who walked in; the script on the walker
+    //    wants to know it walked in. PhysX reports one PxTriggerPair and the
+    //    dispatcher hands it to whichever side asked, so a watch is registered
+    //    for every scripted body either way — the entering body is not itself a
+    //    trigger and there is no way to tell in advance that it will enter one.
+    //
+    // 3. There is no `Collision`. A trigger generates no manifold: no point, no
+    //    normal, no impulse — PhysX has none to give, and a struct full of
+    //    zeroes would be a lie with fields. The callback takes the OBJECT.
+
+    struct QueuedTrigger {
+        bool enter = false;
+        std::weak_ptr<Object3D> other;
+    };
+
+    struct TriggerWatch {
+        std::size_t instance = 0;// index into instances, stable after start()
+        ::physx::PxRigidActor* actor = nullptr;
+        PhysxWorld::TriggerHandle handle = 0;
+        std::vector<Touch> touching;
+        std::vector<QueuedTrigger> queue;
+    };
+
+    std::vector<TriggerWatch> triggerWatches;
+
+    // Called from inside fetchResults(), once per reported trigger pair per
+    // substep. Same rules as onContact: values only, no Python, no GIL.
+    void onTriggerPair(std::size_t watchIndex, const TriggerEvent& event) {
+
+        auto& watch = triggerWatches[watchIndex];
+        const auto& instance = instances[watch.instance];
+        const bool live = !instance.failed;
+
+        if (event.touchFound && acquireTouch(watch.touching, event.other)) {
+            if (live && instance.hasTriggerEnter) {
+                watch.queue.push_back(QueuedTrigger{true, objectFor(event.other)});
+            }
+        }
+        if (event.touchLost && releaseTouch(watch.touching, event.other)) {
+            if (live && instance.hasTriggerExit) {
+                watch.queue.push_back(QueuedTrigger{false, objectFor(event.other)});
+            }
+        }
+    }
+
 #endif
 
     [[nodiscard]] bool collisionsPending() const {
@@ -578,6 +654,106 @@ struct ScriptPlaySession::Impl {
         // reason: the methods are not quietly dropped, they are reported once.
         log("collision callbacks need a playing physics world - they never run on " +
             std::to_string(wanted) + (wanted == 1 ? " script" : " scripts"));
+    }
+
+    [[nodiscard]] bool triggersPending() const {
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        for (const auto& watch : triggerWatches) {
+            if (!watch.queue.empty()) return true;
+        }
+#endif
+        return false;
+    }
+
+    // Live instances whose class defines either trigger callback.
+    [[nodiscard]] std::size_t triggersWanted() const {
+
+        std::size_t wanted = 0;
+        for (const auto& instance : instances) {
+            if (instance.failed) continue;
+            if (instance.hasTriggerEnter || instance.hasTriggerExit) ++wanted;
+        }
+        return wanted;
+    }
+
+    // Watch trigger overlaps for every scripted body that asked, in instance
+    // order — the sweep order, so this stays as deterministic as the substep it
+    // rides on. Nothing is enabled on the actor here (see the block comment
+    // above): a body is only a trigger because the document says so.
+    void attachTriggers() {
+
+        const auto wanted = triggersWanted();
+        if (wanted == 0) return;
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        if (bindWorld()) {
+            for (std::size_t i = 0; i < instances.size(); ++i) {
+                const auto& instance = instances[i];
+                if (instance.failed) continue;
+                if (!instance.hasTriggerEnter && !instance.hasTriggerExit) continue;
+
+                const auto object = instance.object.lock();
+                auto* actor = object ? physics->findActor(object.get()) : nullptr;
+                if (!actor) {
+                    // A body IS needed, on either side. The volume needs one to
+                    // be a trigger at all; the entering body needs one to be
+                    // something a trigger can notice. Ticking Trigger is NOT
+                    // required — a script on an ordinary body that walks into
+                    // somebody else's volume is exactly half of this feature.
+                    log("trigger callbacks need a physics body - " + instance.label +
+                        " has none, so they never fire");
+                    continue;
+                }
+                triggerWatches.push_back(TriggerWatch{i, actor, 0, {}, {}});
+            }
+            // Registered only once the vector is final, for the reason
+            // attachCollisions gives: the callback names its watch by index, and
+            // an index survives the reallocation a pointer would not.
+            for (std::size_t w = 0; w < triggerWatches.size(); ++w) {
+                triggerWatches[w].handle = world->watchTriggers(
+                        triggerWatches[w].actor,
+                        [this, w](const TriggerEvent& event) { onTriggerPair(w, event); });
+            }
+            return;
+        }
+#endif
+        log("trigger callbacks need a playing physics world - they never run on " +
+            std::to_string(wanted) + (wanted == 1 ? " script" : " scripts"));
+    }
+
+    // deliverCollisions for overlaps: same order (instance, then queue), same
+    // held GIL, same disable-once. What it hands over is the object rather than
+    // a Collision, since there is no contact data to put beside it.
+    void deliverTriggers() {
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        for (auto& watch : triggerWatches) {
+            if (watch.queue.empty()) continue;
+            const auto queued = std::move(watch.queue);
+            watch.queue.clear();
+
+            auto& instance = instances[watch.instance];
+            for (const auto& event : queued) {
+                if (instance.failed) break;// disabled by an earlier event
+                const char* method = event.enter ? "on_trigger_enter" : "on_trigger_exit";
+                if (event.enter ? !instance.hasTriggerEnter : !instance.hasTriggerExit) continue;
+                try {
+                    // The object itself, not a struct wrapping it: a trigger
+                    // overlap has no contact data to carry alongside.
+                    if (const auto other = event.other.lock()) {
+                        instance.self.attr(method)(scripting::handleFor(*other));
+                    } else {
+                        instance.self.attr(method)(py::none());
+                    }
+                } catch (py::error_already_set& e) {
+                    fail(instance, method, scripting::describeError(e));
+                } catch (const std::exception& e) {
+                    fail(instance, method, e.what());
+                }
+            }
+        }
+#endif
     }
 
     // One sweep of everything queued since the last one, in instance order and
@@ -760,6 +936,8 @@ void ScriptPlaySession::start(Scene& scene) {
             instance.hasFixedUpdate = py::hasattr(self, "fixed_update");
             instance.hasCollisionEnter = py::hasattr(self, "on_collision_enter");
             instance.hasCollisionExit = py::hasattr(self, "on_collision_exit");
+            instance.hasTriggerEnter = py::hasattr(self, "on_trigger_enter");
+            instance.hasTriggerExit = py::hasattr(self, "on_trigger_exit");
             instance.self = self;
             // Kept so attachCollisions() can resolve the body governing it,
             // without a second traversal of the scene to find the object again.
@@ -815,12 +993,14 @@ void ScriptPlaySession::start(Scene& scene) {
     }
 
     // After BOTH phases, so they only ever consider instances that actually came
-    // up: a script whose start() raised is disabled, and its fixed_update and
-    // its collision callbacks with it. (The hasattr results they read are phase
-    // 1's, but `failed` is not final until phase 2 has run — which is exactly
-    // why these stay down here rather than moving up with the resolver.)
+    // up: a script whose start() raised is disabled, and its fixed_update, its
+    // collision callbacks and its trigger callbacks with it. (The hasattr
+    // results they read are phase 1's, but `failed` is not final until phase 2
+    // has run — which is exactly why these stay down here rather than moving up
+    // with the resolver.)
     impl_->attachToPhysics();
     impl_->attachCollisions();
+    impl_->attachTriggers();
 }
 
 void ScriptPlaySession::update(float dt) {
@@ -831,10 +1011,11 @@ void ScriptPlaySession::update(float dt) {
     for (const auto& instance : impl_->instances) {
         if (!instance.failed && instance.hasUpdate) any = true;
     }
-    // Contacts queued by this frame's substeps are delivered here even when no
-    // script defines update() at all.
+    // Contacts and trigger overlaps queued by this frame's substeps are
+    // delivered here even when no script defines update() at all.
     const bool collisions = impl_->collisionsPending();
-    if (!any && !collisions) return;
+    const bool triggers = impl_->triggersPending();
+    if (!any && !collisions && !triggers) return;
 
     // Once for the whole sweep, not once per script: acquiring the GIL is the
     // expensive part, and there is nothing else running that wants it.
@@ -852,6 +1033,10 @@ void ScriptPlaySession::update(float dt) {
     // whole sweep shares the acquisition above instead of taking the GIL inside
     // the physics step once per substep.
     if (collisions) impl_->deliverCollisions();
+    // Then the overlaps, on the same terms and for the same reasons. Contacts
+    // before triggers is an arbitrary but FIXED order: a script defining both
+    // sees the same sequence every run.
+    if (triggers) impl_->deliverTriggers();
 
     for (auto& instance : impl_->instances) {
         if (instance.failed || !instance.hasUpdate) continue;

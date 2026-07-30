@@ -156,6 +156,13 @@ namespace threepp::editor {
     // state flag, so a touch that begins and ends inside one frame still
     // produces enter followed by exit rather than nothing at all.
     //
+    // A script may also define on_trigger_enter(other) / on_trigger_exit(other),
+    // the same machinery over PhysX's TRIGGER reports: fired when a body enters
+    // and leaves a trigger volume, for the script on the VOLUME and for the
+    // script on the entering BODY alike, each handed the other object. Nothing
+    // is enabled on the actor for these — a volume is a trigger because the
+    // document says so — so start() only registers the delivery.
+    //
     // A script may also define fixed_update(dt), which does NOT run per frame:
     // start() registers ONE pre-substep callback with the PhysxWorld the physics
     // session is playing (only when some live instance defines the method), and

@@ -126,6 +126,11 @@ std::string PhysicsConfig::encode() const {
     out += bodyToken(body);
     out += ";shape=";
     out += shapeToken(shape);
+    // Written for a soft body too, where it means nothing: the same "every key,
+    // every time" rule the soft-body and V-HACD parameters follow, so ticking
+    // Trigger, switching to Soft and back does not lose the tick.
+    out += ";trigger=";
+    out += (trigger ? "1" : "0");
     out += ";mass=";
     out += number(mass);
     out += ";friction=";
@@ -175,6 +180,8 @@ std::optional<PhysicsConfig> PhysicsConfig::decode(const std::string& text) {
                 config.body = bodyFrom(value, config.body);
             } else if (key == "shape") {
                 config.shape = shapeFrom(value, config.shape);
+            } else if (key == "trigger") {
+                config.trigger = toInt(value, config.trigger ? 1 : 0) != 0;
             } else if (key == "mass") {
                 config.mass = toFloat(value, config.mass);
             } else if (key == "friction") {

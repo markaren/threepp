@@ -191,7 +191,7 @@ double / string — see `ObjectExporter::writeUserData`), so a nested JSON objec
 is not available. The value is therefore one flat, deterministic string:
 
 ```
-body=dynamic;shape=convex;mass=12.5;friction=0.8;restitution=0.35;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000
+body=dynamic;shape=convex;trigger=0;mass=12.5;friction=0.8;restitution=0.35;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000
 ```
 
 `PhysicsConfig::encode()` / `decode()` own that format. Unknown keys are ignored
@@ -200,7 +200,9 @@ written by an *older* one loads too, since a missing key keeps its default. A
 disabled body removes the entry entirely rather than writing `enabled=false`, so
 turning physics off leaves no trace in the file. Every key is written whatever
 the body type, so switching a body from `soft` to `dynamic` and back does not
-quietly discard the settings the other type was using.
+quietly discard the settings the other type was using — `trigger=1` on a body
+you flip to `soft` and back is still `trigger=1`, even though the checkbox is
+hidden in between (see [Trigger volumes](#trigger-volumes)).
 
 ### Colliders
 
@@ -250,6 +252,61 @@ so *Convex Pieces* still simulates — just without the concavity.
 The cooked hulls are drawn by the **Physics Colliders** overlay (PhysX's own
 collision-shape visualization), so the quality of a decomposition is visible in
 the viewport, not just inferred from behaviour.
+
+### Trigger volumes
+
+Tick **Trigger** and the body stops colliding and starts *reporting*. Its shapes
+are cooked with PhysX's `eTRIGGER_SHAPE` instead of `eSIMULATION_SHAPE` — the two
+are mutually exclusive on one shape — so bodies pass straight through it and what
+it produces instead is an overlap event: who came in, and who left. That is the
+goal zone, the checkpoint, the kill plane, the "the player reached the door"
+region. A script on either side hears about it through
+[`on_trigger_enter` / `on_trigger_exit`](#trigger-volumes-on_trigger_enter--on_trigger_exit);
+with no script anywhere it is simply a body that collides with nothing.
+
+* **`trigger=0/1` in `userData`, written every time** like every other key, so
+  ticking it, switching the body to *Soft* and switching back does not lose the
+  tick.
+* **Static, Dynamic and Kinematic.** A static volume is the common case and the
+  cheap one; PhysX allows a trigger shape on any rigid actor, so a moving trigger
+  (a zone carried by a lift, a proximity bubble on a vehicle) works too. A
+  *dynamic* trigger still falls — it has mass and gravity, it just has nothing to
+  land on.
+* **Hidden for Soft.** A deformable volume's collider is the tetrahedral mesh
+  PhysX cooks from the geometry, which is not a shape anything can raise the
+  trigger flag on, so the checkbox disappears the same way the Shape picker does.
+* **A trigger is not a collider, at all.** No contacts, so
+  [`on_collision_enter`](#collisions-on_collision_enter--on_collision_exit) never
+  fires for an overlap with one and a
+  [`ContactSensor`](#sensors-from-a-script) never measures one. If you want an
+  object to both block and report, use two objects: a collider and a trigger over
+  it.
+* **Scene queries still see it.** A trigger shape keeps `eSCENE_QUERY_SHAPE`, so
+  [`threepp.editor.raycast`](#raycasts-threeppeditorraycast) hits it like
+  anything else — which is what lets a script find a zone before entering it, and
+  what a ground check has to know when casting through one.
+* **The overlay draws it.** The **Physics Colliders** overlay shows a trigger
+  volume exactly as it shows a collider (measured: PhysX's collision-shape
+  visualization emits the same lines either way), so a volume you cannot see
+  bodies bouncing off is still visible in the viewport.
+
+**Triangle meshes cannot be triggers**, and this is the one place the editor
+substitutes something. PhysX refuses the flag outright — *"triangle mesh and
+heightfield triggers are not supported"* — because a trigger asks whether a point
+is *inside* it and a triangle soup is a surface with no inside. Rather than cook
+a trigger that silently does not exist, the play session falls back to a **convex
+hull** and says so in the console, once, naming the object. That covers:
+
+| authored as | cooked as | why |
+| --- | --- | --- |
+| **TriMesh** on a mesh | one convex hull of that mesh | the flag would be refused |
+| **Convex** on a *static* mesh | one convex hull of that mesh | a static Convex is normally cooked as an exact triangle mesh, which is free for something that never moves — and not available here |
+| **Auto** on a static shaped mesh | one convex hull | *Auto* resolves to TriMesh for a static shaped mesh |
+| **Auto**/**TriMesh** on a static `Group` | one hull per sub-mesh, welded into one compound | the subtree is cooked as triangle meshes |
+| **Box** / **Sphere** / **Capsule** / **Convex Pieces** | unchanged | already volumes |
+
+So a concave trigger volume wants **Convex Pieces**, whose hulls are volumes
+already and need no substitution.
 
 ### Soft bodies
 
@@ -507,12 +564,16 @@ class Spinner:
         pass
 ```
 
-Every method is optional; missing ones are skipped. There are three more:
+Every method is optional; missing ones are skipped. There are five more:
 `fixed_update(self, dt)`, which runs on the *physics* clock rather than on the
-frame (see [The physics clock](#the-physics-clock-fixed_update)), and
+frame (see [The physics clock](#the-physics-clock-fixed_update)),
 `on_collision_enter(self, contact)` / `on_collision_exit(self, contact)`, which
 run when the body governing the object starts and stops touching another (see
-[Collisions](#collisions-on_collision_enter--on_collision_exit)). In a file, the
+[Collisions](#collisions-on_collision_enter--on_collision_exit)), and
+`on_trigger_enter(self, other)` / `on_trigger_exit(self, other)`, which run when
+a body enters and leaves a [trigger volume](#trigger-volumes) — on the volume's
+script and on the entering body's alike (see
+[Trigger volumes](#trigger-volumes-on_trigger_enter--on_trigger_exit)). In a file, the
 class is the one whose name matches it (`spinner.py` → `Spinner`,
 case-insensitively), or — failing that — the single class in the file that
 defines `update()`. Anything else is reported rather than guessed at.
@@ -708,15 +769,127 @@ generate contacts for kinematic-against-static or kinematic-against-kinematic
 pairs unless the scene asks for them, and this one does not — so a script on a
 *kinematic* body hears about the dynamic bodies it pushes and about nothing else.
 
-Out of scope, deliberately: **trigger volumes** (an overlap that does not
-collide), **`on_collision_stay`** (a resting contact stops being re-reported the
-moment PhysX puts the pair to sleep, so a per-frame "still touching" callback
-would lie), **per-contact-point lists** beyond the single representative point
-above, **soft bodies** (a deformable volume has no rigid actor to watch), and
-**watching a robot** — a simulated robot's links are the articulation's, not the
-session's actor registry's, so a script on a robot resolves no body of its own
-and gets the no-body line. (Being *hit* by one is fine: a contact against a link
-names the robot, the same way a raycast does.)
+A **trigger volume** generates no contacts at all, so none of this fires for one
+— that is a separate pair of callbacks, below.
+
+Out of scope, deliberately: **`on_collision_stay`** (a resting contact stops
+being re-reported the moment PhysX puts the pair to sleep, so a per-frame "still
+touching" callback would lie), **per-contact-point lists** beyond the single
+representative point above, **soft bodies** (a deformable volume has no rigid
+actor to watch), and **watching a robot** — a simulated robot's links are the
+articulation's, not the session's actor registry's, so a script on a robot
+resolves no body of its own and gets the no-body line. (Being *hit* by one is
+fine: a contact against a link names the robot, the same way a raycast does.)
+
+#### Trigger volumes: `on_trigger_enter` / `on_trigger_exit`
+
+The other pair, for the other kind of body. Tick **Trigger** on an object's
+physics (see [Trigger volumes](#trigger-volumes)) and it stops colliding: things
+pass through it and it reports who is inside. Both scripts hear about it — the
+one on the **volume**, and the one on the **body that walked in**:
+
+```python
+def on_trigger_enter(self, other: threepp.Object3D): ...
+def on_trigger_exit(self, other: threepp.Object3D): ...
+```
+
+A goal zone, a scoreboard, and a ball — three features composing (a trigger, a
+script reaching another script's live instance, and the callbacks themselves):
+
+`scoreboard.py`, on anything:
+
+```python
+import threepp
+
+
+class Scoreboard:
+    def start(self, obj: threepp.Object3D):
+        self.obj = obj
+        self.score = 0
+
+    def scored(self, who: threepp.Object3D):
+        self.score += 1
+        print("goal by", who.name, "- score is now", self.score)
+        self.obj.scale.y = 1.0 + self.score      # the bar grows
+```
+
+`goal_zone.py`, on the trigger volume:
+
+```python
+import threepp
+
+
+class GoalZone:
+    def start(self, obj: threepp.Object3D, scene: threepp.Scene):
+        # Resolve in start(), use later: every script instance exists by now,
+        # but its own start() may not have run yet.
+        self.board = threepp.editor.script_from_object(scene.get_object_by_name("Scoreboard"))
+
+    def on_trigger_enter(self, other: threepp.Object3D):
+        if self.board is not None and other is not None:
+            self.board.scored(other)
+```
+
+* **`other` is the object, not a `Collision`.** A trigger produces no manifold —
+  no point, no normal, no impulse, because PhysX has none to give — and a struct
+  full of zeroes would be a lie with fields on it. So the callback takes the far
+  object directly, as its **concrete type** (`Mesh`, `Robot`, …), resolved the
+  same way [`contact.other`](#collisions-on_collision_enter--on_collision_exit)
+  is: the node the physics was authored on, so a body crossing one cooked mesh of
+  a spline's tube names the spline, and a robot crossing it names the robot. It
+  is `None` when that actor answers to nothing the scene can name.
+* **Both sides are called, and only one of them is the volume.** The volume's
+  script is told who came in; the entering body's script is told what it entered.
+  The entering body is *not* itself a trigger and needs no tick of its own — a
+  script that only defines these two methods, on an ordinary falling box, works.
+* **Nothing turns it on.** Contact reporting is an opt-in bit per actor; trigger
+  reporting is the shape *being* a trigger, which the document already says. So
+  there is no box to tick beyond the one that made the volume. A script with
+  these methods on a body that is not a trigger and never gets entered by one
+  simply never fires — but a script with them on an object with **no physics body
+  at all** gets one line in the console at Play, the same voice and the same
+  reason as `fixed_update`'s missing clock.
+* **One crossing is one pair of bodies.** A compound volume, or a body with
+  several shapes, overlaps through several shape pairs: that is *one*
+  `on_trigger_enter`, refcounted the same way a collision is, so a partial
+  separation cannot report an exit the rest of the overlap is still holding.
+* **Delivered from the frame sweep, just before `update(dt)`**, exactly like the
+  collision callbacks and for exactly the same reason: PhysX reports from inside
+  the solver, so the report is copied into a queue and handed over where
+  `update()` runs. Contacts are delivered first, then triggers — an arbitrary but
+  fixed order, so a script defining both sees the same sequence every run.
+* **Both edges always survive.** A body that crosses a thin volume *and leaves*
+  between two deliveries still produces `on_trigger_enter` followed by
+  `on_trigger_exit`. The queue is a list, not a state flag.
+* **There is no "still inside" event.** PhysX reports `TOUCH_FOUND` and
+  `TOUCH_LOST` for a trigger and nothing between them — `eNOTIFY_TOUCH_PERSISTS`
+  is explicitly unsupported for triggers. A body sitting inside a volume also
+  falls **asleep**, and a sleeping pair reports nothing further. Neither is a
+  problem *because* there is no persist event to lose: the enter has already been
+  delivered and the exit still arrives when the body wakes and leaves. Track the
+  two edges yourself if you need an "is inside" flag; do not try to derive one
+  from a per-frame event that does not exist.
+* **Errors work as everywhere else.** The first raise is reported once with its
+  traceback and disables that instance whole for the rest of the session.
+
+Interplay, stated rather than left to be discovered:
+
+* **No collisions.** A trigger shape generates no contacts, so
+  `on_collision_enter` / `on_collision_exit` never fire for an overlap with one,
+  a `ContactSensor` never measures one, and bodies pass through. That last part
+  *is* the feature.
+* **Raycasts still hit it.** A trigger keeps its scene-query flag, so
+  [`threepp.editor.raycast`](#raycasts-threeppeditorraycast) reports it like any
+  other body — see the table there.
+* **Triangle meshes are substituted.** PhysX has no triangle-mesh trigger, so a
+  volume authored as one is cooked as a convex hull with one console line saying
+  so. [The rule and the table](#trigger-volumes) are in the authoring section.
+* **Trigger-against-trigger is nothing.** PhysX does not report overlaps between
+  two trigger shapes, so two volumes crossing each other produce no callbacks on
+  either.
+* **Soft bodies have no trigger.** The checkbox is hidden for `body=soft`, and a
+  soft body crossing a volume is not reported — a deformable volume is not a
+  rigid actor and never enters the trigger pair.
 
 #### Raycasts: `threepp.editor.raycast`
 
@@ -781,8 +954,8 @@ class Hopper:
   on a robot's forearm names the robot. It is `None` only when the actor answers
   to nothing the scene can name; `hit.point`, `hit.normal` and `hit.distance`
   are still valid in that case.
-* **Call it from anywhere a script runs**: `update`, `fixed_update`,
-  `on_collision_enter` / `on_collision_exit`. All of those run on the editor
+* **Call it from anywhere a script runs**: `update`, `fixed_update`, the
+  collision callbacks and the trigger callbacks. All of those run on the editor
   thread with the GIL held and *outside* `simulate()` — a substep is
   `pre-hook → simulate → fetchResults → post-hook`, so the pre-substep hook
   `fixed_update` runs from sits between one substep's results and the next
@@ -797,6 +970,7 @@ What the query sees in this world, stated rather than assumed:
 | dynamic | yes |
 | kinematic | yes — a kinematic actor is a `PxRigidDynamic`, and the query asks for static and dynamic both |
 | an articulated robot's links | yes, and each one answers as the **robot** |
+| [trigger volumes](#trigger-volumes) | **yes** — a trigger shape loses `eSIMULATION_SHAPE` but keeps `eSCENE_QUERY_SHAPE`, so a ray finds a volume that bodies pass straight through. Pass it to `ignore`, or check `hit.object`, if a ground check must not stop at one |
 | soft bodies | **no** — a deformable volume's shape is created without PhysX's scene-query flag, so it is not in the query structures at all |
 
 #### Talking to other scripts: `threepp.editor.script_from_object`
@@ -873,7 +1047,8 @@ exactly one script.
   session's instance either, and the new session will never see your writes to
   it.
 * **Call it from anywhere a script runs** — `start`, `update`, `fixed_update`,
-  the collision callbacks, and `stop`, where every instance is still alive. It
+  the collision and trigger callbacks, and `stop`, where every instance is still
+  alive. It
   reads the session's own instance list and touches neither the scene nor the
   physics world, so it needs no PhysX build: unlike the handles above it, this
   is there in every build that has scripts at all.
@@ -1381,8 +1556,10 @@ per substep, at a constant dt.
 
 The body is also what
 [`on_collision_enter` / `on_collision_exit`](#collisions-on_collision_enter--on_collision_exit)
+and
+[`on_trigger_enter` / `on_trigger_exit`](#trigger-volumes-on_trigger_enter--on_trigger_exit)
 watch: same lookup, same object, and no handle to ask for — the session resolves
-it at Play for any script that defines either method. To ask about a body that
+it at Play for any script that defines any of them. To ask about a body that
 is *not* yours — what is under your feet, what is in front of you — cast a ray:
 [`threepp.editor.raycast`](#raycasts-threeppeditorraycast).
 

@@ -720,7 +720,13 @@ namespace threepp::editor {
         // Meshes carrying their own enabled PhysicsConfig are left alone —
         // start() is creating their actors — so putting physics on a spline
         // collides its generated tube, which is where a user naturally puts it.
-        std::size_t addSubtree(Object3D& root, ::physx::PxMaterial* material) {
+        //
+        // Never reached for a TRIGGER: what this cooks is triangle meshes, which
+        // PhysX refuses to make triggers, so createActor sends a trigger to the
+        // convex-hull compound instead. (If one ever did arrive here, record()
+        // below reports the refusal rather than leaving a volume that collides.)
+        std::size_t addSubtree(Object3D& root, ::physx::PxMaterial* material,
+                               const PhysicsConfig& config) {
 
             const auto actors = world_->addStaticTrimeshTree(
                     root,
@@ -731,7 +737,7 @@ namespace threepp::editor {
             // A subtree is many actors under one authored config. A script
             // asking the root for "its" body gets the first — enough to answer
             // is_static and where it is, which is all a static collider has.
-            if (!actors.empty()) record(root, actors.front());
+            if (!actors.empty()) record(root, actors.front(), config);
             // Backwards, though, ALL of them answer as the root: a contact
             // against the fourth cooked mesh of a spline's tube is a contact
             // with the spline, and there is nothing else to call it.
@@ -745,13 +751,88 @@ namespace threepp::editor {
         // and the object governed by that actor, so something handed the actor
         // can name the object. Returns true so the creation sites can
         // `return record(...)`.
-        bool record(Object3D& object, ::physx::PxRigidActor* actor) {
+        //
+        // The last thing every creation path does, which is also where the
+        // trigger flip belongs: by here the shapes are attached and (for a
+        // dynamic body) finishDynamic has already derived the inertia FROM them.
+        // Flipping earlier would compute the mass of a body with no simulation
+        // shapes, i.e. of nothing.
+        bool record(Object3D& object, ::physx::PxRigidActor* actor, const PhysicsConfig& config) {
 
             if (actor) {
                 actors_.emplace(&object, actor);
                 objects_.emplace(actor, &object);
+                if (wantsTrigger(config)) makeTrigger(object, *actor);
             }
             return actor != nullptr;
+        }
+
+        // Is this authored body a trigger volume?
+        //
+        // Soft is excluded, and the `trigger` key still round-trips for it: a
+        // deformable volume's collider is the cooked tetrahedral mesh, which is
+        // not a shape anything can raise eTRIGGER_SHAPE on. The inspector hides
+        // the checkbox there rather than offering one that does nothing.
+        static bool wantsTrigger(const PhysicsConfig& config) {
+
+            return config.trigger && config.body != PhysicsConfig::Body::Soft;
+        }
+
+        // Turn a cooked actor's shapes from colliding into overlapping.
+        void makeTrigger(const Object3D& object, ::physx::PxRigidActor& actor) {
+
+            if (PhysxWorld::setTriggerShapes(actor, true)) return;
+            // Only reachable if some path produced a geometry PhysX refuses as a
+            // trigger despite createActor's diversions. Say it rather than leave
+            // a "trigger" that quietly still collides.
+            log("physics: \"" + object.name + "\" has a shape PhysX will not make a trigger "
+                                              "- it still collides");
+        }
+
+        // One convex hull around a mesh's own geometry, as the actor a trigger
+        // needs. THE triangle-mesh fallback.
+        //
+        // PhysX rejects eTRIGGER_SHAPE on triangle meshes (and heightfields, and
+        // planes): a trigger asks "is this point inside me", and a triangle soup
+        // is a surface with no inside. The alternative to approximating it is a
+        // trigger volume that does not exist — silently, at Play, on the one
+        // object the user ticked the box on — so the geometry's convex envelope
+        // stands in, with one line saying so. Convex Pieces needs none of this:
+        // its hulls are already volumes.
+        bool buildTriggerHull(Object3D& object, Mesh& mesh, const PhysicsConfig& config,
+                              ::physx::PxMaterial* material, bool moving) {
+
+            using namespace ::physx;
+
+            log("physics: \"" + object.name + "\" is a trigger, and PhysX has no triangle-mesh "
+                                              "trigger - using a convex hull of it instead");
+
+            const auto geometry = mesh.geometry();
+            const auto* posAttr = geometry ? geometry->getAttribute<float>("position") : nullptr;
+            if (!posAttr) return false;
+
+            mesh.updateWorldMatrix(true, false);
+            Vector3 position, scale;
+            Quaternion rotation;
+            mesh.matrixWorld->decompose(position, rotation, scale);
+
+            auto* hull = world_->cookConvexHull(
+                    posAttr->array().data(), posAttr->count(),
+                    static_cast<unsigned>(config.hullVerts <= 0 ? 64 : config.hullVerts));
+            if (!hull) return false;
+
+            const std::vector<PhysxWorld::ConvexPart> parts{{hull, PxTransform(PxIdentity), scale}};
+            auto* actor = world_->addCompound(PxTransform(toPxVec3(position), toPxQuat(rotation)),
+                                              parts, moving, 1000.f, material);
+            hull->release();// attachShape kept its own reference
+            if (!actor) return false;
+
+            if (moving) {
+                auto* body = static_cast<PxRigidDynamic*>(actor);
+                finishDynamic(*body, config);
+                world_->bind(mesh, *body);
+            }
+            return record(object, actor, config);
         }
 
         // A deformable volume: PhysX cooks a tetrahedral mesh from the object's
@@ -1025,7 +1106,7 @@ namespace threepp::editor {
                 finishDynamic(*body, config);
                 world_->bind(root, *body);
             }
-            return record(root, actor);
+            return record(root, actor, config);
         }
 
         // "1.23 s" / "840 ms" — a cook time a human reads at a glance.
@@ -1047,6 +1128,9 @@ namespace threepp::editor {
             const auto placement = placementOf(object);
             const auto shape = resolveShape(object, config);
             const bool moving = config.body != PhysicsConfig::Body::Static;
+            // Every path below that would cook a TRIANGLE MESH has to cook
+            // something else for a trigger; see buildTriggerHull.
+            const bool trigger = wantsTrigger(config);
 
             auto* material = materialFor(config);
 
@@ -1063,7 +1147,17 @@ namespace threepp::editor {
             if (!moving && !object.geometry() &&
                 (config.shape == PhysicsConfig::Shape::Auto ||
                  config.shape == PhysicsConfig::Shape::TriMesh)) {
-                if (addSubtree(object, material) > 0) return true;
+                if (trigger) {
+                    // The subtree cooks triangle meshes, which cannot be
+                    // triggers. One hull per sub-mesh, welded into one compound,
+                    // is the same envelope the moving case already uses.
+                    log("physics: \"" + object.name + "\" is a trigger, and PhysX has no "
+                                                      "triangle-mesh trigger - using convex hulls of its "
+                                                      "subtree instead");
+                    if (buildCompoundFromSubMeshes(object, config, false, material)) return true;
+                } else if (addSubtree(object, material, config) > 0) {
+                    return true;
+                }
                 // Nothing under it: fall through to the placeholder, which is
                 // still what a bare Group used as a trigger volume wants.
             }
@@ -1091,7 +1185,7 @@ namespace threepp::editor {
                             finishDynamic(*body, config);
                             world_->bind(*mesh, *body);
                         }
-                        return record(object, actor);
+                        return record(object, actor, config);
                     }
                 } else {
                     for (auto* m : cooked) m->release();
@@ -1127,16 +1221,21 @@ namespace threepp::editor {
                 // Triangle meshes are valid for static/kinematic actors only;
                 // a dynamic request silently gets a static collider rather than
                 // a PhysX assertion.
-                return record(object, world_->addStaticTrimesh(*mesh, material));
+                if (trigger) return buildTriggerHull(object, *mesh, config, material, moving);
+                return record(object, world_->addStaticTrimesh(*mesh, material), config);
             }
             if (shape == PhysicsConfig::Shape::Convex && mesh && moving) {
                 auto* body = world_->addDynamicConvex(*mesh, 1000.f, material);
                 if (!body) return false;
                 finishDynamic(*body, config);
-                return record(object, body);
+                return record(object, body, config);
             }
             if (shape == PhysicsConfig::Shape::Convex && mesh) {
-                return record(object, world_->addStaticTrimesh(*mesh, material));
+                // A STATIC convex is cooked as a triangle mesh — exact, and free
+                // for something that never moves. A trigger cannot have that, so
+                // it gets the hull the name asked for in the first place.
+                if (trigger) return buildTriggerHull(object, *mesh, config, material, moving);
+                return record(object, world_->addStaticTrimesh(*mesh, material), config);
             }
 
             // Analytic shapes: build the geometry from the local bounds so an
@@ -1181,7 +1280,7 @@ namespace threepp::editor {
                 body->attachShape(*pxShape);
                 pxShape->release();
                 world_->scene().addActor(*body);
-                return record(object, body);
+                return record(object, body, config);
             }
 
             PxRigidDynamic* body = world_->physics().createRigidDynamic(placement.pose);
@@ -1194,7 +1293,7 @@ namespace threepp::editor {
             // PhysxWorld writes the actor pose back into the object each step,
             // converting to parent-local space for nested nodes.
             world_->bind(object, *body);
-            return record(object, body);
+            return record(object, body, config);
         }
 
         void finishDynamic(::physx::PxRigidDynamic& body, const PhysicsConfig& config) {
