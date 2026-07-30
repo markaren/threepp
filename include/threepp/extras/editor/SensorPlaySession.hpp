@@ -116,6 +116,94 @@ namespace threepp::editor {
 
         static constexpr int maxTraces = 6;
 
+        // --- what a reader that is NOT the panel sees ------------------------
+        //
+        // drain() empties a sensor's ring, so the session is the only party that
+        // may call it (see Trace). That is precisely why a second reader has to
+        // be served from HERE: these are the measurements the session keeps
+        // after draining them, so a play script holding a handle
+        // (threepp.editor.imu_from_object) reads the same seeded, post-noise
+        // stream the plots and the CSV are built from without stealing a sample
+        // from either of them.
+        //
+        // Deliberately not the sensors' own sample types: those live in
+        // PhysX-including headers and this class is PhysX-free by design. The
+        // fields are the ones a control loop closes on; the CSV stays the place
+        // to go for the manifold points and the edge flags.
+        struct ImuReading {
+            double t = 0.0;
+            Vector3 angularVelocity;// rad/s, sensor frame
+            Vector3 acceleration;   // specific force, m/s^2, sensor frame
+        };
+
+        struct EncoderReading {
+            double t = 0.0;
+            float position = 0.f;// rad (revolute) or m (prismatic)
+            float velocity = 0.f;
+        };
+
+        struct WrenchReading {
+            double t = 0.0;
+            Vector3 force; // N, joint child frame
+            Vector3 torque;// N*m, joint child frame
+        };
+
+        struct ContactReading {
+            double t = 0.0;
+            bool touching = false;// the LATCH, which survives the pair falling asleep
+            Vector3 force;        // mean force over the interval (N); zero while asleep
+        };
+
+        // A short tail of retained measurements, carrying a monotonic sequence
+        // number so several readers can each hold their own cursor: "what is new
+        // since I last looked" must not depend on who else looked. Bounded like
+        // the sensor's own ring — a reader that stops reading loses the oldest
+        // samples rather than growing the session without limit.
+        template<class T>
+        class History {
+
+        public:
+            static constexpr std::size_t capacity = 256;
+
+            void push(const T& value) {
+                // Allocated on first use, so an entry that is not this kind of
+                // sensor (and a vision entry, which is none of them) pays nothing.
+                if (buf_.empty()) buf_.resize(capacity);
+                buf_[total_ % capacity] = value;
+                ++total_;
+            }
+
+            // Sequence number one past the newest sample: a cursor equal to it
+            // has seen everything.
+            [[nodiscard]] std::size_t total() const { return total_; }
+
+            // Oldest sequence number still retained. A cursor older than this
+            // missed samples and is fast-forwarded, rather than being handed a
+            // window that silently starts in the wrong place.
+            [[nodiscard]] std::size_t oldest() const {
+                return total_ > capacity ? total_ - capacity : 0;
+            }
+
+            [[nodiscard]] bool empty() const { return total_ == 0; }
+
+            // Precondition: !empty().
+            [[nodiscard]] const T& newest() const { return buf_[(total_ - 1) % capacity]; }
+
+            // Samples at or after `cursor`, oldest-first. Returns the cursor to
+            // read from next time.
+            std::size_t since(std::size_t cursor, std::vector<T>& out) const {
+                out.clear();
+                for (std::size_t i = std::max(cursor, oldest()); i < total_; ++i) {
+                    out.push_back(buf_[i % capacity]);
+                }
+                return total_;
+            }
+
+        private:
+            std::vector<T> buf_;
+            std::size_t total_ = 0;
+        };
+
         struct Entry {
             // The authored object, by uuid AND by pointer. The uuid is what
             // survives; the pointer is only valid between start() and stop(),
@@ -154,6 +242,14 @@ namespace threepp::editor {
             std::array<const char*, maxTraces> traceNames{};
             int traceCount = 0;
 
+            // Retained measurements for readers outside the panel (see History).
+            // Filled where the drain happens, so a handle never touches a live
+            // sensor — or the PhysX state behind it — at all.
+            History<ImuReading> imuReadings;
+            History<EncoderReading> encoderReadings;
+            History<WrenchReading> wrenchReadings;
+            History<ContactReading> contactReadings;
+
             // CSV recording. One file per sensor; opened on the first drained
             // measurement after Record goes on, closed and flushed on Stop.
             std::ofstream csv;
@@ -178,6 +274,10 @@ namespace threepp::editor {
         // The body sensors' unregistration is PhysxSensorPlaySession's half —
         // its destructor body runs before this one.
         ~SensorPlaySession() override {
+
+            // A session destroyed without a stop() must not leave active()
+            // pointing at freed memory.
+            if (active_ == this) active_ = nullptr;
 
             for (const auto& entry : entries_) {
                 if (entry->depth) entry->depth->removeFromParent();
@@ -220,6 +320,46 @@ namespace threepp::editor {
                                   [](const std::unique_ptr<Entry>& e) { return e->live(); }));
         }
 
+        // --- the seam a play script reaches its sensors through ---------------
+
+        // The sensor session currently playing, or nullptr.
+        //
+        // The same seam as PhysicsPlaySession::active(), for the same reason: a
+        // script reaches its object's sensors through a free function
+        // (threepp.editor.imu_from_object) that has no context to resolve
+        // against. The editor runs one Play at a time, so "the session that is
+        // playing" is well defined. Set by start(), cleared by stop().
+        [[nodiscard]] static SensorPlaySession* active() { return active_; }
+
+        // A token that lives exactly as long as the entries the last start()
+        // built. Handles handed to scripts keep a weak_ptr to it, so one held
+        // across a Stop reports that it is gone rather than reading a freed
+        // Entry.
+        [[nodiscard]] std::weak_ptr<const void> lifetime() const { return lifetime_; }
+
+        // The live sensors of `type` authored on `object`, or on the nearest
+        // ancestor of it that carries one — the same walk-up contract as
+        // PhysicsPlaySession::findActor, so a script sited on a child of an
+        // instrumented link still finds the sensor measuring it.
+        //
+        // A list because ONE authored entry can be several live sensors: the
+        // all-joints encoder fans out to one per DOF, each its own Entry (see
+        // PhysxSensorPlaySession::buildEncoderFanout).
+        [[nodiscard]] std::vector<const Entry*> findSensors(const Object3D* object,
+                                                            SensorConfig::Type type) const {
+
+            std::vector<const Entry*> found;
+            for (const Object3D* o = object; o != nullptr; o = o->parent) {
+                for (const auto& entry : entries_) {
+                    if (entry->node == o && entry->config.type == type && entry->live()) {
+                        found.push_back(entry.get());
+                    }
+                }
+                if (!found.empty()) break;// nearest ancestor wins, as for a body
+            }
+            return found;
+        }
+
         // The clock every measurement is stamped with: the physics world's
         // accumulated substep time while one exists (worldClock), otherwise this
         // session's own accumulation of the frame delta. Sim time, never wall
@@ -251,8 +391,16 @@ namespace threepp::editor {
         void start(Scene& scene) override {
 
             scene_ = &scene;
+
+            // Kill the previous token BEFORE the entries it pointed into, then
+            // mint a fresh one: a handle from the previous Play stays dead even
+            // though the same session object is starting again.
+            lifetime_.reset();
             entries_.clear();
             simTime_ = 0.0;
+
+            lifetime_ = std::make_shared<const char>('\0');
+            active_ = this;
 
             // Collect first, build second: registering a sensor can throw, and a
             // stable list keeps the build order (and therefore every seeded
@@ -292,6 +440,12 @@ namespace threepp::editor {
             // PhysxSensorPlaySession has already unregistered the body sensors
             // (its stop() runs first and calls down here); what is left is the
             // renderer half and the shared bookkeeping.
+            //
+            // Drop the token BEFORE the entries: a handle a script is still
+            // holding must read as dead from the moment the sensors go.
+            lifetime_.reset();
+            if (active_ == this) active_ = nullptr;
+
             closeFiles();
 
             // Detach the rig nodes before the sensors are destroyed: the rig
@@ -659,6 +813,9 @@ namespace threepp::editor {
 
         bool recording_ = false;
         std::filesystem::path recordDir_ = std::filesystem::temp_directory_path() / "threepp-sensors";
+
+        std::shared_ptr<const void> lifetime_;
+        inline static SensorPlaySession* active_ = nullptr;
     };
 
 }// namespace threepp::editor

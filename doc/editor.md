@@ -467,6 +467,10 @@ pointer without releasing it) on the normal Stop rather than releasing it agains
 a freed allocator; the SDK teardown already reclaimed the buffer. On a mid-play
 teardown, where the world is still alive, it unregisters cleanly instead.
 
+Everything a sensor measures is readable from a play script too — see
+[Sensors from a script](#sensors-from-a-script), which is where a controller
+closes its loop on the noisy reading instead of on the solver's truth.
+
 ### Scripts in `userData`
 
 Attach a script to any object and it becomes a behaviour, MonoBehaviour style.
@@ -1115,6 +1119,109 @@ script on a child of a physics object still finds the body governing it. It
 resolves against the play session's own record of what it created, not
 `PhysxWorld`'s binding list — a static body is never bound, since it has no
 pose to write back, and would otherwise be invisible to a script.
+
+### Sensors from a script
+
+The physics handles above read *ground truth*: `articulation_from_object` hands
+back the exact joint angle the solver holds, to the last bit. A controller
+written against that is a controller that has never met a sensor. The sensor
+handles are the other half — the **noisy, seeded, rate-gated** numbers the
+[authored sensors](#joint-sensors) actually produced, so a script can close its
+loop on what the robot would really measure:
+
+```python
+import threepp
+
+
+class ElbowHold:
+    target = 0.6
+    gain = 0.5
+
+    def start(self, obj: threepp.Robot):
+        self.art = threepp.editor.articulation_from_object(obj)
+        self.enc = threepp.editor.encoder_from_object(obj, joint="elbow")
+
+    def update(self, dt: float):
+        if self.enc is None:
+            return
+        reading = self.enc.latest()
+        if reading is None:
+            return  # no measurement yet this Play
+        # Closed on the MEASURED position - quantized to whole encoder ticks and
+        # noise-corrupted - not on the joint angle the solver knows.
+        command = reading.position + self.gain * (self.target - reading.position)
+        self.art.set_drive_target(self.enc.joint, command)
+```
+
+Four lookups, one per proprioceptive sensor type:
+
+| function | returns | reading fields |
+| --- | --- | --- |
+| `imu_from_object(obj)` | `Imu` | `time`, `angular_velocity`, `acceleration` |
+| `encoder_from_object(obj, joint=None)` | `Encoder` | `time`, `position`, `velocity` |
+| `force_torque_from_object(obj)` | `ForceTorque` | `time`, `force`, `torque` |
+| `contact_from_object(obj)` | `Contact` | `time`, `touching`, `force` |
+
+The IMU's `acceleration` is **specific force**, so a level sensor at rest reads
+`+9.81` on its up axis and one in free fall reads ~0. The contact sensor's
+`touching` is the *latch*: it stays `True` while resting on something, including
+after PhysX puts the pair to sleep and `force` goes quiet — which is the channel
+a foot-down check wants, and the reason there are two.
+
+Every handle reads the same two ways:
+
+* `latest()` — the newest measurement, or `None` before the first one. Does not
+  move the handle's read cursor, so polling it in a control loop is free.
+* `read_new()` — every measurement since *this handle* last read, oldest first,
+  and advances its cursor. A fresh handle starts empty: it reports what arrives
+  from now on, never a backlog you did not ask for. Each handle carries its own
+  cursor, so two scripts reading one sensor never steal samples from each other,
+  and neither starves the Sensors panel's plots or the CSV recording. Falling
+  more than 256 readings behind loses the oldest.
+
+That last point is the design constraint the whole thing is built around.
+`drain()` *empties* a sensor's ring, so the session is the only party allowed to
+call it — a second drainer would leave the panel plotting half the data. Handles
+therefore read the session's own retained copies, never a live sensor and never
+PhysX state. Which is also what makes them safe at Stop: physics stops *first*,
+so anything reaching into a sensor from a script's `stop()` would be reading
+through a torn-down SDK.
+
+**The encoder fans out.** An encoder authored for `All joints` becomes one live
+encoder *per DOF* (see [Joint sensors](#joint-sensors)), so
+`encoder_from_object(obj)` with no `joint` raises when more than one answers
+rather than picking an arbitrary one — pass `joint="elbow"`, or take them all:
+
+```python
+for enc in threepp.editor.encoders_from_object(robot):
+    print(enc.joint, enc.latest().position)
+```
+
+Naming a joint no encoder measures raises too, listing the ones that do: a typo
+answering `None` is indistinguishable from "Play is not running", and that costs
+an afternoon.
+
+Otherwise the contract is the physics handles' contract, for the same reasons:
+
+* **They only exist during Play.** An authored `userData["sensor"]` is not a
+  sensor until the session builds one, so every lookup returns `None` outside
+  Play, and for an object carrying no sensor of that kind.
+* **A handle belongs to the play session that made it.** Stop drops every
+  sensor, so a handle kept across a stop raises `RuntimeError` instead of
+  reading freed memory — check `.valid`, or just ask again in `start()`.
+* **They need the PhysX SDK.** Without it the names are absent from
+  `threepp.editor` rather than present and always answering `None`.
+* **The lookup walks *up* the scene graph**, so a script on a child of an
+  instrumented link still finds the sensor measuring it. The nearest ancestor
+  carrying one wins.
+
+Vision sensors (depth, lidar) are deliberately **not** here: a scan is tens of
+thousands of points, which wants a buffer protocol rather than a per-sample
+handle. Read those from the overlay, the panel, or a CSV recording for now.
+
+Sensors are rebuilt from the authored seed on every Play, so a script that
+reacts to noise reacts to the *same* noise on the next run — a closed loop under
+test is reproducible, which is the entire point of the seed.
 
 ### Async model import
 

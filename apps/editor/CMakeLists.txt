@@ -133,12 +133,18 @@ if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
             "${PROJECT_SOURCE_DIR}/python/src/bind_lights.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_robot.cpp")
 
-    # The physics half of threepp.editor: handles onto the bodies the play
-    # session is simulating. Gated on the SDK the same way the play session
-    # itself is, so a build without PhysX simply does not have the names.
+    # The physics and sensor halves of threepp.editor: handles onto the bodies
+    # the play session is simulating and the sensors it is running. Gated on the
+    # SDK the same way the play sessions themselves are, so a build without
+    # PhysX simply does not have the names.
+    #
+    # bind_editor_sensors.cpp reads only the PhysX-FREE SensorPlaySession (the
+    # retained readings live there on purpose), so it is gated for what it means
+    # — no PhysX, no body sensors to read — not for what it includes.
     if (TARGET unofficial::omniverse-physx-sdk::sdk)
         target_sources(threepp_editor_scripting
-                PRIVATE "${PROJECT_SOURCE_DIR}/python/src/bind_editor_physics.cpp")
+                PRIVATE "${PROJECT_SOURCE_DIR}/python/src/bind_editor_physics.cpp"
+                "${PROJECT_SOURCE_DIR}/python/src/bind_editor_sensors.cpp")
         target_link_libraries(threepp_editor_scripting PRIVATE unofficial::omniverse-physx-sdk::sdk)
         target_compile_definitions(threepp_editor_scripting PRIVATE THREEPP_EDITOR_WITH_PHYSX=1)
         # bind_editor_physics.cpp includes PhysicsPlaySession.hpp, whose inline

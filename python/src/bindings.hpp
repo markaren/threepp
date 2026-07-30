@@ -54,6 +54,9 @@ namespace threepp_py {
     // play session. Defined only where the PhysX SDK was found, and must be
     // called AFTER init_editor, which creates the submodule it adds to.
     void init_editor_physics(py::module_& m);
+    // threepp.editor, sensor half — read handles onto the proprioceptive sensors
+    // the play session is running. Same gating and ordering as the physics half.
+    void init_editor_sensors(py::module_& m);
     // threepp.editor, authoring half — add() for a generator script to build
     // document content. Editor-only for the same reason as the physics half (the
     // wheel has no document), and likewise must follow init_editor.

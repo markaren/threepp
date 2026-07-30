@@ -18,9 +18,10 @@
 //
 // Physics is left out on the same grounds — a script has no business building a
 // PhysxWorld — with one deliberate exception: threepp.editor's rigid_body /
-// soft_body handles onto the bodies the play session is ALREADY simulating.
-// That is the editor's own state, handed over read/write, not a second physics
-// stack. It is compiled only where the PhysX SDK was found.
+// soft_body handles onto the bodies the play session is ALREADY simulating, and
+// the matching read handles onto the sensors it is already running. That is the
+// editor's own state, handed over, not a second physics or sensor stack. Both
+// are compiled only where the PhysX SDK was found.
 
 #include "ScriptHost.hpp"
 
@@ -78,6 +79,10 @@ PYBIND11_EMBEDDED_MODULE(threepp, m) {
     // handles onto the bodies the play session is already simulating. Must
     // follow init_editor, which owns the submodule.
     tp::init_editor_physics(m);
+    // threepp.editor.imu_from_object and friends — the same idea for the
+    // sensors the play session is running, which is how a script closes a loop
+    // on NOISY measurements rather than on the simulation's ground truth.
+    tp::init_editor_sensors(m);
 #endif
 }
 

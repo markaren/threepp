@@ -62,11 +62,14 @@ if (TARGET threepp_editor_scripting)
     target_link_libraries(EditorScriptPlay_test PRIVATE threepp_editor_scripting)
 
     # threepp.editor's RigidBody/SoftBody handles need both halves: the script
-    # host above, and the PhysX SDK the play session is built on.
+    # host above, and the PhysX SDK the play session is built on. The sensor
+    # handles are the same story one session over.
     if (TARGET unofficial::omniverse-physx-sdk::sdk)
-        add_test_executable(EditorScriptPhysics_test)
-        target_link_libraries(EditorScriptPhysics_test
-                PRIVATE threepp_editor_scripting unofficial::omniverse-physx-sdk::sdk)
+        foreach (name EditorScriptPhysics_test EditorScriptSensors_test)
+            add_test_executable(${name})
+            target_link_libraries(${name}
+                    PRIVATE threepp_editor_scripting unofficial::omniverse-physx-sdk::sdk)
+        endforeach ()
     endif ()
 else ()
     message(STATUS "editor scripting not built, skipping EditorScriptPlay_test..")

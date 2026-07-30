@@ -384,6 +384,9 @@ namespace threepp::editor {
             if (imuScratch_.empty()) return;
 
             for (const auto& sample : imuScratch_) {
+                // Retained for readers that are not the panel — a play script's
+                // handle reads this copy, never the sensor (see History).
+                entry.imuReadings.push({sample.t, sample.angularVelocity, sample.linearAcceleration});
                 entry.traces[0].push(sample.angularVelocity.x);
                 entry.traces[1].push(sample.angularVelocity.y);
                 entry.traces[2].push(sample.angularVelocity.z);
@@ -410,6 +413,7 @@ namespace threepp::editor {
 
             for (const auto& sample : contactScratch_) {
                 const float force = sample.force.length();
+                entry.contactReadings.push({sample.t, sample.inContact, sample.force});
                 entry.traces[0].push(force);
                 entry.traces[1].push(sample.inContact ? 1.f : 0.f);
                 if (openFile(entry, "t,in_contact,force,fx,fy,fz,points")) {
@@ -432,6 +436,7 @@ namespace threepp::editor {
             if (encoderScratch_.empty()) return;
 
             for (const auto& sample : encoderScratch_) {
+                entry.encoderReadings.push({sample.t, sample.position, sample.velocity});
                 entry.traces[0].push(sample.position);
                 entry.traces[1].push(sample.velocity);
                 if (openFile(entry, "t,position,velocity")) {
@@ -449,6 +454,7 @@ namespace threepp::editor {
             if (wrenchScratch_.empty()) return;
 
             for (const auto& sample : wrenchScratch_) {
+                entry.wrenchReadings.push({sample.t, sample.force, sample.torque});
                 entry.traces[0].push(sample.force.x);
                 entry.traces[1].push(sample.force.y);
                 entry.traces[2].push(sample.force.z);

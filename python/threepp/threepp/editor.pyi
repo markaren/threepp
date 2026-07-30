@@ -4,7 +4,7 @@ The runtime face of editor-authored data.
 from __future__ import annotations
 import typing
 import threepp
-__all__: list[str] = ['Articulation', 'RigidBody', 'SoftBody', 'SplinePath', 'add', 'articulation_from_object', 'is_key_down', 'rigid_body_from_object', 'scene', 'soft_body_from_object', 'spline_from_object']
+__all__: list[str] = ['Articulation', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'RigidBody', 'SoftBody', 'SplinePath', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'rigid_body_from_object', 'scene', 'soft_body_from_object', 'spline_from_object']
 class SplinePath:
     def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> threepp.Vector3:
         """
@@ -224,9 +224,208 @@ class Articulation:
         """
         Root link angular velocity in rad/s, world frame.
         """
+class ImuSample:
+    """
+    One IMU measurement, as the sensor reported it (noise, bias and all).
+    """
+    @property
+    def time(self) -> float:
+        """
+        Sim time of the measurement (s).
+        """
+    @property
+    def angular_velocity(self) -> threepp.Vector3:
+        """
+        Gyro reading in rad/s, in the sensor's own frame.
+        """
+    @property
+    def acceleration(self) -> threepp.Vector3:
+        """
+        Accelerometer reading in m/s^2, in the sensor's own frame. SPECIFIC FORCE, so a level sensor at rest reads +9.81 on its up axis and one in free fall reads ~0.
+        """
+class EncoderSample:
+    """
+    One joint-encoder reading: quantized to whole ticks and noise-corrupted,
+    which is why a controller tuned on it survives contact with hardware.
+    """
+    @property
+    def time(self) -> float:
+        """
+        Sim time of the reading (s).
+        """
+    @property
+    def position(self) -> float:
+        """
+        Joint position: radians for a revolute joint, metres for a prismatic one.
+        """
+    @property
+    def velocity(self) -> float:
+        """
+        Joint velocity, differentiated from the QUANTIZED position - so it chatters at standstill, exactly as a real one does.
+        """
+class WrenchSample:
+    """
+    One six-component load-cell reading, in the measured joint's child frame.
+    """
+    @property
+    def time(self) -> float:
+        """
+        Sim time of the reading (s).
+        """
+    @property
+    def force(self) -> threepp.Vector3:
+        """
+        Force in newtons.
+        """
+    @property
+    def torque(self) -> threepp.Vector3:
+        """
+        Torque in newton-metres.
+        """
+class ContactSample:
+    """
+    One contact reading: the touch latch and the force behind it.
+    """
+    @property
+    def time(self) -> float:
+        """
+        Sim time of the reading (s).
+        """
+    @property
+    def touching(self) -> bool:
+        """
+        Latched touch state. Stays True while resting on something, including after the contact pair falls asleep and `force` goes quiet - this is the channel a foot-down check wants.
+        """
+    @property
+    def force(self) -> threepp.Vector3:
+        """
+        Mean contact force over the interval (N). Zero while the pair sleeps, even though the touch is real.
+        """
+class Imu:
+    """
+    A live IMU the play session is running for a scene object. Only exists
+    during Play, and only in a build with the PhysX SDK.
+    """
+    @property
+    def object(self) -> threepp.Object3D:
+        """
+        The scene object this sensor was authored on.
+        """
+    @property
+    def valid(self) -> bool:
+        """
+        False once the play session that created it has stopped.
+        """
+    def latest(self) -> ImuSample | None:
+        """
+        The newest measurement, or None before the first one. Does not move this handle's read cursor.
+        """
+    def read_new(self) -> list[ImuSample]:
+        """
+        Every measurement since this handle last read, oldest first, and advances its cursor. A fresh handle starts empty - it reports what arrives from now on. Each handle has its own cursor, so two of them never steal each other's samples; falling more than 256 behind loses the oldest.
+        """
+class Encoder:
+    """
+    A live joint encoder the play session is running. Only exists during Play,
+    and only in a build with the PhysX SDK.
+    """
+    @property
+    def object(self) -> threepp.Object3D:
+        """
+        The scene object this sensor was authored on.
+        """
+    @property
+    def valid(self) -> bool:
+        """
+        False once the play session that created it has stopped.
+        """
+    @property
+    def joint(self) -> str:
+        """
+        The URDF joint name this encoder measures.
+        """
+    def latest(self) -> EncoderSample | None:
+        """
+        The newest reading, or None before the first one. Does not move this handle's read cursor.
+        """
+    def read_new(self) -> list[EncoderSample]:
+        """
+        Every reading since this handle last read, oldest first, and advances its cursor. A fresh handle starts empty.
+        """
+class ForceTorque:
+    """
+    A live six-axis load cell the play session is running. Only exists during
+    Play, and only in a build with the PhysX SDK.
+    """
+    @property
+    def object(self) -> threepp.Object3D:
+        """
+        The scene object this sensor was authored on.
+        """
+    @property
+    def valid(self) -> bool:
+        """
+        False once the play session that created it has stopped.
+        """
+    @property
+    def joint(self) -> str:
+        """
+        The URDF joint name this load cell sits in.
+        """
+    def latest(self) -> WrenchSample | None:
+        """
+        The newest wrench, or None before the first one. Does not move this handle's read cursor.
+        """
+    def read_new(self) -> list[WrenchSample]:
+        """
+        Every wrench since this handle last read, oldest first, and advances its cursor. A fresh handle starts empty.
+        """
+class Contact:
+    """
+    A live contact sensor the play session is running. Only exists during Play,
+    and only in a build with the PhysX SDK.
+    """
+    @property
+    def object(self) -> threepp.Object3D:
+        """
+        The scene object this sensor was authored on.
+        """
+    @property
+    def valid(self) -> bool:
+        """
+        False once the play session that created it has stopped.
+        """
+    def latest(self) -> ContactSample | None:
+        """
+        The newest reading, or None before the first one. Does not move this handle's read cursor.
+        """
+    def read_new(self) -> list[ContactSample]:
+        """
+        Every reading since this handle last read, oldest first, and advances its cursor. A fresh handle starts empty.
+        """
 def articulation_from_object(object: threepp.Object3D | None) -> Articulation | None:
     """
     The Articulation PhysX is simulating for `object`, or None when Play is not running or no articulated robot governs it. The lookup walks up the scene graph, so a script on any link of a robot finds the robot's articulation. Robots simulate only when their Articulation section says Simulate.
+    """
+def contact_from_object(object: threepp.Object3D | None) -> Contact | None:
+    """
+    The live contact sensor authored on `object`, or None when Play is not running or none measures it.
+    """
+def encoder_from_object(object: threepp.Object3D | None, joint: str | None = None) -> Encoder | None:
+    """
+    The live joint encoder authored on `object`, or None when Play is not running or none measures it. An encoder authored for All joints becomes one live encoder per DOF, so pass joint="name" to pick one; with no joint this raises rather than guessing when more than one answers.
+    """
+def encoders_from_object(object: threepp.Object3D | None) -> list[Encoder]:
+    """
+    Every live joint encoder authored on `object`, in the articulation's DOF order - the whole-robot joint state an All-joints encoder fans out into. Empty outside Play. Read `joint` on each to know which DOF it is.
+    """
+def force_torque_from_object(object: threepp.Object3D | None) -> ForceTorque | None:
+    """
+    The live force/torque sensor authored on `object`, or None when Play is not running or none measures it. A load cell sits in ONE joint, so there is never more than one to choose between.
+    """
+def imu_from_object(object: threepp.Object3D | None) -> Imu | None:
+    """
+    The live IMU authored on `object`, or None when Play is not running or no IMU measures it. The lookup walks up the scene graph, so a script on a child finds the sensor on its link.
     """
 def rigid_body_from_object(object: threepp.Object3D | None) -> RigidBody | None:
     """
