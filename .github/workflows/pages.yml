@@ -1,6 +1,6 @@
 name: Deploy WASM examples to GitHub Pages
 
-# Builds the Emscripten (WebGL2) examples and publishes build/bin — which
+# Builds the Emscripten (WebGL2) examples and publishes the build's bin/ — which
 # contains every web example plus the generated index.html — to GitHub Pages.
 # Runs on every push to master; can also be triggered manually from the Actions
 # tab (workflow_dispatch works from any branch, useful for previewing).
@@ -46,19 +46,18 @@ jobs:
 
       - name: Configure and build (Emscripten / WebGL2)
         run: |
-          cmake . -B build \
-            -DCMAKE_TOOLCHAIN_FILE=${{env.EMSDK}}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake \
-            -DTHREEPP_BUILD_TESTS=OFF \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build
+          cmake --preset ci-wasm
+          cmake --build --preset ci-wasm
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      # The ci-wasm preset builds into build/ci-wasm; CMAKE_RUNTIME_OUTPUT_DIRECTORY
+      # puts the examples and the generated index.html in its bin/.
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: build/bin
+          path: build/ci-wasm/bin
 
   deploy:
     needs: build

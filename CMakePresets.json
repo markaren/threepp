@@ -1,0 +1,316 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "gl",
+      "inherits": "base",
+      "displayName": "OpenGL (start here)",
+      "description": "Portable OpenGL 3.3 backend, with examples, tests and the editor. The configuration to use if you are unsure."
+    },
+    {
+      "name": "gl-debug",
+      "inherits": "gl",
+      "displayName": "OpenGL, Debug",
+      "description": "As 'gl', built with debug info and no optimisation.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "vulkan",
+      "inherits": "base",
+      "displayName": "Vulkan deferred backend",
+      "description": "Deferred Vulkan renderer: raster G-buffer with ray-traced AO, GI, reflections and shadows. Needs the Vulkan SDK on PATH, or the vcpkg 'vulkan' feature.",
+      "cacheVariables": {
+        "THREEPP_WITH_VULKAN": "ON"
+      }
+    },
+    {
+      "name": "vulkan-aaa",
+      "inherits": "vulkan",
+      "displayName": "Vulkan + FSR 3.1 + DLSS",
+      "description": "As 'vulkan', plus the AMD FidelityFX FSR 3.1 and NVIDIA DLSS temporal upscalers. Windows only; both SDKs are fetched at configure time (the DLSS archive is large).",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "THREEPP_WITH_FSR": "ON",
+        "THREEPP_WITH_DLSS": "ON"
+      }
+    },
+    {
+      "name": "python",
+      "inherits": "base",
+      "displayName": "Python bindings",
+      "description": "Builds the pybind11 'threepp' module (GL backend). Add -DPython_EXECUTABLE=<path> to select an interpreter; build the 'threepp_py' target.",
+      "cacheVariables": {
+        "THREEPP_WITH_PYTHON": "ON",
+        "THREEPP_BUILD_EXAMPLES": "OFF",
+        "THREEPP_BUILD_TESTS": "OFF",
+        "PYBIND11_FINDPYTHON": "ON"
+      }
+    },
+    {
+      "name": "no-glfw",
+      "inherits": "base",
+      "displayName": "Build check: no GLFW frontend",
+      "description": "The library without the GLFW frontend. Canvas is the only thing dropped, but Canvas is what creates the context — so this configuration cannot render at all, offscreen or otherwise. It exists to keep the windowing-independent code compiling, and runs the tests that need no window.",
+      "cacheVariables": {
+        "THREEPP_WITH_GLFW": "OFF",
+        "THREEPP_BUILD_EXAMPLES": "OFF"
+      }
+    },
+    {
+      "name": "wasm",
+      "inherits": "base",
+      "displayName": "Emscripten / WebGL2",
+      "description": "Web build of the examples. Requires an activated emsdk (EMSDK must be set in the environment).",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+        "THREEPP_BUILD_TESTS": "OFF"
+      }
+    },
+
+    {
+      "name": "ci-base",
+      "hidden": true,
+      "inherits": "base",
+      "generator": "Ninja"
+    },
+    {
+      "name": "ci-linux",
+      "inherits": [
+        "gl",
+        "ci-base"
+      ],
+      "displayName": "CI: Linux, GL, system GLFW",
+      "cacheVariables": {
+        "THREEPP_USE_EXTERNAL_GLFW": "ON"
+      }
+    },
+    {
+      "name": "ci-linux-asan",
+      "inherits": "ci-linux",
+      "displayName": "CI: Linux, AddressSanitizer + UndefinedBehaviorSanitizer",
+      "description": "Examples are excluded: they are compiled but never run, so instrumenting them buys nothing and they dominate the build time.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "THREEPP_BUILD_EXAMPLES": "OFF",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -g",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -g",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "ci-linux-no-glfw",
+      "inherits": [
+        "no-glfw",
+        "ci-base"
+      ],
+      "displayName": "CI: Linux, build check without the GLFW frontend"
+    },
+    {
+      "name": "ci-linux-vulkan",
+      "inherits": [
+        "vulkan",
+        "ci-base"
+      ],
+      "displayName": "CI: Linux, Vulkan compile check",
+      "description": "Library only. The runners have no GPU, but the backend and its GLSL shaders still compile: the loader links without a device and glslangValidator needs none.",
+      "cacheVariables": {
+        "THREEPP_BUILD_EXAMPLES": "OFF",
+        "THREEPP_BUILD_TESTS": "OFF",
+        "VMA_INCLUDE_DIR": "${sourceDir}/third_party/vma"
+      }
+    },
+    {
+      "name": "ci-windows",
+      "inherits": [
+        "gl",
+        "ci-base"
+      ],
+      "displayName": "CI: Windows, GL, warnings as errors",
+      "description": "Ninja needs cl.exe on PATH — run from a developer command prompt.",
+      "cacheVariables": {
+        "THREEPP_TREAT_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "ci-macos",
+      "inherits": "ci-base",
+      "displayName": "CI: macOS, library compile check",
+      "cacheVariables": {
+        "THREEPP_BUILD_EXAMPLES": "OFF",
+        "THREEPP_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "ci-wasm",
+      "inherits": [
+        "wasm",
+        "ci-base"
+      ],
+      "displayName": "CI: Emscripten / WebGL2"
+    },
+    {
+      "name": "ci-python",
+      "inherits": [
+        "python",
+        "ci-base"
+      ],
+      "displayName": "CI: Python bindings, system GLFW",
+      "cacheVariables": {
+        "THREEPP_USE_EXTERNAL_GLFW": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "gl",
+      "configurePreset": "gl",
+      "configuration": "Release"
+    },
+    {
+      "name": "gl-debug",
+      "configurePreset": "gl-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "vulkan",
+      "configurePreset": "vulkan",
+      "configuration": "Release"
+    },
+    {
+      "name": "vulkan-aaa",
+      "configurePreset": "vulkan-aaa",
+      "configuration": "Release"
+    },
+    {
+      "name": "python",
+      "configurePreset": "python",
+      "configuration": "Release",
+      "targets": [
+        "threepp_py"
+      ]
+    },
+    {
+      "name": "no-glfw",
+      "configurePreset": "no-glfw",
+      "configuration": "Release"
+    },
+    {
+      "name": "wasm",
+      "configurePreset": "wasm",
+      "configuration": "Release"
+    },
+
+    {
+      "name": "ci-linux",
+      "configurePreset": "ci-linux",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-linux-asan",
+      "configurePreset": "ci-linux-asan",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "ci-linux-no-glfw",
+      "configurePreset": "ci-linux-no-glfw",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-linux-vulkan",
+      "configurePreset": "ci-linux-vulkan",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-windows",
+      "configurePreset": "ci-windows",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-macos",
+      "configurePreset": "ci-macos",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-wasm",
+      "configurePreset": "ci-wasm",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-python",
+      "configurePreset": "ci-python",
+      "configuration": "Release",
+      "jobs": 2,
+      "targets": [
+        "threepp_py"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "configurePreset": "gl",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "gl",
+      "inherits": "base",
+      "configurePreset": "gl",
+      "configuration": "Release"
+    },
+    {
+      "name": "gl-debug",
+      "inherits": "base",
+      "configurePreset": "gl-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "ci-linux",
+      "inherits": "base",
+      "configurePreset": "ci-linux",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-linux-asan",
+      "inherits": "base",
+      "configurePreset": "ci-linux-asan",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "ci-linux-no-glfw",
+      "inherits": "base",
+      "configurePreset": "ci-linux-no-glfw",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-windows",
+      "inherits": "base",
+      "configurePreset": "ci-windows",
+      "configuration": "Release"
+    }
+  ]
+}

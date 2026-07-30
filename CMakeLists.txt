@@ -55,6 +55,31 @@ cmake_dependent_option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" O
 # Global internal configuration
 # ==============================================================================
 
+# Give a single-config generator (Ninja, Makefiles) a build type when nothing
+# else has. An empty CMAKE_BUILD_TYPE means no optimisation flags at all, which
+# is what a bare `cmake . -B build` produces on Linux and macOS: a silently
+# unoptimised build. MSVC is unaffected either way — its platform module already
+# defaults to Debug during project(), so this is a no-op on Windows.
+#
+# Only when we are the top-level project: as a subproject (FetchContent /
+# add_subdirectory) the build type belongs to whoever consumed us.
+#
+# Evaluating CMAKE_BUILD_TYPE here has a second effect, which is worth keeping
+# even where the assignment never fires. Multi-config generators (Visual Studio,
+# Xcode) choose the configuration at build time and ignore the variable, so a
+# preset that sets it — as ours do, for the single-config case — would otherwise
+# draw a "Manually-specified variables were not used by the project" warning on
+# every configure. Reading it in the test above is what marks it as used.
+if (PROJECT_IS_TOP_LEVEL AND NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type (single-config generators)" FORCE)
+endif ()
+# Offers the usual four as a dropdown in cmake-gui / ccmake. Guarded because a
+# multi-config generator leaves no CMAKE_BUILD_TYPE cache entry to annotate, and
+# set_property(CACHE) on a missing entry is an error.
+if (DEFINED CACHE{CMAKE_BUILD_TYPE})
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
+endif ()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 

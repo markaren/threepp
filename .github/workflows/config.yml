@@ -27,6 +27,7 @@ jobs:
           xorg-dev \
           libglu1-mesa-dev \
           pkg-config \
+          ninja-build \
           libglfw3 \
           libglfw3-dev \
           libgl1-mesa-dri \
@@ -41,47 +42,67 @@ jobs:
       # CONFIGURE time, so the install has to precede cmake either way.
       - name: Configure and build
         run: |
-          cmake . -B build -DTHREEPP_USE_EXTERNAL_GLFW=ON -DCMAKE_BUILD_TYPE="Release"
-          cmake --build build
+          cmake --preset ci-linux
+          cmake --build --preset ci-linux
 
       - name: Test
-        run: |
-          cd build/tests
-          ctest --output-on-failure
+        run: ctest --preset ci-linux
 
-      # --- AddressSanitizer + UndefinedBehaviorSanitizer -----------------------
-      #
-      # Piggybacks on this job rather than taking its own runner: the apt set and
-      # the display stack are identical, so all a separate job would add is queue
-      # time. It uses its own build directory so the Release build above is not
-      # clobbered, and runs after the Release ctest so a plain regression is
-      # reported before a sanitizer one.
-      #
-      # Examples are off here — they are only ever compiled, never run, so
-      # instrumenting them buys nothing and they are the bulk of the build time.
-      #
-      # Leak detection is OFF on purpose: the GL driver, GLFW and X11 all leak
-      # per-process allocations we neither own nor can free, and their reports
-      # bury the ones that matter. The target is use-after-free, out-of-bounds and
-      # undefined behaviour, which detect_leaks does not affect.
+
+  # AddressSanitizer + UndefinedBehaviorSanitizer.
+  #
+  # Its own job, so that a plain regression and a sanitizer regression are
+  # reported independently rather than the first failure hiding the second.
+  # The apt set and the display stack are the same as the Release job above.
+  #
+  # Examples are off (see the ci-linux-asan preset) — they are only ever
+  # compiled, never run, so instrumenting them buys nothing and they are the
+  # bulk of the build time.
+  #
+  # Leak detection is OFF on purpose: the GL driver, GLFW and X11 all leak
+  # per-process allocations we neither own nor can free, and their reports
+  # bury the ones that matter. The target is use-after-free, out-of-bounds and
+  # undefined behaviour, which detect_leaks does not affect.
+  linux-asan:
+
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: gcc-${{ matrix.compiler_version }}
+      CXX: g++-${{ matrix.compiler_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-22.04 ]
+        compiler_version: [ 11 ]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+          libxinerama-dev \
+          libxcursor-dev \
+          xorg-dev \
+          libglu1-mesa-dev \
+          pkg-config \
+          ninja-build \
+          libglfw3 \
+          libglfw3-dev \
+          libgl1-mesa-dri \
+          xvfb
+
       - name: Configure and build (ASan + UBSan)
         run: |
-          cmake . -B build-asan \
-            -DTHREEPP_USE_EXTERNAL_GLFW=ON \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DTHREEPP_BUILD_EXAMPLES=OFF \
-            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -g" \
-            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -g" \
-            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
-          cmake --build build-asan
+          cmake --preset ci-linux-asan
+          cmake --build --preset ci-linux-asan
 
       - name: Test (ASan + UBSan)
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: |
-          cd build-asan/tests
-          ctest --output-on-failure
+        run: ctest --preset ci-linux-asan
+
 
   linux-no-glfw:
 
@@ -105,17 +126,16 @@ jobs:
           libxcursor-dev \
           xorg-dev \
           libglu1-mesa-dev \
-          pkg-config
+          pkg-config \
+          ninja-build
 
       - name: Configure and build
         run: |
-          cmake . -B build -DTHREEPP_WITH_GLFW=OFF -DTHREEPP_BUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE="Release"
-          cmake --build build
+          cmake --preset ci-linux-no-glfw
+          cmake --build --preset ci-linux-no-glfw
 
       - name: Test
-        run: |
-          cd build/tests
-          ctest --output-on-failure
+        run: ctest --preset ci-linux-no-glfw
 
 
   # Compile-only smoke test for the Vulkan path-tracing backend.
@@ -141,7 +161,8 @@ jobs:
           libxcursor-dev \
           xorg-dev \
           libglu1-mesa-dev \
-          pkg-config
+          pkg-config \
+          ninja-build
 
       - name: Install Vulkan SDK (headers, loader, current glslangValidator)
         run: |
@@ -161,13 +182,8 @@ jobs:
 
       - name: Configure and build (library only — compile check)
         run: |
-          cmake . -B build \
-            -DTHREEPP_WITH_VULKAN=ON \
-            -DTHREEPP_BUILD_EXAMPLES=OFF \
-            -DTHREEPP_BUILD_TESTS=OFF \
-            -DVMA_INCLUDE_DIR="$GITHUB_WORKSPACE/third_party/vma" \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build
+          cmake --preset ci-linux-vulkan
+          cmake --build --preset ci-linux-vulkan
 
 
   windows:
@@ -189,13 +205,11 @@ jobs:
 
       - name: Configure and build
         run: |
-          cmake . -B build -G Ninja -DTHREEPP_TREAT_WARNINGS_AS_ERRORS=ON -DCMAKE_BUILD_TYPE="Release"
-          cmake --build build
+          cmake --preset ci-windows
+          cmake --build --preset ci-windows
 
       - name: Test
-        run: |
-          cd build/tests
-          ctest --output-on-failure
+        run: ctest --preset ci-windows
 
 
   darwin:
@@ -209,10 +223,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Ninja (which the ci-* presets select) comes from the runner image here —
+      # unlike the Linux jobs there is no package step to declare it in. If an
+      # image ever drops it, CMake fails at configure time with a missing
+      # CMAKE_MAKE_PROGRAM, which is immediate and unambiguous.
       - name: Configure and build
         run: |
-          cmake . -B build -DTHREEPP_BUILD_EXAMPLES=OFF -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
-          cmake --build build
+          cmake --preset ci-macos
+          cmake --build --preset ci-macos
 
 
   linux-emscripten:
@@ -241,7 +259,8 @@ jobs:
           libxcursor-dev \
           xorg-dev \
           libglu1-mesa-dev \
-          pkg-config
+          pkg-config \
+          ninja-build
 
       - uses: mymindstorm/setup-emsdk@v14
         with:
@@ -250,8 +269,8 @@ jobs:
 
       - name: Configure and build
         run: |
-          cmake . -B build -DCMAKE_TOOLCHAIN_FILE=${{env.EMSDK}}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
-          cmake --build build
+          cmake --preset ci-wasm
+          cmake --build --preset ci-wasm
 
 
   # Build the pybind11 Python bindings (the `threepp` module) and run the binding
@@ -270,7 +289,7 @@ jobs:
         python-version: [ '3.10', '3.12' ]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install prerequisites
         run: |
@@ -280,6 +299,7 @@ jobs:
           xorg-dev \
           libglu1-mesa-dev \
           pkg-config \
+          ninja-build \
           libglfw3 \
           libglfw3-dev \
           libgl1-mesa-dri \
@@ -294,15 +314,8 @@ jobs:
 
       - name: Build the threepp module (GL only — PhysX/Vulkan need a GPU)
         run: |
-          cmake . -B build \
-            -DTHREEPP_WITH_PYTHON=ON \
-            -DTHREEPP_USE_EXTERNAL_GLFW=ON \
-            -DTHREEPP_BUILD_TESTS=OFF \
-            -DTHREEPP_BUILD_EXAMPLES=OFF \
-            -DPYBIND11_FINDPYTHON=ON \
-            -DPython_EXECUTABLE=$(which python) \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target threepp_py -j 2
+          cmake --preset ci-python -DPython_EXECUTABLE=$(which python)
+          cmake --build --preset ci-python
 
       - name: Run binding tests (headless GL under Xvfb)
         working-directory: python
