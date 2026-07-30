@@ -21,10 +21,20 @@ ab_check.py           proves the bundle reproduces torch, on the training plant
 ```bash
 python export_bundle.py         # -> bundle_spot_steps/
 python ab_check.py              # PARITY + WALK must both pass before trusting the bundle
-python make_spot_urdf.py        # -> ~/.cache/threepp/spot/spot_physics.urdf
+python make_spot_urdf.py        # -> <threepp_data>/urdf/spot/spot_physics.urdf
 python make_scene.py            # -> spot_policy.json
-threepp_editor spot_policy.json # press Play (or: --play --frames=700)
+threepp_editor spot_policy.json # press Play (or: --play --frames=1400)
 ```
+
+**The robot ships with threepp_data** (`urdf/spot/`), so there is nothing to download. Both
+generators find it via `THREEPP_DATA_DIR`, then a sibling `threepp_data` checkout, then the
+`cmake-build-*/_deps` one FetchContent made.
+
+Those files are Boston Dynamics SDK Software under the **BD SDK License**, *not* MIT — see
+`urdf/spot/LICENSE` and `NOTICE.md` there. Section 2(c) of that license explicitly permits
+software-based simulation, which is the only thing done with them here; using them to drive
+hardware is prohibited. `spot_physics.urdf` is a modified version and says so in its own header,
+as section 2(e) requires.
 
 ## Why a bundle and not just the checkpoint
 
@@ -73,7 +83,9 @@ colliders and per-link masses, because Boston Dynamics' URDF ships visuals and k
 **no `<collision>` and no `<inertial>`**. A URDF-driven host cannot import that. `make_spot_urdf.py`
 injects exactly those two things — from `spot_deploy`'s own constants — into the real URDF, leaving
 its visuals, joint origins, axes and per-leg limits untouched. Result: 13 links, 28.0 kg, the
-capsules the policy was trained against, and Spot still renders as Spot.
+capsules the policy was trained against, and Spot still renders as Spot. (Loading the result
+reports 26 meshes for 13 links — 13 visual, 13 collision — which is the quickest check that the
+colliders actually parsed.)
 
 **Generalising:** if a policy's plant lives in training code, that code is the source of truth and
 the URDF should be *generated from it*. A hand-written URDF that merely looks similar is the single

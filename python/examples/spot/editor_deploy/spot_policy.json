@@ -191,7 +191,7 @@
           1
         ],
         "userData": {
-          "urdf": "C:/Users/larsi/.cache/threepp/spot/spot_physics.urdf",
+          "urdf": "C:/dev/threepp_data/urdf/spot/spot_physics.urdf",
           "jointValues": "0.1,0.9,-1.5,-0.1,0.9,-1.5,0.1,1.1,-1.5,-0.1,1.1,-1.5",
           "articulation": "fixedbase=0;stiffness=90;damping=1.5;maxforce=115;selfcollision=0;iterations=12;density=1000",
           "script": "C:/dev/threepp-spot-editor/python/examples/spot/editor_deploy/spot_editor_script.py",

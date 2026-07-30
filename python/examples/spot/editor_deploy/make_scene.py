@@ -45,8 +45,11 @@ def uid(tag):
 
 def main():
     ap = argparse.ArgumentParser()
-    cache = pathlib.Path.home() / ".cache" / "threepp" / "spot"
-    ap.add_argument("--urdf", default=str(cache / "spot_physics.urdf"))
+    # The robot ships in threepp_data (urdf/spot), so a fresh checkout runs this scene with
+    # no downloads. THREEPP_DATA_DIR overrides; see make_spot_urdf.data_dir.
+    from make_spot_urdf import data_dir
+    spot = os.path.join(data_dir(), "urdf", "spot") if data_dir() else ""
+    ap.add_argument("--urdf", default=os.path.join(spot, "spot_physics.urdf") if spot else "")
     ap.add_argument("--bundle", default=os.path.join(_HERE, "bundle_spot_steps"))
     ap.add_argument("--script", default=os.path.join(_HERE, "spot_editor_script.py"))
     ap.add_argument("--log", default=os.path.join(_HERE, "spot_editor_trace.csv"))
@@ -61,8 +64,9 @@ def main():
     ap.add_argument("--route", default="5:0.8,0,0|4:0.5,0,0.5|4:0.8,0,0|3:0,0.5,0|4:1.2,0,0",
                     help="seconds:vx,vy,wz segments, '|'-separated. Empty = hold vx forever.")
     args = ap.parse_args()
-    if not os.path.exists(args.urdf):
-        print(f"no physics URDF at {args.urdf} - run make_spot_urdf.py first")
+    if not args.urdf or not os.path.exists(args.urdf):
+        print(f"no physics URDF at {args.urdf or '<threepp_data not found>'} - "
+              f"run make_spot_urdf.py first")
         return 1
 
     fwd = lambda p: str(p).replace("\\", "/")
