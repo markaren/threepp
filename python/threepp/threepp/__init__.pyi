@@ -1027,7 +1027,7 @@ class DepthPacking:
 class DepthSensor(Object3D, Sensor):
     def __init__(self, fov_y: typing.SupportsFloat | typing.SupportsIndex, width: typing.SupportsInt | typing.SupportsIndex, height: typing.SupportsInt | typing.SupportsIndex, near: typing.SupportsFloat | typing.SupportsIndex = 0.10000000149011612, far: typing.SupportsFloat | typing.SupportsIndex = 100.0) -> None:
         """
-        Depth sensor with a vertical FOV (deg), output resolution, and near/far clip (m).
+        Depth sensor with a vertical FOV (deg), output resolution, and the near/far RANGE bounds (m) it reports in -- a blind sphere of radius near out to a max range of far, inclusive at both ends and identical on GL and Vulkan. These are ranges, not view-space clip planes: an off-axis surface is judged by its distance, not by its depth along the view axis.
         """
     def reset_noise(self) -> None:
         """

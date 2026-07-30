@@ -251,7 +251,11 @@ namespace threepp_py {
                     return std::make_shared<DepthSensor>(fov_y, width, height, near, far);
                 }), py::arg("fov_y"), py::arg("width"), py::arg("height"),
                     py::arg("near") = 0.1f, py::arg("far") = 100.f,
-                    "Depth sensor with a vertical FOV (deg), output resolution, and near/far clip (m).")
+                    "Depth sensor with a vertical FOV (deg), output resolution, and the near/far "
+                    "RANGE bounds (m) it reports in -- a blind sphere of radius near out to a max "
+                    "range of far, inclusive at both ends and identical on GL and Vulkan. These are "
+                    "ranges, not view-space clip planes: an off-axis surface is judged by its "
+                    "distance, not by its depth along the view axis.")
                 // `range_noise` stays a float — the sigma is the knob every
                 // caller actually turns (sliders, episode randomization) — with
                 // the full seeded model beside it as `noise`.

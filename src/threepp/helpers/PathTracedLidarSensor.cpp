@@ -136,9 +136,12 @@ void PathTracedLidarSensor::scan(VulkanRenderer& renderer, std::vector<LidarRetu
 // frame, so it could not honour a caller's seed, and a scan replayed on another
 // GPU would not reproduce it. Here the stream is the sensor's own.
 //
-// A return whose noisy range leaves (0, maxRange] becomes a miss rather than a
-// point at a range the sensor could not have reported — same rule the raster
-// sensors apply when noise pushes a depth past the far plane.
+// A return whose noisy range leaves the sensor's [minRange, maxRange] shell
+// becomes a miss rather than a point at a range the sensor could not have
+// reported — the same rule, on the same inclusive bounds, that the raster
+// sensors apply after perturbing their own ranges. The invariant both backends
+// then hold is worth stating: every reported return has minRange <= distance
+// <= maxRange, noise or no noise.
 void PathTracedLidarSensor::applyNoise(std::vector<LidarReturn>& out, const Vector3& origin) {
     if (!rangeNoise.active()) return;
 
@@ -151,7 +154,7 @@ void PathTracedLidarSensor::applyNoise(std::vector<LidarReturn>& out, const Vect
         if (dist <= 1e-6f) continue;
 
         const float noisy = applyRangeNoise(dist);
-        if (noisy <= 0.f || noisy > params.maxRange) {
+        if (noisy <= 0.f || noisy < params.minRange || noisy > params.maxRange) {
             // Full miss per the LidarTypes.hpp contract (normal = 0 too), so a
             // consumer that ignores the sentinel rules still sees miss-shaped
             // data rather than the stale hit fields.

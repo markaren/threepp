@@ -21,6 +21,7 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 #endif
 
+#include <algorithm>
 #include <cmath>
 
 using namespace threepp;
@@ -115,8 +116,35 @@ DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, fl
                                           /*bias*/ 0.f, /*seed*/ 0x94D049BB133111EBULL}),
       width_(width),
       height_(height),
+      near_(near),
+      far_(far),
       postCamera_(-1, 1, 1, -1, 0, 1),
       camera_(fovY, static_cast<float>(width) / static_cast<float>(height), near, far) {
+
+    // ── The range shell vs. the raster frustum ──────────────────────────────
+    //
+    // near_/far_ bound the RANGE this sensor reports — a blind sphere out to a
+    // maximum range, which is what the ray-traced backend enforces as the ray's
+    // [tMin, tMax] interval and what the noise model is specified in. A raster
+    // near plane bounds something else: perpendicular view-space Z. The two
+    // differ by the pixel's slant ratio k = sqrt(1 + xd^2 + yd^2), which reaches
+    // 1/cos(half-diagonal FOV) at the image corner — so using the near plane as
+    // the blind zone clipped off-axis surfaces that are genuinely outside the
+    // blind sphere, and disagreed with Vulkan, which kept them.
+    //
+    // Fix: pull the raster near plane in by the worst-case k so it cannot clip
+    // anything inside the shell, then reject on the exact per-pixel range in
+    // unprojectPoints. Anything the pulled-in plane still clips has
+    // viewZ < near/kMax, hence range = k*viewZ < near — outside the shell
+    // regardless. far needs no widening: range >= viewZ always, so viewZ > far
+    // already implies range > far. Both bounds are INCLUSIVE, matching
+    // traceRayEXT's [tMin, tMax]. (LidarSensor.cpp carries the same note for the
+    // cube-face variant, where kMax is sqrt(3).)
+    const float tanHalfY = std::tan(math::degToRad(camera_.fov) * 0.5f);
+    const float tanHalfX = tanHalfY * camera_.aspect;
+    const float kMaxSlant = std::sqrt(1.f + tanHalfX * tanHalfX + tanHalfY * tanHalfY);
+    camera_.nearPlane = std::max(near_ / kMaxSlant, 1e-4f);
+    camera_.updateProjectionMatrix();
 
     // Scene render target: renders geometry and captures depth
     RenderTarget::Options sceneOpts;
@@ -206,15 +234,18 @@ void DepthSensor::resetNoise() {
 PathTracedLidarSensor& DepthSensor::tracedBackend() {
     if (!tracedBackend_) {
         tracedBackend_ = std::make_unique<PathTracedLidarSensor>(
-                camera_.fov, width_, height_, camera_.farPlane);
+                camera_.fov, width_, height_, far_);
     }
     // The depth sensor owns the noise contract; the back-end just applies it,
     // so its model tracks ours (including a seed the caller re-rolled). Copying
     // an unchanged seed does not restart the stream — see VisionSensor.
     tracedBackend_->rangeNoise = rangeNoise;
-    // The near plane doubles as the blind zone: without it every beam
-    // returns the sensor's own housing mesh from the inside.
-    tracedBackend_->params.minRange = camera_.nearPlane;
+    // The range shell, handed to the tracer as its [tMin, tMax] interval — the
+    // sensor's near_, NOT the pulled-in raster plane. This is the same bound the
+    // raster path applies per pixel after unprojecting, which is what makes the
+    // two backends report the same points. Without it every beam returns the
+    // sensor's own housing mesh from the inside.
+    tracedBackend_->params.minRange = near_;
     return *tracedBackend_;
 }
 #endif
@@ -308,13 +339,14 @@ void DepthSensor::unprojectPoints(std::vector<Vector3>& points,
     const float m8 = me[8], m9 = me[9], m10 = me[10];
     const float m12 = me[12], m13 = me[13], m14 = me[14];
 
-    const float far = camera_.farPlane;
+    const float far = camera_.farPlane;// == far_; the depth pack normalises by it
     const bool addNoise = rangeNoise.active();
 
     for (unsigned y = 0; y < height_; ++y) {
         // Hoist row-constant contributions from yDir_[y]
         const float yd = yDir_[y];
         const float ry0 = m4 * yd, ry1 = m5 * yd, ry2 = m6 * yd;
+        const float slantY = yd * yd + 1.f;
 
         for (unsigned x = 0; x < width_; ++x, px += 2) {
             // Unpack 16-bit normalised depth from RG channels
@@ -322,14 +354,26 @@ void DepthSensor::unprojectPoints(std::vector<Vector3>& points,
 
             if (normalizedDepth >= 0.9999f) continue;
 
+            const float xd = xDir_[x];
+            // Range (Euclidean), not view-space depth: the shell is a sphere,
+            // and off-axis pixels travel k times further per unit of view z.
+            const float k = std::sqrt(xd * xd + slantY);
             float depth = normalizedDepth * far;// positive distance along view axis
+            float range = depth * k;
+
+            // The shell, applied to the true geometry — the same interval the
+            // traced backend passes as tMin/tMax. Inclusive at both ends.
+            if (range < near_ || range > far_) continue;
+
             if (addNoise) {
-                depth = applyRangeNoise(depth);
-                if (depth <= 0.f || depth > far) continue;
+                // The model corrupts a RANGE (that is what its sigmas mean, and
+                // what the traced backend perturbs); view depth follows from it.
+                range = applyRangeNoise(range);
+                if (range < near_ || range > far_) continue;
+                depth = range / k;
             }
 
             // Inline world-space transform: view point = (xDir*depth, yDir*depth, -depth)
-            const float xd = xDir_[x];
             points.emplace_back(
                     (m0 * xd + ry0 - m8) * depth + m12,
                     (m1 * xd + ry1 - m9) * depth + m13,

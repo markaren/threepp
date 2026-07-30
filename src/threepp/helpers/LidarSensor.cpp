@@ -89,6 +89,40 @@ namespace {
         v = num_v * inv;
     }
 
+    // ── The near/far shell, and why a raster near plane is not it ────────────
+    //
+    // For a ranging sensor, `near` and `far` bound the RANGE it can report: a
+    // blind sphere of radius `near`, out to a maximum range of `far`. That is
+    // what LidarReturn::distance is measured in, what a real scanner's datasheet
+    // quotes ("a VLP-16 cannot report inside ~0.4 m"), and what the ray-traced
+    // backend enforces directly as the ray's [tMin, tMax] interval.
+    //
+    // A raster near/far plane is a different quantity: it clips on view-space Z,
+    // the PERPENDICULAR depth along the face camera's axis. The two differ by the
+    // pixel's slant ratio
+    //
+    //     k = |view ray| / |view z| = sqrt(1 + u^2 + v^2),   u, v = face NDC
+    //
+    // which is 1 dead ahead and sqrt(3) at the corner of a 90-degree square cube
+    // face. Using the near plane AS the blind zone therefore made the blind zone
+    // direction-dependent — the same object was clipped or returned depending on
+    // which part of which cube face its beam landed on — and it did NOT agree
+    // with the traced backend, which bounds the true range. A drone's rotor at
+    // 1.35 m from a near=1.2 m sensor was clipped by GL (view z 0.95) and
+    // returned by Vulkan (range 1.35). That is the parity bug this shell fixes.
+    //
+    // So: pull the raster near plane in by the worst-case k, then reject on the
+    // exact range per pixel. Nothing inside the shell can be clipped, because
+    // anything the pulled-in plane still clips has viewZ < near/kMaxSlant, hence
+    // range = k*viewZ < near. The far plane needs no widening, by the same
+    // argument in reverse: range >= viewZ always, so viewZ > far implies the
+    // point is outside the shell anyway.
+    //
+    // Both bounds are INCLUSIVE — a surface exactly at near or at far is
+    // reported — which is what traceRayEXT's [tMin, tMax] interval gives on the
+    // Vulkan side, so the two backends agree on the boundary too.
+    constexpr float kMaxSlant = 1.7320508f;// sqrt(3), at the corner of a 90-degree face
+
     // Sensors render *data* (linearized + packed depth) into render targets and
     // read it back. Color management (sRGB encode / tone mapping) would corrupt
     // those bytes — silently, on any backend that applies the output encode to
@@ -135,8 +169,13 @@ void LidarSensor::init(float near, float far) {
             {{0, 0, -1}, {0, -1, 0}},// -Z
     }};
 
+    // See kMaxSlant above: the raster plane is pulled in so it cannot clip
+    // anything inside the range shell; the shell itself is applied on the exact
+    // per-pixel range during unprojection.
+    const float rasterNear = std::max(near / kMaxSlant, 1e-4f);
+
     for (int i = 0; i < kNumFaces; ++i) {
-        auto cam = PerspectiveCamera::create(90.f, 1.f, near, far);
+        auto cam = PerspectiveCamera::create(90.f, 1.f, rasterNear, far);
         cam->up.copy(kFaces[i].up);
         cam->lookAt(kFaces[i].lookAt);
         add(cam);
@@ -189,9 +228,12 @@ void LidarSensor::init(float near, float far) {
             gl_FragColor = vec4(r, g, 0, 1.0);
         }
     )";
+    // The linearize pass must be told the plane the projection actually used,
+    // not the sensor's blind-sphere radius — perspectiveDepthToViewZ inverts the
+    // projection, and feeding it the wrong near would skew every depth read.
     postMaterial_->uniforms = {
             {"tDepth", Uniform()},
-            {"cameraNear", Uniform(near_)},
+            {"cameraNear", Uniform(rasterNear)},
             {"cameraFar", Uniform(far_)}};
 
     postScene_.add(Mesh::create(PlaneGeometry::create(2, 2), postMaterial_));
@@ -289,8 +331,10 @@ PathTracedLidarSensor& LidarSensor::tracedBackend() {
     // its model tracks ours (including a seed the caller re-rolled). Copying
     // an unchanged seed does not restart the stream — see VisionSensor.
     tracedBackend_->rangeNoise = rangeNoise;
-    // The near plane doubles as the blind zone: without it every beam
-    // returns the sensor's own housing mesh from the inside.
+    // The range shell, handed to the tracer as its [tMin, tMax] interval. This
+    // is the SAME bound the raster path applies per pixel after unprojecting
+    // (see kMaxSlant) — near is a blind sphere on both backends, not a plane.
+    // Without it every beam returns the sensor's own housing from the inside.
     tracedBackend_->params.minRange = near_;
     return *tracedBackend_;
 }
@@ -322,12 +366,14 @@ void LidarSensor::scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn
 
         lidar.scan(*vk, cloud);
 
-        // The raster path emits only real surface hits: nothing past the far
-        // plane, nothing inside the near clip. Drop the tracer's sentinel
-        // returns (hitInstanceId < 0: -1 = miss, -2 = fog/volume scatter — a
-        // raster scan never sees atmosphere) and near-clip hits to match.
+        // The raster path emits only real surface hits inside the range shell.
+        // Drop the tracer's sentinel returns (hitInstanceId < 0: -1 = miss,
+        // -2 = fog/volume scatter — a raster scan never sees atmosphere) to
+        // match. The shell itself is already enforced on this path (tMin/tMax
+        // on the true range, then again after noise in applyNoise), so the
+        // range test here is belt-and-braces on the same inclusive bound.
         std::erase_if(cloud, [this](const LidarReturn& r) {
-            return r.hitInstanceId < 0 || r.distance < near_;
+            return r.hitInstanceId < 0 || r.distance < near_ || r.distance > far_;
         });
         return;
     }
@@ -393,21 +439,32 @@ void LidarSensor::unprojectDense(std::vector<LidarReturn>& points) {
         for (unsigned y = 0; y < faceSize_; ++y) {
             const float yd = dir_[y];
             const float ry0 = m4 * yd, ry1 = m5 * yd, ry2 = m6 * yd;
+            const float slantY = yd * yd + 1.f;
 
             for (unsigned x = 0; x < faceSize_; ++x, px += 2) {
                 const float nd = static_cast<float>(px[0]) * (1.f / 255.f) + static_cast<float>(px[1]) * (1.f / 65025.f);
                 if (nd >= 0.9999f) continue;
 
-                float depth = nd * far_;
-                if (addNoise) {
-                    depth = applyRangeNoise(depth);
-                    if (depth <= 0.f || depth > far_) continue;
-                }
-
                 const float xd = dir_[x];
                 // Slant range (Euclidean): depth is along the cube-face camera's
                 // view axis; off-axis beams travel further per unit of view-z.
-                const float slant = depth * std::sqrt(xd * xd + yd * yd + 1.f);
+                const float k = std::sqrt(xd * xd + slantY);
+                float depth = nd * far_;
+                float slant = depth * k;
+
+                // The range shell, applied to the true geometry — the same
+                // interval the traced backend passes as tMin/tMax. Inclusive at
+                // both ends (see kMaxSlant).
+                if (slant < near_ || slant > far_) continue;
+
+                if (addNoise) {
+                    // Noise corrupts the RANGE, which is what the model is
+                    // specified in (and what the traced backend perturbs); the
+                    // view-space depth follows from it.
+                    slant = applyRangeNoise(slant);
+                    if (slant < near_ || slant > far_) continue;
+                    depth = slant / k;
+                }
 
                 LidarReturn r;
                 r.position.set(
@@ -445,16 +502,23 @@ void LidarSensor::unprojectBeams(std::vector<LidarReturn>& points) {
 
         if (nd >= 0.9999f) continue;
 
+        const float k = std::sqrt(b.u * b.u + b.v * b.v + 1.f);
         float depth = nd * far_;
+        float slant = depth * k;
+
+        // The range shell, applied to the true geometry — the same interval the
+        // traced backend passes as tMin/tMax. Inclusive at both ends.
+        if (slant < near_ || slant > far_) continue;
+
         if (addNoise) {
-            depth = applyRangeNoise(depth);
-            if (depth <= 0.f || depth > far_) continue;
+            slant = applyRangeNoise(slant);
+            if (slant < near_ || slant > far_) continue;
+            depth = slant / k;
         }
 
         // view-space point for this beam: (u*depth, v*depth, -depth)
         // transformed to world space via the face camera's world matrix
         const float* me = faceMat[b.face];
-        const float slant = depth * std::sqrt(b.u * b.u + b.v * b.v + 1.f);
 
         LidarReturn r;
         r.position.set(

@@ -2400,7 +2400,7 @@ namespace {
             "name": "Drone Lidar",
             "receiveShadow": true,
             "userData": {
-              "sensor": "type=lidar;rate=10;seed=23;gyrodensity=0.005;gyrowalk=0.00004;acceldensity=0.06;accelwalk=0.004;near=1.2;far=12;rangestddev=0.015;rangepermetre=0;rangebias=0;fov=60;width=160;height=120;beams=vlp16;facesize=112;joint=;encoderres=0;contactthreshold=0"
+              "sensor": "type=lidar;rate=10;seed=23;gyrodensity=0.005;gyrowalk=0.00004;acceldensity=0.06;accelwalk=0.004;near=1.6;far=12;rangestddev=0.015;rangepermetre=0;rangebias=0;fov=60;width=160;height=120;beams=vlp16;facesize=112;joint=;encoderres=0;contactthreshold=0"
             },
             "layers": 1,
             "matrix": [

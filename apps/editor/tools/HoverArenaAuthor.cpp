@@ -761,7 +761,14 @@ class Scoreboard:
             scan.beams = SensorConfig::Beams::VLP16;
             scan.faceSize = 112;
             scan.rateHz = 10.f;
-            scan.nearPlane = 1.2f;
+            // The blind zone is a RANGE — a sphere of this radius around the
+            // sensor, identical on GL and Vulkan (see LidarSensor.cpp). So it
+            // has to clear the airframe's actual radius, not its half-width:
+            // the rotor rings sit at (+-0.74, 0.1, +-0.74) from the hull origin
+            // and the lidar rides 0.2 m above it, which puts their outer arcs
+            // 1.46 m away. 1.6 m blinds the drone to itself with margin to
+            // spare, and is still a tenth of the arena.
+            scan.nearPlane = 1.6f;
             scan.farPlane = 12.f;
             scan.rangeStddev = 0.015f;
             scan.seed = 23;

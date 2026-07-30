@@ -39,6 +39,18 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # created afterwards got a context-less window (hard exit, no traceback).
     # Needs its own executable — every other test uses a single backend, and the
     # hazard is invisible unless the Vulkan canvas comes first.
+    # A vision sensor's near/far must bound the same quantity on both backends.
+    # Same both-backends-in-one-process shape as CanvasApiOrder_test below (and
+    # the same Vulkan-canvas-first ordering), because that is what it takes to
+    # compare a GL scan against a Vulkan one without serialising through a file.
+    add_executable(SensorBackendParity_test SensorBackendParity_test.cpp)
+    target_link_libraries(SensorBackendParity_test PRIVATE threepp)
+    target_include_directories(SensorBackendParity_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME SensorBackendParity_test COMMAND SensorBackendParity_test)
+    set_tests_properties(SensorBackendParity_test PROPERTIES
+            SKIP_RETURN_CODE 42
+            SKIP_REGULAR_EXPRESSION "WGL: The driver does not appear to support OpenGL")
+
     add_executable(CanvasApiOrder_test CanvasApiOrder_test.cpp)
     target_link_libraries(CanvasApiOrder_test PRIVATE threepp)
     target_include_directories(CanvasApiOrder_test PRIVATE "${PROJECT_SOURCE_DIR}/src")

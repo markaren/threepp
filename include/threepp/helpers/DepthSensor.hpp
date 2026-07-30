@@ -78,14 +78,29 @@ namespace threepp {
         [[nodiscard]] unsigned int width() const { return width_; }
         [[nodiscard]] unsigned int height() const { return height_; }
         [[nodiscard]] float fov() const { return camera_.fov; }
-        [[nodiscard]] float near() const { return camera_.nearPlane; }
-        [[nodiscard]] float far() const { return camera_.farPlane; }
 
+        // The range shell the sensor reports in: a return's distance from the
+        // sensor origin always lies in [near(), far()], on every backend. These
+        // are RANGES, not view-space planes — see the raster camera note below.
+        [[nodiscard]] float near() const { return near_; }
+        [[nodiscard]] float far() const { return far_; }
+
+        // The camera the GL path rasterizes from. Its near plane is deliberately
+        // pulled in from near(): a plane clips on perpendicular view-space Z,
+        // while the sensor's near is a blind SPHERE, and an off-axis surface can
+        // sit outside the sphere while being inside the plane. Read near()/far()
+        // for the sensor's own bounds; this frustum is an implementation detail
+        // that is merely guaranteed to contain them.
         Camera& getCamera() { return camera_; }
 
     private:
         unsigned int width_;
         unsigned int height_;
+
+        // The reported range shell. Distinct from camera_.nearPlane, which is
+        // the (wider) raster frustum used to fill the depth buffer.
+        float near_;
+        float far_;
 
         Scene postScene_;
         OrthographicCamera postCamera_;

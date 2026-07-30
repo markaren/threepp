@@ -1885,6 +1885,16 @@ Vision sensors (depth, lidar) are deliberately **not** here: a scan is tens of
 thousands of points, which wants a buffer protocol rather than a per-sample
 handle. Read those from the overlay, the panel, or a CSV recording for now.
 
+A vision sensor's **Near** and **Far** bound the *range* it can report — a blind
+sphere of radius Near, out to a maximum range of Far — and mean exactly the same
+thing on GL as on Vulkan, inclusive at both ends. They are not view-space clip
+planes: an object off to the side is judged by how far away it is, not by its
+depth along some axis, so a Near large enough to hide the machine the sensor
+rides on has to clear that machine's *radius*. (The shipped Hover Arena uses
+1.6 m for exactly this reason: the drone's rotor rings reach 1.46 m from the
+lidar.) `SensorBackendParity_test` scans one scene on both backends and pins the
+two to the same answer.
+
 Sensors are rebuilt from the authored seed on every Play, so a script that
 reacts to noise reacts to the *same* noise on the next run — a closed loop under
 test is reproducible, which is the entire point of the seed.
