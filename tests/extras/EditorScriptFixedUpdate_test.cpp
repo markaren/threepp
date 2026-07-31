@@ -78,9 +78,12 @@ namespace {
         sensor.write(object);
     }
 
-    // The editor's registration order, and its stop order (physics first, so a
-    // script's stop() runs when the world is already gone — the window a stale
-    // substep handle would blow up in).
+    // The editor's registration order, and its stop order — the REVERSE of
+    // registration, scripts first, so the substep callback is removed from a
+    // world that is still alive. (The stale-handle window still exists — a
+    // teardown that skips the controller — and detachFromPhysics still guards
+    // it; the dead-world path is exercised where EditorScriptPhysics_test
+    // stops physics by hand first.)
     struct Rig {
 
         SceneDocument document;
@@ -120,9 +123,9 @@ namespace {
         }
 
         void stop() {
-            physics.stop();
-            sensors.stop();
             scripts.stop();
+            sensors.stop();
+            physics.stop();
         }
 
         [[nodiscard]] std::size_t linesContaining(const std::string& text) const {

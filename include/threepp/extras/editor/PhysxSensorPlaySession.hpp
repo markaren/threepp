@@ -9,11 +9,12 @@
 // threepp library proper never links PhysX, so this file is included only by
 // builds that found the SDK (the editor sets THREEPP_EDITOR_WITH_PHYSX).
 //
-// The world is borrowed, never owned: PlayController stops sessions in
-// registration order, and physics is registered FIRST, so by the time stop()
-// runs here the PhysxWorld may already be gone. Hence the lifetime token — the
-// world pointer is only ever dereferenced while PhysicsPlaySession's token is
-// still alive.
+// The world is borrowed, never owned. On the normal Stop it is still alive
+// here — PlayController stops sessions in REVERSE registration order, physics
+// last — but a teardown that skips the controller (the editor closed mid-Play,
+// destructors in member order) makes no such promise. Hence the lifetime token:
+// the world pointer is only ever dereferenced while PhysicsPlaySession's token
+// is still alive.
 
 #ifndef THREEPP_EDITOR_PHYSXSENSORPLAYSESSION_HPP
 #define THREEPP_EDITOR_PHYSXSENSORPLAYSESSION_HPP
@@ -66,10 +67,11 @@ namespace threepp::editor {
 
         void stop() override {
 
-            // Sessions stop in registration order, physics FIRST — so by the time
-            // this runs the PhysxWorld (and the PhysX SDK behind it) is usually
-            // already gone. Release the body sensors accordingly, then let the
-            // base do the renderer half and drop the entries.
+            // Sessions stop in REVERSE registration order, physics LAST — so on
+            // the normal Stop the PhysxWorld is still alive here and the body
+            // sensors unregister cleanly. releaseBodySensors() still carries the
+            // dead-world path for the teardown that skips the controller
+            // entirely (the editor closed mid-Play, destructor order).
             releaseBodySensors();
 
             SensorPlaySession::stop();
@@ -137,14 +139,17 @@ namespace threepp::editor {
         // Two paths, and the difference is a class of bug this codebase cares
         // about:
         //
-        //  world alive  — a mid-play teardown that reached us before physics.
+        //  world alive  — the normal Stop: the controller stops sessions in
+        //                 reverse registration order, so physics is still up.
         //                 Unregister cleanly; the Force/Torque sensor releases
         //                 its PxArticulationCache through onUnregister while the
         //                 SDK still exists.
-        //  world gone   — the normal Stop. The cache's memory went with the SDK,
-        //                 so calling release() on it would touch a freed
-        //                 allocator. Abandon the pointer instead: the SDK teardown
-        //                 already reclaimed the buffer, so nothing leaks that the
+        //  world gone   — a teardown that never went through the controller
+        //                 (the editor closed mid-Play; destructors run in member
+        //                 order). The cache's memory went with the SDK, so
+        //                 calling release() on it would touch a freed allocator.
+        //                 Abandon the pointer instead: the SDK teardown already
+        //                 reclaimed the buffer, so nothing leaks that the
         //                 process does not, and the destructor stays a no-op.
         void releaseBodySensors() {
 

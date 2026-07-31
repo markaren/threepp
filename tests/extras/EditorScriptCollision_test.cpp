@@ -122,9 +122,9 @@ namespace {
         sensor.write(object);
     }
 
-    // The editor's registration order, and its stop order (physics first, so the
-    // world — and every contact watch in it — is gone before the script session
-    // is asked to give its registrations back).
+    // The editor's registration order, and its stop order — the REVERSE of
+    // registration, scripts first, so the script session gives its contact
+    // watches back to a world that is still alive to take them.
     struct Rig {
 
         SceneDocument document;
@@ -164,9 +164,9 @@ namespace {
         }
 
         void stop() {
-            physics.stop();
-            sensors.stop();
             scripts.stop();
+            sensors.stop();
+            physics.stop();
         }
 
         [[nodiscard]] std::size_t linesContaining(const std::string& text) const {

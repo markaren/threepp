@@ -103,9 +103,18 @@ void PlayController::update(float dt) {
 
 void PlayController::stopSessions() {
 
-    for (const auto& session : sessions_) {
+    // REVERSE registration order — the same LIFO the failed-start unwind in
+    // play() has always used. Sessions later in the list build on what earlier
+    // ones stand up (scripts hook the physics session's substep loop, sensors
+    // register against its world), so teardown must peel them off in the
+    // opposite order: a script's stop() runs against a live world, the sensor
+    // session unregisters from an SDK that still exists, and only then does
+    // physics take the world down. The reverse — the order this used to run
+    // in — made every later session tear down against freed PhysX state,
+    // which each one grew its own token machinery to survive.
+    for (std::size_t i = sessions_.size(); i-- > 0;) {
         try {
-            session->stop();
+            sessions_[i]->stop();
         } catch (...) {
             // A runtime that fails to shut down cleanly must not strand the
             // editor in Play mode with no way back to the snapshot.

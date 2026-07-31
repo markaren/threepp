@@ -13,6 +13,9 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
+#include <cctype>
+#include <string>
+
 using namespace threepp;
 using namespace threepp::editor;
 
@@ -206,6 +209,46 @@ TEST_CASE("pause suspends updates without stopping", "[editor]") {
     CHECK(session->stops == 0);
 
     REQUIRE(controller.stop(document));
+}
+
+TEST_CASE("sessions start in registration order and stop in reverse", "[editor]") {
+
+    // Later sessions build on what earlier ones stand up — scripts hook the
+    // physics session's substep loop, sensors register against its world — so
+    // teardown must peel them off LIFO, the way the failed-start unwind always
+    // has. The concrete stake: a script's stop() runs against a live world
+    // instead of the freed PhysX state every later session used to tear down
+    // against.
+    class OrderProbe: public PlaySession {
+
+    public:
+        OrderProbe(char id, std::string& trace) : id_(id), trace_(trace) {}
+
+        void start(Scene&) override { trace_ += id_; }
+        void update(float) override {}
+        void stop() override {
+            trace_ += static_cast<char>(std::toupper(id_));
+        }
+        [[nodiscard]] std::string name() const override { return {id_}; }
+
+    private:
+        char id_;
+        std::string& trace_;
+    };
+
+    SceneDocument document;
+    populate(document.scene());
+
+    std::string trace;
+    PlayController controller;
+    controller.addSession(std::make_shared<OrderProbe>('a', trace));
+    controller.addSession(std::make_shared<OrderProbe>('b', trace));
+    controller.addSession(std::make_shared<OrderProbe>('c', trace));
+
+    REQUIRE(controller.play(document));
+    REQUIRE(controller.stop(document));
+
+    CHECK(trace == "abcCBA");
 }
 
 TEST_CASE("a session that fails to start rolls the whole play back", "[editor]") {

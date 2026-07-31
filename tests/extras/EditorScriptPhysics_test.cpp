@@ -199,13 +199,78 @@ class Ledger:
 
     run(physics, scripts, 10);
 
-    // PlayController stops sessions in registration order, and physics is
-    // registered first — so a script's stop() runs when every actor is already
-    // released. That window is the whole reason a handle carries a lifetime
-    // token, so the test reproduces it rather than stopping in a tidier order.
+    // Physics DELIBERATELY stopped first. This is no longer the controller's
+    // order — PlayController stops sessions in reverse registration order, so a
+    // script's stop() normally sees a live world (the test below pins that) —
+    // but the world dying under a held handle is still reachable: the editor
+    // torn down mid-Play runs destructors in member order, and a handle stashed
+    // beyond its session outlives any ordering promise. THIS is what the
+    // lifetime token is for, so the test produces the hostile order by hand and
+    // asserts a dead handle answers rather than reads freed memory.
     physics.stop();
     scripts.stop();
     CHECK(box->name == "got/dead/raised");
+}
+
+TEST_CASE("a script's stop() runs against a live world", "[editor][scripting][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+    addGround(scene);
+
+    // The controller's order — scripts stop FIRST, reverse of registration —
+    // driven here by hand the same way `run` mirrors its update order. stop()
+    // is where cleanup code naturally goes (park the robot, log the pose,
+    // release the grip), so everything a script could hold is exercised there:
+    // the checked handle, editor.world, and the raw handle world.add returned —
+    // the last of which was a SEGFAULT in this window before sessions stopped
+    // in reverse.
+    auto box = addBox(scene, "Closer", PhysicsConfig::Body::Dynamic, R"(
+import threepp
+
+editor = threepp.editor
+
+
+class Closer:
+    def start(self, obj):
+        self.obj = obj
+        self.body = editor.rigid_body_from_object(obj)
+        crate = threepp.Mesh(threepp.BoxGeometry(0.5, 0.5, 0.5),
+                             threepp.MeshStandardMaterial())
+        crate.position.set(3.0, 3.0, 0.0)
+        editor.scene().add(crate)
+        self.raw = editor.world().add(crate)
+        obj.name = "got" if self.body else "none"
+
+    def stop(self):
+        self.obj.name += "/valid" if self.body.valid else "/dead"
+        try:
+            self.body.velocity
+            self.obj.name += "/read"
+        except RuntimeError:
+            self.obj.name += "/raised"
+        self.obj.name += "/world" if editor.world() is not None else "/noworld"
+        p = self.raw.position
+        self.obj.name += "/raw" if p.y < 3.0 else "/unmoved"
+)");
+
+    PhysicsPlaySession physics;
+    ScriptPlaySession scripts;
+
+    physics.start(scene);
+    scripts.start(scene);
+    REQUIRE(scripts.errorFor(box->uuid).empty());
+    CHECK(box->name == "got");
+
+    run(physics, scripts, 60);
+
+    scripts.stop();
+    physics.stop();
+
+    CHECK(scripts.errorFor(box->uuid).empty());
+    // Every read answered, and the raw handle reported a crate that actually
+    // fell — a live world on both counts.
+    CHECK(box->name == "got/valid/read/world/raw");
 }
 
 TEST_CASE("a kinematic body is steered through its target", "[editor][scripting][physx]") {

@@ -505,7 +505,7 @@ def world() -> threepp.PhysxWorld | None:
 
     This is the ONLY way to a world inside the editor: threepp.PhysxWorld's own constructor raises there, because the session owns the one world and a second would bring up a second PhysX foundation beside it.
 
-    NOTE the handle difference: what world.add returns is a raw threepp.RigidBody, valid only while the world is alive and NOT invalidated by Stop - keeping one across a stop/play dereferences a released actor. rigid_body_from_object returns the lifetime-checked threepp.editor.RigidBody, which raises instead. Prefer that one for anything you hold onto.
+    NOTE the handle difference: what world.add returns is a raw threepp.RigidBody, valid while the world is alive - which includes stop(), since sessions stop in reverse order and physics goes down last - but NOT invalidated when the world dies, so one stashed beyond its session dereferences a released actor. rigid_body_from_object returns the lifetime-checked threepp.editor.RigidBody, which raises instead. Prefer that one for anything held longer than the session.
     """
 def rigid_body_from_object(object: threepp.Object3D | None) -> RigidBody | None:
     """

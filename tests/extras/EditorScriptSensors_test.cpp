@@ -109,13 +109,14 @@ namespace {
             }
         }
 
-        // Stop order is the controller's, i.e. registration order: by the time a
-        // script's stop() runs, the world AND the sensors are already gone. That
-        // window is the whole reason a handle carries a lifetime token.
+        // Stop order is the controller's — the REVERSE of registration, so a
+        // script's stop() still has the sensors and the world under it. The
+        // dead-handle window (a teardown that skips the controller) is driven
+        // by hand in the test that pins it, not manufactured here.
         void stop() {
-            physics.stop();
-            sensors.stop();
             scripts.stop();
+            sensors.stop();
+            physics.stop();
         }
     };
 
@@ -341,8 +342,9 @@ class Ledger:
         pass
 
     def stop(self):
-        # The sensor session stops before the script one, so the handle must say
-        # it is gone rather than read a freed entry.
+        # The test tears the sensor session down FIRST, by hand - the hostile
+        # order a controller-skipping teardown can still produce - so the handle
+        # must say it is gone rather than read a freed entry.
         self.obj.name += "/valid" if self.imu.valid else "/dead"
         try:
             self.imu.latest()
@@ -366,7 +368,15 @@ class Ledger:
     rig.start();
     CHECK(box->name == "got");
     rig.run(10);
-    rig.stop();
+
+    // The hostile order, by hand: sensors and world torn down under a script
+    // still holding a handle. The controller no longer produces this (it stops
+    // sessions in reverse registration order), but a destructor-order teardown
+    // still can, and a handle stashed beyond its session always could — THIS is
+    // what the lifetime token is for.
+    rig.sensors.stop();
+    rig.physics.stop();
+    rig.scripts.stop();
 
     CHECK(box->name == "got/dead/raised/raised");
 }

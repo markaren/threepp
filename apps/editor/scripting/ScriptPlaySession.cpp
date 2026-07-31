@@ -226,10 +226,13 @@ struct ScriptPlaySession::Impl {
     // drainer would starve the Sensors panel.)
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-    // The world is BORROWED. Physics is registered first and therefore stops
-    // first, so by the time stop() runs here the PhysxWorld is usually already
-    // gone — the token (which PhysicsPlaySession drops before the world) is what
-    // makes "is my registration still there to remove" answerable without ever
+    // The world is BORROWED. On the normal Stop it is still alive when stop()
+    // runs here — the controller stops sessions in REVERSE registration order,
+    // scripts before physics — so the callbacks and watches below are given
+    // back cleanly. The token (which PhysicsPlaySession drops before the world)
+    // guards the paths that make no such promise: the editor torn down mid-Play,
+    // where ~ScriptPlaySession runs in whatever order the members fall, must
+    // still be able to ask "is my registration still there to remove" without
     // dereferencing a dead pointer.
     PhysxWorld* world = nullptr;
     PhysicsPlaySession* physics = nullptr;

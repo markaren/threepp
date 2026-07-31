@@ -129,9 +129,9 @@ namespace {
         return box;
     }
 
-    // The editor's registration order, and its stop order (physics first, so the
-    // world — and every trigger watch in it — is gone before the script session
-    // is asked to give its registrations back). Both sessions log into ONE list:
+    // The editor's registration order, and its stop order — the REVERSE of
+    // registration, scripts first, so the script session gives its trigger
+    // watches back to a world still alive to take them. Both sessions log into ONE list:
     // the trimesh fallback is the physics session's line and the missing-body one
     // is the script session's, and a test reads them the same way.
     struct Rig {
@@ -174,9 +174,9 @@ namespace {
         }
 
         void stop() {
-            physics.stop();
-            sensors.stop();
             scripts.stop();
+            sensors.stop();
+            physics.stop();
         }
 
         [[nodiscard]] std::size_t linesContaining(const std::string& text) const {

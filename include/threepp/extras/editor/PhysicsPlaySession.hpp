@@ -348,9 +348,11 @@ namespace threepp::editor {
             objects_.clear();
             // Destroy the articulations while the world is still alive: an
             // Articulation releases itself back into the scene it belongs to, so
-            // it must go before the world it was added to. (The sensor session,
-            // which stops after us, already dropped its FT caches — it stops
-            // world-touching the instant our lifetime token expires below.)
+            // it must go before the world it was added to. (On the normal Stop
+            // the sensor and script sessions have ALREADY detached — the
+            // controller stops sessions in reverse registration order, and
+            // physics goes last. The token below is for the paths that cannot
+            // promise that: a stashed handle, or a destructor-order teardown.)
             articulations_.clear();
             world_.reset();
             bodyCount_ = 0;

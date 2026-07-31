@@ -608,11 +608,12 @@ namespace threepp_py {
                 "program would. Bodies added this way die with the world at Stop, and meshes "
                 "spawned into the scene die with the stop-restore, so neither needs cleaning up.\n\n"
                 "NOTE the handle difference: what `world.add()` returns is a raw "
-                "`threepp.RigidBody`, valid only while the world is alive and NOT invalidated by "
-                "Stop - keeping one across a stop/play dereferences a released actor. "
-                "`rigid_body_from_object` returns the lifetime-checked "
-                "`threepp.editor.RigidBody`, which raises instead. Prefer that one for anything "
-                "you hold onto.");
+                "`threepp.RigidBody`, valid while the world is alive - which includes stop(), "
+                "since sessions stop in reverse order and physics goes down last - but NOT "
+                "invalidated when the world dies, so one stashed beyond its session "
+                "dereferences a released actor. `rigid_body_from_object` returns the "
+                "lifetime-checked `threepp.editor.RigidBody`, which raises instead. Prefer "
+                "that one for anything held longer than the session.");
 
         sub.def(
                 "rigid_body_from_object", [](const py::handle& h) -> py::object {

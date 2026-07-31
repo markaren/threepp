@@ -745,12 +745,14 @@ robot node itself resolves to the root link, so a base IMU needs no link names
 at all.
 
 One teardown detail worth knowing, because it is a class of bug this codebase
-cares about: sessions stop physics-first, so by the time the sensor session stops
-the PhysX SDK is already gone. A Force/Torque sensor holds a `PxArticulationCache`
-whose memory went with it, so the session **abandons** that cache (drops the
-pointer without releasing it) on the normal Stop rather than releasing it against
-a freed allocator; the SDK teardown already reclaimed the buffer. On a mid-play
-teardown, where the world is still alive, it unregisters cleanly instead.
+cares about: sessions stop in **reverse** registration order, physics last, so on
+the normal Stop the sensor session unregisters from a world that still exists —
+a Force/Torque sensor releases its `PxArticulationCache` cleanly through
+`onUnregister`. The other path still exists for a teardown that skips the
+controller (the editor closed mid-Play, destructors running in member order):
+there the SDK is already gone, the cache's memory went with it, and the session
+**abandons** the pointer rather than releasing it against a freed allocator; the
+SDK teardown already reclaimed the buffer.
 
 Everything a sensor measures is readable from a play script too — see
 [Sensors from a script](#sensors-from-a-script), which is where a controller
@@ -1891,9 +1893,11 @@ Three things separate these from `spline_from_object`:
   functions return `None` outside Play (and for an object with no physics).
 * **A handle belongs to the play session that made it.** Stop releases every
   actor, so a handle kept across a stop raises instead of reading freed memory —
-  check `body.valid`, or just ask again in `start()`. This is reachable in
-  normal use: sessions stop in registration order, physics first, so a script's
-  own `stop()` runs when the actors are already gone.
+  check `body.valid`, or just ask again in `start()`. A script's own `stop()`
+  is *inside* the session: sessions stop in reverse registration order, physics
+  last, so the body is still live there — parking a robot or logging a final
+  pose from `stop()` is fine. What the check guards is a handle kept *beyond*
+  the session, stashed somewhere the next Play can see.
 * **They need the PhysX SDK.** Without it the names are absent from
   `threepp.editor` rather than present and always failing.
 
@@ -1952,9 +1956,12 @@ Two limits worth knowing before leaning on this:
   it.
 * **`world().add()` hands back a raw `threepp.RigidBody`**, not the
   lifetime-checked `threepp.editor.RigidBody` that `rigid_body_from_object`
-  returns. It is valid only while the world is alive and is *not* invalidated by
-  Stop, so keeping one across a stop/play dereferences a released actor. For
-  anything held longer than the call, prefer the checked handle.
+  returns. Within the session — `update()`, the callbacks, and `stop()`, which
+  runs before the world goes down — it is fine. But it is *not* invalidated
+  when the world dies, so one stashed beyond its session dereferences a
+  released actor where the checked handle would raise. For anything held
+  longer than the session, prefer the checked handle. This is the wheel's own
+  contract, inherited: a `threepp.RigidBody` is valid while its world is alive.
 
 `threepp.PhysxWorld` is visible in the editor but **cannot be constructed**
 there — its constructor raises, and says to use `editor.world()` instead. The

@@ -113,7 +113,7 @@ namespace {
         return box;
     }
 
-    // The editor's registration order, and its stop order (physics first).
+    // The editor's registration order, and its stop order — the reverse.
     struct Rig {
 
         SceneDocument document;
@@ -153,9 +153,9 @@ namespace {
         }
 
         void stop() {
-            physics.stop();
-            sensors.stop();
             scripts.stop();
+            sensors.stop();
+            physics.stop();
         }
 
         Object3D* marker(const char* name) { return scene().getObjectByName(name); }
