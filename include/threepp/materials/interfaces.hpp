@@ -279,7 +279,6 @@ namespace threepp {
 
         Color sheenColor{0, 0, 0};
         float sheenRoughness{0.f};
-        std::optional<Color> sheen;  // legacy
     };
 
     struct MaterialWithIridescence: virtual Material {

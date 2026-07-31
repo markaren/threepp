@@ -131,7 +131,6 @@ void MeshPhysicalMaterial::copyInto(Material& material) const {
 
     m->sheenColor.copy(sheenColor);
     m->sheenRoughness = sheenRoughness;
-    m->sheen = sheen;
 
     m->transmission = transmission;
     m->transmissionMap = transmissionMap;
@@ -193,11 +192,6 @@ bool MeshPhysicalMaterial::setValue(const std::string& key, const MaterialValue&
     } else if (key == "clearcoatNormalScale") {
 
         clearcoatNormalScale.copy(std::get<Vector2>(value));
-        return true;
-
-    } else if (key == "sheen") {
-
-        sheen = extractColor(value);
         return true;
 
     } else if (key == "sheenColor") {

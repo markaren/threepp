@@ -330,7 +330,6 @@ namespace {
             setTexture("metalnessMap");
         }
         if (dynamic_cast<MaterialWithSheen*>(&material)) {
-            setColor("sheen");
             setColor("sheenColor");
             setFloat("sheenRoughness");
         }

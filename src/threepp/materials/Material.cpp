@@ -219,8 +219,7 @@ void Material::copyCompatibleFrom(const Material& other) {
                    d->attenuationColor = s->attenuationColor;);
     TPP_COPY_MIXIN(MaterialWithSheen,
                    d->sheenColor = s->sheenColor;
-                   d->sheenRoughness = s->sheenRoughness;
-                   d->sheen = s->sheen;);
+                   d->sheenRoughness = s->sheenRoughness;);
     TPP_COPY_MIXIN(MaterialWithIridescence,
                    d->iridescence = s->iridescence;
                    d->iridescenceIOR = s->iridescenceIOR;

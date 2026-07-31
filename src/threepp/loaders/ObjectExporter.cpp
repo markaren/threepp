@@ -364,9 +364,9 @@ namespace {
             writeTextureSlot(data, "metalnessMap", m->metalnessMap, meta);
         }
         if (auto* m = dynamic_cast<MaterialWithSheen*>(&material)) {
-            // r129 wrote a single `sheen` colour; the split sheenColor/
-            // sheenRoughness pair matches later revisions and threepp's fields.
-            if (m->sheen) data["sheen"] = hex(*m->sheen);
+            // r129 wrote a single `sheen` colour. threepp only carries the split
+            // sheenColor/sheenRoughness pair of later revisions, so that key is
+            // neither written here nor read back by ObjectLoader.
             data["sheenColor"] = hex(m->sheenColor);
             data["sheenRoughness"] = m->sheenRoughness;
         }
