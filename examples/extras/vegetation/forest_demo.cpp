@@ -375,7 +375,7 @@ int main() {
     auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
     if (vk) {
         vulkanBackend = true;
-        // Path tracer: GPU cost (pathTrace + denoise) scales with pixel count,
+        // Deferred renderer: GPU cost (shade + denoise) scales with pixel count,
         // so render below native and TAA-upsample.
         vk->setRenderScale(0.8f);
     }

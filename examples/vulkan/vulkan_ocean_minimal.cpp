@@ -1,4 +1,4 @@
-// Vulkan PT — minimal ocean.
+// Vulkan deferred — minimal ocean.
 //
 // The "fancy water" (3-cascade Phillips/FFT-displaced surface with foam and
 // transmission) with NO hero object: just an env HDR, a sand floor, and an
@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
     const capture::Args capArgs = capture::parseArgs(argc, argv);
     if (capArgs.frames) shotFrames = *capArgs.frames;
 
-    Canvas canvas("Vulkan PT - Ocean (minimal)", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
+    Canvas canvas("Vulkan Deferred - Ocean (minimal)", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
 
     auto renderer = VulkanRenderer(canvas);
     renderer.setDenoise(true);

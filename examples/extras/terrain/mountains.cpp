@@ -1,6 +1,6 @@
-// Vulkan PT — procedural mountain configurator.
+// Procedural mountain configurator.
 //
-// A single hero mountain massif rendered through the Vulkan path tracer, with a
+// A single hero mountain massif rendered through the deferred VulkanRenderer, with a
 // live ImGui panel that re-rolls and re-shapes the terrain. The heightfield is
 // generated on the CPU by threepp::terrain::TerrainGenerator (fBm / ridged /
 // hybrid multifractal + domain warp), optionally carved by droplet-hydraulic +
@@ -274,7 +274,7 @@ int main(int argc, char** argv) {
         else if (a == "--closeup") closeUp = true;
     }
 
-    Canvas canvas("Vulkan PT - Mountains", {{"vsync", false}});
+    Canvas canvas("Vulkan Deferred - Mountains", {{"vsync", false}});
     // Headless capture forces the Vulkan deferred renderer (the detail
     // normal/roughness + triplanar layer is Vulkan-only); interactive runs keep
     // the renderer-select menu.
@@ -287,7 +287,7 @@ int main(int argc, char** argv) {
     RGBELoader rgbe;
     if (auto env = rgbe.load(std::string(DATA_FOLDER) + "/textures/env/autumn_field_puresky_2k.hdr")) {
         scene.background = env;
-        scene.environment = env;// image-based lighting (env CDF + MIS in the PT)
+        scene.environment = env;// image-based lighting
     } else {
         scene.background = Color(0.55f, 0.70f, 0.92f);
         std::cerr << "[mountains] HDRI not found - falling back to flat sky background\n";

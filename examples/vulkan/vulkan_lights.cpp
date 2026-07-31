@@ -1,4 +1,4 @@
-// Vulkan PT lights showcase — five side-by-side sections each lit by a
+// Vulkan deferred lights showcase — five side-by-side sections each lit by a
 // different light source, demonstrating the renderer's analytic light path
 // (DirectionalLight, PointLight, SpotLight, RectAreaLight) and the emissive-
 // mesh NEE path. AmbientLight contributes a uniform diffuse fill that the
@@ -88,7 +88,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Vulkan PT - Lights", {{"vsync", false}, {"size", WindowSize{1700, 900}}});
+    Canvas canvas("Vulkan Deferred - Lights", {{"vsync", false}, {"size", WindowSize{1700, 900}}});
     VulkanRenderer renderer(canvas);
 
     Scene scene;
@@ -147,7 +147,7 @@ int main() {
 
     // ── Section 5: Emissive mesh (NEE-sampled) ──────────────────────────────
     // No analytic light here — illumination comes purely from a glowing torus
-    // that the PT samples explicitly via emissive-triangle NEE. Cyan to make
+    // that the renderer samples explicitly via emissive-triangle NEE. Cyan to make
     // the colour bleed obvious on the matte receivers.
     auto neonMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::black).emissive(Color(0.1f, 0.95f, 1.0f)).emissiveIntensity(22.0f).roughness(1.0f));
     auto neon = Mesh::create(TorusGeometry::create(0.55f, 0.05f, 16, 64), neonMat);
@@ -227,7 +227,7 @@ int main() {
         ImGui::SameLine();
         if (ImGui::SliderFloat("##neI", &neonIntensity, 0.f, 60.f, "%.1f") && neonOn) {
             neonMat->emissiveIntensity = neonIntensity;
-            neonMat->needsUpdate();// version bump so PT picks up the new value
+            neonMat->needsUpdate();// version bump so the renderer picks up the new value
         }
 
         ImGui::Separator();
@@ -252,7 +252,7 @@ int main() {
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
-    }, "Vulkan PT - Lights");
+    }, "Vulkan Deferred - Lights");
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);

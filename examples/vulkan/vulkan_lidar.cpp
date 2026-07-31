@@ -1,18 +1,18 @@
-// Vulkan PT — physically correct LIDAR scanner.
+// Vulkan deferred — physically correct LIDAR scanner.
 //
 // Demonstrates VulkanRenderer::scanLidar — a synchronous ray-tracing pass
-// that re-uses the path tracer's TLAS, evaluates a back-scatter LIDAR
+// that re-uses the renderer's TLAS, evaluates a back-scatter LIDAR
 // equation in a custom closest-hit shader, and returns per-beam (position,
 // normal, distance, intensity, hit-instance) tuples. The scan runs on the
 // same GPU + acceleration structure the renderer uses, so geometry the
-// path tracer sees is exactly the geometry the LIDAR sees — no
+// renderer sees is exactly the geometry the LIDAR sees — no
 // CPU/Raycaster duplication, no cube-face raster approximation.
 //
 // The scene mixes matte concrete pillars (bright LIDAR returns), chrome
 // spheres (almost invisible to a single-pulse LIDAR because the mirror
 // lobe throws energy off-axis), and brushed-metal panels (in-between)
 // so the material-dependent intensity falloff is visible. Returns are
-// rendered as LineSegments overlaid on the path-traced image, each
+// rendered as LineSegments overlaid on the rendered image, each
 // segment pointing along the surface normal and coloured by intensity.
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
@@ -132,7 +132,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Vulkan PT - physically correct LIDAR",
+    Canvas canvas("Vulkan Deferred - physically correct LIDAR",
                   {{"vsync", false}, {"size", WindowSize{1600, 900}}});
     VulkanRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
@@ -171,7 +171,7 @@ int main() {
     scene.addRef(*sensor);
 
     // ── Visualisation: Points overlay ─────────────────────────────────
-    // One vertex per LIDAR return, colour-mapped by intensity. Vulkan PT
+    // One vertex per LIDAR return, colour-mapped by intensity. The renderer
     // routes Points to the POINT_LIST overlay pipeline (drawn after TAA,
     // depth-tested against the raster G-buffer) and excludes them from
     // the TLAS, so the LIDAR beams don't see their own visualisation.
@@ -241,9 +241,9 @@ int main() {
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
         ImGui::SetNextWindowSize({340, 460});
-        ImGui::Begin("Vulkan PT LIDAR");
+        ImGui::Begin("Vulkan LIDAR");
         ImGui::TextWrapped("Beams traced via a dedicated VK_KHR_ray_tracing_pipeline; "
-                           "intensity computed from the same MaterialDesc the path tracer uses.");
+                           "intensity computed from the same MaterialDesc the renderer uses.");
 
         ImGui::Separator();
         ImGui::Combo("Sensor model", &currentModel, modelNames.data(),
@@ -315,7 +315,7 @@ int main() {
         cloudMat->size = pointSize;
 
         // "Point cloud only" mode: drop the tone-map exposure to 0 so the
-        // path-traced image goes pitch black. We deliberately do NOT toggle
+        // rendered image goes pitch black. We deliberately do NOT toggle
         // mesh visibility — the overlay pass scans `traverseVisible`, and
         // hiding meshes there would also remove them from the TLAS, which
         // would leave scanLidar() with nothing to hit. The cloud + panel

@@ -254,7 +254,6 @@ int main() {
 
     float steerCmd = 0.f, throttleCmd = 0.f, brakeCmd = 0.f;
 
-    bool pathTrace = false;
     RendererSettings rendererSettings(*renderer);
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         const float w = 280 * ui.dpiScale();

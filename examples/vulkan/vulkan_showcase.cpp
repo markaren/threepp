@@ -1,10 +1,9 @@
-// Vulkan PT showcase — Cornell-style stage demonstrating the renderer's
-// path-traced features: PBR lobes (diffuse / metal / glass / clearcoat),
-// emissive area lights via NEE, alpha-test cutouts via any-hit, color bleed
-// from coloured walls, and per-pixel temporal accumulation under camera and
-// mesh motion. An animated torus knot exercises the per-pixel motion gate
-// landed on this branch — only its pixels reset accumulation; the static
-// walls keep converging.
+// Vulkan deferred showcase — Cornell-style stage demonstrating the renderer's
+// ray-traced features: PBR lobes (diffuse / metal / glass / clearcoat),
+// emissive area lights via NEE, alpha-test cutouts, color bleed from the
+// coloured walls, and temporally stable lighting under camera and mesh
+// motion — an animated torus knot exercises the motion-gated temporal
+// accumulation while the static walls keep converging.
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"

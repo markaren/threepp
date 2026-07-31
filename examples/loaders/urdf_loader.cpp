@@ -1,3 +1,7 @@
+// URDF loader demo — loads a robot description and drives its joints from an
+// ImGui panel. Defaults to the bundled KUKA iiwa; pass any .urdf as the first
+// argument. The data pack bundles two more to try: urdf/crane3r.urdf (OBJ
+// visual meshes) and urdf/model.urdf (primitives only).
 
 #include <threepp/extras/imgui/RendererSettings.hpp>
 #include <threepp/loaders/URDFLoader.hpp>

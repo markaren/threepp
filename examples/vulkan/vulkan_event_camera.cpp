@@ -1,4 +1,4 @@
-// Vulkan PT — event camera (DVS) sensor demo.
+// Vulkan deferred — event camera (DVS) sensor demo.
 //
 // Three pendulums swinging at different frequencies in front of a striped
 // wall. The event camera helper (EventCameraSensor) reads the renderer's
@@ -107,7 +107,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Vulkan PT - event camera (DVS)",
+    Canvas canvas("Vulkan Deferred - event camera (DVS)",
                   {{"vsync", false}, {"size", WindowSize{1280, 720}}});
     VulkanRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
@@ -185,7 +185,7 @@ int main() {
 
     // Helper used by the UI toggle + resize hook to flip the sprite
     // between corner-panel and full-screen layouts. In events-only mode
-    // the path tracer doesn't produce a visual at all (swapchain is
+    // the renderer doesn't produce a visual at all (swapchain is
     // cleared to black), so the accumulator IS the only content the
     // user sees — it gets the whole window.
     auto applySpriteLayout = [&](bool fullScreen, WindowSize sz) {
@@ -252,7 +252,7 @@ int main() {
         ImGui::Separator();
         ImGui::Checkbox("Animate pendulums", &animatePendulums);
 
-        // Events-only mode: when on, the renderer skips PT/denoise/TAA
+        // Events-only mode: when on, the renderer skips shading/denoise/TAA
         // entirely — only the raster gbuf prepass + event_shade +
         // event_detect run. The pendulums no longer appear in the
         // swapchain (just a black clear), but the event camera readout
@@ -265,7 +265,7 @@ int main() {
         ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
-            ImGui::TextWrapped("Skips path tracing entirely. The accumulator "
+            ImGui::TextWrapped("Skips deferred shading entirely. The accumulator "
                                "fills the window; the rendered scene is not "
                                "drawn. Use to maximise the event rate.");
             ImGui::EndTooltip();
@@ -307,7 +307,7 @@ int main() {
         ImGui::TextWrapped("Detection runs on GPU; only the visualisation "
                            "memcpy is host-side. 2-frame display latency "
                            "due to the readback ring.");
-    }, "Vulkan PT - event camera (DVS)");
+    }, "Vulkan Deferred - event camera (DVS)");
 
     Clock clock;
     auto frameTp = std::chrono::steady_clock::now();

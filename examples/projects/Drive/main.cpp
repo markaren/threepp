@@ -6,8 +6,8 @@
 // autobox + differential), driving a procedurally generated world: rolling
 // terrain (TerrainGenerator) cut through by a point-to-point road
 // (RoadGenerator), lined with an instanced forest, grass and wildflowers.
-// Backend-flexible via createRenderer; looks best on the Vulkan path tracer
-// (aerial haze + real headlight cones at night). Swap cars with `--model <glb>`.
+// Backend-flexible via createRenderer; looks best on the Vulkan deferred
+// renderer (aerial haze + real headlight cones at night). Swap cars with `--model <glb>`.
 //
 // Controls:
 //   W / S      throttle / brake        A / D   steer
@@ -565,7 +565,7 @@ int main(int argc, char** argv) {
 
     // GL: a GrassField (instanced GPU vertex-shader wind) so the verge
     // sways; held here so the animate loop can advance its clock and day/night
-    // can retint its fog. Vulkan (path tracer) has no ShaderMaterial path, so
+    // can retint its fog. The Vulkan renderer has no ShaderMaterial path, so
     // it falls back to static blades.
     std::shared_ptr<GrassField> windGrass;
     {

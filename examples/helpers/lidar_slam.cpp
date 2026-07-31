@@ -481,7 +481,7 @@ int main(int argc, char** argv) {
 
     // The reconstruction overlays (map points + trajectories) live in the RIGHT
     // scene on both backends. On raster this is a true split (each pane its own
-    // raster render); on Vulkan the left pane is the path-traced ground truth
+    // raster render); on Vulkan the left pane is the deferred-rendered ground truth
     // and the right pane is an overlay-only compose (points + lines) of a second
     // render into the right scissor region.
     Scene& reconScene = sceneRight;
@@ -722,7 +722,7 @@ int main(int argc, char** argv) {
 
         // View geometry: both backends split the window in half (ground truth
         // left, reconstruction right), so each pane gets the half-width aspect.
-        // On Vulkan the left pane is the path-traced view and the right pane is
+        // On Vulkan the left pane is the deferred-rendered view and the right pane is
         // an overlay-only compose of a second render into the right region.
         const auto size = canvas.size();
         const int w = size.width();
@@ -736,7 +736,7 @@ int main(int argc, char** argv) {
         if (isVulkan) {
 #ifdef THREEPP_WITH_VULKAN
             // Path-traced scan reads the renderer's TLAS, so render the ground-
-            // truth scene first — into the LEFT pane (the PT view). The right
+            // truth scene first — into the LEFT pane (the Vulkan view). The right
             // pane (reconstruction) is composed afterwards in the render step.
             // Points are overlay-only (never in the TLAS); the robot is, but its
             // near self-returns are dropped below.
@@ -841,7 +841,7 @@ int main(int argc, char** argv) {
         drift = (estPos.clone().sub(gtPos)).length();
 
         // --- Map view: point cloud / occupancy cubes / surface ---
-        if (isVulkan) viewMode = 0;// mesh views are raster-only; never show them on the PT path
+        if (isVulkan) viewMode = 0;// mesh views are raster-only; never show them on Vulkan
         mapPoints->visible = (viewMode == 0);
         cubesMesh->visible = (viewMode == 1);
         surfaceMesh->visible = (viewMode == 2);
@@ -863,7 +863,7 @@ int main(int argc, char** argv) {
 
         // --- Render ---
         if (!isVulkan) {
-            // Raster: ground truth left (Vulkan already path-traced its left
+            // Raster: ground truth left (Vulkan already rendered its left
             // pane in the scan step above).
             renderer->setViewport(0, 0, halfW, h);
             renderer->setScissor(0, 0, halfW, h);
@@ -871,7 +871,7 @@ int main(int argc, char** argv) {
         }
         // Reconstruction right pane: a full raster render on GL, an overlay-only
         // compose on Vulkan (the renderer draws Points/Lines into the right
-        // scissor region beside the PT pane, leaving PT accumulation untouched).
+        // scissor region beside the left pane, leaving its temporal accumulation untouched).
         renderer->setViewport(halfW, 0, w - halfW, h);
         renderer->setScissor(halfW, 0, w - halfW, h);
         renderer->render(sceneRight, *camera);

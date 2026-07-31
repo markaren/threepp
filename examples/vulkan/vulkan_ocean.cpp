@@ -1,4 +1,4 @@
-// Vulkan PT ocean demo — FFT-displaced water, path-traced refraction/caustics, LIDAR and radar.
+// Vulkan deferred ocean demo — FFT-displaced water, ray-traced reflections and refraction, LIDAR and radar.
 
 #include "threepp/audio/Audio.hpp"
 #include "threepp/audio/WavFile.hpp"
@@ -723,7 +723,7 @@ int main(int argc, char** argv) {
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(6.0f);
 
-    // Trace PT at lower resolution; TAA upsamples to full swapchain by
+    // Render at lower resolution; TAA upsamples to full swapchain by
     // accumulating jittered low-res samples into the full-res history.
     renderer.setRenderScale(0.9f);
     renderer.toneMapping = ToneMapping::ACESFilmic;
@@ -739,10 +739,11 @@ int main(int argc, char** argv) {
         scene.environment = env;
     }
 
-    // Sun-like directional light. The HDR env already contains a sun (env
-    // CDF + MIS will importance-sample it), so the directional is mostly
-    // here to drive the photon-mapping caustics pass — kept gentle so it
-    // doesn't double up with the env's own sun on the surface.
+    // Sun-like directional light. The HDR env already contains a sun (the
+    // renderer's one-sun policy lets a scene DirectionalLight claim it), so
+    // the directional is mostly here to drive crisp RT sun shadows and the
+    // volumetric god rays — kept gentle so it doesn't double up with the
+    // env's own sun on the surface.
     auto sun = DirectionalLight::create(Color(1.0f, 0.95f, 0.85f), 2.0f);
     sun->position.set(2.f, 1.f, 2.f);
     Object3D sunTarget;
@@ -1226,7 +1227,7 @@ int main(int argc, char** argv) {
     // (see the GLB-success branch below).
     //
     // Fallback path: if the GLB is missing or doesn't expose ≥5 children,
-    // emissive spheres take over. Path tracer's emissive NEE picks them up
+    // emissive spheres take over. The renderer's emissive NEE picks them up
     // (low intensity so they don't double as light sources).
     auto buoyFallbackMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.95f, 0.25f, 0.1f)).emissive(Color(0.95f, 0.25f, 0.1f)).emissiveIntensity(0.6f).roughness(0.8f));
     auto makeFallbackBuoy = [&] {
@@ -1534,12 +1535,12 @@ int main(int argc, char** argv) {
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
         ImGui::SetNextWindowSize({340, 0});
-        ImGui::Begin("Vulkan PT - Ocean");
+        ImGui::Begin("Vulkan Deferred - Ocean");
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Separator();
         ImGui::TextWrapped(
             "FFT-displaced surface (multi-cascade Phillips, %u² IFFT, "
-            "%.0f m tile). Path-traced refraction + photon-map caustics. "
+            "%.0f m tile). Ray-traced reflections + refraction. "
             "W/S = engine telegraph, A/D = rudder.",
             kFftSize, kTileSize);
         ImGui::Text("Speed: %.1f kn (%.1f m/s)   Heading: %.0f°",
@@ -2372,9 +2373,9 @@ int main(int argc, char** argv) {
         // ── Underwater fog activation ─────────────────────────────────────
         // Sample the wave height at the camera's XZ position. If the camera
         // is below the surface, enable homogeneous fog (participating media)
-        // for the path tracer — this activates the existing volumeInscatter
-        // pipeline in raygen.rgen (single-scattering NEE with HG phase).
-        // A 0.5 m ramp smooths the transition at the waterline.
+        // — this activates the renderer's volumetric-fog in-scatter path
+        // (single scattering with an HG phase; setFogAnisotropy drives the
+        // asymmetry). A 0.5 m ramp smooths the transition at the waterline.
         {
             const float waveH = ocean->sampleHeight(camera.position.x,
                                                     camera.position.z);

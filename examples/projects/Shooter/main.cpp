@@ -157,14 +157,14 @@ int main(int argc, char** argv) {
     camera->position.set(0, 3, 8);
 
     // Sun direction for the directional light (raster shadows). On Vulkan the
-    // path tracer takes its key light + shadows from the HDR sun instead.
+    // renderer takes its key light + shadows from the HDR sun instead.
     Vector3 sunDir;
     sunDir.setFromSphericalCoords(1.f, math::degToRad(90.f - 35.f), math::degToRad(55.f));
 
     // HDR equirectangular environment = the sky AND the image-based light, on
     // every backend. Replaces the procedural Sky shader (a ShaderMaterial the
-    // Vulkan path tracer can't render); on Vulkan this is exactly what the PT
-    // importance-samples for the visible sky and IBL.
+    // Vulkan renderer can't render); on Vulkan this is exactly what supplies
+    // the visible sky and IBL.
     RGBELoader hdrLoader;
     if (auto hdr = hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/autumn_field_puresky_2k.hdr")) {
         scene->background = hdr;
@@ -172,7 +172,7 @@ int main(int argc, char** argv) {
     }
 
     // lighting: the HDR env supplies ambient + IBL; a directional sun adds the
-    // crisp shadows the raster backends need (the Vulkan PT shadows off the HDR).
+    // crisp shadows the raster backends need (Vulkan shadows off the HDR sun).
     auto hemi = HemisphereLight::create(0xaeccff, 0x4a4031, 0.25f);
     hemi->position.set(0, 50, 0);
     scene->add(hemi);
@@ -189,10 +189,9 @@ int main(int argc, char** argv) {
     sun->shadow->camera->farPlane = 240.f;
     sun->shadow->camera->updateProjectionMatrix();
     scene->add(sun);
-    // ONE-SUN: the Vulkan renderers resolve the HDR env's sun themselves — the
-    // deferred extracts + injects it as the analytic sun (EnvSunPolicy::Auto,
-    // measured direction/energy from the HDRI), the path tracer importance-
-    // samples the disc directly. The raster stand-in above would OVERRIDE the
+    // ONE-SUN: the Vulkan renderer resolves the HDR env's sun itself — it
+    // extracts + injects it as the analytic sun (EnvSunPolicy::Auto,
+    // measured direction/energy from the HDRI). The raster stand-in above would OVERRIDE the
     // measured sun (Auto defers to scene lights) with this hand-tuned
     // approximation — hide it there so the env IS the sun. GL keeps it: raster
     // cannot cast shadows from an env map.

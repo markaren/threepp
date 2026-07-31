@@ -4,8 +4,8 @@
 // Note: the window's emissive plane has been
 // replaced with a RectAreaLight. The RectAreaLight is sampled analytically
 // (one shadow ray per primary hit) rather than via emissive-triangle NEE,
-// which gives crisper soft shadows in this scene and is one of Vulkan PT's
-// ReSTIR DI candidate types.
+// which gives crisper soft shadows in this scene and is one of the
+// renderer's ReSTIR DI candidate types.
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
@@ -367,7 +367,7 @@ int main() {
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
-    }, "Vulkan Path Tracer");
+    }, "Vulkan Deferred - Gallery");
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);

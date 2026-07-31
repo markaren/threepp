@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
         else if (a == "--seqn" && i + 1 < argc) seqN = std::atoi(argv[++i]);
     }
 
-    Canvas canvas("Vulkan PT - Denoiser Showcase", {{"vsync", false}});
+    Canvas canvas("Vulkan Deferred - Denoiser Showcase", {{"vsync", false}});
 
     VulkanRenderer renderer(canvas);
     renderer.outputColorSpace    = ColorSpace::sRGB;
@@ -234,7 +234,7 @@ int main(int argc, char** argv) {
             if (rotating) {
                 ImGui::SliderFloat("Speed", &rotSpeed, 0.0f, 3.0f);
             }
-        }, "Vulkan PT - Denoiser");
+        }, "Vulkan Deferred - Denoiser");
     }
 
     canvas.onWindowResize([&](const WindowSize& ns) {
