@@ -147,19 +147,36 @@ namespace threepp::editor {
         // Knobs the backend does not have are skipped.
         void apply(Renderer& renderer) const;
 
+        // The four entry points below come in pairs rather than taking a
+        // `const RenderConfig& base = {}` default argument. A default argument
+        // is parsed in the complete-class context in principle, but GCC 11
+        // rejects `= {}` naming the enclosing class while it is still
+        // incomplete; a function BODY is a complete-class context on every
+        // compiler, so the no-base spellings forward from one. Do not fold
+        // these back into default arguments.
+
         // Only the fields that differ from `base`; empty when nothing does.
-        [[nodiscard]] std::string encode(const RenderConfig& base = {}) const;
+        [[nodiscard]] std::string encode(const RenderConfig& base) const;
+        [[nodiscard]] std::string encode() const { return encode(RenderConfig{}); }
+
         // `base` supplies every field the text omits.
         [[nodiscard]] static RenderConfig decode(const std::string& text,
-                                                 const RenderConfig& base = {});
+                                                 const RenderConfig& base);
+        [[nodiscard]] static RenderConfig decode(const std::string& text) {
+            return decode(text, RenderConfig{});
+        }
 
         // nullopt when the object carries no render entry (or an unreadable one).
         [[nodiscard]] static std::optional<RenderConfig> read(const Object3D& object,
-                                                              const RenderConfig& base = {});
+                                                              const RenderConfig& base);
+        [[nodiscard]] static std::optional<RenderConfig> read(const Object3D& object) {
+            return read(object, RenderConfig{});
+        }
 
         // Writes the entry; a config identical to `base` removes it, so a
         // document that just uses the editor's defaults saves no render block.
-        void write(Object3D& object, const RenderConfig& base = {}) const;
+        void write(Object3D& object, const RenderConfig& base) const;
+        void write(Object3D& object) const { write(object, RenderConfig{}); }
 
         static void erase(Object3D& object);
     };
