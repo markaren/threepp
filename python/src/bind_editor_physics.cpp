@@ -585,6 +585,35 @@ namespace threepp_py {
                                        "Root link angular velocity in rad/s, world frame.")
                 .def("__repr__", &ArticulationHandle::repr);
 
+        // The world ITSELF, not a handle onto something it is simulating. This
+        // is the one thing in this file a script cannot build for itself and
+        // must not try to: the session owns the world, and threepp.PhysxWorld's
+        // constructor raises in the editor precisely so this is the only way to
+        // one. With it, giving a spawned mesh a body is the ordinary threepp
+        // call rather than an editor verb invented for the purpose.
+        sub.def(
+                "world", []() -> py::object {
+                    auto* session = playing();
+                    if (!session) return py::none();
+                    // Reference, never a holder: the session owns the world and
+                    // outlives every script that asks. A Python-side keep-alive
+                    // here would let a stopped session's world survive its own
+                    // stop(), which is the opposite of what Stop means.
+                    return py::cast(session->world(), py::return_value_policy::reference);
+                },
+                "The PhysxWorld this Play session is stepping, or None outside Play.\n\n"
+                "The ordinary threepp.PhysxWorld - `world.add(mesh, mass=1.0)`, `add_static`, "
+                "`add_dynamic_convex`, `remove`, `create_material` - so a script that spawns a "
+                "mesh into `editor.scene()` gives it a body exactly as a standalone threepp "
+                "program would. Bodies added this way die with the world at Stop, and meshes "
+                "spawned into the scene die with the stop-restore, so neither needs cleaning up.\n\n"
+                "NOTE the handle difference: what `world.add()` returns is a raw "
+                "`threepp.RigidBody`, valid only while the world is alive and NOT invalidated by "
+                "Stop - keeping one across a stop/play dereferences a released actor. "
+                "`rigid_body_from_object` returns the lifetime-checked "
+                "`threepp.editor.RigidBody`, which raises instead. Prefer that one for anything "
+                "you hold onto.");
+
         sub.def(
                 "rigid_body_from_object", [](const py::handle& h) -> py::object {
                     auto object = as_object3d(h);

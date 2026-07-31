@@ -497,6 +497,16 @@ def script_from_object(object: threepp.Object3D | None) -> typing.Any | None:
 
     Typed Any because it honestly is: what comes back is your own script class, which this stub has never seen. `X | None` rather than a bare Any so the None case still reads as a case a checker will make you handle.
     """
+def world() -> threepp.PhysxWorld | None:
+    """
+    The PhysxWorld this Play session is stepping, or None outside Play.
+
+    The ordinary threepp.PhysxWorld - world.add(mesh), add_static, add_dynamic_convex, remove, create_material - so a script that spawns a mesh into editor.scene() gives it a body exactly as a standalone threepp program would. Bodies added this way die with the world at Stop, and meshes spawned into the scene die with the stop-restore, so neither needs cleaning up.
+
+    This is the ONLY way to a world inside the editor: threepp.PhysxWorld's own constructor raises there, because the session owns the one world and a second would bring up a second PhysX foundation beside it.
+
+    NOTE the handle difference: what world.add returns is a raw threepp.RigidBody, valid only while the world is alive and NOT invalidated by Stop - keeping one across a stop/play dereferences a released actor. rigid_body_from_object returns the lifetime-checked threepp.editor.RigidBody, which raises instead. Prefer that one for anything you hold onto.
+    """
 def rigid_body_from_object(object: threepp.Object3D | None) -> RigidBody | None:
     """
     The RigidBody PhysX is simulating for `object`, or None when Play is not running or the object has no physics. The lookup walks up the scene graph, so a script on a child finds the body governing it.

@@ -83,10 +83,26 @@ PYBIND11_EMBEDDED_MODULE(threepp, m) {
     tp::init_lights(m);
     tp::init_robot(m);
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-    // threepp.editor.rigid_body_from_object / soft_body_from_object. NOT the
-    // general physics bindings — no PhysxWorld, no scene construction; just
-    // handles onto the bodies the play session is already simulating. Must
-    // follow init_editor, which owns the submodule.
+    // threepp.PhysxWorld and its RigidBody / Articulation / PhysxMaterial — the
+    // SAME translation unit the wheel builds, so a script that wants to give a
+    // spawned mesh a body writes what a standalone threepp program writes rather
+    // than waiting for an editor-shaped verb to be invented for it.
+    //
+    // This used to be withheld, and the reason was sound: nothing may stand up a
+    // SECOND PhysxWorld beside the one the play session is stepping (one
+    // PxFoundation, one world). Withholding the whole TYPE was the blunt way to
+    // enforce it — a script asking for threepp.PhysxWorld got a NameError that
+    // says nothing. denyWorldConstruction() below replaces the constructor with
+    // one that explains itself, and threepp.editor.world() hands back the world
+    // that already exists. Before init_editor_physics, which binds its own
+    // lifetime-checked threepp.editor.RigidBody: a DIFFERENT C++ type in a
+    // different namespace, so the two registrations do not collide.
+    tp::init_physx(m);
+    threepp::editor::scripting::denyWorldConstruction(m);
+    // threepp.editor.rigid_body_from_object / soft_body_from_object — handles
+    // onto the bodies the play session is already simulating, lifetime-checked
+    // against the session in a way a raw threepp.RigidBody is not. Must follow
+    // init_editor, which owns the submodule.
     tp::init_editor_physics(m);
     // threepp.editor.imu_from_object and friends — the same idea for the
     // sensors the play session is running, which is how a script closes a loop
@@ -139,6 +155,25 @@ namespace threepp::editor::scripting {
                     }
                     return "<threepp.editor.Collision other=" + other + ">";
                 });
+    }
+
+    void denyWorldConstruction(py::module_& m) {
+
+        // Assigning over the pybind-installed __init__ leaves __new__ and every
+        // bound method alone: the object is still allocated, and the raise comes
+        // from initialisation — which is early enough that no PhysX call has
+        // been made and nothing needs unwinding.
+        auto cls = m.attr("PhysxWorld");
+        cls.attr("__init__") = py::cpp_function(
+                [](const py::args&, const py::kwargs&) {
+                    throw std::runtime_error(
+                            "threepp.PhysxWorld cannot be constructed inside the editor: the "
+                            "play session owns the one world, and a second would bring up a "
+                            "second PhysX foundation beside it. Use threepp.editor.world() to "
+                            "get the world that is already running.");
+                },
+                py::is_method(cls), py::name("__init__"),
+                py::doc("Unavailable in the editor - use threepp.editor.world()."));
     }
 
     void initScriptLookup(py::module_& m) {

@@ -86,6 +86,20 @@ namespace threepp::editor::scripting {
     // too. Called after the submodule exists.
     void initScriptLookup(py::module_& m);
 
+    // Replaces threepp.PhysxWorld.__init__ with one that raises.
+    //
+    // The editor plays exactly ONE world, owned by the PhysicsPlaySession, and a
+    // script that builds a second gets a second PxFoundation fighting the first.
+    // The wheel has no such constraint, so this cannot live in the shared
+    // binding — it is applied here, to the embedded module only, right after
+    // init_physx registers the type.
+    //
+    // A raising constructor rather than an absent type on purpose: withholding
+    // the name gives a script author a NameError that explains nothing, while
+    // this says what to call instead. Every other method on the class stays
+    // exactly as the wheel binds it, which is the whole point of sharing the TU.
+    void denyWorldConstruction(py::module_& m);
+
     // Pulls the PYBIND11_EMBEDDED_MODULE translation unit into the link.
     //
     // The macro registers `threepp` as a built-in module from a static

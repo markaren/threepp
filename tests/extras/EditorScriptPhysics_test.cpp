@@ -399,3 +399,92 @@ class Follow:
     scripts.stop();
     physics.stop();
 }
+
+TEST_CASE("a script gives a spawned mesh a body through editor.world()",
+          "[editor][scripting][physx]") {
+
+    // The editor used to withhold the general physics bindings entirely, so the
+    // only bodies a script could touch were the ones the DOCUMENT authored.
+    // Between them, scene().add() (plain scene-graph parenting, which always
+    // worked) and editor.world() (the session's own PhysxWorld) make a spawned
+    // object a first-class one: it renders because the graph has it, and it
+    // falls because the world does.
+    //
+    // Deliberately written the way a standalone threepp program is written -
+    // that is the claim being tested. No editor-shaped spawn verb exists, and
+    // none is needed.
+    auto scene = Scene::create();
+    addGround(*scene);
+
+    // The findings go into the spawner's SCALE: physics never writes a scale
+    // back, and this one is a static body whose pose is not bound either, so
+    // nothing but the script can have touched them by the time they are read.
+    auto spawner = addBox(*scene, "Spawner", PhysicsConfig::Body::Static, R"(
+import threepp
+
+
+class Spawner:
+    def start(self, obj):
+        self.obj = obj
+        self.done = False
+        # 2.0 for yes, -1.0 for no, and NEVER 1.0 - that is the scale a box is
+        # created with, so a start() that never ran must not read as a pass.
+        # The type is REACHABLE - it used to be a NameError...
+        obj.scale.x = 2.0 if hasattr(threepp, "PhysxWorld") else -1.0
+        # ...but a second world is still refused, which is the whole reason it
+        # was withheld in the first place. The explaining message is the feature.
+        try:
+            threepp.PhysxWorld()
+            obj.scale.y = -1.0
+        except RuntimeError as e:
+            # No parentheses in the needle. This source sits in a C++ raw string
+            # literal, and a close-paren followed by a quote would end it early.
+            obj.scale.y = 2.0 if "editor.world" in str(e) else -2.0
+        # And the running world is reachable, which is what makes the refusal
+        # above a redirection rather than a dead end.
+        obj.scale.z = 2.0 if threepp.editor.world() is not None else -1.0
+
+    def update(self, dt):
+        if self.done:
+            return
+        self.done = True
+        box = threepp.Mesh(threepp.BoxGeometry(0.6, 0.6, 0.6),
+                           threepp.MeshStandardMaterial())
+        box.name = "Spawned"
+        # Clear of the spawner's own body at x=0, so what it lands on is the
+        # ground and the resting height means what the assertion says it does.
+        box.position.set(3.0, 5.0, 0.0)
+        threepp.editor.scene().add(box)
+        # The ordinary call, on the world the session is already stepping.
+        threepp.editor.world().add(box)
+)");
+
+    PhysicsPlaySession physics;
+    ScriptPlaySession scripts;
+
+    physics.start(*scene);
+    scripts.start(*scene);
+    REQUIRE(scripts.errorFor(spawner->uuid).empty());
+
+    using Catch::Matchers::WithinAbs;
+    // What start() found, before a single step: the type is there, constructing
+    // one raises with the message that redirects, and the running world answers.
+    CHECK_THAT(spawner->scale.x, WithinAbs(2.f, 1e-5));
+    CHECK_THAT(spawner->scale.y, WithinAbs(2.f, 1e-5));
+    CHECK_THAT(spawner->scale.z, WithinAbs(2.f, 1e-5));
+
+    run(physics, scripts, 180);
+    CHECK(scripts.errorFor(spawner->uuid).empty());
+
+    auto* spawned = scene->getObjectByName("Spawned");
+    REQUIRE(spawned != nullptr);
+    // Dropped from 5 m and came to rest ON THE GROUND rather than hanging where
+    // it was spawned: the body is real, not a mesh parked in mid-air. Half the
+    // 0.6 box sits above a ground whose top is y = 0.
+    CHECK_THAT(spawned->position.y, WithinAbs(0.3f, 0.05f));
+    // And it fell straight down - it did not land on the spawner.
+    CHECK_THAT(spawned->position.x, WithinAbs(3.f, 0.05f));
+
+    scripts.stop();
+    physics.stop();
+}

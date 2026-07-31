@@ -1903,6 +1903,65 @@ resolves against the play session's own record of what it created, not
 `PhysxWorld`'s binding list — a static body is never bound, since it has no
 pose to write back, and would otherwise be invisible to a script.
 
+### Spawning objects during Play
+
+The play scene is an ordinary threepp graph, so a script builds and parents
+objects into it with the ordinary calls — `scene.add(mesh)`, `remove`, `clear`.
+There is no editor verb for this and none is needed. Stop restores the scene
+from the snapshot it took at Play, so whatever a script spawned simply is not
+there afterwards; nothing has to be cleaned up.
+
+`threepp.editor.world()` is the other half — the `PhysxWorld` the session is
+stepping, so a spawned mesh gets a body the same way a standalone threepp
+program would give it one:
+
+```python
+import threepp
+
+editor = threepp.editor
+
+
+class Spawner:
+    def start(self, obj):
+        self.left = 5
+
+    def update(self, dt):
+        if self.left <= 0:
+            return
+        self.left -= 1
+        crate = threepp.Mesh(threepp.BoxGeometry(0.6, 0.6, 0.6),
+                             threepp.MeshStandardMaterial())
+        crate.position.set(0.0, 6.0, 0.0)
+        editor.scene().add(crate)     # it renders
+        editor.world().add(crate)     # ...and it falls
+```
+
+Do not confuse this with [`editor.add()`](#generators-in-userdata), which is a
+*generator* verb: that one writes into the **document**, as one undoable step,
+and refuses during Play precisely because Play must not touch the document.
+`scene().add()` writes into the **play scene**, which is transient by
+construction. Different targets, both correct.
+
+Two limits worth knowing before leaning on this:
+
+* **The play sessions collect their objects once, at `start()`.** A spawned
+  object gets no authored physics, no sensors, and no script of its own — even
+  if you spawn it carrying `scriptSource` in its `userData`. `world().add()`
+  works because it goes straight to the world rather than through the authored
+  `PhysicsConfig` sweep. If a spawned thing needs behaviour, the spawner drives
+  it.
+* **`world().add()` hands back a raw `threepp.RigidBody`**, not the
+  lifetime-checked `threepp.editor.RigidBody` that `rigid_body_from_object`
+  returns. It is valid only while the world is alive and is *not* invalidated by
+  Stop, so keeping one across a stop/play dereferences a released actor. For
+  anything held longer than the call, prefer the checked handle.
+
+`threepp.PhysxWorld` is visible in the editor but **cannot be constructed**
+there — its constructor raises, and says to use `editor.world()` instead. The
+editor plays exactly one world; a second would stand up a second PhysX
+foundation beside it. Every other method on the class is the one the wheel
+binds, because it is literally the same translation unit.
+
 ### Sensors from a script
 
 The physics handles above read *ground truth*: `articulation_from_object` hands

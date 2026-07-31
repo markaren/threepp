@@ -152,9 +152,20 @@ if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
     if (TARGET unofficial::omniverse-physx-sdk::sdk)
         target_sources(threepp_editor_scripting
                 PRIVATE "${PROJECT_SOURCE_DIR}/python/src/bind_editor_physics.cpp"
-                "${PROJECT_SOURCE_DIR}/python/src/bind_editor_sensors.cpp")
+                "${PROJECT_SOURCE_DIR}/python/src/bind_editor_sensors.cpp"
+                # The GENERAL physics bindings — PhysxWorld itself, the same TU the
+                # wheel builds. The editor withheld these for a real reason (a
+                # script must not stand up a SECOND world beside the one the play
+                # session is stepping), but withholding the whole type was a blunt
+                # way to say it: threepp.editor.world() now hands back the running
+                # world, and PhysxWorld's own constructor raises in this build. So a
+                # script spawning a body writes what a standalone threepp program
+                # writes. THREEPP_PY_HAS_PHYSX is what activates the file's body,
+                # exactly as python/CMakeLists.txt defines it for the wheel.
+                "${PROJECT_SOURCE_DIR}/python/src/bind_physx.cpp")
         target_link_libraries(threepp_editor_scripting PRIVATE unofficial::omniverse-physx-sdk::sdk)
-        target_compile_definitions(threepp_editor_scripting PRIVATE THREEPP_EDITOR_WITH_PHYSX=1)
+        target_compile_definitions(threepp_editor_scripting
+                PRIVATE THREEPP_EDITOR_WITH_PHYSX=1 THREEPP_PY_HAS_PHYSX)
         # bind_editor_physics.cpp includes PhysicsPlaySession.hpp, whose inline
         # methods branch on THREEPP_EDITOR_WITH_VHACD. This library is linked into
         # threepp_editor (which links V-HACD) AND into the script tests, so it and
