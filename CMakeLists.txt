@@ -147,6 +147,10 @@ endif ()
 
 if (THREEPP_BUILD_EDITOR)
     add_subdirectory(apps/editor)
+    # threepp_player: the same play runtime with no editing machinery, for
+    # policy validation and data generation. After apps/editor, not beside it —
+    # the Python scripting library it links is declared there.
+    add_subdirectory(apps/player)
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN AND THREEPP_BUILD_TESTS)
