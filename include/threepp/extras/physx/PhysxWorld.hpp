@@ -514,6 +514,15 @@ namespace threepp {
 
         ~PhysxWorld() {
             using namespace ::physx;
+            // A sensor still registered here holds a back-pointer to this world
+            // (see onRegister). Sessions normally unregister before the world
+            // goes, but the seam does not require that order — so notify the
+            // stragglers first, while the scene and articulations their
+            // onUnregister hooks touch are still alive. Without this, the
+            // sensor's own destructor calls into freed memory (detach →
+            // unwatchContacts).
+            for (auto* s: sensors_) s->onUnregister();
+            sensors_.clear();
             // Soft bodies must be released BEFORE the scene/physics/cuda context;
             // their destructor releases the PxDeformableVolume actor and frees pinned
             // host memory through the CUDA context.
