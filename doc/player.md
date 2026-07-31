@@ -30,6 +30,7 @@ hundreds of parallel environments are `GpuSim`'s job; there is deliberately no
 | `--episodes=N` | Play the document N times back to back (default 1). |
 | `--frames=N` | Stop each episode after N frames. |
 | `--seconds=N` | Stop each episode after N simulated seconds. |
+| `--vulkan` | Use the Vulkan backend (OpenGL is the default). A build without Vulkan warns and uses OpenGL. |
 | `--headless` | No visible window. |
 | `--dt=SECONDS` | Force a fixed simulation step instead of the wall clock. |
 | `--record=DIR` | Write the sensor CSVs under `DIR`. |
