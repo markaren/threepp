@@ -30,6 +30,8 @@
 #include "threepp/extras/editor/SensorConfig.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/lights/light_interfaces.hpp"
+#include "threepp/objects/ObjectWithMaterials.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/CylinderGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
@@ -44,11 +46,16 @@
 #include "threepp/scenes/Fog.hpp"
 #include "threepp/scenes/Scene.hpp"
 
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <vector>
 
 using namespace threepp;
@@ -814,6 +821,99 @@ class Scoreboard:
         return scene;
     }
 
+    // --- deterministic identity ----------------------------------------------
+    // Object3D, BufferGeometry and Material each draw a fresh random uuid at
+    // construction, so two runs over identical sources would agree on every
+    // value and disagree on every identity — a few hundred lines of churn per
+    // regenerate, burying the one line that was actually authored differently.
+    // An authored scene gets authored identity: every uuid is derived from the
+    // scene path of the node that carries the thing, so regenerating an
+    // unchanged scene reproduces the committed file byte for byte.
+
+    std::uint64_t fnv1a(std::string_view text, std::uint64_t hash = 0xcbf29ce484222325ull) {
+
+        for (const unsigned char c : text) {
+            hash ^= c;
+            hash *= 0x100000001b3ull;
+        }
+        return hash;
+    }
+
+    std::string uuidFrom(const std::string& key) {
+
+        // Two dependent hashes give the 16 bytes; the version and variant bits
+        // keep the result the same v4 shape math::generateUUID produces.
+        const auto lo = fnv1a(key);
+        const auto hi = fnv1a(key, lo ^ 0x9e3779b97f4a7c15ull);
+
+        std::array<std::uint8_t, 16> bytes{};
+        for (int i = 0; i < 8; ++i) bytes[i] = static_cast<std::uint8_t>(lo >> (8 * i));
+        for (int i = 0; i < 8; ++i) bytes[8 + i] = static_cast<std::uint8_t>(hi >> (8 * i));
+        bytes[6] = static_cast<std::uint8_t>((bytes[6] & 0x0f) | 0x40);
+        bytes[8] = static_cast<std::uint8_t>((bytes[8] & 0x3f) | 0x80);
+
+        constexpr char hex[] = "0123456789abcdef";
+        std::string uuid;
+        uuid.reserve(36);
+        for (int i = 0; i < 16; ++i) {
+            if (i == 4 || i == 6 || i == 8 || i == 10) uuid += '-';
+            uuid += hex[bytes[i] >> 4];
+            uuid += hex[bytes[i] & 0x0f];
+        }
+        return uuid;
+    }
+
+    void assignAuthoredUuids(Scene& scene) {
+
+        // A repeated path would collide two identities silently, so it gets a
+        // deterministic ordinal instead (traversal order is authoring order).
+        std::unordered_set<std::string> used;
+        auto claim = [&used](const std::string& key) {
+            auto candidate = key;
+            for (int n = 2; !used.insert(candidate).second; ++n) {
+                candidate = key + " #" + std::to_string(n);
+            }
+            return candidate;
+        };
+
+        // Shared geometries and materials keep the identity of their FIRST
+        // carrier: the arena's one unit cube is "the floor's" once, not a new
+        // identity per pillar that references it.
+        std::unordered_set<const void*> seen;
+
+        std::function<void(Object3D&, const std::string&)> visit =
+                [&](Object3D& object, const std::string& parent) {
+                    const auto path = parent + '/' + object.name;
+                    object.uuid = uuidFrom(claim("object:" + path));
+
+                    // The shadow camera is exported as a full object of its own
+                    // (ObjectExporter::writeShadow), uuid included.
+                    if (auto* lit = dynamic_cast<LightWithShadow*>(&object)) {
+                        if (lit->shadow && lit->shadow->camera) {
+                            lit->shadow->camera->uuid =
+                                    uuidFrom(claim("object:" + path + "/shadow camera"));
+                        }
+                    }
+
+                    if (const auto geometry = object.geometry();
+                        geometry && seen.insert(geometry.get()).second) {
+                        geometry->uuid = uuidFrom(claim("geometry:" + path));
+                    }
+                    if (auto* withMaterials = object.as<ObjectWithMaterials>()) {
+                        const auto& materials = withMaterials->materials();
+                        for (std::size_t i = 0; i < materials.size(); ++i) {
+                            if (!materials[i] || !seen.insert(materials[i].get()).second) continue;
+                            auto key = "material:" + path;
+                            if (i > 0) key += " #" + std::to_string(i);
+                            materials[i]->setUuid(uuidFrom(claim(key)));
+                        }
+                    }
+
+                    for (auto* child : object.children) visit(*child, path);
+                };
+        visit(scene, "");
+    }
+
     // Runs the scene's generator exactly as EditorApp::regenerate does: fill a
     // DETACHED node, attach it only on success.
     bool runGenerator(Scene& scene, std::string& error) {
@@ -950,6 +1050,10 @@ int main(int argc, char** argv) {
         std::cerr << "hover_arena_author: generator failed: " << error << std::endl;
         return 1;
     }
+
+    // After the generator, so its output is covered too; before the export,
+    // which is where identity becomes text.
+    assignAuthoredUuids(document.scene());
 
     const auto json = document.toJson(/*prettyPrint*/ true, &error);
     if (json.empty()) {
