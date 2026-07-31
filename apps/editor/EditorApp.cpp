@@ -192,6 +192,13 @@ EditorApp::EditorApp(const Options& options)
       ortho_(-1.f, 1.f, 1.f, -1.f, 0.05f, 10000.f) {
 
     contentScale_ = monitor::contentScale().first;
+    // The fonts already follow the window between monitors (ImguiContext has
+    // its own onMonitorChange subscription); this keeps the editor's layout
+    // math — panel widths, button sizes, marker pixels — on the same scale,
+    // so a HiDPI laptop screen and a 100% external monitor both look right.
+    canvas_.onMonitorChange([this](int idx) {
+        contentScale_ = monitor::contentScale(idx).first;
+    });
 
     renderer_->shadowMap().enabled = true;
     renderer_->shadowMap().type = ShadowMap::PFC;
