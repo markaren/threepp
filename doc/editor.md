@@ -155,10 +155,11 @@ counts, light parameters, camera parameters, spline curve parameters, attached
 scripts and physics. Every edit is undoable, and a drag collapses into a single
 undo step.
 
-**Bottom panel.** A console showing loader and exporter warnings, and an asset
-browser (double-click a file to open/import/assign). Console is the first tab —
-it is where import results and errors land. Collapsible, and it runs to the left
-edge of the window.
+**Bottom panel.** A console showing loader and exporter warnings, an asset
+browser (double-click a file to open/import/assign), the live sensor readout,
+and — while any are open — the Script Editor's scripts. Console is the first tab: it is
+where import results and errors land. Collapsible, resizable by dragging its top
+edge, and it runs to the left edge of the window.
 
 **Camera dock.** The band beside the bottom panel, under the inspector, renders
 the selected camera live. It collapses with the bottom panel and paints itself
@@ -166,7 +167,10 @@ when nothing is selected, so that corner is never a sliver of viewport too small
 to see into or click in.
 
 **Panel sizes.** The hierarchy and inspector are resized by dragging their inner
-edge, and the widths persist in the settings file. The hierarchy also scrolls
+edge, the bottom panel by dragging its top edge, and all three sizes persist in
+the settings file. Every one is clamped on read and on drag — the bottom panel
+against the window itself, so a settings file written on a bigger monitor cannot
+leave a small one with no viewport at all. The hierarchy also scrolls
 horizontally, because a deep tree indents past any fixed width and the panel
 cannot be widened past the screen.
 
@@ -761,7 +765,7 @@ scene back.
 
 The code comes in one of two forms, never both: a `.py` **file** referenced by
 path, or **inline source** stored in the scene itself and edited in the editor's
-Script Editor window. A file is shared between objects and scenes and editable
+Script Editor tab. A file is shared between objects and scenes and editable
 in whatever tooling you already have; inline source travels with the scene, so a
 `.json` handed to somebody else is complete.
 
@@ -1280,12 +1284,33 @@ exactly one script.
 #### The Script Editor
 
 `New Inline Script` in the Script section writes a template into the object and
-opens a floating **Script Editor** window on it — movable, resizable, closable,
-and one instance: it edits the selected object's inline script, following the
-selection while there is nothing to lose and **staying on the object it was
-opened for whenever the buffer has unsaved edits**, because retargeting text
-somebody is still typing would drop it without a word. `Edit…` reopens it, and
-the title carries an asterisk while the buffer differs from the document.
+opens it in the bottom panel's **Scripts** tab, bringing the panel up if it was
+collapsed. `Edit…` opens an existing one the same way.
+
+**As many at once as you open.** Inside the Scripts tab is a second bar with one
+entry per open script, labelled with its object and carrying an asterisk while
+its buffer differs from the document. Each keeps its own text, its own undo
+position in the box and its own syntax error until you close it with its ×, so
+writing two scripts that talk to each other is a click between tabs rather than
+a round trip through the hierarchy. When more are open than fit, the ▾ button at
+the left of the bar lists them all by name. Still **one script per object** —
+that is `ScriptConfig`'s rule; this is one tab per object.
+
+Selecting an object that already has a tab open **raises that tab**, and that is
+all the selection does: on a change of selection, not on every frame the visible
+tab and the selection disagree — otherwise opening a script for anything other
+than what is selected would bounce straight back. Selecting an object with no
+tab open opens nothing; `Edit…` is what opens one. The single editor this
+replaced instead *retargeted itself* onto the selection, and could only ever do
+it when the buffer was clean, because pointing a buffer somebody is typing into
+at another object drops what they typed.
+
+It is docked rather than floating because floating is what was wrong with it: a
+text box big enough to write in covered the object the script was about. Beside
+the console it takes room from nothing, and the bottom panel's top edge drags,
+so "big enough" costs a drag rather than a window parked over the scene. The
+panel's `v` collapses the lot; the Scripts tab itself is there only while at
+least one script is.
 
 * **Apply** (or `Ctrl+Enter`) commits the buffer as one undoable step, keyed per
   object so it lands in the undo stack next to every other inspector edit.
@@ -1298,7 +1323,7 @@ the title carries an asterisk while the buffer differs from the document.
   Apply: half-written code is a normal thing to want to save, and an editor that
   refuses to let go of what you typed is a worse editor.
 * **Revert** reloads the committed text; **Clear** in the inspector removes the
-  script and closes the window (one `Ctrl+Z` away, and the buffer is still there
+  script and closes the tab (one `Ctrl+Z` away, and the buffer is still there
   if you reopen the object).
 * It is read-only while playing, like the inspector: the snapshot restore on Stop
   would throw the edit away.
@@ -1313,7 +1338,7 @@ module defines, or failing that the single one defining `update()`; several
 candidates is reported against the object, not guessed at.
 
 Plain text, deliberately: no highlighting, no completion, no third-party editor
-widget and no new dependency. Editing an external `.py` in this window is out of
+widget and no new dependency. Editing an external `.py` in this tab is out of
 scope — that file already has an editor, and so, now, does inline source: see
 below.
 
@@ -1332,7 +1357,7 @@ to `<temp>/threepp-editor/scripts/<uuid8>_<name>.py`, VS Code opens on it, and
 the editor polls that file about once a second from the frame loop. Every save
 comes back in through the Script Editor's own **Apply** — the same tab and
 line-ending normalization, the same compile check, the same undoable commit —
-and the window shows the source read-only with a banner and a **Stop external
+and the tab shows the source read-only with a banner and a **Stop external
 edit** button for as long as the session lives.
 
 Details that are not incidental:
@@ -2119,9 +2144,12 @@ their say.
   one or the other. Several behaviours on one object means several child
   objects, or one script that composes them.
 * **The Script Editor is a text box.** No syntax highlighting, no completion, no
-  find-and-replace, and it edits inline source only. The one thing it adds over
-  Notepad is the compile check — for anything more, `Edit in VS Code` hands the
-  same source to an editor that has all of it.
+  find-and-replace, and it edits inline source only. It does hold several
+  scripts open at once, one tab each, because that costs nothing but a vector
+  and the alternative — one buffer retargeting itself onto the selection — makes
+  writing two scripts that talk to each other a chore. The one thing it adds
+  over Notepad is the compile check; for anything more, `Edit in VS Code` hands
+  the same source to an editor that has all of it.
 * **External editing syncs one way.** The scratch file is the source of truth
   while a session is live: an undo in the editor moves the document out from
   under it without touching the file, and the next save puts the file's version

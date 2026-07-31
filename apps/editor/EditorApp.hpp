@@ -227,14 +227,43 @@ namespace threepp::editor {
         // Record toggle. A sensor is invisible without this.
         void drawSensorsTab();
 
-        // Script Editor (apps/editor/panels/ScriptEditorPanel.cpp). One
-        // floating window, editing one object's inline script source.
-        void drawScriptEditor();
-        // Points the window at `object` and shows it. Reopening the same object
-        // keeps whatever was being typed — closing the window is not a decision
-        // to throw text away.
-        void openScriptEditor(const Object3D& object);
+        // Script Editor (apps/editor/panels/ScriptEditorPanel.cpp): a Scripts
+        // tab in the bottom panel, holding one inner tab per open script.
+        //
+        // Several at once, because editing one object's script while reading
+        // another's is the normal way to write two things that talk to each
+        // other. One per object — the object still carries a single script.
+        struct ScriptEditorState;
+
+        // The unsaved marker, the raise-on-selection rule and the
+        // close-when-the-script-is-gone rule are per-frame state, so they run
+        // here rather than in a tab body — a collapsed panel, or a tab that is
+        // not the visible one, must not freeze them. Called before
+        // drawBottomPanel(), which draws the tabs.
+        void updateScriptEditors();
+        // The Scripts tab body: the inner tab bar, and the visible script.
+        void drawScriptsTab();
+        void drawScriptTab(ScriptEditorState& state);
+        // Labels: the outer tab, and one script's inner tab.
+        [[nodiscard]] std::string scriptsTabLabel() const;
+        [[nodiscard]] static std::string scriptTabLabel(const ScriptEditorState& state);
+        // The editor open on `uuid`, or nullptr. Invalidated by any open, so do
+        // not hold it across one.
+        [[nodiscard]] ScriptEditorState* scriptEditorFor(const std::string& uuid);
+        // The script the user is looking at: what Apply, Revert and Ctrl+Enter
+        // act on. Null with no scripts open.
+        [[nodiscard]] ScriptEditorState* activeScriptEditor();
+        // Opens a tab on `object`, or reuses the one already on it. `reveal`
+        // brings that tab forward (and the bottom panel with it); an external
+        // session syncing in the background passes false, since it must not
+        // pull the panel out from under whatever the user was looking at.
+        //
+        // Reopening an object that already has a tab keeps whatever was being
+        // typed — closing a tab is not a decision to throw text away.
+        void openScriptEditor(const Object3D& object, bool reveal = true);
         // Normalizes, syntax-checks and commits the buffer as one undo step.
+        void applyScriptEditor(ScriptEditorState& state);
+        // The same, on whichever script is visible.
         void applyScriptEditor();
 
         // --- external editing (apps/editor/ExternalScriptEdit.cpp) ----------
@@ -244,7 +273,7 @@ namespace threepp::editor {
         // Which inline source an external session is editing. A behaviour script
         // and a generator live on the same object under different keys, so the
         // session has to know which one it exported — and they commit through
-        // different paths (the Script Editor window vs the Generator's own
+        // different paths (the Script Editor tab vs the Generator's own
         // property write).
         enum class ExternalEditKind {
             Script,
@@ -582,16 +611,36 @@ namespace threepp::editor {
         void persistSettings();
         [[nodiscard]] float scale() const { return contentScale_; }
 
-        // Side panel widths in device pixels. The unscaled values are a user
+        // Panel sizes in device pixels. The unscaled values are a user
         // preference (draggable, persisted); everything that lays out against
         // a panel goes through these.
         [[nodiscard]] float hierarchyPx() const;
         [[nodiscard]] float inspectorPx() const;
-        // Drag handle along a panel edge. `x` is the strip's left edge and
-        // `sign` is +1 when dragging right widens the panel (left-hand panels),
-        // -1 when it narrows it (right-hand panels).
+        // Height of the open bottom panel, clamped to what the window can
+        // actually spare (bottomHeightLimit()) so shrinking the window cannot
+        // leave the editor all panel and no viewport.
+        [[nodiscard]] float bottomPanelPx() const;
+        // The tab strip that is left when the panel is collapsed.
+        [[nodiscard]] float collapsedBottomPx() const;
+        // What the side panels have to keep clear above the status bar: the
+        // panel plus its splitter when open, the collapsed strip when not.
+        [[nodiscard]] float bottomBandPx() const;
+        // Largest bottom panel height, unscaled, for the current window.
+        [[nodiscard]] float bottomHeightLimit() const;
+
+        // The grab strip both splitters below are made of. `sign` is +1 when
+        // dragging along the axis grows the value, -1 when it shrinks it.
+        void drawSplitterStrip(const char* id, float x, float top, float width, float height,
+                               bool horizontal, float& value, float sign, float lo, float hi);
+        // Vertical drag handle beside a side panel. `x` is the strip's left
+        // edge and `sign` is +1 when dragging right widens the panel (left-hand
+        // panels), -1 when it narrows it (right-hand panels).
         void drawSplitter(const char* id, float x, float top, float height,
                           float& width, float sign);
+        // The horizontal twin, along the top edge of the bottom panel: dragging
+        // up makes it taller.
+        void drawHeightSplitter(const char* id, float x, float top, float width,
+                                float& height);
 
         // Undo-friendly ImGui helpers: begin a transaction when a widget is
         // activated and close it when the edit finishes, so a drag collapses to
@@ -849,6 +898,11 @@ namespace threepp::editor {
         // bar on the next frame it draws. Exists for --screenshot: a live readout
         // that nobody has looked at is a readout nobody knows is right.
         bool selectSensorsTab_ = false;
+        // The same, for the Scripts tab, on an explicit open — and, separately,
+        // for which script inside it. They are two bars: raising a script the
+        // selection moved onto must not also drag the panel off the Console.
+        bool selectScriptsTab_ = false;
+        std::string selectScriptUuid_;
         std::deque<std::string> console_;
         std::string renameBuffer_;
         // Name as it was when the inspector's name field gained focus, so the
@@ -876,16 +930,19 @@ namespace threepp::editor {
         };
         std::unique_ptr<AnimPreview> animPreview_;
 
-        // The Script Editor window. One instance, editing one object — a text
-        // buffer that is not the document until Apply commits it, which is what
-        // makes the unsaved marker in the title mean something.
+        // One open script — a text buffer that is not the document until Apply
+        // commits it, which is what makes the unsaved marker on its tab mean
+        // something.
         //
         // Not gated on Python: a build without it still edits and saves the
         // source, it just cannot check or run it.
         struct ScriptEditorState {
-            bool open = false;
+            // Presence in scriptEditors_ IS being open; the flag exists because
+            // ImGui's tab close button writes through a bool*. Cleared entries
+            // are erased at the top of the next updateScriptEditors().
+            bool open = true;
             // The object being edited, by uuid: a play/stop replaces the whole
-            // graph, and the window has to survive that.
+            // graph, and the tabs have to survive that.
             std::string uuid;
             std::string label;
             // What the text box holds, and what the document holds. Different
@@ -895,10 +952,21 @@ namespace threepp::editor {
             // Syntax error from the last Apply, shown in red until the next.
             std::string status;
             // Take the keyboard on the frame after an explicit open (but never
-            // when the window merely follows the selection).
+            // when a tab is merely raised or synced under the user).
             bool focus = false;
+            // The object is gone from the scene, as of the last update. Resolved
+            // there so the tab body does not walk the graph a second time.
+            bool missing = false;
         };
-        ScriptEditorState scriptEditor_;
+        // In tab order, one entry per open script. A vector and not a map: the
+        // order on screen is the order they were opened in, and there are never
+        // enough of them for the lookup to be worth a hash.
+        std::vector<ScriptEditorState> scriptEditors_;
+        // Which one is visible, by uuid — set by the inner tab bar as it draws.
+        std::string activeScriptUuid_;
+        // The selection as the raise-on-selection rule last saw it, so that the
+        // rule fires on a change rather than on a mismatch.
+        std::string lastScriptSelection_;
 
         // "Edit in VS Code" on an inline script. The source is exported to a
         // scratch .py, VS Code is pointed at it, and the file is polled once a

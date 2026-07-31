@@ -10,7 +10,7 @@
 //   * a .py FILE, referenced by path — shared between objects and scenes, and
 //     editable in whatever editor the user already has open;
 //   * INLINE SOURCE, stored in the document itself — self-contained, travels
-//     with the scene, and edited in the editor's own Script Editor window.
+//     with the scene, and edited in the editor's own Script Editor tab.
 //
 // Unlike PhysicsConfig and AnimationConfig this does NOT pack everything into
 // one key=value string: a Windows path contains the characters that format uses

@@ -11,12 +11,11 @@
 
 namespace threepp::editor::layout {
 
-    // Height at 100% DPI; multiply by the monitor content scale. The side
-    // panel widths are user-draggable and live in EditorSettings instead —
-    // see EditorApp::hierarchyPx() / inspectorPx().
-    inline constexpr float bottomHeight = 200.f;
+    // Every panel size is user-draggable and lives in EditorSettings rather
+    // than here — see EditorApp::hierarchyPx() / inspectorPx() /
+    // bottomPanelPx(), which apply the monitor content scale.
 
-    // Grab strip between a side panel and the viewport.
+    // Grab strip between a panel and the viewport.
     inline constexpr float splitterThickness = 6.f;
 
     inline constexpr ImGuiWindowFlags panelFlags =

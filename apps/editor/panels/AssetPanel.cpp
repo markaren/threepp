@@ -200,11 +200,10 @@ void EditorApp::drawBottomPanel() {
     // viewport, too short to see anything in and too small to click in. The
     // matching strip on the right is the camera dock — see cameraDockRect().
     const float right = inspectorPx();
-    const float collapsedHeight = ImGui::GetFrameHeight() + 6 * s;
-    const float height = bottomPanelOpen_ ? layout::bottomHeight * s : collapsedHeight;
+    const float height = bottomPanelOpen_ ? bottomPanelPx() : collapsedBottomPx();
+    const float top = viewport->Pos.y + viewport->Size.y - statusHeight_ - height;
 
-    ImGui::SetNextWindowPos({viewport->Pos.x,
-                             viewport->Pos.y + viewport->Size.y - statusHeight_ - height});
+    ImGui::SetNextWindowPos({viewport->Pos.x, top});
     ImGui::SetNextWindowSize({std::max(viewport->Size.x - right, 120.f * s), height});
 
     if (ImGui::Begin("##bottom", nullptr, layout::barFlags)) {
@@ -239,8 +238,35 @@ void EditorApp::drawBottomPanel() {
                 drawSensorsTab();
                 ImGui::EndTabItem();
             }
+            // Last, and only while a script is open: it is the one tab that
+            // comes and goes, and a tab bar whose fixed entries move under the
+            // pointer is a tab bar nobody can aim at. No close button — the
+            // scripts inside it have their own, and this tab is gone when the
+            // last of them is.
+            if (!scriptEditors_.empty()) {
+                ImGuiTabItemFlags scriptFlags = 0;
+                if (selectScriptsTab_) {
+                    scriptFlags = ImGuiTabItemFlags_SetSelected;
+                    selectScriptsTab_ = false;
+                }
+                const auto label = scriptsTabLabel();
+                if (ImGui::BeginTabItem(label.c_str(), nullptr, scriptFlags)) {
+                    drawScriptsTab();
+                    ImGui::EndTabItem();
+                }
+            }
             ImGui::EndTabBar();
         }
     }
     ImGui::End();
+
+    // Straddling the boundary rather than sitting in a gap of its own, and
+    // across the camera dock too: the dock's top edge is the panel's, so the
+    // whole band moves together. Drawn last, so it takes the hover from the
+    // side panels it overlaps.
+    if (bottomPanelOpen_) {
+        drawHeightSplitter("##bottomSplit", viewport->Pos.x,
+                           top - layout::splitterThickness * s, viewport->Size.x,
+                           settings_.bottomPanelHeight);
+    }
 }

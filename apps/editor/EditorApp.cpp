@@ -610,14 +610,15 @@ void EditorApp::drawUi() {
 
     drawMenuBar();
     drawToolbar();
+    // Before the panels: the Scripts tab lives in the bottom panel, and which
+    // scripts are in it — if any — is decided here.
+    updateScriptEditors();
     drawHierarchy();
     drawInspector();
     drawBottomPanel();
     drawStatusBar();
     drawPlayBanner();
     drawImportToast();
-    // A floating window, so it goes over the fixed panels and under the modals.
-    drawScriptEditor();
 
     if (preview_.visible) {
         // Background list, not foreground: the camera image is drawn by the
@@ -1204,42 +1205,100 @@ float EditorApp::inspectorPx() const {
     return settings_.inspectorWidth * contentScale_;
 }
 
-void EditorApp::drawSplitter(const char* id, float x, float top, float height,
-                             float& width, float sign) {
+float EditorApp::bottomHeightLimit() const {
 
     const float s = contentScale_;
-    const float thickness = layout::splitterThickness * s;
+    // Against the render surface rather than the ImGui viewport, because
+    // cameraDockRect() asks for this outside the frame.
+    const float total = static_cast<float>(renderer_->size().height());
+    // A viewport strip has to survive: dragging the panel up to the toolbar
+    // would leave nothing to drag it back down against.
+    const float free = total - menuHeight_ - toolbarHeight_ - statusHeight_ - 140.f * s;
+
+    return std::max(free / s, EditorSettings::minBottomHeight);
+}
+
+float EditorApp::bottomPanelPx() const {
+
+    return std::clamp(settings_.bottomPanelHeight,
+                      EditorSettings::minBottomHeight, bottomHeightLimit()) *
+           contentScale_;
+}
+
+float EditorApp::collapsedBottomPx() const {
+
+    return ImGui::GetFrameHeight() + 6 * contentScale_;
+}
+
+float EditorApp::bottomBandPx() const {
+
+    // Exactly the panel, with nothing reserved for the splitter: a band held
+    // clear for the grip is a strip of bare viewport between the side panels
+    // and the bottom one — a seam across the whole window. The grip overlays
+    // the boundary instead (drawHeightSplitter), which costs the side panels
+    // their last few pixels and costs the layout nothing.
+    return bottomPanelOpen_ ? bottomPanelPx() : collapsedBottomPx();
+}
+
+// One implementation for both axes. `horizontal` is the strip's long axis being
+// horizontal — the handle that moves things up and down.
+void EditorApp::drawSplitterStrip(const char* id, float x, float top, float width, float height,
+                                  bool horizontal, float& value, float sign, float lo, float hi) {
+
+    const float s = contentScale_;
 
     ImGui::SetNextWindowPos({x, top});
-    ImGui::SetNextWindowSize({thickness, height});
+    ImGui::SetNextWindowSize({width, height});
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4{0.f, 0.f, 0.f, 0.f});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.f, 0.f});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
 
     if (ImGui::Begin(id, nullptr, layout::barFlags)) {
 
-        ImGui::InvisibleButton("##grip", {thickness, std::max(height, 1.f)});
+        ImGui::InvisibleButton("##grip", {std::max(width, 1.f), std::max(height, 1.f)});
 
         const bool active = ImGui::IsItemActive();
         if (active || ImGui::IsItemHovered()) {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            ImGui::SetMouseCursor(horizontal ? ImGuiMouseCursor_ResizeNS : ImGuiMouseCursor_ResizeEW);
             // Only hint at the handle once the pointer finds it; an always-on
             // divider would just be chrome.
             auto* draw = ImGui::GetWindowDrawList();
             const auto min = ImGui::GetWindowPos();
-            draw->AddRectFilled({min.x + thickness * 0.5f - 1.f * s, min.y},
-                                {min.x + thickness * 0.5f + 1.f * s, min.y + height},
-                                ImGui::GetColorU32(active ? theme::accent() : theme::muted()));
+            const auto colour = ImGui::GetColorU32(active ? theme::accent() : theme::muted());
+            if (horizontal) {
+                draw->AddRectFilled({min.x, min.y + height * 0.5f - 1.f * s},
+                                    {min.x + width, min.y + height * 0.5f + 1.f * s}, colour);
+            } else {
+                draw->AddRectFilled({min.x + width * 0.5f - 1.f * s, min.y},
+                                    {min.x + width * 0.5f + 1.f * s, min.y + height}, colour);
+            }
         }
         if (active) {
-            width = std::clamp(width + ImGui::GetIO().MouseDelta.x * sign / s,
-                               EditorSettings::minPanelWidth, EditorSettings::maxPanelWidth);
+            const auto& delta = ImGui::GetIO().MouseDelta;
+            value = std::clamp(value + (horizontal ? delta.y : delta.x) * sign / s, lo, hi);
         }
     }
     ImGui::End();
 
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
+}
+
+void EditorApp::drawSplitter(const char* id, float x, float top, float height,
+                             float& width, float sign) {
+
+    drawSplitterStrip(id, x, top, layout::splitterThickness * contentScale_, height,
+                      false, width, sign,
+                      EditorSettings::minPanelWidth, EditorSettings::maxPanelWidth);
+}
+
+void EditorApp::drawHeightSplitter(const char* id, float x, float top, float width,
+                                   float& height) {
+
+    // Dragging up grows the panel, hence the -1.
+    drawSplitterStrip(id, x, top, width, layout::splitterThickness * contentScale_,
+                      true, height, -1.f,
+                      EditorSettings::minBottomHeight, bottomHeightLimit());
 }
 
 void EditorApp::flashStatus(std::string message) {
@@ -1271,7 +1330,7 @@ void EditorApp::drawImportToast() {
     const float width = textSize.x + radius * 2 + 34 * s;
 
     // Bottom-left of the viewport (the camera preview owns the bottom-right).
-    const float bottom = viewport->Size.y - statusHeight_ - (bottomPanelOpen_ ? layout::bottomHeight * s : 0.f);
+    const float bottom = viewport->Size.y - statusHeight_ - bottomBandPx();
     ImGui::SetNextWindowPos({viewport->Pos.x + hierarchyPx() + 12 * s,
                              viewport->Pos.y + bottom - height - 12 * s});
     ImGui::SetNextWindowSize({width, height});
@@ -2171,7 +2230,7 @@ bool EditorApp::cameraDockRect(float& x, float& y, float& w, float& h) const {
     const float s = contentScale_;
 
     w = inspectorPx();
-    h = layout::bottomHeight * s;
+    h = bottomPanelPx();
     x = static_cast<float>(size.width()) - w;
     y = static_cast<float>(size.height()) - statusHeight_ - h;
 
