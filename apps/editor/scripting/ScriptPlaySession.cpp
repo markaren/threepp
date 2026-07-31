@@ -47,33 +47,6 @@ namespace {
         return std::filesystem::path(config.path).filename().string();
     }
 
-    // A script declares start(self, obj) or start(self, obj, scene); the scene
-    // is passed only when asked for, so every existing script keeps working.
-    // `start` arrives as a bound method, so `self` is already hidden and the
-    // counts here are one positional versus two. *args reads as wanting it.
-    bool startWantsScene(const py::object& start) {
-
-        try {
-            const auto inspect = py::module_::import("inspect");
-            const auto parameters =
-                    inspect.attr("signature")(start).attr("parameters").attr("values")();
-            std::size_t positional = 0;
-            for (auto parameter : parameters) {
-                const auto kind = parameter.attr("kind");
-                if (kind.equal(parameter.attr("VAR_POSITIONAL"))) return true;
-                if (kind.equal(parameter.attr("POSITIONAL_ONLY")) ||
-                    kind.equal(parameter.attr("POSITIONAL_OR_KEYWORD"))) {
-                    ++positional;
-                }
-            }
-            return positional >= 2;
-        } catch (py::error_already_set&) {
-            // signature() balks at some exotic callables; the safe reading is
-            // the one every script had before this feature existed.
-            return false;
-        }
-    }
-
 }// namespace
 
 
@@ -188,24 +161,40 @@ struct ScriptPlaySession::Impl {
         return py::none();
     }
 
-    // Installed between the two phases of start() and taken back at stop, so a
-    // resolver can never answer for a session that is not running. The lambda
-    // captures `this` and nothing Python-shaped, which is what lets the release
-    // below run from a destructor with no interpreter left.
-    void installResolver() {
+    // Everything a running script can reach that is not its own object: the
+    // instance resolver behind threepp.editor.script_from_object, and the scene
+    // behind threepp.editor.scene().
+    //
+    // ONE install, ONE clear, so the two share a lifetime rather than each
+    // having its own. Installed between the two phases of start() and taken back
+    // at stop, so neither can answer for a session that is not running — and so
+    // the window in which a script may ask is exactly the window the doc names:
+    // from start() onwards. A script's __init__ runs in phase 1, before its
+    // authored fields are even applied; it is not a place to go looking at the
+    // world from.
+    //
+    // The lambda captures `this` and nothing Python-shaped, which is what lets
+    // the release below run from a destructor with no interpreter left. The
+    // scene is a borrowed raw pointer for the same reason: clearing it must not
+    // need an interpreter either.
+    void installSessionAccess(Object3D& scene) {
 
         auto& resolver = scripting::scriptResolver();
         resolver.owner = this;
         resolver.lookup = [this](const std::string& uuid) { return resolve(uuid); };
+        scripting::playScene() = &scene;
     }
 
-    void clearResolver() {
+    void clearSessionAccess() {
 
         auto& resolver = scripting::scriptResolver();
-        // Ours to take back only while it still is ours.
+        // Ours to take back only while it still is ours. Guards the scene as
+        // well: the two went up together, so a session tearing down late must
+        // not take either back from a newer one.
         if (resolver.owner != this) return;
         resolver.owner = nullptr;
         resolver.lookup = nullptr;
+        scripting::playScene() = nullptr;
     }
 
     // --- the physics clock -------------------------------------------------
@@ -822,8 +811,9 @@ ScriptPlaySession::~ScriptPlaySession() {
     // rule is about.
     impl_->detachFromPhysics();
     // Same rule: a resolver outliving the instance list it closes over would
-    // answer out of freed memory the moment anything asked.
-    impl_->clearResolver();
+    // answer out of freed memory the moment anything asked — and a scene pointer
+    // outliving the document it points into is the same bug one door over.
+    impl_->clearSessionAccess();
     impl_->release();
 }
 
@@ -861,8 +851,9 @@ void ScriptPlaySession::start(Scene& scene) {
     // last session's queued contacts to this one's scripts.
     impl_->detachFromPhysics();
     // Same reasoning one door over: a resolver still answering out of the list
-    // release() is about to empty would hand this Play the last one's instances.
-    impl_->clearResolver();
+    // release() is about to empty would hand this Play the last one's instances,
+    // and a scene pointer left over from it the last one's document.
+    impl_->clearSessionAccess();
     impl_->release();
     impl_->errors.clear();
 
@@ -953,8 +944,9 @@ void ScriptPlaySession::start(Scene& scene) {
     }
 
     // Between the phases, and not a line later: the first thing a start() may
-    // want to do is find a neighbour, and every neighbour now exists.
-    impl_->installResolver();
+    // want to do is find a neighbour — by uuid through the resolver, or by name
+    // through the scene — and every neighbour now exists.
+    impl_->installSessionAccess(scene);
 
     // ---- phase 2: start them ----------------------------------------------
     //
@@ -970,12 +962,11 @@ void ScriptPlaySession::start(Scene& scene) {
         if (instance.failed || !instance.hasStart) continue;
 
         try {
-            const auto start = instance.self.attr("start");
-            if (startWantsScene(start)) {
-                start(scripting::handleFor(*attached[i].object), scripting::handleFor(scene));
-            } else {
-                start(scripting::handleFor(*attached[i].object));
-            }
+            // ONE signature: start(self, obj). Everything else a script may want
+            // to reach is a named call on threepp.editor — the scene included,
+            // which is why this no longer sniffs the signature to decide how many
+            // arguments to pass.
+            instance.self.attr("start")(scripting::handleFor(*attached[i].object));
         } catch (py::error_already_set& e) {
             impl_->fail(instance, "start", scripting::describeError(e));
         } catch (const std::exception& e) {
@@ -1070,9 +1061,10 @@ void ScriptPlaySession::stop() {
         }
         // The resolver goes down WITH the list it answers from, not before it: a
         // stop() is still inside the session, every instance is still alive
-        // until the line below, and a script tidying up after a neighbour is a
-        // reasonable last act. Nothing may resolve after this returns.
-        impl_->clearResolver();
+        // until the line below, and a script tidying up after a neighbour — or
+        // taking one last look at the scene — is a reasonable last act. Nothing
+        // may resolve after this returns.
+        impl_->clearSessionAccess();
         // Inside the same GIL scope: dropping the last reference to a script
         // instance runs its __del__ and frees Python memory.
         impl_->instances.clear();
@@ -1081,6 +1073,6 @@ void ScriptPlaySession::stop() {
     // No instances, or no interpreter to run stop() in. The release is still
     // unconditional, for the reason detachFromPhysics above is: an empty list
     // says nothing about what is still installed.
-    impl_->clearResolver();
+    impl_->clearSessionAccess();
     impl_->instances.clear();
 }

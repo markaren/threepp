@@ -75,6 +75,25 @@ namespace threepp::editor {
             return scene;
         }
 
+        // The live scene a PLAY session is running — the other thing
+        // threepp.editor.scene() can be answering for. Set and cleared by
+        // ScriptPlaySession together with its resolver, so the two halves of
+        // "what can a behaviour script reach" share one lifetime and one place
+        // to go down.
+        //
+        // Deliberately a second static rather than reusing authoringScene():
+        // that one means "what this generator is authoring INTO", a sentence
+        // about a detached sink that has no meaning during Play, and one
+        // pointer standing for two different questions is how a stale answer
+        // gets handed to the wrong caller. Same inline function-local static as
+        // its neighbours — the binding lives in python/src and the session in
+        // apps/editor, and neither links the other.
+        inline Object3D*& playScene() {
+
+            static Object3D* scene = nullptr;
+            return scene;
+        }
+
         // Key state for a script that wants to be DRIVEN — threepp.editor.is_key_down.
         //
         // Installed by the editor app, which owns the window and the ImGui context and is

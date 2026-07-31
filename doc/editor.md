@@ -806,12 +806,15 @@ class is the one whose name matches it (`spinner.py` → `Spinner`,
 case-insensitively), or — failing that — the single class in the file that
 defines `update()`. Anything else is reported rather than guessed at.
 
-`start` may also ask for the scene — `def start(self, obj, scene):` — and the
-editor passes it only when the signature does (`*args` counts as asking), so the
-one-argument form keeps working untouched. The scene handle is the ordinary
-`threepp.Scene`: `scene.get_object_by_name("Ground")`, `scene.children`, and so
-on. The same lifetime rule as every handle applies — resolve neighbours in
-`start`, use them during the session, never stash them across Play sessions.
+**The scene** is `threepp.editor.scene()` — the ordinary `threepp.Scene`, so
+`scene.get_object_by_name("Ground")`, `scene.children`, and so on. It answers
+from `start()` onwards and for as long as the session runs, which means
+`update()`, `fixed_update()` and the collision and trigger callbacks can all just
+ask; there is no need to stash it on `self`. Outside a session it raises, because
+outside a session there is no scene to answer with — a script's `__init__` runs
+before its authored fields are even applied and is not a place to look at the
+world from. The same lifetime rule as every handle applies to what you resolve
+*through* it: use it during the session, never stash it across Play sessions.
 That is also where a script reaches another script's *running instance*, rather
 than its node: see [Talking to other
 scripts](#talking-to-other-scripts-threeppeditorscript_from_object).
@@ -1048,10 +1051,11 @@ import threepp
 
 
 class GoalZone:
-    def start(self, obj: threepp.Object3D, scene: threepp.Scene):
+    def start(self, obj: threepp.Object3D):
         # Resolve in start(), use later: every script instance exists by now,
         # but its own start() may not have run yet.
-        self.board = threepp.editor.script_from_object(scene.get_object_by_name("Scoreboard"))
+        self.board = threepp.editor.script_from_object(
+            threepp.editor.scene().get_object_by_name("Scoreboard"))
 
     def on_trigger_enter(self, other: threepp.Object3D):
         if self.board is not None and other is not None:
@@ -1230,9 +1234,10 @@ import threepp
 
 
 class Button:
-    def start(self, obj: threepp.Object3D, scene: threepp.Scene):
+    def start(self, obj: threepp.Object3D):
         # Resolve neighbours here, once: every instance exists by now.
-        self.door = threepp.editor.script_from_object(scene.get_object_by_name("Door"))
+        self.door = threepp.editor.script_from_object(
+            threepp.editor.scene().get_object_by_name("Door"))
 
     def update(self, dt: float):
         if self.door is None or self.door.open:
@@ -1743,11 +1748,11 @@ class FollowSpline:
     spline_name = "Spline"   # the spline Group to follow
     speed = 0.2              # laps per second
 
-    def start(self, obj: threepp.Object3D, scene: threepp.Scene):
+    def start(self, obj: threepp.Object3D):
         self.obj = obj
         self.u = 0.0
         self.path = threepp.editor.spline_from_object(
-            scene.get_object_by_name(self.spline_name))
+            threepp.editor.scene().get_object_by_name(self.spline_name))
 
     def update(self, dt: float):
         if self.path is None:

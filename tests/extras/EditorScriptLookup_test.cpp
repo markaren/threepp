@@ -54,20 +54,22 @@ import threepp
 class Door:
     opened = 0
 
-    def start(self, obj, scene):
+    def start(self, obj):
         self.obj = obj
-        self.scene = scene
         # The Button exists by now whether or not its own start() has run.
         self.obj.position.y = 1.0 if threepp.editor.script_from_object(
-            scene.get_object_by_name("Button")) is not None else -1.0
+            threepp.editor.scene().get_object_by_name("Button")) is not None else -1.0
 
     def on_opened(self):
         self.opened += 1
         self.obj.position.x = float(self.opened)
 
     def update(self, dt):
-        # ...and mid-session too, which is the other half of the seam.
-        button = threepp.editor.script_from_object(self.scene.get_object_by_name("Button"))
+        # ...and mid-session too, which is the other half of the seam. Note the
+        # scene is asked for again rather than stashed in start(): it answers for
+        # as long as the session runs.
+        button = threepp.editor.script_from_object(
+            threepp.editor.scene().get_object_by_name("Button"))
         if button is not None:
             button.acknowledged = True
 )";
@@ -79,9 +81,10 @@ import threepp
 class Button:
     acknowledged = False
 
-    def start(self, obj, scene):
+    def start(self, obj):
         self.obj = obj
-        self.door = threepp.editor.script_from_object(scene.get_object_by_name("Door"))
+        self.door = threepp.editor.script_from_object(
+            threepp.editor.scene().get_object_by_name("Door"))
         self.obj.position.y = 1.0 if self.door is not None else -1.0
 
     def update(self, dt):
@@ -149,8 +152,9 @@ import threepp
 
 
 class Reader:
-    def start(self, obj, scene):
-        other = threepp.editor.script_from_object(scene.get_object_by_name("Tuned"))
+    def start(self, obj):
+        other = threepp.editor.script_from_object(
+            threepp.editor.scene().get_object_by_name("Tuned"))
         obj.position.x = other.speed if other is not None else -1.0
 )");
     attach(*scene, "Tuned", R"(
@@ -222,8 +226,8 @@ import threepp
 
 
 class Parent:
-    def start(self, obj, scene):
-        child = scene.get_object_by_name("Child")
+    def start(self, obj):
+        child = threepp.editor.scene().get_object_by_name("Child")
         obj.position.x = 1.0 if threepp.editor.script_from_object(child) is None else -1.0
 )");
     auto child = Group::create();
@@ -262,10 +266,10 @@ import threepp
 
 
 class Observer:
-    def start(self, obj, scene):
+    def start(self, obj):
         self.obj = obj
-        self.scene = scene
         self.frames = 0
+        scene = threepp.editor.scene()
         # No script at all.
         obj.position.x = 1.0 if threepp.editor.script_from_object(
             scene.get_object_by_name("Bare")) is None else -1.0
@@ -282,7 +286,7 @@ class Observer:
         if self.frames == 1:
             # ...and now it has. A disabled script is dead to a new lookup.
             self.obj.rotation.x = 1.0 if threepp.editor.script_from_object(
-                self.scene.get_object_by_name("Thrower")) is None else -1.0
+                threepp.editor.scene().get_object_by_name("Thrower")) is None else -1.0
 )");
 
     ScriptPlaySession session;
@@ -366,6 +370,58 @@ class Cleanup:
     CHECK(session.errorCount() == 0);
 }
 
+TEST_CASE("threepp.editor.scene() answers for the whole session and no longer",
+          "[editor][scripting]") {
+
+    // The scene used to arrive as a second argument to start(), which made it
+    // reachable in start() and NOWHERE ELSE — a script wanting it from update()
+    // had to stash it on self. It is a named call now, so the interesting claim
+    // is the LIFETIME: every callback can ask, and nothing can ask outside a
+    // session.
+    auto scene = Scene::create();
+    auto watcher = attach(*scene, "Watcher", R"(
+import threepp
+
+
+class Watcher:
+    def start(self, obj):
+        self.obj = obj
+        # The scene knows this object by name, which is the identity check:
+        # a wrong scene would not have it.
+        self.obj.position.x = 1.0 if threepp.editor.scene().get_object_by_name(
+            "Watcher").uuid == obj.uuid else -1.0
+
+    def update(self, dt):
+        # Asked for again rather than stashed. This is the half that could not
+        # be written at all before.
+        self.obj.position.y = 1.0 if threepp.editor.scene().get_object_by_name(
+            "Watcher") is not None else -1.0
+
+    def stop(self):
+        # Still inside the session: the accessor goes down WITH the instances,
+        # not before them.
+        self.obj.position.z = 1.0 if threepp.editor.scene() is not None else -1.0
+)");
+
+    // Nothing playing, nothing generating: nothing to answer with.
+    CHECK(scripting::playScene() == nullptr);
+
+    ScriptPlaySession session;
+    session.start(*scene);
+    CHECK(scripting::playScene() == scene.get());
+
+    session.update(0.1f);
+    session.stop();
+
+    CHECK(session.errorCount() == 0);
+    CHECK(watcher->position.x == 1.f);
+    CHECK(watcher->position.y == 1.f);
+    CHECK(watcher->position.z == 1.f);
+    // Down again, so a script handle kept across sessions cannot reach a
+    // document nobody is playing.
+    CHECK(scripting::playScene() == nullptr);
+}
+
 TEST_CASE("the documented Button/Door pair runs as written", "[editor][scripting]") {
 
     // doc/editor.md, "Talking to other scripts", verbatim - the sibling
@@ -390,9 +446,10 @@ import threepp
 
 
 class Button:
-    def start(self, obj: threepp.Object3D, scene: threepp.Scene):
+    def start(self, obj: threepp.Object3D):
         # Resolve neighbours here, once: every instance exists by now.
-        self.door = threepp.editor.script_from_object(scene.get_object_by_name("Door"))
+        self.door = threepp.editor.script_from_object(
+            threepp.editor.scene().get_object_by_name("Door"))
 
     def update(self, dt: float):
         if self.door is None or self.door.open:

@@ -2463,16 +2463,18 @@ int EditorApp::runSelfTest() {
                     step();
                 }
 
-                // start(self, obj, scene): the scene arrives only when the
-                // signature asks for it, and it is a real handle — this script
-                // ignores its own object and drives Ground through a lookup.
+                // threepp.editor.scene(): a real handle on the played scene —
+                // this script ignores its own object and drives Ground through a
+                // lookup. Called from update() rather than start(), which is the
+                // half the old scene-as-a-start-argument could not do at all.
                 if (auto* target = document_.scene().getObjectByName("Box")) {
                     setInlineScript(*target,
+                                    "import threepp\n"
+                                    "\n"
                                     "class Reacher:\n"
-                                    "    def start(self, obj, scene):\n"
-                                    "        self.other = scene.get_object_by_name('Ground')\n"
                                     "    def update(self, dt):\n"
-                                    "        self.other.position.y += dt\n",
+                                    "        scene = threepp.editor.scene()\n"
+                                    "        scene.get_object_by_name('Ground').position.y += dt\n",
                                     "Scene-Reaching Script");
                     step();
                     const float groundBefore =
@@ -2481,7 +2483,7 @@ int EditorApp::runSelfTest() {
                     stepFixed(30);
                     auto* ground = document_.scene().getObjectByName("Ground");
                     check(ground && ground->position.y > groundBefore + 1e-3f,
-                          "a two-argument start receives the scene and reaches other objects");
+                          "threepp.editor.scene() answers during Play and reaches other objects");
                     stopPlay();
                     step();
                     auto* groundRestored = document_.scene().getObjectByName("Ground");
@@ -2505,9 +2507,9 @@ int EditorApp::runSelfTest() {
                                     "import threepp\n"
                                     "\n"
                                     "class Button:\n"
-                                    "    def start(self, obj, scene):\n"
+                                    "    def start(self, obj):\n"
                                     "        self.door = threepp.editor.script_from_object(\n"
-                                    "            scene.get_object_by_name('Box'))\n"
+                                    "            threepp.editor.scene().get_object_by_name('Box'))\n"
                                     "\n"
                                     "    def update(self, dt):\n"
                                     "        if self.door is not None:\n"
@@ -3237,11 +3239,11 @@ int EditorApp::runSelfTest() {
                             "class FollowSpline:\n"
                             "    spline_name = \"Spline\"\n"
                             "\n"
-                            "    def start(self, obj, scene):\n"
+                            "    def start(self, obj):\n"
                             "        self.obj = obj\n"
                             "        self.u = 0.0\n"
                             "        self.path = threepp.editor.spline_from_object(\n"
-                            "            scene.get_object_by_name(self.spline_name))\n"
+                            "            threepp.editor.scene().get_object_by_name(self.spline_name))\n"
                             "\n"
                             "    def update(self, dt):\n"
                             "        if self.path is None:\n"

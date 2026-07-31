@@ -515,7 +515,7 @@ def add(object: threepp.Object3D, parent: threepp.Object3D | None = None) -> thr
     """
 def scene() -> threepp.Object3D:
     """
-    The scene this generator is authoring into. READ it to place content relative to what already exists. Objects reached this way are NOT this generator's output and are not replaced when it re-runs.
+    The live scene: what a generator is authoring into, or what a behaviour script is playing in. READ it to reach what you did not author — scene.get_object_by_name("Ground"), scene.children. Objects a generator reaches this way are NOT its output and are not replaced when it re-runs. During Play this answers from start() onwards, including update(), fixed_update() and the collision and trigger callbacks. Raises when nothing is generating and nothing is playing.
     """
 def is_key_down(key: str) -> bool:
     """

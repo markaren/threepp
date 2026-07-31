@@ -27,7 +27,7 @@ namespace {
   },
   "geometries": [
     {
-      "uuid": "253ec300-ddef-4400-9ca7-b9005c029b00",
+      "uuid": "ad491800-ce3b-4e00-a715-a50073655200",
       "type": "BoxGeometry",
       "width": 1.0,
       "height": 0.25999999046325684,
@@ -37,7 +37,7 @@ namespace {
       "depthSegments": 1
     },
     {
-      "uuid": "f040df00-4cc7-4400-ac09-6a00f6777000",
+      "uuid": "dc859800-9859-4500-bef8-0200d8832000",
       "type": "BoxGeometry",
       "width": 1.0,
       "height": 1.0,
@@ -47,7 +47,7 @@ namespace {
       "depthSegments": 1
     },
     {
-      "uuid": "b0189300-4859-4f00-97f6-d70010082800",
+      "uuid": "89daa100-36ae-4400-8cb6-fd0023a92900",
       "type": "TorusGeometry",
       "radius": 0.36000001430511475,
       "tube": 0.04500000178813934,
@@ -56,7 +56,7 @@ namespace {
       "arc": 6.2831854820251465
     },
     {
-      "uuid": "9afaca00-2cb6-4400-afda-ae00eacc9d00",
+      "uuid": "1addae00-3a82-4200-b2ac-67000f198d00",
       "type": "CylinderGeometry",
       "radiusTop": 0.10000000149011612,
       "radiusBottom": 0.10000000149011612,
@@ -68,7 +68,7 @@ namespace {
       "thetaLength": 6.2831854820251465
     },
     {
-      "uuid": "3e08e500-a3ac-4800-a717-a80059cf9100",
+      "uuid": "b08e6a00-875d-4900-82f4-5a0076530e00",
       "type": "SphereGeometry",
       "radius": 0.3199999928474426,
       "widthSegments": 24,
@@ -79,7 +79,7 @@ namespace {
       "thetaLength": 3.1415927410125732
     },
     {
-      "uuid": "c652c900-b366-4500-b2a6-b7003ff18000",
+      "uuid": "8c74b800-c989-4d00-ac3c-2d0011e48000",
       "type": "BoxGeometry",
       "width": 0.2199999988079071,
       "height": 0.10000000149011612,
@@ -89,7 +89,7 @@ namespace {
       "depthSegments": 1
     },
     {
-      "uuid": "b6953e00-4f00-4300-9a82-090067bbc400",
+      "uuid": "da7a5b00-0cb8-4000-9c82-66005350db00",
       "type": "CylinderGeometry",
       "radiusTop": 0.09000000357627869,
       "radiusBottom": 0.09000000357627869,
@@ -101,7 +101,7 @@ namespace {
       "thetaLength": 6.2831854820251465
     },
     {
-      "uuid": "4cafa700-ca3b-4500-8b0d-0d004ead3800",
+      "uuid": "0caa1300-88ca-4800-aa7f-c400d23fb800",
       "type": "TorusGeometry",
       "radius": 1.850000023841858,
       "tube": 0.17000000178813934,
@@ -110,7 +110,7 @@ namespace {
       "arc": 6.2831854820251465
     },
     {
-      "uuid": "891b0300-f992-4400-a173-0700f3673500",
+      "uuid": "3c221600-f647-4900-92ae-b0001f2ed400",
       "type": "BoxGeometry",
       "width": 2.299999952316284,
       "height": 2.299999952316284,
@@ -120,7 +120,7 @@ namespace {
       "depthSegments": 1
     },
     {
-      "uuid": "02949c00-a0f0-4b00-9378-8b001375fb00",
+      "uuid": "9641be00-939b-4700-9823-c700925ec300",
       "type": "TorusGeometry",
       "radius": 1.850000023841858,
       "tube": 0.17000000178813934,
@@ -129,7 +129,7 @@ namespace {
       "arc": 6.2831854820251465
     },
     {
-      "uuid": "a68d9000-474f-4a00-9696-0a00949e8000",
+      "uuid": "8f42c600-cd80-4d00-a2e5-40007bed4a00",
       "type": "BoxGeometry",
       "width": 2.299999952316284,
       "height": 2.299999952316284,
@@ -139,7 +139,7 @@ namespace {
       "depthSegments": 1
     },
     {
-      "uuid": "386b8500-78a2-4f00-92b1-b400fbf8ba00",
+      "uuid": "884a3c00-7fe3-4d00-ad7b-be003f14c800",
       "type": "TorusGeometry",
       "radius": 1.850000023841858,
       "tube": 0.17000000178813934,
@@ -148,7 +148,7 @@ namespace {
       "arc": 6.2831854820251465
     },
     {
-      "uuid": "6eb4fa00-849b-4f00-a42c-c500162ef600",
+      "uuid": "47dc7900-4eb0-4400-ae7e-b00071e1ba00",
       "type": "BoxGeometry",
       "width": 2.299999952316284,
       "height": 2.299999952316284,
@@ -158,7 +158,7 @@ namespace {
       "depthSegments": 1
     },
     {
-      "uuid": "77ce1200-9c01-4800-a0a5-0400a5783a00",
+      "uuid": "8c76ec00-4277-4000-98b3-b20079766300",
       "type": "TorusGeometry",
       "radius": 1.850000023841858,
       "tube": 0.17000000178813934,
@@ -167,7 +167,7 @@ namespace {
       "arc": 6.2831854820251465
     },
     {
-      "uuid": "afca3900-9ab5-4000-97b4-7d00222aa100",
+      "uuid": "1800da00-b87f-4400-88c6-77007247d800",
       "type": "BoxGeometry",
       "width": 2.299999952316284,
       "height": 2.299999952316284,
@@ -177,7 +177,7 @@ namespace {
       "depthSegments": 1
     },
     {
-      "uuid": "3ec6cf00-4d10-4000-871f-740021146c00",
+      "uuid": "c7dd2400-654f-4200-9b63-d700d92ed400",
       "type": "TorusGeometry",
       "radius": 1.850000023841858,
       "tube": 0.17000000178813934,
@@ -186,7 +186,7 @@ namespace {
       "arc": 6.2831854820251465
     },
     {
-      "uuid": "3ace1800-e347-4600-90fa-0900a8d3c300",
+      "uuid": "ca3f0d00-f517-4c00-9e49-ac00ada04700",
       "type": "BoxGeometry",
       "width": 2.299999952316284,
       "height": 2.299999952316284,
@@ -196,7 +196,7 @@ namespace {
       "depthSegments": 1
     },
     {
-      "uuid": "c8f62800-78e4-4b00-a46b-1000e5068c00",
+      "uuid": "8837d100-175f-4900-9cfc-b400135a4300",
       "type": "CylinderGeometry",
       "radiusTop": 0.3499999940395355,
       "radiusBottom": 0.8500000238418579,
@@ -208,7 +208,7 @@ namespace {
       "thetaLength": 6.2831854820251465
     },
     {
-      "uuid": "47152900-eb92-4a00-8490-4900d9e58400",
+      "uuid": "45714b00-ab5b-4900-93ad-b000cef2e400",
       "type": "CylinderGeometry",
       "radiusTop": 1.5,
       "radiusBottom": 2.0999999046325684,
@@ -220,7 +220,7 @@ namespace {
       "thetaLength": 6.2831854820251465
     },
     {
-      "uuid": "ad104b00-773c-4100-8398-4700b3deb500",
+      "uuid": "8bdef800-6461-4100-ad6f-d000d46a5b00",
       "type": "BoxGeometry",
       "width": 1.0,
       "height": 1.0,
@@ -232,7 +232,7 @@ namespace {
   ],
   "materials": [
     {
-      "uuid": "402d7f00-63b9-4e00-9a66-53000a652500",
+      "uuid": "72175000-e1d5-4100-8155-8b0082d07000",
       "type": "MeshStandardMaterial",
       "color": 7109776,
       "roughness": 0.41999998688697815,
@@ -296,7 +296,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "4251a500-4aba-4e00-9aae-ee004f29ab00",
+      "uuid": "fee3b600-d707-4800-aa79-f40001816000",
       "type": "MeshStandardMaterial",
       "color": 6122624,
       "roughness": 0.44999998807907104,
@@ -361,7 +361,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "30af7000-38ee-4d00-b086-c8005aa3f700",
+      "uuid": "fd39c600-3d61-4c00-9e89-020089686300",
       "type": "MeshStandardMaterial",
       "color": 329482,
       "roughness": 0.4000000059604645,
@@ -425,7 +425,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "88560000-6a30-4700-993c-9c007c719300",
+      "uuid": "873bb700-60b9-4500-a4d4-1100543af600",
       "type": "MeshStandardMaterial",
       "color": 3884889,
       "roughness": 0.4000000059604645,
@@ -489,7 +489,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "e89c1000-2c6a-4300-8c44-9a00566c3600",
+      "uuid": "c8d8aa00-e381-4200-b126-5d0065d82e00",
       "type": "MeshStandardMaterial",
       "color": 5925766,
       "roughness": 0.30000001192092896,
@@ -553,7 +553,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "5a44ce00-742f-4200-ad86-b50034d88100",
+      "uuid": "91d1e800-d296-4e00-ae35-e500fa38e600",
       "type": "MeshStandardMaterial",
       "color": 329482,
       "roughness": 0.4000000059604645,
@@ -618,7 +618,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "057abd00-1b4a-4f00-892c-55006903f900",
+      "uuid": "7af38900-322d-4b00-92b2-a4001bc88500",
       "type": "MeshStandardMaterial",
       "color": 329482,
       "roughness": 0.4000000059604645,
@@ -682,7 +682,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "88102b00-a7e2-4300-a464-9800d0c6ef00",
+      "uuid": "4075f100-5401-4100-a383-970051f53300",
       "type": "MeshStandardMaterial",
       "color": 329482,
       "roughness": 0.4000000059604645,
@@ -746,7 +746,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "6cea5600-8aa4-4c00-b60d-7c00302d9400",
+      "uuid": "d82f9f00-144a-4d00-b482-29004ddc8400",
       "type": "MeshStandardMaterial",
       "color": 2479856,
       "roughness": 0.5,
@@ -810,7 +810,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "59c33a00-2c53-4600-9ce8-a2008f264f00",
+      "uuid": "5cc3fc00-4540-4a00-b680-f100396d5a00",
       "type": "MeshStandardMaterial",
       "color": 329482,
       "roughness": 0.4000000059604645,
@@ -874,7 +874,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "36451400-1611-4300-9b09-f300342d1500",
+      "uuid": "fa4ae000-07ac-4f00-9924-1500b27f4900",
       "type": "MeshStandardMaterial",
       "color": 2479856,
       "roughness": 0.5,
@@ -939,7 +939,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "3f96c300-6148-4200-bf4b-ad009b1d8a00",
+      "uuid": "e70f6a00-c0b7-4f00-8016-7e009ab77b00",
       "type": "MeshStandardMaterial",
       "color": 329482,
       "roughness": 0.4000000059604645,
@@ -1003,7 +1003,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "d32c4600-db34-4c00-a04e-6f00accbdd00",
+      "uuid": "6d66b900-47b4-4500-ba79-a9008a6b1f00",
       "type": "MeshStandardMaterial",
       "color": 2479856,
       "roughness": 0.5,
@@ -1067,7 +1067,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "82d7e900-7ec8-4f00-8555-bc0022591600",
+      "uuid": "3cc5d300-22af-4600-8ee7-97008a8cb400",
       "type": "MeshStandardMaterial",
       "color": 329482,
       "roughness": 0.4000000059604645,
@@ -1131,7 +1131,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "68e67100-2a34-4100-acf7-4a0094080800",
+      "uuid": "749d4a00-32b8-4200-87d2-cd0004b38a00",
       "type": "MeshStandardMaterial",
       "color": 2479856,
       "roughness": 0.5,
@@ -1196,7 +1196,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "488d5500-9191-4a00-bb2e-d80021ff6800",
+      "uuid": "ec542b00-80cc-4400-9743-ea00082ad500",
       "type": "MeshStandardMaterial",
       "color": 329482,
       "roughness": 0.4000000059604645,
@@ -1260,7 +1260,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "7d566000-3cf5-4b00-b670-f40003b65d00",
+      "uuid": "1cc77e00-b5c9-4e00-9dbd-d600dff30900",
       "type": "MeshStandardMaterial",
       "color": 2479856,
       "roughness": 0.5,
@@ -1324,7 +1324,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "16636900-2a9a-4800-9a7c-b400c369a900",
+      "uuid": "88520b00-6411-4200-b365-cc002e4e4d00",
       "type": "MeshStandardMaterial",
       "color": 329482,
       "roughness": 0.4000000059604645,
@@ -1388,7 +1388,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "7a4eb400-8b51-4d00-967c-9c00b1599e00",
+      "uuid": "e679d500-1ceb-4700-a7ce-3100e0423800",
       "type": "MeshStandardMaterial",
       "color": 4478056,
       "roughness": 0.75,
@@ -1452,7 +1452,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "c2537400-e020-4900-97aa-a500c5eed400",
+      "uuid": "3a286100-3319-4300-b518-73007aa64700",
       "type": "MeshStandardMaterial",
       "color": 3754076,
       "roughness": 0.9200000166893005,
@@ -1517,7 +1517,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "68917000-7a0d-4400-b8f0-4d000f409900",
+      "uuid": "2c784e00-5f8b-4800-b31a-ea0023eb5c00",
       "type": "MeshStandardMaterial",
       "color": 4478056,
       "roughness": 0.8500000238418579,
@@ -1581,7 +1581,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "bc115300-4cea-4300-962f-fd002a200800",
+      "uuid": "f225c900-0b51-4a00-91b2-31003ac4b000",
       "type": "MeshStandardMaterial",
       "color": 329482,
       "roughness": 0.4000000059604645,
@@ -1645,7 +1645,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "09832c00-abc7-4f00-830c-ef0075c27200",
+      "uuid": "1770c700-3c61-4a00-bf9f-9800647ebb00",
       "type": "MeshStandardMaterial",
       "color": 5662076,
       "roughness": 0.699999988079071,
@@ -1709,7 +1709,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "9b398100-cce3-4c00-a670-3500c5329d00",
+      "uuid": "3445d800-4214-4200-b221-1a00fc3e3d00",
       "type": "MeshStandardMaterial",
       "color": 329482,
       "roughness": 0.4000000059604645,
@@ -1774,7 +1774,7 @@ namespace {
       "toneMapped": true
     },
     {
-      "uuid": "348a3f00-0356-4900-9ebd-c0004f742e00",
+      "uuid": "0347eb00-7e31-4f00-89fb-7000810b9c00",
       "type": "MeshStandardMaterial",
       "color": 857632,
       "roughness": 0.5,
@@ -1839,7 +1839,7 @@ namespace {
     }
   ],
   "object": {
-    "uuid": "6b9a6a00-18a0-4b00-b750-8000a4d11900",
+    "uuid": "61d9be00-c126-4e00-9ea1-e4004f877100",
     "type": "Scene",
     "name": "Scene",
     "userData": {
@@ -1876,7 +1876,7 @@ namespace {
     },
     "children": [
       {
-        "uuid": "8b3fbc00-4f42-4a00-9386-1d002e560600",
+        "uuid": "72cd3900-e080-4200-b905-04005f197600",
         "type": "DirectionalLight",
         "name": "Key Light",
         "castShadow": true,
@@ -1910,7 +1910,7 @@ namespace {
             2048.0
           ],
           "camera": {
-            "uuid": "e2ffc700-31a0-4c00-879a-6d0088f79100",
+            "uuid": "bb67fa00-298f-4100-8d62-07006b440c00",
             "type": "OrthographicCamera",
             "layers": 1,
             "zoom": 1.0,
@@ -1924,7 +1924,7 @@ namespace {
         }
       },
       {
-        "uuid": "72b1ed00-1b2e-4200-99ce-2f009b35f600",
+        "uuid": "b8793000-0e76-4a00-b55a-8d00420a3400",
         "type": "HemisphereLight",
         "name": "Sky Fill",
         "layers": 1,
@@ -1951,7 +1951,7 @@ namespace {
         "groundColor": 856344
       },
       {
-        "uuid": "0de06d00-498d-4f00-86e7-d10052980900",
+        "uuid": "2f9dc300-2835-4300-8a04-a800fee23300",
         "type": "AmbientLight",
         "name": "Ambient Light",
         "layers": 1,
@@ -1977,15 +1977,15 @@ namespace {
         "intensity": 0.550000011920929
       },
       {
-        "uuid": "d941dc00-bd42-4600-a1de-84007a8c1d00",
+        "uuid": "fddbc000-929b-4300-be40-0e00486aaf00",
         "type": "Mesh",
         "name": "Drone",
         "castShadow": true,
         "receiveShadow": true,
         "userData": {
           "physics": "body=dynamic;shape=auto;trigger=0;mass=1.4;friction=0.4;restitution=0.05;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
-          "scriptSource": "# Hover Arena - the drone.\n#\n# fixed_update runs once per physics substep with a constant dt, so the same\n# gains settle at the same height whatever the frame rate is doing. Altitude is\n# a short downward raycast with ignore=self (without it the ray starts inside\n# the hull and finds it at distance zero); the rate feedback is the AUTHORED\n# IMU's reading, which is noisy, seeded and rate-gated. The small wobble you\n# can see is that noise going round the loop - it is not a bug to tune out.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\ndef _verb(name):\n    # The PhysX-gated names are ABSENT from threepp.editor without the SDK,\n    # rather than present and answering None, so ask before reaching.\n    return getattr(editor, name, None) if editor is not None else None\n\n\nclass DroneController:\n\n    hover_height = 2.2       # m above whatever is under the drone\n    lift_p = 13.0            # thrust per metre of altitude error, per kg\n    lift_d = 5.5             # thrust per m/s of climb rate, per kg\n    level_p = 2.6            # N*m per radian of tilt\n    level_d = 0.55           # N*m per rad/s of body rate  <- reads the IMU\n    yaw_p = 0.9              # N*m of yaw command\n    yaw_d = 0.25             # N*m per rad/s of yaw rate\n    thrust = 5.0             # N of forward / strafe drive\n    climb_rate = 1.6         # m/s of commanded climb\n    drag = 1.4               # horizontal damping, per kg: a drone is not ice\n    probe = 16.0             # m the altimeter looks down\n    flash_seconds = 0.35\n\n    def start(self, obj: threepp.Mesh, scene: threepp.Scene):\n        self.obj = obj\n        self.body = None\n        self.imu = None\n        self.cast = None\n        self.climb_hold = self.hover_height\n        self.flash = 0.0\n        self.imu_reads = 0\n        self.bumps = 0\n        material = obj.material\n        self.material = material if isinstance(material, threepp.MeshStandardMaterial) else None\n        self.rest = self.material.emissive.get_hex() if self.material else 0\n\n        body_of = _verb(\"rigid_body_from_object\")\n        self.cast = _verb(\"raycast\")\n        imu_of = _verb(\"imu_from_object\")\n        if body_of is None or self.cast is None:\n            print(\"Hover Arena needs the PhysX build to fly - the drone will just sit there.\",\n                  flush=True)\n            return\n\n        self.body = body_of(obj)\n        if self.body is None:\n            print(\"Hover Arena: no rigid body on\", obj.name, \"- nothing to fly.\", flush=True)\n            return\n        if imu_of is not None:\n            self.imu = imu_of(obj)\n\n        print(\"Hover Arena - W/S fly, A/D yaw, Q/E strafe, R/F climb. \"\n              \"Fly through all five rings.\", flush=True)\n\n    # --- the controller, on the physics clock -------------------------------\n    def fixed_update(self, dt: float):\n        if self.body is None:\n            return\n\n        mass = self.body.mass\n        rotation = self.body.rotation\n        up = threepp.Vector3(0.0, 1.0, 0.0).apply_quaternion(rotation)\n        forward = threepp.Vector3(0.0, 0.0, -1.0).apply_quaternion(rotation)\n        right = threepp.Vector3(1.0, 0.0, 0.0).apply_quaternion(rotation)\n\n        # Rate feedback: the sensor if it has spoken, the solver's own number\n        # only until the first sample arrives. Both are rad/s; the IMU's is in\n        # the sensor frame, so it is rotated into the world the torque is in.\n        rate = None\n        if self.imu is not None:\n            sample = self.imu.latest()\n            if sample is not None:\n                rate = sample.angular_velocity.clone().apply_quaternion(rotation)\n                self.imu_reads += 1\n        if rate is None:\n            rate = self.body.angular_velocity\n\n        # --- altitude: what is under me, right now --------------------------\n        origin = self.body.position\n        hit = self.cast(origin, threepp.Vector3(0.0, -1.0, 0.0), self.probe, ignore=self.obj)\n        altitude = hit.distance if hit is not None else origin.y\n\n        keys = editor.is_key_down\n        climb = (1.0 if keys(\"R\") else 0.0) - (1.0 if keys(\"F\") else 0.0)\n        # The stick sets a HEIGHT, not a thrust: let go and it holds the last\n        # one, which is what makes threading a ring at 3.8 m possible at all.\n        self.climb_hold = max(0.8, min(9.0, self.climb_hold + climb * self.climb_ra)JSON",
-            R"JSON(te * dt))\n\n        error = self.climb_hold - altitude\n        lift = mass * (9.81 + self.lift_p * error - self.lift_d * self.body.velocity.y)\n        # Along the hull's own up, divided by how much of it still points up:\n        # a tilted quad has to work harder to hold height, and that IS the feel.\n        lean = max(0.35, up.y)\n        lift = max(0.0, min(lift / lean, mass * 9.81 * 3.0))\n        self.body.apply_force(up.clone().multiply_scalar(lift))\n\n        # --- attitude: bring the hull's up back to the world's --------------\n        tilt = up.clone().cross(threepp.Vector3(0.0, 1.0, 0.0))\n        spin = rate.dot(up)\n        torque = tilt.multiply_scalar(self.level_p * mass)\n        # Damp the TILT rates only; the yaw rate has a command of its own below\n        # and would otherwise be fought by its own damper twice.\n        tilt_rate = rate.clone().sub(up.clone().multiply_scalar(spin))\n        torque.sub(tilt_rate.multiply_scalar(self.level_d * mass))\n\n        yaw = (1.0 if keys(\"A\") else 0.0) - (1.0 if keys(\"D\") else 0.0)\n        torque.add(up.clone().multiply_scalar(mass * (self.yaw_p * yaw - self.yaw_d * spin)))\n        self.body.apply_torque(torque)\n\n        # --- translation ----------------------------------------------------\n        drive = (1.0 if keys(\"W\") else 0.0) - (1.0 if keys(\"S\") else 0.0)\n        strafe = (1.0 if keys(\"E\") else 0.0) - (1.0 if keys(\"Q\") else 0.0)\n        push = forward.clone().multiply_scalar(drive * self.thrust * mass)\n        push.add(right.clone().multiply_scalar(strafe * self.thrust * mass))\n        velocity = self.body.velocity\n        push.add(threepp.Vector3(velocity.x, 0.0, velocity.z).multiply_scalar(-self.drag * mass))\n        self.body.apply_force(push)\n\n    # --- the frame's final word: what you can see ---------------------------\n    def update(self, dt: float):\n        if self.flash > 0.0 and self.material is not None:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xff3b1f)\n            self.material.emissive_intensity = 2.4 * level\n            if self.flash <= 0.0:\n                self.material.emissive = threepp.Color(self.rest)\n                self.material.emissive_intensity = 1.0\n\n    def on_collision_enter(self, contact):\n        self.bumps += 1\n        self.flash = self.flash_seconds\n        other = contact.other.name if contact.other is not None else \"the world\"\n        impulse = contact.impulse.length()\n        if impulse > 1.5:\n            print(\"Hover Arena: clipped %s (%.1f N*s)\" % (other, impulse), flush=True)\n",
+          "scriptSource": "# Hover Arena - the drone.\n#\n# fixed_update runs once per physics substep with a constant dt, so the same\n# gains settle at the same height whatever the frame rate is doing. Altitude is\n# a short downward raycast with ignore=self (without it the ray starts inside\n# the hull and finds it at distance zero); the rate feedback is the AUTHORED\n# IMU's reading, which is noisy, seeded and rate-gated. The small wobble you\n# can see is that noise going round the loop - it is not a bug to tune out.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\ndef _verb(name):\n    # The PhysX-gated names are ABSENT from threepp.editor without the SDK,\n    # rather than present and answering None, so ask before reaching.\n    return getattr(editor, name, None) if editor is not None else None\n\n\nclass DroneController:\n\n    hover_height = 2.2       # m above whatever is under the drone\n    lift_p = 13.0            # thrust per metre of altitude error, per kg\n    lift_d = 5.5             # thrust per m/s of climb rate, per kg\n    level_p = 2.6            # N*m per radian of tilt\n    level_d = 0.55           # N*m per rad/s of body rate  <- reads the IMU\n    yaw_p = 0.9              # N*m of yaw command\n    yaw_d = 0.25             # N*m per rad/s of yaw rate\n    thrust = 5.0             # N of forward / strafe drive\n    climb_rate = 1.6         # m/s of commanded climb\n    drag = 1.4               # horizontal damping, per kg: a drone is not ice\n    probe = 16.0             # m the altimeter looks down\n    flash_seconds = 0.35\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.body = None\n        self.imu = None\n        self.cast = None\n        self.climb_hold = self.hover_height\n        self.flash = 0.0\n        self.imu_reads = 0\n        self.bumps = 0\n        material = obj.material\n        self.material = material if isinstance(material, threepp.MeshStandardMaterial) else None\n        self.rest = self.material.emissive.get_hex() if self.material else 0\n\n        body_of = _verb(\"rigid_body_from_object\")\n        self.cast = _verb(\"raycast\")\n        imu_of = _verb(\"imu_from_object\")\n        if body_of is None or self.cast is None:\n            print(\"Hover Arena needs the PhysX build to fly - the drone will just sit there.\",\n                  flush=True)\n            return\n\n        self.body = body_of(obj)\n        if self.body is None:\n            print(\"Hover Arena: no rigid body on\", obj.name, \"- nothing to fly.\", flush=True)\n            return\n        if imu_of is not None:\n            self.imu = imu_of(obj)\n\n        print(\"Hover Arena - W/S fly, A/D yaw, Q/E strafe, R/F climb. \"\n              \"Fly through all five rings.\", flush=True)\n\n    # --- the controller, on the physics clock -------------------------------\n    def fixed_update(self, dt: float):\n        if self.body is None:\n            return\n\n        mass = self.body.mass\n        rotation = self.body.rotation\n        up = threepp.Vector3(0.0, 1.0, 0.0).apply_quaternion(rotation)\n        forward = threepp.Vector3(0.0, 0.0, -1.0).apply_quaternion(rotation)\n        right = threepp.Vector3(1.0, 0.0, 0.0).apply_quaternion(rotation)\n\n        # Rate feedback: the sensor if it has spoken, the solver's own number\n        # only until the first sample arrives. Both are rad/s; the IMU's is in\n        # the sensor frame, so it is rotated into the world the torque is in.\n        rate = None\n        if self.imu is not None:\n            sample = self.imu.latest()\n            if sample is not None:\n                rate = sample.angular_velocity.clone().apply_quaternion(rotation)\n                self.imu_reads += 1\n        if rate is None:\n            rate = self.body.angular_velocity\n\n        # --- altitude: what is under me, right now --------------------------\n        origin = self.body.position\n        hit = self.cast(origin, threepp.Vector3(0.0, -1.0, 0.0), self.probe, ignore=self.obj)\n        altitude = hit.distance if hit is not None else origin.y\n\n        keys = editor.is_key_down\n        climb = (1.0 if keys(\"R\") else 0.0) - (1.0 if keys(\"F\") else 0.0)\n        # The stick sets a HEIGHT, not a thrust: let go and it holds the last\n        # one, which is what makes threading a ring at 3.8 m possible at all.\n        self.climb_hold = max(0.8, min(9.0, self.climb_hold + climb * self.climb_rate * dt))\n\n        e)JSON",
+            R"JSON(rror = self.climb_hold - altitude\n        lift = mass * (9.81 + self.lift_p * error - self.lift_d * self.body.velocity.y)\n        # Along the hull's own up, divided by how much of it still points up:\n        # a tilted quad has to work harder to hold height, and that IS the feel.\n        lean = max(0.35, up.y)\n        lift = max(0.0, min(lift / lean, mass * 9.81 * 3.0))\n        self.body.apply_force(up.clone().multiply_scalar(lift))\n\n        # --- attitude: bring the hull's up back to the world's --------------\n        tilt = up.clone().cross(threepp.Vector3(0.0, 1.0, 0.0))\n        spin = rate.dot(up)\n        torque = tilt.multiply_scalar(self.level_p * mass)\n        # Damp the TILT rates only; the yaw rate has a command of its own below\n        # and would otherwise be fought by its own damper twice.\n        tilt_rate = rate.clone().sub(up.clone().multiply_scalar(spin))\n        torque.sub(tilt_rate.multiply_scalar(self.level_d * mass))\n\n        yaw = (1.0 if keys(\"A\") else 0.0) - (1.0 if keys(\"D\") else 0.0)\n        torque.add(up.clone().multiply_scalar(mass * (self.yaw_p * yaw - self.yaw_d * spin)))\n        self.body.apply_torque(torque)\n\n        # --- translation ----------------------------------------------------\n        drive = (1.0 if keys(\"W\") else 0.0) - (1.0 if keys(\"S\") else 0.0)\n        strafe = (1.0 if keys(\"E\") else 0.0) - (1.0 if keys(\"Q\") else 0.0)\n        push = forward.clone().multiply_scalar(drive * self.thrust * mass)\n        push.add(right.clone().multiply_scalar(strafe * self.thrust * mass))\n        velocity = self.body.velocity\n        push.add(threepp.Vector3(velocity.x, 0.0, velocity.z).multiply_scalar(-self.drag * mass))\n        self.body.apply_force(push)\n\n    # --- the frame's final word: what you can see ---------------------------\n    def update(self, dt: float):\n        if self.flash > 0.0 and self.material is not None:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xff3b1f)\n            self.material.emissive_intensity = 2.4 * level\n            if self.flash <= 0.0:\n                self.material.emissive = threepp.Color(self.rest)\n                self.material.emissive_intensity = 1.0\n\n    def on_collision_enter(self, contact):\n        self.bumps += 1\n        self.flash = self.flash_seconds\n        other = contact.other.name if contact.other is not None else \"the world\"\n        impulse = contact.impulse.length()\n        if impulse > 1.5:\n            print(\"Hover Arena: clipped %s (%.1f N*s)\" % (other, impulse), flush=True)\n",
           "sensor": "type=imu;rate=200;seed=11;gyrodensity=0.035;gyrowalk=0.0002;acceldensity=0.12;accelwalk=0.004;near=0.1;far=30;rangestddev=0.02;rangepermetre=0;rangebias=0;fov=60;width=160;height=120;beams=vlp16;facesize=128;joint=;encoderres=0;contactthreshold=0"
         },
         "layers": 1,
@@ -2007,11 +2007,11 @@ namespace {
           14.0,
           1.0
         ],
-        "geometry": "253ec300-ddef-4400-9ca7-b9005c029b00",
-        "material": "402d7f00-63b9-4e00-9a66-53000a652500",
+        "geometry": "ad491800-ce3b-4e00-a715-a50073655200",
+        "material": "72175000-e1d5-4100-8155-8b0082d07000",
         "children": [
           {
-            "uuid": "2d8ef800-9ef9-4000-886d-8500f2825300",
+            "uuid": "36916c00-3e53-4f00-80f8-1e00cad1c700",
             "type": "Mesh",
             "name": "Drone Boom 1",
             "castShadow": true,
@@ -2035,11 +2035,11 @@ namespace {
               -0.40700000524520874,
               1.0
             ],
-            "geometry": "f040df00-4cc7-4400-ac09-6a00f6777000",
-            "material": "4251a500-4aba-4e00-9aae-ee004f29ab00"
+            "geometry": "dc859800-9859-4500-bef8-0200d8832000",
+            "material": "fee3b600-d707-4800-aa79-f40001816000"
           },
           {
-            "uuid": "d8e4ae00-1d70-4b00-8feb-a80075845000",
+            "uuid": "71ec6800-7216-4f00-9ff8-8500d9f22d00",
             "type": "Mesh",
             "name": "Drone Rotor 1",
             "receiveShadow": true,
@@ -2062,11 +2062,11 @@ namespace {
               -0.7400000095367432,
               1.0
             ],
-            "geometry": "b0189300-4859-4f00-97f6-d70010082800",
-            "material": "30af7000-38ee-4d00-b086-c8005aa3f700"
+            "geometry": "89daa100-36ae-4400-8cb6-fd0023a92900",
+            "material": "fd39c600-3d61-4c00-9e89-020089686300"
           },
           {
-            "uuid": "9deae300-e4dd-4900-a064-71001da03400",
+            "uuid": "2a126d00-2eb3-4200-af41-c80080519700",
             "type": "Mesh",
             "name": "Drone Hub 1",
             "receiveShadow": true,
@@ -2089,11 +2089,11 @@ namespace {
               -0.7400000095367432,
               1.0
             ],
-            "geometry": "9afaca00-2cb6-4400-afda-ae00eacc9d00",
-            "material": "88560000-6a30-4700-993c-9c007c719300"
+            "geometry": "1addae00-3a82-4200-b2ac-67000f198d00",
+            "material": "873bb700-60b9-4500-a4d4-1100543af600"
           },
           {
-            "uuid": "5f642c00-c720-4b00-a6af-8c0040934c00",
+            "uuid": "53197b00-0a1a-4200-a57b-84006b20eb00",
             "type": "Mesh",
             "name": "Drone Boom 2",
             "castShadow": true,
@@ -2117,11 +2117,11 @@ namespace {
               -0.40700000524520874,
               1.0
             ],
-            "geometry": "f040df00-4cc7-4400-ac09-6a00f6777000",
-            "material": "4251a500-4aba-4e00-9aae-ee004f29ab00"
+            "geometry": "dc859800-9859-4500-bef8-0200d8832000",
+            "material": "fee3b600-d707-4800-aa79-f40001816000"
           },
           {
-            "uuid": "c8acd500-cd14-4c00-9d8c-550099df0700",
+            "uuid": "ee725300-d81b-4400-a14b-d50059daea00",
             "type": "Mesh",
             "name": "Drone Rotor 2",
             "receiveShadow": true,
@@ -2144,11 +2144,11 @@ namespace {
               -0.7400000095367432,
               1.0
             ],
-            "geometry": "b0189300-4859-4f00-97f6-d70010082800",
-            "material": "30af7000-38ee-4d00-b086-c8005aa3f700"
+            "geometry": "89daa100-36ae-4400-8cb6-fd0023a92900",
+            "material": "fd39c600-3d61-4c00-9e89-020089686300"
           },
           {
-            "uuid": "9be36e00-99e3-4a00-a6bf-380042078900",
+            "uuid": "35b0bd00-350a-4400-ad21-a00053c4c500",
             "type": "Mesh",
             "name": "Drone Hub 2",
             "receiveShadow": true,
@@ -2171,12 +2171,12 @@ namespace {
               -0.7400000095367432,
               1.0
             ],
-            "geometry": "9afaca00-2cb6-)JSON",
-            R"JSON(4400-afda-ae00eacc9d00",
-            "material": "88560000-6a30-4700-993c-9c007c719300"
+            "geometry": "1addae00-3a82-4200-b2ac-67000f198d00)JSON",
+            R"JSON(",
+            "material": "873bb700-60b9-4500-a4d4-1100543af600"
           },
           {
-            "uuid": "24b19000-cf6b-4c00-b1aa-c200dfc9e500",
+            "uuid": "62aa1d00-f6e9-4700-baed-13004c5af400",
             "type": "Mesh",
             "name": "Drone Boom 3",
             "castShadow": true,
@@ -2200,11 +2200,11 @@ namespace {
               0.40700000524520874,
               1.0
             ],
-            "geometry": "f040df00-4cc7-4400-ac09-6a00f6777000",
-            "material": "4251a500-4aba-4e00-9aae-ee004f29ab00"
+            "geometry": "dc859800-9859-4500-bef8-0200d8832000",
+            "material": "fee3b600-d707-4800-aa79-f40001816000"
           },
           {
-            "uuid": "5c438000-8044-4100-b3b7-0200efe70b00",
+            "uuid": "37e2fc00-cb22-4d00-a21d-b10081e03600",
             "type": "Mesh",
             "name": "Drone Rotor 3",
             "receiveShadow": true,
@@ -2227,11 +2227,11 @@ namespace {
               0.7400000095367432,
               1.0
             ],
-            "geometry": "b0189300-4859-4f00-97f6-d70010082800",
-            "material": "30af7000-38ee-4d00-b086-c8005aa3f700"
+            "geometry": "89daa100-36ae-4400-8cb6-fd0023a92900",
+            "material": "fd39c600-3d61-4c00-9e89-020089686300"
           },
           {
-            "uuid": "bb6a7c00-d01e-4400-9c7c-f400619e3300",
+            "uuid": "4e5bd000-7df7-4000-8948-be00a3c5bd00",
             "type": "Mesh",
             "name": "Drone Hub 3",
             "receiveShadow": true,
@@ -2254,11 +2254,11 @@ namespace {
               0.7400000095367432,
               1.0
             ],
-            "geometry": "9afaca00-2cb6-4400-afda-ae00eacc9d00",
-            "material": "88560000-6a30-4700-993c-9c007c719300"
+            "geometry": "1addae00-3a82-4200-b2ac-67000f198d00",
+            "material": "873bb700-60b9-4500-a4d4-1100543af600"
           },
           {
-            "uuid": "a7052100-e072-4500-9d6e-7f004d563600",
+            "uuid": "22364b00-e79f-4f00-b82a-09001a4db000",
             "type": "Mesh",
             "name": "Drone Boom 4",
             "castShadow": true,
@@ -2282,11 +2282,11 @@ namespace {
               0.40700000524520874,
               1.0
             ],
-            "geometry": "f040df00-4cc7-4400-ac09-6a00f6777000",
-            "material": "4251a500-4aba-4e00-9aae-ee004f29ab00"
+            "geometry": "dc859800-9859-4500-bef8-0200d8832000",
+            "material": "fee3b600-d707-4800-aa79-f40001816000"
           },
           {
-            "uuid": "d0dcf800-89f8-4600-8133-37004d305300",
+            "uuid": "f241ff00-045f-4000-ace8-6a00a49a2e00",
             "type": "Mesh",
             "name": "Drone Rotor 4",
             "receiveShadow": true,
@@ -2309,11 +2309,11 @@ namespace {
               0.7400000095367432,
               1.0
             ],
-            "geometry": "b0189300-4859-4f00-97f6-d70010082800",
-            "material": "30af7000-38ee-4d00-b086-c8005aa3f700"
+            "geometry": "89daa100-36ae-4400-8cb6-fd0023a92900",
+            "material": "fd39c600-3d61-4c00-9e89-020089686300"
           },
           {
-            "uuid": "69285600-e99b-4800-8f78-d50017ec6f00",
+            "uuid": "9b7da600-6409-4700-90f3-e4009a03b100",
             "type": "Mesh",
             "name": "Drone Hub 4",
             "receiveShadow": true,
@@ -2336,11 +2336,11 @@ namespace {
               0.7400000095367432,
               1.0
             ],
-            "geometry": "9afaca00-2cb6-4400-afda-ae00eacc9d00",
-            "material": "88560000-6a30-4700-993c-9c007c719300"
+            "geometry": "1addae00-3a82-4200-b2ac-67000f198d00",
+            "material": "873bb700-60b9-4500-a4d4-1100543af600"
           },
           {
-            "uuid": "c9b57200-fba9-4000-97d3-ce00bc52e600",
+            "uuid": "94a4e300-0c83-4700-b39b-4e0026209400",
             "type": "Mesh",
             "name": "Drone Canopy",
             "castShadow": true,
@@ -2364,11 +2364,11 @@ namespace {
               -0.05999999865889549,
               1.0
             ],
-            "geometry": "3e08e500-a3ac-4800-a717-a80059cf9100",
-            "material": "e89c1000-2c6a-4300-8c44-9a00566c3600"
+            "geometry": "b08e6a00-875d-4900-82f4-5a0076530e00",
+            "material": "c8d8aa00-e381-4200-b126-5d0065d82e00"
           },
           {
-            "uuid": "10ccf000-881e-4a00-8fcc-a5006615a800",
+            "uuid": "87f74300-5f68-4200-92ca-e50036379d00",
             "type": "Mesh",
             "name": "Drone Nose",
             "receiveShadow": true,
@@ -2391,11 +2391,11 @@ namespace {
               -0.6800000071525574,
               1.0
             ],
-            "geometry": "c652c900-b366-4500-b2a6-b7003ff18000",
-            "material": "5a44ce00-742f-4200-ad86-b50034d88100"
+            "geometry": "8c74b800-c989-4d00-ac3c-2d0011e48000",
+            "material": "91d1e800-d296-4e00-ae35-e500fa38e600"
           },
           {
-            "uuid": "dba6d500-9a52-4b00-ad3f-a100ee895000",
+            "uuid": "33138800-0034-4100-a698-dd00892fa100",
             "type": "Mesh",
             "name": "Drone Lidar",
             "receiveShadow": true,
@@ -2421,13 +2421,13 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "b6953e00-4f00-4300-9a82-090067bbc400",
-            "material": "057abd00-1b4a-4f00-892c-55006903f900"
+            "geometry": "da7a5b00-0cb8-4000-9c82-66005350db00",
+            "material": "7af38900-322d-4b00-92b2-a4001bc88500"
           }
         ]
       },
       {
-        "uuid": "dcaeec00-50b6-4000-bab7-71005f619700",
+        "uuid": "01d21a00-381b-4200-b94b-8400bdb21900",
         "type": "Group",
         "name": "Ring 1",
         "layers": 1,
@@ -2451,7 +2451,7 @@ namespace {
         ],
         "children": [
           {
-            "uuid": "1ad2be00-f7e7-4200-8481-5300454e9c00",
+            "uuid": "295e3b00-ae64-4b00-820b-e6003c263700",
             "type": "Mesh",
             "name": "Ring 1 Torus",
             "layers": 1,
@@ -2460,9 +2460,9 @@ namespace {
               0.0,
               0.0,
               0.0,
-           )JSON",
-            R"JSON(   0.0,
-              1.0,
+              0.0,
+              )JSON",
+            R"JSON(1.0,
               0.0,
               0.0,
               0.0,
@@ -2474,18 +2474,18 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "4cafa700-ca3b-4500-8b0d-0d004ead3800",
-            "material": "88102b00-a7e2-4300-a464-9800d0c6ef00"
+            "geometry": "0caa1300-88ca-4800-aa7f-c400d23fb800",
+            "material": "4075f100-5401-4100-a383-970051f53300"
           },
           {
-            "uuid": "6b74e100-5bad-4f00-a453-6a00f7433500",
+            "uuid": "b001c500-6370-4500-bbac-590013facd00",
             "type": "Mesh",
             "name": "Ring 1 Gate",
             "visible": false,
             "userData": {
               "physics": "body=static;shape=box;trigger=1;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
               "scriptFields": "index=1;torus=Ring 1 Torus;board=Beacon",
-              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh, scene: threepp.Scene):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        # Resolve the neighbour HERE: every instance exists by now, even though\n        # its own start() may not have run yet.\n        self.score = None\n        if editor is not None:\n            self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
+              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
             },
             "layers": 1,
             "matrix": [
@@ -2506,13 +2506,13 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "891b0300-f992-4400-a173-0700f3673500",
-            "material": "6cea5600-8aa4-4c00-b60d-7c00302d9400"
+            "geometry": "3c221600-f647-4900-92ae-b0001f2ed400",
+            "material": "d82f9f00-144a-4d00-b482-29004ddc8400"
           }
         ]
       },
       {
-        "uuid": "956d0100-edba-4a00-88e0-1800a58bb500",
+        "uuid": "a38e9400-c756-4300-9e37-ce0094cf2000",
         "type": "Group",
         "name": "Ring 2",
         "layers": 1,
@@ -2536,7 +2536,7 @@ namespace {
         ],
         "children": [
           {
-            "uuid": "8a7d4200-af92-4d00-a629-f4004d91de00",
+            "uuid": "09b4dc00-7825-4200-ac14-6b00a80a0000",
             "type": "Mesh",
             "name": "Ring 2 Torus",
             "layers": 1,
@@ -2558,19 +2558,19 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "02949c00-a0f0-4b00-9378-8b001375fb00",
-            "material": "59c33a00-2c53-4600-9ce8-a2008f264f00"
+            "geometry": "9641be00-939b-4700-9823-c700925ec300",
+            "material": "5cc3fc00-4540-4a00-b680-f100396d5a00"
           },
           {
-            "uuid": "51079c00-7861-4000-8e44-1100515efe00",
+            "uuid": "13df2b00-69d9-4b00-a9f4-0e00065efd00",
             "type": "Mesh",
             "name": "Ring 2 Gate",
             "visible": false,
             "userData": {
               "physics": "body=static;shape=box;trigger=1;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
               "scriptFields": "index=2;torus=Ring 2 Torus;board=Beacon",
-              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh, scene: threepp.Scene):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        # Resolve the neighbour HERE: every instance exists by now, even though\n        # its own start() may not have run yet.\n        self.score = None\n        if editor is not None:\n            self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = thr)JSON",
-            R"JSON(eepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
+              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock )JSON",
+            R"JSON(* 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
             },
             "layers": 1,
             "matrix": [
@@ -2591,13 +2591,13 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "a68d9000-474f-4a00-9696-0a00949e8000",
-            "material": "36451400-1611-4300-9b09-f300342d1500"
+            "geometry": "8f42c600-cd80-4d00-a2e5-40007bed4a00",
+            "material": "fa4ae000-07ac-4f00-9924-1500b27f4900"
           }
         ]
       },
       {
-        "uuid": "4e51d400-f908-4400-b391-2e00bb68c700",
+        "uuid": "3c8e3400-78b8-4d00-aed0-a9003958a300",
         "type": "Group",
         "name": "Ring 3",
         "layers": 1,
@@ -2621,7 +2621,7 @@ namespace {
         ],
         "children": [
           {
-            "uuid": "92617100-ba75-4900-a278-fa0081d62000",
+            "uuid": "a71d5d00-516a-4500-bc72-e000fc649600",
             "type": "Mesh",
             "name": "Ring 3 Torus",
             "layers": 1,
@@ -2643,18 +2643,18 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "386b8500-78a2-4f00-92b1-b400fbf8ba00",
-            "material": "3f96c300-6148-4200-bf4b-ad009b1d8a00"
+            "geometry": "884a3c00-7fe3-4d00-ad7b-be003f14c800",
+            "material": "e70f6a00-c0b7-4f00-8016-7e009ab77b00"
           },
           {
-            "uuid": "0e6d5600-b0fd-4f00-bd2d-840076735a00",
+            "uuid": "7daf0100-cb58-4c00-9806-2500435d3800",
             "type": "Mesh",
             "name": "Ring 3 Gate",
             "visible": false,
             "userData": {
               "physics": "body=static;shape=box;trigger=1;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
               "scriptFields": "index=3;torus=Ring 3 Torus;board=Beacon",
-              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh, scene: threepp.Scene):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        # Resolve the neighbour HERE: every instance exists by now, even though\n        # its own start() may not have run yet.\n        self.score = None\n        if editor is not None:\n            self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
+              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
             },
             "layers": 1,
             "matrix": [
@@ -2675,13 +2675,13 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "6eb4fa00-849b-4f00-a42c-c500162ef600",
-            "material": "d32c4600-db34-4c00-a04e-6f00accbdd00"
+            "geometry": "47dc7900-4eb0-4400-ae7e-b00071e1ba00",
+            "material": "6d66b900-47b4-4500-ba79-a9008a6b1f00"
           }
         ]
       },
       {
-        "uuid": "38746c00-2979-4700-8173-24008da64900",
+        "uuid": "73789400-f14c-4e00-bbdb-30005888c600",
         "type": "Group",
         "name": "Ring 4",
         "layers": 1,
@@ -2705,7 +2705,7 @@ namespace {
         ],
         "children": [
           {
-            "uuid": "fa2d9b00-bf56-4d00-9b25-930077b92e00",
+            "uuid": "ef99f600-c14c-4800-a2ad-fc00d50a0200",
             "type": "Mesh",
             "name": "Ring 4 Torus",
             "layers": 1,
@@ -2727,19 +2727,19 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "77ce1200-9c01-4800-a0a5-0400a5783a00",
-            "material": "82d7e900-7ec8-4f00-8555-bc0022591600"
+            "geometry": "8c76ec00-4277-4000-98b3-b20079766300",
+            "material": "3cc5d300-22af-4600-8ee7-97008a8cb400"
           },
           {
-            "uuid": "b7b47700-f863-4300-be10-63001b09e600",
+            "uuid": "7f88a800-79b9-4f00-9386-74002d6c1e00",
             "type": "Mesh",
             "name": "Ring 4 Gate",
             "visible": false,
             "userData": {
               "physics": "body=static;shape=box;trigger=1;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
               "scriptFields": "index=4;torus=Ring 4 Torus;board=Beacon",
-              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh, scene: threepp.Scene):\n        self.obj =)JSON",
-            R"JSON( obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        # Resolve the neighbour HERE: every instance exists by now, even though\n        # its own start() may not have run yet.\n        self.score = None\n        if editor is not None:\n            self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
+              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at a)JSON",
+            R"JSON(ll - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
             },
             "layers": 1,
             "matrix": [
@@ -2760,13 +2760,13 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "afca3900-9ab5-4000-97b4-7d00222aa100",
-            "material": "68e67100-2a34-4100-acf7-4a0094080800"
+            "geometry": "1800da00-b87f-4400-88c6-77007247d800",
+            "material": "749d4a00-32b8-4200-87d2-cd0004b38a00"
           }
         ]
       },
       {
-        "uuid": "afc31c00-9e5e-4b00-bea1-bf0021785500",
+        "uuid": "41561700-6b2e-4400-8a59-bb00da382400",
         "type": "Group",
         "name": "Ring 5",
         "layers": 1,
@@ -2790,7 +2790,7 @@ namespace {
         ],
         "children": [
           {
-            "uuid": "b33ee400-cdd2-4b00-9365-2c0084a7a800",
+            "uuid": "717d9e00-4ae8-4a00-939e-29000491a100",
             "type": "Mesh",
             "name": "Ring 5 Torus",
             "layers": 1,
@@ -2812,18 +2812,18 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "3ec6cf00-4d10-4000-871f-740021146c00",
-            "material": "488d5500-9191-4a00-bb2e-d80021ff6800"
+            "geometry": "c7dd2400-654f-4200-9b63-d700d92ed400",
+            "material": "ec542b00-80cc-4400-9743-ea00082ad500"
           },
           {
-            "uuid": "17f1cc00-3662-4e00-818d-3600c5f05f00",
+            "uuid": "fb9e4a00-afeb-4800-8f03-4300cf7abe00",
             "type": "Mesh",
             "name": "Ring 5 Gate",
             "visible": false,
             "userData": {
               "physics": "body=static;shape=box;trigger=1;mass=1;friction=0.5;restitution=0;young=1000000;poisson=0.45;voxel=10;iterations=20;selfcollision=0;hulls=16;hullverts=64;voxels=100000",
               "scriptFields": "index=5;torus=Ring 5 Torus;board=Beacon",
-              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh, scene: threepp.Scene):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        # Resolve the neighbour HERE: every instance exists by now, even though\n        # its own start() may not have run yet.\n        self.score = None\n        if editor is not None:\n            self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
+              "scriptSource": "# Hover Arena - one goal ring.\n#\n# This is on the GATE: an invisible thin box spanning the ring's hole, with\n# trigger=1 in its physics. A trigger collides with nothing and reports who\n# passed through it, which is exactly a goal. The torus is a sibling with no\n# physics at all - a ring you can hit is a ring that ends the run.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass GoalRing:\n\n    index = 1\n    torus = \"Ring 1 Torus\"\n    board = \"Beacon\"\n    flash_seconds = 0.9\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.taken = False\n        self.flash = 0.0\n        self.celebrating = False\n        self.clock = 0.0\n        self.material = None\n        self.score = None\n        if editor is None:\n            return\n        # The scene is a named call, so any callback could ask for it - but the\n        # things resolved from it are resolved HERE: every instance exists by\n        # now, even though its own start() may not have run yet.\n        scene = editor.scene()\n        ring = scene.get_object_by_name(self.torus)\n        if ring is not None:\n            material = ring.material\n            if isinstance(material, threepp.MeshStandardMaterial):\n                self.material = material\n        self.score = editor.script_from_object(scene.get_object_by_name(self.board))\n\n    def on_trigger_enter(self, other: threepp.Object3D):\n        if other is None or other.name != \"Drone\":\n            return\n        self.flash = self.flash_seconds\n        if self.taken:\n            return\n        self.taken = True\n        if self.score is not None:\n            self.score.scored(self.index, other)\n\n    def update(self, dt: float):\n        if self.material is None:\n            return\n        self.clock += dt\n        if self.flash > 0.0:\n            self.flash = max(0.0, self.flash - dt)\n            level = self.flash / self.flash_seconds\n            self.material.emissive = threepp.Color(0xffd27a)\n            self.material.emissive_intensity = 1.4 + 5.0 * level\n            return\n        if self.celebrating:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 6.0 + self.index)\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.6 + 3.2 * wave\n        elif self.taken:\n            self.material.emissive = threepp.Color(0xff9430)\n            self.material.emissive_intensity = 1.5\n        else:\n            wave = 0.5 + 0.5 * math.sin(self.clock * 1.6 + self.index)\n            self.material.emissive = threepp.Color(0x25d6f0)\n            self.material.emissive_intensity = 1.5 + 0.9 * wave\n"
             },
             "layers": 1,
             "matrix": [
@@ -2844,20 +2844,20 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "3ace1800-e347-4600-90fa-0900a8d3c300",
-            "material": "7d566000-3cf5-4b00-b670-f40003b65d00"
+            "geometry": "ca3f0d00-f517-4c00-9e49-ac00ada04700",
+            "material": "1cc77e00-b5c9-4e00-9dbd-d600dff30900"
           }
         ]
       },
       {
-        "uuid": "73bc0f00-de9e-4800-b2f0-2700fb081900",
+        "uuid": "65fdef00-f4f1-4400-83e9-79009385fb)JSON",
+            R"JSON(00",
         "type": "Mesh",
         "name": "Beacon",
         "castShadow": true,
         "receiveShadow": true,
         "userData": {
-          "scriptSource": "# Hover Arena - the scoreboard.\n#\n# The rings call scored() on this instance through\n# threepp.editor.script_from_object. There is no event bus: the instance IS\n# the API, so a method call is the message.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass Scoreboard:\n\n    rings = 5\n    light = \"Beacon Light\"\n\n    def start(self, obj: threepp.Mesh, scene:)JSON",
-            R"JSON( threepp.Scene):\n        self.obj = obj\n        self.score = 0\n        self.clock = 0.0\n        self.done = False\n        material = obj.material\n        self.material = material if isinstance(material, threepp.MeshStandardMaterial) else None\n        self.lamp = scene.get_object_by_name(self.light)\n        self.gates = []\n        if editor is not None:\n            for i in range(self.rings):\n                gate = scene.get_object_by_name(\"Ring %d Gate\" % (i + 1))\n                instance = editor.script_from_object(gate)\n                if instance is not None:\n                    self.gates.append(instance)\n        print(\"Hover Arena: 0/%d rings\" % self.rings, flush=True)\n\n    def scored(self, index: int, who: threepp.Object3D):\n        self.score += 1\n        print(\"Hover Arena: %d/%d rings (ring %d by %s)\"\n              % (self.score, self.rings, index, who.name if who is not None else \"?\"),\n              flush=True)\n        if self.score >= self.rings and not self.done:\n            self.done = True\n            print(\"Hover Arena: course complete - every ring taken.\", flush=True)\n            for gate in self.gates:\n                gate.celebrating = True\n\n    def update(self, dt: float):\n        self.clock += dt\n        share = float(self.score) / float(max(1, self.rings))\n        # Cyan while there is work left, gold once there is not. The beacon is\n        # the one thing in the scene that reads the score from across the arena.\n        cold = threepp.Color(0x25d6f0)\n        warm = threepp.Color(0xff9430)\n        tint = cold.clone().lerp(warm, share)\n        pulse = 0.5 + 0.5 * math.sin(self.clock * (2.0 + 4.0 * share))\n        level = (1.4 + 2.2 * share) * (0.75 + 0.45 * pulse)\n        if self.material is not None:\n            self.material.emissive = tint\n            self.material.emissive_intensity = level\n        if self.lamp is not None:\n            self.lamp.color = tint\n            self.lamp.intensity = 6.0 + 26.0 * share * (0.7 + 0.5 * pulse)\n"
+          "scriptSource": "# Hover Arena - the scoreboard.\n#\n# The rings call scored() on this instance through\n# threepp.editor.script_from_object. There is no event bus: the instance IS\n# the API, so a method call is the message.\nimport math\n\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass Scoreboard:\n\n    rings = 5\n    light = \"Beacon Light\"\n\n    def start(self, obj: threepp.Mesh):\n        self.obj = obj\n        self.score = 0\n        self.clock = 0.0\n        self.done = False\n        material = obj.material\n        self.material = material if isinstance(material, threepp.MeshStandardMaterial) else None\n        self.lamp = None\n        self.gates = []\n        if editor is None:\n            return\n        scene = editor.scene()\n        self.lamp = scene.get_object_by_name(self.light)\n        for i in range(self.rings):\n            gate = scene.get_object_by_name(\"Ring %d Gate\" % (i + 1))\n            instance = editor.script_from_object(gate)\n            if instance is not None:\n                self.gates.append(instance)\n        print(\"Hover Arena: 0/%d rings\" % self.rings, flush=True)\n\n    def scored(self, index: int, who: threepp.Object3D):\n        self.score += 1\n        print(\"Hover Arena: %d/%d rings (ring %d by %s)\"\n              % (self.score, self.rings, index, who.name if who is not None else \"?\"),\n              flush=True)\n        if self.score >= self.rings and not self.done:\n            self.done = True\n            print(\"Hover Arena: course complete - every ring taken.\", flush=True)\n            for gate in self.gates:\n                gate.celebrating = True\n\n    def update(self, dt: float):\n        self.clock += dt\n        share = float(self.score) / float(max(1, self.rings))\n        # Cyan while there is work left, gold once there is not. The beacon is\n        # the one thing in the scene that reads the score from across the arena.\n        cold = threepp.Color(0x25d6f0)\n        warm = threepp.Color(0xff9430)\n        tint = cold.clone().lerp(warm, share)\n        pulse = 0.5 + 0.5 * math.sin(self.clock * (2.0 + 4.0 * share))\n        level = (1.4 + 2.2 * share) * (0.75 + 0.45 * pulse)\n        if self.material is not None:\n            self.material.emissive = tint\n            self.material.emissive_intensity = level\n        if self.lamp is not None:\n            self.lamp.color = tint\n            self.lamp.intensity = 6.0 + 26.0 * share * (0.7 + 0.5 * pulse)\n"
         },
         "layers": 1,
         "matrix": [
@@ -2878,11 +2878,11 @@ namespace {
           -20.0,
           1.0
         ],
-        "geometry": "c8f62800-78e4-4b00-a46b-1000e5068c00",
-        "material": "16636900-2a9a-4800-9a7c-b400c369a900",
+        "geometry": "8837d100-175f-4900-9cfc-b400135a4300",
+        "material": "88520b00-6411-4200-b365-cc002e4e4d00",
         "children": [
           {
-            "uuid": "8b0b5600-dedb-4200-ad7e-7600dbf28400",
+            "uuid": "ee8b9200-6685-4e00-9a6c-3900307ffa00",
             "type": "Mesh",
             "name": "Beacon Plinth",
             "castShadow": true,
@@ -2906,11 +2906,11 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "47152900-eb92-4a00-8490-4900d9e58400",
-            "material": "7a4eb400-8b51-4d00-967c-9c00b1599e00"
+            "geometry": "45714b00-ab5b-4900-93ad-b000cef2e400",
+            "material": "e679d500-1ceb-4700-a7ce-3100e0423800"
           },
           {
-            "uuid": "debdb600-906f-4800-b841-fe00b0c32300",
+            "uuid": "6e305000-e628-4700-b671-8400908c8800",
             "type": "PointLight",
             "name": "Beacon Light",
             "layers": 1,
@@ -2945,7 +2945,7 @@ namespace {
                 2048.0
               ],
               "camera": {
-                "uuid": "404edb00-f1a5-4400-994e-ba00406dea00",
+                "uuid": "4c53f100-b5b4-4e00-9461-5a0053596c00",
                 "type": "PerspectiveCamera",
                 "layers": 1,
                 "fov": 90.0,
@@ -2962,7 +2962,7 @@ namespace {
         ]
       },
       {
-        "uuid": "fff8ce00-c4bf-4000-9a53-6300681d7000",
+        "uuid": "53dc7100-0212-4100-b06e-d4002b71c800",
         "type": "Group",
         "name": "Generated",
         "userData": {
@@ -2989,7 +2989,7 @@ namespace {
         ],
         "children": [
           {
-            "uuid": "16bbae00-199b-4f00-badf-f20013b7b400",
+            "uuid": "3dec4e00-8e6a-4a00-bb5d-370048951800",
             "type": "Mesh",
             "name": "Arena Floor",
             "receiveShadow": true,
@@ -3015,11 +3015,11 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "c2537400-e020-4900-97aa-a500c5eed400"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3a286100-3319-4300-b518-73007aa64700"
           },
           {
-            "uuid": "927b3200-7fc9-4100-b678-490017979400",
+            "uuid": "6e9d0600-54b8-4800-9351-4b0088554800",
             "type": "Mesh",
             "name": "Arena Wall 1",
             "castShadow": true,
@@ -3046,11 +3046,11 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "68917000-7a0d-4400-b8f0-4d000f409900"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "2c784e00-5f8b-4800-b31a-ea0023eb5c00"
           },
           {
-            "uuid": "174f9c00-d237-4800-b843-dc00c961dd00",
+            "uuid": "5011ad00-0ec2-4d00-9e8b-c000c6f4a700",
             "type": "Mesh",
             "name": "Arena Kerb 1",
             "receiveShadow": true,
@@ -3073,11 +3073,12 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "bc115300-4cea-4300-962f-fd002a200800"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+ )JSON",
+            R"JSON(           "material": "f225c900-0b51-4a00-91b2-31003ac4b000"
           },
           {
-            "uuid": "58d4b300-9c95-4e00-bae4-58000c900900",
+            "uuid": "7157df00-0ceb-4f00-b260-c9002a96d100",
             "type": "Mesh",
             "name": "Arena Wall 2",
             "castShadow": true,
@@ -3093,8 +3094,7 @@ namespace {
               0.0,
               0.0,
               7.0,
-        )JSON",
-            R"JSON(      0.0,
+              0.0,
               0.0,
               0.0,
               0.0,
@@ -3105,11 +3105,11 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "68917000-7a0d-4400-b8f0-4d000f409900"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "2c784e00-5f8b-4800-b31a-ea0023eb5c00"
           },
           {
-            "uuid": "17752800-5814-4d00-ad61-df00cc387300",
+            "uuid": "3fbf0400-06cd-4300-853c-d5008185a000",
             "type": "Mesh",
             "name": "Arena Kerb 2",
             "receiveShadow": true,
@@ -3132,11 +3132,11 @@ namespace {
               0.0,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "bc115300-4cea-4300-962f-fd002a200800"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "f225c900-0b51-4a00-91b2-31003ac4b000"
           },
           {
-            "uuid": "d01fe500-8acf-4800-b637-1f00884fc300",
+            "uuid": "cf88cf00-c5dc-4600-aae7-6600fc4c8500",
             "type": "Mesh",
             "name": "Arena Wall 3",
             "castShadow": true,
@@ -3163,11 +3163,11 @@ namespace {
               22.399999618530273,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "68917000-7a0d-4400-b8f0-4d000f409900"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "2c784e00-5f8b-4800-b31a-ea0023eb5c00"
           },
           {
-            "uuid": "8fdb1700-8f6e-4400-a618-2500c4548d00",
+            "uuid": "703da300-1566-4200-9626-e900452b0300",
             "type": "Mesh",
             "name": "Arena Kerb 3",
             "receiveShadow": true,
@@ -3190,11 +3190,11 @@ namespace {
               21.799999237060547,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "bc115300-4cea-4300-962f-fd002a200800"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "f225c900-0b51-4a00-91b2-31003ac4b000"
           },
           {
-            "uuid": "dc0b5800-cc6f-4f00-a14c-3300e4a4f100",
+            "uuid": "6a01c100-51fc-4d00-a372-d200d4195400",
             "type": "Mesh",
             "name": "Arena Wall 4",
             "castShadow": true,
@@ -3221,11 +3221,11 @@ namespace {
               -22.399999618530273,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "68917000-7a0d-4400-b8f0-4d000f409900"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "2c784e00-5f8b-4800-b31a-ea0023eb5c00"
           },
           {
-            "uuid": "d2248b00-3c3f-4500-b34d-f20020b79800",
+            "uuid": "12c1a800-73c0-4800-964b-2c0047273d00",
             "type": "Mesh",
             "name": "Arena Kerb 4",
             "receiveShadow": true,
@@ -3248,11 +3248,11 @@ namespace {
               -21.799999237060547,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "bc115300-4cea-4300-962f-fd002a200800"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "f225c900-0b51-4a00-91b2-31003ac4b000"
           },
           {
-            "uuid": "dfb6c100-1b06-4e00-936a-400072c97b00",
+            "uuid": "4d96e900-9a74-4300-854a-7800e5c0d000",
             "type": "Mesh",
             "name": "Pillar 1",
             "castShadow": true,
@@ -3279,11 +3279,11 @@ namespace {
               -18.158437728881836,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "8c724900-b784-4400-9e4c-82005c428600",
+            "uuid": "e04fe000-a6e8-4100-a5da-4d0093c58900",
             "type": "Mesh",
             "name": "Pillar 1 Band",
             "receiveShadow": true,
@@ -3306,11 +3306,11 @@ namespace {
               -18.158437728881836,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "69e8c600-78ab-4d00-94a2-080075a3c600",
+            "uuid": "bd8c3500-0086-4500-91e3-1e00a0b47200",
             "type": "Mesh",
             "name": "Pillar 2",
             "castShadow": true,
@@ -3337,11 +3337,11 @@ namespace {
               13.56879997253418,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "b554ad00-10b9-4900-b393-d80005a93100",
+            "uuid": "8c994500-0a41-4000-b409-a600db32a700",
             "type": "Mesh",
             "name": "Pillar 2 Band",
             "receiveShadow": true,
@@ -3349,7 +3349,8 @@ namespace {
             "matrix": [
               1.3493095636367798,
               0.0,
-              -0.006130672991275787,
+              -0.00613067)JSON",
+            R"JSON(2991275787,
               0.0,
               0.0,
               0.10000000149011612,
@@ -3364,13 +3365,12 @@ namespace {
               13.56879997253418,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "acc12e00-c34c-4200-b15d-630067be8000",
-            "type": "Mesh)JSON",
-            R"JSON(",
+            "uuid": "1e31de00-5981-4300-a98e-8f00f1e71400",
+            "type": "Mesh",
             "name": "Pillar 3",
             "castShadow": true,
             "receiveShadow": true,
@@ -3396,11 +3396,11 @@ namespace {
               2.516740083694458,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "eab2ed00-fc65-4800-92df-fb00b8b05a00",
+            "uuid": "b141d300-485c-4700-b666-c30025388200",
             "type": "Mesh",
             "name": "Pillar 3 Band",
             "receiveShadow": true,
@@ -3423,11 +3423,11 @@ namespace {
               2.516740083694458,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "3cadc500-1572-4e00-b521-c80068923600",
+            "uuid": "24020200-fcaf-4000-80c7-270058780c00",
             "type": "Mesh",
             "name": "Pillar 4",
             "castShadow": true,
@@ -3454,11 +3454,11 @@ namespace {
               8.87553882598877,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "28cfcd00-4e37-4600-80ba-dd00d1704600",
+            "uuid": "8ab97300-e2d7-4b00-a729-1100117f7700",
             "type": "Mesh",
             "name": "Pillar 4 Band",
             "receiveShadow": true,
@@ -3481,11 +3481,11 @@ namespace {
               8.87553882598877,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "ea051600-bae1-4500-ba0b-3f00723b1e00",
+            "uuid": "234e3600-8453-4100-a5d5-ab0079eff700",
             "type": "Mesh",
             "name": "Pillar 5",
             "castShadow": true,
@@ -3512,11 +3512,11 @@ namespace {
               -12.253166198730469,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "949c1800-7489-4000-bc5f-5200c91e1700",
+            "uuid": "9cb1ec00-cafd-4f00-9c6d-07008ca4e600",
             "type": "Mesh",
             "name": "Pillar 5 Band",
             "receiveShadow": true,
@@ -3539,11 +3539,11 @@ namespace {
               -12.253166198730469,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "aa6a0300-8116-4600-b2ba-86008cefa900",
+            "uuid": "88142c00-c858-4800-84b6-ba00e3db9e00",
             "type": "Mesh",
             "name": "Pillar 6",
             "castShadow": true,
@@ -3570,11 +3570,11 @@ namespace {
               4.495255470275879,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "5c12ed00-a55b-4c00-8e81-8300f635d800",
+            "uuid": "a6a0dd00-b993-4a00-841b-6500d6752300",
             "type": "Mesh",
             "name": "Pillar 6 Band",
             "receiveShadow": true,
@@ -3597,11 +3597,11 @@ namespace {
               4.495255470275879,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "856f5e00-46f0-4800-8c3f-b100762eb900",
+            "uuid": "bdd44300-cbff-4900-b54e-9800f7486600",
             "type": "Mesh",
             "name": "Pillar 7",
             "castShadow": true,
@@ -3613,7 +3613,8 @@ namespace {
             "matrix": [
               1.0326670408248901,
               0.0,
-              -0.3852808177471161,
+    )JSON",
+            R"JSON(          -0.3852808177471161,
               0.0,
               0.0,
               6.156509876251221,
@@ -3628,13 +3629,12 @@ namespace {
               4.310395240783691,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "40e26200-0bd0-4a00-b31a-ba0082feb900",
-       )JSON",
-            R"JSON(     "type": "Mesh",
+            "uuid": "0400ba00-7008-4500-ac79-20002f34dd00",
+            "type": "Mesh",
             "name": "Pillar 7 Band",
             "receiveShadow": true,
             "layers": 1,
@@ -3656,11 +3656,11 @@ namespace {
               4.310395240783691,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "15f69b00-25ec-4e00-a173-da00fdea6800",
+            "uuid": "5068c900-b4ee-4500-be89-39003c58a000",
             "type": "Mesh",
             "name": "Pillar 8",
             "castShadow": true,
@@ -3687,11 +3687,11 @@ namespace {
               -3.5981175899505615,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "23e4fe00-a1bb-4800-84a4-c30088149800",
+            "uuid": "5c4b2700-63dc-4800-8f91-d100d8816d00",
             "type": "Mesh",
             "name": "Pillar 8 Band",
             "receiveShadow": true,
@@ -3714,11 +3714,11 @@ namespace {
               -3.5981175899505615,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "2b8f1b00-1cf0-4900-a77f-da0069952600",
+            "uuid": "f960c300-440b-4300-8023-68006efe1b00",
             "type": "Mesh",
             "name": "Pillar 9",
             "castShadow": true,
@@ -3745,11 +3745,11 @@ namespace {
               9.06758975982666,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "74731b00-0a14-4000-8fbc-4700a1133400",
+            "uuid": "f7fce600-60db-4200-bd49-8f00c7a87900",
             "type": "Mesh",
             "name": "Pillar 9 Band",
             "receiveShadow": true,
@@ -3772,11 +3772,11 @@ namespace {
               9.06758975982666,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "67c99a00-145e-4200-9799-db003c02de00",
+            "uuid": "3dcfa300-ebd1-4700-8257-3d0060740000",
             "type": "Mesh",
             "name": "Pillar 10",
             "castShadow": true,
@@ -3803,11 +3803,11 @@ namespace {
               9.310735702514648,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "46c73300-6c03-4900-abe5-3900eff13a00",
+            "uuid": "7e2f4c00-6c8b-4400-b7a9-9700707b5800",
             "type": "Mesh",
             "name": "Pillar 10 Band",
             "receiveShadow": true,
@@ -3830,11 +3830,11 @@ namespace {
               9.310735702514648,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "f4b8e200-7dd9-4100-9fd1-a2004e323900",
+            "uuid": "c7561600-ae78-4f00-a256-6900530bb600",
             "type": "Mesh",
             "name": "Pillar 11",
             "castShadow": true,
@@ -3861,11 +3861,11 @@ namespace {
               18.792898178100586,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "991c7800-067d-4c00-aa6e-eb00b0fc7c00",
+            "uuid": "8ba55300-c10f-4700-8369-b80098428000",
             "type": "Mesh",
             "name": "Pillar 11 Band",
             "receiveShadow": true,
@@ -3879,7 +3879,8 @@ namespace {
               0.10000000149011612,
               0.0,
               0.0,
-              0.7893840670585632,
+    )JSON",
+            R"JSON(          0.7893840670585632,
               0.0,
               -1.2389392852783203,
               0.0,
@@ -3888,17 +3889,16 @@ namespace {
               18.792898178100586,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "f4661d00-5787-4100-90e3-a000552ebb00",
+            "uuid": "365d2a00-fcfb-4800-a539-f70036aff100",
             "type": "Mesh",
             "name": "Pillar 12",
             "castShadow": true,
             "receiveShadow": true,
-            "userData":)JSON",
-            R"JSON( {
+            "userData": {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
             },
             "layers": 1,
@@ -3920,11 +3920,11 @@ namespace {
               -8.744040489196777,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "fdfae300-e397-4100-ba50-df004074e600",
+            "uuid": "f91cd800-aecc-4e00-8fcd-340071f50a00",
             "type": "Mesh",
             "name": "Pillar 12 Band",
             "receiveShadow": true,
@@ -3947,11 +3947,11 @@ namespace {
               -8.744040489196777,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "78ec1d00-401f-4a00-8465-fe00fd7b1100",
+            "uuid": "41340700-f2d2-4300-8a1d-9100ecdf9e00",
             "type": "Mesh",
             "name": "Pillar 13",
             "castShadow": true,
@@ -3978,11 +3978,11 @@ namespace {
               -5.379762172698975,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "c3519000-f5eb-4700-9e4a-3700056a0c00",
+            "uuid": "2e4f2800-4dd2-4800-822d-6c00ba723c00",
             "type": "Mesh",
             "name": "Pillar 13 Band",
             "receiveShadow": true,
@@ -4005,11 +4005,11 @@ namespace {
               -5.379762172698975,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "3a86af00-678a-4c00-9506-d80081b42f00",
+            "uuid": "6bd71b00-a3ca-4b00-a2d6-b00031a92c00",
             "type": "Mesh",
             "name": "Pillar 14",
             "castShadow": true,
@@ -4036,11 +4036,11 @@ namespace {
               14.635796546936035,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "3cd30100-8898-4800-ac1c-0d0060c06c00",
+            "uuid": "cfbc4800-2378-4600-aaa8-2e007108e400",
             "type": "Mesh",
             "name": "Pillar 14 Band",
             "receiveShadow": true,
@@ -4063,11 +4063,11 @@ namespace {
               14.635796546936035,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "29dbeb00-2c86-4b00-bf9e-37009a0efd00",
+            "uuid": "5f56c800-2702-4a00-9c17-dd0040762300",
             "type": "Mesh",
             "name": "Pillar 15",
             "castShadow": true,
@@ -4094,11 +4094,11 @@ namespace {
               -1.8067920207977295,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "51793400-7fc7-4e00-a0ce-7400032b7600",
+            "uuid": "b8954000-9933-4e00-ba1a-090017b20c00",
             "type": "Mesh",
             "name": "Pillar 15 Band",
             "receiveShadow": true,
@@ -4121,11 +4121,11 @@ namespace {
               -1.8067920207977295,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "9b398100-cce3-4c00-a670-3500c5329d00"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "3445d800-4214-4200-b221-1a00fc3e3d00"
           },
           {
-            "uuid": "c80eb900-e8e2-4100-bc1e-9e00e98a9000",
+            "uuid": "bc5b6e00-2cb7-4600-a32c-5e00e7c63400",
             "type": "Mesh",
             "name": "Start Pad",
             "receiveShadow": true,
@@ -4147,12 +4147,13 @@ namespace {
               0.05000000074505806,
               14.0,
               1.0
-            ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "348a3f00-0356-4900-9ebd-c0004f742e00"
+)JSON",
+            R"JSON(            ],
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "0347eb00-7e31-4f00-89fb-7000810b9c00"
           },
           {
-            "uuid": "623b8200-4bb5-4c00-87df-b200ef526600",
+            "uuid": "48d40500-4736-4400-8359-7d00c8109c00",
             "type": "Mesh",
             "name": "Crate 1",
             "castShadow": true,
@@ -4164,8 +4165,7 @@ namespace {
             "matrix": [
               0.6733859181404114,
               0.0,
-        )JSON",
-            R"JSON(      -0.794296145439148,
+              -0.794296145439148,
               0.0,
               0.0,
               1.0413236618041992,
@@ -4180,11 +4180,11 @@ namespace {
               -12.752528190612793,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "31444f00-cf1c-4400-83d8-d70085ef7b00",
+            "uuid": "538c7500-aae5-4b00-89df-f500855cf100",
             "type": "Mesh",
             "name": "Crate 2",
             "castShadow": true,
@@ -4211,11 +4211,11 @@ namespace {
               9.233094215393066,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "8c0d0300-79da-4300-b3f0-0800f9957a00",
+            "uuid": "59f6f500-58bd-4f00-b0f8-f200a8977a00",
             "type": "Mesh",
             "name": "Crate 3",
             "castShadow": true,
@@ -4242,11 +4242,11 @@ namespace {
               -0.601351797580719,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "e43c9e00-33f2-4c00-818a-6800229d8400",
+            "uuid": "e9a25c00-0d57-4300-86b5-4700e7d9cc00",
             "type": "Mesh",
             "name": "Crate 4",
             "castShadow": true,
@@ -4273,11 +4273,11 @@ namespace {
               8.036529541015625,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "c3b53400-7f5e-4e00-bbad-0200aa53df00",
+            "uuid": "21ee3900-8133-4500-98be-8a00f7343f00",
             "type": "Mesh",
             "name": "Crate 5",
             "castShadow": true,
@@ -4304,11 +4304,11 @@ namespace {
               -11.480022430419922,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "63941a00-cccd-4700-9cf7-8a0069bdb900",
+            "uuid": "a91cd500-2757-4e00-a832-ed0027ee7c00",
             "type": "Mesh",
             "name": "Crate 6",
             "castShadow": true,
@@ -4335,11 +4335,11 @@ namespace {
               -2.497955799102783,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "409f1500-77b6-4f00-b9e1-5b008054ea00",
+            "uuid": "a6b93000-e48d-4800-b185-2b000e0b2c00",
             "type": "Mesh",
             "name": "Crate 7",
             "castShadow": true,
@@ -4366,11 +4366,11 @@ namespace {
               7.529664993286133,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "e2930100-f1a4-4c00-94db-e400d8008400",
+            "uuid": "9396c100-f57a-4b00-baaf-0f00f7a78600",
             "type": "Mesh",
             "name": "Crate 8",
             "castShadow": true,
@@ -4397,14 +4397,15 @@ namespace {
               10.913208961486816,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           },
           {
-            "uuid": "b34d6000-d4eb-4300-a292-ab0053ef2900",
+            "uuid": "ce49ba00-ccd4-4100-baf6-8e004c319300",
             "type": "Mesh",
             "name": "Crate 9",
-            "castShadow": true,
+)JSON",
+            R"JSON(            "castShadow": true,
             "receiveShadow": true,
             "userData": {
               "physics": "body=static;shape=box;trigger=0;mass=1;friction=0.6;restitution=0.05"
@@ -4424,13 +4425,12 @@ namespace {
               1.1751666069030762,
               0.0,
               -11.382733345031738,
-        )JSON",
-            R"JSON(      0.6255301237106323,
+              0.6255301237106323,
               -13.891948699951172,
               1.0
             ],
-            "geometry": "ad104b00-773c-4100-8398-4700b3deb500",
-            "material": "09832c00-abc7-4f00-830c-ef0075c27200"
+            "geometry": "8bdef800-6461-4100-ad6f-d000d46a5b00",
+            "material": "1770c700-3c61-4a00-bf9f-9800647ebb00"
           }
         ]
       }

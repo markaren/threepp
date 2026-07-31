@@ -25,6 +25,12 @@
 // marker. They hand back the live graph, so a script CAN reach in and mutate it
 // directly; that is not authored content and will not be saved as such, and the
 // docstrings say so rather than pretending the door is locked.
+//
+// scene() is the one name here that a BEHAVIOUR script uses too: during Play it
+// answers with the scene the play session is running (scripting::playScene),
+// which is how a script reaches a neighbour by name. It is the same verb asking
+// the same question — "what is around me" — so it is one binding rather than
+// two spellings of it, and the fallback below is the whole of the difference.
 
 #include "bindings.hpp"
 
@@ -88,17 +94,31 @@ namespace {
 
         sub.def(
                 "scene", []() -> py::object {
+                    // A generator run first, because during one that IS the
+                    // scene the caller means — and the two never overlap anyway:
+                    // the editor does not generate into a document it is
+                    // playing.
                     auto* scene = editor::scripting::authoringScene();
+                    if (!scene) scene = editor::scripting::playScene();
                     if (!scene) {
                         throw std::runtime_error(
-                                "threepp.editor.scene: only available while generating.");
+                                "threepp.editor.scene: no scene right now. This answers "
+                                "during a generator run and from a behaviour script's "
+                                "start/update/stop while playing — nowhere else.");
                     }
                     return py::cast(scene->shared_from_this());
                 },
-                "The scene this generator is authoring into. READ it to place content "
-                "relative to what already exists — a marker to put a crate on, a surface to "
-                "scatter over. Objects reached this way are NOT this generator's output and "
-                "are not replaced when it re-runs; only what you pass to add() is.");
+                "The live scene: what a generator is authoring into, or what a behaviour "
+                "script is playing in.\n\n"
+                "READ it to reach what you did not author — `scene.get_object_by_name(\"Ground\")`, "
+                "`scene.children`. A generator places content relative to what already exists (a "
+                "marker to put a crate on, a surface to scatter over); objects reached that way "
+                "are NOT its output and are not replaced when it re-runs, only what you pass to "
+                "add() is.\n\n"
+                "During Play this answers from start() onwards, including update(), "
+                "fixed_update() and the collision and trigger callbacks — so a script that needs "
+                "the scene later does not have to stash it. Raises when nothing is generating "
+                "and nothing is playing.");
 
         // Input, for a BEHAVIOUR script during Play — the other half of "a play session is a
         // thing you can drive". Poll it from update(); it never sticks.

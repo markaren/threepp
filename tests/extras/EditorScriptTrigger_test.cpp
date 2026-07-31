@@ -722,10 +722,11 @@ import threepp
 
 
 class GoalZone:
-    def start(self, obj: threepp.Object3D, scene: threepp.Scene):
+    def start(self, obj: threepp.Object3D):
         # Resolve in start(), use later: every script instance exists by now,
         # but its own start() may not have run yet.
-        self.board = threepp.editor.script_from_object(scene.get_object_by_name("Scoreboard"))
+        self.board = threepp.editor.script_from_object(
+            threepp.editor.scene().get_object_by_name("Scoreboard"))
 
     def on_trigger_enter(self, other: threepp.Object3D):
         if self.board is not None and other is not None:

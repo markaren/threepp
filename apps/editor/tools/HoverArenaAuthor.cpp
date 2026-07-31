@@ -311,7 +311,7 @@ class DroneController:
     probe = 16.0             # m the altimeter looks down
     flash_seconds = 0.35
 
-    def start(self, obj: threepp.Mesh, scene: threepp.Scene):
+    def start(self, obj: threepp.Mesh):
         self.obj = obj
         self.body = None
         self.imu = None
@@ -449,23 +449,26 @@ class GoalRing:
     board = "Beacon"
     flash_seconds = 0.9
 
-    def start(self, obj: threepp.Mesh, scene: threepp.Scene):
+    def start(self, obj: threepp.Mesh):
         self.obj = obj
         self.taken = False
         self.flash = 0.0
         self.celebrating = False
         self.clock = 0.0
         self.material = None
+        self.score = None
+        if editor is None:
+            return
+        # The scene is a named call, so any callback could ask for it - but the
+        # things resolved from it are resolved HERE: every instance exists by
+        # now, even though its own start() may not have run yet.
+        scene = editor.scene()
         ring = scene.get_object_by_name(self.torus)
         if ring is not None:
             material = ring.material
             if isinstance(material, threepp.MeshStandardMaterial):
                 self.material = material
-        # Resolve the neighbour HERE: every instance exists by now, even though
-        # its own start() may not have run yet.
-        self.score = None
-        if editor is not None:
-            self.score = editor.script_from_object(scene.get_object_by_name(self.board))
+        self.score = editor.script_from_object(scene.get_object_by_name(self.board))
 
     def on_trigger_enter(self, other: threepp.Object3D):
         if other is None or other.name != "Drone":
@@ -519,21 +522,24 @@ class Scoreboard:
     rings = 5
     light = "Beacon Light"
 
-    def start(self, obj: threepp.Mesh, scene: threepp.Scene):
+    def start(self, obj: threepp.Mesh):
         self.obj = obj
         self.score = 0
         self.clock = 0.0
         self.done = False
         material = obj.material
         self.material = material if isinstance(material, threepp.MeshStandardMaterial) else None
-        self.lamp = scene.get_object_by_name(self.light)
+        self.lamp = None
         self.gates = []
-        if editor is not None:
-            for i in range(self.rings):
-                gate = scene.get_object_by_name("Ring %d Gate" % (i + 1))
-                instance = editor.script_from_object(gate)
-                if instance is not None:
-                    self.gates.append(instance)
+        if editor is None:
+            return
+        scene = editor.scene()
+        self.lamp = scene.get_object_by_name(self.light)
+        for i in range(self.rings):
+            gate = scene.get_object_by_name("Ring %d Gate" % (i + 1))
+            instance = editor.script_from_object(gate)
+            if instance is not None:
+                self.gates.append(instance)
         print("Hover Arena: 0/%d rings" % self.rings, flush=True)
 
     def scored(self, index: int, who: threepp.Object3D):

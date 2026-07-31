@@ -129,9 +129,8 @@ class PolicyDrive:
     keys = 1             # 1 = drive it with the keyboard, 0 = follow `route`
     route = ""           # "secs:vx,vy,wz|..."  used when keys=0; empty = hold (vx, vy, wz)
 
-    def start(self, obj, scene):
+    def start(self, obj):
         self.obj = obj
-        self.scene = scene
         self.ctrl = None
         self.held = 0
         self.t = 0.0
@@ -161,7 +160,7 @@ class PolicyDrive:
         self.keydown = getattr(editor, "is_key_down", None)
         self.cam = None
         if self.chase:
-            self.cam = scene.get_object_by_name(self.chase)
+            self.cam = editor.scene().get_object_by_name(self.chase)
             if self.cam is None:
                 print(f"[policy] no camera named '{self.chase}' in the scene")
         # The plant this policy wants vs what the scene actually authored. A silent mismatch here
