@@ -99,3 +99,14 @@ if (TARGET threepp_editor_scripting)
 else ()
     message(STATUS "editor scripting not built, skipping EditorScriptPlay_test..")
 endif ()
+
+# threepp_player's core — the play runtime with no window on it. Its own library
+# for exactly this reason (apps/player/CMakeLists.txt), so the test drives the
+# code the binary runs. Linking it carries the PhysX and Python gates it was
+# built with, so this one test covers whichever halves the build actually has.
+if (TARGET threepp_player_core)
+    add_test_executable(PlayerCore_test)
+    target_link_libraries(PlayerCore_test PRIVATE threepp_player_core)
+else ()
+    message(STATUS "threepp_player not built, skipping PlayerCore_test..")
+endif ()

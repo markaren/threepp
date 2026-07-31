@@ -13,6 +13,7 @@
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
+#include "threepp/extras/editor/ViewSpec.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
@@ -908,35 +909,13 @@ void EditorApp::openExample(const std::string& slug) {
 
 bool EditorApp::parseViewSpec(const std::string& text, Vector3& position, Vector3& target) {
 
-    const auto at = text.find('@');
-    if (at == std::string::npos) return false;
-
-    const auto triple = [](const std::string& part, Vector3& out) {
-        std::istringstream stream(part);
-        std::string field;
-        float values[3];
-        for (float& value : values) {
-            if (!std::getline(stream, field, ',')) return false;
-            try {
-                value = std::stof(field);
-            } catch (const std::exception&) {
-                return false;
-            }
-        }
-        // Everything after the third number is a typo, not a fourth axis.
-        if (std::getline(stream, field, ',')) return false;
-        out.set(values[0], values[1], values[2]);
-        return true;
-    };
-
-    Vector3 wantPosition;
-    Vector3 wantTarget;
-    if (!triple(text.substr(0, at), wantPosition)) return false;
-    if (!triple(text.substr(at + 1), wantTarget)) return false;
-
-    position.copy(wantPosition);
-    target.copy(wantTarget);
-    return true;
+    // The parse itself is in the library (extras/editor/ViewSpec.hpp), because
+    // the editor is no longer the only front end that places a camera from a
+    // document's authored vantage — threepp_player reads the same
+    // userData["editorView"] and --shot takes the same text. This stays as the
+    // editor's public spelling of it; main.cpp's --shot handling and every
+    // caller below are unchanged.
+    return editor::parseViewSpec(text, position, target);
 }
 
 bool EditorApp::applyDocumentView() {

@@ -40,7 +40,9 @@ Two layers, deliberately separated:
 
 **`threepp/extras/editor/*` — the reusable core.** Part of the threepp library,
 with no ImGui, no window and no GL/Vulkan dependency. It is what a different
-front end (a Qt tool, a Python binding, a batch script) would build on:
+front end (a Qt tool, a Python binding, a batch script) would build on — and
+what [`threepp_player`](player.md), the second front end that ships, is built
+on:
 
 | type | responsibility |
 | --- | --- |
@@ -2225,6 +2227,24 @@ Three sessions ship, and they start in this order: physics, then the animation
 player, then scripts. Scripts run last on purpose — a script's transform edits
 are the final word for the frame, after the simulation and the mixer have had
 their say.
+
+---
+
+## Playing a document without the editor
+
+[`threepp_player`](player.md) is the second front end over this same core: it
+loads a `scene.json` and plays it with none of the editing machinery, for policy
+validation and data generation.
+
+```
+threepp_player arena.json --headless --episodes=100 --seconds=20 --record=runs
+```
+
+It registers the same four sessions in the same order, runs each episode as a
+full play/stop cycle (so episodes are independent), records what the sensors
+measured, and exits nonzero if any script raised or the document would not play
+— which is what makes a scene something CI can gate on. See
+[doc/player.md](player.md).
 
 ---
 

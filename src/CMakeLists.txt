@@ -78,6 +78,7 @@ set(publicHeaders
         "threepp/extras/editor/Selection.hpp"
         "threepp/extras/editor/SensorConfig.hpp"
         "threepp/extras/editor/SplineConfig.hpp"
+        "threepp/extras/editor/ViewSpec.hpp"
         "threepp/extras/imgui/ImguiContext.hpp"
 
         "threepp/input/KeyListener.hpp"
