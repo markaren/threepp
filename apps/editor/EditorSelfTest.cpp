@@ -3212,6 +3212,67 @@ int EditorApp::runSelfTest() {
         }
     }
 
+    // --- The look rides with the document -------------------------------------
+    // What the Renderer Settings panel writes to is the renderer itself, so this
+    // drives the renderer directly and then goes through Save / New / Open — the
+    // three app paths that have to carry, clear and restore it.
+    {
+        newScene();
+        step(2);
+
+        const auto renderPath = std::filesystem::temp_directory_path() / "threepp_editor_render.json";
+        const auto entry = [this] {
+            const auto& userData = document_.scene().userData;
+            const auto it = userData.find(RenderConfig::userDataKey);
+            return it != userData.end() && it->second.type() == typeid(std::string)
+                           ? std::any_cast<const std::string&>(it->second)
+                           : std::string();
+        };
+
+        saveSceneAs(renderPath);
+        step();
+        check(entry().empty(), "a document nobody re-lit saves no render block");
+
+        constexpr float kExposure = 1.75f;
+        renderer_->toneMappingExposure = kExposure;
+#ifdef THREEPP_WITH_VULKAN
+        float wantScale = 0.f;
+        if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer_.get())) {
+            vk->setBloomIntensity(0.4f);
+            // Deliberately not the editor's 0.8 default: this is the field that
+            // has to come back from the file rather than from the constructor.
+            wantScale = 0.5f;
+            vk->setRenderScale(wantScale);
+        }
+#endif
+        saveSceneAs(renderPath);
+        step();
+        check(entry().find("exposure=1.75") != std::string::npos,
+              "an adjusted look is written into the document");
+
+        newScene();
+        step(2);
+        check(std::abs(renderer_->toneMappingExposure - renderDefaults_.exposure) < 1e-4f,
+              "and a new document goes back to the editor's defaults");
+
+        openScene(renderPath);
+        step(2);
+        check(std::abs(renderer_->toneMappingExposure - kExposure) < 1e-4f,
+              "reopening restores the look the document was saved with");
+#ifdef THREEPP_WITH_VULKAN
+        if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer_.get())) {
+            check(std::abs(vk->bloomIntensity() - 0.4f) < 1e-4f, "bloom and all");
+            check(std::abs(vk->renderScale() - wantScale) < 1e-4f,
+                  "including a render scale that is not the editor default");
+        }
+#endif
+
+        std::error_code renderEc;
+        std::filesystem::remove(renderPath, renderEc);
+        newScene();
+        step(2);
+    }
+
     // URDF: import, drive a joint, and prove the pose survives a full document
     // round trip. Play/Stop is that round trip — it serialises the scene and
     // rebuilds it — so this covers re-articulation as the user meets it.

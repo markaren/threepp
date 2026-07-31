@@ -213,8 +213,21 @@ EditorApp::EditorApp(const Options& options)
     // projects. Ignored by the OpenGL backend, which never had the ambiguity.
     if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer_.get())) {
         vk->setOrthographicSceneRendering(true);
+
+        // The editor is an authoring tool running a deferred path-traced
+        // backend on whatever laptop it was opened on, and the shade is the
+        // frame's dominant cost — it scales with pixels. 0.8 is 64% of them for
+        // a difference TAA reconstructs most of the way back, which is the
+        // trade a viewport should default to; a final frame is what --screenshot
+        // and the Render scale slider are for. Deliberately editor-only: the
+        // renderer itself still defaults to 1.0 for every example and test.
+        vk->setRenderScale(0.8f);
     }
 #endif
+
+    // After every renderer knob above: this is the baseline a document is
+    // opened against and saved as a difference from.
+    renderDefaults_ = RenderConfig::capture(*renderer_);
 
     camera_.position.set(6, 5, 8);
 
@@ -783,6 +796,9 @@ void EditorApp::newScene() {
     commands_.clear();
     document_.newScene();
     buildTemplateScene();
+    // A new document is a document: it renders the way the editor starts,
+    // whatever the one before it had dialled in.
+    applyDocumentRender();
     log("new scene");
 }
 
@@ -850,6 +866,7 @@ void EditorApp::openScene(const std::filesystem::path& path) {
     // nothing keeps the camera where it was, which is what every version of the
     // editor before this one did.
     applyDocumentView();
+    applyDocumentRender();
     settings_.addRecentFile(path);
     settings_.sceneDir = path.parent_path().string();
     log("opened " + path.filename().string());
@@ -884,6 +901,7 @@ void EditorApp::openExample(const std::string& slug) {
     // authored a vantage of its own, which is a considered answer to the same
     // question and beats an automatic three-quarter view.
     if (!applyDocumentView()) frameDocument();
+    applyDocumentRender();
     log("opened example \"" + std::string(example->label) + "\" - " + std::string(example->summary));
 }
 
@@ -967,6 +985,17 @@ bool EditorApp::applyDocumentView() {
     return true;
 }
 
+void EditorApp::applyDocumentRender() {
+
+    // value_or(renderDefaults_), not "leave the renderer alone": a document that
+    // says nothing about fog wants the editor's fog, not the ground mist the
+    // document opened before it was carrying. read() already layers whatever the
+    // document DOES say over the same defaults, key by key.
+    const auto config = RenderConfig::read(document_.scene(), renderDefaults_)
+                                .value_or(renderDefaults_);
+    config.apply(*renderer_);
+}
+
 void EditorApp::frameDocument() {
 
     Box3 box;
@@ -1008,6 +1037,12 @@ void EditorApp::saveScene() {
 void EditorApp::saveSceneAs(const std::filesystem::path& path) {
 
     if (rejectWhilePlaying("Save As")) return;
+
+    // The look goes into the file with the geometry. Written as a difference
+    // from the editor's startup state, so a document nobody adjusted the
+    // renderer for carries no render block at all (write() erases it) and one
+    // that did carries only what was adjusted.
+    RenderConfig::capture(*renderer_).write(document_.scene(), renderDefaults_);
 
     std::string error;
     if (!document_.saveAs(path, &error)) {

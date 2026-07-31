@@ -26,6 +26,7 @@
 #include "threepp/extras/editor/EditorSettings.hpp"
 #include "threepp/extras/editor/ObjectFactory.hpp"
 #include "threepp/extras/editor/PlaySession.hpp"
+#include "threepp/extras/editor/RenderConfig.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
 #include "threepp/extras/editor/Selection.hpp"
 
@@ -309,6 +310,15 @@ namespace threepp::editor {
         // whether it still has to frame the document itself. A malformed value
         // is a console line and nothing else.
         bool applyDocumentView();
+        // How a document asks to be RENDERED, off the same scene root:
+        //
+        //   userData["render"]  "key=value;key=value" - see RenderConfig
+        //
+        // Called from the OPEN paths beside applyDocumentView(), and from New,
+        // which is a document too. A document that says nothing gets
+        // renderDefaults_ — NOT whatever the last document left on the renderer,
+        // which is the difference between opening a scene and inheriting one.
+        void applyDocumentRender();
         void saveScene();
         void saveSceneAs(const std::filesystem::path& path);
         void importModel(const std::filesystem::path& path);
@@ -627,6 +637,13 @@ namespace threepp::editor {
         // userData["editorView"]. Only the --screenshot pass asks: a considered
         // vantage is not something to overwrite with an automatic framing.
         bool documentView_ = false;
+        // The renderer as the editor set it up, captured once in the
+        // constructor. Two jobs, both about keeping a saved document honest: it
+        // is what a document that carries no render block opens with, and it is
+        // the baseline a save is written as a difference FROM — so a scene that
+        // never touched the Renderer Settings panel saves no render block at
+        // all, and one that dialled in fog saves the fog and nothing else.
+        RenderConfig renderDefaults_;
 
         SceneDocument document_;
         Selection selection_;

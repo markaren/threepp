@@ -52,6 +52,7 @@ front end (a Qt tool, a Python binding, a batch script) would build on:
 | `ObjectFactory` | primitives, lights, groups, cameras with unique names |
 | `PlaySession`, `PlayController` | the play-mode state machine |
 | `PhysicsConfig` | per-object rigid-body and soft-body authoring, stored in `userData` |
+| `RenderConfig` | the renderer settings a document is saved with, as a difference from the editor's defaults, stored in the scene root's `userData` |
 | `PhysicsPlaySession` | the PhysX runtime (header-only, PhysX-gated) |
 | `ScriptConfig` | per-object Python script — a file path or inline source — plus its parameters, stored in `userData` |
 | `ScriptWorkspace` | the `.vscode/settings.json` that teaches Pylance about `threepp`, and the text normalization an external edit round-trips through |
@@ -363,6 +364,48 @@ Two rules make them safe rather than surprising:
   camera where it was (an example, having nothing to preserve, frames itself
   instead); no `editorFollow` switches following *off*, since following belongs
   to a subject and a new document is a new subject.
+
+### The look of a document: `render`
+
+A third key on the **scene root** carries what the **View ▸ Renderer Settings**
+panel was set to when the document was saved — exposure and tone map, render
+scale and upscaler, GI and denoiser, fog, bloom, clouds, depth of field, the
+camera triplet. It is written on every save and read by the same open paths as
+`editorView`, plus File ▸ New:
+
+```
+userData["render"]   renderscale=0.5;bloom=0.4;heightfog=1;fogdensity=0.05
+```
+
+`RenderConfig::encode()` / `decode()` own that format — the same flat
+`key=value;key=value` string as `physics` below, for the same reason (`userData`
+round-trips scalars only), and with the same rule that an unknown key is ignored
+on read.
+
+What is different from every other config in the editor is that the string is a
+**difference from a baseline**, not a full state. The baseline is
+`RenderConfig::capture()` of the renderer as the editor set it up, taken once in
+`EditorApp`'s constructor and kept in `renderDefaults_`:
+
+* On **save**, only the fields that differ from that baseline are written. A
+  document nobody re-lit therefore carries no `render` key at all, and the four
+  keys above are the whole of what one that was re-lit says.
+* On **open**, the text is layered over the same baseline key by key. A document
+  that says nothing about fog gets *the editor's* fog — not the ground mist the
+  previously open document left on the renderer. That inheritance is the bug the
+  baseline exists to prevent, and it is why File ▸ New applies it too.
+
+Two things are deliberately **not** in here. The diagnostic controls (G-buffer
+debug view, overlay layer) are about inspecting a frame, not authoring one. The
+sensor-simulation controls (lens distortion, sensor noise) describe an
+*instrument* pointed at the scene, and belong to the per-object sensor
+authoring `SensorConfig` already carries.
+
+On Vulkan the editor's baseline sets **render scale 0.8** — the deferred shade
+is the frame's dominant cost and it scales with pixels, so an authoring viewport
+takes 64% of them for a difference TAA reconstructs most of the way back. The
+renderer's own default is still 1.0 for every example and test, and the Render
+scale slider (or a saved `renderscale=`) overrides it per document.
 
 ### Physics in `userData`
 

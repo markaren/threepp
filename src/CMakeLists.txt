@@ -374,6 +374,7 @@ set(sources
         "threepp/extras/editor/MaterialTextureSlots.cpp"
         "threepp/extras/editor/ObjectFactory.cpp"
         "threepp/extras/editor/PhysicsConfig.cpp"
+        "threepp/extras/editor/RenderConfig.cpp"
         "threepp/extras/editor/RobotConfig.cpp"
         "threepp/extras/editor/PlaySession.cpp"
         "threepp/extras/editor/SceneDocument.cpp"
