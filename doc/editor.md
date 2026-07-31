@@ -28,6 +28,7 @@ Command line:
 | `--screenshot=<png>` | write PNGs and exit. With no document of its own it builds the spline-tube acceptance scenario and writes one file per view; **with a `scene.json` or `--example` it photographs that instead**, honouring the three flags below |
 | `--seconds=N` | how long that pass plays before the first shot (default 3) |
 | `--keys=W,A` | hold these keys for those seconds, then let go — a scene you are meant to *drive* cannot be reviewed standing still |
+| `--hold-keys` | keep holding them **through** the shots instead of letting go and waiting for the scene to settle. What a manoeuvre looks like halfway through it — a drone mid-turn, with the chase camera coming round behind it — is a picture the settled pose cannot show |
 | `--shot=px,py,pz@tx,ty,tz[:tag]` | camera position and target for that pass, repeatable; `tag` becomes a file-name suffix. None given keeps the camera the session already has — an authored [`editorView`](#opening-a-document-editorview--editorfollow), or wherever Follow Selection has chased to — and frames the whole document only when there is neither |
 | `--bench=N` | time N frames after `--seconds` of warmup and print the result. **Turns vsync off**, because a present-capped frame time measures the display rather than the renderer; the status bar's fps cannot answer this question for the same reason (it is a smoothed average of frames the swapchain paced). Reports median, p95 and max CPU frame time in milliseconds, and on Vulkan the per-pass GPU medians from the backend's timestamp queries. Composes with `--example`/`--play`/`--keys`, so a demo can be timed while it is being flown. `THREEPP_BENCH_VSYNC=1` puts the cap back, for the one question the uncapped number cannot answer: whether the editor *as shipped* holds the refresh rate. `THREEPP_BENCH_DISABLE=a,b,…` strips pieces of the frame so a cost can be *attributed* rather than guessed at — `cloud`, `sensors`, `ui`, `overlay`, `play`, and the deferred pipeline's own `ao`, `probegi`, `restir`, `denoise`, `halfres` (render at half scale: a cost that halves is per-pixel work, one that does not is fixed) |
 
@@ -75,11 +76,37 @@ subtree to drill down to the exact node.
 
 **Follow Selection.** View ▸ Follow Selection (`Shift+F`) turns the viewport
 into a chase camera: every frame the orbit target walks towards the selection's
-world position and the camera is translated by the *same* delta, so the angle,
-the distance and the projection you orbited to are kept and orbiting, panning and
-zooming keep working while it follows. The approach is exponential with a ~90 ms
-time constant rather than a hard lock — a rigid body has a tremble, and a camera
-bolted to it inherits it.
+world position and the camera is carried with it, keeping the offset you orbited
+to, so orbiting, panning and zooming keep working while it follows. The approach
+is exponential with a ~90 ms time constant rather than a hard lock — a rigid body
+has a tremble, and a camera bolted to it inherits it.
+
+The offset is kept in the subject's **heading frame**, which is what makes it a
+chase rather than a fixed vantage that the subject flies out of: yaw the drone
+with `A`/`D` and the camera comes round behind the new heading instead of
+watching it leave sideways. What "heading" means is the object's forward axis
+(`-Z`, threepp's own convention — the direction `lookAt` aims) projected onto the
+ground plane, read off its world quaternion, so it works for anything that faces
+where it goes. Specifically:
+
+* **Yaw only.** Never pitch, never roll. A hover drone banks constantly to move,
+  and a camera that inherited attitude would roll the horizon with every input.
+  Camera up stays world up and is never touched.
+* **Its own time constant**, 150 ms — slower than the position follow, because a
+  heading error swings the whole frame. The number was measured on the shipped
+  drone rather than guessed: hovering, its heading *wanders* slowly enough that
+  no exponential filter takes that out, and at full stick it yaws at 200 °/s,
+  where the steady lag is exactly `tau` × that. This one keeps the subject astern
+  through a turn while still letting you see that it is turning.
+* **Orbiting composes in the subject's frame.** Drag the camera over its left
+  shoulder and it stays over its left shoulder through every turn. Zoom is still
+  just a shorter offset.
+* **A nose pointed at the sky keeps the last heading** — the ground-plane
+  projection is noise there, and something tumbling must not whip the camera.
+* **An orthographic view follows by translation alone.** An axis view *is* a
+  direction of view; rotating it would mean it is no longer the view you asked
+  for. Following a subject that never turns is therefore exactly what it always
+  was, in either projection.
 
 It works while **playing**, which is the point: a drone you fly with `W`/`A`/`S`/`D`
 leaves the frame in about two seconds otherwise. `Shift+F` is answered even while
@@ -158,11 +185,34 @@ the toolbar's Select/Move/Rotate/Scale and Local/World buttons grey out with it.
 Hiding it would not have been enough — attached, it rides a body the solver is
 moving and keeps offering handles for an edit that Play would only refuse (every
 document mutation goes through one gate; the greyed menu items are the visible
-half of it). Picking still works and
-the selection outline stays, because watching what the simulation does to an
-object is half of why anyone presses Play; only the handles go. Stop puts the
-gizmo back on the selection (re-resolved by uuid across the scene swap) with the
-mode, the space and the snap it had.
+half of it). Stop puts the gizmo back on the selection (re-resolved by uuid
+across the scene swap) with the mode, the space and the snap it had.
+
+**The rest of the authoring layer goes with it.** During Play the viewport shows
+the *scene*, not the editing furniture, so these are hidden for the session and
+restored on Stop:
+
+| hidden while playing | why |
+| --- | --- |
+| the selection bounding box, and the outline around a picked instance | it says what you are *editing* |
+| the viewport marker icons — cameras, lights, spline points, sensors | same, and an icon you cannot see is not clickable either: picking through the icons is switched off with them |
+| the selected camera's frustum helper | same |
+| the transform gizmo | above |
+
+And these deliberately **stay**:
+
+| still drawn while playing | why |
+| --- | --- |
+| the sensor point cloud | it is what the scene is *doing* — play data, not furniture |
+| the physics collider overlay | a debug view that only means anything while a world exists to debug |
+| the grid and the origin axes | View-menu preferences somebody set on purpose |
+| the play banner and the status bar | UI, not scene |
+
+Picking itself still works, and the hierarchy still shows what is selected —
+watching what the simulation does to an object is half of why anyone presses
+Play. Selecting something *during* play is fine too: the outline it builds
+arrives hidden and appears on Stop. The `--screenshot` pass over a document hides
+the same layer through the same predicate, for the same reason.
 
 ---
 
@@ -189,7 +239,9 @@ drone, the rest of the rings receding and the beacon standing at the far end. It
 also carries `editorFollow = Drone`, so the drone is selected and
 [Follow Selection](#features) is on — and because Follow keeps the offset the
 camera has when the document opens, that one authored vantage *is* the chase
-camera. Press Play and the view goes with the drone.
+camera. Press Play and the view goes with the drone — and because the offset is
+kept in the drone's heading frame, `A`/`D` turn the *camera* too: it comes round
+behind the new heading instead of watching the drone leave sideways.
 
 | what you see | what it is |
 | --- | --- |

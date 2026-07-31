@@ -162,19 +162,19 @@ int EditorApp::runSceneScreenshot() {
     // not be answered through a wireframe lying across it.
     if (grid_) grid_->visible = false;
     if (axes_) axes_->visible = false;
-    // Marker icons too. A hemisphere light and an ambient light both sit at the
-    // origin, so their billboards hang in mid-air in the middle of the arena —
-    // useful when you are authoring, noise when you are judging a picture. The
-    // point cloud stays: it is what the scene is DOING, not furniture.
-    if (markers_) markers_->visible = false;
-    // And the selection furniture, for the same reason: a document that opens
-    // with something selected (userData["editorFollow"]) would otherwise be
-    // photographed through a yellow box and a set of transform handles. Select
-    // mode is how the toolbar itself spells "no gizmo", and the outline nodes
-    // are only rebuilt when the selection changes, which it does not here.
-    gizmoMode_ = "select";
-    applyGizmoMode();
-    if (selectionBox_) selectionBox_->visible = false;
+    // And the whole authoring layer with them — the marker icons, the selection
+    // outline, the frustum helper, the handles. A hemisphere light and an
+    // ambient light both sit at the origin, so their billboards hang in mid-air
+    // in the middle of the arena; a document that opens with something selected
+    // (userData["editorFollow"]) would be photographed through a yellow box.
+    // Useful when you are authoring, noise when you are judging a picture.
+    //
+    // Through the same flag Play reads (authoringVisible), so this pass hides
+    // what a play session hides and cannot drift from it — and unlike the four
+    // hand-hidden nodes it replaces, it also covers whatever the pass selects
+    // later. The point cloud stays: it is what the scene is DOING, not
+    // furniture.
+    hideAuthoring_ = true;
     // One frame before Play so the scene's own materials and shadow maps exist.
     playFor(0.05f);
     if (options_.play) startPlay();
@@ -191,7 +191,7 @@ int EditorApp::runSceneScreenshot() {
 #endif
     playFor(std::max(options_.settle, 0.05f));
 #ifdef THREEPP_EDITOR_WITH_PYTHON
-    if (!options_.keys.empty()) {
+    if (!options_.keys.empty() && !options_.holdKeys) {
         scripting::keyStateProvider() = [](const std::string&) { return false; };
         // Long enough for whatever was commanded to settle back to a hover.
         playFor(1.2f);
@@ -980,6 +980,115 @@ int EditorApp::runSelfTest() {
         step();
     }
 
+    // And the rest of the authoring layer goes with the handles. The outline,
+    // the outlined instance, the marker icons and the frustum helper all say
+    // what you are EDITING, and Play is when the viewport should be showing the
+    // scene. Picking stays live, so the interesting case is the one below: a
+    // selection made mid-play builds new nodes, and they must arrive hidden.
+    {
+        auto* target = document_.scene().getObjectByName("Box");
+        auto* other = document_.scene().getObjectByName("Ground");
+        check(target != nullptr && other != nullptr, "Box and Ground available for the furniture drive");
+
+        // A camera of its own, so the frustum helper has something to be about,
+        // and an InstancedMesh, so the instance outline does.
+        auto sceneCamera = ObjectFactory::createCamera(document_.scene());
+        sceneCamera->name = "Furniture Camera";
+        sceneCamera->position.set(3.f, 2.f, 3.f);
+        addObject(sceneCamera, document_.scene(), "Add Furniture Camera");
+        auto instanced = InstancedMesh::create(BoxGeometry::create(0.4f, 0.4f, 0.4f),
+                                               MeshStandardMaterial::create(), 4);
+        instanced->name = "Furniture Instances";
+        for (std::size_t i = 0; i < 4; ++i) {
+            Matrix4 m;
+            m.setPosition(-3.f + 1.5f * static_cast<float>(i), 0.3f, -4.f);
+            instanced->setMatrixAt(i, m);
+        }
+        instanced->instanceMatrix()->needsUpdate();
+        addObject(instanced, document_.scene(), "Add Furniture Instances");
+        const auto cameraUuid = sceneCamera->uuid;
+        const auto instancedUuid = instanced->uuid;
+
+        selectObject(sceneCamera.get());
+        step(2);
+        check(markers_ && markers_->visible, "the marker icons are on screen while editing");
+        check(cameraHelper_ && cameraHelper_->visible, "and a selected camera's frustum");
+
+        selectObject(instanced.get(), 2);
+        step();
+        check(instanceOutline_ && instanceOutline_->visible, "and the outlined instance");
+
+        selectObject(target);
+        step();
+        check(selectionBox_ && selectionBox_->visible, "and the selection outline");
+
+        startPlay();
+        step(2);
+        check(markers_ && !markers_->visible, "play hides the marker icons");
+        check(selectionBox_ && !selectionBox_->visible, "and the selection outline");
+
+        // The whole point of applying it every frame: picking stays live while
+        // playing, so these are NEW nodes built during the session.
+        selectObject(other);
+        step();
+        check(selection_.get() == other, "selecting during play still selects");
+        check(selectionBox_ && !selectionBox_->visible,
+              "and the outline it builds arrives hidden");
+        check(markers_ && !markers_->visible, "with the icons still gone");
+
+        if (auto* playingCamera = findByUuid(document_.scene(), cameraUuid)) {
+            selectObject(playingCamera);
+            step();
+            check(cameraHelper_ && !cameraHelper_->visible,
+                  "a camera selected mid-play gets a hidden frustum");
+        } else {
+            check(false, "the camera survives into the furniture drive's play session");
+        }
+        if (auto* playingInstanced = findByUuid(document_.scene(), instancedUuid)) {
+            selectObject(playingInstanced, 1);
+            step();
+            check(instanceOutline_ && !instanceOutline_->visible,
+                  "and an instance picked mid-play a hidden outline");
+        } else {
+            check(false, "the instances survive into the furniture drive's play session");
+        }
+
+        // Deselecting and reselecting mid-play is the other way in: the nodes
+        // are torn down and rebuilt, and rebuilt is where a default-visible
+        // helper would slip through.
+        selectObject(nullptr);
+        step();
+        check(outlineCount() == 0, "deselecting during play leaves no outline behind");
+        selectObject(document_.scene().getObjectByName("Box"));
+        step();
+        check(outlineCount() == 1 && selectionBox_ && !selectionBox_->visible,
+              "and reselecting builds one, hidden");
+
+        stopPlay();
+        step(2);
+        check(markers_ && markers_->visible, "stop puts the marker icons back");
+        check(selectionBox_ && selectionBox_->visible, "and the selection outline");
+
+        // Deliberately NOT hidden: the point cloud is what the scene is DOING,
+        // and the grid and the axes are a View-menu preference nobody revoked.
+        check(grid_ && grid_->visible && axes_ && axes_->visible,
+              "while the grid and the origin axes are the user's own preference");
+
+        // Put the scene back the way the drives that follow expect it.
+        for (const auto& uuid : {instancedUuid, cameraUuid}) {
+            if (auto* stillThere = findByUuid(document_.scene(), uuid)) {
+                selectObject(stillThere);
+                deleteSelected();
+            }
+        }
+        check(document_.scene().getObjectByName("Furniture Camera") == nullptr &&
+                      document_.scene().getObjectByName("Furniture Instances") == nullptr,
+              "and the drive leaves the scene as it found it");
+        document_.setDirty(false);
+        selectObject(nullptr);
+        step();
+    }
+
     // Follow Selection: the orbit target chases what is selected, the camera
     // rides along keeping the user's angle and distance, and it keeps doing it
     // while a Play session owns the transform. Driven with a hand-moved object
@@ -1040,6 +1149,145 @@ int EditorApp::runSelfTest() {
         step(2);
         setFollowSelection(false);
         check(!followSelection(), "and Follow Selection switches off again");
+    }
+
+    // And the chase is a CHASE: the offset lives in the subject's heading frame,
+    // so a subject that turns is followed round the corner rather than watched
+    // flying sideways out of frame. Yaw only, and world up throughout — a body
+    // that banks must not roll the horizon.
+    {
+        auto* subject = document_.scene().getObjectByName("Box");
+        check(subject != nullptr, "Box available for the heading drive");
+        if (subject) {
+
+            const Vector3 up(0.f, 1.f, 0.f);
+            // The camera's own X axis in world. Level means horizontal, and it
+            // is the only thing that says the picture is not rolled: a rolled
+            // camera still looks at its target.
+            const auto cameraRoll = [&] {
+                Vector3 right(1.f, 0.f, 0.f);
+                right.applyQuaternion(camera_.quaternion);
+                return right.y;
+            };
+
+            subject->position.set(0.f, 0.5f, 0.f);
+            subject->rotation.set(0.f, 0.f, 0.f);
+            selectObject(subject);
+            setFollowSelection(true);
+            step(60);
+
+            // Directly astern and a little above — the vantage a chase camera is
+            // named after, and the one the Hover Arena document authors.
+            camera_.position.copy(orbit_->target).add(Vector3(0.f, 2.f, 8.f));
+            step(2);
+            Vector3 before;
+            before.subVectors(camera_.position, orbit_->target);
+            check(std::abs(before.length() - std::sqrt(68.f)) < 0.5f,
+                  "the chase starts from the offset the camera was put at");
+
+            // A 90-degree yaw, flown rather than teleported: 90 frames of one
+            // degree is a turn the smoothing has to follow, not a step it could
+            // snap through.
+            for (int i = 0; i < 90; ++i) {
+                subject->rotateY(math::degToRad(1.f));
+                step();
+            }
+            // Then let it settle: the heading follow is exponential, so what is
+            // asserted is where it ARRIVES once the subject stops turning.
+            step(120);
+
+            Vector3 after;
+            after.subVectors(camera_.position, orbit_->target);
+            Vector3 want(before);
+            want.applyAxisAngle(up, math::degToRad(90.f));
+            check(after.distanceTo(want) < 0.35f,
+                  "a 90-degree yaw carries the camera round behind the new heading");
+            check(std::abs(after.length() - before.length()) < 0.05f,
+                  "at the distance it had - a turn is not a dolly");
+            check(std::abs(after.y - before.y) < 0.05f,
+                  "and at the height it had - the rotation is about world up alone");
+            check(std::abs(cameraRoll()) < 1e-3f, "with the horizon still level");
+
+            // Bank is ATTITUDE, and attitude is exactly what a chase camera must
+            // not inherit: a drone banks to move, constantly, and a camera that
+            // rolled with it would make the picture unwatchable. A roll is about
+            // the nose itself, so it moves the heading by nothing at all.
+            subject->rotateZ(math::degToRad(35.f));
+            step(120);
+            Vector3 banked;
+            banked.subVectors(camera_.position, orbit_->target);
+            check(banked.distanceTo(after) < 0.05f, "a bank does not move the camera");
+            check(std::abs(cameraRoll()) < 1e-3f, "nor tilt the horizon");
+
+            // Nor does a pitch on a level airframe: the nose dips, and where it
+            // points on the ground plane is where it pointed.
+            subject->rotateZ(math::degToRad(-35.f));
+            subject->rotateX(math::degToRad(20.f));
+            step(120);
+            Vector3 pitched;
+            pitched.subVectors(camera_.position, orbit_->target);
+            check(pitched.distanceTo(after) < 0.05f, "and a pitch does not either");
+
+            // Nose straight up: the forward axis has no ground-plane projection
+            // left, so there is no heading to read. Keep the last one — a body
+            // tumbling through vertical must not whip the camera round with it.
+            subject->rotation.set(0.f, 0.f, 0.f);
+            subject->rotateY(math::degToRad(90.f));
+            step(60);
+            Vector3 upright;
+            upright.subVectors(camera_.position, orbit_->target);
+            subject->rotateX(math::degToRad(-90.f));// nose to the sky
+            step(120);
+            Vector3 tumbled;
+            tumbled.subVectors(camera_.position, orbit_->target);
+            check(tumbled.distanceTo(upright) < 0.15f,
+                  "a nose pointed at the sky keeps the heading it had");
+
+            // Orbiting composes in the subject's frame: a camera dragged over
+            // the subject's shoulder stays over that shoulder through the turn.
+            subject->rotation.set(0.f, 0.f, 0.f);
+            step(60);
+            camera_.position.copy(orbit_->target).add(Vector3(6.f, 2.f, 6.f));
+            step(30);
+            Vector3 shoulder;
+            shoulder.subVectors(camera_.position, orbit_->target);
+            for (int i = 0; i < 90; ++i) {
+                subject->rotateY(math::degToRad(1.f));
+                step();
+            }
+            step(120);
+            Vector3 carried;
+            carried.subVectors(camera_.position, orbit_->target);
+            Vector3 wantShoulder(shoulder);
+            wantShoulder.applyAxisAngle(up, math::degToRad(90.f));
+            check(carried.distanceTo(wantShoulder) < 0.35f,
+                  "an orbited vantage is carried round in the subject's frame");
+
+            // A parallel projection translates and does not rotate: an axis view
+            // IS a direction of view, and turning it is not following.
+            subject->rotation.set(0.f, 0.f, 0.f);
+            step(60);
+            setOrthographic(true);
+            step(2);
+            Vector3 orthoBefore;
+            orthoBefore.subVectors(ortho_.position, orbit_->target);
+            for (int i = 0; i < 90; ++i) {
+                subject->rotateY(math::degToRad(1.f));
+                step();
+            }
+            step(60);
+            Vector3 orthoAfter;
+            orthoAfter.subVectors(ortho_.position, orbit_->target);
+            check(orthoAfter.distanceTo(orthoBefore) < 0.05f,
+                  "and an ortho view follows by translation alone");
+            setOrthographic(false);
+
+            subject->rotation.set(0.f, 0.f, 0.f);
+            subject->position.set(0.f, 0.5f, 0.f);
+            setFollowSelection(false);
+            selectObject(nullptr);
+            step(2);
+        }
     }
 
     // A texture dialog outliving its target. The picker records (uuid, slot)

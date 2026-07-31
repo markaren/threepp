@@ -124,6 +124,11 @@ namespace threepp::editor {
             // drive it cannot be reviewed standing still, and pressing a key by
             // hand is not something a capture script can do.
             std::vector<std::string> keys;
+            // Keep holding them THROUGH the shots instead of letting go and
+            // waiting for the scene to settle. What a manoeuvre looks like
+            // halfway through it — a drone mid-turn, and the chase camera coming
+            // round with it — is a picture the settled pose cannot show.
+            bool holdKeys = false;
             // Timed pass: warm up, then measure this many frames and print
             // median/p95 frame time (plus the Vulkan per-pass GPU breakdown)
             // instead of running interactively. Implies vsync OFF — a
@@ -473,11 +478,12 @@ namespace threepp::editor {
         // --- follow selection -----------------------------------------------
         // Chase camera. While it is on and something is selected, every frame
         // walks the orbit target towards the selection's world position and
-        // translates the camera by the SAME delta, so the angle and distance
-        // the user orbited to are theirs and orbiting/zooming keeps working
-        // while it follows. Works in both projections (a parallel projection is
-        // translated exactly like a perspective one) and, above all, while
-        // playing — chasing a body the physics is moving is the point.
+        // carries the camera with it, keeping the offset the user orbited to —
+        // in the SUBJECT'S HEADING FRAME, so a body that turns is chased round
+        // the corner rather than watched flying sideways out of frame. Works in
+        // both projections (a parallel projection translates, see updateFollow)
+        // and, above all, while playing — chasing a body the physics is moving
+        // is the point.
         void setFollowSelection(bool follow);
         [[nodiscard]] bool followSelection() const { return followSelection_; }
         // One frame of that chase. Deselecting pauses it (there is nothing to
@@ -547,6 +553,21 @@ namespace threepp::editor {
         // applyGizmoMode() and refreshSelectionHelpers() both decide it and a
         // gizmo that comes back for one frame is a gizmo that came back.
         [[nodiscard]] bool gizmoActive() const;
+        // Whether the AUTHORING LAYER belongs on screen at all: the selection
+        // outline, the outlined instance, the marker icons and the selected
+        // camera's frustum. They are editor concepts — they say what you are
+        // editing — so Play takes them away with the gizmo and the viewport
+        // shows the scene, which is what the button is for. Deliberately NOT
+        // everything the overlay holds: the sensor point cloud is play DATA, the
+        // collider lines are a debug view that only means anything while
+        // playing, and the grid and the origin axes are View-menu preferences a
+        // user set on purpose.
+        [[nodiscard]] bool authoringVisible() const;
+        // Applies it to every node that carries it. Called from the frame loop
+        // and from selectObject rather than toggled once at Play, because
+        // picking stays live while playing: a selection made mid-play builds
+        // NEW outline nodes, and they have to arrive hidden.
+        void applyAuthoringVisibility();
         void loadSettings();
         void persistSettings();
         [[nodiscard]] float scale() const { return contentScale_; }
@@ -588,6 +609,20 @@ namespace threepp::editor {
         // belongs to what is open and what is selected, not to the editor's
         // saved preferences.
         bool followSelection_ = false;
+        // The heading the chase last placed the camera with: the followed
+        // object's yaw about world up, exponentially smoothed. Kept as state
+        // because it is BOTH ends of a frame — the offset is read back out of
+        // the camera through this angle and written back through the new one,
+        // which is what lets the user orbit while it follows.
+        //
+        // followHeadingFor_ is the subject it belongs to, by uuid: a different
+        // subject SNAPS (reading the offset through the new heading leaves the
+        // camera exactly where it stands, so selecting something that happens to
+        // face east does not fling the view). By uuid rather than by pointer
+        // because Stop rebuilds the graph, and the same subject across that swap
+        // is the same chase.
+        float followHeading_ = 0.f;
+        std::string followHeadingFor_;
         // Whether the document that is open placed the camera itself, through
         // userData["editorView"]. Only the --screenshot pass asks: a considered
         // vantage is not something to overwrite with an automatic framing.
@@ -643,6 +678,11 @@ namespace threepp::editor {
         // it is torn down whenever the selection or the scene changes.
         std::shared_ptr<CameraHelper> cameraHelper_;
         Object3D* cameraHelperFor_ = nullptr;
+        // The other half of authoringVisible(): a --screenshot pass over a
+        // document has no user and nothing being authored, so the whole layer is
+        // off for its duration. One flag instead of the four hand-hidden nodes
+        // it used to set, and the same flag the play gate reads.
+        bool hideAuthoring_ = false;
 
         // Curve overlays. Same lifetime rules as the markers above: the owner
         // is a raw pointer into the current graph, the whole list is dropped

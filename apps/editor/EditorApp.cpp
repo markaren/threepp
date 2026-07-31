@@ -132,6 +132,36 @@ namespace {
         return GraphicsAPI::OpenGL;
     }
 
+    // Which way `object` is FACING, as an angle about world up: its forward axis
+    // projected onto the ground plane. False when there is nothing to project —
+    // a nose within a few degrees of straight up or down, where the projection
+    // is numerical noise and the caller must keep the heading it had, or a body
+    // tumbling through vertical whips the camera round with it.
+    //
+    // Forward is -Z. Not a convention picked for one scene: it is threepp's own,
+    // the direction lookAt() aims and the direction every camera in the engine
+    // looks, so an object modelled to face the way it moves faces -Z. Read off
+    // the WORLD quaternion, so a subject parented under something rotated heads
+    // where it actually points.
+    bool headingOf(Object3D& object, float& radians) {
+
+        Quaternion world;
+        object.getWorldQuaternion(world);
+
+        Vector3 forward(0.f, 0.f, -1.f);
+        forward.applyQuaternion(world);
+
+        // sin(4 degrees). Below it the ground-plane projection is shorter than
+        // the attitude noise of a hovering body.
+        constexpr float kFlat = 0.07f;
+        if (forward.x * forward.x + forward.z * forward.z < kFlat * kFlat) return false;
+
+        // Zero for an unrotated object, and +theta for a yaw of +theta about +Y,
+        // which is exactly what Vector3::applyAxisAngle(worldUp, theta) undoes.
+        radians = std::atan2(-forward.x, -forward.z);
+        return true;
+    }
+
     // --bench turns vsync off, because a present-capped frame time measures the
     // display rather than the renderer. THREEPP_BENCH_VSYNC=1 puts it back, for
     // the one question the uncapped number cannot answer: does the editor AS
@@ -1956,6 +1986,11 @@ void EditorApp::selectObject(Object3D* object, std::optional<int> instance) {
         gizmo_->detach();
     }
     applyGizmoMode();
+    // The outline above was built this instant and is visible by default. The
+    // frame loop would hide it before anything drew, but saying it here means
+    // "selected while playing" is answered where the selection is made rather
+    // than one call later.
+    applyAuthoringVisibility();
 }
 
 void EditorApp::setJointValue(Robot& robot, std::size_t index, float radians) {
@@ -2162,16 +2197,14 @@ void EditorApp::refreshSelectionHelpers() {
 
     // Box3Helper reads instanceBox_ by reference, so re-deriving the box here is
     // what makes the outline follow an instance whose mesh (or whose instance
-    // matrix) moved. An instance that went away — count shrank under the
-    // selection — leaves an empty box, and Box3Helper::updateMatrixWorld
-    // early-returns on empty, so hide it rather than stranding the last shape.
+    // matrix) moved. Whether the result is worth drawing is
+    // applyAuthoringVisibility()'s call, below.
     if (instanceOutline_ && selectedInstance_) {
         if (auto* instanced = selection_.get() ? selection_.get()->as<InstancedMesh>() : nullptr) {
             instanceBox_.copy(instanceWorldBox(*instanced, *selectedInstance_));
         } else {
             instanceBox_.makeEmpty();
         }
-        instanceOutline_->visible = !instanceBox_.isEmpty();
     }
 
     syncViewportMarkers();
@@ -2179,6 +2212,13 @@ void EditorApp::refreshSelectionHelpers() {
     syncPhysicsDebug();
     syncSensorOverlay();
     syncCameraHelper();
+
+    // After the syncs, because two of them BUILD the nodes it hides: a camera
+    // selected mid-play gets a fresh frustum helper, and an object that only
+    // now needs a marker gets a fresh icon. Every frame rather than at Play and
+    // Stop, so nothing the authoring layer grows during a session can come back
+    // for a frame.
+    applyAuthoringVisibility();
 
     // Snap is a hold-to-engage modifier, exactly like the transform example.
     const bool snap = snapEnabled_ || ImGui::GetIO().KeyShift;
@@ -2238,12 +2278,17 @@ void EditorApp::pickAt(float mouseX, float mouseY) {
 
     // Markers win over geometry regardless of depth: they are drawn on top of
     // everything, so clicking one has to select its owner even when the icon
-    // floats inside a wall.
-    for (const auto& hit : intersections) {
-        if (!hit.object) continue;
-        if (auto* owner = markerOwnerOf(hit.object)) {
-            selectObject(owner);
-            return;
+    // floats inside a wall. Only while they are ON screen, though — the
+    // raycaster does not test visibility, so without this a click during Play
+    // would land on an icon nobody can see and select a light instead of the
+    // wall the user was pointing at.
+    if (markers_ && markers_->visible) {
+        for (const auto& hit : intersections) {
+            if (!hit.object) continue;
+            if (auto* owner = markerOwnerOf(hit.object)) {
+                selectObject(owner);
+                return;
+            }
         }
     }
 
@@ -2514,6 +2559,10 @@ void EditorApp::setFollowSelection(bool follow) {
     if (followSelection_ == follow) return;
 
     followSelection_ = follow;
+    // Whichever way it went, the next chase starts from where the camera stands:
+    // forgetting the heading is what makes the first frame snap instead of swing
+    // (see updateFollow).
+    followHeadingFor_.clear();
     if (!follow) {
         log("follow selection off");
         return;
@@ -2546,19 +2595,90 @@ void EditorApp::updateFollow(float dt) {
     // tremble of a hovering physics body does not reach the picture: a hard
     // lock on a rigid body is not a chase cam, it is a vibration.
     constexpr float kTau = 0.09f;
+    // The heading gets its own, and a slower one: position error is a metre the
+    // eye reads as lag, heading error is the whole frame swinging, and a swing
+    // that tracks every twitch is worse than one that arrives late.
+    //
+    // 150 ms, and the number was measured rather than guessed. The Hover Arena
+    // drone was traced hands-off and at full yaw stick: hovering, its heading
+    // WANDERS — a degree or two either way at about 1.3 deg/s — and that is a
+    // slow enough signal that no exponential filter takes it out (the camera's
+    // yaw jitter only falls from 1.33 to 1.21 degrees rms going from no filter
+    // at all to 180 ms), so buying wobble rejection with lag buys nothing. At
+    // full stick it yaws at 200 deg/s, and the steady lag is exactly tau times
+    // that: 30 degrees here, 45 at 220 ms. Looked at side by side mid-turn, 100
+    // ms is a rigid lock that hides the turn entirely, 220 ms shows the drone's
+    // flank, and this one keeps it astern while still reading as cornering.
+    constexpr float kHeadingTau = 0.15f;
     // A hitch (a shader compile, a breakpoint) must not fling the camera; the
     // clamp costs nothing and bounds the step to one settled frame.
     const float step = std::clamp(dt, 0.f, 0.1f);
 
+    // --- which way the subject is facing ------------------------------------
+    // YAW ONLY, and never pitch or roll. A hover drone banks to move, constantly;
+    // a camera that inherited attitude would roll the horizon with every input
+    // and make the picture unwatchable. Camera up is left alone (OrbitControls
+    // aims it at the target with the world up it has always used), so "level"
+    // needs no correcting — it is never disturbed.
+    //
+    // A parallel projection is the one exception to the rotation: an axis view IS
+    // a direction of view, and rotating it means it is no longer the view that
+    // was asked for. Ortho follows by translation, exactly as it did before.
+    // The editor is Y-up throughout: the grid lies in XZ and the axis presets
+    // name ±Y as the poles. The heading is measured about this and the offset is
+    // rotated about it, so the two cannot disagree.
+    const Vector3 worldUp(0.f, 1.f, 0.f);
+    const bool rotate = !orthographic_;
+    float placedWith = followHeading_;
+    if (!rotate) {
+        // The camera is not standing at any heading while a parallel projection
+        // is on, so the one on record is not the one to un-rotate by later:
+        // forget it, and let a switch back to perspective snap to whatever the
+        // subject is doing then.
+        followHeadingFor_.clear();
+    } else {
+        float measured = 0.f;
+        const bool valid = headingOf(*selected, measured);
+
+        // A different subject snaps. Reading the offset back through the NEW
+        // heading (below) leaves the camera precisely where it stands, so
+        // selecting something that happens to face east is not a 90-degree whip.
+        if (const auto uuid = selection_.uuid(); uuid != followHeadingFor_) {
+            followHeadingFor_ = uuid;
+            followHeading_ = valid ? measured : 0.f;
+        }
+        placedWith = followHeading_;
+
+        if (valid) {
+            // Shortest way round: std::remainder folds the difference into
+            // [-pi, pi], so a subject crossing the seam behind it turns the near
+            // way rather than unwinding the long way about.
+            const float error = std::remainder(measured - followHeading_, math::TWO_PI);
+            followHeading_ += error * (1.f - std::exp(-step / kHeadingTau));
+        }
+    }
+
+    // --- where the camera stands, in the subject's frame --------------------
+    // Read back out of the camera every frame, through the heading it was PLACED
+    // with. That is what makes the user's orbiting, panning and zooming compose
+    // in the subject's frame: a drag that puts the camera over the drone's left
+    // shoulder is stored as "over its left shoulder" and stays there through
+    // every turn, and a zoom is still just a shorter offset.
+    auto& camera = viewCamera();
+    Vector3 offset;
+    offset.subVectors(camera.position, orbit_->target);
+    if (rotate) offset.applyAxisAngle(worldUp, -placedWith);
+
+    // The target chases the subject; the camera is then placed relative to where
+    // the target ended up. With a subject that never turns (every object in an
+    // edit-mode scene, and the heading frame is the identity) this is exactly
+    // the old rigid translation of target and camera by the same delta.
     Vector3 delta;
     delta.subVectors(world, orbit_->target).multiplyScalar(1.f - std::exp(-step / kTau));
-
-    // The same delta on both: what the user orbited to — the angle, the
-    // distance, the projection's framing — is theirs, and following must not
-    // quietly take it back. In a parallel projection the translation means the
-    // same thing, so an axis view chases too.
     orbit_->target.add(delta);
-    viewCamera().position.add(delta);
+
+    if (rotate) offset.applyAxisAngle(worldUp, followHeading_);
+    camera.position.copy(orbit_->target).add(offset);
 }
 
 float EditorApp::viewportWorldPerPixel(const Vector3& world) const {
@@ -2656,9 +2776,29 @@ void EditorApp::stopPlay() {
 
 // ------------------------------------------------------------------- plumbing
 
+bool EditorApp::authoringVisible() const {
+
+    return !hideAuthoring_ && !isPlaying();
+}
+
+void EditorApp::applyAuthoringVisibility() {
+
+    const bool visible = authoringVisible();
+
+    if (selectionBox_) selectionBox_->visible = visible;
+    // An instance whose index went out from under it (the count shrank) leaves
+    // an empty box, and Box3Helper::updateMatrixWorld early-returns on empty —
+    // hide it rather than stranding the last shape it drew.
+    if (instanceOutline_) instanceOutline_->visible = visible && !instanceBox_.isEmpty();
+    // The whole group: one flag hides every icon, including the ones a frame of
+    // play is still busy placing.
+    if (markers_) markers_->visible = visible;
+    if (cameraHelper_) cameraHelper_->visible = visible;
+}
+
 bool EditorApp::gizmoActive() const {
 
-    return !isPlaying() && gizmoMode_ != "select" && !selection_.empty();
+    return authoringVisible() && gizmoMode_ != "select" && !selection_.empty();
 }
 
 void EditorApp::applyGizmoMode() {

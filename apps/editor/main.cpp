@@ -69,6 +69,8 @@ int main(int argc, char** argv) {
             while (std::getline(held, key, ',')) {
                 if (!key.empty()) options.keys.push_back(key);
             }
+        } else if (std::strcmp(argument, "--hold-keys") == 0) {
+            options.holdKeys = true;
         } else if (std::strncmp(argument, "--shot=", 7) == 0) {
             // px,py,pz@tx,ty,tz[:label]
             if (auto shot = parseShot(argument + 7)) {
@@ -98,6 +100,8 @@ int main(int argc, char** argv) {
                       << "  --seconds=N      how long to play before the first shot (default 3)\n"
                       << "  --keys=W,A       hold these keys for that time, then let go, so a\n"
                       << "                   scene you are meant to DRIVE can be photographed moving\n"
+                      << "  --hold-keys      keep holding them through the shots instead of letting\n"
+                      << "                   go first, for a picture of a manoeuvre mid-way through\n"
                       << "  --shot=P@T[:tag] camera position@target for that pass, repeatable;\n"
                       << "                   e.g. --shot=0,18,34@0,2,-2:wide. None = auto-framed\n";
             return 0;
