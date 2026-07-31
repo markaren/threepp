@@ -816,9 +816,10 @@ namespace threepp::editor {
         Raycaster raycaster_;
         std::unique_ptr<ImguiContext> ui_;
         IOCapture ioCapture_;
-        // The gizmo's "dragging-changed" listener is referenced, not owned, by
-        // the dispatcher — it has to outlive the subscription.
-        std::unique_ptr<LambdaEventListener> gizmoDragListener_;
+        // The handler outlives the gizmo (rebuilt on every projection change);
+        // each rebuild takes a fresh subscription on it.
+        std::function<void(Event&)> gizmoDragHandler_;
+        Subscription gizmoDragSub_;
 
         // Gizmo state
         std::string gizmoMode_ = "translate";

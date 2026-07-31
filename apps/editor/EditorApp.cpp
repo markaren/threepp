@@ -263,7 +263,7 @@ EditorApp::EditorApp(const Options& options)
 
     // Orbiting while dragging a handle fights the gizmo; and a drag is exactly
     // the span an undo entry should cover.
-    gizmoDragListener_ = std::make_unique<LambdaEventListener>([this](Event& event) {
+    gizmoDragHandler_ = [this](Event& event) {
         const bool dragging = std::any_cast<bool>(event.target);
         orbit_->enabled = !dragging;
         auto* selected = selection_.get();
@@ -283,7 +283,7 @@ EditorApp::EditorApp(const Options& options)
             document_.setDirty(true);
         }
         gizmoDragging_ = false;
-    });
+    };
 
     // Builds orbit_ and gizmo_ against the perspective camera. Called again
     // whenever the projection changes.
@@ -502,7 +502,7 @@ EditorApp::~EditorApp() {
     // Tear the overlay down before the members it points at (the gizmo owns a
     // pimpl that unregisters canvas listeners in its destructor).
     if (gizmo_) {
-        gizmo_->removeEventListener("dragging-changed", *gizmoDragListener_);
+        gizmoDragSub_.unsubscribe();
         gizmo_->detach();
         gizmo_->removeFromParent();
     }
@@ -2619,14 +2619,14 @@ void EditorApp::bindViewportControls() {
     orbit_->maxZoom = 1e4f;
 
     if (gizmo_) {
-        gizmo_->removeEventListener("dragging-changed", *gizmoDragListener_);
+        gizmoDragSub_.unsubscribe();
         gizmo_->detach();
         gizmo_->removeFromParent();
     }
     gizmo_ = std::make_unique<TransformControls>(camera, canvas_);
     gizmo_->setSize(0.9f);
     overlay_->addRef(*gizmo_);
-    gizmo_->addEventListener("dragging-changed", *gizmoDragListener_);
+    gizmoDragSub_ = gizmo_->subscribe("dragging-changed", gizmoDragHandler_);
     // Snap and enabled/visible are re-applied every frame by
     // refreshSelectionHelpers(); mode, space and the attachment are not. A
     // projection switch while playing rebuilds a gizmo that has to arrive
