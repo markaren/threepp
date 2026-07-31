@@ -1969,6 +1969,54 @@ editor plays exactly one world; a second would stand up a second PhysX
 foundation beside it. Every other method on the class is the one the wheel
 binds, because it is literally the same translation unit.
 
+### Debug draw
+
+Every controller script computes geometry nobody can see — the altimeter ray,
+the contact normal, the drive target — and its only instrument used to be
+`print()`. `threepp.editor.draw_*` puts those vectors in the viewport, over the
+scene, for one frame:
+
+| call | draws |
+| --- | --- |
+| `draw_line(a, b, color=None)` | a world-space segment |
+| `draw_ray(origin, direction, length=1.0, color=None)` | `origin + direction*length` — pass `hit.distance` to see exactly the ray that hit |
+| `draw_point(point, size=0.25, color=None)` | a small axis-aligned cross |
+| `draw_box(center, size, color=None)` | the 12 edges of an AABB (`size` = full extents) |
+| `draw_sphere(center, radius=1.0, color=None)` | three great circles |
+| `draw_axes(object, size=1.0)` | the object's world frame, X red / Y green / Z blue |
+
+`color` is a hex int (`0xff8800`) or a `threepp.Color`; default white.
+
+```python
+def update(self, dt):
+    hit = editor.raycast(self.body.position, DOWN, self.probe, ignore=self.obj)
+    if hit is not None:
+        editor.draw_ray(self.body.position, DOWN, hit.distance, 0x25d6f0)
+        editor.draw_point(hit.point, 0.3, 0xff9430)
+    editor.draw_axes(self.obj)
+```
+
+The rules, all of one piece:
+
+* **Immediate mode.** A draw lasts the frame it was made in; a line that should
+  persist is redrawn every `update()` — which is exactly when a script is called
+  anyway. Nothing to clean up, nothing to leak. (Pause keeps the last picture on
+  screen rather than blanking it.)
+* **No-op outside Play**, same reasoning as `is_key_down` answering `False`
+  headless: a script that draws must still *run* in a headless pass, just
+  unseen. Nothing raises.
+* **Drawn on top.** Depth test off — the whole point is seeing the ray that
+  ends inside a mesh. Everything decomposes to segments into one overlay
+  `LineSegments`, so a thousand calls are still one draw.
+* **Furniture, not scene.** Never saved, never picked, and hidden during every
+  sensor scan — a lidar cannot range against your debug arrow. Screenshots
+  taken with `--screenshot` *do* show it, which is the point: a review pass can
+  see what the controller was thinking, not just where the body ended up.
+* **Capped** (100 000 segments a frame), with one console line when a script
+  blows past it — a per-body-per-substep loop gone wrong must not freeze the
+  editor. Draw from `update()`, not `fixed_update()`, unless you want a
+  segment per substep.
+
 ### Sensors from a script
 
 The physics handles above read *ground truth*: `articulation_from_object` hands

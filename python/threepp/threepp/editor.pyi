@@ -531,3 +531,27 @@ def is_key_down(key: str) -> bool:
     """
     Poll whether a key is currently held — 'W', 'SPACE', 'UP', 'LEFT', 'KP8', the same names Canvas.is_key_down takes. Answers False while the user is typing into a field, and False in a build or a pass with no window. Query it every update() for continuous control; it never sticks.
     """
+def draw_line(a: threepp.Vector3, b: threepp.Vector3, color: int | threepp.Color | None = None) -> None:
+    """
+    Draw a world-space line from a to b, over the scene, for the CURRENT frame only — call it every update() to keep it visible. color is a hex int or a threepp.Color; default white. No-op outside Play, so a script that draws still runs headless. The lines are editor furniture: never saved, and invisible to the sensors.
+    """
+def draw_ray(origin: threepp.Vector3, direction: threepp.Vector3, length: float = 1.0, color: int | threepp.Color | None = None) -> None:
+    """
+    Draw origin plus direction times length — the shape of a raycast, so draw_ray(origin, direction, hit.distance) shows exactly the ray that hit. direction is used as given, not normalised. Current frame only; no-op outside Play.
+    """
+def draw_point(point: threepp.Vector3, size: float = 0.25, color: int | threepp.Color | None = None) -> None:
+    """
+    Draw a small axis-aligned cross at point — a position made visible. Current frame only; no-op outside Play.
+    """
+def draw_box(center: threepp.Vector3, size: threepp.Vector3, color: int | threepp.Color | None = None) -> None:
+    """
+    Draw the 12 edges of an axis-aligned box: center and size as full extents — an AABB, a spawn region, a sensor's reach. Current frame only; no-op outside Play.
+    """
+def draw_sphere(center: threepp.Vector3, radius: float = 1.0, color: int | threepp.Color | None = None) -> None:
+    """
+    Draw a wireframe sphere as three great circles — a trigger radius, a sensor range, a clearance. Current frame only; no-op outside Play.
+    """
+def draw_axes(object: threepp.Object3D, size: float = 1.0) -> None:
+    """
+    Draw object's world-space frame: X red, Y green, Z blue — the one question every attitude bug comes down to. Current frame only; no-op outside Play.
+    """

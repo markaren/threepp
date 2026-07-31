@@ -2311,6 +2311,7 @@ void EditorApp::refreshSelectionHelpers() {
     syncViewportMarkers();
     syncSplineOverlays();
     syncPhysicsDebug();
+    syncDebugDraw();
     syncSensorOverlay();
     syncCameraHelper();
 

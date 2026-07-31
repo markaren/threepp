@@ -37,9 +37,14 @@
 #include "Scripting.hpp"
 
 #include "threepp/core/Object3D.hpp"
+#include "threepp/math/Color.hpp"
+#include "threepp/math/Quaternion.hpp"
+#include "threepp/math/Vector3.hpp"
 
 #include <pybind11/stl.h>
 
+#include <cmath>
+#include <stdexcept>
 #include <string>
 
 using namespace threepp;
@@ -65,6 +70,24 @@ namespace {
             throw std::runtime_error("threepp.editor.add: `parent` is not an Object3D");
         }
         return object;
+    }
+
+    // The colour of a debug draw call: a hex int, a threepp.Color, or nothing
+    // (white). Wrong types raise with the two accepted spellings named, rather
+    // than the cast's own message.
+    Color drawColor(const py::handle& value) {
+
+        if (value.is_none()) return Color(0xffffff);
+        try {
+            return py::cast<Color>(value);
+        } catch (const py::cast_error&) {
+        }
+        try {
+            return Color(py::cast<int>(value));
+        } catch (const py::cast_error&) {
+        }
+        throw std::runtime_error(
+                "draw color must be a hex int (0xff0000) or a threepp.Color");
     }
 
 }// namespace
@@ -136,6 +159,164 @@ namespace {
                 "into a field, so driving a robot cannot eat somebody's rename, and False in a "
                 "build or a pass with no window. Query it every update() for continuous "
                 "control; it never sticks.");
+
+        // --- debug draw ------------------------------------------------------
+        //
+        // A behaviour script's instrument panel: world-space lines, drawn over
+        // the scene for ONE frame and gone. Everything decomposes to segments
+        // into one shared list (scripting::debugDraw) that the editor drains
+        // into a single overlay LineSegments per rendered frame — one primitive,
+        // one draw path. Immediate mode: a line that should persist is redrawn
+        // every update(), which is exactly when a script is called anyway.
+        //
+        // No-ops outside a play session, same reasoning as is_key_down above: a
+        // script that draws must still RUN headless, just unseen. And the lines
+        // are editor furniture, invisible to the sensors — a lidar must not
+        // range against somebody's debug arrow.
+
+        constexpr const char* kDrawSeconds =
+                "Draws for the CURRENT frame only - call it every update() to keep it visible. "
+                "No-op outside Play.";
+
+        sub.def(
+                "draw_line",
+                [](const Vector3& a, const Vector3& b, const py::handle& color) {
+                    const auto c = drawColor(color);
+                    editor::scripting::debugDraw().push(a.x, a.y, a.z, b.x, b.y, b.z,
+                                                        c.r, c.g, c.b);
+                },
+                py::arg("a"), py::arg("b"), py::arg("color") = py::none(),
+                (std::string("Draw a world-space line from `a` to `b`. `color` is a hex int or "
+                             "a threepp.Color; default white. ") +
+                 kDrawSeconds)
+                        .c_str());
+
+        sub.def(
+                "draw_ray",
+                [](const Vector3& origin, const Vector3& direction, float length,
+                   const py::handle& color) {
+                    const auto c = drawColor(color);
+                    const Vector3 end{origin.x + direction.x * length,
+                                      origin.y + direction.y * length,
+                                      origin.z + direction.z * length};
+                    editor::scripting::debugDraw().push(origin.x, origin.y, origin.z,
+                                                        end.x, end.y, end.z, c.r, c.g, c.b);
+                },
+                py::arg("origin"), py::arg("direction"), py::arg("length") = 1.f,
+                py::arg("color") = py::none(),
+                (std::string("Draw `origin` plus `direction` times `length` - the shape of a "
+                             "raycast, so `draw_ray(origin, direction, hit.distance)` shows "
+                             "exactly the ray that hit. `direction` is used as given, not "
+                             "normalised. ") +
+                 kDrawSeconds)
+                        .c_str());
+
+        sub.def(
+                "draw_point",
+                [](const Vector3& p, float size, const py::handle& color) {
+                    const auto c = drawColor(color);
+                    const float h = size * 0.5f;
+                    auto& list = editor::scripting::debugDraw();
+                    list.push(p.x - h, p.y, p.z, p.x + h, p.y, p.z, c.r, c.g, c.b);
+                    list.push(p.x, p.y - h, p.z, p.x, p.y + h, p.z, c.r, c.g, c.b);
+                    list.push(p.x, p.y, p.z - h, p.x, p.y, p.z + h, c.r, c.g, c.b);
+                },
+                py::arg("point"), py::arg("size") = 0.25f, py::arg("color") = py::none(),
+                (std::string("Draw a small axis-aligned cross at `point` - a position made "
+                             "visible. ") +
+                 kDrawSeconds)
+                        .c_str());
+
+        sub.def(
+                "draw_box",
+                [](const Vector3& center, const Vector3& size, const py::handle& color) {
+                    const auto c = drawColor(color);
+                    const float hx = size.x * 0.5f, hy = size.y * 0.5f, hz = size.z * 0.5f;
+                    auto& list = editor::scripting::debugDraw();
+                    // 12 edges of the axis-aligned box, bottom ring / top ring /
+                    // verticals.
+                    const float x0 = center.x - hx, x1 = center.x + hx;
+                    const float y0 = center.y - hy, y1 = center.y + hy;
+                    const float z0 = center.z - hz, z1 = center.z + hz;
+                    const auto edge = [&](float ax, float ay, float az, float bx, float by,
+                                          float bz) {
+                        list.push(ax, ay, az, bx, by, bz, c.r, c.g, c.b);
+                    };
+                    edge(x0, y0, z0, x1, y0, z0);
+                    edge(x1, y0, z0, x1, y0, z1);
+                    edge(x1, y0, z1, x0, y0, z1);
+                    edge(x0, y0, z1, x0, y0, z0);
+                    edge(x0, y1, z0, x1, y1, z0);
+                    edge(x1, y1, z0, x1, y1, z1);
+                    edge(x1, y1, z1, x0, y1, z1);
+                    edge(x0, y1, z1, x0, y1, z0);
+                    edge(x0, y0, z0, x0, y1, z0);
+                    edge(x1, y0, z0, x1, y1, z0);
+                    edge(x1, y0, z1, x1, y1, z1);
+                    edge(x0, y0, z1, x0, y1, z1);
+                },
+                py::arg("center"), py::arg("size"), py::arg("color") = py::none(),
+                (std::string("Draw the 12 edges of an axis-aligned box: `center` and `size` as "
+                             "full extents - an AABB, a spawn region, a sensor's reach. ") +
+                 kDrawSeconds)
+                        .c_str());
+
+        sub.def(
+                "draw_sphere",
+                [](const Vector3& center, float radius, const py::handle& color) {
+                    const auto c = drawColor(color);
+                    auto& list = editor::scripting::debugDraw();
+                    // Three great circles, one per plane - the wireframe idiom
+                    // that reads as a sphere from any angle.
+                    constexpr int kSteps = 24;
+                    constexpr float kTau = 6.2831853f;
+                    for (int i = 0; i < kSteps; ++i) {
+                        const float t0 = kTau * static_cast<float>(i) / kSteps;
+                        const float t1 = kTau * static_cast<float>(i + 1) / kSteps;
+                        const float c0 = std::cos(t0) * radius, s0 = std::sin(t0) * radius;
+                        const float c1 = std::cos(t1) * radius, s1 = std::sin(t1) * radius;
+                        list.push(center.x + c0, center.y + s0, center.z,
+                                  center.x + c1, center.y + s1, center.z, c.r, c.g, c.b);
+                        list.push(center.x + c0, center.y, center.z + s0,
+                                  center.x + c1, center.y, center.z + s1, c.r, c.g, c.b);
+                        list.push(center.x, center.y + c0, center.z + s0,
+                                  center.x, center.y + c1, center.z + s1, c.r, c.g, c.b);
+                    }
+                },
+                py::arg("center"), py::arg("radius") = 1.f, py::arg("color") = py::none(),
+                (std::string("Draw a wireframe sphere as three great circles - a trigger "
+                             "radius, a sensor range, a clearance. ") +
+                 kDrawSeconds)
+                        .c_str());
+
+        sub.def(
+                "draw_axes",
+                [](const py::handle& h, float size) {
+                    auto object = as_object3d(h);
+                    if (!object) {
+                        throw std::runtime_error("threepp.editor.draw_axes: not an Object3D");
+                    }
+                    Vector3 origin;
+                    Quaternion rotation;
+                    object->getWorldPosition(origin);
+                    object->getWorldQuaternion(rotation);
+                    auto& list = editor::scripting::debugDraw();
+                    const auto axis = [&](float x, float y, float z, float r, float g,
+                                          float b) {
+                        Vector3 dir{x, y, z};
+                        dir.applyQuaternion(rotation).multiplyScalar(size);
+                        list.push(origin.x, origin.y, origin.z, origin.x + dir.x,
+                                  origin.y + dir.y, origin.z + dir.z, r, g, b);
+                    };
+                    axis(1, 0, 0, 1.f, 0.25f, 0.25f);
+                    axis(0, 1, 0, 0.35f, 1.f, 0.35f);
+                    axis(0, 0, 1, 0.3f, 0.5f, 1.f);
+                },
+                py::arg("object"), py::arg("size") = 1.f,
+                (std::string("Draw `object`'s world-space frame: X red, Y green, Z blue - the "
+                             "one question every attitude bug comes down to. ") +
+                 kDrawSeconds)
+                        .c_str());
     }
 
 }// namespace threepp_py

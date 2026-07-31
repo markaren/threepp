@@ -112,6 +112,66 @@ namespace threepp::editor {
             return provider;
         }
 
+        // Debug draw — threepp.editor.draw_line and friends, on their way to the
+        // viewport. A script computes vectors nobody can see (an altimeter ray, a
+        // contact normal, a drive target); these land here as world-space line
+        // segments, and the editor drains the list into one overlay LineSegments
+        // each rendered frame. Immediate mode: drained is gone, and a script
+        // that wants a line to persist draws it again next update() — which it
+        // is called every frame to do.
+        //
+        // Plain floats on purpose. Everything else in this header is
+        // Python-free so the inspector and the tests can include it; this stays
+        // dumb enough to also be written from C++ (a play session that wants to
+        // show its own working lands in the same batch).
+        //
+        // `active` is the whole gate, set by ScriptPlaySession together with its
+        // resolver: draws outside a session are cheap no-ops rather than raises,
+        // exactly as is_key_down answers False with no window — a script that
+        // draws must still RUN in a headless pass, just unseen.
+        //
+        // The cap is a backstop for a script drawing per body per substep and
+        // getting it wrong. Refused segments are counted in `dropped`, and the
+        // drainer says so once, rather than the editor freezing under a million
+        // lines nobody meant to ask for.
+        struct DebugDrawList {
+
+            struct Segment {
+                float ax, ay, az;
+                float bx, by, bz;
+                float r, g, b;
+            };
+
+            static constexpr std::size_t cap = 100000;
+
+            std::vector<Segment> segments;
+            std::size_t dropped = 0;
+            bool active = false;
+
+            void push(float ax, float ay, float az, float bx, float by, float bz,
+                      float r, float g, float b) {
+
+                if (!active) return;
+                if (segments.size() >= cap) {
+                    ++dropped;
+                    return;
+                }
+                segments.push_back({ax, ay, az, bx, by, bz, r, g, b});
+            }
+
+            void clear() {
+
+                segments.clear();
+                dropped = 0;
+            }
+        };
+
+        inline DebugDrawList& debugDraw() {
+
+            static DebugDrawList list;
+            return list;
+        }
+
         // Result of looking at a script without running any of its behaviour.
         struct Inspection {
             std::string className;

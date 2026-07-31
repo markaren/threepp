@@ -564,3 +564,80 @@ TEST_CASE("a scene with no scripts costs nothing", "[editor][scripting]") {
     CHECK(session.instanceCount() == 0);
     CHECK(session.errorCount() == 0);
 }
+
+TEST_CASE("debug draw lands in the seam and dies with the session", "[editor][scripting]") {
+
+    // The seam is scripting::debugDraw() - the bindings decompose every call to
+    // line segments there, and the editor drains it into the overlay. Headless
+    // there is no drainer, which is exactly what lets a test read the list.
+    auto& list = scripting::debugDraw();
+
+    auto scene = Scene::create();
+    attachSource(*scene, R"(
+import threepp
+
+editor = threepp.editor
+
+
+class Sketcher:
+    def start(self, obj):
+        # Colours: default white, hex int, and a threepp.Color - all accepted.
+        editor.draw_line(threepp.Vector3(0, 0, 0), threepp.Vector3(1, 0, 0))
+        editor.draw_line(threepp.Vector3(0, 0, 0), threepp.Vector3(0, 1, 0), 0xff0000)
+        editor.draw_ray(threepp.Vector3(0, 2, 0), threepp.Vector3(0, -1, 0), 2.0,
+                        threepp.Color(0.0, 0.0, 1.0))
+
+    def update(self, dt):
+        editor.draw_point(threepp.Vector3(5, 5, 5))          # 3 segments
+        editor.draw_box(threepp.Vector3(0, 0, 0),
+                        threepp.Vector3(2, 2, 2), 0x00ff00)  # 12 segments
+        editor.draw_sphere(threepp.Vector3(0, 0, 0), 1.0)    # 72 segments
+        # draw_axes wants an Object3D; the scene root is one that always exists.
+        editor.draw_axes(editor.scene(), 1.0)                # 3 segments
+)");
+
+    // Nothing playing: the binding is a no-op, not a raise, and nothing lands.
+    CHECK_FALSE(list.active);
+    CHECK(list.segments.empty());
+
+    ScriptPlaySession session;
+    session.start(*scene);
+    CHECK(session.errorCount() == 0);
+
+    // start() drew three lines; the session activated the seam before phase 2.
+    CHECK(list.active);
+    REQUIRE(list.segments.size() == 3);
+
+    // Default white, hex red, Color blue - per-segment colour survives.
+    CHECK(list.segments[0].r == 1.f);
+    CHECK(list.segments[0].g == 1.f);
+    CHECK(list.segments[1].r == 1.f);
+    CHECK(list.segments[1].g == 0.f);
+    CHECK(list.segments[2].b == 1.f);
+    CHECK(list.segments[2].r == 0.f);
+    // draw_ray scaled the direction: from (0,2,0) two metres straight down,
+    // origin stored first, computed endpoint second.
+    CHECK(list.segments[2].ay == 2.f);
+    CHECK(list.segments[2].by == 0.f);
+
+    // One update: point 3 + box 12 + sphere 72 + axes 3 on top of start's 3.
+    session.update(0.016f);
+    CHECK(session.errorCount() == 0);
+    CHECK(list.segments.size() == 3 + 3 + 12 + 72 + 3);
+
+    // The editor drains between frames; headless the test plays that part.
+    list.clear();
+    session.update(0.016f);
+    CHECK(list.segments.size() == 3 + 12 + 72 + 3);
+
+    // Stop takes the seam down with the session: inactive AND empty, so the
+    // first frame of the next Play cannot render leftovers.
+    session.stop();
+    CHECK_FALSE(list.active);
+    CHECK(list.segments.empty());
+
+    // And a draw after stop is the headless no-op again.
+    session.start(*scene);
+    session.stop();
+    CHECK(list.segments.empty());
+}

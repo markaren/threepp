@@ -183,18 +183,25 @@ struct ScriptPlaySession::Impl {
         resolver.owner = this;
         resolver.lookup = [this](const std::string& uuid) { return resolve(uuid); };
         scripting::playScene() = &scene;
+        // Draws land only while a session runs; see DebugDrawList. Cleared on
+        // the way UP too, so the first frame of a Play never renders leftovers
+        // from a session that skipped its own teardown.
+        scripting::debugDraw().clear();
+        scripting::debugDraw().active = true;
     }
 
     void clearSessionAccess() {
 
         auto& resolver = scripting::scriptResolver();
-        // Ours to take back only while it still is ours. Guards the scene as
-        // well: the two went up together, so a session tearing down late must
-        // not take either back from a newer one.
+        // Ours to take back only while it still is ours. Guards the scene and
+        // the draw list as well: the three went up together, so a session
+        // tearing down late must not take any of them back from a newer one.
         if (resolver.owner != this) return;
         resolver.owner = nullptr;
         resolver.lookup = nullptr;
         scripting::playScene() = nullptr;
+        scripting::debugDraw().active = false;
+        scripting::debugDraw().clear();
     }
 
     // --- the physics clock -------------------------------------------------

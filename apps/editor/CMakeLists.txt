@@ -16,6 +16,7 @@ target_compile_features(threepp_editor_examples PUBLIC cxx_std_20)
 
 add_executable(threepp_editor
         main.cpp
+        DebugDrawOverlay.cpp
         EditorApp.cpp
         EditorSelfTest.cpp
         EditorTheme.cpp

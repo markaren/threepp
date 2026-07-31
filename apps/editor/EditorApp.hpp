@@ -466,6 +466,13 @@ namespace threepp::editor {
         // my collider" being unanswerable without leaving the editor.
         void syncPhysicsDebug();
         void clearPhysicsDebug();
+        // --- script debug draw (apps/editor/DebugDrawOverlay.cpp) -----------
+        // threepp.editor.draw_line and friends: the segments a playing script
+        // asked to see this frame, drained from scripting::debugDraw() into one
+        // LineSegments under the overlay. Immediate mode - drained is gone, a
+        // paused frame keeps the last picture.
+        void syncDebugDraw();
+        void clearDebugDraw();
         // --- sensor point cloud (apps/editor/SensorOverlay.cpp) --------------
         // Every playing depth camera's and LIDAR's returns, as one Points under
         // the overlay, coloured by range. Same in-place attribute contract as
@@ -778,6 +785,14 @@ namespace threepp::editor {
         std::shared_ptr<LineSegments> physicsDebugLines_;
         int physicsDebugCapacity_ = 0;
         bool physicsDebug_ = false;
+
+        // Script debug draw. Same in-place-rewrite contract as the collider
+        // lines above, plus a colour attribute (each call picks its own). No
+        // toggle: the view is on exactly when a playing script draws, and an
+        // empty frame hides it.
+        std::shared_ptr<LineSegments> debugDrawLines_;
+        int debugDrawCapacity_ = 0;
+        bool debugDrawWarned_ = false;
 
         // Sensors authored on scene objects. The session is kept as a member for
         // the same reason physics_ is: the readout and the point-cloud overlay
