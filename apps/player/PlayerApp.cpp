@@ -36,6 +36,23 @@ namespace {
     // whatever it is simulating; the sim simply loses the time instead.
     constexpr float kMaxWallDt = 0.1f;
 
+    // Always names a backend — the editor's rule, for the editor's reason:
+    // handing createRenderer no preference makes it print a console menu and
+    // block on std::cin, which would hang every piped or scripted run this tool
+    // exists for.
+    GraphicsAPI requestedApi(bool vulkan) {
+
+#ifdef THREEPP_WITH_VULKAN
+        if (vulkan) return GraphicsAPI::Vulkan;
+#else
+        if (vulkan) {
+            std::cerr << "threepp player: built without Vulkan support, using OpenGL"
+                      << std::endl;
+        }
+#endif
+        return GraphicsAPI::OpenGL;
+    }
+
     // A flat userData string on the scene root, or "" when the document does not
     // carry one. Same two keys the editor reads.
     std::string userDataString(const Object3D& object, const char* key) {
@@ -131,7 +148,7 @@ void PlayerApp::buildView() {
                         .vsync(!options_.headless)
                         .headless(options_.headless)
                         .exitOnKeyEscape(true));
-        renderer_ = createRenderer(*canvas_, GraphicsAPI::OpenGL);
+        renderer_ = createRenderer(*canvas_, requestedApi(options_.vulkan));
     } catch (const std::exception& e) {
         std::cerr << "threepp player: no renderer (" << e.what()
                   << ") - vision sensors will not scan" << std::endl;

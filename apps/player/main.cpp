@@ -22,6 +22,8 @@ namespace {
                 << "  --seconds=N    stop each episode after N simulated seconds. With both,\n"
                 << "                 whichever comes first wins. Neither, windowed, means play\n"
                 << "                 until the window is closed\n"
+                << "  --vulkan       use the Vulkan backend (OpenGL is the default). In a build\n"
+                << "                 without Vulkan support this warns and uses OpenGL\n"
                 << "  --headless     no visible window. The GL context is still created (the\n"
                 << "                 window is just not shown) so depth and lidar sensors still\n"
                 << "                 scan. Steps at a fixed 1/60 s and, with no --frames or\n"
@@ -55,6 +57,8 @@ int main(int argc, char** argv) {
             options.frames = std::atoi(argument + 9);
         } else if (std::strncmp(argument, "--seconds=", 10) == 0) {
             options.seconds = static_cast<float>(std::atof(argument + 10));
+        } else if (std::strcmp(argument, "--vulkan") == 0) {
+            options.vulkan = true;
         } else if (std::strcmp(argument, "--headless") == 0) {
             options.headless = true;
         } else if (std::strncmp(argument, "--dt=", 5) == 0) {

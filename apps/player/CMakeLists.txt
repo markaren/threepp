@@ -65,6 +65,13 @@ add_executable(threepp_player
 
 target_link_libraries(threepp_player PRIVATE threepp_player_core)
 
+# THREEPP_WITH_VULKAN is PRIVATE on the threepp lib (the editor happens to
+# inherit it through imgui, which the player deliberately does not link), so
+# --vulkan's compile-time gate needs the define stated here.
+if (THREEPP_WITH_VULKAN)
+    target_compile_definitions(threepp_player PRIVATE THREEPP_WITH_VULKAN=1)
+endif ()
+
 # The GPU libraries PhysX loads at runtime, beside the binary — the same
 # POST_BUILD copies threepp_editor does, so the player can be run from its own
 # output directory without one.

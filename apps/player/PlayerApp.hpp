@@ -60,6 +60,10 @@ namespace threepp::player {
         // so there is still a GL context and the vision sensors still scan.
         bool headless = false;
 
+        // The Vulkan backend, same flag as the editor's. A build without it
+        // warns once and plays on OpenGL rather than refusing the document.
+        bool vulkan = false;
+
         // Fixed simulation step. Zero means "use the wall clock", which is what
         // a windowed run wants; a headless run defaults this to 1/60 because a
         // bounded, reproducible run is the whole point of being headless.
