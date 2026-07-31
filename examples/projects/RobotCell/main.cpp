@@ -876,7 +876,7 @@ namespace {
         uiCam->position.z = 10;
         FontLoader fontLoader;
         const Font font = fontLoader.defaultFont();
-        auto label = TextSprite::create(font, 20);
+        auto label = TextSprite::create(font, 20.f);
         label->setText("0");
         label->screenSpace = true;
         label->screenAnchor.set(0.f, 1.f);
