@@ -133,9 +133,9 @@ ProgramParameters::ProgramParameters(
 
     gradientMap = gradientMaterial && gradientMaterial->gradientMap;
 
-    if (sheenMaterial) {
-        sheen = sheenMaterial->sheen;
-    }
+    // KHR_materials_sheen is an additive lobe, so a black sheenColor is a no-op —
+    // gate the define on it and spare every other physical material the cost.
+    sheen = sheenMaterial && !sheenMaterial->sheenColor.equals(Color(0, 0, 0));
 
     transmission = transmissionMaterial && transmissionMaterial->transmission > 0;
     transmissionMap = transmissionMaterial && transmissionMaterial->transmissionMap;
@@ -250,11 +250,7 @@ std::string ProgramParameters::hash() const {
 
     s << std::to_string(gradientMap) << '\n';
 
-    if (sheen.has_value()) {
-        s << *sheen << '\n';
-    } else {
-        s << "undefined \n";
-    }
+    s << std::to_string(sheen) << '\n';
 
     s << std::to_string(transmission) << '\n';
     s << std::to_string(transmissionMap) << '\n';

@@ -339,22 +339,26 @@ float BlinnExponentToGGXRoughness( const in float blinnExponent ) {
 
 #if defined( USE_SHEEN )
 
-// https://github.com/google/filament/blob/master/shaders/src/brdf.fs#L94
-float D_Charlie(float roughness, float NoH) {
-	// Estevez and Kulla 2017, "Production Friendly Microfacet Sheen BRDF"
-	float invAlpha = 1.0 / roughness;
-	float cos2h = NoH * NoH;
-	float sin2h = max(1.0 - cos2h, 0.0078125); // 2^(-14/2), so sin2h^2 > 0 in fp16
-	return (2.0 + invAlpha) * pow(sin2h, invAlpha * 0.5) / (2.0 * PI);
+// KHR_materials_sheen. Kept numerically identical to the Vulkan deferred lobe in
+// renderers/vulkan/shaders/deferred_shade_10_lighting_utils.glsl so the two
+// backends shade fabric the same — note alpha = roughness^2 here, where the old
+// r119 chunk fed roughness in directly and came out far too tight.
+
+// Estevez and Kulla 2017, "Production Friendly Microfacet Sheen BRDF"
+float D_Charlie( const in float NoH, const in float roughness ) {
+	float invAlpha = 1.0 / max( roughness * roughness, 1e-4 );
+	float sin2h = max( 1.0 - NoH * NoH, 1e-7 );
+	return (2.0 + invAlpha) * pow( sin2h, invAlpha * 0.5 ) / (2.0 * PI);
 }
 
-// https://github.com/google/filament/blob/master/shaders/src/brdf.fs#L136
-float V_Neubelt(float NoV, float NoL) {
-	// Neubelt and Pettineo 2013, "Crafting a Next-gen Material Pipeline for The Order: 1886"
-	return saturate(1.0 / (4.0 * (NoL + NoV - NoL * NoV)));
+// Neubelt and Pettineo 2013, "Crafting a Next-gen Material Pipeline for The Order: 1886"
+float V_Neubelt( const in float NoV, const in float NoL ) {
+	return saturate( 1.0 / (4.0 * (NoL + NoV - NoL * NoV)) );
 }
 
-vec3 BRDF_Specular_Sheen( const in float roughness, const in vec3 L, const in GeometricContext geometry, vec3 specularColor ) {
+// Named sheenTint, not sheenColor: the uniform of that name is declared above this
+// chunk in meshphysical_frag, and a parameter shadowing it reads as a bug.
+vec3 BRDF_Specular_Sheen( const in float roughness, const in vec3 L, const in GeometricContext geometry, const in vec3 sheenTint ) {
 
 	vec3 N = geometry.normal;
 	vec3 V = geometry.viewDir;
@@ -362,8 +366,20 @@ vec3 BRDF_Specular_Sheen( const in float roughness, const in vec3 L, const in Ge
 	vec3 H = normalize( V + L );
 	float dotNH = saturate( dot( N, H ) );
 
-	return specularColor * D_Charlie( roughness, dotNH ) * V_Neubelt( dot(N, V), dot(N, L) );
+	return sheenTint * D_Charlie( dotNH, roughness ) * V_Neubelt( saturate( dot( N, V ) ), saturate( dot( N, L ) ) );
 
+}
+
+// Analytic fit to the sheen directional albedo, for the environment lobe. This is
+// what carries an env-lit fabric, where no analytic light drives the Charlie lobe.
+float IBLSheenBRDF( const in float dotNV, const in float roughness ) {
+	float r2 = roughness * roughness;
+	float a = roughness < 0.25 ? -339.2 * r2 + 161.4 * roughness - 25.9
+	                           :   -8.48 * r2 +  14.3 * roughness -  9.95;
+	float b = roughness < 0.25 ?   44.0 * r2 -  23.7 * roughness +  3.26
+	                           :    1.97 * r2 -   3.27 * roughness +  0.72;
+	float DG = exp( a * dotNV + b ) + ( roughness < 0.25 ? 0.0 : 0.1 * ( roughness - 0.25 ) );
+	return saturate( DG / PI );
 }
 
 #endif

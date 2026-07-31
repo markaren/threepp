@@ -11,6 +11,7 @@ struct PhysicalMaterial {
 #endif
 #ifdef USE_SHEEN
 	vec3 sheenColor;
+	float sheenRoughness;
 #endif
 
 };
@@ -101,15 +102,19 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 
 	#endif
 
+	reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.normal, material.specularColor, material.specularRoughness);
+
 	#ifdef USE_SHEEN
+		// KHR_materials_sheen: the Charlie lobe sits ON TOP of the base BRDF. The
+		// r119 chunk this replaces put it in an #else and swapped GGX out entirely,
+		// which cost sheen materials their whole specular highlight. No albedo
+		// scaling, matching the Vulkan deferred path.
 		reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_Sheen(
-			material.specularRoughness,
+			material.sheenRoughness,
 			directLight.direction,
 			geometry,
 			material.sheenColor
 		);
-	#else
-		reflectedLight.directSpecular += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Specular_GGX( directLight, geometry.viewDir, geometry.normal, material.specularColor, material.specularRoughness);
 	#endif
 
 	reflectedLight.directDiffuse += ( 1.0 - clearcoatDHR ) * irradiance * BRDF_Diffuse_Lambert( material.diffuseColor );
@@ -150,6 +155,16 @@ void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradia
 
 	reflectedLight.indirectSpecular += clearcoatInv * radiance * envBRDF;
 	reflectedLight.indirectDiffuse += material.diffuseColor * cosineWeightedIrradiance;
+
+	#ifdef USE_SHEEN
+
+		// Env/IBL sheen — the grazing rim glow that carries a fabric lit only by an
+		// environment. Driven by the same cosine-weighted irradiance the diffuse
+		// lobe uses, as in the Vulkan gather.
+		float sheenDotNV = saturate( dot( geometry.normal, geometry.viewDir ) );
+		reflectedLight.indirectSpecular += material.sheenColor * IBLSheenBRDF( sheenDotNV, material.sheenRoughness ) * cosineWeightedIrradiance;
+
+	#endif
 
 }
 

@@ -45,7 +45,10 @@ material.specularRoughness = min( material.specularRoughness, 1.0 );
 
 #ifdef USE_SHEEN
 
-	material.sheenColor = sheen;
+	// No clamp: Vulkan hands sheenRoughness through raw and lets D_Charlie's
+	// max(alpha, 1e-4) be the only guard. Kept identical here on purpose.
+	material.sheenColor = sheenColor;
+	material.sheenRoughness = sheenRoughness;
 
 #endif
 

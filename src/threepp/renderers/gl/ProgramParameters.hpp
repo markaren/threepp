@@ -67,7 +67,7 @@ namespace threepp {
 
             bool gradientMap{};
 
-            std::optional<Color> sheen;
+            bool sheen{};
 
             bool transmission{};
             bool transmissionMap{};

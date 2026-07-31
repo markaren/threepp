@@ -276,9 +276,8 @@ struct GLMaterials::Impl {
         uniforms.at("clearcoat").value<float>() = material->clearcoat;
         uniforms.at("clearcoatRoughness").value<float>() = material->clearcoatRoughness;
 
-        if (material->sheen) {
-            uniforms.at("sheen").value<Color>().copy(*material->sheen);
-        }
+        uniforms.at("sheenColor").value<Color>().copy(material->sheenColor);
+        uniforms.at("sheenRoughness").value<float>() = material->sheenRoughness;
 
         if (material->clearcoatMap) {
             uniforms.at("clearcoatMap").setValue(material->clearcoatMap.get());
