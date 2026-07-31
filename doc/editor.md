@@ -29,6 +29,7 @@ Command line:
 | `--seconds=N` | how long that pass plays before the first shot (default 3) |
 | `--keys=W,A` | hold these keys for those seconds, then let go — a scene you are meant to *drive* cannot be reviewed standing still |
 | `--shot=px,py,pz@tx,ty,tz[:tag]` | camera position and target for that pass, repeatable; `tag` becomes a file-name suffix. None given keeps the camera the session already has — an authored [`editorView`](#opening-a-document-editorview--editorfollow), or wherever Follow Selection has chased to — and frames the whole document only when there is neither |
+| `--bench=N` | time N frames after `--seconds` of warmup and print the result. **Turns vsync off**, because a present-capped frame time measures the display rather than the renderer; the status bar's fps cannot answer this question for the same reason (it is a smoothed average of frames the swapchain paced). Reports median, p95 and max CPU frame time in milliseconds, and on Vulkan the per-pass GPU medians from the backend's timestamp queries. Composes with `--example`/`--play`/`--keys`, so a demo can be timed while it is being flown. `THREEPP_BENCH_VSYNC=1` puts the cap back, for the one question the uncapped number cannot answer: whether the editor *as shipped* holds the refresh rate. `THREEPP_BENCH_DISABLE=a,b,…` strips pieces of the frame so a cost can be *attributed* rather than guessed at — `cloud`, `sensors`, `ui`, `overlay`, `play`, and the deferred pipeline's own `ao`, `probegi`, `restir`, `denoise`, `halfres` (render at half scale: a cost that halves is per-pixel work, one that does not is fixed) |
 
 ---
 
@@ -1898,6 +1899,21 @@ two to the same answer.
 Sensors are rebuilt from the authored seed on every Play, so a script that
 reacts to noise reacts to the *same* noise on the next run — a closed loop under
 test is reproducible, which is the entire point of the seed.
+
+A vision scan is **fired on one frame and delivered on a later one**. On a
+raster backend the two are the same frame (the scan *is* six blocking
+framebuffer reads); on Vulkan the beams are traced against the renderer's
+acceleration structure and collected by a later frame's fence poll — never a
+wait. That is not a refinement, it is the difference between a smooth frame and
+a periodic stall: taking delivery means waiting on a GPU fence, and that fence
+sits behind every frame already queued. Measured on an RTX 4070 with two frames
+in flight, collecting a 1.2 ms VLP-16 trace immediately cost **28 ms**, and the
+Hover Arena's 10 Hz lidar delivered that ten times a second — a 34 ms frame in
+an otherwise 15 ms scene. So the cloud a panel or the overlay reads is one frame
+old, at the pose the beams were fired from, and a sensor with a scan still owed
+does not fire again. Which frame a scan lands on is a property of the machine;
+what the seed guarantees — the same cloud, from the same pose, on every run — is
+unchanged.
 
 ### Async model import
 

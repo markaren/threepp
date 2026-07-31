@@ -60,6 +60,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>// std::getenv (THREEPP_BENCH_DISABLE)
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -232,6 +233,175 @@ int EditorApp::runSceneScreenshot() {
     }
     if (isPlaying()) stopPlay();
     return wrote ? 0 : 1;
+}
+
+// --bench: how long a frame of whatever is open actually takes.
+//
+// Exists because the numbers a person can read off the running editor are both
+// wrong for the question. The status bar's fps is ImGui's smoothed average over
+// a moving window, and the window is FIFO-presented, so a renderer that needs
+// 12 ms and one that needs 16 both read "60". The constructor turns vsync off
+// for this pass (see the Canvas parameters) so what is timed is the renderer.
+//
+// CPU frame time is the wall clock around one animateOnce — everything the
+// editor does in a frame, present included. On Vulkan the per-pass GPU medians
+// come from the backend's timestamp queries (VulkanRenderer::lastFrameTimings),
+// which is the only way to say WHICH pass a frame is spent in; those are GPU
+// time for that pass, so they do not sum to the CPU frame time and are not
+// meant to.
+//
+// THREEPP_BENCH_DISABLE=a,b,c strips pieces of the frame for attribution. It is
+// a bench-only ablation switch, deliberately an environment variable rather
+// than a command line flag: it exists to answer "what costs what" in a session,
+// not to be a supported way to run the editor.
+int EditorApp::runBench() {
+
+    // --- ablations ---------------------------------------------------------
+    bool noCloud = false, noSensors = false, noUi = false, noOverlay = false, noPlay = false;
+    if (const char* raw = std::getenv("THREEPP_BENCH_DISABLE"); raw && *raw) {
+        std::string list(raw);
+        std::cout << "[bench] disabled: " << list << std::endl;
+        const auto has = [&](const char* token) { return list.find(token) != std::string::npos; };
+        noCloud    = has("cloud");
+        noSensors  = has("sensors");
+        noUi       = has("ui");
+        noOverlay  = has("overlay");
+        noPlay     = has("play");
+        if (has("follow")) followSelection_ = false;
+
+#ifdef THREEPP_WITH_VULKAN
+        // The deferred pipeline's own knobs, so "what is the floor" can be
+        // answered per stage instead of guessed at.
+        if (auto* vulkan = dynamic_cast<VulkanRenderer*>(renderer_.get())) {
+            if (has("ao")) vulkan->setDeferredAO(false);
+            if (has("probegi")) vulkan->setProbeGI(false);
+            if (has("restir")) vulkan->setRestirDIEnabled(false);
+            if (has("denoise")) vulkan->setDenoise(false);
+            // Compute vs bandwidth: half the pixels. A cost that halves is
+            // per-pixel work; one that does not is fixed or bandwidth-bound.
+            if (has("halfres")) vulkan->setRenderScale(0.5f);
+        }
+#endif
+    }
+
+    if (noSensors) {
+        // Strip the authoring, not the objects: the scene keeps its geometry and
+        // its mass, and Play simply builds no sensors from it.
+        int stripped = 0;
+        document_.scene().traverse([&](Object3D& object) {
+            if (const auto config = SensorConfig::read(object); config && config->enabled) {
+                object.userData.erase("sensor");
+                ++stripped;
+            }
+        });
+        std::cout << "[bench] stripped " << stripped << " sensor(s)" << std::endl;
+    }
+    if (noCloud) sensorCloudVisible_ = false;
+    if (noOverlay && overlay_) overlay_->visible = false;
+    benchSkipUi_ = noUi;
+
+    if (options_.play && !noPlay) startPlay();
+
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    if (!options_.keys.empty()) {
+        const auto held = options_.keys;
+        scripting::keyStateProvider() = [held](const std::string& key) {
+            return std::find(held.begin(), held.end(), key) != held.end();
+        };
+    }
+#endif
+
+    Clock clock;
+    const auto playFor = [&](float seconds) {
+        float elapsed = 0.f;
+        for (int i = 0; i < 100000 && elapsed < seconds; ++i) {
+            const float dt = clock.getDelta();
+            elapsed += std::max(dt, 0.f);
+            if (!canvas_.animateOnce([&] { frame(dt); })) break;
+        }
+    };
+
+    // Warm up: shader/pipeline compiles, the first BLAS builds, TAA history,
+    // the probe grid's first round-robin sweep and — for a played scene — the
+    // controller settling into its hover all land in here rather than in the
+    // measurement.
+    playFor(std::max(options_.settle, 0.5f));
+
+#ifdef THREEPP_WITH_VULKAN
+    auto* vk = dynamic_cast<VulkanRenderer*>(renderer_.get());
+    std::vector<VulkanRenderer::FrameTimings> gpu;
+    if (vk) gpu.reserve(static_cast<std::size_t>(options_.bench));
+#endif
+
+    std::vector<double> cpuMs;
+    cpuMs.reserve(static_cast<std::size_t>(options_.bench));
+
+    for (int i = 0; i < options_.bench; ++i) {
+        const auto begin = std::chrono::high_resolution_clock::now();
+        const float dt = clock.getDelta();
+        if (!canvas_.animateOnce([&] { frame(dt); })) break;
+        const auto end = std::chrono::high_resolution_clock::now();
+        cpuMs.push_back(std::chrono::duration<double, std::milli>(end - begin).count());
+#ifdef THREEPP_WITH_VULKAN
+        if (vk) gpu.push_back(vk->lastFrameTimings());
+#endif
+    }
+
+    if (cpuMs.empty()) {
+        std::cout << "[bench] no frames measured" << std::endl;
+        return 1;
+    }
+
+    // Median and p95 rather than a mean: one 40 ms hitch (a pipeline compile
+    // that escaped the warmup, the OS taking the core away) moves a mean over
+    // 600 frames by enough to hide a real regression, and the p95 is where a
+    // periodic stall shows up as itself instead of smearing into the average.
+    const auto pct = [](std::vector<double> v, double q) {
+        std::sort(v.begin(), v.end());
+        const auto at = static_cast<std::size_t>(q * static_cast<double>(v.size() - 1) + 0.5);
+        return v[at];
+    };
+    const double median = pct(cpuMs, 0.5);
+    const double p95 = pct(cpuMs, 0.95);
+    double sum = 0.;
+    for (const double ms : cpuMs) sum += ms;
+
+    std::cout << "[bench] frames=" << cpuMs.size()
+              << " cpu_median=" << median << " ms"
+              << " cpu_p95=" << p95 << " ms"
+              << " cpu_max=" << *std::max_element(cpuMs.begin(), cpuMs.end()) << " ms"
+              << " mean_fps=" << (1000. * static_cast<double>(cpuMs.size()) / sum)
+              << " median_fps=" << (1000. / median) << std::endl;
+
+#ifdef THREEPP_WITH_VULKAN
+    if (vk && !gpu.empty()) {
+        const auto medianOf = [&](float VulkanRenderer::FrameTimings::* field) {
+            std::vector<double> v;
+            v.reserve(gpu.size());
+            for (const auto& t : gpu) v.push_back(static_cast<double>(t.*field));
+            return pct(std::move(v), 0.5);
+        };
+        std::cout << "[bench] gpu medians (ms):"
+                  << " raster=" << medianOf(&VulkanRenderer::FrameTimings::rasterGbufMs)
+                  << " shade=" << medianOf(&VulkanRenderer::FrameTimings::pathTraceMs)
+                  << " denoise=" << medianOf(&VulkanRenderer::FrameTimings::denoiseMs)
+                  << " taa=" << medianOf(&VulkanRenderer::FrameTimings::taaMs)
+                  << " overlay=" << medianOf(&VulkanRenderer::FrameTimings::overlayMs)
+                  << " froxel=" << medianOf(&VulkanRenderer::FrameTimings::froxelMs)
+                  << " dof=" << medianOf(&VulkanRenderer::FrameTimings::dofMs)
+                  << " gbufResolve=" << medianOf(&VulkanRenderer::FrameTimings::gbufResolveMs)
+                  << " shadeB=" << medianOf(&VulkanRenderer::FrameTimings::shadeBMs)
+                  << std::endl;
+        std::cout << "[bench] cpu medians (ms):"
+                  << " ensureScene=" << medianOf(&VulkanRenderer::FrameTimings::cpuEnsureSceneMs)
+                  << " record=" << medianOf(&VulkanRenderer::FrameTimings::cpuRecordMs)
+                  << " render=" << medianOf(&VulkanRenderer::FrameTimings::cpuFrameMs)
+                  << std::endl;
+    }
+#endif
+
+    if (isPlaying()) stopPlay();
+    return 0;
 }
 
 int EditorApp::runScreenshot() {
@@ -3907,20 +4077,36 @@ int EditorApp::runSelfTest() {
             check(sensors_ && sensors_->sensorCount() == 3, "all three authored sensors are built");
             check(sensors_ && sensors_->liveCount() == 3, "and all three come up live");
 
-            // One step is one scan for an ungated sensor. Hash the FIRST scan and
-            // nothing later: every scan draws from the range-noise stream, so
-            // scan N is only comparable with scan N of another run, and how many
-            // frames the IMU wait below takes is a property of the machine.
-            stepFixed();
+            // The first scan of each vision sensor, hashed and nothing later:
+            // every scan draws from the range-noise stream, so scan N is only
+            // comparable with scan N of another run.
+            //
+            // Both sensors are ungated, so both FIRE on the first frame. Which
+            // frame they are DELIVERED on is a property of the backend and of
+            // the machine: a raster scan lands on the frame it fired (six
+            // blocking framebuffer reads), while on Vulkan the beams are traced
+            // on the GPU and collected by a later frame's fence poll, because
+            // blocking for a readback costs every frame already queued (see
+            // SensorPlaySession::scanAll). So step until the first scan has
+            // landed, exactly as the IMU wait below does and for the same
+            // reason. What the seed guarantees — the same cloud from the same
+            // pose — is asserted between the two passes and is untouched by
+            // which frame carried it.
             const auto* lidarEntry = entryFor(lidarUuid);
-            check(lidarEntry != nullptr && lidarEntry->scans == 1,
-                  "the first frame of play is exactly one scan");
+            const auto* depthEntry = entryFor(depthUuid);
+            for (int i = 0; i < 600; ++i) {
+                lidarEntry = entryFor(lidarUuid);
+                depthEntry = entryFor(depthUuid);
+                if (lidarEntry && lidarEntry->scans > 0 && depthEntry && depthEntry->scans > 0) break;
+                stepFixed();
+            }
+            check(lidarEntry != nullptr && lidarEntry->scans >= 1,
+                  "the first frame of play fires a scan, and it is delivered");
             const std::size_t scanHash = lidarEntry ? hashCloud(lidarEntry->returns) : 0;
             const std::size_t scanPoints = lidarEntry ? lidarEntry->returns.size() : 0;
 
-            const auto* depthEntry = entryFor(depthUuid);
-            check(depthEntry != nullptr && depthEntry->scans == 1,
-                  "the depth camera scanned on the same frame");
+            check(depthEntry != nullptr && depthEntry->scans >= 1,
+                  "the depth camera's scan is delivered too");
             const std::size_t depthHash = depthEntry ? hashPoints(depthEntry->cloud) : 0;
             const std::size_t depthPoints = depthEntry ? depthEntry->cloud.size() : 0;
             check(depthPoints > 0, "and its cloud is not empty");

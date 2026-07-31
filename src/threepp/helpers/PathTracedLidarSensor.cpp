@@ -104,8 +104,13 @@ void PathTracedLidarSensor::buildCameraBeams(float fovY, unsigned int width, uns
 }
 
 void PathTracedLidarSensor::scan(VulkanRenderer& renderer, std::vector<LidarReturn>& out) {
+    scanBegin(renderer);
+    if (!scanCollect(renderer, out)) out.clear();
+}
+
+void PathTracedLidarSensor::scanBegin(VulkanRenderer& renderer) {
     beginScan();
-    out.clear();
+    scanHandle_ = VulkanRenderer::kNoLidarScan;
     if (directions_.empty()) return;
 
     if (!parent) updateMatrixWorld();
@@ -113,8 +118,7 @@ void PathTracedLidarSensor::scan(VulkanRenderer& renderer, std::vector<LidarRetu
     // Origin = sensor's world translation; orientation = upper-3x3 of world
     // matrix. Sensors don't typically carry scale, so the upper-3x3 is a
     // rotation matrix (no inverse-transpose required for direction vectors).
-    Vector3 origin;
-    getWorldPosition(origin);
+    getWorldPosition(scanOrigin_);
     Matrix3 rot;
     rot.setFromMatrix4(*matrixWorld);
 
@@ -122,13 +126,28 @@ void PathTracedLidarSensor::scan(VulkanRenderer& renderer, std::vector<LidarRetu
     for (size_t i = 0; i < directions_.size(); ++i) {
         Vector3 d = directions_[i];
         d.applyMatrix3(rot).normalize();
-        beamScratch_[i].origin = origin;
+        beamScratch_[i].origin = scanOrigin_;
         beamScratch_[i].direction = d;
     }
 
-    renderer.scanLidar(beamScratch_, out, params);
+    scanHandle_ = renderer.scanLidarBegin(beamScratch_, params);
+}
 
-    applyNoise(out, origin);
+bool PathTracedLidarSensor::scanReady(const VulkanRenderer& renderer) const {
+    return scanHandle_ != VulkanRenderer::kNoLidarScan && renderer.scanLidarReady(scanHandle_);
+}
+
+bool PathTracedLidarSensor::scanCollect(VulkanRenderer& renderer, std::vector<LidarReturn>& out) {
+    out.clear();
+    if (scanHandle_ == VulkanRenderer::kNoLidarScan) return false;
+    const int handle = scanHandle_;
+    scanHandle_ = VulkanRenderer::kNoLidarScan;
+
+    if (!renderer.scanLidarCollect(handle, out)) return false;
+
+    // Along the beam from where it was FIRED, not from where the sensor is now.
+    applyNoise(out, scanOrigin_);
+    return true;
 }
 
 // Perturb each return along its own beam. Applied CPU-side rather than in the

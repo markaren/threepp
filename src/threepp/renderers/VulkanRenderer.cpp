@@ -1751,6 +1751,19 @@ namespace threepp {
         core()->scanLidar(beams, results, params);
     }
 
+    int VulkanRenderer::scanLidarBegin(const std::vector<LidarBeam>& beams,
+                                       const LidarParams& params) {
+        return core()->scanLidarBegin(beams, params);
+    }
+
+    bool VulkanRenderer::scanLidarReady(int handle) const {
+        return core()->scanLidarReady(handle);
+    }
+
+    bool VulkanRenderer::scanLidarCollect(int handle, std::vector<LidarReturn>& results) {
+        return core()->scanLidarCollect(handle, results);
+    }
+
     void VulkanRenderer::setOverlayLayer(int channel) {
         core()->overlayLayer_ = (channel < 0 || channel > 31) ? -1 : channel;
     }

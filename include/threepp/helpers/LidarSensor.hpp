@@ -86,6 +86,44 @@ namespace threepp {
          */
         void scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud);
 
+        /**
+         * The frame-loop form of scan(), split into a fire and a delivery.
+         *
+         * scan() on Vulkan blocks on a GPU readback, and a blocking readback
+         * does not cost the trace — it costs every frame already queued behind
+         * the fence. On an RTX 4070 with two frames in flight that turned a
+         * 1.2 ms VLP-16 trace into a 28 ms stall, landing on whatever frame the
+         * rate gate happened to fire on: a 10 Hz sensor hitching a 60 Hz app ten
+         * times a second. Fire on one frame, deliver on the next, and the trace
+         * costs what it takes.
+         *
+         *     if (sensor.scanDue() && sensor.scanBegin(renderer, scene, cloud))
+         *         take(cloud);                      // raster: already in hand
+         *     if (sensor.scanReady(renderer))       // a poll, never a wait
+         *         if (sensor.scanCollect(renderer, cloud)) take(cloud);
+         *
+         * On a RASTER backend there is nothing to pipeline: scanBegin() does the
+         * whole scan (it already blocks on six framebuffer reads), fills `cloud`
+         * there and then, and RETURNS TRUE to say so. On Vulkan it returns false
+         * and the cloud arrives at a later scanCollect(). A caller written
+         * against the pair behaves correctly on both backends; only the frame
+         * the cloud lands on differs.
+         *
+         * The scan is stamped and aimed at scanBegin(); lastScanTime() is the
+         * fire time on both backends.
+         */
+        bool scanBegin(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud);
+        // Whether a fired scan has not been collected yet. Fire again while one
+        // is outstanding and the earlier one is thrown away, so a driver on a
+        // rate gate should skip a due scan while this is true.
+        [[nodiscard]] bool scanPending() const { return scanPending_; }
+        // Whether a fired scan can be collected without waiting. Raster: true
+        // as soon as scanBegin has run.
+        [[nodiscard]] bool scanReady(const Renderer& renderer) const;
+        // Take delivery. False when nothing is outstanding (and `cloud` is
+        // untouched, so the caller keeps the previous cloud rather than blinking).
+        bool scanCollect(Renderer& renderer, std::vector<LidarReturn>& cloud);
+
         [[nodiscard]] unsigned int faceSize() const { return faceSize_; }
         [[nodiscard]] float near() const { return near_; }
         [[nodiscard]] float far() const { return far_; }
@@ -123,6 +161,12 @@ namespace threepp {
 
         // Path-traced back-end for Vulkan scans, built on first use.
         std::unique_ptr<PathTracedLidarSensor> tracedBackend_;
+
+        // A scanBegin() awaiting its scanCollect(). On a raster backend the
+        // cloud is already in the caller's vector and this only says "one
+        // delivery is owed"; on Vulkan the back-end holds the outstanding
+        // dispatch.
+        bool scanPending_ = false;
 
         // Builds tracedBackend_ on first call and syncs the noise model onto it.
         PathTracedLidarSensor& tracedBackend();

@@ -60,6 +60,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>// std::getenv (THREEPP_BENCH_VSYNC)
 #include <cstring>
 #include <iostream>
 #include <sstream>
@@ -131,6 +132,17 @@ namespace {
         return GraphicsAPI::OpenGL;
     }
 
+    // --bench turns vsync off, because a present-capped frame time measures the
+    // display rather than the renderer. THREEPP_BENCH_VSYNC=1 puts it back, for
+    // the one question the uncapped number cannot answer: does the editor AS
+    // SHIPPED hold the refresh rate.
+    bool benchWantsVsync(const EditorApp::Options& options) {
+
+        if (options.bench <= 0) return true;
+        const char* keep = std::getenv("THREEPP_BENCH_VSYNC");
+        return keep && *keep && *keep != '0';
+    }
+
 }// namespace
 
 
@@ -140,6 +152,10 @@ EditorApp::EditorApp(const Options& options)
                       .title("threepp editor")
                       .size(kDefaultWidth, kDefaultHeight)
                       .antialiasing(4)
+                      // A timed pass measures the RENDERER. With vsync on, the
+                      // swapchain is FIFO and every frame time is quantized to
+                      // the refresh interval, which measures the monitor.
+                      .vsync(benchWantsVsync(options))
                       .exitOnKeyEscape(false)),
       renderer_(createRenderer(canvas_, requestedApi(options.vulkan))),
       camera_(55.f, canvas_.aspect(), 0.05f, 5000.f),
@@ -450,6 +466,7 @@ int EditorApp::run() {
     Clock clock;
 
     if (options_.selfTest) return runSelfTest();
+    if (options_.bench > 0) return runBench();
     if (!options_.screenshot.empty()) return runScreenshot();
 
     if (options_.play) startPlay();
@@ -507,7 +524,7 @@ void EditorApp::frame(float dt) {
 
     renderer_->render(document_.scene(), viewCamera());
     renderCameraPreview();
-    ui_->render();
+    if (!benchSkipUi_) ui_->render();
 
     updateWindowTitle();
 }

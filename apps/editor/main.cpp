@@ -57,6 +57,8 @@ int main(int argc, char** argv) {
             options.urdf = argument + 7;
         } else if (std::strncmp(argument, "--screenshot=", 13) == 0) {
             options.screenshot = argument + 13;
+        } else if (std::strncmp(argument, "--bench=", 8) == 0) {
+            options.bench = std::atoi(argument + 8);
         } else if (std::strncmp(argument, "--example=", 10) == 0) {
             options.example = argument + 10;
         } else if (std::strncmp(argument, "--seconds=", 10) == 0) {
@@ -90,6 +92,9 @@ int main(int argc, char** argv) {
                       << "                   scenario, play it and write PNG plus one _<view>.png\n"
                       << "                   per camera. With a scene.json or --example, photograph\n"
                       << "                   THAT instead, honouring --play/--seconds/--shot\n"
+                      << "  --bench=N        time N frames (after --seconds of warmup) with\n"
+                      << "                   vsync OFF and print median/p95 frame time plus,\n"
+                      << "                   on Vulkan, the per-pass GPU breakdown\n"
                       << "  --seconds=N      how long to play before the first shot (default 3)\n"
                       << "  --keys=W,A       hold these keys for that time, then let go, so a\n"
                       << "                   scene you are meant to DRIVE can be photographed moving\n"

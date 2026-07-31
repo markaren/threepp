@@ -38,11 +38,16 @@ namespace threepp::vulkan {
 
     LidarScanner::~LidarScanner() {
         VkDevice d = ctx_.device();
-        if (fence_)    vkDestroyFence(d, fence_, nullptr);
+        // A dispatch nobody collected is still reading its beam buffer and
+        // writing its result buffer. Let it finish before either is freed.
+        for (auto& s : slots_) {
+            if (s.submitted && s.fence) vkWaitForFences(d, 1, &s.fence, VK_TRUE, UINT64_MAX);
+            if (s.fence) vkDestroyFence(d, s.fence, nullptr);
+            destroyBuffer(ctx_.allocator(), s.readbackBuf);
+            destroyBuffer(ctx_.allocator(), s.resultBuf);
+            destroyBuffer(ctx_.allocator(), s.beamBuf);
+        }
         if (cmdPool_)  vkDestroyCommandPool(d, cmdPool_, nullptr);
-        destroyBuffer(ctx_.allocator(), readbackBuf_);
-        destroyBuffer(ctx_.allocator(), resultBuf_);
-        destroyBuffer(ctx_.allocator(), beamBuf_);
         destroyBuffer(ctx_.allocator(), sbtBuf_);
         if (pipeline_) vkDestroyPipeline(d, pipeline_, nullptr);
         if (descPool_) vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -110,30 +115,36 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &pipelineLayout_),
               "vkCreatePipelineLayout(lidar)");
 
-        // Descriptor pool sized for exactly one set.
+        // One set per scan slot: a set referenced by a pending submit must not
+        // be updated (VUID-vkUpdateDescriptorSets-None-03047), and every
+        // dispatch rewrites the TLAS + desc bindings.
         std::array<VkDescriptorPoolSize, 3> ps{};
         ps[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-        ps[0].descriptorCount = 1;
+        ps[0].descriptorCount = kScanSlots;
         ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        ps[1].descriptorCount = 4;
+        ps[1].descriptorCount = 4 * kScanSlots;
         ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        ps[2].descriptorCount = 1;
+        ps[2].descriptorCount = kScanSlots;
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets = 1;
+        dpci.maxSets = kScanSlots;
         dpci.poolSizeCount = static_cast<uint32_t>(ps.size());
         dpci.pPoolSizes = ps.data();
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
               "vkCreateDescriptorPool(lidar)");
 
+        std::array<VkDescriptorSetLayout, kScanSlots> layouts{};
+        layouts.fill(descSetLayout_);
+        std::array<VkDescriptorSet, kScanSlots> sets{};
         VkDescriptorSetAllocateInfo dsai{};
         dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         dsai.descriptorPool = descPool_;
-        dsai.descriptorSetCount = 1;
-        dsai.pSetLayouts = &descSetLayout_;
-        check(vkAllocateDescriptorSets(ctx_.device(), &dsai, &descSet_),
+        dsai.descriptorSetCount = kScanSlots;
+        dsai.pSetLayouts = layouts.data();
+        check(vkAllocateDescriptorSets(ctx_.device(), &dsai, sets.data()),
               "vkAllocateDescriptorSets(lidar)");
+        for (uint32_t i = 0; i < kScanSlots; ++i) slots_[i].descSet = sets[i];
     }
 
     void LidarScanner::createPipeline() {
@@ -251,87 +262,90 @@ namespace threepp::vulkan {
         check(vkCreateCommandPool(ctx_.device(), &cpci, nullptr, &cmdPool_),
               "vkCreateCommandPool(lidar)");
 
+        std::array<VkCommandBuffer, kScanSlots> cbs{};
         VkCommandBufferAllocateInfo cbai{};
         cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         cbai.commandPool        = cmdPool_;
         cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cbai.commandBufferCount = 1;
-        check(vkAllocateCommandBuffers(ctx_.device(), &cbai, &cmdBuf_),
+        cbai.commandBufferCount = kScanSlots;
+        check(vkAllocateCommandBuffers(ctx_.device(), &cbai, cbs.data()),
               "vkAllocateCommandBuffers(lidar)");
 
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        check(vkCreateFence(ctx_.device(), &fci, nullptr, &fence_),
-              "vkCreateFence(lidar)");
+        for (uint32_t i = 0; i < kScanSlots; ++i) {
+            slots_[i].cmdBuf = cbs[i];
+            check(vkCreateFence(ctx_.device(), &fci, nullptr, &slots_[i].fence),
+                  "vkCreateFence(lidar)");
+        }
     }
 
-    void LidarScanner::ensureCapacity(uint32_t numBeams, uint32_t slotsPerBeam) {
+    void LidarScanner::ensureCapacity(Slot& slot, uint32_t numBeams, uint32_t slotsPerBeam) {
         const uint32_t beamsNeeded   = roundUpPow2(std::max(1u, numBeams));
         const uint32_t resultsNeeded = roundUpPow2(std::max(1u, numBeams * std::max(1u, slotsPerBeam)));
-        const bool beamsGrew   = (beamsNeeded   > capacityBeams_);
-        const bool resultsGrew = (resultsNeeded > capacityResults_);
+        const bool beamsGrew   = (beamsNeeded   > slot.capacityBeams);
+        const bool resultsGrew = (resultsNeeded > slot.capacityResults);
         if (!beamsGrew && !resultsGrew) return;
 
-        // Wait for any in-flight work on these buffers before freeing. The
-        // scanner's own dispatch is the only thing that touches them, and
-        // we've either never submitted (first call) or already waited on
-        // fence_ at the end of the previous scan().
+        // Safe to free: dispatch reaches here only with a slot that is either
+        // free or reclaimed, and a slot is reclaimed only once its fence has
+        // signaled — so nothing in flight is reading these buffers.
         if (beamsGrew) {
-            destroyBuffer(ctx_.allocator(), beamBuf_);
+            destroyBuffer(ctx_.allocator(), slot.beamBuf);
             const VkDeviceSize beamBytes =
                     static_cast<VkDeviceSize>(beamsNeeded) * sizeof(vulkan_lidar::LidarBeam);
-            beamBuf_ = createBuffer(
+            slot.beamBuf = createBuffer(
                     ctx_.allocator(), ctx_.device(), beamBytes,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     VMA_MEMORY_USAGE_AUTO,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
-            capacityBeams_ = beamsNeeded;
+            slot.capacityBeams = beamsNeeded;
         }
 
         if (resultsGrew) {
-            destroyBuffer(ctx_.allocator(), resultBuf_);
-            destroyBuffer(ctx_.allocator(), readbackBuf_);
+            destroyBuffer(ctx_.allocator(), slot.resultBuf);
+            destroyBuffer(ctx_.allocator(), slot.readbackBuf);
             const VkDeviceSize resultBytes =
                     static_cast<VkDeviceSize>(resultsNeeded) * sizeof(vulkan_lidar::LidarResult);
-            resultBuf_ = createBuffer(
+            slot.resultBuf = createBuffer(
                     ctx_.allocator(), ctx_.device(), resultBytes,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                     VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                     0);
-            readbackBuf_ = createBuffer(
+            slot.readbackBuf = createBuffer(
                     ctx_.allocator(), ctx_.device(), resultBytes,
                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
-            capacityResults_ = resultsNeeded;
+            slot.capacityResults = resultsNeeded;
         }
 
         // Update descriptor set bindings 3 (beams) and 4 (results) to point
         // at the new buffers. The scene bindings (0/1/2) are touched per
         // scan in updateSceneBindings.
         VkDescriptorBufferInfo beamInfo{};
-        beamInfo.buffer = beamBuf_.handle;
+        beamInfo.buffer = slot.beamBuf.handle;
         beamInfo.offset = 0;
         beamInfo.range  = VK_WHOLE_SIZE;
 
         VkDescriptorBufferInfo resultInfo{};
-        resultInfo.buffer = resultBuf_.handle;
+        resultInfo.buffer = slot.resultBuf.handle;
         resultInfo.offset = 0;
         resultInfo.range  = VK_WHOLE_SIZE;
 
         std::array<VkWriteDescriptorSet, 2> w{};
         w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[0].dstSet = descSet_;
+        w[0].dstSet = slot.descSet;
         w[0].dstBinding = 3;
         w[0].descriptorCount = 1;
         w[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[0].pBufferInfo = &beamInfo;
 
         w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[1].dstSet = descSet_;
+        w[1].dstSet = slot.descSet;
         w[1].dstBinding = 4;
         w[1].descriptorCount = 1;
         w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -342,7 +356,8 @@ namespace threepp::vulkan {
                                0, nullptr);
     }
 
-    void LidarScanner::updateSceneBindings(VkAccelerationStructureKHR tlas,
+    void LidarScanner::updateSceneBindings(Slot& slot,
+                                           VkAccelerationStructureKHR tlas,
                                            VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
                                            VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
                                            VkBuffer fogUbo, VkDeviceSize fogUboSize) {
@@ -369,27 +384,27 @@ namespace threepp::vulkan {
         std::array<VkWriteDescriptorSet, 4> w{};
         w[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[0].pNext           = &asi;
-        w[0].dstSet          = descSet_;
+        w[0].dstSet          = slot.descSet;
         w[0].dstBinding      = 0;
         w[0].descriptorCount = 1;
         w[0].descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 
         w[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[1].dstSet          = descSet_;
+        w[1].dstSet          = slot.descSet;
         w[1].dstBinding      = 1;
         w[1].descriptorCount = 1;
         w[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[1].pBufferInfo     = &geomInfo;
 
         w[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[2].dstSet          = descSet_;
+        w[2].dstSet          = slot.descSet;
         w[2].dstBinding      = 2;
         w[2].descriptorCount = 1;
         w[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[2].pBufferInfo     = &matInfo;
 
         w[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[3].dstSet          = descSet_;
+        w[3].dstSet          = slot.descSet;
         w[3].dstBinding      = 5;
         w[3].descriptorCount = 1;
         w[3].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -408,60 +423,125 @@ namespace threepp::vulkan {
                             const vulkan_lidar::LidarPushConstants& pc,
                             const vulkan_lidar::LidarBeam* beams, uint32_t numBeams,
                             vulkan_lidar::LidarResult* outResults) {
-        if (numBeams == 0 || outResults == nullptr || beams == nullptr) return;
+
+        if (outResults == nullptr) return;
+        // The synchronous contract, expressed in terms of the pipelined one:
+        // fire and take delivery immediately. `collect` writes the all-miss
+        // result when `dispatch` declined to submit, so an unbuilt scene reads
+        // the same here as it always did.
+        const int slot = dispatch(queue, tlas, geomDescsBuffer, geomDescsSize,
+                                  matDescsBuffer, matDescsSize,
+                                  fogUbo, fogUboSize, pc, beams, numBeams);
+        collect(slot, outResults);
+    }
+
+    int LidarScanner::dispatch(VkQueue queue,
+                               VkAccelerationStructureKHR tlas,
+                               VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
+                               VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
+                               VkBuffer fogUbo, VkDeviceSize fogUboSize,
+                               const vulkan_lidar::LidarPushConstants& pc,
+                               const vulkan_lidar::LidarBeam* beams, uint32_t numBeams) {
+
+        if (numBeams == 0 || beams == nullptr) return kNoSlot;
+
+        uint32_t index = kScanSlots;
+        for (uint32_t i = 0; i < kScanSlots; ++i) {
+            if (!slots_[i].reserved) { index = i; break; }
+        }
+        if (index == kScanSlots) {
+            // Every slot is reserved. Reclaim the stalest one that has actually
+            // finished on the GPU — see the header: a sensor destroyed between
+            // firing and collecting abandons its slot, and four of those would
+            // wedge the scanner permanently. Bumping the generation below kills
+            // the abandoned handle rather than aliasing it onto this scan.
+            uint64_t oldest = UINT64_MAX;
+            for (uint32_t i = 0; i < kScanSlots; ++i) {
+                const Slot& c = slots_[i];
+                const bool finished = !c.submitted ||
+                                      vkGetFenceStatus(ctx_.device(), c.fence) == VK_SUCCESS;
+                if (finished && c.issued < oldest) {
+                    oldest = c.issued;
+                    index  = i;
+                }
+            }
+            if (index == kScanSlots) return kNoSlot;// all still running
+        }
+        Slot& s = slots_[index];
+        s.gen = (s.gen + 1) & 0x3FFFFFFu;
+        s.issued = ++dispatchCounter_;
+        const int handle = static_cast<int>(index) | static_cast<int>(s.gen << kHandleShift);
 
         const uint32_t maxReturns   = std::max(pc.maxReturns, 1u);
         const uint32_t samples      = std::max(pc.samplesPerBeam, 1u);
         const uint32_t slotsPerBeam = maxReturns * samples;
         const uint32_t totalSlots   = numBeams * slotsPerBeam;
 
-        // Bail out gracefully if the scene isn't ready — write all misses.
+        // Reserve first: collect() owes the caller a result of the right length
+        // whether or not anything was traced.
+        s.reserved  = true;
+        s.submitted = false;
+        s.slots     = totalSlots;
+
         const bool sceneReady = (tlas != VK_NULL_HANDLE) &&
                                 (geomDescsBuffer != VK_NULL_HANDLE) &&
                                 (matDescsBuffer != VK_NULL_HANDLE) &&
                                 (fogUbo != VK_NULL_HANDLE);
-        if (!sceneReady) {
-            for (uint32_t i = 0; i < totalSlots; ++i) {
-                vulkan_lidar::LidarResult& r = outResults[i];
-                r.position[0] = r.position[1] = r.position[2] = 0.f;
-                r.normal[0]   = r.normal[1]   = r.normal[2]   = 0.f;
-                r.distance    = 0.f;
-                r.intensity   = 0.f;
-                r.instanceId  = -1;
-                r.returnNo    = 0;
-                r._pad[0] = r._pad[1] = 0.f;
-            }
-            return;
-        }
+        if (!sceneReady) return handle;
 
-        ensureCapacity(numBeams, slotsPerBeam);
+        ensureCapacity(s, numBeams, slotsPerBeam);
 
         // Upload beams (mapped, sequential write + flush).
-        uploadHostVisible(ctx_.allocator(), beamBuf_, beams,
+        uploadHostVisible(ctx_.allocator(), s.beamBuf, beams,
                           numBeams * sizeof(vulkan_lidar::LidarBeam));
 
-        updateSceneBindings(tlas, geomDescsBuffer, geomDescsSize,
+        updateSceneBindings(s, tlas, geomDescsBuffer, geomDescsSize,
                             matDescsBuffer, matDescsSize,
                             fogUbo, fogUboSize);
 
+        VkCommandBuffer cmd = s.cmdBuf;
+
         // Reset cmd buffer + fence and re-record.
-        check(vkResetCommandBuffer(cmdBuf_, 0), "vkResetCommandBuffer(lidar)");
-        check(vkResetFences(ctx_.device(), 1, &fence_), "vkResetFences(lidar)");
+        check(vkResetCommandBuffer(cmd, 0), "vkResetCommandBuffer(lidar)");
+        check(vkResetFences(ctx_.device(), 1, &s.fence), "vkResetFences(lidar)");
 
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check(vkBeginCommandBuffer(cmdBuf_, &bi), "vkBeginCommandBuffer(lidar)");
+        check(vkBeginCommandBuffer(cmd, &bi), "vkBeginCommandBuffer(lidar)");
 
-        vkCmdBindPipeline(cmdBuf_, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline_);
-        vkCmdBindDescriptorSets(cmdBuf_, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                                pipelineLayout_, 0, 1, &descSet_, 0, nullptr);
-        vkCmdPushConstants(cmdBuf_, pipelineLayout_,
+        // The trace reads the renderer's TLAS, which an in-flight frame may
+        // still be building. This barrier is what makes that safe WITHOUT a CPU
+        // wait: the first synchronization scope of a barrier covers everything
+        // submitted earlier on the same queue, so the acceleration-structure
+        // build of any frame ahead of us has completed before the rgen runs.
+        // Before this existed the caller reached for vkDeviceWaitIdle, which is
+        // correct and costs every queued frame — the ~28 ms hitch this class's
+        // header talks about.
+        VkMemoryBarrier2 asToTrace{};
+        asToTrace.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        asToTrace.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        asToTrace.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
+                                  VK_ACCESS_2_SHADER_WRITE_BIT |
+                                  VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        asToTrace.dstStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+        asToTrace.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                  VK_ACCESS_2_SHADER_READ_BIT;
+        VkDependencyInfo asDep{};
+        asDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        asDep.memoryBarrierCount = 1;
+        asDep.pMemoryBarriers = &asToTrace;
+        vkCmdPipelineBarrier2(cmd, &asDep);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline_);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+                                pipelineLayout_, 0, 1, &s.descSet, 0, nullptr);
+        vkCmdPushConstants(cmd, pipelineLayout_,
                            VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                    VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
                                    VK_SHADER_STAGE_MISS_BIT_KHR,
                            0, sizeof(pc), &pc);
-        ctx_.rt().cmdTraceRays(cmdBuf_, &rgenRgn_, &missRgn_, &hitRgn_, &callRgn_,
+        ctx_.rt().cmdTraceRays(cmd, &rgenRgn_, &missRgn_, &hitRgn_, &callRgn_,
                                 numBeams, 1, 1);
 
         // Barrier: RT shader writes to resultBuf_ → transfer read.
@@ -472,19 +552,19 @@ namespace threepp::vulkan {
         rtToCopy.dstStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
         rtToCopy.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
         rtToCopy.srcQueueFamilyIndex = rtToCopy.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        rtToCopy.buffer = resultBuf_.handle;
+        rtToCopy.buffer = s.resultBuf.handle;
         rtToCopy.size   = VK_WHOLE_SIZE;
         VkDependencyInfo rtDep{};
         rtDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
         rtDep.bufferMemoryBarrierCount = 1;
         rtDep.pBufferMemoryBarriers = &rtToCopy;
-        vkCmdPipelineBarrier2(cmdBuf_, &rtDep);
+        vkCmdPipelineBarrier2(cmd, &rtDep);
 
         // Copy device → host-visible. Copy `numBeams * maxReturns` slots
         // — the rgen lays out results as beamIdx * maxReturns + returnSlot.
         VkBufferCopy region{};
         region.size = static_cast<VkDeviceSize>(totalSlots) * sizeof(vulkan_lidar::LidarResult);
-        vkCmdCopyBuffer(cmdBuf_, resultBuf_.handle, readbackBuf_.handle, 1, &region);
+        vkCmdCopyBuffer(cmd, s.resultBuf.handle, s.readbackBuf.handle, 1, &region);
 
         // Barrier: transfer write → host read.
         VkBufferMemoryBarrier2 copyToHost{};
@@ -494,35 +574,86 @@ namespace threepp::vulkan {
         copyToHost.dstStageMask  = VK_PIPELINE_STAGE_2_HOST_BIT;
         copyToHost.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
         copyToHost.srcQueueFamilyIndex = copyToHost.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        copyToHost.buffer = readbackBuf_.handle;
+        copyToHost.buffer = s.readbackBuf.handle;
         copyToHost.size   = VK_WHOLE_SIZE;
         VkDependencyInfo hostDep{};
         hostDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
         hostDep.bufferMemoryBarrierCount = 1;
         hostDep.pBufferMemoryBarriers = &copyToHost;
-        vkCmdPipelineBarrier2(cmdBuf_, &hostDep);
+        vkCmdPipelineBarrier2(cmd, &hostDep);
 
-        check(vkEndCommandBuffer(cmdBuf_), "vkEndCommandBuffer(lidar)");
+        check(vkEndCommandBuffer(cmd), "vkEndCommandBuffer(lidar)");
 
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
-        si.pCommandBuffers = &cmdBuf_;
-        check(vkQueueSubmit(queue, 1, &si, fence_), "vkQueueSubmit(lidar)");
+        si.pCommandBuffers = &cmd;
+        check(vkQueueSubmit(queue, 1, &si, s.fence), "vkQueueSubmit(lidar)");
 
-        check(vkWaitForFences(ctx_.device(), 1, &fence_, VK_TRUE, UINT64_MAX),
+        s.submitted = true;
+        return handle;
+    }
+
+    bool LidarScanner::ready(int handle) const {
+
+        const Slot* s = slotFor(handle);
+        if (s == nullptr) return false;
+        // A reserved-but-unsubmitted slot (unbuilt scene) has nothing to wait
+        // for — its all-miss result is available immediately.
+        if (!s->submitted) return true;
+        return vkGetFenceStatus(ctx_.device(), s->fence) == VK_SUCCESS;
+    }
+
+    uint32_t LidarScanner::resultSlots(int handle) const {
+
+        const Slot* s = slotFor(handle);
+        return s ? s->slots : 0u;
+    }
+
+    bool LidarScanner::collect(int handle, vulkan_lidar::LidarResult* outResults) {
+
+        if (outResults == nullptr) return false;
+        Slot* slot = slotFor(handle);
+        if (slot == nullptr) return false;
+        Slot& s = *slot;
+
+        const uint32_t totalSlots = s.slots;
+        const bool submitted = s.submitted;
+        s.reserved  = false;
+        s.submitted = false;
+        s.slots     = 0;
+        if (totalSlots == 0) return false;
+
+        // Nothing was submitted (unbuilt scene): the caller is still owed a
+        // well-formed all-miss cloud of the right length.
+        if (!submitted) {
+            for (uint32_t i = 0; i < totalSlots; ++i) {
+                vulkan_lidar::LidarResult& r = outResults[i];
+                r.position[0] = r.position[1] = r.position[2] = 0.f;
+                r.normal[0]   = r.normal[1]   = r.normal[2]   = 0.f;
+                r.distance    = 0.f;
+                r.intensity   = 0.f;
+                r.instanceId  = -1;
+                r.returnNo    = 0;
+                r._pad[0] = r._pad[1] = 0.f;
+            }
+            return true;
+        }
+
+        check(vkWaitForFences(ctx_.device(), 1, &s.fence, VK_TRUE, UINT64_MAX),
               "vkWaitForFences(lidar)");
 
         // Memcpy from mapped readback buffer. VMA HOST_ACCESS_RANDOM keeps it
         // mapped continuously, but the spec requires an invalidate before
         // reading non-coherent host-visible memory; a no-op when coherent.
-        invalidateHostReads(ctx_.allocator(), readbackBuf_.alloc, 0,
+        invalidateHostReads(ctx_.allocator(), s.readbackBuf.alloc, 0,
                             static_cast<VkDeviceSize>(totalSlots) * sizeof(vulkan_lidar::LidarResult));
         void* mapped = nullptr;
-        check(vmaMapMemory(ctx_.allocator(), readbackBuf_.alloc, &mapped),
+        check(vmaMapMemory(ctx_.allocator(), s.readbackBuf.alloc, &mapped),
               "vmaMapMemory(lidar readback)");
         std::memcpy(outResults, mapped, totalSlots * sizeof(vulkan_lidar::LidarResult));
-        vmaUnmapMemory(ctx_.allocator(), readbackBuf_.alloc);
+        vmaUnmapMemory(ctx_.allocator(), s.readbackBuf.alloc);
+        return true;
     }
 
 }// namespace threepp::vulkan

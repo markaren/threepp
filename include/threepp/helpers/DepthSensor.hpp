@@ -75,6 +75,29 @@ namespace threepp {
          */
         void scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud, std::vector<Color>& colors);
 
+        /**
+         * The frame-loop form of scan(), split into a fire and a delivery — the
+         * same pair, for the same reason, as LidarSensor::scanBegin: on Vulkan a
+         * blocking readback costs every frame already queued on the GPU, not the
+         * trace, so a rate-gated sensor hitches the app on every scan. Fire on
+         * one frame, deliver on the next.
+         *
+         * On a raster backend scanBegin() does the whole scan (it already blocks
+         * on a framebuffer read) and RETURNS TRUE to say the cloud is in hand;
+         * on Vulkan it returns false and the cloud arrives at a later
+         * scanCollect(). One caller works on both backends.
+         *
+         * RGB-D is not offered here: the colour half is a raster readback of the
+         * scene colour buffer with nothing to pipeline. Use scan() for that.
+         */
+        bool scanBegin(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud);
+        // Whether a fired scan has not been collected yet — a driver on a rate
+        // gate should skip a due scan while this is true, or the outstanding
+        // one is thrown away.
+        [[nodiscard]] bool scanPending() const { return scanPending_; }
+        [[nodiscard]] bool scanReady(const Renderer& renderer) const;
+        bool scanCollect(Renderer& renderer, std::vector<Vector3>& cloud);
+
         [[nodiscard]] unsigned int width() const { return width_; }
         [[nodiscard]] unsigned int height() const { return height_; }
         [[nodiscard]] float fov() const { return camera_.fov; }
@@ -117,6 +140,11 @@ namespace threepp {
         // tracer's TLAS. Built on first use and kept, not rebuilt per scan —
         // rebuilding would also rebuild the beam table every frame.
         std::unique_ptr<PathTracedLidarSensor> tracedBackend_;
+
+        // A scanBegin() awaiting its scanCollect(). On a raster backend the
+        // cloud is already in the caller's vector and this only says "one
+        // delivery is owed".
+        bool scanPending_ = false;
 
         // Builds tracedBackend_ on first call and syncs the noise model onto it.
         // Only defined on a Vulkan build (the back-end's TU is Vulkan-gated).

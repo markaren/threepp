@@ -154,25 +154,51 @@ void VulkanRenderer::Impl::resetAccumulation() {
 void VulkanRenderer::Impl::scanLidar(const std::vector<LidarBeam>& beams,
                        std::vector<LidarReturn>& outResults,
                        const LidarParams& params) {
-            outResults.clear();
-            if (beams.empty()) return;
+            const int handle = scanLidarBegin(beams, params);
+            if (!scanLidarCollect(handle, outResults)) outResults.clear();
+        }
+
+int VulkanRenderer::Impl::scanLidarBegin(const std::vector<LidarBeam>& beams,
+                       const LidarParams& params) {
+            if (beams.empty()) return vulkan::LidarScanner::kNoSlot;
 
             // Lazy-construct the LIDAR pipeline. Idempotent; if the user
             // never calls scanLidar, the pipeline + SBT cost is never paid.
             if (!lidar_) lidar_ = std::make_unique<vulkan::LidarScanner>(*ctx);
 
-            // Drain all in-flight frames so the TLAS + geom/mat buffers
-            // are stable while we read them.
-            vkDeviceWaitIdle(ctx->device());
-
-            // Force-flush Material/GeometryDescs into buffer slot 0 — gives us
-            // a known-good frame target without having to chase `currentFrame`
-            // semantics across render() calls. (Safe: the device-wide drain
-            // above means nothing is reading either slot.)
-            matDescsDirty_[0] = true;
-            flushMaterialDescsIfDirty(0);
-            geomDescsDirty_[0] = true;
-            flushGeometryDescsIfDirty(0);
+            // NO DEVICE DRAIN. This used to open with vkDeviceWaitIdle so the
+            // TLAS and the desc buffers were quiescent; it made a 1.2 ms trace
+            // cost ~28 ms, because a drain waits for every frame already queued
+            // (measured: two frames in flight at ~14 ms). What the drain bought
+            // is bought twice as cheaply now:
+            //
+            //   TLAS — the dispatch command buffer opens with a barrier whose
+            //          first scope is everything submitted earlier on this
+            //          queue, so an in-flight frame's build has landed before
+            //          the trace reads it (see LidarScanner::dispatch).
+            //   descs — read, never written, from the slot the LAST SUBMITTED
+            //          frame used. The renderer flushes that slot from the
+            //          frame loop under its own fence gate, so it is complete
+            //          and nothing here has to write (and race with) it. The
+            //          old code force-dirtied slot 0 and re-uploaded, which is
+            //          exactly what needed the drain to be safe.
+            //
+            // render() bumps currentFrame at the end, so the just-used slot is
+            // (currentFrame - 1) mod N — the same expression the fog UBO below
+            // has always used, now shared by all three. Walk backwards from
+            // there to the newest slot whose desc buffers actually exist: they
+            // are created on their frame's first flush, so early in a session
+            // (or right after a scene swap) only some slots are populated, and
+            // reading an empty one would report a scene made of nothing.
+            uint32_t lastSlot = (currentFrame + kFramesInFlight - 1) % kFramesInFlight;
+            for (uint32_t back = 0; back < kFramesInFlight; ++back) {
+                const uint32_t candidate = (currentFrame + kFramesInFlight - 1 - back) % kFramesInFlight;
+                if (geometryDescsBuffers[candidate].handle != VK_NULL_HANDLE &&
+                    materialDescsBuffers[candidate].handle != VK_NULL_HANDLE) {
+                    lastSlot = candidate;
+                    break;
+                }
+            }
 
             // Push constants encode the LIDAR equation parameters. The
             // shader multiplies the raw `laserPower · f_back · cos θ · η / r²`
@@ -220,31 +246,46 @@ void VulkanRenderer::Impl::scanLidar(const std::vector<LidarBeam>& beams,
                 packed[i]._pad1        = 0.f;
             }
 
+            const int handle = lidar_->dispatch(
+                    ctx->graphicsQueue(),
+                    tlas,
+                    geometryDescsBuffers[lastSlot].handle, geometryDescsBuffers[lastSlot].size,
+                    materialDescsBuffers[lastSlot].handle, materialDescsBuffers[lastSlot].size,
+                    fogUbos[lastSlot].handle, fogUbos[lastSlot].size,
+                    pc,
+                    packed.data(), static_cast<uint32_t>(packed.size()));
+            if (handle == vulkan::LidarScanner::kNoSlot) return handle;
+
             // results[(beam * samplesPerBeam + sample) * maxReturns + slot]
-            const size_t totalSlots = beams.size() * pc.samplesPerBeam * pc.maxReturns;
-            std::vector<vulkan_lidar::LidarResult> raw(totalSlots);
+            lidarRaw_[vulkan::LidarScanner::slotIndex(handle)].assign(
+                    lidar_->resultSlots(handle), vulkan_lidar::LidarResult{});
+            return handle;
+        }
 
-            // Pick the most recently uploaded fog slot. render() bumps
-            // currentFrame at the end, so the just-used slot is
-            // (currentFrame - 1) mod N. The slot's contents reflect the
-            // scene's current fog state because updateFogUbo runs every
-            // frame from render().
-            const uint32_t fogSlot = (currentFrame + kFramesInFlight - 1) % kFramesInFlight;
+bool VulkanRenderer::Impl::scanLidarReady(int handle) const {
+            return lidar_ && lidar_->ready(handle);
+        }
 
-            lidar_->scan(ctx->graphicsQueue(),
-                         tlas,
-                         geometryDescsBuffers[0].handle, geometryDescsBuffers[0].size,
-                         materialDescsBuffers[0].handle, materialDescsBuffers[0].size,
-                         fogUbos[fogSlot].handle, fogUbos[fogSlot].size,
-                         pc,
-                         packed.data(), static_cast<uint32_t>(packed.size()),
-                         raw.data());
+bool VulkanRenderer::Impl::scanLidarCollect(int handle, std::vector<LidarReturn>& outResults) {
+            outResults.clear();
+            if (!lidar_ || handle == vulkan::LidarScanner::kNoSlot) return false;
+            // Check the handle BEFORE touching the staging: a reclaimed handle
+            // names a slot that now belongs to someone else, and its staging
+            // holds their scan.
+            if (lidar_->resultSlots(handle) == 0) return false;
+            auto& raw = lidarRaw_[vulkan::LidarScanner::slotIndex(handle)];
+            if (raw.empty()) return false;
+
+            if (!lidar_->collect(handle, raw.data())) {
+                raw.clear();
+                return false;
+            }
 
             // Unpack into the public LidarReturn struct. We preserve the
             // fixed-stride layout (numBeams * maxReturns) — caller filters
             // entries with hitInstanceId < 0.
-            outResults.resize(totalSlots);
-            for (size_t i = 0; i < totalSlots; ++i) {
+            outResults.resize(raw.size());
+            for (size_t i = 0; i < raw.size(); ++i) {
                 const auto& r = raw[i];
                 auto& o = outResults[i];
                 o.position.set(r.position[0], r.position[1], r.position[2]);
@@ -254,6 +295,8 @@ void VulkanRenderer::Impl::scanLidar(const std::vector<LidarBeam>& beams,
                 o.hitInstanceId = r.instanceId;
                 o.returnNo      = r.returnNo;
             }
+            raw.clear();
+            return true;
         }
 
 void VulkanRenderer::Impl::reallocateRenderExtentResources() {

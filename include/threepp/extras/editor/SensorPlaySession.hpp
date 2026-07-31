@@ -666,22 +666,53 @@ namespace threepp::editor {
             sensorNode->updateWorldMatrix(true, true);
         }
 
+        // A vision scan is FIRED on one frame and DELIVERED on a later one.
+        //
+        // That is not an optimisation detail, it is the only way a rate-gated
+        // sensor can be free of hitches on a ray-traced backend: taking delivery
+        // means waiting on a GPU fence, and that fence sits behind every frame
+        // already queued — measured at ~28 ms for a 1.2 ms VLP-16 trace on an
+        // RTX 4070 with two frames in flight. A 10 Hz LIDAR would deliver that
+        // stall ten times a second, which is exactly what the Hover Arena
+        // example felt like. So: collect what an earlier frame fired (by then a
+        // memcpy), then fire whatever the gate says is due.
+        //
+        // The cloud a panel or the overlay reads is therefore one frame old, at
+        // the pose the beams were fired from. A real sensor has latency too; a
+        // frame of it at 60 Hz is 16 ms, and the alternative is a 28 ms stall.
+        // On a raster backend the fire IS the scan (six framebuffer reads that
+        // block anyway), so the delivery lands on the same frame and nothing
+        // about GL behaviour changes.
         void scanAll(float dt) {
 
             if (!renderer_ || !scene_) return;
 
+            // --- deliveries owed from an earlier frame ------------------------
+            // scanReady is a fence poll, never a wait: a scan that has not
+            // landed yet simply stays owed for another frame, and the entry
+            // keeps the cloud it already had rather than blinking empty.
+            for (const auto& entry : entries_) {
+                if (entry->depth && entry->depth->scanReady(*renderer_)) deliverDepth(*entry);
+                if (entry->lidar && entry->lidar->scanReady(*renderer_)) deliverLidar(*entry);
+            }
+
             // Arm the gate and latch the clock on the pulled sensors. They are
             // deliberately NOT registered with the world (that would tick them
             // twice); tick() is the same entry point the world would use.
+            // A sensor with a scan still owed does not fire again: the second
+            // fire would throw the first away, and an UNGATED sensor (rateHz 0
+            // = every frame) would then spend its whole life firing scans
+            // nobody ever sees. The gate stays armed, so it fires on the frame
+            // after delivery instead.
             bool any = false;
             for (const auto& entry : entries_) {
                 if (entry->depth) {
                     entry->depth->tick(static_cast<double>(dt), simTime_);
-                    any = any || entry->depth->scanDue();
+                    any = any || (entry->depth->scanDue() && !entry->depth->scanPending());
                 }
                 if (entry->lidar) {
                     entry->lidar->tick(static_cast<double>(dt), simTime_);
-                    any = any || entry->lidar->scanDue();
+                    any = any || (entry->lidar->scanDue() && !entry->lidar->scanPending());
                 }
             }
             if (!any) return;
@@ -691,26 +722,46 @@ namespace threepp::editor {
             const bool wasVisible = hidden_ ? hidden_->visible : true;
             if (hidden_) hidden_->visible = false;
 
+            // scanBegin answers whether the cloud is ALREADY in hand (raster) or
+            // owed by a later frame (Vulkan). Deliberately not a fence poll: a
+            // poll that happened to succeed would land the same scan on frame N
+            // in one run and N+1 in the next, and "which frame did this sensor
+            // report on" would become a property of GPU scheduling.
             for (const auto& entry : entries_) {
-                if (entry->depth && entry->depth->scanDue()) {
+                if (entry->depth && entry->depth->scanDue() && !entry->depth->scanPending()) {
                     placeVision(*entry);
-                    entry->depth->scan(*renderer_, *scene_, entry->cloud);
-                    entry->lastTime = entry->depth->lastScanTime();
-                    ++entry->scans;
-                    entry->traces[0].push(static_cast<float>(entry->cloud.size()));
-                    recordVision(*entry);
+                    if (entry->depth->scanBegin(*renderer_, *scene_, entry->cloud)) {
+                        deliverDepth(*entry);
+                    }
                 }
-                if (entry->lidar && entry->lidar->scanDue()) {
+                if (entry->lidar && entry->lidar->scanDue() && !entry->lidar->scanPending()) {
                     placeVision(*entry);
-                    entry->lidar->scan(*renderer_, *scene_, entry->returns);
-                    entry->lastTime = entry->lidar->lastScanTime();
-                    ++entry->scans;
-                    entry->traces[0].push(static_cast<float>(entry->returns.size()));
-                    recordVision(*entry);
+                    if (entry->lidar->scanBegin(*renderer_, *scene_, entry->returns)) {
+                        deliverLidar(*entry);
+                    }
                 }
             }
 
             if (hidden_) hidden_->visible = wasVisible;
+        }
+
+        // One delivered scan: stamp, count, plot, record. Shared by the two
+        // places delivery can happen (immediately on a raster backend, a frame
+        // later on Vulkan) so a scan is booked identically either way.
+        void deliverDepth(Entry& entry) {
+            if (!entry.depth->scanCollect(*renderer_, entry.cloud)) return;
+            entry.lastTime = entry.depth->lastScanTime();
+            ++entry.scans;
+            entry.traces[0].push(static_cast<float>(entry.cloud.size()));
+            recordVision(entry);
+        }
+
+        void deliverLidar(Entry& entry) {
+            if (!entry.lidar->scanCollect(*renderer_, entry.returns)) return;
+            entry.lastTime = entry.lidar->lastScanTime();
+            ++entry.scans;
+            entry.traces[0].push(static_cast<float>(entry.returns.size()));
+            recordVision(entry);
         }
 
         // One row per scan: time, count and the cloud's gross shape. A row per

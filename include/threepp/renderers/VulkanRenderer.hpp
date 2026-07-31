@@ -631,6 +631,40 @@ namespace threepp {
                        std::vector<LidarReturn>& results,
                        const LidarParams& params = {});
 
+        // The same scan, PIPELINED — fire on one frame, take delivery on a
+        // later one. Use this from a frame loop; scanLidar() above is for a
+        // caller with no frame to keep (a test, an offline capture).
+        //
+        // Blocking on a readback does not cost the trace, it costs every frame
+        // already queued on the GPU: the fence sits behind them. Measured on an
+        // RTX 4070 at two frames in flight, a 1.2 ms VLP-16 trace cost a 28 ms
+        // stall — a hitch a 10 Hz sensor delivers ten times a second. So:
+        //
+        //   const int scan = scanLidarBegin(beams, params);// frame N: submits
+        //   ...render frame N, present...
+        //   if (scanLidarReady(scan))            // frame N+1: poll, no wait
+        //       scanLidarCollect(scan, results); // a memcpy by now
+        //
+        // Results are therefore one frame old, which is the pose the beams
+        // were actually fired from — a sensor's own latency, not an error.
+        //
+        // The handle keeps several sensors independent: a rig with a LIDAR and
+        // a depth camera both due on the same frame each get their own slot, so
+        // which frame a sensor scans on never depends on what else is in the
+        // scene. A few scans may be outstanding at once; beyond that Begin
+        // returns kNoLidarScan and the caller retries next frame. On a
+        // non-Vulkan renderer there is no equivalent, which is why LidarSensor
+        // keeps the synchronous path for raster backends.
+        static constexpr int kNoLidarScan = -1;
+        [[nodiscard]] int scanLidarBegin(const std::vector<LidarBeam>& beams,
+                                         const LidarParams& params = {});
+        // Whether that dispatch has finished. A fence poll, never a wait;
+        // false for a handle that is not outstanding.
+        [[nodiscard]] bool scanLidarReady(int handle) const;
+        // Take delivery, waiting if it somehow has not finished. False when the
+        // handle is not outstanding, in which case `results` is left empty.
+        bool scanLidarCollect(int handle, std::vector<LidarReturn>& results);
+
         // Per-frame timings (milliseconds). See FrameTimings.
         struct FrameTimings {
             float pathTraceMs    = 0.f;// deferred shade compute

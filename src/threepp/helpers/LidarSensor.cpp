@@ -345,8 +345,18 @@ PathTracedLidarSensor& LidarSensor::tracedBackend() {
 // ---------------------------------------------------------------------------
 
 void LidarSensor::scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud) {
+    // Fire and take delivery in one call. Both halves run unconditionally: the
+    // raster path has already filled `cloud`, and its collect is what clears
+    // the "one delivery owed" flag so the pair stays balanced.
+    const bool immediate = scanBegin(renderer, scene, cloud);
+    const bool delivered = scanCollect(renderer, cloud);
+    // Synchronous contract: this call's cloud, or nothing.
+    if (!immediate && !delivered) cloud.clear();
+}
+
+bool LidarSensor::scanBegin(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud) {
     beginScan();
-    cloud.clear();
+    scanPending_ = true;
 
 #ifdef THREEPP_WITH_VULKAN
     if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
@@ -364,7 +374,56 @@ void LidarSensor::scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn
         lidar.quaternion = quat;
         lidar.scale = scl;
 
-        lidar.scan(*vk, cloud);
+        lidar.scanBegin(*vk);
+        // Refused (too many scans already in flight): nothing is owed, so the
+        // caller keeps whatever cloud it had rather than being handed an empty
+        // one, and tries again next frame.
+        scanPending_ = lidar.scanFired();
+        // `cloud` is deliberately NOT cleared. It still holds the last delivered
+        // scan, and a viewer reading it between fire and delivery must see that
+        // rather than an empty one — clearing here made the overlay blink and
+        // made "the cloud is not empty" a coin flip on the frame you asked.
+        return false;
+    }
+#endif
+
+    // Raster: the six face renders and their readbacks ARE the scan, and they
+    // block anyway. Do it here and let scanCollect hand the same cloud over.
+    cloud.clear();
+    DataPassGuard guard(renderer);
+    renderFaces(renderer, scene);
+
+    if (beams_.empty())
+        unprojectDense(cloud);
+    else
+        unprojectBeams(cloud);
+    return true;
+}
+
+bool LidarSensor::scanReady(const Renderer& renderer) const {
+
+    if (!scanPending_) return false;
+#ifdef THREEPP_WITH_VULKAN
+    if (const auto* vk = dynamic_cast<const VulkanRenderer*>(&renderer)) {
+        return tracedBackend_ && tracedBackend_->scanReady(*vk);
+    }
+#else
+    (void) renderer;
+#endif
+    return true;// raster: filled by scanBegin
+}
+
+bool LidarSensor::scanCollect(Renderer& renderer, std::vector<LidarReturn>& cloud) {
+
+    if (!scanPending_) return false;
+
+#ifdef THREEPP_WITH_VULKAN
+    if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
+        if (!tracedBackend_ || !tracedBackend_->scanCollect(*vk, cloud)) {
+            scanPending_ = false;
+            return false;
+        }
+        scanPending_ = false;
 
         // The raster path emits only real surface hits inside the range shell.
         // Drop the tracer's sentinel returns (hitInstanceId < 0: -1 = miss,
@@ -375,17 +434,15 @@ void LidarSensor::scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn
         std::erase_if(cloud, [this](const LidarReturn& r) {
             return r.hitInstanceId < 0 || r.distance < near_ || r.distance > far_;
         });
-        return;
+        return true;
     }
+#else
+    (void) renderer;
+    (void) cloud;
 #endif
 
-    DataPassGuard guard(renderer);
-    renderFaces(renderer, scene);
-
-    if (beams_.empty())
-        unprojectDense(cloud);
-    else
-        unprojectBeams(cloud);
+    scanPending_ = false;
+    return true;// raster: scanBegin already filled it
 }
 
 void LidarSensor::renderFaces(Renderer& renderer, Scene& scene) {

@@ -77,6 +77,25 @@ namespace threepp {
          */
         void scan(VulkanRenderer& renderer, std::vector<LidarReturn>& out);
 
+        /**
+         * The same scan, split so a frame loop does not have to block on the
+         * readback (which costs every frame already queued on the GPU — see
+         * VulkanRenderer::scanLidarBegin). Fire with scanBegin() on one frame,
+         * poll scanReady(), take delivery with scanCollect() on a later one.
+         *
+         * The scan is STAMPED and the beams are AIMED at scanBegin(): the
+         * returns describe the pose the sensor held when it fired, and the
+         * seeded range noise is drawn at collect in beam-table order, so the
+         * stream replays exactly as the synchronous path's does.
+         */
+        void scanBegin(VulkanRenderer& renderer);
+        // Whether scanBegin() actually got a slot (it can be refused when too
+        // many scans are already outstanding — the caller retries next frame).
+        [[nodiscard]] bool scanFired() const { return scanHandle_ >= 0; }
+        [[nodiscard]] bool scanReady(const VulkanRenderer& renderer) const;
+        // False when nothing was fired; `out` is then left empty.
+        bool scanCollect(VulkanRenderer& renderer, std::vector<LidarReturn>& out);
+
         [[nodiscard]] unsigned int beamCount() const { return static_cast<unsigned int>(directions_.size()); }
         [[nodiscard]] const std::vector<Vector3>& beamDirections() const { return directions_; }
 
@@ -85,6 +104,12 @@ namespace threepp {
         std::vector<Vector3> directions_;
         // Scratch buffer reused across scans so we don't reallocate.
         std::vector<LidarBeam> beamScratch_;
+        // The world position the outstanding scan was fired from. Noise is
+        // applied along each beam from ITS origin, which is the pose at
+        // scanBegin() and not wherever the sensor has moved to by collect.
+        Vector3 scanOrigin_;
+        // The renderer's handle for the outstanding dispatch; -1 = none.
+        int scanHandle_ = -1;
 
         void buildDenseBeams(unsigned int hRes, unsigned int vRes);
         void buildModelBeams(const LidarModel& model);

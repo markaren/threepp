@@ -124,6 +124,11 @@ namespace threepp::editor {
             // drive it cannot be reviewed standing still, and pressing a key by
             // hand is not something a capture script can do.
             std::vector<std::string> keys;
+            // Timed pass: warm up, then measure this many frames and print
+            // median/p95 frame time (plus the Vulkan per-pass GPU breakdown)
+            // instead of running interactively. Implies vsync OFF — a
+            // present-capped frame time measures the display, not the renderer.
+            int bench = 0;
         };
 
         // The standard editor viewpoints. `User` is any freely orbited angle;
@@ -521,6 +526,10 @@ namespace threepp::editor {
         // --screenshot over the document that is already open (a scene.json on
         // the command line, or --example). Honours --play / --seconds / --shot.
         int runSceneScreenshot();
+        // --bench: a timed pass over whatever is open. Honours --play/--keys,
+        // warms up for --seconds, then measures --bench frames and prints
+        // median/p95 CPU frame time and (on Vulkan) the per-pass GPU medians.
+        int runBench();
         // One PNG of whatever the renderer last produced, right way up for the
         // backend in use.
         bool shootTo(const std::filesystem::path& path);
@@ -679,6 +688,9 @@ namespace threepp::editor {
         std::shared_ptr<Points> sensorCloud_;
         int sensorCloudCapacity_ = 0;
         bool sensorCloudVisible_ = true;
+        // --bench with THREEPP_BENCH_DISABLE=ui: skip the ImGui pass so the
+        // frame time measures the renderer alone. Never set outside runBench().
+        bool benchSkipUi_ = false;
 
         Raycaster raycaster_;
         std::unique_ptr<ImguiContext> ui_;

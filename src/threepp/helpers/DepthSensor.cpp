@@ -70,19 +70,18 @@ namespace {
     // its RNG stream has to continue across scans, or every frame would be
     // perturbed by the identical noise pattern (a seeded sensor rebuilt each
     // frame replays its seed each frame — noise frozen into the geometry).
-    void scanViaPathTracer(PathTracedLidarSensor& lidar, const Matrix4& world,
-                           VulkanRenderer& vk,
-                           std::vector<Vector3>& cloud, std::vector<Color>* colors) {
+    void aimAtWorld(PathTracedLidarSensor& lidar, const Matrix4& world) {
         Vector3 pos, scl;
         Quaternion quat;
         world.decompose(pos, quat, scl);
         lidar.position = pos;
         lidar.quaternion = quat;
         lidar.scale = scl;
+    }
 
-        std::vector<LidarReturn> returns;
-        lidar.scan(vk, returns);// range noise applied by the back-end
-
+    // Turn the tracer's returns into the depth camera's point cloud.
+    void gatherPoints(const std::vector<LidarReturn>& returns,
+                      std::vector<Vector3>& cloud, std::vector<Color>* colors) {
         cloud.clear();
         cloud.reserve(returns.size());
         if (colors) {
@@ -252,12 +251,32 @@ PathTracedLidarSensor& DepthSensor::tracedBackend() {
 
 void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
 
+    // Fire and take delivery in one call. Both halves run unconditionally: the
+    // raster path has already filled `cloud`, and its collect is what clears
+    // the "one delivery owed" flag so the pair stays balanced.
+    const bool immediate = scanBegin(renderer, scene, cloud);
+    const bool delivered = scanCollect(renderer, cloud);
+    // Synchronous contract: this call's cloud, or nothing.
+    if (!immediate && !delivered) cloud.clear();
+}
+
+bool DepthSensor::scanBegin(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
+
     beginScan();
+    scanPending_ = true;
 
 #ifdef THREEPP_WITH_VULKAN
     if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
-        scanViaPathTracer(tracedBackend(), *matrixWorld, *vk, cloud, nullptr);
-        return;
+        auto& lidar = tracedBackend();
+        aimAtWorld(lidar, *matrixWorld);
+        lidar.scanBegin(*vk);
+        // Refused (too many scans already in flight): nothing is owed, and the
+        // caller keeps the cloud it had rather than being handed an empty one.
+        scanPending_ = lidar.scanFired();
+        // `cloud` is deliberately NOT cleared — it still holds the last
+        // delivered scan, which is what a viewer reading it between fire and
+        // delivery must see. See LidarSensor::scanBegin.
+        return false;
     }
 #endif
 
@@ -278,6 +297,42 @@ void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& c
     renderer.setRenderTarget(nullptr);
 
     unprojectPoints(cloud);
+    return true;
+}
+
+bool DepthSensor::scanReady(const Renderer& renderer) const {
+
+    if (!scanPending_) return false;
+#ifdef THREEPP_WITH_VULKAN
+    if (const auto* vk = dynamic_cast<const VulkanRenderer*>(&renderer)) {
+        return tracedBackend_ && tracedBackend_->scanReady(*vk);
+    }
+#else
+    (void) renderer;
+#endif
+    return true;// raster: filled by scanBegin
+}
+
+bool DepthSensor::scanCollect(Renderer& renderer, std::vector<Vector3>& cloud) {
+
+    if (!scanPending_) return false;
+
+#ifdef THREEPP_WITH_VULKAN
+    if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
+        scanPending_ = false;
+        if (!tracedBackend_) return false;
+        std::vector<LidarReturn> returns;
+        if (!tracedBackend_->scanCollect(*vk, returns)) return false;
+        gatherPoints(returns, cloud, nullptr);
+        return true;
+    }
+#else
+    (void) renderer;
+    (void) cloud;
+#endif
+
+    scanPending_ = false;
+    return true;// raster: scanBegin already filled it
 }
 
 void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud, std::vector<Color>& colors) {
@@ -286,7 +341,11 @@ void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& c
 
 #ifdef THREEPP_WITH_VULKAN
     if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
-        scanViaPathTracer(tracedBackend(), *matrixWorld, *vk, cloud, &colors);
+        auto& lidar = tracedBackend();
+        aimAtWorld(lidar, *matrixWorld);
+        std::vector<LidarReturn> returns;
+        lidar.scan(*vk, returns);// range noise applied by the back-end
+        gatherPoints(returns, cloud, &colors);
         return;
     }
 #endif

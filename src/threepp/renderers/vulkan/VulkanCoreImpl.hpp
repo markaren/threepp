@@ -6029,12 +6029,24 @@ namespace threepp {
         void resetAccumulation();
 
         // Path-traced LIDAR scan entry-point. Re-uses the main TLAS and the
-        // current frame's geom/mat descriptors via a private RT pipeline owned
-        // by `lidar_`. Synchronous: blocks the calling thread until per-beam
-        // results land in `outResults`.
+        // last submitted frame's geom/mat descriptors via a private RT pipeline
+        // owned by `lidar_`. Synchronous: blocks the calling thread until
+        // per-beam results land in `outResults`.
         void scanLidar(const std::vector<LidarBeam>& beams,
                        std::vector<LidarReturn>& outResults,
                        const LidarParams& params);
+
+        // The same scan, pipelined: fire on one frame, take delivery on a
+        // later one. Blocking readback costs every frame already queued behind
+        // the fence (~28 ms at two frames in flight), which is a hitch a 10 Hz
+        // sensor would inflict ten times a second — see LidarScanner.
+        int scanLidarBegin(const std::vector<LidarBeam>& beams, const LidarParams& params);
+        [[nodiscard]] bool scanLidarReady(int handle) const;
+        bool scanLidarCollect(int handle, std::vector<LidarReturn>& outResults);
+        // Per-slot staging for the outstanding dispatches, sized by
+        // scanLidarBegin and consumed by scanLidarCollect.
+        std::array<std::vector<vulkan_lidar::LidarResult>,
+                   vulkan::LidarScanner::kScanSlots> lidarRaw_{};
 
         // ── Hybrid raster G-buffer prepass implementation ───────────────────
         // Lazy-initialized on first render().
