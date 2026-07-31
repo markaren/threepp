@@ -265,9 +265,10 @@ void EditorApp::startExternalEdit(Object3D& object, ExternalEditKind kind) {
         source = config.source;
     }
 
-    // One session at a time — the same rule the Script Editor window follows,
-    // and for the same reason: two of them would be two answers to "what is
-    // this object's source".
+    // One session at a time. Not for the reason the editor once held one tab —
+    // it holds as many as you open now — but because a session owns a scratch
+    // file, a command-stack transaction and a poll slot, and two of them would
+    // be two writers racing to answer "what is this object's source".
     if (externalEdit_.active) {
         if (externalEdit_.uuid == object.uuid) return;
         stopExternalEdit("another object took over");
@@ -307,10 +308,10 @@ void EditorApp::startExternalEdit(Object3D& object, ExternalEditKind kind) {
     commands_.beginTransaction();
     externalEdit_.transaction = true;
 
-    // The window comes along read-only, because a session needs somewhere to
+    // A tab comes along read-only, because a session needs somewhere to
     // announce itself and somewhere to be stopped.
     openScriptEditor(object);
-    scriptEditor_.focus = false;
+    if (auto* editor = scriptEditorFor(object.uuid)) editor->focus = false;
 
     log("editing " + label + " externally - " + file.generic_string());
     launchExternalEditor(dir, file);
@@ -395,8 +396,8 @@ void EditorApp::pollExternalEdit(float dt) {
     externalEdit_.waiting = false;
 
     if (externalEdit_.kind == ExternalEditKind::Generator) {
-        // No Script Editor window in this path — a generator's source is not a
-        // behaviour script and does not belong in the window that owns those.
+        // No Script Editor tab in this path — a generator's source is not a
+        // behaviour script and does not belong in the tab that owns those.
         externalEdit_.synced = applyGeneratorSource(*target, text);
         ++externalEdit_.syncs;
 
@@ -419,19 +420,22 @@ void EditorApp::pollExternalEdit(float dt) {
         return;
     }
 
-    // Through the window, not around it. Retargeting it first is for the case
-    // where the user opened the Script Editor on some other object in the
-    // meantime — Apply writes to whatever the window is pointing at.
-    if (scriptEditor_.uuid != externalEdit_.uuid) {
-        openScriptEditor(*target);
-        scriptEditor_.focus = false;
-    }
-    scriptEditor_.buffer = text;
-    applyScriptEditor();
+    // Through this object's own tab, not around it and not through whichever
+    // one happens to be visible: the sync is the same normalization, the same
+    // compile check and the same undo entry a typed edit gets. Reopened without
+    // revealing if the user closed it — the session outlives its tab, and a
+    // save must not yank the panel out from under them to say so.
+    if (!scriptEditorFor(externalEdit_.uuid)) openScriptEditor(*target, false);
 
-    externalEdit_.synced = scriptEditor_.committed;
+    auto* editor = scriptEditorFor(externalEdit_.uuid);
+    if (!editor) return;
+
+    editor->buffer = text;
+    applyScriptEditor(*editor);
+
+    externalEdit_.synced = editor->committed;
     ++externalEdit_.syncs;
 
     log("synced " + externalEdit_.label + " from " + externalEdit_.file.filename().string() +
-        (scriptEditor_.status.empty() ? "" : " - with a syntax error"));
+        (editor->status.empty() ? "" : " - with a syntax error"));
 }

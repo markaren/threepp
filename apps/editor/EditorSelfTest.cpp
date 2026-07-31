@@ -740,6 +740,41 @@ int EditorApp::runScreenshot() {
     }
 #endif
 
+    // And the Script Editor, docked. It is the shot that shows what it stopped
+    // being: a floating window parked over the viewport, covering the object
+    // the script was being written about. Dragged tall, because the height is
+    // a preference now and this is the one tab that wants it.
+    if (auto* subject = document_.scene().getObjectByName("Box near the crest")) {
+        // Two of them, because one script open and several open do not look the
+        // same and both are worth having a picture of.
+        setInlineScript(*subject, inlineScriptTemplate(), "New Inline Script");
+        selectObject(subject);
+        openScriptEditor(*subject);
+
+        const float userHeight = settings_.bottomPanelHeight;
+        settings_.bottomPanelHeight = std::min(340.f, bottomHeightLimit());
+        camera_.position.set(-4.f, 9.f, 20.f);
+        orbit_->target.set(0.f, 2.f, 10.f);
+        playFor(0.3f);
+        wrote = shoot(sibling("_script_editor")) && wrote;
+
+        if (auto* other = document_.scene().getObjectByName("Lidar Mast")) {
+            setInlineScript(*other,
+                            "# A second script, open at the same time as the first.\n"
+                            "class Sweep:\n"
+                            "\n"
+                            "    rate = 0.5\n"
+                            "\n"
+                            "    def update(self, dt):\n"
+                            "        self.obj.rotation.y += self.rate * dt\n",
+                            "New Inline Script");
+            openScriptEditor(*other);
+            playFor(0.3f);
+            wrote = shoot(sibling("_script_editor_two")) && wrote;
+        }
+        settings_.bottomPanelHeight = userHeight;
+    }
+
     return wrote ? 0 : 1;
 }
 
@@ -2019,6 +2054,66 @@ int EditorApp::runSelfTest() {
     selectObject(cameraRaw);
     step();
 
+    // --- the bottom panel is a size, not a switch --------------------------
+    // The height is a dragged preference, so everything laid out against the
+    // panel has to read it rather than a constant — the camera dock above all,
+    // since it shares the band and is drawn by the renderer, not by ImGui.
+    {
+        const float s = contentScale_;
+        // Saved and put back: this is a persisted preference the user has
+        // dragged, and a test run is not a reason to move it. Every height
+        // below is derived from the minimum rather than from theirs — someone
+        // who has already dragged the panel to the limit leaves no headroom to
+        // grow into, and that is a valid preference, not a failing editor.
+        const float userHeight = settings_.bottomPanelHeight;
+        float dockX = 0, dockY = 0, dockW = 0, dockH = 0;
+
+        settings_.bottomPanelHeight = EditorSettings::minBottomHeight;
+        step();
+
+        check(cameraDockRect(dockX, dockY, dockW, dockH) &&
+                      std::abs(dockH - bottomPanelPx()) < 0.5f,
+              "the camera dock is exactly as tall as the bottom panel");
+        check(std::abs(bottomBandPx() - bottomPanelPx()) < 0.5f,
+              "the side panels come down to the bottom panel with no seam between");
+
+        // Against the limit, not a round number: a test window on a 200% display
+        // has little room to spare, and the point here is that the panel takes
+        // the height it is given, not that any particular height fits.
+        const float taller = std::min(EditorSettings::minBottomHeight + 60.f, bottomHeightLimit());
+        settings_.bottomPanelHeight = taller;
+        step();
+        check(taller > EditorSettings::minBottomHeight &&
+                      std::abs(bottomPanelPx() - taller * s) < 0.5f,
+              "a taller panel is a taller panel");
+        check(cameraDockRect(dockX, dockY, dockW, dockH) &&
+                      std::abs(dockH - bottomPanelPx()) < 0.5f,
+              "the dock grows with it");
+
+        // A settings file (or a shrunken window) must not be able to push the
+        // viewport off the screen.
+        settings_.bottomPanelHeight = 100000.f;
+        step();
+        check(std::abs(bottomPanelPx() - bottomHeightLimit() * s) < 0.5f,
+              "an absurd height clamps to what the window can spare");
+        check(bottomPanelPx() < static_cast<float>(renderer_->size().height()) -
+                                        menuHeight_ - toolbarHeight_ - statusHeight_,
+              "the clamp leaves a viewport to look at");
+        check(settings_.bottomPanelHeight == 100000.f,
+              "clamping the layout does not rewrite the preference");
+
+        settings_.bottomPanelHeight = userHeight;
+        bottomPanelOpen_ = false;
+        step();
+        check(std::abs(bottomBandPx() - collapsedBottomPx()) < 0.5f,
+              "collapsed, the band is just the tab strip");
+        check(!cameraDockRect(dockX, dockY, dockW, dockH),
+              "and the camera dock collapses with it");
+
+        bottomPanelOpen_ = true;
+        step();
+    }
+
     // --- the preview dock SHADES ------------------------------------------
     // A selected camera renders its view through the renderer's secondary
     // scissored pane. On Vulkan that path drew flat unlit fills with no clear
@@ -2246,25 +2341,30 @@ int EditorApp::runSelfTest() {
         std::filesystem::remove(throwerPath, ec);
 
         // The same drive again with no file anywhere: source authored in the
-        // Script Editor and stored in the scene. Through the window's own apply
+        // Script Editor and stored in the scene. Through the tab's own apply
         // path, which is what the user's Ctrl+Enter runs.
         if (auto* box = document_.scene().getObjectByName("Box")) {
 
             const auto undosBefore = commands_.undoCount();
 
+            const auto boxUuid = box->uuid;
             openScriptEditor(*box);
-            check(scriptEditor_.open, "the Script Editor opens on the object");
+            check(scriptEditorFor(boxUuid) != nullptr, "the Script Editor opens on the object");
+            check(bottomPanelOpen_, "opening it brings the bottom panel up with it");
+            check(activeScriptEditor() && activeScriptEditor()->uuid == boxUuid,
+                  "and that script is the one Apply acts on");
             // Indented with TABS on purpose: Apply has to normalize them, or
             // this source is a TabError waiting for the first space-indented
             // line somebody adds later.
-            scriptEditor_.buffer = "class Inline:\n"
-                                   "\tspeed = 2.0\n"
-                                   "\n"
-                                   "\tdef start(self, obj):\n"
-                                   "\t\tself.obj = obj\n"
-                                   "\n"
-                                   "\tdef update(self, dt):\n"
-                                   "\t\tself.obj.rotation.y += self.speed * dt\n";
+            scriptEditorFor(boxUuid)->buffer =
+                    "class Inline:\n"
+                    "\tspeed = 2.0\n"
+                    "\n"
+                    "\tdef start(self, obj):\n"
+                    "\t\tself.obj = obj\n"
+                    "\n"
+                    "\tdef update(self, dt):\n"
+                    "\t\tself.obj.rotation.y += self.speed * dt\n";
             applyScriptEditor();
             step();
 
@@ -2272,13 +2372,14 @@ int EditorApp::runSelfTest() {
             check(stored.isInline(), "the inline source is recorded in userData");
             check(stored.path.empty(), "an inline script carries no file path");
             check(stored.source.find('\t') == std::string::npos, "Apply normalizes tabs to spaces");
-            check(scriptEditor_.status.empty(), "valid source passes the syntax check");
+            check(scriptEditorFor(boxUuid)->status.empty(), "valid source passes the syntax check");
             check(commands_.undoCount() == undosBefore + 1, "Apply is one undo entry");
 
             commands_.undo();
             step();
             check(!ScriptConfig::read(*box).has_value(), "undo takes the inline script back off");
-            check(!scriptEditor_.open, "the window closes when its script is undone away");
+            check(scriptEditorFor(boxUuid) == nullptr,
+                  "the script's tab closes when its script is undone away");
             commands_.redo();
             step();
             check(ScriptConfig::read(*box).has_value(), "redo puts it back");
@@ -2321,15 +2422,16 @@ int EditorApp::runSelfTest() {
             if (restored) {
                 const auto uuid = restored->uuid;
                 openScriptEditor(*restored);
-                scriptEditor_.buffer = "class Broken:\n    def update(self dt):\n        pass\n";
+                scriptEditorFor(uuid)->buffer =
+                        "class Broken:\n    def update(self dt):\n        pass\n";
                 applyScriptEditor();
                 step();
 
-                check(!scriptEditor_.status.empty(), "Apply reports the syntax error");
-                check(scriptEditor_.status.find("line 2") != std::string::npos,
+                check(!scriptEditorFor(uuid)->status.empty(), "Apply reports the syntax error");
+                check(scriptEditorFor(uuid)->status.find("line 2") != std::string::npos,
                       "the syntax error carries its line number");
                 check(ScriptConfig::read(*restored).value_or(ScriptConfig{}).source ==
-                              scriptEditor_.buffer,
+                              scriptEditorFor(uuid)->buffer,
                       "a syntax error does not block Apply");
 
                 startPlay();
@@ -2443,15 +2545,125 @@ int EditorApp::runSelfTest() {
                 }
 
                 if (auto* clear = document_.scene().getObjectByName("Box")) {
+                    const auto uuid = clear->uuid;
                     assignScript(*clear, {});
                     step();
                     check(!ScriptConfig::read(*clear).has_value(), "clearing removes the inline script");
-                    check(!scriptEditor_.open, "clearing the script closes the Script Editor");
+                    check(scriptEditorFor(uuid) == nullptr, "clearing the script closes its tab");
                 }
             }
         }
     }
 #endif
+
+    // --- two scripts open at once ------------------------------------------
+    // The editor used to be ONE buffer that retargeted itself onto whatever was
+    // selected, which is unusable for the thing people actually do: write two
+    // scripts that talk to each other. Each open script now keeps its own tab,
+    // its own buffer and its own syntax error, and the only thing the selection
+    // does is raise a tab that already exists.
+    {
+        auto* first = document_.scene().getObjectByName("Box");
+        auto* second = document_.scene().getObjectByName("Ground");
+        if (first && second) {
+
+            const auto firstUuid = first->uuid;
+            const auto secondUuid = second->uuid;
+
+            setInlineScript(*first, "class A:\n    def update(self, dt):\n        pass\n", "Script A");
+            setInlineScript(*second, "class B:\n    def update(self, dt):\n        pass\n", "Script B");
+            step();
+
+            openScriptEditor(*first);
+            openScriptEditor(*second);
+            step();
+
+            check(scriptEditors_.size() == 2, "two scripts open as two tabs");
+            check(scriptEditorFor(firstUuid) && scriptEditorFor(secondUuid),
+                  "each object keeps its own");
+            check(activeScriptEditor() && activeScriptEditor()->uuid == secondUuid,
+                  "the one opened last is the one in front");
+
+            // With `first` selected the whole time: an explicit open outranks
+            // the raise-on-selection rule, which otherwise pulls the bar back to
+            // the selected object on the next frame and makes opening a script
+            // for anything else impossible.
+            selectObject(first);
+            step();
+            openScriptEditor(*second);
+            step(3);
+            check(activeScriptEditor() && activeScriptEditor()->uuid == secondUuid,
+                  "opening a script for an object that is not selected stays open");
+
+            // The whole point: an edit in one is not an edit in the other, and
+            // neither is silently retargeted by clicking around the scene.
+            const std::string edited = "class A:\n    speed = 3.0\n"
+                                       "    def update(self, dt):\n        pass\n";
+            scriptEditorFor(firstUuid)->buffer = edited;
+            selectObject(second);
+            step();
+            check(scriptEditorFor(firstUuid) && scriptEditorFor(firstUuid)->buffer == edited,
+                  "an unsaved buffer survives the selection moving off it");
+            check(scriptEditorFor(secondUuid) &&
+                          scriptEditorFor(secondUuid)->buffer.find("class B") != std::string::npos,
+                  "and the other tab still holds its own object's source");
+
+            // Selecting an object that has a tab raises it; selecting one that
+            // does not opens nothing (that is what Edit… is for).
+            selectObject(first);
+            step();
+            check(activeScriptEditor() && activeScriptEditor()->uuid == firstUuid,
+                  "selecting an object with a tab open raises that tab");
+            selectObject(&document_.scene());
+            step();
+            check(scriptEditors_.size() == 2,
+                  "selecting something without one opens nothing");
+
+            // Reopening a tab that is already there keeps what was typed into
+            // it rather than reloading over the top of it.
+            openScriptEditor(*first);
+            step();
+            check(scriptEditors_.size() == 2, "reopening an object reuses its tab");
+            check(scriptEditorFor(firstUuid)->buffer == edited, "and keeps the unsaved text in it");
+
+            // Apply acts on the visible one, and only on it.
+            const auto sourceOf = [this](const char* name) {
+                auto* object = document_.scene().getObjectByName(name);
+                return object ? ScriptConfig::read(*object).value_or(ScriptConfig{}).source
+                              : std::string{};
+            };
+            applyScriptEditor();
+            step();
+            check(sourceOf("Box").find("speed = 3.0") != std::string::npos,
+                  "Apply commits the visible script");
+            check(sourceOf("Ground").find("class B") != std::string::npos,
+                  "and leaves the other object's alone");
+
+            // Both survive a play/stop: the graph is replaced wholesale and the
+            // tabs are keyed by uuid precisely so they do not go with it.
+            startPlay();
+            step(3);
+            stopPlay();
+            step();
+            check(scriptEditors_.size() == 2, "both tabs survive play/stop");
+            check(scriptEditorFor(firstUuid) && !scriptEditorFor(firstUuid)->missing,
+                  "and are still pointing at live objects");
+
+            // Closing one leaves the other, and closing the last takes the
+            // Scripts tab with it.
+            scriptEditorFor(firstUuid)->open = false;
+            step();
+            check(scriptEditors_.size() == 1 && scriptEditorFor(secondUuid),
+                  "closing one tab leaves the other");
+            scriptEditorFor(secondUuid)->open = false;
+            step();
+            check(scriptEditors_.empty(), "closing the last leaves no Scripts tab at all");
+
+            if (auto* a = document_.scene().getObjectByName("Box")) assignScript(*a, {});
+            if (auto* b = document_.scene().getObjectByName("Ground")) assignScript(*b, {});
+            step();
+        }
+    }
 
     // "Edit in VS Code", end to end and without VS Code: the export, the
     // workspace, the poll, the sync back through the Script Editor's Apply, and
@@ -2515,7 +2727,7 @@ int EditorApp::runSelfTest() {
             check(std::filesystem::exists(scratch), "the source is exported to a scratch file");
             check(ScriptWorkspace::readSource(scratch) == source,
                   "the export is the committed source, byte for byte");
-            check(scriptEditor_.open, "the Script Editor comes along to show the session");
+            check(scriptEditorFor(uuid) != nullptr, "the Script Editor comes along to show the session");
 
             // The workspace: written once, carrying this build's stub path, and
             // never written over the top of what the user made of it.

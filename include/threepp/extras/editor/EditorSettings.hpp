@@ -65,6 +65,15 @@ namespace threepp::editor {
         static constexpr float minPanelWidth = 180.f;
         static constexpr float maxPanelWidth = 720.f;
 
+        // Bottom panel height, same units and draggable for the same reason:
+        // the console is fine in a 200 px strip and the docked script editor is
+        // not. The viewport is the real upper bound — see
+        // EditorApp::bottomHeightLimit() — so this cap only guards the file.
+        float bottomPanelHeight = 200.f;
+
+        static constexpr float minBottomHeight = 90.f;
+        static constexpr float maxBottomHeight = 1200.f;
+
     private:
         std::vector<std::string> recentFiles_;
     };

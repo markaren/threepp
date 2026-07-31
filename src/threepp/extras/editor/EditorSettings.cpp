@@ -108,12 +108,14 @@ bool EditorSettings::load(const std::filesystem::path& path) {
 
     // Clamped on read: a settings file edited by hand (or written by a build
     // with different limits) must not be able to push a panel off-screen.
-    const auto readWidth = [&j](const char* key, float fallback) {
+    const auto readSize = [&j](const char* key, float fallback, float lo, float hi) {
         if (!j.contains(key) || !j[key].is_number()) return fallback;
-        return std::clamp(j[key].get<float>(), minPanelWidth, maxPanelWidth);
+        return std::clamp(j[key].get<float>(), lo, hi);
     };
-    hierarchyWidth = readWidth("hierarchyWidth", hierarchyWidth);
-    inspectorWidth = readWidth("inspectorWidth", inspectorWidth);
+    hierarchyWidth = readSize("hierarchyWidth", hierarchyWidth, minPanelWidth, maxPanelWidth);
+    inspectorWidth = readSize("inspectorWidth", inspectorWidth, minPanelWidth, maxPanelWidth);
+    bottomPanelHeight = readSize("bottomPanelHeight", bottomPanelHeight,
+                                 minBottomHeight, maxBottomHeight);
 
     recentFiles_.clear();
     if (j.contains("recentFiles") && j["recentFiles"].is_array()) {
@@ -147,6 +149,7 @@ bool EditorSettings::save(const std::filesystem::path& path) const {
     j["modelStorage"] = modelStorage == ModelStorage::Reference ? "reference" : "embed";
     j["hierarchyWidth"] = hierarchyWidth;
     j["inspectorWidth"] = inspectorWidth;
+    j["bottomPanelHeight"] = bottomPanelHeight;
     j["recentFiles"] = recentFiles_;
 
     std::ofstream file(path);

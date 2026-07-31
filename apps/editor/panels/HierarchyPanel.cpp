@@ -224,8 +224,7 @@ void EditorApp::drawHierarchy() {
 
     const float width = hierarchyPx();
     const float top = menuHeight_ + toolbarHeight_;
-    const float bottom = statusHeight_ + (bottomPanelOpen_ ? layout::bottomHeight * s
-                                                           : ImGui::GetFrameHeight() + 6 * s);
+    const float bottom = statusHeight_ + bottomBandPx();
     const float height = std::max(viewport->Size.y - top - bottom, 40.f * s);
 
     ImGui::SetNextWindowPos({viewport->Pos.x, viewport->Pos.y + top});

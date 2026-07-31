@@ -215,8 +215,7 @@ void EditorApp::drawInspector() {
 
     const float width = inspectorPx();
     const float top = menuHeight_ + toolbarHeight_;
-    const float bottom = statusHeight_ + (bottomPanelOpen_ ? layout::bottomHeight * s
-                                                           : ImGui::GetFrameHeight() + 6 * s);
+    const float bottom = statusHeight_ + bottomBandPx();
     const float height = std::max(viewport->Size.y - top - bottom, 40.f * s);
 
     ImGui::SetNextWindowPos({viewport->Pos.x + viewport->Size.x - width, viewport->Pos.y + top});
@@ -1307,7 +1306,7 @@ void EditorApp::drawScriptSection(Object3D& object) {
 
     // --- where the code is ---------------------------------------------------
     // Two forms, never both: a .py file, or source stored in this scene and
-    // edited in the Script Editor window.
+    // edited in the Script Editor tab.
     const float buttonWidth = 90 * contentScale_;
 
     if (config.isInline()) {
@@ -1369,7 +1368,7 @@ void EditorApp::drawScriptSection(Object3D& object) {
     if (!externalEditActive(object) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         ImGui::SetTooltip(config.isInline()
                                   ? "Export the source to a file, open it in VS Code, and take\n"
-                                    "every save back into the scene while the window is open.\n"
+                                    "every save back into the scene while the session is live.\n"
                                     "A .vscode/settings.json is written beside it so Pylance\n"
                                     "completes `import threepp`."
                                   : "Open the script's folder in VS Code, with a\n"
