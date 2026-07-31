@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <utility>
 
 namespace {
@@ -1738,6 +1739,7 @@ void VulkanRenderer::Impl::buildTlas(const std::vector<VkAccelerationStructureIn
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &tlasBuild, &pRange);
             endAndSubmitOneShot(cb, "buildTlas");
             destroyBuffer(ctx->allocator(), scratch);
+            tlasBuiltInstanceCount_ = instanceCount;
         }
 
 void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
@@ -1746,9 +1748,31 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
             const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
             if (instanceCount == 0 || tlas == VK_NULL_HANDLE) return;
 
+            // A MODE_UPDATE must carry exactly the instance count of the TLAS's
+            // last full build — anything else is invalid and corrupts traversal
+            // (ray-query hang → TDR). Membership changes are classified
+            // structural upstream, so this firing means some path slipped
+            // through: promote to a full in-place build rather than corrupt.
+            if (!fullBuild && instanceCount != tlasBuiltInstanceCount_) {
+                std::cerr << "[VulkanRenderer] TLAS refit count " << instanceCount
+                          << " != built count " << tlasBuiltInstanceCount_
+                          << "; promoting to full build\n";
+                fullBuild = true;
+            }
+
             Buffer& instBuf = tlasInstancesBuffers[currentFrame];
-            uploadHostVisible(ctx->allocator(), instBuf, instances.data(),
-                              instanceCount * sizeof(VkAccelerationStructureInstanceKHR));
+            const VkDeviceSize instBytes =
+                    instanceCount * sizeof(VkAccelerationStructureInstanceKHR);
+            if (instBytes > instBuf.size) {
+                // Instance buffers are sized by the last structural buildTlas;
+                // writing past them corrupts whatever VMA placed next. A stale
+                // TLAS for one frame is invisible next to that.
+                std::cerr << "[VulkanRenderer] TLAS refit skipped: instance data "
+                          << instBytes << " B exceeds staged buffer "
+                          << instBuf.size << " B\n";
+                return;
+            }
+            uploadHostVisible(ctx->allocator(), instBuf, instances.data(), instBytes);
 
             VkAccelerationStructureGeometryInstancesDataKHR instData{};
             instData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
@@ -1800,10 +1824,22 @@ void VulkanRenderer::Impl::recordTlasRefit(VkCommandBuffer cb,
             }
             tlasBuild.scratchData.deviceAddress = tlasRefitScratch_.address;
 
+            // A promoted/full build reuses the existing TLAS object, whose
+            // storage was sized for the last structural build's count. Skip if
+            // the fresh build wouldn't fit — one stale-TLAS frame, not a
+            // heap stomp; the structural path re-sizes on its next pass.
+            if (fullBuild && sizes.accelerationStructureSize > tlasBuffer.size) {
+                std::cerr << "[VulkanRenderer] TLAS refit skipped: full build needs "
+                          << sizes.accelerationStructureSize << " B, storage is "
+                          << tlasBuffer.size << " B\n";
+                return;
+            }
+
             VkAccelerationStructureBuildRangeInfoKHR range{};
             range.primitiveCount = instanceCount;
             const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &tlasBuild, &pRange);
+            if (fullBuild) tlasBuiltInstanceCount_ = instanceCount;
         }
 
 }// namespace threepp

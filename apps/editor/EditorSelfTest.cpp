@@ -817,6 +817,31 @@ int EditorApp::runSelfTest() {
     check(selection_.get() == box, "selection is Box");
     check(outlineCount() == 1, "one outline after repeated re-select");
 
+    // Wireframe + resize regression: flipping a material to wireframe moves the
+    // mesh out of the Vulkan TLAS (the overlay pass draws it instead). That
+    // flip must classify as STRUCTURAL — before it did, the next TLAS refit
+    // after a window resize was a MODE_UPDATE with the wrong instance count,
+    // which corrupts traversal (ray-query hang → 2 s TDR → device lost at the
+    // next submit). GL has no TLAS; there this pass just exercises the resize.
+    if (auto* wireMesh = box->as<Mesh>()) {
+        if (auto* mw = dynamic_cast<MaterialWithWireframe*>(wireMesh->material().get())) {
+            const auto sizeBefore = canvas_.size();
+            mw->wireframe = true;
+            wireMesh->material()->needsUpdate();
+            step(3);
+            canvas_.setSize({sizeBefore.width() - 160, sizeBefore.height() - 90});
+            step(3);
+            canvas_.setSize({sizeBefore.width(), sizeBefore.height()});
+            step(3);
+            mw->wireframe = false;
+            wireMesh->material()->needsUpdate();
+            step();
+            // Reaching this line is the assertion: a corrupted TLAS never
+            // returns from the resize's device-idle.
+            check(true, "wireframe Box survives a window resize");
+        }
+    }
+
     // Delete through the same member the Del key and menus call.
     deleteSelected();
     step();

@@ -810,9 +810,12 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                         // Texture pointers + pbr live on the material; matVersion
                         // unchanged means none of them moved. Copy everything from
                         // prev, then overwrite matrix (transform can change without
-                        // bumping mat version — Object3D xfm is independent).
+                        // bumping mat version — Object3D xfm is independent) and
+                        // the overlay flag (entries were just re-expanded; a flag
+                        // flip is exactly what the structural compare must see).
                         fp = p;
                         fp.matrix = en.worldMatrix;
+                        fp.overlay = en.isOverlay;
                         fastPath = true;
                     }
                 }
@@ -864,6 +867,7 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     fp.emissiveTex           = d.emissiveTex;
                     fp.occlusionTex          = d.occlusionTex;
                     fp.instanceIndex         = en.instanceIndex;
+                    fp.overlay               = en.isOverlay;
                     fp.matrix                = en.worldMatrix;
                     fp.pbr = d.pbr;
                 }
@@ -998,6 +1002,11 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     const auto& a = currFp[i];
                     const auto& b = prevSceneFingerprint[i];
                     if (a.mesh != b.mesh || a.geom != b.geom || a.mat != b.mat ||
+                        // TLAS membership flip (wireframe/overlay toggled) — the
+                        // instance set changed, so a refit would MODE_UPDATE with
+                        // a different instance count than the last build (spec
+                        // violation → corrupt TLAS → traversal hang). Rebuild.
+                        a.overlay != b.overlay ||
                         a.albedoTex != b.albedoTex || a.roughnessTex != b.roughnessTex ||
                         a.metalnessTex != b.metalnessTex || a.normalTex != b.normalTex ||
                         a.transmissionTex != b.transmissionTex ||

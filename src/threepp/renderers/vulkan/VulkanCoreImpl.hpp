@@ -668,6 +668,12 @@ namespace threepp {
         // the frame command buffers execute in submit order so it never races).
         Buffer tlasRefitScratch_{};
         VkDeviceSize tlasRefitScratchSize_ = 0;
+        // Instance count of the TLAS's last full BUILD. A MODE_UPDATE with any
+        // other count is a spec violation that corrupts traversal, so
+        // recordTlasRefit promotes such a refit to a full build (or skips it
+        // when the existing storage can't hold the build). The structural
+        // fingerprint now catches membership flips too — this is the backstop.
+        uint32_t tlasBuiltInstanceCount_ = 0;
         // Per-frame TLAS refit, staged by ensureSceneBuilt and recorded into the
         // frame command buffer by recordCommandBuffer (after the deformable BLAS
         // rebuilds). Replaces the old mid-frame refitTlas one-shot drain.
@@ -1679,6 +1685,13 @@ namespace threepp {
                                                            // dead predecessor's Texture* could be
                                                            // reused and hit a stale textureCache slot
             uint32_t instanceIndex;// 0 for non-instanced; distinguishes sub-instances
+            // TLAS membership. An overlay flip (e.g. material.wireframe toggled)
+            // keeps every pointer above identical but adds/removes this entry's
+            // TLAS instance, so it must classify as STRUCTURAL: a MODE_UPDATE
+            // refit with a different instance count than the TLAS's last build
+            // is invalid (VUID-vkCmdBuildAccelerationStructuresKHR) and corrupts
+            // traversal — observed as a ray-query hang → 2 s TDR → device lost.
+            bool overlay = false;
             unsigned int matVersion = 0;// Material::version() — bumped by needsUpdate(),
                                         // KHR_animation_pointer, etc. Lets us skip the
                                         // 8 texture-of dynamic_casts + materialFromMesh
