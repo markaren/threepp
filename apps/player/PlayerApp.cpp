@@ -6,6 +6,10 @@
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/controls/OrbitControls.hpp"
 #include "threepp/core/Clock.hpp"
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+#include "Scripting.hpp"// keyStateProvider - the seam behind threepp.editor.is_key_down
+#include "threepp/input/KeyFromName.hpp"
+#endif
 #include "threepp/extras/editor/RenderConfig.hpp"
 #include "threepp/extras/editor/ViewSpec.hpp"
 #include "threepp/math/Box3.hpp"
@@ -57,6 +61,12 @@ PlayerApp::PlayerApp(PlayerOptions options)
 
 PlayerApp::~PlayerApp() {
 
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    // The provider closes over `this` and the canvas; neither survives the
+    // destructor, so the seam must not either. One player per process, so no
+    // ownership token needed — there is nobody to take it back from.
+    editor::scripting::keyStateProvider() = nullptr;
+#endif
     // The overlay parents a node into the core's overlay group. Drop it while
     // that group is still alive — member order would otherwise take the core
     // (and its groups) down first.
@@ -142,6 +152,19 @@ void PlayerApp::buildView() {
     // Orbit and the drawn lines are for a person watching, so neither is stood
     // up for a run nobody can see.
     if (canvas_ && !options_.headless) {
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+        // threepp.editor.is_key_down, answered from the window's own key state —
+        // a scene authored to be DRIVEN (the hover arena's W/A/S/D drone) is
+        // drivable here too, not only in the editor. The editor answers this
+        // from ImGui because it must ignore keys typed into its panels; the
+        // player has no panels, so the Canvas state IS the answer. Headless
+        // installs nothing, and the provider then answers False — a script that
+        // steers still runs, just uncommanded, which is what an unattended
+        // evaluation wants (and what keeps episode CSVs reproducible).
+        editor::scripting::keyStateProvider() = [this](const std::string& name) {
+            return canvas_ && canvas_->isKeyDown(keyFromName(name));
+        };
+#endif
         orbit_ = std::make_unique<OrbitControls>(camera_, *canvas_);
         orbit_->enableDamping = true;
 

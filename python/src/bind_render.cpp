@@ -13,6 +13,7 @@
 #include "threepp/controls/TransformControls.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
+#include "threepp/input/KeyFromName.hpp"
 #include "threepp/helpers/LidarModel.hpp"
 #include "threepp/helpers/LidarTypes.hpp"
 #include "threepp/input/KeyListener.hpp"
@@ -38,33 +39,9 @@ namespace threepp_py {
         return h.cast<GLRenderer&>();
     }
 
-    // Map a friendly key name ('W', 'a', 'SPACE', 'UP', ...) to threepp's Key enum.
-    // Letters/digits exploit the enum's contiguous A-Z and NUM_0-NUM_9 ranges.
-    static Key keyFromName(std::string n) {
-        for (auto& ch : n) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-        if (n.size() == 1 && n[0] >= 'A' && n[0] <= 'Z')
-            return static_cast<Key>(static_cast<int>(Key::A) + (n[0] - 'A'));
-        if (n.size() == 1 && n[0] >= '0' && n[0] <= '9')
-            return static_cast<Key>(static_cast<int>(Key::NUM_0) + (n[0] - '0'));
-        // Numpad keys: "KP8" / "NUM8" / "NUMPAD8" -> Key::KP_8 (distinct from the
-        // top-row digit "8" -> Key::NUM_8).
-        for (const std::string& pre : {std::string("KP"), std::string("NUMPAD"), std::string("NUM")}) {
-            if (n.size() == pre.size() + 1 && n.compare(0, pre.size(), pre) == 0 &&
-                n.back() >= '0' && n.back() <= '9')
-                return static_cast<Key>(static_cast<int>(Key::KP_0) + (n.back() - '0'));
-        }
-        if (n == "SPACE") return Key::SPACE;
-        if (n == "UP") return Key::UP;
-        if (n == "DOWN") return Key::DOWN;
-        if (n == "LEFT") return Key::LEFT;
-        if (n == "RIGHT") return Key::RIGHT;
-        if (n == "ESCAPE" || n == "ESC") return Key::ESCAPE;
-        if (n == "ENTER") return Key::ENTER;
-        if (n == "TAB") return Key::TAB;
-        if (n == "SHIFT") return Key::LEFT_SHIFT;
-        if (n == "CTRL" || n == "CONTROL") return Key::LEFT_CONTROL;
-        return Key::UNKNOWN;
-    }
+    // keyFromName lives in the library (threepp/input/KeyFromName.hpp) - one
+    // mapping shared with the player's keyboard provider, so the names a script
+    // was written against mean the same key on every surface.
 
     void init_render(py::module_& m) {
 

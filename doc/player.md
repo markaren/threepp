@@ -47,6 +47,14 @@ object for the camera to chase. Without a view, the player frames the scene's
 bounds. `RenderConfig` on the scene root is applied, so a document looks the way
 it was saved.
 
+**Keyboard input works.** A windowed run answers a script's
+`threepp.editor.is_key_down` from the window's own key state (one name→key
+mapping, shared with `Canvas.is_key_down` — `threepp/input/KeyFromName.hpp`),
+so a scene authored to be *driven* — the hover arena's W/A/S/D drone — is
+drivable in the player too. Headless installs no provider and the calls answer
+`False`: a script that steers still runs, just uncommanded, which is what an
+unattended evaluation wants and what keeps episode recordings reproducible.
+
 ## Exit code
 
 | code | meaning |
