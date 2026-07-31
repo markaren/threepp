@@ -2,6 +2,7 @@
 #include "PlayerApp.hpp"
 
 #include "DebugDrawOverlay.hpp"
+#include "SensorCloudOverlay.hpp"
 
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/controls/OrbitControls.hpp"
@@ -67,9 +68,10 @@ PlayerApp::~PlayerApp() {
     // ownership token needed — there is nobody to take it back from.
     editor::scripting::keyStateProvider() = nullptr;
 #endif
-    // The overlay parents a node into the core's overlay group. Drop it while
+    // The overlays parent nodes into the core's overlay group. Drop them while
     // that group is still alive — member order would otherwise take the core
     // (and its groups) down first.
+    sensorCloud_.reset();
     debugDraw_.reset();
     orbit_.reset();
 }
@@ -181,6 +183,13 @@ void PlayerApp::buildView() {
             // clears the list itself each step, which is what the headless path
             // does — either way it never reaches its cap.
             core_.setDebugDrawDrain([this] { debugDraw_->sync(); });
+
+            // What the vision sensors measured, as the editor draws it: one
+            // range-coloured cloud. Under the same scan-hidden overlay group, so
+            // a lidar never ranges against its own returns.
+            if (auto* sensors = core_.sensors()) {
+                sensorCloud_ = std::make_unique<SensorCloudOverlay>(*overlay, *sensors);
+            }
         }
     }
 
@@ -316,6 +325,9 @@ bool PlayerApp::playEpisode(int index) {
     // is a pointer into a freed graph rather than after.
     follow_ = nullptr;
     followSeeded_ = false;
+    // The cloud's "keep the last frame" rule must not cross an episode
+    // boundary: episode N+1 opens clean, not wearing episode N's returns.
+    if (sensorCloud_) sensorCloud_->clear();
 
     report(result);
     return windowOpen;
@@ -324,6 +336,10 @@ bool PlayerApp::playEpisode(int index) {
 void PlayerApp::frame(float dt) {
 
     core_.step(dt);
+
+    // After the step (the sensors have drained this frame's returns), before
+    // the render (this frame should show them).
+    if (sensorCloud_) sensorCloud_->sync();
 
     updateFollow();
     if (orbit_) orbit_->update();

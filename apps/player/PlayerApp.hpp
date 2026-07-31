@@ -39,6 +39,7 @@ namespace threepp {
 namespace threepp::player {
 
     class DebugDrawOverlay;
+    class SensorCloudOverlay;
 
     struct PlayerOptions {
 
@@ -108,6 +109,7 @@ namespace threepp::player {
         std::unique_ptr<Renderer> renderer_;
         std::unique_ptr<OrbitControls> orbit_;
         std::unique_ptr<DebugDrawOverlay> debugDraw_;
+        std::unique_ptr<SensorCloudOverlay> sensorCloud_;
 
         PerspectiveCamera camera_{55.f, 16.f / 9.f, 0.05f, 5000.f};
 

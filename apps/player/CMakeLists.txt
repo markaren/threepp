@@ -60,7 +60,8 @@ endif ()
 add_executable(threepp_player
         main.cpp
         PlayerApp.cpp
-        DebugDrawOverlay.cpp)
+        DebugDrawOverlay.cpp
+        SensorCloudOverlay.cpp)
 
 target_link_libraries(threepp_player PRIVATE threepp_player_core)
 

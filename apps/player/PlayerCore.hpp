@@ -140,6 +140,11 @@ namespace threepp::player {
         // range against somebody's debug arrow.
         [[nodiscard]] Group* overlay() const;
 
+        // The sensor session, for a front end that VISUALIZES what it measured —
+        // the point-cloud overlay reads its entries. Never null after
+        // construction; its entries are empty between episodes.
+        [[nodiscard]] editor::SensorPlaySession* sensors() const { return sensors_.get(); }
+
         // --- episodes --------------------------------------------------------
 
         [[nodiscard]] bool playing() const;
