@@ -707,21 +707,24 @@ namespace {
     architecture::CabinParams fjordCabinParams() {
         architecture::CabinParams cp;
         cp.seed = 11u;
-        cp.length = 12.0f;
-        cp.depth = 7.4f;
-        cp.wallHeight = 3.2f;
-        cp.floorHeight = 0.72f;
+        // Against a fjord wall and 20 m spruce, a 12 m cabin read as a model.
+        // Still inside the pad's 24 m flat radius: half-diagonal of the 16 x
+        // 12 m envelope (body + porch) is ~10 m.
+        cp.length = 16.0f;
+        cp.depth = 9.0f;
+        cp.wallHeight = 3.6f;
+        cp.floorHeight = 0.80f;
         cp.roofPitchDeg = 40.f;
-        cp.porchStartX = -6.0f;
-        cp.porchEndX = 6.0f;
-        cp.porchDepth = 2.4f;
+        cp.porchStartX = -8.0f;
+        cp.porchEndX = 8.0f;
+        cp.porchDepth = 2.8f;
         cp.stepsCenterX = 0.f;// defaultOpenings puts the door on centre
-        cp.stepsWidth = 1.6f;
-        cp.dormerCenterX = -3.3f;
-        cp.dormerWidth = 4.0f;
-        cp.flueX = 3.6f;
-        cp.flueZ = -0.9f;
-        cp.flueRise = 1.5f;
+        cp.stepsWidth = 1.8f;
+        cp.dormerCenterX = -4.4f;
+        cp.dormerWidth = 4.8f;
+        cp.flueX = 4.8f;
+        cp.flueZ = -1.1f;
+        cp.flueRise = 1.6f;
         cp.logColor = {0.355f, 0.205f, 0.098f};   // dark creosote stain
         cp.logEndColor = {0.440f, 0.320f, 0.180f};
         cp.shingleColor = {0.130f, 0.135f, 0.145f};// slate roof, as the old cabin had
@@ -1273,6 +1276,108 @@ int main(int argc, char** argv) {
             }
         }
         scene.add(dock);
+    }
+
+    // ── footpath: cabin steps down to the pier ──────────────────────────────
+    //
+    // A gravel ribbon laid on the terrain. Two things keep it from reading as
+    // a decal painted on a hillside:
+    //
+    //   * It WANDERS. A path worn by feet never takes the shortest line, and a
+    //     ruler-straight strip across a meadow is the first thing the eye
+    //     rejects. The centreline is a Catmull-Rom through offset waypoints and
+    //     the half-width breathes along it.
+    //   * It has a SKIRT. The ribbon samples the same tile heightfield the
+    //     terrain renders from, but sub-metre relief still slips between
+    //     samples; edges dropped a third of a metre bury those crossings
+    //     instead of leaving the path hovering over its own shadow.
+    {
+        const auto cm = architecture::cabinMetrics(fjordCabinParams());
+        // Foot of the porch steps, in world space. The cabin is turned so its
+        // local +Z (the porch side) points down -X, and the steps sit on the
+        // door centreline, so the landing is straight out along -X at kPadZ.
+        const float xStart = padX - (cm.porchOuterZ + 0.16f + 0.29f * 3.f + 0.6f);
+        const float xEnd = xWater + 6.5f;// meets the dock's landward end
+
+        auto ground = [&](float x, float z) { return Vector3(x, terrainH(x, z), z); };
+        auto lerpX = [&](float t) { return xStart + (xEnd - xStart) * t; };
+
+        CatmullRomCurve3 spine({
+                ground(xStart + 1.2f, kPadZ + 0.1f),
+                ground(lerpX(0.00f), kPadZ + 0.5f),
+                ground(lerpX(0.20f), kPadZ + 4.2f),
+                ground(lerpX(0.45f), kPadZ + 2.4f),
+                ground(lerpX(0.70f), kPadZ - 3.0f),
+                ground(lerpX(0.90f), kPadZ - 1.0f),
+                ground(xEnd, kPadZ + 0.3f),
+        });
+
+        auto pathTex = architecture::makeStoneTextures(256, 5u, {0.315f, 0.278f, 0.226f});
+        auto pathMat = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.98f).metalness(0.f));
+        pathMat->map = pathTex.first;
+        pathMat->normalMap = pathTex.second;
+        pathMat->normalScale.set(0.8f, 0.8f);
+
+        constexpr int kSteps = 220;
+        constexpr float kSkirt = 0.34f;
+        std::vector<float> pos, nrm, uv;
+        std::vector<unsigned int> idx;
+        float arc = 0.f;
+        Vector3 prev;
+        for (int i = 0; i <= kSteps; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(kSteps);
+            Vector3 c;
+            spine.getPoint(t, c);
+            // Tangent by central difference in the XZ plane.
+            Vector3 a, b;
+            spine.getPoint(std::max(0.f, t - 0.004f), a);
+            spine.getPoint(std::min(1.f, t + 0.004f), b);
+            float tx = b.x - a.x, tz = b.z - a.z;
+            const float tl = std::sqrt(tx * tx + tz * tz);
+            if (tl > 1e-5f) { tx /= tl; tz /= tl; }
+            else { tx = 1.f; tz = 0.f; }
+            const float px = -tz, pz = tx;// left normal in XZ
+
+            if (i > 0) arc += c.distanceTo(prev);
+            prev = c;
+
+            // Worn wider where it is walked most, narrower on the pinch points.
+            const float half = 0.62f + 0.30f * noise::valueNoise(t * 9.f, 0.5f, 9, 17u);
+            for (int e = 0; e < 4; ++e) {
+                // 0,3 = skirt edges (dropped); 1,2 = the walked surface.
+                const float s = (e == 0 || e == 1) ? 1.f : -1.f;
+                const float w = (e == 0 || e == 3) ? half + 0.22f : half;
+                const float drop = (e == 0 || e == 3) ? kSkirt : 0.f;
+                const float x = c.x + px * w * s;
+                const float z = c.z + pz * w * s;
+                pos.insert(pos.end(), {x, terrainH(x, z) + 0.035f - drop, z});
+                nrm.insert(nrm.end(), {0.f, 1.f, 0.f});
+                uv.insert(uv.end(), {(0.5f + 0.5f * s * (w / 0.9f)), arc / 0.9f});
+            }
+            if (i > 0) {
+                const auto b0 = static_cast<unsigned int>((i - 1) * 4);
+                const auto b1 = static_cast<unsigned int>(i * 4);
+                for (int e = 0; e < 3; ++e) {
+                    const auto q0 = b0 + static_cast<unsigned int>(e);
+                    const auto q1 = b1 + static_cast<unsigned int>(e);
+                    idx.insert(idx.end(), {q0, q1, q0 + 1, q0 + 1, q1, q1 + 1});
+                }
+            }
+        }
+        auto pathGeo = BufferGeometry::create();
+        pathGeo->setIndex(idx);
+        pathGeo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
+        pathGeo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
+        pathGeo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
+        pathGeo->computeVertexNormals();
+        pathGeo->computeBoundingSphere();
+
+        auto path = Mesh::create(pathGeo, pathMat);
+        path->name = "footpath";
+        path->receiveShadow = true;
+        path->castShadow = false;
+        scene.add(path);
     }
 
     // Lantern on the dock end.
