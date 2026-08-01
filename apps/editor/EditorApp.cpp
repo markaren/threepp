@@ -786,9 +786,14 @@ void EditorApp::drawUi() {
         operation();
     }
 
+    // The conveyor radius handle owns the mouse for as long as it is being
+    // dragged (and for the release frame) — picking through a drag would
+    // reselect and tear the handle out from under it.
+    const bool radiusDragOwnsMouse = updateConveyorRadiusDrag();
+
     // Picking runs last: it must see the WantCaptureMouse produced by every
     // panel drawn this frame.
-    if (!io.WantCaptureMouse && !fileBrowser_.isOpen() &&
+    if (!io.WantCaptureMouse && !fileBrowser_.isOpen() && !radiusDragOwnsMouse &&
         ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !gizmo_->isDragging()) {
         // A click, not the end of an orbit drag.
         const auto drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.f);

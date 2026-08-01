@@ -472,6 +472,16 @@ namespace threepp::editor {
         // the conveyor twin of the spline overlay pass.
         void syncConveyorOverlays();
         void clearConveyorOverlays();
+        // The corner-radius handle: a draggable ball on the selected corner's
+        // arc midpoint. Interaction runs in the ImGui frame (it reads the same
+        // mouse state picking does); placement rides syncConveyorOverlays.
+        // Returns true while a drag owns the mouse, so picking stands down.
+        bool updateConveyorRadiusDrag();
+        // The drag core, separated so the selftest can drive it without a
+        // mouse: maps a world-space ray to a radius via the corner's bisector.
+        void applyConveyorRadiusDrag(const Vector3& rayOrigin, const Vector3& rayDirection);
+        void beginConveyorRadiusDrag(const Vector3& rayOrigin, const Vector3& rayDirection);
+        void endConveyorRadiusDrag();
         // --- physics collider overlay (apps/editor/PhysicsDebugOverlay.cpp) --
         // PhysX's own debug lines for every collider in the playing world,
         // drawn as one LineSegments under the overlay. The answer to "where is
@@ -805,6 +815,20 @@ namespace threepp::editor {
         };
         std::vector<ConveyorOverlay> conveyorOverlays_;
         std::shared_ptr<Group> conveyors_;
+
+        // The corner-radius handle: one ball, re-aimed at whichever corner
+        // waypoint is selected (see ConveyorOverlay.cpp). Dragging it along
+        // the corner's bisector writes the waypoint's cornerRadius through the
+        // same property command the inspector uses, transaction-coalesced so
+        // the whole drag is one undo entry.
+        std::shared_ptr<Mesh> conveyorRadiusHandle_;
+        struct ConveyorRadiusDrag {
+            bool active = false;
+            std::string conveyorUuid;
+            std::string waypointUuid;
+            float grabOffset = 0.f;// bisector distance at grab minus the handle's
+        };
+        ConveyorRadiusDrag radiusDrag_;
 
         // Physics collider overlay. The line buffer PhysX hands out changes
         // size every frame, so the attribute is rewritten in place and only

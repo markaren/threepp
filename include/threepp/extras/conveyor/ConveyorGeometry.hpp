@@ -192,6 +192,23 @@ namespace threepp::conveyor {
 
     CornerFillet cornerFillet(const std::vector<Waypoint>& wps, std::size_t index);
 
+    // The radius-handle frame at an interior corner: a draggable point on the
+    // turn's bisector whose distance from the waypoint maps linearly to the
+    // corner radius. The handle sits on the ARC MIDPOINT (by symmetry it lies
+    // on the bisector), at distance h = radius * (sec(turn/2) - 1) — so
+    // radius = h / secMinusOne, monotone and exact whatever the turn angle.
+    // Valid on any interior corner with a real turn, radius authored or not
+    // (a zero-radius corner still offers the handle to drag a bend INTO
+    // being). Everything is in the waypoints' own (local) space.
+    struct CornerHandle {
+        bool valid = false;
+        Vector3 origin;         // the corner waypoint
+        Vector3 direction;      // unit bisector, horizontal, toward the arc
+        float secMinusOne = 0.f;// h = radius * secMinusOne
+    };
+
+    CornerHandle cornerHandle(const std::vector<Waypoint>& wps, std::size_t index);
+
     // Resample the waypoints into a dense point list shared by the preview and
     // the sim. Any rounded corner present: straight runs between waypoints
     // with a tangent fillet arc at each rounded one. Else smooth: centripetal

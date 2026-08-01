@@ -26,11 +26,15 @@
 #include "EditorTheme.hpp"
 
 #include "threepp/extras/editor/ConveyorConfig.hpp"
+#include "threepp/extras/editor/EditorCommands.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineSegments.hpp"
+#include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <imgui.h>// theme colours are ImVec4
@@ -152,9 +156,11 @@ namespace {
     }
 
     // The selected rounded corner's derived construction: a cross at the arc
-    // centre and the two spokes to its tangent points — what the radius is
-    // actually doing to the path, live while it is dragged.
-    void appendCornerAid(const conveyor::CornerFillet& fillet, std::vector<Vector3>& segments) {
+    // centre, the two spokes to its tangent points, and the bisector stem from
+    // the waypoint to the arc midpoint (the radius handle's drag axis) — what
+    // the radius is actually doing to the path, live while it is dragged.
+    void appendCornerAid(const conveyor::CornerFillet& fillet, const Vector3& corner,
+                         std::vector<Vector3>& segments) {
 
         if (!fillet.valid) return;
 
@@ -170,6 +176,30 @@ namespace {
         segments.push_back(fillet.t1);
         segments.push_back(fillet.centre);
         segments.push_back(fillet.t2);
+
+        const float midAngle = fillet.a0 + fillet.sweep * 0.5f;
+        Vector3 mid(fillet.centre.x + fillet.radius * std::cos(midAngle),
+                    (fillet.t1.y + fillet.t2.y) * 0.5f,
+                    fillet.centre.z + fillet.radius * std::sin(midAngle));
+        segments.push_back(corner);
+        segments.push_back(mid);
+    }
+
+    // Closest point of a LINE (origin P, unit direction L) to a RAY (origin O,
+    // unit direction D), returned as the line parameter t — the bisector
+    // distance a mouse ray reads as. Near-parallel falls back to projecting
+    // the ray origin.
+    float lineParamClosestToRay(const Vector3& O, const Vector3& D,
+                                const Vector3& P, const Vector3& L) {
+
+        Vector3 w0;
+        w0.subVectors(O, P);
+        const float b = D.dot(L);
+        const float d = D.dot(w0);
+        const float e = L.dot(w0);
+        const float denom = 1.f - b * b;
+        if (denom < 1e-6f) return e;
+        return (e - b * d) / denom;
     }
 
 }// namespace
@@ -178,6 +208,9 @@ namespace {
 void EditorApp::syncConveyorOverlays() {
 
     if (!conveyors_) return;
+
+    // Off unless this frame's walk aims it at a selected corner below.
+    bool handlePlaced = false;
 
     // --- who is a conveyor this frame ---------------------------------------
     static thread_local std::vector<Object3D*> owners;
@@ -198,7 +231,10 @@ void EditorApp::syncConveyorOverlays() {
         }
     }
 
-    if (owners.empty()) return;
+    if (owners.empty()) {
+        if (conveyorRadiusHandle_) conveyorRadiusHandle_->visible = false;
+        return;
+    }
 
     const auto tint = theme::accent();
 
@@ -270,11 +306,64 @@ void EditorApp::syncConveyorOverlays() {
             if (selectedWaypoint) {
                 const auto index = ConveyorConfig::pointIndexOf(*owner, *selectedWaypoint);
                 if (index < spec.waypoints.size()) {
-                    appendCornerAid(conveyor::cornerFillet(spec.waypoints, index), segments);
+                    appendCornerAid(conveyor::cornerFillet(spec.waypoints, index),
+                                    spec.waypoints[index].pos, segments);
                 }
             }
             it->aids->visible = !segments.empty();
             if (!segments.empty()) writePoints(*it->aids, it->aidsCapacity, segments);
+        }
+
+        // --- the radius handle ----------------------------------------------
+        // One draggable ball, on the selected corner's arc midpoint (or a
+        // grab's width off the corner while its radius is still zero, so a
+        // bend can be dragged into being). Constant screen size like the
+        // marker icons; hidden while playing — the document is read-only then.
+        if (selectedWaypoint && !spec.separator && !isPlaying()) {
+            const auto index = ConveyorConfig::pointIndexOf(*owner, *selectedWaypoint);
+            const auto handle = conveyor::cornerHandle(spec.waypoints, index);
+            if (handle.valid) {
+                if (!conveyorRadiusHandle_) {
+                    auto material = MeshBasicMaterial::create();
+                    material->depthTest = false;
+                    material->transparent = true;
+                    material->opacity = 0.95f;
+                    material->toneMapped = false;
+                    conveyorRadiusHandle_ = Mesh::create(SphereGeometry::create(1.f, 16, 12),
+                                                         material);
+                    conveyorRadiusHandle_->name = "__conveyor_radius_handle";
+                    conveyorRadiusHandle_->renderOrder = kCurveRenderOrder + 1;
+                    conveyorRadiusHandle_->frustumCulled = false;
+                    conveyors_->add(conveyorRadiusHandle_);
+                }
+                const auto fillet = conveyor::cornerFillet(spec.waypoints, index);
+                Vector3 local;
+                if (fillet.valid) {
+                    const float midAngle = fillet.a0 + fillet.sweep * 0.5f;
+                    local.set(fillet.centre.x + fillet.radius * std::cos(midAngle),
+                              (fillet.t1.y + fillet.t2.y) * 0.5f,
+                              fillet.centre.z + fillet.radius * std::sin(midAngle));
+                } else {
+                    // Radius 0: offer the handle a grab's width along the
+                    // bisector, in screen units so it clears the waypoint
+                    // marker at any zoom.
+                    local = handle.origin;
+                    Vector3 world = local;
+                    world.applyMatrix4(*owner->matrixWorld);
+                    local.addScaledVector(handle.direction,
+                                          14.f * viewportWorldPerPixel(world));
+                }
+                Vector3 world = local;
+                world.applyMatrix4(*owner->matrixWorld);
+                conveyorRadiusHandle_->position.copy(world);
+                const float scale = 7.f * viewportWorldPerPixel(world);
+                conveyorRadiusHandle_->scale.set(scale, scale, scale);
+                if (auto* material = conveyorRadiusHandle_->material()->as<MeshBasicMaterial>()) {
+                    material->color.setRGB(tint.x, tint.y, tint.z);
+                }
+                conveyorRadiusHandle_->visible = true;
+                handlePlaced = true;
+            }
         }
 
         owner->updateMatrixWorld();
@@ -290,6 +379,8 @@ void EditorApp::syncConveyorOverlays() {
         it->material->opacity = active ? 1.f : 0.55f;
         it->material->transparent = !active;
     }
+
+    if (!handlePlaced && conveyorRadiusHandle_) conveyorRadiusHandle_->visible = false;
 }
 
 void EditorApp::clearConveyorOverlays() {
@@ -299,4 +390,154 @@ void EditorApp::clearConveyorOverlays() {
         overlay.aids->removeFromParent();
     }
     conveyorOverlays_.clear();
+    if (conveyorRadiusHandle_) conveyorRadiusHandle_->visible = false;
+    // A scene replace mid-drag would otherwise leave the transaction open and
+    // every later command merging into it.
+    if (radiusDrag_.active) endConveyorRadiusDrag();
+}
+
+// --- the radius drag ---------------------------------------------------------
+//
+// Runs inside the ImGui frame (same mouse state picking reads). The grab test
+// is screen-space against the drawn ball — depth-tested reality is irrelevant
+// for a handle rendered on top. While a drag is live the mouse belongs to it:
+// orbit is off, and the caller keeps picking away until the release frame has
+// passed.
+
+bool EditorApp::updateConveyorRadiusDrag() {
+
+    const auto& io = ImGui::GetIO();
+
+    const auto mouseRay = [&](Vector3& origin, Vector3& direction) {
+        const auto* viewport = ImGui::GetMainViewport();
+        const float width = std::max(viewport->Size.x, 1.f);
+        const float height = std::max(viewport->Size.y, 1.f);
+        const Vector2 ndc{((io.MousePos.x - viewport->Pos.x) / width) * 2.f - 1.f,
+                          -(((io.MousePos.y - viewport->Pos.y) / height) * 2.f - 1.f)};
+        raycaster_.setFromCamera(ndc, viewCamera());
+        origin.copy(raycaster_.ray.origin);
+        direction.copy(raycaster_.ray.direction);
+    };
+
+    if (!radiusDrag_.active) {
+        if (!conveyorRadiusHandle_ || !conveyorRadiusHandle_->visible) return false;
+        if (io.WantCaptureMouse || fileBrowser_.isOpen()) return false;
+        if (gizmo_->isDragging() || isPlaying()) return false;
+        if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return false;
+
+        // Where the ball is on screen, against where the click landed.
+        const auto* viewport = ImGui::GetMainViewport();
+        Vector3 projected = conveyorRadiusHandle_->position;
+        projected.project(viewCamera());
+        if (projected.z > 1.f) return false;// behind the camera
+        const float px = viewport->Pos.x + (projected.x + 1.f) * 0.5f * viewport->Size.x;
+        const float py = viewport->Pos.y + (1.f - projected.y) * 0.5f * viewport->Size.y;
+        const float reach = 12.f * contentScale_;
+        if (std::hypot(io.MousePos.x - px, io.MousePos.y - py) > reach) return false;
+
+        Vector3 origin, direction;
+        mouseRay(origin, direction);
+        beginConveyorRadiusDrag(origin, direction);
+        return radiusDrag_.active;
+    }
+
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        endConveyorRadiusDrag();
+        return true;// consume the release too, or picking fires on it
+    }
+
+    Vector3 origin, direction;
+    mouseRay(origin, direction);
+    applyConveyorRadiusDrag(origin, direction);
+    return true;
+}
+
+void EditorApp::beginConveyorRadiusDrag(const Vector3& rayOrigin, const Vector3& rayDirection) {
+
+    auto* waypoint = selection_.get();
+    auto* owner = waypoint ? ConveyorConfig::conveyorOf(*waypoint) : nullptr;
+    if (!owner || !conveyorRadiusHandle_) return;
+
+    radiusDrag_.active = true;
+    radiusDrag_.conveyorUuid = owner->uuid;
+    radiusDrag_.waypointUuid = waypoint->uuid;
+
+    // The offset that makes click-without-move a no-op: where the ray reads on
+    // the bisector, minus where the ball actually is.
+    const auto config = ConveyorConfig::read(*owner).value_or(ConveyorConfig{});
+    const auto spec = config.spec(*owner);
+    const auto index = ConveyorConfig::pointIndexOf(*owner, *waypoint);
+    const auto handle = conveyor::cornerHandle(spec.waypoints, index);
+    if (!handle.valid) {
+        radiusDrag_.active = false;
+        return;
+    }
+    owner->updateWorldMatrix(true, false);
+    Vector3 origin = handle.origin;
+    origin.applyMatrix4(*owner->matrixWorld);
+    Vector3 direction = handle.direction;
+    direction.transformDirection(*owner->matrixWorld);
+    const float rayAt = lineParamClosestToRay(rayOrigin, rayDirection, origin, direction);
+    Vector3 toBall;
+    toBall.subVectors(conveyorRadiusHandle_->position, origin);
+    radiusDrag_.grabOffset = rayAt - toBall.dot(direction);
+
+    orbit_->enabled = false;
+    commands_.beginTransaction();
+}
+
+void EditorApp::applyConveyorRadiusDrag(const Vector3& rayOrigin, const Vector3& rayDirection) {
+
+    if (!radiusDrag_.active) return;
+    auto* owner = findByUuid(document_.scene(), radiusDrag_.conveyorUuid);
+    auto* waypoint = findByUuid(document_.scene(), radiusDrag_.waypointUuid);
+    if (!owner || !waypoint || ConveyorConfig::conveyorOf(*waypoint) != owner) {
+        endConveyorRadiusDrag();
+        return;
+    }
+
+    const auto config = ConveyorConfig::read(*owner).value_or(ConveyorConfig{});
+    const auto spec = config.spec(*owner);
+    const auto index = ConveyorConfig::pointIndexOf(*owner, *waypoint);
+    const auto handle = conveyor::cornerHandle(spec.waypoints, index);
+    if (!handle.valid) return;
+
+    owner->updateWorldMatrix(true, false);
+    Vector3 position, scale;
+    Quaternion rotation;
+    owner->matrixWorld->decompose(position, rotation, scale);
+    const float horizontal = std::max((std::abs(scale.x) + std::abs(scale.z)) * 0.5f, 1e-4f);
+
+    Vector3 origin = handle.origin;
+    origin.applyMatrix4(*owner->matrixWorld);
+    Vector3 direction = handle.direction;
+    direction.transformDirection(*owner->matrixWorld);
+
+    // World bisector distance -> local radius, through the grab offset (so the
+    // ball follows the cursor, not the cursor's absolute reading).
+    const float rayAt = lineParamClosestToRay(rayOrigin, rayDirection, origin, direction);
+    const float h = std::max(rayAt - radiusDrag_.grabOffset, 0.f);
+    const float radius = std::clamp(h / (handle.secMinusOne * horizontal), 0.f, 50.f);
+
+    const auto before = ConveyorWaypointConfig::read(*waypoint);
+    auto after = before;
+    // Snap-to-sharp near zero: a bend nobody can see should not linger as a
+    // millimetre of arc in the document.
+    after.cornerRadius = radius < 0.01f ? 0.f : radius;
+    if (after == before) return;
+
+    auto* node = waypoint;
+    commands_.execute(makeProperty<ConveyorWaypointConfig>(
+            "Corner Radius", "conveyorWp:" + waypoint->uuid,
+            [node](const ConveyorWaypointConfig& value) { value.write(*node); },
+            before, after));
+    document_.setDirty(true);
+}
+
+void EditorApp::endConveyorRadiusDrag() {
+
+    if (!radiusDrag_.active) return;
+    radiusDrag_ = {};
+    commands_.endTransaction();
+    if (orbit_) orbit_->enabled = true;
 }

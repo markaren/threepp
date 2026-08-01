@@ -382,6 +382,37 @@ namespace threepp::conveyor {
         return f;
     }
 
+    CornerHandle cornerHandle(const std::vector<Waypoint>& wps, std::size_t index) {
+
+        CornerHandle h;
+        const std::size_t n = wps.size();
+        if (index == 0 || index + 1 >= n) return h;
+
+        const Vector3& A = wps[index - 1].pos;
+        const Vector3& P = wps[index].pos;
+        const Vector3& B = wps[index + 1].pos;
+
+        Vector2 u(P.x - A.x, P.z - A.z);
+        Vector2 v(B.x - P.x, B.z - P.z);
+        if (u.length() < 1e-4f || v.length() < 1e-4f) return h;
+        u.normalize();
+        v.normalize();
+
+        const float dot = std::clamp(u.x * v.x + u.y * v.y, -1.f, 1.f);
+        const float turn = std::acos(dot);
+        if (turn < 0.02f || turn > static_cast<float>(math::PI) - 0.02f) return h;
+
+        Vector2 bis(v.x - u.x, v.y - u.y);
+        if (bis.length() < 1e-5f) return h;
+        bis.normalize();
+
+        h.valid = true;
+        h.origin = P;
+        h.direction.set(bis.x, 0.f, bis.y);
+        h.secMinusOne = 1.f / std::max(std::cos(turn * 0.5f), 1e-4f) - 1.f;
+        return h;
+    }
+
     namespace {
 
         bool hasRoundedCorner(const std::vector<Waypoint>& wps) {

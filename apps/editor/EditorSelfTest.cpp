@@ -3697,6 +3697,53 @@ int EditorApp::runSelfTest() {
                 const float outDot = (fillet.t2.z - fillet.centre.z) * 1.f;// outgoing dir +z
                 check(std::abs(inDot) < 1e-3f && std::abs(outDot) < 1e-3f,
                       "with its spokes perpendicular to both segments");
+
+                // The radius handle, driven through the same core the viewport
+                // drag runs — no mouse, real commands. The conveyor sits at the
+                // origin, so local and world agree.
+                selectObject(nodes[1]);
+                step();
+                check(conveyorRadiusHandle_ && conveyorRadiusHandle_->visible,
+                      "selecting a corner shows the radius handle");
+                const float midAngle = fillet.a0 + fillet.sweep * 0.5f;
+                const Vector3 expectedMid(fillet.centre.x + fillet.radius * std::cos(midAngle),
+                                          (fillet.t1.y + fillet.t2.y) * 0.5f,
+                                          fillet.centre.z + fillet.radius * std::sin(midAngle));
+                check(conveyorRadiusHandle_ &&
+                              conveyorRadiusHandle_->position.distanceTo(expectedMid) < 1e-2f,
+                      "sitting on the arc midpoint");
+
+                if (conveyorRadiusHandle_) {
+                    const auto handle = conveyor::cornerHandle(spec.waypoints, 1);
+                    const auto undos = commands_.undoCount();
+                    // Grab the ball with a vertical ray (the bisector is
+                    // horizontal, so the ray reads exactly the ball's
+                    // distance), then drop the same ray over the point a
+                    // radius of 2.5 would put the ball at.
+                    Vector3 over = conveyorRadiusHandle_->position;
+                    over.y += 5.f;
+                    beginConveyorRadiusDrag(over, Vector3(0.f, -1.f, 0.f));
+                    Vector3 target = handle.origin;
+                    target.addScaledVector(handle.direction, 2.5f * handle.secMinusOne);
+                    target.y += 5.f;
+                    applyConveyorRadiusDrag(target, Vector3(0.f, -1.f, 0.f));
+                    endConveyorRadiusDrag();
+                    step();
+
+                    auto liveNodes = ConveyorConfig::waypointNodes(*conveyorNow(arcUuid));
+                    const float dragged = ConveyorWaypointConfig::read(*liveNodes[1]).cornerRadius;
+                    check(std::abs(dragged - 2.5f) < 0.05f,
+                          "dragging the handle outward widens the radius");
+                    check(commands_.undoCount() == undos + 1,
+                          "and the whole drag is one undo entry");
+                    commands_.undo();
+                    step();
+                    liveNodes = ConveyorConfig::waypointNodes(*conveyorNow(arcUuid));
+                    check(std::abs(ConveyorWaypointConfig::read(*liveNodes[1]).cornerRadius - 2.f) < 1e-4f,
+                          "which undoes back to the authored radius");
+                }
+                selectObject(nullptr);
+                step();
             }
 
             auto cargo = ObjectFactory::createPrimitive(Primitive::Box,

@@ -1839,6 +1839,12 @@ marker (the spline points' machinery, with its own glyph), the path overlay
 carries **chevrons pointing along the flow** (they flip with `reverse`), and
 selecting a rounded corner draws its derived arc centre and the two tangent
 spokes, so what the radius is doing to the path is visible while it is tuned.
+The ball on the arc midpoint is a **radius handle**: drag it along the
+corner's bisector to widen or tighten the bend directly in the viewport (a
+sharp corner offers the ball just off the waypoint, so a bend can be dragged
+into being). The whole drag lands as one undo entry, exactly like a gizmo
+move, and dragging past what the segments allow just pins the bend at its
+maximum.
 
 **The look is generated, and it is first-party.** Every conveyor carries one
 tagged child (`userData["conveyorDerived"]`), a Group holding the parts: the
