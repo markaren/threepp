@@ -56,6 +56,66 @@ namespace threepp::vegetation {
         Vector3 topColor{0.19f, 0.30f, 0.10f};
     };
 
+    namespace detail {
+
+        // Blade template in local space (base at origin, unit height along +Y):
+        // a tapered two-vert-per-row quad strip with an up-biased normal (catches
+        // sky/sun light regardless of facing) and a bottom→top colour gradient.
+        // This is THE blade every grass path in the engine shares — GrassField's
+        // instanced single blade and the merged/tiled GrassMesh bakes all emit
+        // the same rows in the same order, so the paths stay interchangeable.
+        struct BladeVert {
+            Vector3 p, n;
+            float u, vy;
+            Vector3 c;
+        };
+
+        inline void bladeTemplate(const GrassBladeStyle& style,
+                                  std::vector<BladeVert>& tmpl, std::vector<unsigned int>& tidx) {
+            const int seg = style.segments < 1 ? 1 : style.segments;
+            const float wBase = style.halfWidthBase;
+            const Vector3& bottom = style.bottomColor;
+            const Vector3& top = style.topColor;
+            for (int i = 0; i <= seg; ++i) {
+                const float t = static_cast<float>(i) / static_cast<float>(seg);
+                const float w = wBase * (1.f - t);// taper to a point at the tip
+                const Vector3 c{bottom.x + (top.x - bottom.x) * t, bottom.y + (top.y - bottom.y) * t,
+                                bottom.z + (top.z - bottom.z) * t};
+                for (int s = 0; s < 2; ++s)
+                    tmpl.push_back({Vector3{(s == 0 ? -w : w), t, 0.f}, Vector3{0.f, 0.85f, 0.53f},
+                                    (s == 0 ? 0.f : 1.f), t, c});
+            }
+            for (int i = 0; i < seg; ++i) {
+                const auto a = static_cast<unsigned int>(i * 2);
+                tidx.insert(tidx.end(), {a, a + 1u, a + 2u, a + 1u, a + 3u, a + 2u});
+            }
+        }
+
+    }// namespace detail
+
+    // A single blade as its own geometry (for InstancedMesh paths — see
+    // GrassField). Carries position / normal / uv / color; no heightFrac, the
+    // instanced vertex-shader wind derives the sway weight from uv.y instead.
+    inline std::shared_ptr<BufferGeometry> makeBladeGeometry(const GrassBladeStyle& style = {}) {
+        std::vector<detail::BladeVert> tmpl;
+        std::vector<unsigned int> tidx;
+        detail::bladeTemplate(style, tmpl, tidx);
+        std::vector<float> pos, nrm, uv, col;
+        for (const auto& tv : tmpl) {
+            pos.insert(pos.end(), {tv.p.x, tv.p.y, tv.p.z});
+            nrm.insert(nrm.end(), {tv.n.x, tv.n.y, tv.n.z});
+            uv.insert(uv.end(), {tv.u, tv.vy});
+            col.insert(col.end(), {tv.c.x, tv.c.y, tv.c.z});
+        }
+        auto geo = BufferGeometry::create();
+        geo->setIndex(std::move(tidx));
+        geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
+        geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
+        geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
+        geo->setAttribute("color", FloatBufferAttribute::create(col, 3));
+        return geo;
+    }
+
     // Merge a set of blades into ONE BufferGeometry carrying the attributes the
     // wind path needs: position (rest pose, world space), normal, uv, color, and
     // the custom per-vertex float "heightFrac" (0 at a blade's base, 1 at its
@@ -63,32 +123,9 @@ namespace threepp::vegetation {
     // the fjord example used for its single merged mesh, factored out for reuse.
     inline std::shared_ptr<BufferGeometry> buildGrassGeometry(
             const std::vector<GrassBlade>& blades, const GrassBladeStyle& style = {}) {
-        const int seg = style.segments < 1 ? 1 : style.segments;
-        const float wBase = style.halfWidthBase;
-        const Vector3& bottom = style.bottomColor;
-        const Vector3& top = style.topColor;
-
-        // Blade template in local space (base at origin, unit height along +Y).
-        struct V {
-            Vector3 p, n;
-            float u, vy;
-            Vector3 c;
-        };
-        std::vector<V> tmpl;
+        std::vector<detail::BladeVert> tmpl;
         std::vector<unsigned int> tidx;
-        for (int i = 0; i <= seg; ++i) {
-            const float t = static_cast<float>(i) / static_cast<float>(seg);
-            const float w = wBase * (1.f - t);// taper to a point at the tip
-            const Vector3 c{bottom.x + (top.x - bottom.x) * t, bottom.y + (top.y - bottom.y) * t,
-                            bottom.z + (top.z - bottom.z) * t};
-            for (int s = 0; s < 2; ++s)
-                tmpl.push_back({Vector3{(s == 0 ? -w : w), t, 0.f}, Vector3{0.f, 0.85f, 0.53f},
-                                (s == 0 ? 0.f : 1.f), t, c});
-        }
-        for (int i = 0; i < seg; ++i) {
-            const auto a = static_cast<unsigned int>(i * 2);
-            tidx.insert(tidx.end(), {a, a + 1u, a + 2u, a + 1u, a + 3u, a + 2u});
-        }
+        detail::bladeTemplate(style, tmpl, tidx);
 
         std::vector<float> pos, nrm, uv, col, hfrac;
         std::vector<unsigned int> idx;

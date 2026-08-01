@@ -16,6 +16,7 @@
 #define THREEPP_GRASSFIELD_HPP
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/extras/vegetation/GrassTiles.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
@@ -76,8 +77,16 @@ namespace threepp {
         [[nodiscard]] ShaderMaterial& windMaterial() const { return *windMaterial_; }
 
         static std::shared_ptr<GrassField> create(size_t bladeCount, const Params& params) {
+            // Bake the Params colours into the vertex colours too, so the
+            // geometry agrees with the shader's uniform gradient if it is ever
+            // reused with a vertexColors material. The GrassField shader itself
+            // reads only the uniforms, so this changes nothing on screen here.
+            vegetation::GrassBladeStyle style;
+            style.segments = params.segments;
+            style.bottomColor = params.bottomColor;
+            style.topColor = params.topColor;
             return std::make_shared<GrassField>(
-                    bladeGeometry(params.segments), makeMaterial(params), bladeCount);
+                    vegetation::makeBladeGeometry(style), makeMaterial(params), bladeCount);
         }
 
         static std::shared_ptr<GrassField> create(size_t bladeCount) {
@@ -87,42 +96,18 @@ namespace threepp {
         // A single tapered blade (origin at the base, unit height along +Y;
         // scale per instance). Carries position / normal / uv / color so it also
         // works with a standard vertexColors material if reused elsewhere.
+        //
+        // The template itself is shared with the merged/tiled GrassMesh bakes —
+        // see vegetation::detail::bladeTemplate (GrassTiles.hpp). This overload
+        // keeps the palette this helper has always baked (slightly brighter than
+        // the GrassBladeStyle default, which matches the fjord meadow); pass a
+        // GrassBladeStyle to makeBladeGeometry directly to choose.
         static std::shared_ptr<BufferGeometry> bladeGeometry(int segments = 4) {
-            const int seg = segments < 1 ? 1 : segments;
-            constexpr float wBase = 0.05f;// half-width at the base
-            const Vector3 bottom{0.06f, 0.13f, 0.04f};
-            const Vector3 top{0.20f, 0.34f, 0.11f};
-
-            std::vector<float> pos, nrm, uv, col;
-            std::vector<unsigned int> idx;
-            for (int i = 0; i <= seg; ++i) {
-                const float t = static_cast<float>(i) / static_cast<float>(seg);
-                const float w = wBase * (1.f - t);// taper to a point at the tip
-                const Vector3 c = bottom.clone().lerp(top, t);
-                for (int s = 0; s < 2; ++s) {
-                    pos.push_back(s == 0 ? -w : w);
-                    pos.push_back(t);// unit height
-                    pos.push_back(0.f);
-                    // Up-biased normal: catches sky/sun light regardless of facing.
-                    nrm.insert(nrm.end(), {0.f, 0.85f, 0.53f});
-                    uv.push_back(s == 0 ? 0.f : 1.f);
-                    uv.push_back(t);
-                    col.insert(col.end(), {c.x, c.y, c.z});
-                }
-            }
-            for (int i = 0; i < seg; ++i) {
-                const auto a = static_cast<unsigned int>(i * 2);
-                const unsigned int b = a + 1, c = a + 2, d = a + 3;
-                idx.insert(idx.end(), {a, b, c, b, d, c});
-            }
-
-            auto geo = BufferGeometry::create();
-            geo->setIndex(idx);
-            geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
-            geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
-            geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
-            geo->setAttribute("color", FloatBufferAttribute::create(col, 3));
-            return geo;
+            vegetation::GrassBladeStyle style;
+            style.segments = segments;
+            style.bottomColor = {0.06f, 0.13f, 0.04f};
+            style.topColor = {0.20f, 0.34f, 0.11f};
+            return vegetation::makeBladeGeometry(style);
         }
 
     private:

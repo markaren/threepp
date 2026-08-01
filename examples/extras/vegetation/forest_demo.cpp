@@ -22,6 +22,7 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/extras/vegetation/GrassField.hpp"
+#include "threepp/extras/vegetation/GrassTiles.hpp"
 #include "threepp/objects/GrassMesh.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/textures/DataTexture.hpp"
@@ -70,67 +71,6 @@ namespace {
         float phase;   // wind phase offset
     };
 
-    // Bake every blade into ONE merged geometry for the Vulkan GrassMesh path:
-    // each blade's verts are transformed by its placement (pos/yaw/scale) and
-    // appended, with a per-vertex `heightFrac` (blade-local y, 0 base→1 tip)
-    // for the wind compute shader. One mesh → one BLAS → one TLAS instance.
-    std::shared_ptr<BufferGeometry> makeGrassField(const std::vector<Blade>& blades) {
-        // Blade template (matches makeGrassBlade): 4 segments, tapered, vertex-
-        // colour gradient, up-biased normal.
-        constexpr int seg = 4;
-        constexpr float wBase = 0.05f;
-        const Vector3 bottom{0.06f, 0.13f, 0.04f};
-        const Vector3 top{0.20f, 0.34f, 0.11f};
-        struct V { Vector3 p; Vector3 n; float u, vy; Vector3 c; };
-        std::vector<V> tmpl;
-        std::vector<unsigned int> tidx;
-        for (int i = 0; i <= seg; ++i) {
-            const float t = static_cast<float>(i) / static_cast<float>(seg);
-            const float w = wBase * (1.f - t);
-            Vector3 c{bottom.x + (top.x - bottom.x) * t,
-                      bottom.y + (top.y - bottom.y) * t,
-                      bottom.z + (top.z - bottom.z) * t};
-            for (int s = 0; s < 2; ++s)
-                tmpl.push_back({Vector3{(s == 0 ? -w : w), t, 0.f},
-                                Vector3{0.f, 0.85f, 0.53f}, (s == 0 ? 0.f : 1.f), t, c});
-        }
-        for (int i = 0; i < seg; ++i) {
-            const auto a = static_cast<unsigned int>(i * 2);
-            tidx.insert(tidx.end(), {a, a + 1u, a + 2u, a + 1u, a + 3u, a + 2u});
-        }
-
-        std::vector<float> pos, nrm, uv, col, hfrac;
-        std::vector<unsigned int> idx;
-        const auto vpb = static_cast<unsigned int>(tmpl.size());
-        pos.reserve(blades.size() * vpb * 3);
-        Matrix4 m;
-        for (const auto& bl : blades) {
-            const auto base = static_cast<unsigned int>(pos.size() / 3);
-            m.compose(bl.pos, bl.yaw, bl.scale);
-            for (const auto& tv : tmpl) {
-                Vector3 p = tv.p;
-                p.applyMatrix4(m);
-                Vector3 n = tv.n;
-                n.applyQuaternion(bl.yaw);
-                n.normalize();
-                pos.push_back(p.x); pos.push_back(p.y); pos.push_back(p.z);
-                nrm.push_back(n.x); nrm.push_back(n.y); nrm.push_back(n.z);
-                uv.push_back(tv.u); uv.push_back(tv.vy);
-                col.push_back(tv.c.x); col.push_back(tv.c.y); col.push_back(tv.c.z);
-                hfrac.push_back(tv.vy);// height fraction = blade-local y
-            }
-            for (unsigned int t : tidx) idx.push_back(base + t);
-        }
-
-        auto geo = BufferGeometry::create();
-        geo->setIndex(idx);
-        geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
-        geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
-        geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
-        geo->setAttribute("color", FloatBufferAttribute::create(col, 3));
-        geo->setAttribute("heightFrac", FloatBufferAttribute::create(hfrac, 1));
-        return geo;
-    }
 
     // Cutout threshold for every foliage card in the scene.
     //
@@ -600,7 +540,16 @@ int main(int argc, char** argv) {
         grassMat->vertexColors = true;
         grassMat->side = Side::Double;
         grassMat->envMapIntensity = 0.45f;
-        grassFieldVk = GrassMesh::create(makeGrassField(blades), grassMat);
+        // Bake into ONE merged geometry via the shared helper (GrassTiles.hpp),
+        // with the palette this demo has always used (brighter than the fjord-
+        // meadow default). One mesh → one BLAS → one TLAS instance.
+        std::vector<vegetation::GrassBlade> vkBlades;
+        vkBlades.reserve(blades.size());
+        for (const auto& bl : blades) vkBlades.push_back({bl.pos, bl.scale, bl.yaw});
+        vegetation::GrassBladeStyle bladeStyle;
+        bladeStyle.bottomColor = {0.06f, 0.13f, 0.04f};
+        bladeStyle.topColor = {0.20f, 0.34f, 0.11f};
+        grassFieldVk = GrassMesh::create(vegetation::buildGrassGeometry(vkBlades, bladeStyle), grassMat);
         grassFieldVk->params.windDir = windDir2;
         grassFieldVk->params.windStrength = 0.18f;
         scene.add(grassFieldVk);
