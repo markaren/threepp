@@ -29,6 +29,7 @@
 #ifndef THREEPP_EXTRAS_ROAD_ROADGENERATOR_HPP
 #define THREEPP_EXTRAS_ROAD_ROADGENERATOR_HPP
 
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/math/Vector3.hpp"
@@ -174,7 +175,7 @@ namespace threepp::road {
             const float corridor = corridorHalfWidth();
             if (d <= paved) return 1.f;
             if (d >= corridor) return 0.f;
-            return smoothstep(corridor, paved, d);
+            return math::smoothstep(corridor, paved, d);
         }
 
         // Smoothed centerline elevation of the nearest centerline sample to (x,z).
@@ -567,10 +568,6 @@ namespace threepp::road {
 
         // ── small numeric helpers (mirrors TerrainGenerator) ─────────────────
         static float lerp(float a, float b, float t) { return a + t * (b - a); }
-        static float smoothstep(float e0, float e1, float x) {
-            const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
-            return t * t * (3.f - 2.f * t);
-        }
         static unsigned char toByte(float v) {
             return static_cast<unsigned char>(std::clamp(v, 0.f, 1.f) * 255.f + 0.5f);
         }

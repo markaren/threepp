@@ -98,10 +98,6 @@ namespace {
         return -3.f + 10.f * t;
     }
 
-    float smoothstepf(float e0, float e1, float x) {
-        const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
-        return t * t * (3.f - 2.f * t);
-    }
 
     // Cheap deterministic 2D value noise (independent of the terrain seed).
     float hash01(int x, int y) {
@@ -150,14 +146,14 @@ namespace {
                 // Channel floor → shore bench → natural walls.
                 const float floorH = kFloorDepth + 4.f * fbm2(x * 0.004f, z * 0.004f);
                 const float bench = benchHeight(d) + 2.2f * (fbm2(x * 0.012f, z * 0.012f) - 0.5f);
-                const float sFloor = smoothstepf(kChannelHalf - 90.f, kChannelHalf, d);// floor→bench edge
-                const float sWall = smoothstepf(kBenchEnd, kWallEnd, d);               // bench→natural
+                const float sFloor = math::smoothstep(kChannelHalf - 90.f, kChannelHalf, d);// floor→bench edge
+                const float sWall = math::smoothstep(kBenchEnd, kWallEnd, d);               // bench→natural
                 float hm = floorH + (bench - floorH) * sFloor;
                 hm = hm + (std::max(natural, hm) - hm) * sWall;
 
                 // Flatten the cabin pad.
                 const float dp = std::sqrt((x - padX) * (x - padX) + (z - padZ) * (z - padZ));
-                const float sPad = smoothstepf(24.f, 52.f, dp);
+                const float sPad = math::smoothstep(24.f, 52.f, dp);
                 hm = kPadHeight + (hm - kPadHeight) * sPad;
 
                 h[static_cast<size_t>(iz) * dim + ix] = hm;
@@ -171,10 +167,10 @@ namespace {
     // at the waterline/beach and on the cabin pad so placement stays exact.
     float detailRelief(float x, float z, float baseH, float slopeMask, float padX, float padZ) {
         const float dp = std::sqrt((x - padX) * (x - padX) + (z - padZ) * (z - padZ));
-        const float padMask = smoothstepf(22.f, 56.f, dp);
-        const float waterMask = smoothstepf(0.6f, 2.8f, baseH);
+        const float padMask = math::smoothstep(22.f, 56.f, dp);
+        const float waterMask = math::smoothstep(0.6f, 2.8f, baseH);
         if (padMask * waterMask < 1e-3f) return 0.f;
-        const float amp = 0.22f + 1.35f * smoothstepf(0.10f, 0.45f, slopeMask);
+        const float amp = 0.22f + 1.35f * math::smoothstep(0.10f, 0.45f, slopeMask);
         // fbm2 wavelengths at this frequency: ~20 m / 9.4 m / 4.3 m.
         return (fbm2(x * 0.05f, z * 0.05f) - 0.5f) * 2.f * amp * padMask * waterMask;
     }
@@ -200,33 +196,33 @@ namespace {
             // wet-rock band just above the waterline.
             const float deep = std::clamp(-hC / 18.f, 0.f, 1.f);
             col.copy(cSediment).multiplyScalar(1.f - 0.55f * deep);
-            const float wet = smoothstepf(-0.6f, 0.35f, hC);
+            const float wet = math::smoothstep(-0.6f, 0.35f, hC);
             col.lerp(cWetRock, wet);
         } else if (hC < 1.2f && slope < 0.38f) {
             // Gravel beach strip, noise-broken so it doesn't read as a stripe.
             const Vector3 cGravel(0.30f, 0.28f, 0.24f);
-            col.copy(cGravel).multiplyScalar(0.5f + 0.5f * smoothstepf(0.35f, 1.1f, hC));
-            const float breakup = smoothstepf(0.45f, 0.75f, fbm2(x * 0.038f, z * 0.038f));
-            col.lerp(cGrass, std::max(breakup, smoothstepf(0.8f, 1.2f, hC) * 0.6f));
+            col.copy(cGravel).multiplyScalar(0.5f + 0.5f * math::smoothstep(0.35f, 1.1f, hC));
+            const float breakup = math::smoothstep(0.45f, 0.75f, fbm2(x * 0.038f, z * 0.038f));
+            col.lerp(cGrass, std::max(breakup, math::smoothstep(0.8f, 1.2f, hC) * 0.6f));
         } else {
             // Altitude bands (with a noisy snowline), then slope overrides.
             const float snowLine = 300.f + 70.f * wig;
-            const float heathT = 0.65f * smoothstepf(110.f, 230.f, hC);// grass → heath (subtle)
-            const float fellT = smoothstepf(200.f, 280.f, hC);         // heath → grey fell
-            const float snowT = smoothstepf(snowLine - 28.f, snowLine + 28.f, hC);
+            const float heathT = 0.65f * math::smoothstep(110.f, 230.f, hC);// grass → heath (subtle)
+            const float fellT = math::smoothstep(200.f, 280.f, hC);         // heath → grey fell
+            const float snowT = math::smoothstep(snowLine - 28.f, snowLine + 28.f, hC);
             Vector3 ground = cGrass;
             ground.lerp(cHeath, heathT);
             ground.lerp(Vector3(0.30f, 0.31f, 0.26f), fellT);
 
-            const float screeT = smoothstepf(0.24f, 0.42f, slope);
-            const float rockT = smoothstepf(0.45f, 0.62f, slope);
+            const float screeT = math::smoothstep(0.24f, 0.42f, slope);
+            const float rockT = math::smoothstep(0.45f, 0.62f, slope);
             col.copy(ground).lerp(cScree, screeT).lerp(cRock, rockT);
 
-            const float snowShed = 1.f - smoothstepf(0.50f, 0.68f, slope);
+            const float snowShed = 1.f - math::smoothstep(0.50f, 0.68f, slope);
             col.lerp(cSnow, snowT * snowShed);
 
             // Dry rock band above the waterline on steep banks.
-            const float shoreRock = (1.f - smoothstepf(0.8f, 6.f, hC)) * smoothstepf(0.18f, 0.35f, slope);
+            const float shoreRock = (1.f - math::smoothstep(0.8f, 6.f, hC)) * math::smoothstep(0.18f, 0.35f, slope);
             col.lerp(cWetRock, shoreRock * 0.7f);
         }
 
@@ -254,24 +250,24 @@ namespace {
             // Wet shore / shallow bottom: modest ROCK structure so the band
             // isn't a featureless smooth strip; fades out with depth (deep
             // bottom stays macro-only — invisible relief anyway).
-            w4[1] = 0.35f * smoothstepf(-4.f, 0.35f, hC);
+            w4[1] = 0.35f * math::smoothstep(-4.f, 0.35f, hC);
             return;
         }
         if (hC < 1.2f && slope < 0.38f) {
             // Gravel beach: scree-family structure, grass poking through where
             // the albedo's breakup lerps toward grass.
-            const float breakup = smoothstepf(0.45f, 0.75f, fbm2(x * 0.038f, z * 0.038f));
-            const float grassT = std::max(breakup, smoothstepf(0.8f, 1.2f, hC) * 0.6f);
+            const float breakup = math::smoothstep(0.45f, 0.75f, fbm2(x * 0.038f, z * 0.038f));
+            const float grassT = std::max(breakup, math::smoothstep(0.8f, 1.2f, hC) * 0.6f);
             w4[2] = 0.85f * (1.f - grassT);
             w4[0] = grassT;
             return;
         }
         const float wig = fbm2(x * 0.019f, z * 0.019f) - 0.5f;
-        const float screeT = smoothstepf(0.24f, 0.42f, slope);
-        const float rockT = smoothstepf(0.45f, 0.62f, slope);
+        const float screeT = math::smoothstep(0.24f, 0.42f, slope);
+        const float rockT = math::smoothstep(0.45f, 0.62f, slope);
         const float snowLine = 300.f + 70.f * wig;
-        const float snowT = smoothstepf(snowLine - 28.f, snowLine + 28.f, hC) *
-                            (1.f - smoothstepf(0.50f, 0.68f, slope));// slope-shed, like the colour
+        const float snowT = math::smoothstep(snowLine - 28.f, snowLine + 28.f, hC) *
+                            (1.f - math::smoothstep(0.50f, 0.68f, slope));// slope-shed, like the colour
         // STRUCTURE hands over to the snow band only where snow DOMINATES
         // (squared): at partial snowT the colour is still mostly ground, and
         // binning structure proportionally washed the whole snowline
@@ -307,7 +303,7 @@ namespace {
         const float sunAzDeg = 60.f + (tHours - 5.75f) * 12.5f;// sets ~SW: evening light RAKES the walls
         s.sunDir = dirFromAzElev(sunAzDeg, sunElevDeg);
         s.sunElev = s.sunDir.y;
-        s.daylight = smoothstepf(-0.10f, 0.05f, s.sunElev);
+        s.daylight = math::smoothstep(-0.10f, 0.05f, s.sunElev);
 
         // Moon: up ~19:30–05:00, peak ~40° around midnight, opposite side.
         float tm = tHours - 19.5f;
@@ -400,7 +396,7 @@ namespace {
             // Base sky glow + solar disc (66 arcsec, radiance clamped for env NEE sanity).
             Vector3 l0(0.1f * fex.x, 0.1f * fex.y, 0.1f * fex.z);
             constexpr float sunDiscCos = 0.9999566769464484f;
-            const float sundisk = smoothstepf(sunDiscCos, sunDiscCos + 0.00002f, cosTheta);
+            const float sundisk = math::smoothstep(sunDiscCos, sunDiscCos + 0.00002f, cosTheta);
             if (sundisk > 0.f) {
                 l0.x += sunE * 19000.f * fex.x * sundisk;
                 l0.y += sunE * 19000.f * fex.y * sundisk;
@@ -416,7 +412,7 @@ namespace {
             // The Preetham pow-curve lifts the deep-night residual to a grey
             // haze; fade the daylight model out once the sun is well below the
             // horizon so night is owned by the (dark) night model.
-            const float preFade = 0.05f + 0.95f * smoothstepf(-0.25f, -0.02f, cs.sunDir.y);
+            const float preFade = 0.05f + 0.95f * math::smoothstep(-0.25f, -0.02f, cs.sunDir.y);
             col.multiplyScalar(preFade);
 
             // ── night extension ──
@@ -1223,14 +1219,14 @@ int main(int argc, char** argv) {
             if (h > 52.f) continue;   // stay off the rock walls / scree
             // Thin out as the ground climbs so grass fades into the slope rather
             // than ending in a hard altitude line (reuses the terrain's smoothstep).
-            if (h > 34.f && u01(rng) < smoothstepf(34.f, 52.f, h)) continue;
+            if (h > 34.f && u01(rng) < math::smoothstep(34.f, 52.f, h)) continue;
             // Clear the footpath. FEATHERED, not a hard cut: a corridor mown to
             // a crisp edge reads as a stencil, while thinning over a metre
             // reads as ground worn bare by use.
             const float dPath = pathDistance(x, z);
             if (dPath < kPathFeather) {
                 if (dPath < kPathClear) continue;
-                if (u01(rng) > smoothstepf(kPathClear, kPathFeather, dPath)) continue;
+                if (u01(rng) > math::smoothstep(kPathClear, kPathFeather, dPath)) continue;
             }
             vegetation::GrassBlade bl;
             bl.position.set(x, h - 0.04f, z);
@@ -1714,7 +1710,7 @@ int main(int argc, char** argv) {
             }
             tint.lerp(Color(1.f, 0.80f, 0.62f), 0.35f);
             sun->color.copy(tint);
-            sun->intensity = 3.6f * smoothstepf(-0.03f, 0.12f, cs.sunElev) * (0.35f + 0.65f * maxC);
+            sun->intensity = 3.6f * math::smoothstep(-0.03f, 0.12f, cs.sunElev) * (0.35f + 0.65f * maxC);
         }
         // Moon light at night.
         {
@@ -1723,7 +1719,7 @@ int main(int argc, char** argv) {
         }
 
         // Stars fade in only once the sun is well below the horizon (-3°→-10°).
-        renderer.setDeferredStarfield(1.1f * (1.f - smoothstepf(-0.18f, -0.05f, cs.sunElev)));
+        renderer.setDeferredStarfield(1.1f * (1.f - math::smoothstep(-0.18f, -0.05f, cs.sunElev)));
 
         // Fog (colour follows the sky horizon; dawn mist peaks ~06:20):
         //   • Underwater MURK — the below-waterline absorption, ALWAYS on, its
@@ -1772,7 +1768,7 @@ int main(int argc, char** argv) {
         // Window / lantern glow after sundown. emissiveIntensity is a plain
         // field — bump the material version so the renderer re-uploads it.
         {
-            const float glow = 1.f - smoothstepf(-0.07f, 0.02f, cs.sunElev);
+            const float glow = 1.f - math::smoothstep(-0.07f, 0.02f, cs.sunElev);
             const float flicker = 1.f + 0.05f * std::sin(tElapsed * 9.f) * std::sin(tElapsed * 3.7f);
             const float target = 26.f * glow * flicker;
             if (std::abs(target - cabin.windowMat->emissiveIntensity) > 0.2f) {

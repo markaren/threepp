@@ -31,6 +31,7 @@
 #ifndef THREEPP_EXTRAS_TERRAIN_TERRAINSPLAT_HPP
 #define THREEPP_EXTRAS_TERRAIN_TERRAINSPLAT_HPP
 
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/extras/terrain/TerrainTiles.hpp"// TerrainProvider, HeightGrid
 
 #include <algorithm>
@@ -292,16 +293,12 @@ namespace threepp::terrain {
             const float lBroad = lapAt(x, z, hc, eBig);
             if (lBroad <= 0.f) return 0.f;
             const float r = std::tanh(std::min(lLocal, lBroad) * aoCurvScale);
-            return smoothstep(aoLo, aoHi, r);
+            return math::smoothstep(aoLo, aoHi, r);
         }
 
-        static float smoothstep(float e0, float e1, float x) {
-            const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
-            return t * t * (3.f - 2.f * t);
-        }
         static float band(float x, float lo, float hi, float f) {
             f = std::max(f, 1e-4f);
-            return smoothstep(lo - f, lo + f, x) * (1.f - smoothstep(hi - f, hi + f, x));
+            return math::smoothstep(lo - f, lo + f, x) * (1.f - math::smoothstep(hi - f, hi + f, x));
         }
 
         // Hash-based 2D value noise in [0,1], world-anchored & pure. Inputs are

@@ -23,6 +23,7 @@
 #ifndef THREEPP_EXTRAS_TERRAIN_TERRAINGENERATOR_HPP
 #define THREEPP_EXTRAS_TERRAIN_TERRAINGENERATOR_HPP
 
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/utils/Parallel.hpp"
@@ -245,7 +246,7 @@ namespace threepp::terrain {
             const float e = std::max(tp.bandEdge, 1e-3f);
             const auto at = [dim](int x, int y) { return static_cast<size_t>(y) * dim + x; };
             const auto band = [](float x, float lo, float hi, float ee) {
-                return smoothstep(lo - ee, lo + ee, x) * (1.f - smoothstep(hi - ee, hi + ee, x));
+                return math::smoothstep(lo - ee, lo + ee, x) * (1.f - math::smoothstep(hi - ee, hi + ee, x));
             };
 
             std::vector<int> rows(static_cast<size_t>(dim));
@@ -264,9 +265,9 @@ namespace threepp::terrain {
 
                     float wGrass = band(slope, 0.f, tp.slopeGrassMax, e) * band(alt, 0.f, tp.snowLine, e);
                     float wScree = band(slope, tp.slopeGrassMax, tp.slopeRockMin, e);
-                    float wRock = smoothstep(tp.slopeRockMin - 0.05f, tp.slopeRockMin + 0.2f, slope);
-                    float wSnow = smoothstep(tp.snowLine - 0.06f, tp.snowLine + 0.06f, alt + wig * tp.snowNoiseAmp) *
-                                  (1.f - smoothstep(tp.snowSlopeMax - 0.1f, tp.snowSlopeMax + 0.1f, slope));
+                    float wRock = math::smoothstep(tp.slopeRockMin - 0.05f, tp.slopeRockMin + 0.2f, slope);
+                    float wSnow = math::smoothstep(tp.snowLine - 0.06f, tp.snowLine + 0.06f, alt + wig * tp.snowNoiseAmp) *
+                                  (1.f - math::smoothstep(tp.snowSlopeMax - 0.1f, tp.snowSlopeMax + 0.1f, slope));
 
                     float total = wGrass + wScree + wRock + wSnow;
                     if (total < 1e-4f) {
@@ -302,7 +303,7 @@ namespace threepp::terrain {
                     float cc = 0.f;
                     if (l1 > 0.f && l2 > 0.f) {
                         const float r = std::tanh(std::min(l1, l2) * tp.aoCurvScale);
-                        cc = smoothstep(tp.aoLo, tp.aoHi, r);
+                        cc = math::smoothstep(tp.aoLo, tp.aoHi, r);
                     }
                     const float ao = 1.f - std::clamp(cc * tp.aoStrength, 0.f, tp.aoMax);
 
@@ -360,7 +361,7 @@ namespace threepp::terrain {
             if (tp.falloff != Falloff::Radial) return 1.f;
             const float half = tp.worldSize * 0.5f;
             const float r = std::sqrt(wx * wx + wz * wz) / std::max(half, 1e-3f);
-            return smoothstep(1.0f, tp.falloffStart, r);
+            return math::smoothstep(1.0f, tp.falloffStart, r);
         }
 
         // Rim sink: drops the faded border below the surrounding ground plane so
@@ -540,10 +541,6 @@ namespace threepp::terrain {
         // ── noise primitives ─────────────────────────────────────────────────
         static float fade(float t) { return t * t * t * (t * (t * 6.f - 15.f) + 10.f); }
         static float lerp(float a, float b, float t) { return a + t * (b - a); }
-        static float smoothstep(float e0, float e1, float x) {
-            const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
-            return t * t * (3.f - 2.f * t);
-        }
         static float grad2(int h, float x, float y) {
             switch (h & 7) {
                 case 0: return x + y;

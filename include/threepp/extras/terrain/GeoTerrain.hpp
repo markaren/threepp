@@ -34,6 +34,7 @@
 #ifndef THREEPP_EXTRAS_TERRAIN_GEOTERRAIN_HPP
 #define THREEPP_EXTRAS_TERRAIN_GEOTERRAIN_HPP
 
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/extras/road/RoadNetwork.hpp"
 #include "threepp/extras/terrain/GeoTerrainPack.hpp"
 #include "threepp/extras/terrain/TerrainSplat.hpp"
@@ -370,10 +371,6 @@ namespace threepp::terrain {
             }
         });
 
-        auto sstep = [](float e0, float e1, float x) {
-            const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
-            return t * t * (3.f - 2.f * t);
-        };
         for (size_t i = 0; i < n; ++i) {
             if (bestD[i] != std::numeric_limits<float>::max()) {
                 // Legacy: bench cut only (h > allowed), feathered to natural.
@@ -384,12 +381,12 @@ namespace threepp::terrain {
                 if (o.bakeSurface && h[i] < allowed[i]) {
                     const float w = (bestD[i] <= fillR[i])
                                             ? 1.f
-                                            : 1.f - sstep(fillR[i], fillR[i] + o.fillFeather, bestD[i]);
+                                            : 1.f - math::smoothstep(fillR[i], fillR[i] + o.fillFeather, bestD[i]);
                     h[i] += (allowed[i] - h[i]) * w;
                 } else if (o.bakeSurface || h[i] > allowed[i]) {
                     const float w = (bestD[i] <= innerR[i])
                                             ? 1.f
-                                            : 1.f - sstep(innerR[i], innerR[i] + o.feather, bestD[i]);
+                                            : 1.f - math::smoothstep(innerR[i], innerR[i] + o.feather, bestD[i]);
                     h[i] += (allowed[i] - h[i]) * w;
                 }
             }

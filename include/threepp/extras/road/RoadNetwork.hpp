@@ -32,6 +32,7 @@
 #ifndef THREEPP_EXTRAS_ROAD_ROADNETWORK_HPP
 #define THREEPP_EXTRAS_ROAD_ROADNETWORK_HPP
 
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/extras/road/RoadGenerator.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
@@ -210,7 +211,7 @@ namespace threepp::road {
                 const float d = distToSegment(x, z, s, t);
                 const float corridorHalf = s.corridorHalf;
                 if (d >= corridorHalf + outer) return;
-                const float w = 1.f - smoothstep(corridorHalf, corridorHalf + outer, d);
+                const float w = 1.f - math::smoothstep(corridorHalf, corridorHalf + outer, d);
                 if (w > bestW) {
                     bestW = w;
                     bestH = s.ha + (s.hb - s.ha) * t;
@@ -220,7 +221,7 @@ namespace threepp::road {
                     // don't alias the drop into a crease.
                     bestTrench = (d <= s.pavedHalf)
                                          ? 1.f
-                                         : smoothstep(s.corridorHalf, s.pavedHalf, d);
+                                         : math::smoothstep(s.corridorHalf, s.pavedHalf, d);
                 }
             });
             const float flattened = terrainH + (bestH - terrainH) * bestW;
@@ -288,7 +289,7 @@ namespace threepp::road {
                 float w;
                 if (d <= s.pavedHalf) w = 1.f;
                 else if (d >= s.corridorHalf) w = 0.f;
-                else w = smoothstep(s.corridorHalf, s.pavedHalf, d);
+                else w = math::smoothstep(s.corridorHalf, s.pavedHalf, d);
                 best = std::max(best, w);
             });
             return best;
@@ -310,7 +311,7 @@ namespace threepp::road {
                 float w;
                 if (d <= s.pavedHalf) w = 1.f;
                 else if (d >= s.pavedHalf + edgeFeather) w = 0.f;
-                else w = smoothstep(s.pavedHalf + edgeFeather, s.pavedHalf, d);
+                else w = math::smoothstep(s.pavedHalf + edgeFeather, s.pavedHalf, d);
                 best = std::max(best, w);
             });
             return best;
@@ -973,10 +974,6 @@ namespace threepp::road {
             return std::sqrt(dx * dx + dz * dz);
         }
 
-        static float smoothstep(float e0, float e1, float x) {
-            const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
-            return t * t * (3.f - 2.f * t);
-        }
 
         float flattenMargin_;
         float trenchDepth_ = 0.35f;

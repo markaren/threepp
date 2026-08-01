@@ -23,6 +23,7 @@
 #ifndef THREEPP_EXTRAS_TERRAIN_DETAILTEXTURE_HPP
 #define THREEPP_EXTRAS_TERRAIN_DETAILTEXTURE_HPP
 
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/extras/core/TextureBake.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
@@ -136,10 +137,6 @@ namespace threepp::terrain {
         auto lattice = [&](int cells) { return texgen::noiseLattice(rng, cells); };
         const auto& sampleLat = texgen::sampleLattice;
         const auto l8 = lattice(8), l24 = lattice(24), l8g = lattice(8);
-        auto sstep = [](float e0, float e1, float x) {
-            const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
-            return t * t * (3.f - 2.f * t);
-        };
 
         // Per-kind defaults (only where the caller left the generic ones).
         // Chroma is deliberately TINY for rock/scree/snow: the wobble is
@@ -202,12 +199,12 @@ namespace threepp::terrain {
                     case BandKind::Rock: {
                         // Fractured plates: F2-F1 pinches to 0 along crack lines.
                         const auto s = banddetail::voronoi(u, v, 6, seed);
-                        const float crack = 1.f - sstep(0.f, 0.16f, s.f2 - s.f1);
+                        const float crack = 1.f - math::smoothstep(0.f, 0.16f, s.f2 - s.f1);
                         const float plateH = 0.55f + 0.35f * s.id;// per-plate level
                         const float micro = (sampleLat(l24, 24, u, v) - 0.5f) * 0.18f;
                         // A second, finer fracture set breaks big plates up.
                         const auto s2 = banddetail::voronoi(u, v, 13, seed + 31u);
-                        const float crack2 = 1.f - sstep(0.f, 0.10f, s2.f2 - s2.f1);
+                        const float crack2 = 1.f - math::smoothstep(0.f, 0.10f, s2.f2 - s2.f1);
                         h = std::clamp(plateH + micro - crack * 0.34f - crack2 * 0.12f, 0.f, 1.f);
                         id = s.id;
                         r = 0.5f + 0.5f * std::max(crack, crack2 * 0.6f)// crack dust = rough
@@ -222,7 +219,7 @@ namespace threepp::terrain {
                         // identical every run): the high-frequency terms below
                         // are what keep the band legible in pure luminance.
                         const auto s = banddetail::voronoi(u, v, 22, seed);
-                        const float tuft = 1.f - sstep(0.20f, 0.75f, s.f1);
+                        const float tuft = 1.f - math::smoothstep(0.20f, 0.75f, s.f1);
                         const float undul = sampleLat(l8, 8, u, v);
                         const float blade = sampleLat(l24, 24, u * 2.f, v * 6.f);// stretched → blade streaks
                         const float speck = banddetail::bandHash(i, j, seed + 13u);// per-texel litter/soil grain
@@ -238,7 +235,7 @@ namespace threepp::terrain {
                         const auto s = banddetail::voronoi(u, v, 15, seed);
                         const float stoneR = 0.45f + 0.35f * banddetail::bandHash(
                                                                   static_cast<int>(s.id * 8191.f), 17, seed + 5u);
-                        const float stone = sstep(stoneR, stoneR * 0.15f, s.f1);// 1 at centre → 0 at rim
+                        const float stone = math::smoothstep(stoneR, stoneR * 0.15f, s.f1);// 1 at centre → 0 at rim
                         const float gapDust = sampleLat(l24, 24, u, v) * 0.12f;
                         h = std::clamp(0.18f + 0.72f * stone + gapDust, 0.f, 1.f);
                         id = s.id;

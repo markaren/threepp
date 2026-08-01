@@ -133,10 +133,6 @@ namespace {
     }
 
 
-    float smooth01(float e0, float e1, float x) {
-        const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
-        return t * t * (3.f - 2.f * t);
-    }
 
 }// namespace
 
@@ -292,7 +288,7 @@ int main(int argc, char** argv) {
         const float d = roadGen.distanceToCenter(x, z);
         if (d >= corridorHalf + flattenMargin) return th;
         const float ch = roadGen.centerHeightAt(x, z);
-        const float w = 1.f - smooth01(corridorHalf, corridorHalf + flattenMargin, d);
+        const float w = 1.f - math::smoothstep(corridorHalf, corridorHalf + flattenMargin, d);
         return th + (ch - th) * w;
     };
     // Placement height = ground (terrain blended into the road corridor).
