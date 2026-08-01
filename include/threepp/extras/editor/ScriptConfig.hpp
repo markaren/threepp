@@ -103,6 +103,16 @@ namespace threepp::editor {
         [[nodiscard]] static std::string sanitized(std::string text);
 
         // --- field access -------------------------------------------------------
+        // Static list forms: ONE implementation of the name-keyed field-list
+        // semantics, shared with GeneratorConfig (whose fields carry the same
+        // encoding). The members below delegate to these.
+        [[nodiscard]] static std::optional<std::string> fieldIn(const std::vector<Field>& fields,
+                                                                const std::string& name);
+        static void setFieldIn(std::vector<Field>& fields, const std::string& name,
+                               const std::string& value);
+        static void eraseFieldIn(std::vector<Field>& fields, const std::string& name);
+        static void retainFieldsIn(std::vector<Field>& fields, const std::vector<std::string>& names);
+
         [[nodiscard]] std::optional<std::string> field(const std::string& name) const;
         // Replaces in place when present, appends otherwise — the order the
         // fields were first seen in is the order they stay in.

@@ -1,6 +1,8 @@
 
 #include "threepp/extras/editor/RenderConfig.hpp"
 
+#include "threepp/extras/editor/detail/ConfigCodec.hpp"
+
 #include "threepp/core/Object3D.hpp"
 #include "threepp/renderers/Renderer.hpp"
 
@@ -13,46 +15,9 @@
 
 using namespace threepp;
 using namespace threepp::editor;
+using namespace threepp::editor::codec;
 
 namespace {
-
-    // Fixed 6 decimals with trailing zeros trimmed: stable across platforms
-    // (unlike ostream defaults with a locale) and byte-identical for an
-    // unchanged value, which keeps saved documents diff-clean. Same rule
-    // PhysicsConfig writes its numbers by.
-    std::string number(float value) {
-
-        char buffer[32];
-        const int n = std::snprintf(buffer, sizeof(buffer), "%.6f", static_cast<double>(value));
-        std::string out(buffer, buffer + (n > 0 ? n : 0));
-        if (out.find('.') == std::string::npos) return out;
-        while (!out.empty() && out.back() == '0') out.pop_back();
-        if (!out.empty() && out.back() == '.') out.pop_back();
-        return out.empty() ? "0" : out;
-    }
-
-    float toFloat(std::string_view text, float fallback) {
-
-        try {
-            return std::stof(std::string(text));
-        } catch (...) {
-            return fallback;
-        }
-    }
-
-    int toInt(std::string_view text, int fallback) {
-
-        try {
-            return std::stoi(std::string(text));
-        } catch (...) {
-            return fallback;
-        }
-    }
-
-    bool toBool(std::string_view text, bool fallback) {
-
-        return toInt(text, fallback ? 1 : 0) != 0;
-    }
 
     const char* toneMapToken(ToneMapping value) {
 
@@ -417,131 +382,120 @@ RenderConfig RenderConfig::decode(const std::string& text, const RenderConfig& b
 
     RenderConfig config = base;
 
-    std::size_t start = 0;
-    while (start <= text.size()) {
-        const auto end = text.find(';', start);
-        const auto token = std::string_view(text).substr(
-                start, (end == std::string::npos ? text.size() : end) - start);
-        const auto eq = token.find('=');
-        if (eq != std::string_view::npos) {
-            const auto key = token.substr(0, eq);
-            const auto value = token.substr(eq + 1);
+    codec::parsePairs(text, [&](std::string_view key, std::string_view value) {
 
-            if (key == "tonemap") {
-                config.toneMapping = toneMapFrom(value, config.toneMapping);
-            } else if (key == "exposure") {
-                config.exposure = toFloat(value, config.exposure);
-            } else if (key == "shadows") {
-                config.shadows = toBool(value, config.shadows);
-            } else if (key == "shadowtype") {
-                config.shadowType = shadowFrom(value, config.shadowType);
+        if (key == "tonemap") {
+            config.toneMapping = toneMapFrom(value, config.toneMapping);
+        } else if (key == "exposure") {
+            config.exposure = toFloat(value, config.exposure);
+        } else if (key == "shadows") {
+            config.shadows = toBool(value, config.shadows);
+        } else if (key == "shadowtype") {
+            config.shadowType = shadowFrom(value, config.shadowType);
 
-            } else if (key == "renderscale") {
-                config.renderScale = toFloat(value, config.renderScale);
-            } else if (key == "upscaler") {
-                config.upscaler = upscalerFrom(value, config.upscaler);
-            } else if (key == "msaa") {
-                config.gbufferMsaa = toInt(value, config.gbufferMsaa);
-            } else if (key == "aniso") {
-                config.textureAnisotropy = toFloat(value, config.textureAnisotropy);
+        } else if (key == "renderscale") {
+            config.renderScale = toFloat(value, config.renderScale);
+        } else if (key == "upscaler") {
+            config.upscaler = upscalerFrom(value, config.upscaler);
+        } else if (key == "msaa") {
+            config.gbufferMsaa = toInt(value, config.gbufferMsaa);
+        } else if (key == "aniso") {
+            config.textureAnisotropy = toFloat(value, config.textureAnisotropy);
 
-            } else if (key == "autoexposure") {
-                config.autoExposure = toBool(value, config.autoExposure);
-            } else if (key == "autoexposurespeed") {
-                config.autoExposureSpeed = toFloat(value, config.autoExposureSpeed);
-            } else if (key == "wbk") {
-                config.whiteBalanceK = toFloat(value, config.whiteBalanceK);
-            } else if (key == "wbtint") {
-                config.whiteBalanceTint = toFloat(value, config.whiteBalanceTint);
-            } else if (key == "sharpen") {
-                config.sharpen = toFloat(value, config.sharpen);
+        } else if (key == "autoexposure") {
+            config.autoExposure = toBool(value, config.autoExposure);
+        } else if (key == "autoexposurespeed") {
+            config.autoExposureSpeed = toFloat(value, config.autoExposureSpeed);
+        } else if (key == "wbk") {
+            config.whiteBalanceK = toFloat(value, config.whiteBalanceK);
+        } else if (key == "wbtint") {
+            config.whiteBalanceTint = toFloat(value, config.whiteBalanceTint);
+        } else if (key == "sharpen") {
+            config.sharpen = toFloat(value, config.sharpen);
 
-            } else if (key == "ao") {
-                config.ao = toBool(value, config.ao);
-            } else if (key == "probegi") {
-                config.probeGI = toBool(value, config.probeGI);
-            } else if (key == "denoise") {
-                config.denoise = toBool(value, config.denoise);
-            } else if (key == "restir") {
-                config.restirDI = toBool(value, config.restirDI);
-            } else if (key == "sunsoft") {
-                config.sunAngularRadius = toFloat(value, config.sunAngularRadius);
-            } else if (key == "envsun") {
-                config.envSun = envSunFrom(value, config.envSun);
-            } else if (key == "fireflyclamp") {
-                config.fireflyClamp = toFloat(value, config.fireflyClamp);
+        } else if (key == "ao") {
+            config.ao = toBool(value, config.ao);
+        } else if (key == "probegi") {
+            config.probeGI = toBool(value, config.probeGI);
+        } else if (key == "denoise") {
+            config.denoise = toBool(value, config.denoise);
+        } else if (key == "restir") {
+            config.restirDI = toBool(value, config.restirDI);
+        } else if (key == "sunsoft") {
+            config.sunAngularRadius = toFloat(value, config.sunAngularRadius);
+        } else if (key == "envsun") {
+            config.envSun = envSunFrom(value, config.envSun);
+        } else if (key == "fireflyclamp") {
+            config.fireflyClamp = toFloat(value, config.fireflyClamp);
 
-            } else if (key == "physcam") {
-                config.physicalCamera = toBool(value, config.physicalCamera);
-            } else if (key == "physunits") {
-                config.physicalLightUnits = toBool(value, config.physicalLightUnits);
-            } else if (key == "aperture") {
-                config.aperture = toFloat(value, config.aperture);
-            } else if (key == "shutter") {
-                config.shutterSeconds = toFloat(value, config.shutterSeconds);
-            } else if (key == "iso") {
-                config.iso = toFloat(value, config.iso);
-            } else if (key == "evcomp") {
-                config.exposureCompensation = toFloat(value, config.exposureCompensation);
-            } else if (key == "dof") {
-                config.depthOfField = toBool(value, config.depthOfField);
-            } else if (key == "focus") {
-                config.focusDistance = toFloat(value, config.focusDistance);
-            } else if (key == "motionblur") {
-                config.motionBlur = toFloat(value, config.motionBlur);
+        } else if (key == "physcam") {
+            config.physicalCamera = toBool(value, config.physicalCamera);
+        } else if (key == "physunits") {
+            config.physicalLightUnits = toBool(value, config.physicalLightUnits);
+        } else if (key == "aperture") {
+            config.aperture = toFloat(value, config.aperture);
+        } else if (key == "shutter") {
+            config.shutterSeconds = toFloat(value, config.shutterSeconds);
+        } else if (key == "iso") {
+            config.iso = toFloat(value, config.iso);
+        } else if (key == "evcomp") {
+            config.exposureCompensation = toFloat(value, config.exposureCompensation);
+        } else if (key == "dof") {
+            config.depthOfField = toBool(value, config.depthOfField);
+        } else if (key == "focus") {
+            config.focusDistance = toFloat(value, config.focusDistance);
+        } else if (key == "motionblur") {
+            config.motionBlur = toFloat(value, config.motionBlur);
 
-            } else if (key == "bloom") {
-                config.bloom = toFloat(value, config.bloom);
-            } else if (key == "bloomthreshold") {
-                config.bloomThreshold = toFloat(value, config.bloomThreshold);
-            } else if (key == "heightfog") {
-                config.heightFog = toBool(value, config.heightFog);
-            } else if (key == "fogdensity") {
-                config.fogDensity = toFloat(value, config.fogDensity);
-            } else if (key == "fogbase") {
-                config.fogBaseY = toFloat(value, config.fogBaseY);
-            } else if (key == "fogfalloff") {
-                config.fogFalloff = toFloat(value, config.fogFalloff);
-            } else if (key == "fognoise") {
-                config.fogNoise = toFloat(value, config.fogNoise);
-            } else if (key == "foganiso") {
-                config.fogAnisotropy = toFloat(value, config.fogAnisotropy);
-            } else if (key == "beams") {
-                config.beamDensity = toFloat(value, config.beamDensity);
-            } else if (key == "beamaniso") {
-                config.beamAnisotropy = toFloat(value, config.beamAnisotropy);
-            } else if (key == "clouds") {
-                config.clouds = toBool(value, config.clouds);
-            } else if (key == "cloudcoverage") {
-                config.cloudCoverage = toFloat(value, config.cloudCoverage);
-            } else if (key == "clouddensity") {
-                config.cloudDensity = toFloat(value, config.cloudDensity);
-            } else if (key == "cloudbottom") {
-                config.cloudBottomY = toFloat(value, config.cloudBottomY);
-            } else if (key == "cloudtop") {
-                config.cloudTopY = toFloat(value, config.cloudTopY);
-            } else if (key == "cloudwindx") {
-                config.cloudWindX = toFloat(value, config.cloudWindX);
-            } else if (key == "cloudwindz") {
-                config.cloudWindZ = toFloat(value, config.cloudWindZ);
-            } else if (key == "cloudevolve") {
-                config.cloudEvolve = toFloat(value, config.cloudEvolve);
+        } else if (key == "bloom") {
+            config.bloom = toFloat(value, config.bloom);
+        } else if (key == "bloomthreshold") {
+            config.bloomThreshold = toFloat(value, config.bloomThreshold);
+        } else if (key == "heightfog") {
+            config.heightFog = toBool(value, config.heightFog);
+        } else if (key == "fogdensity") {
+            config.fogDensity = toFloat(value, config.fogDensity);
+        } else if (key == "fogbase") {
+            config.fogBaseY = toFloat(value, config.fogBaseY);
+        } else if (key == "fogfalloff") {
+            config.fogFalloff = toFloat(value, config.fogFalloff);
+        } else if (key == "fognoise") {
+            config.fogNoise = toFloat(value, config.fogNoise);
+        } else if (key == "foganiso") {
+            config.fogAnisotropy = toFloat(value, config.fogAnisotropy);
+        } else if (key == "beams") {
+            config.beamDensity = toFloat(value, config.beamDensity);
+        } else if (key == "beamaniso") {
+            config.beamAnisotropy = toFloat(value, config.beamAnisotropy);
+        } else if (key == "clouds") {
+            config.clouds = toBool(value, config.clouds);
+        } else if (key == "cloudcoverage") {
+            config.cloudCoverage = toFloat(value, config.cloudCoverage);
+        } else if (key == "clouddensity") {
+            config.cloudDensity = toFloat(value, config.cloudDensity);
+        } else if (key == "cloudbottom") {
+            config.cloudBottomY = toFloat(value, config.cloudBottomY);
+        } else if (key == "cloudtop") {
+            config.cloudTopY = toFloat(value, config.cloudTopY);
+        } else if (key == "cloudwindx") {
+            config.cloudWindX = toFloat(value, config.cloudWindX);
+        } else if (key == "cloudwindz") {
+            config.cloudWindZ = toFloat(value, config.cloudWindZ);
+        } else if (key == "cloudevolve") {
+            config.cloudEvolve = toFloat(value, config.cloudEvolve);
 
-            } else if (key == "occlusion") {
-                config.occlusionCulling = toBool(value, config.occlusionCulling);
-            } else if (key == "autolod") {
-                config.autoLod = toBool(value, config.autoLod);
-            } else if (key == "lodpx") {
-                config.autoLodError = toFloat(value, config.autoLodError);
-            } else if (key == "toksvig") {
-                config.normalMapToksvig = toBool(value, config.normalMapToksvig);
-            }
-            // Unknown keys ignored on purpose: a document written by a newer
-            // editor still loads here.
+        } else if (key == "occlusion") {
+            config.occlusionCulling = toBool(value, config.occlusionCulling);
+        } else if (key == "autolod") {
+            config.autoLod = toBool(value, config.autoLod);
+        } else if (key == "lodpx") {
+            config.autoLodError = toFloat(value, config.autoLodError);
+        } else if (key == "toksvig") {
+            config.normalMapToksvig = toBool(value, config.normalMapToksvig);
         }
-        if (end == std::string::npos) break;
-        start = end + 1;
-    }
+        // Unknown keys ignored on purpose: a document written by a newer
+        // editor still loads here.
+    });
 
     return config;
 }

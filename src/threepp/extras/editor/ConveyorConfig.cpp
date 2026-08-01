@@ -1,6 +1,8 @@
 
 #include "threepp/extras/editor/ConveyorConfig.hpp"
 
+#include "threepp/extras/editor/detail/ConfigCodec.hpp"
+
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
@@ -20,40 +22,9 @@
 
 using namespace threepp;
 using namespace threepp::editor;
+using namespace threepp::editor::codec;
 
 namespace {
-
-    // Fixed 6 decimals with trailing zeros trimmed — same rationale as
-    // SplineConfig: stable across platforms and byte-identical for an unchanged
-    // value, which keeps saved documents diff-clean.
-    std::string number(float value) {
-
-        char buffer[32];
-        const int n = std::snprintf(buffer, sizeof(buffer), "%.6f", static_cast<double>(value));
-        std::string out(buffer, buffer + (n > 0 ? n : 0));
-        if (out.find('.') == std::string::npos) return out;
-        while (!out.empty() && out.back() == '0') out.pop_back();
-        if (!out.empty() && out.back() == '.') out.pop_back();
-        return out.empty() ? "0" : out;
-    }
-
-    float toFloat(std::string_view text, float fallback) {
-
-        try {
-            return std::stof(std::string(text));
-        } catch (...) {
-            return fallback;
-        }
-    }
-
-    int toInt(std::string_view text, int fallback) {
-
-        try {
-            return std::stoi(std::string(text));
-        } catch (...) {
-            return fallback;
-        }
-    }
 
     conveyor::SegKind segFrom(std::string_view text, conveyor::SegKind fallback) {
 
@@ -71,24 +42,6 @@ namespace {
             case conveyor::SegKind::Cleats: return "cleats";
         }
         return "flat";
-    }
-
-    // Walk a flat `key=value;…` string, calling `apply(key, value)` per pair.
-    template<class F>
-    void parsePairs(const std::string& text, F&& apply) {
-
-        std::size_t start = 0;
-        while (start <= text.size()) {
-            const auto end = text.find(';', start);
-            const auto token = std::string_view(text).substr(
-                    start, (end == std::string::npos ? text.size() : end) - start);
-            const auto eq = token.find('=');
-            if (eq != std::string_view::npos) {
-                apply(token.substr(0, eq), token.substr(eq + 1));
-            }
-            if (end == std::string::npos) break;
-            start = end + 1;
-        }
     }
 
 }// namespace

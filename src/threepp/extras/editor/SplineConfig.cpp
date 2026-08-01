@@ -1,6 +1,8 @@
 
 #include "threepp/extras/editor/SplineConfig.hpp"
 
+#include "threepp/extras/editor/detail/ConfigCodec.hpp"
+
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 
@@ -11,40 +13,9 @@
 
 using namespace threepp;
 using namespace threepp::editor;
+using namespace threepp::editor::codec;
 
 namespace {
-
-    // Fixed 6 decimals with trailing zeros trimmed: stable across platforms
-    // (unlike ostream defaults with a locale) and byte-identical for an
-    // unchanged value, which keeps saved documents diff-clean.
-    std::string number(float value) {
-
-        char buffer[32];
-        const int n = std::snprintf(buffer, sizeof(buffer), "%.6f", static_cast<double>(value));
-        std::string out(buffer, buffer + (n > 0 ? n : 0));
-        if (out.find('.') == std::string::npos) return out;
-        while (!out.empty() && out.back() == '0') out.pop_back();
-        if (!out.empty() && out.back() == '.') out.pop_back();
-        return out.empty() ? "0" : out;
-    }
-
-    float toFloat(std::string_view text, float fallback) {
-
-        try {
-            return std::stof(std::string(text));
-        } catch (...) {
-            return fallback;
-        }
-    }
-
-    int toInt(std::string_view text, int fallback) {
-
-        try {
-            return std::stoi(std::string(text));
-        } catch (...) {
-            return fallback;
-        }
-    }
 
     SplineConfig::Type typeFrom(std::string_view text, SplineConfig::Type fallback) {
 
@@ -136,36 +107,25 @@ std::optional<SplineConfig> SplineConfig::decode(const std::string& text) {
 
     SplineConfig config;
 
-    std::size_t start = 0;
-    while (start <= text.size()) {
-        const auto end = text.find(';', start);
-        const auto token = std::string_view(text).substr(
-                start, (end == std::string::npos ? text.size() : end) - start);
-        const auto eq = token.find('=');
-        if (eq != std::string_view::npos) {
-            const auto key = token.substr(0, eq);
-            const auto value = token.substr(eq + 1);
-            if (key == "type") {
-                config.type = typeFrom(value, config.type);
-            } else if (key == "closed") {
-                config.closed = value == "1" || value == "true";
-            } else if (key == "tension") {
-                config.tension = toFloat(value, config.tension);
-            } else if (key == "samples") {
-                config.samples = toInt(value, config.samples);
-            } else if (key == "mesh") {
-                config.mesh = meshFrom(value, config.mesh);
-            } else if (key == "radius") {
-                config.radius = toFloat(value, config.radius);
-            } else if (key == "radialSegments") {
-                config.radialSegments = toInt(value, config.radialSegments);
-                        }
-            // Unknown keys ignored on purpose: a document written by a newer
-            // editor still loads here.
-        }
-        if (end == std::string::npos) break;
-        start = end + 1;
-    }
+    codec::parsePairs(text, [&](std::string_view key, std::string_view value) {
+        if (key == "type") {
+            config.type = typeFrom(value, config.type);
+        } else if (key == "closed") {
+            config.closed = value == "1" || value == "true";
+        } else if (key == "tension") {
+            config.tension = toFloat(value, config.tension);
+        } else if (key == "samples") {
+            config.samples = toInt(value, config.samples);
+        } else if (key == "mesh") {
+            config.mesh = meshFrom(value, config.mesh);
+        } else if (key == "radius") {
+            config.radius = toFloat(value, config.radius);
+        } else if (key == "radialSegments") {
+            config.radialSegments = toInt(value, config.radialSegments);
+                    }
+        // Unknown keys ignored on purpose: a document written by a newer
+        // editor still loads here.
+    });
 
     // An empty string is still a spline — the key's presence is the definition,
     // and every parameter has a default.

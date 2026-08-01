@@ -1,6 +1,8 @@
 
 #include "threepp/extras/editor/SensorConfig.hpp"
 
+#include "threepp/extras/editor/detail/ConfigCodec.hpp"
+
 #include "threepp/core/Object3D.hpp"
 
 #include <cstdio>
@@ -8,41 +10,9 @@
 
 using namespace threepp;
 using namespace threepp::editor;
+using namespace threepp::editor::codec;
 
 namespace {
-
-    // Fixed 6 decimals with trailing zeros trimmed: stable across platforms
-    // (unlike ostream defaults with a locale) and byte-identical for an
-    // unchanged value, which keeps saved documents diff-clean. Same routine
-    // PhysicsConfig uses, for the same reason.
-    std::string number(float value) {
-
-        char buffer[32];
-        const int n = std::snprintf(buffer, sizeof(buffer), "%.6f", static_cast<double>(value));
-        std::string out(buffer, buffer + (n > 0 ? n : 0));
-        if (out.find('.') == std::string::npos) return out;
-        while (!out.empty() && out.back() == '0') out.pop_back();
-        if (!out.empty() && out.back() == '.') out.pop_back();
-        return out.empty() ? "0" : out;
-    }
-
-    float toFloat(std::string_view text, float fallback) {
-
-        try {
-            return std::stof(std::string(text));
-        } catch (...) {
-            return fallback;
-        }
-    }
-
-    int toInt(std::string_view text, int fallback) {
-
-        try {
-            return std::stoi(std::string(text));
-        } catch (...) {
-            return fallback;
-        }
-    }
 
     SensorConfig::Type typeFrom(std::string_view text, SensorConfig::Type fallback) {
 
@@ -201,62 +171,51 @@ std::optional<SensorConfig> SensorConfig::decode(const std::string& text) {
     SensorConfig config;
     config.enabled = true;
 
-    std::size_t start = 0;
-    while (start <= text.size()) {
-        const auto end = text.find(';', start);
-        const auto token = std::string_view(text).substr(
-                start, (end == std::string::npos ? text.size() : end) - start);
-        const auto eq = token.find('=');
-        if (eq != std::string_view::npos) {
-            const auto key = token.substr(0, eq);
-            const auto value = token.substr(eq + 1);
-            if (key == "type") {
-                config.type = typeFrom(value, config.type);
-            } else if (key == "rate") {
-                config.rateHz = toFloat(value, config.rateHz);
-            } else if (key == "seed") {
-                config.seed = toInt(value, config.seed);
-            } else if (key == "gyrodensity") {
-                config.gyroNoiseDensity = toFloat(value, config.gyroNoiseDensity);
-            } else if (key == "gyrowalk") {
-                config.gyroRandomWalk = toFloat(value, config.gyroRandomWalk);
-            } else if (key == "acceldensity") {
-                config.accelNoiseDensity = toFloat(value, config.accelNoiseDensity);
-            } else if (key == "accelwalk") {
-                config.accelRandomWalk = toFloat(value, config.accelRandomWalk);
-            } else if (key == "near") {
-                config.nearPlane = toFloat(value, config.nearPlane);
-            } else if (key == "far") {
-                config.farPlane = toFloat(value, config.farPlane);
-            } else if (key == "rangestddev") {
-                config.rangeStddev = toFloat(value, config.rangeStddev);
-            } else if (key == "rangepermetre") {
-                config.rangeStddevPerMetre = toFloat(value, config.rangeStddevPerMetre);
-            } else if (key == "rangebias") {
-                config.rangeBias = toFloat(value, config.rangeBias);
-            } else if (key == "fov") {
-                config.fovY = toFloat(value, config.fovY);
-            } else if (key == "width") {
-                config.width = toInt(value, config.width);
-            } else if (key == "height") {
-                config.height = toInt(value, config.height);
-            } else if (key == "beams") {
-                config.beams = beamsFrom(value, config.beams);
-            } else if (key == "facesize") {
-                config.faceSize = toInt(value, config.faceSize);
-            } else if (key == "joint") {
-                config.joint = std::string(value);
-            } else if (key == "encoderres") {
-                config.encoderResolution = toFloat(value, config.encoderResolution);
-            } else if (key == "contactthreshold") {
-                config.contactForceThreshold = toFloat(value, config.contactForceThreshold);
-            }
-            // Unknown keys ignored on purpose: a document written by a newer
-            // editor still loads here.
+    codec::parsePairs(text, [&](std::string_view key, std::string_view value) {
+        if (key == "type") {
+            config.type = typeFrom(value, config.type);
+        } else if (key == "rate") {
+            config.rateHz = toFloat(value, config.rateHz);
+        } else if (key == "seed") {
+            config.seed = toInt(value, config.seed);
+        } else if (key == "gyrodensity") {
+            config.gyroNoiseDensity = toFloat(value, config.gyroNoiseDensity);
+        } else if (key == "gyrowalk") {
+            config.gyroRandomWalk = toFloat(value, config.gyroRandomWalk);
+        } else if (key == "acceldensity") {
+            config.accelNoiseDensity = toFloat(value, config.accelNoiseDensity);
+        } else if (key == "accelwalk") {
+            config.accelRandomWalk = toFloat(value, config.accelRandomWalk);
+        } else if (key == "near") {
+            config.nearPlane = toFloat(value, config.nearPlane);
+        } else if (key == "far") {
+            config.farPlane = toFloat(value, config.farPlane);
+        } else if (key == "rangestddev") {
+            config.rangeStddev = toFloat(value, config.rangeStddev);
+        } else if (key == "rangepermetre") {
+            config.rangeStddevPerMetre = toFloat(value, config.rangeStddevPerMetre);
+        } else if (key == "rangebias") {
+            config.rangeBias = toFloat(value, config.rangeBias);
+        } else if (key == "fov") {
+            config.fovY = toFloat(value, config.fovY);
+        } else if (key == "width") {
+            config.width = toInt(value, config.width);
+        } else if (key == "height") {
+            config.height = toInt(value, config.height);
+        } else if (key == "beams") {
+            config.beams = beamsFrom(value, config.beams);
+        } else if (key == "facesize") {
+            config.faceSize = toInt(value, config.faceSize);
+        } else if (key == "joint") {
+            config.joint = std::string(value);
+        } else if (key == "encoderres") {
+            config.encoderResolution = toFloat(value, config.encoderResolution);
+        } else if (key == "contactthreshold") {
+            config.contactForceThreshold = toFloat(value, config.contactForceThreshold);
         }
-        if (end == std::string::npos) break;
-        start = end + 1;
-    }
+        // Unknown keys ignored on purpose: a document written by a newer
+        // editor still loads here.
+    });
 
     return config;
 }

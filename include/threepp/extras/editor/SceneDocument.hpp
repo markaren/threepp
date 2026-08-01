@@ -14,6 +14,7 @@
 #define THREEPP_EDITOR_SCENEDOCUMENT_HPP
 
 #include "threepp/loaders/ObjectExporter.hpp"
+#include "threepp/loaders/ObjectLoader.hpp"
 
 #include <filesystem>
 #include <functional>
@@ -109,6 +110,14 @@ namespace threepp::editor {
         [[nodiscard]] const std::vector<std::string>& warnings() const { return warnings_; }
 
     private:
+        // Shared front half of open()/openJson(): run the loader, collect its
+        // warnings, report failure. Returns nullptr on failure; the caller owns
+        // the adopt step so path_ is set BEFORE replaceScene fires its
+        // callback (the app reads the path from inside it).
+        std::shared_ptr<Object3D> runLoader(
+                const std::function<std::shared_ptr<Object3D>(ObjectLoader&)>& load,
+                const std::string& describe, std::string* error);
+
         void detachEditorOnly();
         void attachEditorOnly();
 

@@ -1,6 +1,8 @@
 
 #include "threepp/extras/editor/RobotConfig.hpp"
 
+#include "threepp/extras/editor/detail/ConfigCodec.hpp"
+
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/editor/EditorCommands.hpp"
 #include "threepp/objects/Robot.hpp"
@@ -16,23 +18,13 @@
 
 using namespace threepp;
 using namespace threepp::editor;
+using namespace threepp::editor::codec;
 
 namespace {
 
     // Same contract as the other editor configs: locale-independent, trailing
     // zeros trimmed, byte-identical for an unchanged value so saved documents
     // stay diff-clean.
-    std::string number(float value) {
-
-        char buffer[32];
-        const int n = std::snprintf(buffer, sizeof(buffer), "%.6f", static_cast<double>(value));
-        std::string out(buffer, buffer + (n > 0 ? n : 0));
-        if (out.find('.') == std::string::npos) return out;
-        while (!out.empty() && out.back() == '0') out.pop_back();
-        if (!out.empty() && out.back() == '.') out.pop_back();
-        return out.empty() ? "0" : out;
-    }
-
     // Pre-order walk of everything below `root`, root excluded. Both sides of a
     // transplant are built from the SAME URDF by the same loader, so a node's
     // position in this walk identifies it — which is what makes carrying an
@@ -52,14 +44,6 @@ namespace {
         collect(root);
 
         return flat;
-    }
-
-    std::string readString(const Object3D& object, const char* key) {
-
-        const auto it = object.userData.find(key);
-        if (it == object.userData.end()) return {};
-        if (it->second.type() != typeid(std::string)) return {};
-        return std::any_cast<const std::string&>(it->second);
     }
 
     bool readBool(const Object3D& object, const char* key, bool fallback) {

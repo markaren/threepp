@@ -1,61 +1,40 @@
 
 #include "threepp/extras/editor/GeneratorConfig.hpp"
 
+#include "threepp/extras/editor/detail/ConfigCodec.hpp"
+
 #include "threepp/core/Object3D.hpp"
 
 #include <algorithm>
 
 using namespace threepp;
 using namespace threepp::editor;
+using namespace threepp::editor::codec;
 
 namespace {
 
     // Same guarded read ScriptConfig uses: userData is std::any, and a document
     // written by another tool may carry a non-string under our key.
-    std::string readString(const Object3D& object, const char* key) {
-
-        const auto it = object.userData.find(key);
-        if (it == object.userData.end()) return {};
-        if (it->second.type() != typeid(std::string)) return {};
-        return std::any_cast<const std::string&>(it->second);
-    }
-
 }// namespace
 
 std::optional<std::string> GeneratorConfig::field(const std::string& name) const {
 
-    const auto it = std::find_if(fields.begin(), fields.end(),
-                                 [&name](const ScriptConfig::Field& f) { return f.name == name; });
-    if (it == fields.end()) return std::nullopt;
-    return it->value;
+    return ScriptConfig::fieldIn(fields, name);
 }
 
 void GeneratorConfig::setField(const std::string& name, const std::string& value) {
 
-    const auto it = std::find_if(fields.begin(), fields.end(),
-                                 [&name](const ScriptConfig::Field& f) { return f.name == name; });
-    if (it != fields.end()) {
-        it->value = value;
-        return;
-    }
-    fields.push_back({name, value});
+    ScriptConfig::setFieldIn(fields, name, value);
 }
 
 void GeneratorConfig::eraseField(const std::string& name) {
 
-    fields.erase(std::remove_if(fields.begin(), fields.end(),
-                                [&name](const ScriptConfig::Field& f) { return f.name == name; }),
-                 fields.end());
+    ScriptConfig::eraseFieldIn(fields, name);
 }
 
 void GeneratorConfig::retainFields(const std::vector<std::string>& names) {
 
-    fields.erase(std::remove_if(fields.begin(), fields.end(),
-                                [&names](const ScriptConfig::Field& f) {
-                                    return std::find(names.begin(), names.end(), f.name) ==
-                                           names.end();
-                                }),
-                 fields.end());
+    ScriptConfig::retainFieldsIn(fields, names);
 }
 
 std::optional<GeneratorConfig> GeneratorConfig::read(const Object3D& object) {

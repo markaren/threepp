@@ -1,6 +1,8 @@
 
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 
+#include "threepp/extras/editor/detail/ConfigCodec.hpp"
+
 #include "threepp/core/Object3D.hpp"
 
 #include <charconv>
@@ -9,41 +11,9 @@
 
 using namespace threepp;
 using namespace threepp::editor;
+using namespace threepp::editor::codec;
 
 namespace {
-
-    // Fixed 6 decimals with trailing zeros trimmed: stable across platforms
-    // (unlike ostream defaults with a locale) and byte-identical for an
-    // unchanged value, which keeps saved documents diff-clean.
-    std::string number(float value) {
-
-        char buffer[32];
-        const int n = std::snprintf(buffer, sizeof(buffer), "%.6f", static_cast<double>(value));
-        std::string out(buffer, buffer + (n > 0 ? n : 0));
-        const auto dot = out.find('.');
-        if (dot == std::string::npos) return out;
-        while (!out.empty() && out.back() == '0') out.pop_back();
-        if (!out.empty() && out.back() == '.') out.pop_back();
-        return out.empty() ? "0" : out;
-    }
-
-    float toFloat(std::string_view text, float fallback) {
-
-        try {
-            return std::stof(std::string(text));
-        } catch (...) {
-            return fallback;
-        }
-    }
-
-    int toInt(std::string_view text, int fallback) {
-
-        try {
-            return std::stoi(std::string(text));
-        } catch (...) {
-            return fallback;
-        }
-    }
 
     PhysicsConfig::Body bodyFrom(std::string_view text, PhysicsConfig::Body fallback) {
 
@@ -167,50 +137,39 @@ std::optional<PhysicsConfig> PhysicsConfig::decode(const std::string& text) {
     PhysicsConfig config;
     config.enabled = true;
 
-    std::size_t start = 0;
-    while (start <= text.size()) {
-        const auto end = text.find(';', start);
-        const auto token = std::string_view(text).substr(
-                start, (end == std::string::npos ? text.size() : end) - start);
-        const auto eq = token.find('=');
-        if (eq != std::string_view::npos) {
-            const auto key = token.substr(0, eq);
-            const auto value = token.substr(eq + 1);
-            if (key == "body") {
-                config.body = bodyFrom(value, config.body);
-            } else if (key == "shape") {
-                config.shape = shapeFrom(value, config.shape);
-            } else if (key == "trigger") {
-                config.trigger = toInt(value, config.trigger ? 1 : 0) != 0;
-            } else if (key == "mass") {
-                config.mass = toFloat(value, config.mass);
-            } else if (key == "friction") {
-                config.friction = toFloat(value, config.friction);
-            } else if (key == "restitution") {
-                config.restitution = toFloat(value, config.restitution);
-            } else if (key == "young") {
-                config.youngsModulus = toFloat(value, config.youngsModulus);
-            } else if (key == "poisson") {
-                config.poissonsRatio = toFloat(value, config.poissonsRatio);
-            } else if (key == "voxel") {
-                config.voxelResolution = toInt(value, config.voxelResolution);
-            } else if (key == "iterations") {
-                config.solverIterations = toInt(value, config.solverIterations);
-            } else if (key == "selfcollision") {
-                config.selfCollision = toInt(value, config.selfCollision ? 1 : 0) != 0;
-            } else if (key == "hulls") {
-                config.hulls = toInt(value, config.hulls);
-            } else if (key == "hullverts") {
-                config.hullVerts = toInt(value, config.hullVerts);
-            } else if (key == "voxels") {
-                config.voxels = toInt(value, config.voxels);
-            }
-            // Unknown keys ignored on purpose: a document written by a newer
-            // editor still loads here.
+    codec::parsePairs(text, [&](std::string_view key, std::string_view value) {
+        if (key == "body") {
+            config.body = bodyFrom(value, config.body);
+        } else if (key == "shape") {
+            config.shape = shapeFrom(value, config.shape);
+        } else if (key == "trigger") {
+            config.trigger = toInt(value, config.trigger ? 1 : 0) != 0;
+        } else if (key == "mass") {
+            config.mass = toFloat(value, config.mass);
+        } else if (key == "friction") {
+            config.friction = toFloat(value, config.friction);
+        } else if (key == "restitution") {
+            config.restitution = toFloat(value, config.restitution);
+        } else if (key == "young") {
+            config.youngsModulus = toFloat(value, config.youngsModulus);
+        } else if (key == "poisson") {
+            config.poissonsRatio = toFloat(value, config.poissonsRatio);
+        } else if (key == "voxel") {
+            config.voxelResolution = toInt(value, config.voxelResolution);
+        } else if (key == "iterations") {
+            config.solverIterations = toInt(value, config.solverIterations);
+        } else if (key == "selfcollision") {
+            config.selfCollision = toInt(value, config.selfCollision ? 1 : 0) != 0;
+        } else if (key == "hulls") {
+            config.hulls = toInt(value, config.hulls);
+        } else if (key == "hullverts") {
+            config.hullVerts = toInt(value, config.hullVerts);
+        } else if (key == "voxels") {
+            config.voxels = toInt(value, config.voxels);
         }
-        if (end == std::string::npos) break;
-        start = end + 1;
-    }
+        // Unknown keys ignored on purpose: a document written by a newer
+        // editor still loads here.
+    });
 
     return config;
 }

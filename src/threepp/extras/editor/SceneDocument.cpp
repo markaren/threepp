@@ -71,6 +71,25 @@ void SceneDocument::newScene() {
     dirty_ = false;
 }
 
+std::shared_ptr<Object3D> SceneDocument::runLoader(
+        const std::function<std::shared_ptr<Object3D>(ObjectLoader&)>& load,
+        const std::string& describe, std::string* error) {
+
+    ObjectLoader loader;
+    std::shared_ptr<Object3D> parsed;
+    try {
+        parsed = load(loader);
+    } catch (const std::exception& e) {
+        if (error) *error = e.what();
+        return nullptr;
+    }
+
+    warnings_ = loader.warnings();
+
+    if (!parsed && error) *error = "could not parse " + describe;
+    return parsed;
+}
+
 bool SceneDocument::open(const std::filesystem::path& path, std::string* error) {
 
     warnings_.clear();
@@ -80,21 +99,8 @@ bool SceneDocument::open(const std::filesystem::path& path, std::string* error) 
         return false;
     }
 
-    ObjectLoader loader;
-    std::shared_ptr<Object3D> parsed;
-    try {
-        parsed = loader.load(path);
-    } catch (const std::exception& e) {
-        if (error) *error = e.what();
-        return false;
-    }
-
-    warnings_ = loader.warnings();
-
-    if (!parsed) {
-        if (error) *error = "could not parse " + path.string();
-        return false;
-    }
+    auto parsed = runLoader([&](ObjectLoader& l) { return l.load(path); }, path.string(), error);
+    if (!parsed) return false;
 
     path_ = path;
     replaceScene(asScene(std::move(parsed)));
@@ -111,21 +117,8 @@ bool SceneDocument::openJson(const std::string& jsonText, std::string* error) {
         return false;
     }
 
-    ObjectLoader loader;
-    std::shared_ptr<Object3D> parsed;
-    try {
-        parsed = loader.parse(jsonText);
-    } catch (const std::exception& e) {
-        if (error) *error = e.what();
-        return false;
-    }
-
-    warnings_ = loader.warnings();
-
-    if (!parsed) {
-        if (error) *error = "could not parse the document";
-        return false;
-    }
+    auto parsed = runLoader([&](ObjectLoader& l) { return l.parse(jsonText); }, "the document", error);
+    if (!parsed) return false;
 
     // No path: this document came from nowhere on disk, and Save has to ask.
     path_.clear();

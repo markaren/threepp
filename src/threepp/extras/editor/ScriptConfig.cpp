@@ -1,6 +1,8 @@
 
 #include "threepp/extras/editor/ScriptConfig.hpp"
 
+#include "threepp/extras/editor/detail/ConfigCodec.hpp"
+
 #include "threepp/core/Object3D.hpp"
 
 #include <algorithm>
@@ -10,16 +12,9 @@
 
 using namespace threepp;
 using namespace threepp::editor;
+using namespace threepp::editor::codec;
 
 namespace {
-
-    std::string readString(const Object3D& object, const char* key) {
-
-        const auto it = object.userData.find(key);
-        if (it == object.userData.end()) return {};
-        if (it->second.type() != typeid(std::string)) return {};
-        return std::any_cast<const std::string&>(it->second);
-    }
 
 }// namespace
 
@@ -38,13 +33,7 @@ void ScriptConfig::setSource(std::string value) {
 
 std::string ScriptConfig::toText(float value) {
 
-    char buffer[32];
-    const int n = std::snprintf(buffer, sizeof(buffer), "%.6f", static_cast<double>(value));
-    std::string out(buffer, buffer + (n > 0 ? n : 0));
-    if (out.find('.') == std::string::npos) return out;
-    while (!out.empty() && out.back() == '0') out.pop_back();
-    if (!out.empty() && out.back() == '.') out.pop_back();
-    return out.empty() ? "0" : out;
+    return codec::number(value);
 }
 
 std::string ScriptConfig::toText(int value) {
@@ -59,30 +48,17 @@ std::string ScriptConfig::toText(bool value) {
 
 float ScriptConfig::toFloat(const std::string& text, float fallback) {
 
-    try {
-        return std::stof(text);
-    } catch (...) {
-        return fallback;
-    }
+    return codec::toFloat(text, fallback);
 }
 
 int ScriptConfig::toInt(const std::string& text, int fallback) {
 
-    try {
-        return std::stoi(text);
-    } catch (...) {
-        return fallback;
-    }
+    return codec::toInt(text, fallback);
 }
 
 bool ScriptConfig::toBool(const std::string& text, bool fallback) {
 
-    if (text.empty()) return fallback;
-    // Accepts what the editor writes ("1"/"0") plus what a hand-edited file is
-    // likely to contain.
-    if (text == "1" || text == "true" || text == "True") return true;
-    if (text == "0" || text == "false" || text == "False") return false;
-    return fallback;
+    return codec::toBool(text, fallback);
 }
 
 std::string ScriptConfig::sanitized(std::string text) {
@@ -93,7 +69,8 @@ std::string ScriptConfig::sanitized(std::string text) {
     return text;
 }
 
-std::optional<std::string> ScriptConfig::field(const std::string& name) const {
+std::optional<std::string> ScriptConfig::fieldIn(const std::vector<Field>& fields,
+                                                 const std::string& name) {
 
     const auto it = std::find_if(fields.begin(), fields.end(),
                                  [&name](const Field& f) { return f.name == name; });
@@ -101,7 +78,8 @@ std::optional<std::string> ScriptConfig::field(const std::string& name) const {
     return it->value;
 }
 
-void ScriptConfig::setField(const std::string& name, const std::string& value) {
+void ScriptConfig::setFieldIn(std::vector<Field>& fields, const std::string& name,
+                              const std::string& value) {
 
     const auto it = std::find_if(fields.begin(), fields.end(),
                                  [&name](const Field& f) { return f.name == name; });
@@ -112,20 +90,40 @@ void ScriptConfig::setField(const std::string& name, const std::string& value) {
     fields.push_back({name, value});
 }
 
-void ScriptConfig::eraseField(const std::string& name) {
+void ScriptConfig::eraseFieldIn(std::vector<Field>& fields, const std::string& name) {
 
     fields.erase(std::remove_if(fields.begin(), fields.end(),
                                 [&name](const Field& f) { return f.name == name; }),
                  fields.end());
 }
 
-void ScriptConfig::retainFields(const std::vector<std::string>& names) {
+void ScriptConfig::retainFieldsIn(std::vector<Field>& fields, const std::vector<std::string>& names) {
 
     fields.erase(std::remove_if(fields.begin(), fields.end(),
                                 [&names](const Field& f) {
                                     return std::find(names.begin(), names.end(), f.name) == names.end();
                                 }),
                  fields.end());
+}
+
+std::optional<std::string> ScriptConfig::field(const std::string& name) const {
+
+    return fieldIn(fields, name);
+}
+
+void ScriptConfig::setField(const std::string& name, const std::string& value) {
+
+    setFieldIn(fields, name, value);
+}
+
+void ScriptConfig::eraseField(const std::string& name) {
+
+    eraseFieldIn(fields, name);
+}
+
+void ScriptConfig::retainFields(const std::vector<std::string>& names) {
+
+    retainFieldsIn(fields, names);
 }
 
 std::string ScriptConfig::encodeFields() const {
@@ -149,18 +147,10 @@ std::vector<ScriptConfig::Field> ScriptConfig::decodeFields(const std::string& t
     std::vector<Field> out;
     if (text.empty()) return out;
 
-    std::size_t start = 0;
-    while (start <= text.size()) {
-        const auto end = text.find(';', start);
-        const auto token = std::string_view(text).substr(
-                start, (end == std::string::npos ? text.size() : end) - start);
-        const auto eq = token.find('=');
-        if (eq != std::string_view::npos && eq > 0) {
-            out.push_back({std::string(token.substr(0, eq)), std::string(token.substr(eq + 1))});
-        }
-        if (end == std::string::npos) break;
-        start = end + 1;
-    }
+    codec::parsePairs(text, [&](std::string_view key, std::string_view value) {
+        if (key.empty()) return;// `=value` with no key is malformed, not a field
+        out.push_back({std::string(key), std::string(value)});
+    });
     return out;
 }
 
