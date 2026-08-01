@@ -4703,6 +4703,19 @@ namespace threepp {
             d.detailNormalScale = 1.f;
             d.detailRoughStrength = 0.f;
             d._padDetail = 0.f;
+            d.terrainWeightTexIndex = -1;
+            d.terrainNormalTexIndex = -1;
+            d.terrainBandStrength = 0.f;
+            d.terrainNormalScale = 1.f;
+            d.terrainRoughStrength = 0.f;
+            d.terrainHeightBlend = 0.f;
+            d._padTerrain[0] = d._padTerrain[1] = 0.f;
+            for (int bi = 0; bi < 4; ++bi) {
+                d.terrainBandAlbedoTex[bi] = -1;
+                d.terrainBandNormalTex[bi] = -1;
+                d.terrainBandRepeat[bi] = 1.f;
+                d.terrainBandRough[bi] = 0.9f;
+            }
             d.translucency = 0.f;             // off by default; deferred sun/ambient translucency term is skipped when 0
             d.translucencyColor[0] = d.translucencyColor[1] = d.translucencyColor[2] = 1.0f;
             static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
@@ -4821,6 +4834,18 @@ namespace threepp {
                 d.detailNormalScale   = dm->detailNormalScale;
                 d.detailRoughStrength = std::clamp(dm->detailRoughStrength, 0.f, 1.f);
             }
+            if (auto* tm = dynamic_cast<MaterialWithTerrainMaps*>(mat.get())) {
+                // Indices stay -1 here; the texture-index fill sites bind them
+                // (terrainWeightTexOf gates on the weight map + a band set).
+                d.terrainBandStrength  = std::clamp(tm->terrainBandStrength, 0.f, 1.f);
+                d.terrainNormalScale   = tm->terrainBandNormalScale;
+                d.terrainRoughStrength = std::clamp(tm->terrainBandRoughStrength, 0.f, 1.f);
+                d.terrainHeightBlend   = std::max(tm->terrainHeightBlend, 0.f);
+                for (int bi = 0; bi < 4; ++bi) {
+                    d.terrainBandRepeat[bi] = tm->terrainBandRepeat[static_cast<size_t>(bi)];
+                    d.terrainBandRough[bi]  = tm->terrainBandRoughness[static_cast<size_t>(bi)];
+                }
+            }
             if (auto* sp = dynamic_cast<MaterialWithPbrSpecular*>(mat.get())) {
                 d.specularIntensity   = sp->specularIntensity;
                 d.specularColor[0]    = sp->specularColor.r;
@@ -4903,6 +4928,43 @@ namespace threepp {
                 if (dm->detailNormalMap && (dm->detailNormalScale > 0.f || dm->detailRoughStrength > 0.f))
                     return dm->detailNormalMap;
             }
+            return nullptr;
+        }
+
+        // Terrain splat maps (MaterialWithTerrainMaps). The weight map is the
+        // path's on-switch: bound only when a band set exists to select.
+        static std::shared_ptr<Texture> terrainWeightTexOf(const Mesh& m) {
+            auto mat = m.material();
+            if (!mat) return nullptr;
+            if (auto* tm = dynamic_cast<MaterialWithTerrainMaps*>(mat.get())) {
+                if (tm->terrainMapsActive()) return tm->terrainWeightMap;
+            }
+            return nullptr;
+        }
+
+        // World-space normal map — independent of the band sets (LOD-seam fix
+        // is worthwhile even for a macro-colour-only terrain).
+        static std::shared_ptr<Texture> terrainNormalTexOf(const Mesh& m) {
+            auto mat = m.material();
+            if (!mat) return nullptr;
+            if (auto* tm = dynamic_cast<MaterialWithTerrainMaps*>(mat.get()))
+                return tm->terrainNormalMap;
+            return nullptr;
+        }
+
+        static std::shared_ptr<Texture> terrainBandAlbedoTexOf(const Mesh& m, int band) {
+            auto mat = m.material();
+            if (!mat) return nullptr;
+            if (auto* tm = dynamic_cast<MaterialWithTerrainMaps*>(mat.get()))
+                return tm->terrainBandAlbedo[static_cast<size_t>(band)];
+            return nullptr;
+        }
+
+        static std::shared_ptr<Texture> terrainBandNormalTexOf(const Mesh& m, int band) {
+            auto mat = m.material();
+            if (!mat) return nullptr;
+            if (auto* tm = dynamic_cast<MaterialWithTerrainMaps*>(mat.get()))
+                return tm->terrainBandNormalRough[static_cast<size_t>(band)];
             return nullptr;
         }
 

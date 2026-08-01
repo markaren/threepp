@@ -201,6 +201,16 @@ namespace threepp {
             // wobble). The shader pins a constant history cap on this bit;
             // the TAA resolve floors its blend α (shading changes per frame).
             if (en.isTet) flags |= kInstFlagDeformer;
+            // MOVED-STICKY mirrored into the flag word (same countdown the
+            // GeometryDesc bit-0 stamp reads; that stamp runs earlier in this
+            // same frame, so the two views agree). The reproject guards ask
+            // "was the surface at the PREV texel moving" — answering that via
+            // geoms[prevIds.x - 1] breaks the moment the entry list renumbers
+            // (tile streaming removes a parent mid-list every few frames), so
+            // the prev texel carries its own moved bit instead, identity-
+            // stable like the .y stable id it is compared alongside.
+            if (i < meshMovedSticky_.size() && meshMovedSticky_[i] > 0u)
+                flags |= kInstFlagMoving;
             // Semantic CLASS id (0..255) packed into bits 8..15 — inert to
             // every flag bit-test (they mask the low byte) and carried
             // through the MSAA resolve. Read back via outIds.z >> 8.

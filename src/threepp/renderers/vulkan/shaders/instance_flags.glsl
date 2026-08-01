@@ -37,6 +37,7 @@
 bool ifWater(uint z)       { return (z & kInstFlagWater) != 0u; }
 bool ifSkinned(uint z)     { return (z & kInstFlagSkinned) != 0u; }
 bool ifDoubleSided(uint z) { return (z & kInstFlagDoubleSided) != 0u; }
+bool ifMoving(uint z)      { return (z & kInstFlagMoving) != 0u; }
 uint ifClassId(uint z)     { return (z >> 8) & 0xFFu; }
 
 float ifShadingReactivity(uint z) {

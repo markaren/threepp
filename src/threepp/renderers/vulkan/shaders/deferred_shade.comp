@@ -1503,11 +1503,12 @@ void main() {
         const vec2 prevUv   = vec2(prevNDC.x * 0.5 + 0.5, 0.5 - prevNDC.y * 0.5);
         bool valid = all(greaterThanEqual(prevUv, vec2(0.0))) &&
                      all(lessThanEqual(prevUv, vec2(1.0)));
-        // Per-instance flag bits (drawInfo.flags via the ids attachment .z).
-        // Used by the double-sided normal test below and the persistent-
-        // deformer history cap at the bottom of this block.
-        const uint giFlagsZ = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx).z
-                                                 : texelFetch(gbufIdsTex, px, 0).z;
+        // Per-instance ids texel: .y = stable per-object id (trailing-edge
+        // guard below), .z = flag bits (double-sided normal test + the
+        // persistent-deformer history cap at the bottom of this block).
+        const uvec4 giIds = (msSampleIdx >= 0) ? texelFetch(gbufIdsMS, px, msSampleIdx)
+                                               : texelFetch(gbufIdsTex, px, 0);
+        const uint giFlagsZ = giIds.z;
         // GEOMETRIC (normal-based) JITTER-ROBUST DISOCCLUSION: the current surface's
         // world normal must match SOMEWHERE in the 3×3 prev-normal neighbourhood at
         // the reprojected pixel. Normals are draw-order-INDEPENDENT (so firing —
@@ -1576,20 +1577,49 @@ void main() {
             // the bilinear giPrevTex read blends the departed object's bright/dark
             // GI history into the revealed ground = the "history edge smear" behind
             // every moving car / the character's dust-trail feet. The ID compare is
-            // exact where depth is proportionally blind. Gated on the prev mesh
-            // being CURRENTLY MOVING (GeometryDesc.flags bit 0), which retires the classic
-            // ID-guard failure (draw-list renumber → global false reset; see the
-            // NOT-prev-IDs note in DeferredShade.cpp — static scenes can't fire
-            // this, and topology reorders clear the gbuf so pid=0 skips). All 4
-            // texels of the history read's bilinear footprint are checked — the
-            // snap texel alone leaves a 1-px bleed.
+            // exact where depth is proportionally blind. Compares the STABLE
+            // per-object id (.y) and reads the prev texel's OWN moved-sticky bit
+            // (.z, kInstFlagMoving, stamped at draw time) — both identity-stable —
+            // NOT prev ids .x, which indexes the PREV frame's draw list and names
+            // the wrong entry in geoms[] after any topology renumber (terrain tile
+            // streaming removes a parent mid-list every few frames; the old
+            // geoms[pid-1] read went stale or out of range for the whole burst).
+            // Static scenes can't fire this (no moved bit), and a static tile
+            // swap keeps history because the departed parent was never moving.
+            // All 4 texels of the history read's bilinear footprint are checked —
+            // the snap texel alone leaves a 1-px bleed.
             if (valid) {
                 const vec2  fpx = prevUv * vec2(float(pc.width), float(pc.height)) - 0.5;
                 const ivec2 fb  = ivec2(floor(fpx));
+                // Fire on OBJECT motion (prev texel's moved bit) or CAMERA
+                // TRANSLATION (pc.camDelta): parallax past a STATIC occluder
+                // (tree, pole) reveals ground with no moved bit anywhere, and
+                // the depth/normal gates are proportionally blind at driving
+                // distances — before the identity-stable ids, the global
+                // topology resets were accidentally masking this leak (history
+                // never lived long enough to smear); now the id mismatch IS a
+                // true surface change whenever the camera actually moved.
+                // Pure rotation reprojects exactly (no parallax) and stays
+                // lenient, so static contact edges don't churn.
+                const bool camMoved = pc.camDelta > 0.001;
                 for (int dy = 0; dy <= 1 && valid; ++dy)
                     for (int dx = 0; dx <= 1 && valid; ++dx) {
-                        const uint pid = texelFetch(gbufIdsPrevTex, clamp(fb + ivec2(dx, dy), ivec2(0), mx), 0).x;
-                        if (pid != id && pid > 0u && (geoms[pid - 1u].flags & 1u) != 0u) valid = false;
+                        const uvec4 pids = texelFetch(gbufIdsPrevTex, clamp(fb + ivec2(dx, dy), ivec2(0), mx), 0);
+                        // Prev-SKY texels (.x == 0) are not "safe": sky pixels
+                        // stop accumulating, so their history holds whatever
+                        // surface last covered the texel — with history now
+                        // surviving topology changes, that can be many frames
+                        // old. A camera translating past a feathery silhouette
+                        // (fjord trees: most canopy pixels have mixed tree/sky
+                        // footprints) kept blending that STALE canopy back in —
+                        // the subtle "smooshing" on trees under motion. Reject
+                        // sky-footprint texels when the camera moved; a static
+                        // camera keeps its converged edge mix (same texel, same
+                        // blend, every frame — rejecting there would just make
+                        // silhouettes permanently noisy).
+                        const bool skyStale = pids.x == 0u && camMoved;
+                        const bool objChange = pids.x > 0u && pids.y != giIds.y && (ifMoving(pids.z) || camMoved);
+                        if (skyStale || objChange) valid = false;
                     }
             }
         }

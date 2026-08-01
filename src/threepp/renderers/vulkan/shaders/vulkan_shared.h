@@ -50,6 +50,11 @@
 #define kInstFlagDoubleSided 0x10u// Side::Double material (±N = same surface)
 #define kInstFlagDeformer    0x20u// persistent per-frame deformer (tet soft body)
 #define kInstFlagTexAnim     0x40u// per-frame texture animation (Material::textureAnimatedHint)
+#define kInstFlagMoving      0x80u// moved-sticky (mirrors GeometryDesc.flags bit 0 at draw
+                                  // time). Makes the PREV ids texel self-describing for the
+                                  // moving-mesh trailing-edge guards: prev ids .x indexes the
+                                  // prev frame's draw list, so geoms[pid-1] reads the WRONG
+                                  // entry after any topology renumber (tile streaming).
 
 // Ocean cascade-1 sample-domain rotation. The mid cascade carries only ~a
 // dozen Fourier modes per axis (band-passed to λ ∈ [tileSize2, tileSize1]),
@@ -152,12 +157,32 @@ namespace threepp::vulkan_pt {
         // translucency == 0 → bit-exact no-op for all existing content.
         float translucencyColor[3];
         float translucency;
+        // Terrain splat shading (MaterialWithTerrainMaps). Raster G-buffer
+        // only. terrainWeightTexIndex >= 0 marks a terrain material:
+        //   • terrainNormalTexIndex — WORLD-space normal map (mesh UVs);
+        //     replaces the interpolated vertex normal so tiles of different
+        //     LOD shade identically at shared borders (mips band-limit it).
+        //   • weight map (mesh UVs) selects up to four repeating band sets
+        //     (albedo overlay w/ height in A + normal/roughness), world-XZ
+        //     anchored, stochastic-tiled + triplanar, height-blended. Band
+        //     base roughness REPLACES material roughness where bands cover.
+        int32_t terrainWeightTexIndex; // -1 = not a terrain material
+        int32_t terrainNormalTexIndex; // -1 = keep vertex normals
+        float terrainBandStrength;     // 0..1 albedo-overlay modulation
+        float terrainNormalScale;      // band tangent perturbation scale
+        float terrainRoughStrength;    // 0..1 band roughness modulation
+        float terrainHeightBlend;      // height-blend sharpness (0 = linear)
+        float _padTerrain[2];
+        int32_t terrainBandAlbedoTex[4]; // -1 = band inert
+        int32_t terrainBandNormalTex[4]; // -1 = no relief for that band
+        float terrainBandRepeat[4];      // repeats per world metre
+        float terrainBandRough[4];       // base roughness per band
     };
 
     // Catches silent layout drift: if any field is added/removed/reordered
     // above, the size changes and this fires. Update the GLSL `MaterialDesc`
     // mirror below to match before bumping the expected size.
-    static_assert(sizeof(MaterialDesc) == 512,
+    static_assert(sizeof(MaterialDesc) == 608,
                   "MaterialDesc size changed - update the GLSL mirror in this file too.");
 }
 
@@ -216,6 +241,17 @@ struct MaterialDesc {
     float _padDetail;
     vec3  translucencyColor;// foliage two-sided subsurface tint
     float translucency;     // 0 = off (raster primary shading only)
+    int   terrainWeightTexIndex;// terrain band-weight map; -1 = not terrain
+    int   terrainNormalTexIndex;// world-space normal map; -1 = vertex normals
+    float terrainBandStrength;  // 0..1 albedo-overlay modulation
+    float terrainNormalScale;   // band tangent perturbation scale
+    float terrainRoughStrength; // 0..1 band roughness modulation
+    float terrainHeightBlend;   // height-blend sharpness (0 = linear)
+    vec2  _padTerrain;
+    ivec4 terrainBandAlbedoTex; // per-band overlay (A = height); -1 = inert
+    ivec4 terrainBandNormalTex; // per-band normal/roughness; -1 = none
+    vec4  terrainBandRepeat;    // repeats per world metre
+    vec4  terrainBandRough;     // base roughness per band
 };
 
 #endif  // __cplusplus

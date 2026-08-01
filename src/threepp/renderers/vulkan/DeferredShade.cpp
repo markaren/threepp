@@ -484,10 +484,11 @@ namespace threepp::vulkan {
             VkDescriptorImageInfo normalPrevInfo = sampled(in.gbufNormal[pf], gbufSampler_);
             // PREV ids (other fif) — the GI reproject's moving-mesh trailing-edge
             // guard. The ID-based disocclusion the comment above rejects stays
-            // rejected: this guard only fires when the PREV pixel's mesh is
-            // CURRENTLY MOVING (GeometryDesc._pad), so a draw-list renumber over a
-            // static scene can't false-reset, and topology reorders clear the gbuf
-            // (ids → 0) which the guard skips.
+            // rejected: the guard compares the STABLE per-object id (.y) and the
+            // prev texel's own moved-sticky bit (.z, kInstFlagMoving), both
+            // identity-stable, so a draw-list renumber (topology rebuild, terrain
+            // tile streaming) can't false-reset, and a static scene never fires
+            // it (no moved bit).
             VkDescriptorImageInfo idsPrevInfo    = sampled(in.gbufIds[pf], gbufSampler_);
 
             // Ocean textures stay in GENERAL (written by the FFT/foam compute

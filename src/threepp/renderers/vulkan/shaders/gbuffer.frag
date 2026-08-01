@@ -227,6 +227,56 @@ DetailContrib detailProject(vec2 duv, vec2 g1, vec2 g2, float fade,
     return c;
 }
 
+// ── Terrain band projection ──────────────────────────────────────────────────
+// detailProject plus the band-blend inputs: the albedo tap's ALPHA is the
+// material HEIGHT (terrain band sets bake it there), returned for height-based
+// band blending. Same stochastic/plain split, same fade semantics.
+struct BandContrib {
+    vec3 albedoOverlay;// multiplier (1 = inert)
+    vec3 normal;       // perturbed world normal (= N when inert)
+    float roughMul;    // roughness multiplier (1 = inert)
+    float height;      // band material height, 0.5 = neutral
+};
+
+BandContrib terrainBandProject(vec2 duv, vec2 g1, vec2 g2, float fade,
+                               vec3 axisU, vec3 axisV, vec3 N,
+                               int albIdx, int nrmIdx,
+                               float strength, float nScale, float rStrength,
+                               bool stochastic) {
+    BandContrib c;
+    c.albedoOverlay = vec3(1.0);
+    c.normal = N;
+    c.roughMul = 1.0;
+    c.height = 0.5;
+    if (fade <= 0.001) return c;
+
+    DetailLattice lt;
+    if (stochastic) lt = detailLatticeSetup(duv, g1, g2);
+
+    if (albIdx >= 0) {
+        const vec4 det = stochastic ? detailStochastic(albIdx, duv, lt)
+                                    : detailPlain(albIdx, duv, g1, g2);
+        c.albedoOverlay = mix(vec3(1.0), det.rgb * 2.0, strength * fade);
+        c.height = mix(0.5, det.a, fade);
+    }
+    if (nrmIdx >= 0) {
+        const vec4 dn = stochastic ? detailStochastic(nrmIdx, duv, lt)
+                                   : detailPlain(nrmIdx, duv, g1, g2);
+        vec3 T = axisU - N * dot(N, axisU);
+        vec3 B = axisV - N * dot(N, axisV);
+        const float tl = length(T), bl = length(B);
+        if (tl > 1e-4 && bl > 1e-4) {
+            T /= tl;
+            B /= bl;
+            const vec2 nxy = (dn.xy - 0.5) * 2.0 * nScale * fade;
+            const float nz = sqrt(max(1e-4, 1.0 - dot(nxy, nxy)));
+            c.normal = normalize(T * nxy.x + B * nxy.y + N * nz);
+        }
+        c.roughMul = mix(1.0, 2.0 * dn.a, rStrength * fade);
+    }
+    return c;
+}
+
 void main() {
     vec3 N = normalize(vWorldNormal);
 
@@ -347,6 +397,27 @@ void main() {
         }
     }
 
+    // Terrain WORLD-space normal map (MaterialWithTerrainMaps): replaces the
+    // interpolated vertex normal outright — no TBN, the texel IS the world
+    // vector. The win is band-limiting: screen-footprint mip selection filters
+    // the normal field continuously, so adjacent tiles baked at different LOD
+    // densities shade identically at their shared border, where per-vertex
+    // normals (finite-difference epsilon tied to tile resolution) jump. The
+    // raw tap length feeds the same vMF/Toksvig roughness fold as a regular
+    // normal map — minified terrain keeps a stable pre-integrated lobe.
+    if (m.terrainNormalTexIndex >= 0 && !isWater) {
+        const int ti = clamp(m.terrainNormalTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        const vec3 wTap = texture(gbufAlbedoMaps[nonuniformEXT(ti)], vUv).rgb * 2.0 - 1.0;
+        const float wLen = length(wTap);
+        if (wLen > 1e-3) {
+            if (toksvigOn) {
+                const float nLen = clamp(wLen, 1e-4, 1.0);
+                toksvigSigma2 = (1.0 - nLen) / nLen;
+            }
+            N = wTap / wLen;
+        }
+    }
+
     // ── PBR material sampling.
     // Per-channel transformed UVs.
     const vec2 uvAlbedo     = (m.uvTransform           * vec3(vUv, 1.0)).xy;
@@ -412,9 +483,22 @@ void main() {
         const vec2 duvY = vWorldPos.xz * rep; const vec2 gY1 = dFdx(duvY); const vec2 gY2 = dFdy(duvY);
         const vec2 duvZ = vWorldPos.xy * rep; const vec2 gZ1 = dFdx(duvZ); const vec2 gZ2 = dFdy(duvZ);
         const vec2 duvX = vWorldPos.zy * rep; const vec2 gX1 = dFdx(duvX); const vec2 gX2 = dFdy(duvX);
-        const float fadeY = 1.0 - smoothstep(0.25, 0.75, length(fwidth(duvY)));
-        const float fadeZ = 1.0 - smoothstep(0.25, 0.75, length(fwidth(duvZ)));
-        const float fadeX = 1.0 - smoothstep(0.25, 0.75, length(fwidth(duvX)));
+        // Fade on the SHORT footprint axis, not fwidth: fwidth tracks the LONG
+        // axis, which explodes at grazing incidence even a few metres out —
+        // every slope angled away from the camera lost its layer and read as a
+        // smooth sinuous "untextured" patch hugging the terrain curvature.
+        // Aniso filtering resolves detail across the short axis (textureGrad
+        // passes the true footprint), so grazing keeps its structure. The
+        // LONG axis still bounds the layer at 8× the old threshold — that is
+        // the COST ceiling, not a quality term: with no far bound the taps run
+        // on nearly every terrain pixel (measured 4× G-buffer time on the
+        // fjord's grazing shore), and past ~2 repeats/pixel the mips have
+        // converged to neutral anyway so retiring is visually free.
+        #define DETAIL_FADE(g1, g2) ((1.0 - smoothstep(0.25, 0.75, min(length(g1), length(g2)))) * \
+                                     (1.0 - smoothstep(2.0, 4.0, max(length(g1), length(g2)))))
+        const float fadeY = DETAIL_FADE(gY1, gY2);
+        const float fadeZ = DETAIL_FADE(gZ1, gZ2);
+        const float fadeX = DETAIL_FADE(gX1, gX2);
 
         vec3 ovAccum = vec3(0.0);
         vec3 nAccum = vec3(0.0);
@@ -448,6 +532,132 @@ void main() {
             }
         }
     }
+
+    // ── Terrain band structure (MaterialWithTerrainMaps) ─────────────────────
+    // The per-tile weight map picks up to four repeating band sets; each active
+    // band runs the same triplanar + stochastic machinery as the detail layer
+    // (band textures are 0.5-neutral with HEIGHT in the albedo alpha), then the
+    // bands are HEIGHT-BLENDED: weights sharpen toward the band whose material
+    // stands tallest at this texel, so grass tufts interleave into gravel at a
+    // boundary instead of airbrush-cross-fading. Band base roughness replaces
+    // the material roughness over the covered fraction (snow ≠ rock ≠ asphalt).
+    // The macro splat `map` stays the colour base underneath — bands only
+    // modulate — so painted roads, baked AO and macro variation survive intact.
+    // Coverage < 1 (roads: weights baked to zero) degrades to pure macro. The
+    // supersedes-detail contract is enforced host-side (tiles with bands never
+    // carry a detailMap).
+    float terrainRoughReplace = -1.0;// >= 0 → replaces roughness below
+    if (m.terrainWeightTexIndex >= 0) {
+        const int wi = clamp(m.terrainWeightTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        const vec4 w4 = texture(gbufAlbedoMaps[nonuniformEXT(wi)], vUv);
+        const float coverage = min(w4.x + w4.y + w4.z + w4.w, 1.0);
+
+        // Projection weights from the GEOMETRIC normal (stable macro
+        // orientation; the map normal above carries texel-scale relief that
+        // would dither the projection choice).
+        const float kTri = 7.0;
+        vec3 aw = pow(abs(Ngeo), vec3(kTri));
+        aw = max(aw - 0.08, vec3(0.0));
+        aw /= max(aw.x + aw.y + aw.z, 1e-4);
+        const float maxw = max(aw.x, max(aw.y, aw.z));
+
+        // Un-scaled projected coords + derivatives, hoisted out of the band
+        // loop: per-band coords are a LINEAR scale of these, so derivatives
+        // and footprints scale with them — no dFdx in divergent flow.
+        // Short/long footprint axes feed the same two-sided fade as the detail
+        // block (short axis = grazing correctness, long axis = cost ceiling).
+        const vec2 pY = vWorldPos.xz; const vec2 bgY1 = dFdx(pY); const vec2 bgY2 = dFdy(pY);
+        const vec2 pZ = vWorldPos.xy; const vec2 bgZ1 = dFdx(pZ); const vec2 bgZ2 = dFdy(pZ);
+        const vec2 pX = vWorldPos.zy; const vec2 bgX1 = dFdx(pX); const vec2 bgX2 = dFdy(pX);
+        const float fwYs = min(length(bgY1), length(bgY2)); const float fwYl = max(length(bgY1), length(bgY2));
+        const float fwZs = min(length(bgZ1), length(bgZ2)); const float fwZl = max(length(bgZ1), length(bgZ2));
+        const float fwXs = min(length(bgX1), length(bgX2)); const float fwXl = max(length(bgX1), length(bgX2));
+
+        vec3 bandOv[4];
+        vec3 bandN[4];
+        float bandRM[4];
+        float bandH[4];
+        float bandW[4];
+        float wSum = 0.0;
+        if (coverage > 0.01) {
+            for (int b = 0; b < 4; ++b) {
+                bandW[b] = 0.0;
+                const float wb = w4[b];
+                if (wb < 0.03) continue;
+                const int aRaw = m.terrainBandAlbedoTex[b];
+                const int nRaw = m.terrainBandNormalTex[b];
+                if (aRaw < 0 && nRaw < 0) continue;
+                const int aIdx = aRaw >= 0 ? clamp(aRaw, 0, int(kMaxMaterialTextures) - 1) : -1;
+                const int nIdx = nRaw >= 0 ? clamp(nRaw, 0, int(kMaxMaterialTextures) - 1) : -1;
+                const float rep = m.terrainBandRepeat[b];
+                const float fadeY = (1.0 - smoothstep(0.25, 0.75, fwYs * rep)) * (1.0 - smoothstep(2.0, 4.0, fwYl * rep));
+                const float fadeZ = (1.0 - smoothstep(0.25, 0.75, fwZs * rep)) * (1.0 - smoothstep(2.0, 4.0, fwZl * rep));
+                const float fadeX = (1.0 - smoothstep(0.25, 0.75, fwXs * rep)) * (1.0 - smoothstep(2.0, 4.0, fwXl * rep));
+
+                vec3 ov = vec3(0.0);
+                vec3 nn = vec3(0.0);
+                float rm = 0.0;
+                float hh = 0.0;
+                float pw = 0.0;
+                if (aw.y > 0.001) {
+                    const BandContrib c = terrainBandProject(pY * rep, bgY1 * rep, bgY2 * rep, fadeY,
+                                                             vec3(1, 0, 0), vec3(0, 0, 1), N, aIdx, nIdx,
+                                                             m.terrainBandStrength, m.terrainNormalScale,
+                                                             m.terrainRoughStrength, aw.y >= maxw - 1e-6);
+                    ov += aw.y * c.albedoOverlay; nn += aw.y * c.normal; rm += aw.y * c.roughMul; hh += aw.y * c.height; pw += aw.y;
+                }
+                if (aw.z > 0.001) {
+                    const BandContrib c = terrainBandProject(pZ * rep, bgZ1 * rep, bgZ2 * rep, fadeZ,
+                                                             vec3(1, 0, 0), vec3(0, 1, 0), N, aIdx, nIdx,
+                                                             m.terrainBandStrength, m.terrainNormalScale,
+                                                             m.terrainRoughStrength, aw.z >= maxw - 1e-6);
+                    ov += aw.z * c.albedoOverlay; nn += aw.z * c.normal; rm += aw.z * c.roughMul; hh += aw.z * c.height; pw += aw.z;
+                }
+                if (aw.x > 0.001) {
+                    const BandContrib c = terrainBandProject(pX * rep, bgX1 * rep, bgX2 * rep, fadeX,
+                                                             vec3(0, 0, 1), vec3(0, 1, 0), N, aIdx, nIdx,
+                                                             m.terrainBandStrength, m.terrainNormalScale,
+                                                             m.terrainRoughStrength, aw.x >= maxw - 1e-6);
+                    ov += aw.x * c.albedoOverlay; nn += aw.x * c.normal; rm += aw.x * c.roughMul; hh += aw.x * c.height; pw += aw.x;
+                }
+                if (pw <= 1e-4) continue;
+                const float ipw = 1.0 / pw;
+                bandOv[b] = ov * ipw;
+                bandN[b] = normalize(nn);
+                bandRM[b] = rm * ipw;
+                bandH[b] = hh * ipw;
+                bandW[b] = wb;
+                wSum += wb;
+            }
+        }
+        if (wSum > 1e-3) {
+            // Height-blend: sharpen coverage toward the tallest band material.
+            // exp() keeps it order-preserving and smooth; heightBlend 0 =
+            // plain linear. Heights fade to 0.5 with distance, so far pixels
+            // degrade to the linear blend on their own.
+            float sw[4];
+            float sSum = 0.0;
+            for (int b = 0; b < 4; ++b) {
+                sw[b] = bandW[b] > 0.0 ? bandW[b] * exp(m.terrainHeightBlend * (bandH[b] - 0.5)) : 0.0;
+                sSum += sw[b];
+            }
+            const float inv = 1.0 / max(sSum, 1e-5);
+            vec3 ov = vec3(0.0);
+            vec3 nn = vec3(0.0);
+            float rBase = 0.0;
+            for (int b = 0; b < 4; ++b) {
+                if (sw[b] <= 0.0) continue;
+                const float w = sw[b] * inv;
+                ov += w * bandOv[b];
+                nn += w * bandN[b];
+                rBase += w * m.terrainBandRough[b] * bandRM[b];
+            }
+            // Covered fraction gets the band result; the rest keeps macro/material.
+            albedoSample *= mix(vec3(1.0), ov, coverage);
+            N = normalize(mix(N, normalize(nn), coverage));
+            terrainRoughReplace = mix(m.roughness, rBase, coverage);
+        }
+    }
     // Per-vertex color (material.vertexColors): vColor is white when the mesh
     // has no "color" attribute, so this multiply is a no-op then. Linear working
     // space — matches m.albedo.
@@ -477,6 +687,11 @@ void main() {
         // World-anchored detail roughness breakup (MaterialWithDetailMap detail
         // normal map's alpha). Fades with distance like the detail normal/albedo.
         roughness *= detailRoughMul;
+        // Terrain bands REPLACE roughness where they cover (already blended
+        // against m.roughness by coverage, band modulation folded in) — snow,
+        // rock and grass get their own specular identity instead of one
+        // material-wide constant.
+        if (terrainRoughReplace >= 0.0) roughness = terrainRoughReplace;
         roughness = clamp(roughness, 0.04, 1.0);
         metalness = clamp(metalness, 0.0,  1.0);
 

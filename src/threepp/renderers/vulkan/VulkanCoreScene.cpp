@@ -1476,6 +1476,18 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                             if (auto tex = detailNormalTexOf(*m)) {
                                 md.detailNormalTexIndex = ensureMaterialTexture(tex);
                             }
+                            if (auto tex = terrainWeightTexOf(*m)) {
+                                md.terrainWeightTexIndex = ensureMaterialTexture(tex);
+                                for (int bi = 0; bi < 4; ++bi) {
+                                    if (auto bt = terrainBandAlbedoTexOf(*m, bi))
+                                        md.terrainBandAlbedoTex[bi] = ensureMaterialTexture(bt);
+                                    if (auto bt = terrainBandNormalTexOf(*m, bi))
+                                        md.terrainBandNormalTex[bi] = ensureMaterialTexture(bt);
+                                }
+                            }
+                            if (auto tex = terrainNormalTexOf(*m)) {
+                                md.terrainNormalTexIndex = ensureMaterialTexture(tex);
+                            }
                             matDescsCached_[i] = md;
                         }
                         for (auto& d : matDescsDirty_) d = true;
@@ -2005,6 +2017,21 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
                     if (auto tex = detailNormalTexOf(*m)) {
                         md.detailNormalTexIndex = ensureMaterialTexture(tex);
                     }
+                    if (auto tex = terrainWeightTexOf(*m)) {
+                        md.terrainWeightTexIndex = ensureMaterialTexture(tex);
+                        // Band sets are SHARED textures (one allocation across
+                        // every tile material — ensureMaterialTexture dedupes
+                        // by pointer), so this costs 8 slots total, not 8/tile.
+                        for (int bi = 0; bi < 4; ++bi) {
+                            if (auto bt = terrainBandAlbedoTexOf(*m, bi))
+                                md.terrainBandAlbedoTex[bi] = ensureMaterialTexture(bt);
+                            if (auto bt = terrainBandNormalTexOf(*m, bi))
+                                md.terrainBandNormalTex[bi] = ensureMaterialTexture(bt);
+                        }
+                    }
+                    if (auto tex = terrainNormalTexOf(*m)) {
+                        md.terrainNormalTexIndex = ensureMaterialTexture(tex);
+                    }
                     matDescMemo.emplace(matKey, md);
                 }
                 matDescs[i] = md;
@@ -2056,38 +2083,71 @@ void VulkanRenderer::Impl::ensureSceneBuilt(Object3D& scene, Camera& camera) {
             for (auto& d : matDescsDirty_) d = false;
             cacheCullFlags(matDescs);
 
-            // Topology rebuild: the prev gbuf holds mesh IDs keyed by
-            // gl_InstanceCustomIndexEXT (= entry order). If that ordering shifted,
-            // those IDs no longer name the same surface, so the reproject mesh-ID
-            // guard would accept stale taps — clearing the gbuf (→ guard misses
-            // everywhere → histFc=0 globally, a full cold-start) is the safe path.
+            // Topology rebuild vs temporal history. Nothing consumed ACROSS
+            // frames keys on the entry order any more: the reproject guards
+            // compare the STABLE per-object id (ids .y) and read the prev
+            // texel's own moved bit (ids .z, kInstFlagMoving) instead of
+            // dereferencing geoms[prev ids .x], the ReSTIR reservoirs store
+            // world-space light samples (position + type, never an index),
+            // and prevWorldMats is keyed by (Mesh*, instanceIndex). The
+            // per-pixel depth/normal gates then cold-start exactly the pixels
+            // whose surface really changed. So neither an APPEND (spawned
+            // PhysX body, grown ParticleSystem) nor a mid-list REMOVAL /
+            // REORDER (a terrain tile split/merge swaps the parent for its
+            // children every few frames for seconds at a stretch) needs a
+            // global reset. The old positional stable-prefix check fell back
+            // to clearGbufImages + sampleIndex=0 + prevWorldMats.clear() on
+            // every removal — restarting the whole scene's accumulation AND
+            // the RNG sample stream a few frames apart for the entire
+            // streaming burst, which read as white shimmer on high-contrast
+            // edges under DLSS/TAA.
             //
-            // But the dominant dynamic case is APPEND-ONLY: existing entries keep
-            // their slots and new geometry is tacked on the end (a spawned PhysX
-            // body, a grown ParticleSystem, streamed-in meshes). There, every
-            // existing pixel's mesh ID is still valid and only the new entries lack
-            // history — which the per-pixel mesh-ID guard already cold-starts on its
-            // own. Clearing globally on every add throws away the whole scene's
-            // converged accumulation (the visible reconverge flash + smeared motion
-            // on every spawn). So detect the stable prefix and skip the reset.
-            // prevWorldMats is keyed by (Mesh*, instanceIndex), so it stays valid
-            // across an append too — new bodies are first-seen → identity motion.
-            // Reorder / removal-from-the-middle shifts the prefix → falls back to
-            // the clear.
-            bool appendOnly = sceneBuilt_ && currFp.size() >= prevSceneFingerprint.size();
-            for (size_t i = 0; appendOnly && i < prevSceneFingerprint.size(); ++i) {
-                const auto& a = currFp[i];
-                const auto& b = prevSceneFingerprint[i];
-                if (a.mesh != b.mesh || a.geom != b.geom || a.mat != b.mat ||
-                    a.instanceIndex != b.instanceIndex) {
-                    appendOnly = false;
+            // What still keys positionally is HOST state that outlives the
+            // frame, so remap it by identity instead of resetting:
+            //   meshMovedSticky_ — a removed entry's "recently moved"
+            //     countdown must not land on an unrelated survivor (a stale
+            //     moving label makes the trailing-edge guards reject history
+            //     at every silhouette for 30 frames — edge shimmer).
+            //   prevWorldMats — erase ONLY removed keys: a clear fakes
+            //     identity motion scene-wide for a frame, and a surviving
+            //     stale key could hand a recycled Mesh allocation a dead
+            //     entry's matrix (one-frame ghost motion).
+            // (meshMovedBits_ is refilled in CURRENT index space every
+            // ensureSceneBuilt pass, so it needs no remap.)
+            //
+            // A duplicate (mesh, instanceIndex) key would make the identity
+            // match ambiguous — not expected, every entry is its own TLAS
+            // slot — so that lone case falls back to the old global reset.
+            bool identityOk = sceneBuilt_;
+            if (identityOk) {
+                std::unordered_map<EntryKey, size_t, EntryKeyHash> oldIdx;
+                oldIdx.reserve(prevSceneFingerprint.size());
+                for (size_t i = 0; i < prevSceneFingerprint.size() && identityOk; ++i) {
+                    const auto& p = prevSceneFingerprint[i];
+                    identityOk = oldIdx.try_emplace(
+                            EntryKey{static_cast<const Mesh*>(p.mesh), p.instanceIndex}, i).second;
+                }
+                if (identityOk) {
+                    std::vector<uint32_t> remappedSticky(currFp.size(), 0u);
+                    for (size_t i = 0; i < currFp.size(); ++i) {
+                        const auto it = oldIdx.find(
+                                EntryKey{static_cast<const Mesh*>(currFp[i].mesh), currFp[i].instanceIndex});
+                        if (it == oldIdx.end()) continue;// new entry — no history
+                        if (it->second < meshMovedSticky_.size())
+                            remappedSticky[i] = meshMovedSticky_[it->second];
+                        oldIdx.erase(it);// leftovers below = removed entries
+                    }
+                    meshMovedSticky_.swap(remappedSticky);
+                    for (const auto& [key, idx] : oldIdx) prevWorldMats.erase(key);
                 }
             }
-            if (!appendOnly) {
+            if (!identityOk) {
+                // First build (nothing to preserve) or an ambiguous match.
                 // We're already past vkDeviceWaitIdle so the clear is synchronous.
                 clearGbufImages();
                 sampleIndex = 0;
                 prevWorldMats.clear();
+                meshMovedSticky_.clear();
             }
 
             // Grow motion-mat + mesh-moved-bits buffers if the new instance

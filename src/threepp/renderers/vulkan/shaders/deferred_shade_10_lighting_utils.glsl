@@ -89,18 +89,33 @@ bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, o
         // relative-depth (10% of view-Z > car height at driving distances) gates
         // both pass — so the object's reflection enters the ground's history and
         // trails it as a wake while the silhouette re-feeds it every frame. The
-        // ID compare is exact where those gates are blind; gated on the prev mesh
-        // being CURRENTLY MOVING so static scenes (tile seams) never false-reset.
+        // ID compare is exact where those gates are blind. Compares the STABLE
+        // per-object id (.y) + the prev texel's own moved-sticky bit (.z,
+        // kInstFlagMoving) — identity-stable across the entry-list renumber a
+        // terrain tile split/merge causes, unlike prev ids .x, which indexes the
+        // PREV draw list and made geoms[pid-1] read the wrong (or an out-of-
+        // range) entry for the whole streaming burst. Static scenes (tile
+        // seams) never false-reset: no moved bit, guard inert.
         // All 4 texels of the bilinear history footprint are checked.
         if (valid) {
             const vec2  sz  = vec2(float(pc.width), float(pc.height));
-            const uint  id  = texelFetch(gbufIdsTex, ivec2(uv * sz), 0).x;
+            const uint  sid = texelFetch(gbufIdsTex, ivec2(uv * sz), 0).y;
             const ivec2 mxP = ivec2(int(pc.width) - 1, int(pc.height) - 1);
             const ivec2 fb  = ivec2(floor(pUv * sz - 0.5));
+            // Object motion OR camera translation — see the trailing-edge
+            // guard in deferred_shade.comp: parallax past a static occluder
+            // has no moved bit, and with identity-stable ids the mismatch is
+            // a true surface change whenever the camera moved.
+            const bool camMovedR = pc.camDelta > 0.001;
             for (int dy = 0; dy <= 1 && valid; ++dy)
                 for (int dx = 0; dx <= 1 && valid; ++dx) {
-                    const uint pid = texelFetch(gbufIdsPrevTex, clamp(fb + ivec2(dx, dy), ivec2(0), mxP), 0).x;
-                    if (pid != id && pid > 0u && (geoms[pid - 1u].flags & 1u) != 0u) valid = false;
+                    const uvec4 pids = texelFetch(gbufIdsPrevTex, clamp(fb + ivec2(dx, dy), ivec2(0), mxP), 0);
+                    // Prev-sky texels carry stale last-surface history — reject
+                    // under camera motion (see the trailing-edge guard note in
+                    // deferred_shade.comp).
+                    const bool skyStale = pids.x == 0u && camMovedR;
+                    const bool objChange = pids.x > 0u && pids.y != sid && (ifMoving(pids.z) || camMovedR);
+                    if (skyStale || objChange) valid = false;
                 }
         }
     }
