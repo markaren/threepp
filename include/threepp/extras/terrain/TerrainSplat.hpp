@@ -71,6 +71,13 @@ namespace threepp::terrain {
         // Constant weight floor — give the "fallback" band (bare rock) a small
         // value so pixels that match no window still resolve to it, never grey.
         float weightFloor = 0.f;
+
+        // STRUCTURE band this layer feeds in the terrain shader's per-band
+        // texture sets (MaterialWithTerrainMaps): 0 grass, 1 rock, 2 scree,
+        // 3 snow (the makeTerrainBandSet convention). -1 = no structure — the
+        // layer's coverage shows only the macro splat colour. Several layers
+        // may share a band (grass + heath + wetland are all "grass" structure).
+        int structureBand = -1;
     };
 
     struct SplatRules {
@@ -132,18 +139,7 @@ namespace threepp::terrain {
             Rgb acc{0.f, 0.f, 0.f};
             float wsum = 0.f;
             for (const auto& L : layers) {
-                // One decorrelated noise sample drives both threshold wiggles.
-                const float nH = (vnoise(x * L.noiseFreq, z * L.noiseFreq) - 0.5f) * 2.f;
-                const float nS = (vnoise(x * L.noiseFreq + 19.3f, z * L.noiseFreq - 7.1f) - 0.5f) * 2.f;
-                const float st = slope + nS * L.noiseAmpSlope;
-                const float ht = h + nH * L.noiseAmpHeight;
-
-                float w = band(st, L.slopeLo, L.slopeHi, L.slopeFeather) *
-                          band(ht, L.heightLo, L.heightHi, L.heightFeather);
-                const float cr = 1.f + L.convexBias * std::max(0.f, -curvN) +
-                                 L.concaveBias * std::max(0.f, curvN);
-                w = w * cr + L.weightFloor;
-                w = std::max(w, 0.f);
+                const float w = layerWeight(L, x, z, h, slope, curvN);
 
                 acc[0] += L.color[0] * w;
                 acc[1] += L.color[1] * w;
@@ -195,6 +191,25 @@ namespace threepp::terrain {
             return acc;
         }
 
+        // STRUCTURE-band coverage at a sample: the same per-layer weights the
+        // colour blend uses, binned by SplatLayer::structureBand into w4[0..3]
+        // and normalised against the TOTAL layer weight — a pixel owned by
+        // band-less layers keeps Σw4 < 1 and shows only the macro colour.
+        // Written for the terrain shader's weight-map bake (LINEAR RGBA8).
+        void evaluateWeights(float x, float z, float h, float slope, float* w4) const {
+            const float curvN = curvatureN(x, z);
+            w4[0] = w4[1] = w4[2] = w4[3] = 0.f;
+            float wsum = 0.f;
+            for (const auto& L : layers) {
+                const float w = layerWeight(L, x, z, h, slope, curvN);
+                wsum += w;
+                if (L.structureBand >= 0 && L.structureBand < 4) w4[L.structureBand] += w;
+            }
+            if (wsum < 1e-5f) return;
+            const float inv = 1.f / wsum;
+            for (int b = 0; b < 4; ++b) w4[b] = std::clamp(w4[b] * inv, 0.f, 1.f);
+        }
+
         // Ready-to-assign TerrainProvider::albedo. The returned functor copies
         // the rules by value (pure/thread-safe for TileTerrain's async bake).
         [[nodiscard]] std::function<void(float, float, float, float, float*)> albedoFunction() const {
@@ -207,7 +222,31 @@ namespace threepp::terrain {
             };
         }
 
+        // Ready-to-assign TerrainProvider::weights (same by-value copy contract).
+        [[nodiscard]] std::function<void(float, float, float, float, float*)> weightsFunction() const {
+            SplatRules copy = *this;
+            return [copy](float x, float z, float h, float slope, float* w4) {
+                copy.evaluateWeights(x, z, h, slope, w4);
+            };
+        }
+
     private:
+        // One layer's weight at a sample (shared by evaluate/evaluateWeights so
+        // colour and structure coverage can never disagree). One decorrelated
+        // noise sample drives both threshold wiggles.
+        [[nodiscard]] float layerWeight(const SplatLayer& L, float x, float z,
+                                        float h, float slope, float curvN) const {
+            const float nH = (vnoise(x * L.noiseFreq, z * L.noiseFreq) - 0.5f) * 2.f;
+            const float nS = (vnoise(x * L.noiseFreq + 19.3f, z * L.noiseFreq - 7.1f) - 0.5f) * 2.f;
+            const float st = slope + nS * L.noiseAmpSlope;
+            const float ht = h + nH * L.noiseAmpHeight;
+
+            float w = band(st, L.slopeLo, L.slopeHi, L.slopeFeather) *
+                      band(ht, L.heightLo, L.heightHi, L.heightFeather);
+            const float cr = 1.f + L.convexBias * std::max(0.f, -curvN) +
+                             L.concaveBias * std::max(0.f, curvN);
+            return std::max(w * cr + L.weightFloor, 0.f);
+        }
         // Normalised curvature at (x,z): tanh(Laplacian · scale). Fixed eps so
         // adjacent LODs agree. <0 convex (ridge), >0 concave (hollow).
         //

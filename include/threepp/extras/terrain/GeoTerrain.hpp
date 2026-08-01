@@ -282,6 +282,7 @@ namespace threepp::terrain {
         const float sea = pack.region.seaLevel;
 
         SplatLayer wetland;// boggy shore / valley-floor darkening near sea level
+        wetland.structureBand = 0;// grass-family structure (tufty bog)
         wetland.color = {0.16f, 0.17f, 0.12f};
         wetland.slopeLo = 0.f; wetland.slopeHi = 0.30f; wetland.slopeFeather = 0.06f;
         wetland.heightLo = sea - 5.f;
@@ -291,6 +292,7 @@ namespace threepp::terrain {
         wetland.noiseAmpHeight = 2.5f;
 
         SplatLayer grass;// valley grass/heath on gentle low ground
+        grass.structureBand = 0;
         grass.color = {0.22f, 0.28f, 0.14f};
         grass.slopeLo = 0.f; grass.slopeHi = 0.34f; grass.slopeFeather = 0.06f;
         grass.heightHi = o.grassHeightMax;
@@ -300,6 +302,7 @@ namespace threepp::terrain {
         grass.noiseAmpHeight = 40.f;
 
         SplatLayer heath;// brown heath/fell above the grass, still gentle
+        heath.structureBand = 0;// still grass-family structure, browner colour
         heath.color = {0.30f, 0.27f, 0.17f};
         heath.slopeLo = 0.f; heath.slopeHi = 0.40f; heath.slopeFeather = 0.07f;
         heath.heightLo = o.grassHeightMax - 120.f;
@@ -308,18 +311,21 @@ namespace threepp::terrain {
         heath.noiseAmpHeight = 50.f;
 
         SplatLayer scree;// talus on medium slopes
+        scree.structureBand = 2;
         scree.color = {0.42f, 0.40f, 0.37f};
         scree.slopeLo = 0.34f; scree.slopeHi = 0.58f; scree.slopeFeather = 0.07f;
         scree.concaveBias = 0.9f;// collects in gullies
         scree.noiseAmpSlope = 0.03f;
 
         SplatLayer rock;// bare rock on the steep faces (fallback)
+        rock.structureBand = 1;
         rock.color = {0.34f, 0.33f, 0.31f};
         rock.slopeLo = 0.55f; rock.slopeHi = 1.f; rock.slopeFeather = 0.08f;
         rock.convexBias = 0.8f;   // bare on convex crests
         rock.weightFloor = 0.02f; // no texel resolves to grey
 
         SplatLayer snow;// snow up high, low slope, feathered line
+        snow.structureBand = 3;
         snow.color = {0.88f, 0.90f, 0.94f};
         snow.slopeLo = 0.f; snow.slopeHi = 0.60f; snow.slopeFeather = 0.10f;
         snow.heightLo = o.snowHeightMin;
@@ -385,6 +391,26 @@ namespace threepp::terrain {
                 rgb[0] = c[0];
                 rgb[1] = c[1];
                 rgb[2] = c[2];
+            };
+        }
+
+        // Structure-band weights for the terrain shader's per-band texture
+        // sets. Suppressed over painted pavement (asphalt is smooth — grass
+        // clump / rock plate relief crawling across a road reads as damage);
+        // the same pavedWeight the paint uses, so the two can never disagree.
+        {
+            const float edgeFeather = o.roadEdgeFeather;
+            const bool paint = o.paintRoads;
+            prov.weights = [rules, &network, edgeFeather, paint](float x, float z, float h,
+                                                                 float slope, float* w4) {
+                rules.evaluateWeights(x, z, h, slope, w4);
+                if (paint) {
+                    const float keep = 1.f - network.pavedWeight(x, z, edgeFeather);
+                    w4[0] *= keep;
+                    w4[1] *= keep;
+                    w4[2] *= keep;
+                    w4[3] *= keep;
+                }
             };
         }
 
