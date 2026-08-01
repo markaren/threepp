@@ -1146,6 +1146,83 @@ int main(int argc, char** argv) {
     // --single-grass flag rebuilds the identical blades as ONE merged mesh: its
     // single valley-spanning AABB is ~always on screen and near, so it is never
     // culled and never freezes — the "no culling" baseline for A/B measurement.
+    // ── waterline + footpath spine ──────────────────────────────────────────
+    //
+    // Hoisted ABOVE the meadow because the grass scatter has to reject blades
+    // inside the path corridor: a gravel ribbon laid under a full-density
+    // meadow is simply invisible from anywhere but straight overhead, which is
+    // exactly how it behaved before this.
+    float xWater = padX;
+    for (float x = padX; x > padX - 300.f; x -= 1.f) {
+        if (field.sampleBilinear(x, kPadZ) < 0.f) {
+            xWater = x;
+            break;
+        }
+    }
+
+    const auto fjordCabinMetrics = architecture::cabinMetrics(fjordCabinParams());
+    std::vector<Vector3> pathPts;// sampled centreline, world space
+    float pathMinX = 0.f, pathMaxX = 0.f, pathMinZ = 0.f, pathMaxZ = 0.f;
+    {
+        // Foot of the porch steps. The cabin is turned so its local +Z (the
+        // porch side) points down -X, and the steps sit on the door
+        // centreline, so the landing is straight out along -X at kPadZ.
+        const float xStart = padX - (fjordCabinMetrics.porchOuterZ + 0.16f + 0.29f * 3.f + 0.6f);
+        const float xEnd = xWater + 6.5f;// meets the dock's landward end
+        auto ground = [&](float x, float z) { return Vector3(x, terrainH(x, z), z); };
+        auto lerpX = [&](float t) { return xStart + (xEnd - xStart) * t; };
+
+        // A lazy S, not a straight run: a path worn by feet never takes the
+        // shortest line, and a ruler-straight strip reads as CG immediately.
+        CatmullRomCurve3 spine({
+                ground(xStart + 1.2f, kPadZ + 0.1f),
+                ground(lerpX(0.00f), kPadZ + 0.5f),
+                ground(lerpX(0.20f), kPadZ + 4.2f),
+                ground(lerpX(0.45f), kPadZ + 2.4f),
+                ground(lerpX(0.70f), kPadZ - 3.0f),
+                ground(lerpX(0.90f), kPadZ - 1.0f),
+                ground(xEnd, kPadZ + 0.3f),
+        });
+        constexpr int kSteps = 220;
+        pathPts.reserve(kSteps + 1);
+        for (int i = 0; i <= kSteps; ++i) {
+            Vector3 c;
+            spine.getPoint(static_cast<float>(i) / static_cast<float>(kSteps), c);
+            pathPts.push_back(c);
+        }
+        pathMinX = pathMaxX = pathPts[0].x;
+        pathMinZ = pathMaxZ = pathPts[0].z;
+        for (const auto& p : pathPts) {
+            pathMinX = std::min(pathMinX, p.x);
+            pathMaxX = std::max(pathMaxX, p.x);
+            pathMinZ = std::min(pathMinZ, p.z);
+            pathMaxZ = std::max(pathMaxZ, p.z);
+        }
+    }
+
+    // Distance from a world XZ to the path centreline. The bounding-box reject
+    // comes first so the 2 M-attempt grass loop pays only a few compares for
+    // the ~99% of samples nowhere near the corridor.
+    constexpr float kPathClear = 1.25f;// bare gravel out to here
+    constexpr float kPathFeather = 2.30f;// grass returns to full density here
+    auto pathDistance = [&](float x, float z) {
+        if (x < pathMinX - kPathFeather || x > pathMaxX + kPathFeather ||
+            z < pathMinZ - kPathFeather || z > pathMaxZ + kPathFeather)
+            return 1e9f;
+        float best = 1e9f;
+        for (size_t i = 1; i < pathPts.size(); ++i) {
+            const Vector3& a = pathPts[i - 1];
+            const Vector3& b = pathPts[i];
+            const float ex = b.x - a.x, ez = b.z - a.z;
+            const float len2 = ex * ex + ez * ez;
+            float t = 0.f;
+            if (len2 > 1e-8f) t = std::clamp(((x - a.x) * ex + (z - a.z) * ez) / len2, 0.f, 1.f);
+            const float dx = x - (a.x + ex * t), dz = z - (a.z + ez * t);
+            best = std::min(best, dx * dx + dz * dz);
+        }
+        return std::sqrt(best);
+    };
+
     std::vector<std::shared_ptr<GrassMesh>> grassTiles;
     {
         constexpr float kMeadowRadius = 190.f;   // valley-floor coverage (was 46)
@@ -1168,6 +1245,14 @@ int main(int argc, char** argv) {
             // Thin out as the ground climbs so grass fades into the slope rather
             // than ending in a hard altitude line (reuses the terrain's smoothstep).
             if (h > 34.f && u01(rng) < smoothstepf(34.f, 52.f, h)) continue;
+            // Clear the footpath. FEATHERED, not a hard cut: a corridor mown to
+            // a crisp edge reads as a stencil, while thinning over a metre
+            // reads as ground worn bare by use.
+            const float dPath = pathDistance(x, z);
+            if (dPath < kPathFeather) {
+                if (dPath < kPathClear) continue;
+                if (u01(rng) > smoothstepf(kPathClear, kPathFeather, dPath)) continue;
+            }
             vegetation::GrassBlade bl;
             bl.position.set(x, h - 0.04f, z);
             const float s = 0.5f + u01(rng) * 0.5f;
@@ -1238,17 +1323,6 @@ int main(int argc, char** argv) {
         farWindowMat = nullptr;
     }
 
-    // Waterline along -X from the pad (dock goes there).
-    float xWater = padX;
-    {
-        for (float x = padX; x > padX - 300.f; x -= 1.f) {
-            if (field.sampleBilinear(x, kPadZ) < 0.f) {
-                xWater = x;
-                break;
-            }
-        }
-    }
-
     auto woodMat = MeshStandardMaterial::create(
             MeshStandardMaterial::Params{}.color(Color(0.24f, 0.18f, 0.13f)).roughness(0.9f).metalness(0.f));
     {
@@ -1292,26 +1366,6 @@ int main(int argc, char** argv) {
     //     samples; edges dropped a third of a metre bury those crossings
     //     instead of leaving the path hovering over its own shadow.
     {
-        const auto cm = architecture::cabinMetrics(fjordCabinParams());
-        // Foot of the porch steps, in world space. The cabin is turned so its
-        // local +Z (the porch side) points down -X, and the steps sit on the
-        // door centreline, so the landing is straight out along -X at kPadZ.
-        const float xStart = padX - (cm.porchOuterZ + 0.16f + 0.29f * 3.f + 0.6f);
-        const float xEnd = xWater + 6.5f;// meets the dock's landward end
-
-        auto ground = [&](float x, float z) { return Vector3(x, terrainH(x, z), z); };
-        auto lerpX = [&](float t) { return xStart + (xEnd - xStart) * t; };
-
-        CatmullRomCurve3 spine({
-                ground(xStart + 1.2f, kPadZ + 0.1f),
-                ground(lerpX(0.00f), kPadZ + 0.5f),
-                ground(lerpX(0.20f), kPadZ + 4.2f),
-                ground(lerpX(0.45f), kPadZ + 2.4f),
-                ground(lerpX(0.70f), kPadZ - 3.0f),
-                ground(lerpX(0.90f), kPadZ - 1.0f),
-                ground(xEnd, kPadZ + 0.3f),
-        });
-
         auto pathTex = architecture::makeStoneTextures(256, 5u, {0.315f, 0.278f, 0.226f});
         auto pathMat = MeshStandardMaterial::create(
                 MeshStandardMaterial::Params{}.color(Color::white).roughness(0.98f).metalness(0.f));
@@ -1319,7 +1373,10 @@ int main(int argc, char** argv) {
         pathMat->normalMap = pathTex.second;
         pathMat->normalScale.set(0.8f, 0.8f);
 
-        constexpr int kSteps = 220;
+        // Ribbon built from the SAME sampled centreline the grass scatter
+        // rejected against, so the bare corridor and the gravel cannot drift
+        // apart if either is retuned.
+        const int kSteps = static_cast<int>(pathPts.size()) - 1;
         constexpr float kSkirt = 0.34f;
         std::vector<float> pos, nrm, uv;
         std::vector<unsigned int> idx;
@@ -1327,12 +1384,10 @@ int main(int argc, char** argv) {
         Vector3 prev;
         for (int i = 0; i <= kSteps; ++i) {
             const float t = static_cast<float>(i) / static_cast<float>(kSteps);
-            Vector3 c;
-            spine.getPoint(t, c);
-            // Tangent by central difference in the XZ plane.
-            Vector3 a, b;
-            spine.getPoint(std::max(0.f, t - 0.004f), a);
-            spine.getPoint(std::min(1.f, t + 0.004f), b);
+            const Vector3& c = pathPts[static_cast<size_t>(i)];
+            // Tangent from the neighbouring samples in the XZ plane.
+            const Vector3& a = pathPts[static_cast<size_t>(std::max(0, i - 1))];
+            const Vector3& b = pathPts[static_cast<size_t>(std::min(kSteps, i + 1))];
             float tx = b.x - a.x, tz = b.z - a.z;
             const float tl = std::sqrt(tx * tx + tz * tz);
             if (tl > 1e-5f) { tx /= tl; tz /= tl; }
