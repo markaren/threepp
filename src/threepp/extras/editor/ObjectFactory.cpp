@@ -1,6 +1,7 @@
 
 #include "threepp/extras/editor/ObjectFactory.hpp"
 
+#include "threepp/extras/editor/ConveyorConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
@@ -207,6 +208,37 @@ std::shared_ptr<Group> ObjectFactory::createSpline(const Object3D& root) {
     }
 
     return spline;
+}
+
+std::shared_ptr<Group> ObjectFactory::createConveyor(const Object3D& root) {
+
+    auto conveyor = Group::create();
+    conveyor->name = uniqueName(root, "Conveyor");
+    ConveyorConfig{}.write(*conveyor);
+
+    // A straight run at working height: the legs the frame generates need
+    // ground under them to reach, and a conveyor on the floor tells the user
+    // nothing about what they just added.
+    static constexpr float positions[][3] = {
+            {-1.5f, 0.75f, 0.f},
+            {0.f, 0.75f, 0.f},
+            {1.5f, 0.75f, 0.f}};
+
+    for (const auto& position : positions) {
+        auto point = createConveyorPoint(*conveyor);
+        point->position.set(position[0], position[1], position[2]);
+        conveyor->add(point);
+    }
+
+    return conveyor;
+}
+
+std::shared_ptr<Object3D> ObjectFactory::createConveyorPoint(const Object3D& conveyor) {
+
+    auto point = Object3D::create();
+    // Unique within the conveyor, like spline points: read against siblings.
+    point->name = uniqueName(conveyor, "Waypoint");
+    return point;
 }
 
 std::shared_ptr<Object3D> ObjectFactory::createSplinePoint(const Object3D& spline) {

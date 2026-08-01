@@ -58,6 +58,15 @@ namespace threepp::editor {
         // index the insertion calls for.
         static std::shared_ptr<Object3D> createSplinePoint(const Object3D& spline);
 
+        // A Group carrying ConveyorConfig, with three waypoint children forming
+        // a straight run at working height — enough for the generated belt,
+        // frame and drums to say what it is the moment it appears. See
+        // ConveyorConfig: the children ARE the waypoints.
+        static std::shared_ptr<Group> createConveyor(const Object3D& root);
+
+        // A new waypoint for `conveyor` — same contract as createSplinePoint.
+        static std::shared_ptr<Object3D> createConveyorPoint(const Object3D& conveyor);
+
         // "Box" if free, else "Box 2", "Box 3", ... Matching is exact, so a
         // user-typed "Box copy" never blocks "Box".
         static std::string uniqueName(const Object3D& root, const std::string& base);
