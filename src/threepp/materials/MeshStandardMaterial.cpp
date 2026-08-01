@@ -120,6 +120,17 @@ void MeshStandardMaterial::copyInto(Material& material) const {
     m->detailNormalScale = detailNormalScale;
     m->detailRoughStrength = detailRoughStrength;
 
+    m->terrainWeightMap = terrainWeightMap;
+    m->terrainNormalMap = terrainNormalMap;
+    m->terrainBandAlbedo = terrainBandAlbedo;
+    m->terrainBandNormalRough = terrainBandNormalRough;
+    m->terrainBandRepeat = terrainBandRepeat;
+    m->terrainBandRoughness = terrainBandRoughness;
+    m->terrainBandStrength = terrainBandStrength;
+    m->terrainBandNormalScale = terrainBandNormalScale;
+    m->terrainBandRoughStrength = terrainBandRoughStrength;
+    m->terrainHeightBlend = terrainHeightBlend;
+
     m->translucency = translucency;
     m->translucencyColor.copy(translucencyColor);
 

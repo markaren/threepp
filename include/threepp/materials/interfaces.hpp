@@ -7,6 +7,8 @@
 
 #include "threepp/textures/Texture.hpp"
 
+#include <array>
+
 namespace threepp {
 
     struct MaterialWithColor: virtual Material {
@@ -199,6 +201,51 @@ namespace threepp {
 
         MaterialWithDetailMap(float detailRepeat, float detailStrength)
             : detailRepeat(detailRepeat), detailStrength(detailStrength) {}
+    };
+
+    // threepp extension (no three.js equivalent). Terrain splat shading: the
+    // mesh's `map` stays the coarse per-tile MACRO colour (splat bands, baked
+    // AO/macro variation, painted roads), and this interface adds what resolves
+    // the surface at SCREEN density instead of bake density:
+    //   • terrainWeightMap  — RGBA, LINEAR, mesh UVs: coverage weight of up to
+    //     four structure bands (e.g. grass/rock/scree/snow), baked with the
+    //     macro colour. Selects which band texture sets shade each pixel.
+    //   • terrainNormalMap  — RGB, LINEAR, mesh UVs: WORLD-space surface normal
+    //     (n*0.5+0.5). Replaces the interpolated vertex normal in the G-buffer:
+    //     mip selection band-limits it per screen footprint, so tiles baked at
+    //     different LOD densities agree at their shared border (per-vertex
+    //     normals cannot — their finite-difference epsilon tracks tile
+    //     resolution and jumps across a LOD seam).
+    //   • band sets — per band, a repeating 0.5-neutral albedo overlay (A =
+    //     material HEIGHT for height-based band blending) and a normal +
+    //     roughness map (RGB tangent normal, A = roughness modulation), sampled
+    //     world-XZ anchored with the detail layer's stochastic tiling +
+    //     triplanar machinery, at a per-band repeat rate. Per-band base
+    //     roughness REPLACES the material roughness where bands cover.
+    // Consumed by the Vulkan deferred renderer's raster G-buffer only; every
+    // other renderer/path ignores it (tiles then show the macro `map`).
+    struct MaterialWithTerrainMaps: virtual Material {
+
+        static constexpr int kTerrainBands = 4;
+
+        std::shared_ptr<Texture> terrainWeightMap; // RGBA band weights (mesh UVs)
+        std::shared_ptr<Texture> terrainNormalMap; // world-space normal (mesh UVs)
+
+        // Per-band repeating texture sets (LINEAR; null band = inert).
+        std::array<std::shared_ptr<Texture>, kTerrainBands> terrainBandAlbedo{};     // 0.5-neutral, A = height
+        std::array<std::shared_ptr<Texture>, kTerrainBands> terrainBandNormalRough{};// RGB normal, A = rough mod
+        std::array<float, kTerrainBands> terrainBandRepeat{0.5f, 0.5f, 0.5f, 0.5f}; // repeats per world metre
+        std::array<float, kTerrainBands> terrainBandRoughness{0.9f, 0.9f, 0.9f, 0.9f};// base roughness per band
+
+        float terrainBandStrength = 1.f;    // 0..1 albedo-overlay modulation
+        float terrainBandNormalScale = 1.f; // tangent xy perturbation scale
+        float terrainBandRoughStrength = 0.6f;// 0..1 roughness modulation strength
+        float terrainHeightBlend = 6.f;     // height-blend sharpness (0 = plain linear)
+
+        [[nodiscard]] bool terrainMapsActive() const {
+            return terrainWeightMap != nullptr &&
+                   (terrainBandAlbedo[0] || terrainBandNormalRough[0]);
+        }
     };
 
     // Thin-leaf / foliage two-sided subsurface. Light reaching the BACK of a thin
