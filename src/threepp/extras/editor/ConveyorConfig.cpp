@@ -14,6 +14,7 @@
 #include <any>
 #include <cstdio>
 #include <string_view>
+#include <cmath>
 
 using namespace threepp;
 using namespace threepp::editor;
