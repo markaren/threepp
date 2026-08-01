@@ -28,9 +28,12 @@
 
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 #ifdef THREEPP_EDITOR_WITH_PHYSX
+#include "threepp/extras/editor/ConveyorPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
 #endif
+
+#include "threepp/extras/editor/ConveyorConfig.hpp"
 
 #include "threepp/core/Clock.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
@@ -712,6 +715,163 @@ int EditorApp::runScreenshot() {
         wrote = shoot(sibling("_instancing")) && wrote;
     }
 
+    // And the conveyors. What the picture answers that the assertions cannot:
+    // does a generated conveyor read as a MACHINE — frame, legs, drums, belt
+    // texture, roller bed, cleat bars, a true circular bend — and does the
+    // playing one carry its cargo mid-belt. Everything in the shot is
+    // first-party procedural geometry.
+    {
+        selectObject(nullptr);
+
+        // A long straight belt on the frame, cargo dropped at its upstream end.
+        auto straight = ObjectFactory::createConveyor(document_.scene());
+        straight->name = "Conveyor Straight";
+        straight->position.set(30.f, 0.f, -6.f);
+        {
+            const auto nodes = ConveyorConfig::waypointNodes(*straight);
+            nodes[0]->position.set(-3.5f, 0.75f, 0.f);
+            nodes[1]->position.set(0.f, 0.75f, 0.f);
+            nodes[2]->position.set(3.5f, 0.75f, 0.f);
+            auto config = ConveyorConfig::read(*straight).value_or(ConveyorConfig{});
+            config.speed = 1.f;
+            config.width = 0.9f;
+            config.write(*straight);
+        }
+        addObject(straight, document_.scene(), "Add Conveyor");
+
+        // A guide wall riding beside it — the separator form.
+        auto rail = ObjectFactory::createConveyor(document_.scene());
+        rail->name = "Conveyor Rail";
+        rail->position.set(30.f, 0.75f, -5.35f);
+        {
+            const auto nodes = ConveyorConfig::waypointNodes(*rail);
+            nodes[0]->position.set(-3.5f, 0.f, 0.f);
+            nodes[1]->position.set(0.f, 0.f, 0.f);
+            nodes[2]->position.set(3.5f, 0.f, 0.f);
+            auto config = ConveyorConfig::read(*rail).value_or(ConveyorConfig{});
+            config.separator = true;
+            config.wallHeight = 0.35f;
+            config.write(*rail);
+        }
+        addObject(rail, document_.scene(), "Add Conveyor Rail");
+
+        // A roller bed running into an exact 90-degree bend (arc-centre
+        // waypoint) — the two per-segment surfaces the flat shot can't show.
+        auto bend = ObjectFactory::createConveyor(document_.scene());
+        bend->name = "Conveyor Bend";
+        bend->position.set(28.f, 0.f, 2.f);
+        {
+            bend->add(ObjectFactory::createConveyorPoint(*bend));
+            const auto nodes = ConveyorConfig::waypointNodes(*bend);
+            nodes[0]->position.set(-3.f, 0.75f, 0.f);
+            nodes[1]->position.set(0.f, 0.75f, 0.f);
+            nodes[2]->position.set(0.f, 0.75f, 2.5f);// arc centre, radius 2.5
+            nodes[3]->position.set(2.5f, 0.75f, 2.5f);
+            ConveyorWaypointConfig rollers;
+            rollers.segKind = conveyor::SegKind::Rollers;
+            rollers.write(*nodes[0]);
+            ConveyorWaypointConfig arc;
+            arc.arcCenter = true;
+            arc.write(*nodes[2]);
+            auto config = ConveyorConfig::read(*bend).value_or(ConveyorConfig{});
+            config.speed = 0.8f;
+            config.smooth = false;
+            config.width = 0.9f;
+            config.write(*bend);
+        }
+        addObject(bend, document_.scene(), "Add Conveyor Bend");
+
+        // A climb with cleats: the flight bars are why cargo does not slide
+        // back down the incline.
+        auto climb = ObjectFactory::createConveyor(document_.scene());
+        climb->name = "Conveyor Climb";
+        climb->position.set(24.f, 0.f, 8.f);
+        {
+            const auto nodes = ConveyorConfig::waypointNodes(*climb);
+            nodes[0]->position.set(-3.f, 0.5f, 0.f);
+            nodes[1]->position.set(-0.5f, 0.55f, 0.f);
+            nodes[2]->position.set(3.f, 2.f, 0.f);
+            ConveyorWaypointConfig cleats;
+            cleats.segKind = conveyor::SegKind::Cleats;
+            cleats.write(*nodes[1]);
+            auto config = ConveyorConfig::read(*climb).value_or(ConveyorConfig{});
+            config.speed = 0.7f;
+            config.width = 0.9f;
+            config.cleatHeight = 0.2f;
+            config.write(*climb);
+        }
+        addObject(climb, document_.scene(), "Add Conveyor Climb");
+        playFor(0.2f);// the sync pass derives the parts
+        {
+            std::size_t parts = 0;
+            for (auto* owner : {straight.get(), rail.get(), bend.get(), climb.get()}) {
+                if (auto* group = ConveyorConfig::derivedGroup(*owner)) {
+                    parts += group->children.size();
+                }
+            }
+            std::cout << "[screenshot] conveyors: 4 authored, " << parts
+                      << " generated parts" << std::endl;
+        }
+
+        // NOT the `drop` lambda from the tube section: it closed over a Scene
+        // reference the play/stop cycles since then have replaced twice.
+        const auto cargo = [&](const Vector3& from, const char* label) {
+            auto object = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+            object->name = label;
+            object->position.copy(from);
+            PhysicsConfig config;
+            config.enabled = true;
+            config.friction = 0.8f;
+            config.write(*object);
+            addObject(object, document_.scene(), label);
+        };
+        cargo({26.8f, 1.4f, -6.f}, "Cargo on straight");
+        cargo({25.3f, 1.3f, 2.f}, "Cargo on rollers");
+        cargo({21.5f, 1.2f, 8.f}, "Cargo on climb");
+        playFor(0.2f);
+
+        camera_.position.set(38.f, 8.f, 15.f);
+        orbit_->target.set(26.5f, 0.8f, 2.5f);
+        playFor(0.3f);
+        wrote = shoot(sibling("_conveyors")) && wrote;
+
+        // Plan view: the one projection that shows whether the bend is the
+        // exact quarter circle its arc-centre waypoint asked for, and whether
+        // the rails run parallel along it.
+        setOrthographic(true);
+        setViewPreset(ViewPreset::Top);
+        playFor(0.2f);
+        wrote = shoot(sibling("_conveyors_top")) && wrote;
+        setOrthographic(false);
+        camera_.position.set(38.f, 8.f, 15.f);
+        orbit_->target.set(26.5f, 0.8f, 2.5f);
+        playFor(0.2f);
+
+        // The same machines running: cargo mid-belt, cleat bars risen with it.
+        startPlay();
+        {
+            Clock beltClock;
+            float elapsed = 0.f;
+            for (int i = 0; i < 20000 && elapsed < 2.2f; ++i) {
+                const float dt = beltClock.getDelta();
+                elapsed += std::max(dt, 0.f);
+                canvas_.animateOnce([&] { frame(dt); });
+            }
+        }
+        wrote = shoot(sibling("_conveyors_play")) && wrote;
+
+        // Close on the climb, still playing: the travelling cleat bars behind
+        // the cargo are the reason it is not sliding back down the incline —
+        // and the shot that shows the bars folding flat at the pulleys.
+        camera_.position.set(28.5f, 3.f, 12.5f);
+        orbit_->target.set(24.f, 1.2f, 8.f);
+        playFor(0.4f);
+        wrote = shoot(sibling("_conveyor_climb")) && wrote;
+
+        stopPlay();
+        playFor(0.2f);
+    }
+
 #ifdef THREEPP_EDITOR_WITH_PYTHON
     // And the generator, running the SAME template the Add-generator-script
     // button hands the user. If that template does not produce a field, the first
@@ -826,6 +986,7 @@ int EditorApp::runSelfTest() {
         for (auto* child : overlay_->children) {
             if (child == grid_.get() || child == axes_.get() ||
                 child == markers_.get() || child == splines_.get() ||
+                child == conveyors_.get() ||
                 child == static_cast<Object3D*>(physicsDebugLines_.get()) ||
                 child == static_cast<Object3D*>(cameraHelper_.get()) ||
                 child == static_cast<Object3D*>(gizmo_.get())) continue;
@@ -3343,6 +3504,326 @@ int EditorApp::runSelfTest() {
 
         std::error_code ec;
         std::filesystem::remove(splinePath, ec);
+    }
+
+    // Conveyors. Same authoring model as splines — a Group whose children are
+    // its waypoints — plus generated content (belt, frame, rollers, cleats)
+    // and, under Play, kinematic belt physics that CONVEYS bodies.
+    {
+        const auto conveyorNow = [&](const std::string& uuid) {
+            return findByUuid(document_.scene(), uuid);
+        };
+
+        auto created = ObjectFactory::createConveyor(document_.scene());
+        const auto conveyorUuid = created->uuid;
+        addObject(created, document_.scene(), "Add Conveyor");
+        created.reset();// the command owns it now
+        step();
+
+        auto* conveyor = conveyorNow(conveyorUuid);
+        check(conveyor && ConveyorConfig::isConveyor(*conveyor), "the factory creates a conveyor");
+        check(conveyor && ConveyorConfig::waypointNodes(*conveyor).size() == 3,
+              "with waypoints as its children");
+        check(conveyorOverlays_.size() == 1, "the conveyor gets a path overlay");
+
+        auto* derived = conveyor ? ConveyorConfig::derivedGroup(*conveyor) : nullptr;
+        check(derived != nullptr, "and generates its parts group");
+
+        // Parts by role: the generated content is the conveyor's LOOK, all of
+        // it first-party procedural geometry.
+        const auto roleCount = [&](const char* role) {
+            std::size_t n = 0;
+            auto* live = conveyorNow(conveyorUuid);
+            auto* group = live ? ConveyorConfig::derivedGroup(*live) : nullptr;
+            if (group) {
+                group->traverse([&](Object3D& o) {
+                    if (ConveyorConfig::roleOf(o) == role) ++n;
+                });
+            }
+            return n;
+        };
+        check(roleCount("belt") == 1, "a straight run generates one belt ribbon");
+        check(roleCount("drum") == 2, "an end drum (pulley) at each open end");
+        check(roleCount("frame") >= 4, "side rails and legs make up the frame");
+
+        // Per-segment surfaces live on the WAYPOINT nodes, so flipping one
+        // regenerates the parts without touching the conveyor's own config.
+        if (conveyor) {
+            auto nodes = ConveyorConfig::waypointNodes(*conveyor);
+            ConveyorWaypointConfig wp;
+            wp.segKind = conveyor::SegKind::Rollers;
+            wp.write(*nodes.front());
+            step();
+            check(roleCount("roller") >= 3, "a rollers segment grows a roller bed");
+            check(roleCount("belt") == 1, "while the other segment keeps its ribbon");
+
+            wp.segKind = conveyor::SegKind::Cleats;
+            wp.write(*nodes.front());
+            step();
+            check(roleCount("cleat") >= 1, "a cleats segment grows preview flight bars");
+            check(roleCount("roller") == 0, "and the rollers it replaced are gone");
+
+            ConveyorWaypointConfig::erase(*nodes.front());
+            step();
+            check(roleCount("cleat") == 0 && roleCount("belt") == 1,
+                  "clearing the waypoint entry returns the segment to a flat belt");
+        }
+
+        // A separator is a wall, not a belt: no frame, no drums, one wall.
+        if (conveyor) {
+            auto config = ConveyorConfig::read(*conveyor).value_or(ConveyorConfig{});
+            auto separator = config;
+            separator.separator = true;
+            separator.write(*conveyor);
+            step();
+            check(roleCount("wall") == 1 && roleCount("belt") == 0 && roleCount("drum") == 0,
+                  "a separator generates one wall and nothing else");
+            config.write(*conveyor);
+            step();
+            check(roleCount("belt") == 1, "and switching back restores the belt");
+        }
+
+        // Waypoint editing is the ordinary machinery: add is undoable, delete
+        // is the ordinary delete.
+        if (conveyor) {
+            addConveyorPoint(*conveyor, AddObjectCommand::atEnd, "Add Waypoint");
+            step();
+            conveyor = conveyorNow(conveyorUuid);
+            check(conveyor && ConveyorConfig::waypointNodes(*conveyor).size() == 4,
+                  "Add Waypoint appends a waypoint");
+            commands_.undo();
+            step();
+            conveyor = conveyorNow(conveyorUuid);
+            check(conveyor && ConveyorConfig::waypointNodes(*conveyor).size() == 3,
+                  "and the append is undoable");
+        }
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        // Play: the belt CONVEYS. A dynamic box dropped onto the moving surface
+        // must travel along it — that is the feature, everything else is décor.
+        {
+            auto boxMesh = ObjectFactory::createPrimitive(Primitive::Box,
+                                                          document_.scene());
+            boxMesh->name = "ConveyorCargo";
+            // Over the upstream end of the default belt (surface y=0.75),
+            // dropped a hair so it lands rather than spawns intersecting.
+            boxMesh->position.set(-1.2f, 1.32f, 0.f);
+            boxMesh->scale.set(0.4f, 0.4f, 0.4f);
+            PhysicsConfig cargo;
+            cargo.enabled = true;
+            cargo.write(*boxMesh);
+            const auto cargoUuid = boxMesh->uuid;
+            addObject(boxMesh, document_.scene(), "Add Cargo");
+            boxMesh.reset();
+            step();
+
+            startPlay();
+            step(2);
+            check(conveyorSession_ && conveyorSession_->conveyorCount() == 1,
+                  "the play session picks the conveyor up");
+            check(conveyorSession_ && conveyorSession_->beltCount() >= 2,
+                  "and builds belt colliders for it");
+
+            auto* cargo1 = findByUuid(document_.scene(), cargoUuid);
+            float startX = cargo1 ? cargo1->position.x : 0.f;
+            // Bounded by PLAY TIME, not frames: the selftest runs unthrottled,
+            // so a frame is however little wall clock the machine needs, and
+            // the belt (0.6 m/s) moves cargo by SIMULATED seconds. Half a
+            // metre needs ~1 s of belt time; 8 s is comfortable on any box.
+            bool conveyed = false, onBelt = true;
+            for (int i = 0; i < 200000 && !conveyed && play_.elapsed() < 8.f; ++i) {
+                step();
+                cargo1 = findByUuid(document_.scene(), cargoUuid);
+                if (!cargo1) break;
+                if (cargo1->position.x - startX > 0.5f) conveyed = true;
+                if (cargo1->position.y < 0.4f) {
+                    onBelt = false;// fell through / off the side
+                    break;
+                }
+            }
+            check(conveyed, "the belt conveys a rigid box along its travel direction");
+            check(onBelt, "which rides ON the belt the whole way");
+            check(cargo1 && std::abs(cargo1->position.z) < 0.4f,
+                  "without drifting off the side");
+
+            stopPlay();
+            step();
+            auto* restored = findByUuid(document_.scene(), cargoUuid);
+            check(restored && std::abs(restored->position.x - (-1.2f)) < 1e-3f,
+                  "and Stop puts the cargo back where it was authored");
+        }
+
+        // An arc bend is ONE rotating body, and it really turns cargo. 90
+        // degrees around (0, 2): in from -Z, out along +X.
+        {
+            auto arcConveyor = ObjectFactory::createConveyor(document_.scene());
+            const auto arcUuid = arcConveyor->uuid;
+            addObject(arcConveyor, document_.scene(), "Add Arc Conveyor");
+            arcConveyor.reset();
+            step();
+
+            auto* arc = conveyorNow(arcUuid);
+            if (arc) {
+                auto nodes = ConveyorConfig::waypointNodes(*arc);
+                // A (start), C (arc centre), B (end): radius 2, quarter turn.
+                nodes[0]->position.set(0.f, 0.75f, 0.f);
+                nodes[1]->position.set(0.f, 0.75f, 2.f);
+                nodes[2]->position.set(2.f, 0.75f, 2.f);
+                ConveyorWaypointConfig wp;
+                wp.arcCenter = true;
+                wp.write(*nodes[1]);
+                step();
+            }
+
+            auto cargo = ObjectFactory::createPrimitive(Primitive::Box,
+                                                        document_.scene());
+            cargo->name = "ArcCargo";
+            // On the arc's midpoint (angle -45 degrees about the centre).
+            cargo->position.set(1.414f, 1.32f, 0.586f);
+            cargo->scale.set(0.4f, 0.4f, 0.4f);
+            PhysicsConfig cargoConfig;
+            cargoConfig.enabled = true;
+            cargoConfig.write(*cargo);
+            const auto cargoUuid = cargo->uuid;
+            addObject(cargo, document_.scene(), "Add Arc Cargo");
+            cargo.reset();
+            step();
+
+            startPlay();
+            step(2);
+            check(conveyorSession_ && conveyorSession_->conveyorCount() == 2,
+                  "both conveyors play at once");
+
+            const Vector3 centre(0.f, 0.f, 2.f);
+            auto* riding = findByUuid(document_.scene(), cargoUuid);
+            const float angle0 = riding ? std::atan2(riding->position.z - centre.z,
+                                                     riding->position.x - centre.x)
+                                        : 0.f;
+            bool turned = false, onArc = true;
+            for (int i = 0; i < 200000 && !turned && play_.elapsed() < 8.f; ++i) {
+                step();
+                riding = findByUuid(document_.scene(), cargoUuid);
+                if (!riding) break;
+                const float angle = std::atan2(riding->position.z - centre.z,
+                                               riding->position.x - centre.x);
+                if (angle - angle0 > 0.15f) turned = true;// toward B (angle 0 -> +?)
+                const float radius = std::hypot(riding->position.x - centre.x,
+                                                riding->position.z - centre.z);
+                if (riding->position.y < 0.4f || radius < 1.3f || radius > 2.7f) {
+                    onArc = false;
+                    break;
+                }
+            }
+            check(turned, "the bend carries cargo around the arc");
+            check(onArc, "keeping it on the annulus at belt height");
+
+            stopPlay();
+            step();
+        }
+
+        // Soft bodies convey too — the reason the belts are kinematic dynamics.
+        // Only asserted when the machine could actually cook one (CUDA); the
+        // rigid checks above carry the feature elsewhere.
+        {
+            auto ball = ObjectFactory::createPrimitive(Primitive::Sphere,
+                                                       document_.scene());
+            ball->name = "SoftCargo";
+            ball->position.set(-1.2f, 1.25f, 0.f);
+            ball->scale.set(0.6f, 0.6f, 0.6f);
+            PhysicsConfig soft;
+            soft.enabled = true;
+            soft.body = PhysicsConfig::Body::Soft;
+            soft.write(*ball);
+            const auto ballUuid = ball->uuid;
+            addObject(ball, document_.scene(), "Add Soft Cargo");
+            ball.reset();
+            step();
+
+            startPlay();
+            step(2);
+            if (physics_ && physics_->softBodyCount() == 1) {
+                auto* riding = findByUuid(document_.scene(), ballUuid);
+                float startX = riding ? riding->position.x : 0.f;
+                bool conveyed = false;
+                for (int i = 0; i < 200000 && !conveyed && play_.elapsed() < 10.f; ++i) {
+                    step();
+                    riding = findByUuid(document_.scene(), ballUuid);
+                    if (!riding) break;
+                    // A soft body's node stays put; the SIMULATION rewrites its
+                    // geometry in world space. Read the surface, not the node.
+                    const auto geometry = riding->geometry();
+                    const auto* position = geometry ? geometry->getAttribute<float>("position")
+                                                    : nullptr;
+                    if (position && position->count() > 0) {
+                        float meanX = 0.f;
+                        for (std::size_t v = 0; v < position->count(); ++v) {
+                            meanX += position->getX(v);
+                        }
+                        meanX /= static_cast<float>(position->count());
+                        if (i == 0) startX = meanX;
+                        if (meanX - startX > 0.4f) conveyed = true;
+                    }
+                }
+                check(conveyed, "a soft body rides the belt (GPU dynamics)");
+            } else {
+                // No CUDA: the physics session already logged why. Not a
+                // failure of the conveyor.
+                check(true, "soft cargo skipped - no GPU soft body this run");
+            }
+            stopPlay();
+            step();
+        }
+#endif
+
+        // Save and reload: config, per-waypoint entries and the generated group
+        // are all plain document content.
+        const auto conveyorPath = std::filesystem::temp_directory_path() /
+                                  "threepp-editor-selftest-conveyor.json";
+        if (auto* live = conveyorNow(conveyorUuid)) {
+            ConveyorConfig authored;
+            authored.width = 0.8f;
+            authored.speed = 1.1f;
+            authored.smooth = false;
+            authored.cleatSpacing = 0.5f;
+            authored.write(*live);
+            auto nodes = ConveyorConfig::waypointNodes(*live);
+            ConveyorWaypointConfig wp;
+            wp.segKind = conveyor::SegKind::Cleats;
+            wp.write(*nodes[1]);
+            const auto derivedUuid = ConveyorConfig::derivedGroup(*live)
+                                             ? ConveyorConfig::derivedGroup(*live)->uuid
+                                             : std::string{};
+            step();
+
+            saveSceneAs(conveyorPath);
+            openScene(conveyorPath);
+            step();
+
+            auto* reloaded = conveyorNow(conveyorUuid);
+            check(reloaded != nullptr, "the conveyor survives save and reload");
+            check(reloaded && ConveyorConfig::read(*reloaded) == authored,
+                  "its config round-trips through the document");
+            bool wpKept = false;
+            if (reloaded) {
+                auto reloadedNodes = ConveyorConfig::waypointNodes(*reloaded);
+                wpKept = reloadedNodes.size() == 3 &&
+                         ConveyorWaypointConfig::read(*reloadedNodes[1]).segKind ==
+                                 conveyor::SegKind::Cleats;
+            }
+            check(wpKept, "and so does the per-waypoint surface choice");
+            check(reloaded && ConveyorConfig::derivedGroup(*reloaded) &&
+                          ConveyorConfig::derivedGroup(*reloaded)->uuid == derivedUuid,
+                  "the parts group is adopted by uuid, not duplicated");
+            check(reloaded && roleCount("cleat") >= 1,
+                  "and regenerates the cleat bars the reloaded config asks for");
+        }
+
+        newScene();
+        step(2);
+        check(conveyorOverlays_.empty(), "a scene replace drops every conveyor overlay");
+
+        std::error_code conveyorEc;
+        std::filesystem::remove(conveyorPath, conveyorEc);
     }
 
     // With a model path on the command line, exercise the async import path

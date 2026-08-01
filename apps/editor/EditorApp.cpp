@@ -7,6 +7,7 @@
 #include "PanelLayout.hpp"
 
 #include "threepp/extras/editor/AnimationPlaySession.hpp"
+#include "threepp/extras/editor/ConveyorConfig.hpp"
 #include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/extras/editor/MaterialTextureSlots.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
@@ -24,6 +25,7 @@
 
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 #ifdef THREEPP_EDITOR_WITH_PHYSX
+#include "threepp/extras/editor/ConveyorPlaySession.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
 #endif
@@ -253,6 +255,10 @@ EditorApp::EditorApp(const Options& options)
     splines_->name = "__editor_splines";
     overlay_->add(splines_);
 
+    conveyors_ = Group::create();
+    conveyors_->name = "__editor_conveyors";
+    overlay_->add(conveyors_);
+
     // Editor-only like the overlay, but a SIBLING of it rather than a child: the
     // overlay is hidden for the duration of every sensor scan (a depth camera
     // pointed at the grid otherwise measures the grid), and a sensor must not be
@@ -320,6 +326,7 @@ EditorApp::EditorApp(const Options& options)
         // gone.
         clearViewportMarkers();
         clearSplineOverlays();
+        clearConveyorOverlays();
         // The collider lines are world-space and belong to a world that stop()
         // has already destroyed; the node itself is parented to the surviving
         // overlay, so it has to be taken down explicitly.
@@ -393,6 +400,12 @@ EditorApp::EditorApp(const Options& options)
     // up; both are worth a line in the log rather than silence.
     physics_->setLogger([this](const std::string& message) { log(message); });
     play_.addSession(physics_);
+    // Right after physics: its start() borrows the world physics just built,
+    // and stopping in reverse order tears the belts down while that world is
+    // still alive.
+    conveyorSession_ = std::make_shared<ConveyorPlaySession>();
+    conveyorSession_->setPhysics(physics_.get());
+    play_.addSession(conveyorSession_);
 #endif
     play_.addSession(std::make_shared<AnimationPlaySession>());
     // After physics (whose world the pushed sensors register with) and after the
@@ -1866,6 +1879,46 @@ void EditorApp::addSplinePoint(Object3D& spline, std::size_t index, const std::s
     scrollTo_ = raw;
 }
 
+void EditorApp::addConveyorPoint(Object3D& conveyor, std::size_t index, const std::string& label) {
+
+    // The spline twin, waypoint for control point — see addSplinePoint for the
+    // placement rule (the path must visibly change).
+    if (rejectWhilePlaying(label.c_str())) return;
+
+    if (!ConveyorConfig::isConveyor(conveyor)) return;
+
+    std::vector<Vector3> points;
+    for (const auto* node : ConveyorConfig::waypointNodes(conveyor)) {
+        points.push_back(node->position);
+    }
+    const auto count = points.size();
+    const auto slot = std::min(index, count);
+
+    Vector3 position;
+    if (count == 0) {
+        // Nothing to extend; the origin of the conveyor's own space.
+    } else if (slot == 0) {
+        position.copy(points.front());
+        if (count > 1) position.sub(points[1]).add(points.front());
+    } else if (slot >= count) {
+        position.copy(points.back());
+        if (count > 1) position.sub(points[count - 2]).add(points.back());
+        else position.x += 1.f;
+    } else {
+        position.copy(points[slot - 1]).add(points[slot]).multiplyScalar(0.5f);
+    }
+
+    auto point = ObjectFactory::createConveyorPoint(conveyor);
+    point->position.copy(position);
+
+    auto* raw = point.get();
+    commands_.execute(std::make_unique<AddObjectCommand>(
+            conveyor, point, label, ConveyorConfig::childSlotForPointIndex(conveyor, slot)));
+    document_.setDirty(true);
+    selectObject(raw);
+    scrollTo_ = raw;
+}
+
 void EditorApp::deleteSelected() {
 
     // The one that is not merely confusing: PhysX holds an actor per body, and
@@ -2289,6 +2342,7 @@ void EditorApp::refreshSelectionHelpers() {
 
     syncViewportMarkers();
     syncSplineOverlays();
+    syncConveyorOverlays();
     syncPhysicsDebug();
     syncDebugDraw();
     syncSensorOverlay();

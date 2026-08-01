@@ -6,6 +6,7 @@
 
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/ArticulationConfig.hpp"
+#include "threepp/extras/editor/ConveyorConfig.hpp"
 #include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/extras/editor/MaterialTextureSlots.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
@@ -265,6 +266,7 @@ void EditorApp::drawInspector() {
         drawAnimationSection(*selected);
         drawJointsSection(*selected);
         drawSplineSection(*selected);
+        drawConveyorSection(*selected);
         drawScriptSection(*selected);
         drawPhysicsSection(*selected);
         drawSensorSection(*selected);
@@ -1916,6 +1918,239 @@ void EditorApp::drawSplineSection(Object3D& object) {
 
     ImGui::TextColored(theme::muted(), "Children are the control points, in order.");
     ImGui::TextColored(theme::muted(), "Stored in userData[\"spline\"]");
+
+    ImGui::TreePop();
+}
+
+
+// ----------------------------------------------------------------- conveyor
+
+void EditorApp::drawConveyorSection(Object3D& object) {
+
+    // Two forms of the same section, like the spline's: a conveyor and one of
+    // its waypoints are both ordinary scene nodes — the userData entry and the
+    // parent link tell them apart.
+    if (auto* conveyor = ConveyorConfig::conveyorOf(object)) {
+
+        if (!section("Conveyor Waypoint")) return;
+
+        const auto index = ConveyorConfig::pointIndexOf(*conveyor, object);
+        const auto count = ConveyorConfig::waypointNodes(*conveyor).size();
+        ImGui::TextColored(theme::muted(), "Waypoint %zu of %zu in \"%s\"",
+                           index + 1, count, conveyor->name.c_str());
+
+        auto* node = &object;
+        const auto wpBefore = ConveyorWaypointConfig::read(object);
+        const auto commitWp = [&](ConveyorWaypointConfig after, const char* label) {
+            commands_.execute(makeProperty<ConveyorWaypointConfig>(
+                    label, "conveyorWp:" + object.uuid,
+                    [node](const ConveyorWaypointConfig& value) { value.write(*node); },
+                    wpBefore, after));
+            document_.setDirty(true);
+        };
+
+        const auto parentConfig = ConveyorConfig::read(*conveyor).value_or(ConveyorConfig{});
+
+        {
+            bool arc = wpBefore.arcCenter;
+            if (ImGui::Checkbox("Arc centre (bend between neighbours)", &arc)) {
+                auto after = wpBefore;
+                after.arcCenter = arc;
+                commitWp(after, arc ? "Make Arc Centre" : "Make Regular Waypoint");
+            }
+            if (wpBefore.arcCenter) {
+                ImGui::TextColored(theme::muted(),
+                                   "The bend runs from the previous waypoint to the next,\n"
+                                   "circling this one. Radius = distance to the previous.");
+            }
+        }
+
+        // Surface of the segment LEAVING this waypoint. Hidden on the last
+        // waypoint (no segment leaves it), on an arc centre (arc spans are
+        // always flat) and on a separator (a wall has no surface).
+        if (!parentConfig.separator && !wpBefore.arcCenter && index + 1 < count) {
+            int kind = static_cast<int>(wpBefore.segKind);
+            ImGui::Text("Segment to next:");
+            bool changed = ImGui::RadioButton("Flat", &kind, 0);
+            ImGui::SameLine();
+            changed |= ImGui::RadioButton("Rollers", &kind, 1);
+            ImGui::SameLine();
+            changed |= ImGui::RadioButton("Cleats", &kind, 2);
+            if (changed) {
+                auto after = wpBefore;
+                after.segKind = static_cast<conveyor::SegKind>(kind);
+                commitWp(after, "Segment Surface");
+            }
+        }
+
+        // Uuid rather than the pointer: the deferred edit runs later in the
+        // frame, and an undo (or a stop) in between replaces the graph.
+        const auto uuid = conveyor->uuid;
+        const auto insert = [this, uuid](std::size_t slot, const char* label) {
+            deferred_ = [this, uuid, slot, label] {
+                if (auto* live = findByUuid(document_.scene(), uuid)) {
+                    addConveyorPoint(*live, slot, label);
+                }
+            };
+        };
+
+        if (ImGui::Button("Insert Before")) insert(index, "Insert Waypoint");
+        ImGui::SameLine();
+        if (ImGui::Button("Insert After")) insert(index + 1, "Insert Waypoint");
+        ImGui::SameLine();
+        if (ImGui::Button("Select Conveyor")) {
+            deferred_ = [this, uuid] {
+                if (auto* live = findByUuid(document_.scene(), uuid)) selectObject(live);
+            };
+        }
+
+        ImGui::TextColored(theme::muted(), "Delete removes it from the path.");
+
+        ImGui::TreePop();
+        return;
+    }
+
+    if (!ConveyorConfig::isConveyor(object)) return;
+    if (!section("Conveyor")) return;
+
+    auto* target = &object;
+    auto config = ConveyorConfig::read(object).value_or(ConveyorConfig{});
+    const auto before = config;
+
+    const auto commit = [&](ConveyorConfig after, const char* label) {
+        commands_.execute(makeProperty<ConveyorConfig>(
+                label, "conveyor:" + object.uuid,
+                [target](const ConveyorConfig& value) { value.write(*target); },
+                before, after));
+        document_.setDirty(true);
+    };
+
+    ImGui::PushItemWidth(-110 * contentScale_);
+
+    const auto floatField = [&](const char* label, float value, float step, float lo, float hi,
+                                void (*apply)(ConveyorConfig&, float), const char* undoLabel) {
+        const bool changed = ImGui::DragFloat(label, &value, step, lo, hi);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            apply(after, std::clamp(value, lo, hi));
+            commit(after, undoLabel);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    {
+        bool separator = config.separator;
+        if (ImGui::Checkbox("Separator (wall, no belt)", &separator)) {
+            auto after = config;
+            after.separator = separator;
+            commit(after, separator ? "Make Separator" : "Make Belt");
+            config = ConveyorConfig::read(object).value_or(config);
+        }
+    }
+
+    if (config.separator) {
+        floatField(
+                "Wall Height", config.wallHeight, 0.01f, 0.05f, 5.f,
+                [](ConveyorConfig& c, float v) { c.wallHeight = v; }, "Wall Height");
+    } else {
+        floatField(
+                "Belt Width", config.width, 0.01f, 0.05f, 5.f,
+                [](ConveyorConfig& c, float v) { c.width = v; }, "Belt Width");
+        floatField(
+                "Belt Speed (m/s)", config.speed, 0.01f, 0.f, 10.f,
+                [](ConveyorConfig& c, float v) { c.speed = v; }, "Belt Speed");
+
+        bool reverse = config.reverse;
+        if (ImGui::Checkbox("Reverse Flow", &reverse)) {
+            auto after = config;
+            after.reverse = reverse;
+            commit(after, "Reverse Flow");
+        }
+        ImGui::SameLine();
+        bool frame = config.frame;
+        if (ImGui::Checkbox("Frame", &frame)) {
+            auto after = config;
+            after.frame = frame;
+            commit(after, frame ? "Add Frame" : "Remove Frame");
+        }
+    }
+
+    {
+        bool smooth = config.smooth;
+        if (ImGui::Checkbox("Smooth (spline)", &smooth)) {
+            auto after = config;
+            after.smooth = smooth;
+            commit(after, "Conveyor Smoothing");
+        }
+    }
+
+    {
+        int samples = config.samples;
+        const bool changed = ImGui::DragInt("Samples/Segment", &samples, 0.25f, 2,
+                                            ConveyorConfig::maxSamples);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.samples = std::clamp(samples, 2, ConveyorConfig::maxSamples);
+            commit(after, "Conveyor Samples");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+
+    // Tuning for whichever segments opt into rollers / cleats (chosen per
+    // waypoint). Shown only when at least one segment uses them.
+    if (!config.separator) {
+        bool anyRollers = false, anyCleats = false;
+        const auto nodes = ConveyorConfig::waypointNodes(object);
+        for (std::size_t i = 0; i + 1 < nodes.size(); ++i) {
+            const auto wp = ConveyorWaypointConfig::read(*nodes[i]);
+            if (wp.arcCenter) continue;
+            if (wp.segKind == conveyor::SegKind::Rollers) anyRollers = true;
+            else if (wp.segKind == conveyor::SegKind::Cleats) anyCleats = true;
+        }
+        if (anyRollers) {
+            floatField(
+                    "Roller Radius", config.rollerRadius, 0.002f, 0.01f, 0.5f,
+                    [](ConveyorConfig& c, float v) { c.rollerRadius = v; }, "Roller Radius");
+        }
+        if (anyCleats) {
+            floatField(
+                    "Cleat Height", config.cleatHeight, 0.005f, 0.02f, 1.f,
+                    [](ConveyorConfig& c, float v) { c.cleatHeight = v; }, "Cleat Height");
+            floatField(
+                    "Cleat Spacing", config.cleatSpacing, 0.01f, 0.1f, 5.f,
+                    [](ConveyorConfig& c, float v) { c.cleatSpacing = v; }, "Cleat Spacing");
+        }
+    }
+
+    ImGui::PopItemWidth();
+    ImGui::Spacing();
+
+    const auto count = ConveyorConfig::waypointNodes(object).size();
+    if (count >= 2) {
+        const auto spec = config.spec(object);
+        const auto pts = conveyor::resamplePath(spec.waypoints, spec.smooth, spec.samples);
+        float length = 0.f;
+        for (std::size_t i = 0; i + 1 < pts.size(); ++i) length += pts[i].distanceTo(pts[i + 1]);
+        ImGui::Text("%zu waypoints, path length %.2f", count, length);
+    } else {
+        ImGui::TextColored(theme::warning(), "%zu waypoints - two are needed for a path", count);
+    }
+
+    const auto uuid = object.uuid;
+    if (ImGui::Button("Add Waypoint")) {
+        deferred_ = [this, uuid] {
+            if (auto* live = findByUuid(document_.scene(), uuid)) {
+                addConveyorPoint(*live, AddObjectCommand::atEnd, "Add Waypoint");
+            }
+        };
+    }
+
+    ImGui::TextColored(theme::muted(), "Children are the waypoints, in order.");
+    ImGui::TextColored(theme::muted(), "Pick a waypoint for arc bends and per-segment surfaces.");
+    ImGui::TextColored(theme::muted(), "Play drives the belt; bodies and soft bodies convey.");
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"conveyor\"]");
 
     ImGui::TreePop();
 }

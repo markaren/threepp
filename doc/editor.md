@@ -1785,6 +1785,114 @@ tangents the captured local-space curve is exposed as `path.curve` (a plain
 escape hatch: it returns any string `userData` entry — every editor config
 (`spline`, `physics`, script fields) is one flat `key=value;…` string.
 
+### Conveyors in `userData`
+
+**Add ▸ Conveyor** creates a `Group` carrying `userData["conveyor"]`, with
+three waypoint children forming a straight run at working height. The authoring
+model is the spline's, restated:
+
+> **Every direct child of a conveyor is a path waypoint, in child order —
+> except the generated parts group, which is tagged.**
+
+A waypoint is a plain `Object3D`; drag it with the gizmo, insert, delete and
+undo like any node. The belt's parameters ride in the usual flat format:
+
+```
+width=0.6;speed=0.6;reverse=0;smooth=1;separator=0;wallHeight=0.5;rollerRadius=0.05;cleatHeight=0.15;cleatSpacing=0.6;samples=12;frame=1
+```
+
+| key | values | meaning |
+| --- | --- | --- |
+| `width` | metres | belt width |
+| `speed` | m/s | surface speed along travel; `0` = a static machine |
+| `reverse` | `0`, `1` | flip the travel direction |
+| `smooth` | `0`, `1` | Catmull-Rom through the waypoints, or the raw polyline |
+| `separator` | `0`, `1` | a collision-only guide wall along the path instead of a belt |
+| `wallHeight` | metres | separator only |
+| `rollerRadius` | metres | roller segments — cylinder radius |
+| `cleatHeight`, `cleatSpacing` | metres | cleat segments — flight bar size and pitch |
+| `samples` | `2`…`64` | resample density per waypoint segment |
+| `frame` | `0`, `1` | generate the support frame (rails, legs, end drums) |
+
+Two things live **on the waypoint node itself**, under
+`userData["conveyorWp"]` (`arc=0/1;seg=flat|rollers|cleats`), so they follow
+the node through reorder, undo and serialization; the inspector's **Conveyor
+Waypoint** section edits both:
+
+- **Arc centre** — the waypoint stops being a point *on* the path and becomes
+  the CENTRE of an exact circular bend between its two neighbours: the bend
+  enters at the previous waypoint (which fixes the radius) and leaves at the
+  next. This is how you author true 90°/180° turns instead of spline
+  approximations — and under Play the whole bend is one rotating collider, so
+  the surface velocity is exactly tangential everywhere along it.
+- **Segment surface** — the span leaving the waypoint is a flat belt by
+  default; per segment you can choose a **roller bed** (a row of spinning
+  cylinders) or **cleats** (flight bars standing across the belt that travel
+  with it and catch cargo on an incline). Runs share boundary points, so a
+  flat→rollers change meets gap-free.
+
+**The look is generated, and it is first-party.** Every conveyor carries one
+tagged child (`userData["conveyorDerived"]`), a Group holding the parts: the
+belt ribbon with a procedural scrolling texture, roller cylinders, cleat bars,
+the separator wall, and a support frame — side rails following the path, legs
+down to the conveyor's local ground plane, an end drum (pulley) at each open
+end. All of it is generated geometry; there are no imported models anywhere in
+the feature. Each part is tagged with its role in `userData["conveyorRole"]`
+(`belt` / `roller` / `cleat` / `wall` / `frame` / `drum`), which is how the
+play session finds the moving parts — and how your own tooling can.
+
+Unlike a spline's single tube, **regeneration is wholesale**: the part count
+varies with the path, so the sync pass replaces the group's *content* whenever
+a waypoint or the config changes (the group node itself keeps its uuid). Treat
+the parts as output — a material you hand-edit on one belt mesh will not
+survive the next regeneration.
+
+**Play makes it convey.** The conveyor session builds kinematic colliders into
+the physics session's world: straight runs as chains of drag boxes, each bend
+as one body rotating about its arc centre, tiled with convex wedges that share
+their radial faces. Every physics substep the colliders' kinematic targets are
+advanced along travel and then teleported back — the surface never moves, but
+everything resting on it inherits the belt's surface velocity. That trick works
+for rigid bodies **and for soft bodies**: the wedges are cooked GPU-compatible,
+so a `Body::Soft` object dropped on a belt is carried like anything else.
+Cleat bars are the one exception — a teleported-back wall would un-do its push,
+so the bars genuinely travel, wrapping end→start with a teleport and folding
+flat at the pulleys. Alongside the physics, the session scrolls the belt
+texture, spins the rollers and drums, and drives visible bars along each cleat
+track, all from one speed scale so the picture never disagrees with the
+simulation.
+
+**A conveyor works without the editor.** Everything above is plain scene
+content, so a saved document carries the whole machine. An external consumer —
+a soft-body simulation, a headless data generator — rebuilds the physics in a
+few lines against its own `PhysxWorld`:
+
+```cpp
+#include "threepp/extras/conveyor/ConveyorPhysics.hpp"
+#include "threepp/extras/editor/ConveyorConfig.hpp"
+
+std::vector<threepp::conveyor::ConveyorSpec> specs;
+scene->updateMatrixWorld(true);
+scene->traverse([&](threepp::Object3D& object) {
+    const auto config = threepp::editor::ConveyorConfig::read(object);
+    if (!config) return;
+    auto spec = config->spec(object);            // local-space description
+    for (auto& wp : spec.waypoints)              // → world space
+        wp.pos.applyMatrix4(*object.matrixWorld);
+    specs.push_back(std::move(spec));
+});
+
+threepp::conveyor::ConveyorPhysics belts(world, specs);  // colliders + substep hooks
+belts.speedScale = 1.f;                                   // live speed control
+// destroy `belts` before `world`; it unregisters and releases what it built
+```
+
+The generated meshes are already in the document, so a consumer that only
+renders needs nothing regenerated; one that wants to re-skin or re-tessellate
+can call `ConveyorConfig::syncDerived()` — the same function the editor's sync
+pass uses, so the content is identical either way. `EditorConveyor_test`
+holds this whole path green: author → save → load → rebuild → a box conveys.
+
 ### Physics from a script
 
 `threepp.editor.rigid_body_from_object` hands a script the body PhysX is

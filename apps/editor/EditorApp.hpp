@@ -76,6 +76,8 @@ namespace threepp::editor {
     // Forward-declared: PhysicsPlaySession pulls in the whole PhysX SDK, and
     // every panel includes this header.
     class PhysicsPlaySession;
+    // Forward-declared for the same reason (it includes PhysicsPlaySession).
+    class ConveyorPlaySession;
     // PhysX-free (the PhysX half is PhysxSensorPlaySession, constructed in
     // EditorApp.cpp), but still heavy — it pulls in the depth/lidar sensors and
     // the renderer, which the panels have no business recompiling against.
@@ -209,6 +211,9 @@ namespace threepp::editor {
         // points — both are ordinary scene nodes, so the section is what tells
         // them apart.
         void drawSplineSection(Object3D& object);
+        // The conveyor twin: shown for a conveyor group and, in its waypoint
+        // form, for one of its waypoints (arc centre / segment surface).
+        void drawConveyorSection(Object3D& object);
         // `owner` is the object the material hangs off; the slot is identified
         // by (owner uuid, label) whenever it has to outlive the frame.
         void drawTextureSlot(const Object3D& owner, Material& material, const char* label,
@@ -408,6 +413,8 @@ namespace threepp::editor {
         // curve visibly changes. Undoable, and the point becomes the selection
         // so the gizmo is already on it.
         void addSplinePoint(Object3D& spline, std::size_t index, const std::string& label);
+        // Same contract for a conveyor's waypoints.
+        void addConveyorPoint(Object3D& conveyor, std::size_t index, const std::string& label);
         void deleteSelected();
         void duplicateSelected();
         void focusSelected();
@@ -460,6 +467,11 @@ namespace threepp::editor {
         // is never saved and never picked.
         void syncSplineOverlays();
         void clearSplineOverlays();
+        // --- conveyor overlay (apps/editor/ConveyorOverlay.cpp) -------------
+        // One Line per conveyor path, plus the derived-group regeneration —
+        // the conveyor twin of the spline overlay pass.
+        void syncConveyorOverlays();
+        void clearConveyorOverlays();
         // --- physics collider overlay (apps/editor/PhysicsDebugOverlay.cpp) --
         // PhysX's own debug lines for every collider in the playing world,
         // drawn as one LineSegments under the overlay. The answer to "where is
@@ -775,6 +787,12 @@ namespace threepp::editor {
         std::shared_ptr<Group> splines_;
         std::vector<SplineOverlay> splineOverlays_;
 
+        // Conveyor path overlays — same struct, same lifetime rules. The hash
+        // additionally covers each waypoint's own config (arc centre, segment
+        // surface), which lives on the waypoint node rather than the owner.
+        std::vector<SplineOverlay> conveyorOverlays_;
+        std::shared_ptr<Group> conveyors_;
+
         // Physics collider overlay. The line buffer PhysX hands out changes
         // size every frame, so the attribute is rewritten in place and only
         // replaced when it is outgrown — same contract as the spline curves
@@ -782,6 +800,10 @@ namespace threepp::editor {
         // attribute identity). Null whenever the view is off, play is stopped,
         // or the scene was replaced under it.
         std::shared_ptr<PhysicsPlaySession> physics_;
+        // Belts in the world physics_ builds + the visual motion on the derived
+        // meshes. Registered right after physics (start order), which also puts
+        // its stop BEFORE physics' — the world is still alive to unregister from.
+        std::shared_ptr<ConveyorPlaySession> conveyorSession_;
         std::shared_ptr<LineSegments> physicsDebugLines_;
         int physicsDebugCapacity_ = 0;
         bool physicsDebug_ = false;

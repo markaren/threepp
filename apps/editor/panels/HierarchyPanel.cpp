@@ -80,6 +80,11 @@ void EditorApp::drawAddMenu(Object3D& parent) {
             addObject(ObjectFactory::createSpline(document_.scene()), *target, "Add Spline");
         };
     }
+    if (ImGui::MenuItem("Conveyor")) {
+        deferred_ = [this, target] {
+            addObject(ObjectFactory::createConveyor(document_.scene()), *target, "Add Conveyor");
+        };
+    }
 }
 
 void EditorApp::drawHierarchyNode(Object3D& object) {
