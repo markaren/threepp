@@ -20,6 +20,9 @@
 //     slopes, snow up high with a feathered line; macro variation + gentle AO).
 //     No roadside tint: a corridor-wide swath reads as a phantom road wherever
 //     roads run close (hairpins, dual carriageways) — the ribbon is the road.
+//     Where the pack carries buildings, an URBAN ground paint blends the splat
+//     toward asphalt/gravel town fabric under building-DENSE areas (see
+//     UrbanMask below) — towns stop reading as houses scattered on a lawn.
 //
 // Both callbacks are pure and thread-safe (HeightGrid + RoadNetwork queries are
 // read-only; the SplatRules is captured by value): safe for TileTerrain's async
@@ -41,6 +44,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <vector>
 
 namespace threepp::terrain {
@@ -69,6 +73,21 @@ namespace threepp::terrain {
         bool paintRoads = false;
         float roadEdgeFeather = 0.8f;                       // paint feather past the pavement edge (m)
         std::array<float, 3> roadColor = {0.075f, 0.075f, 0.08f};// sRGB asphalt
+
+        // URBAN ground paint (packs with buildings): where built COVERAGE is
+        // dense, blend the splat toward two-tone asphalt/gravel town fabric,
+        // suppress band structure (no grass clumps between houses) and flatten
+        // the detail relief (town ground is graded). Density-gated — a lone
+        // mountain cabin never earns a grey halo, a town block does — and
+        // applied UNDER the road paint, so streets stay visible through town.
+        bool paintUrban = true;      // no-op when the pack has no buildings
+        float urbanCell = 4.f;       // mask raster cell (m)
+        float urbanBlurRadius = 28.f;// coverage smoothing radius (m)
+        float urbanCoverLo = 0.05f;  // built fraction where the paint starts
+        float urbanCoverHi = 0.20f;  // built fraction of full paint
+        float urbanMax = 0.85f;      // paint ceiling — gardens keep some ground tone
+        std::array<float, 3> urbanAsphalt = {0.085f, 0.085f, 0.09f};// sRGB street/lot
+        std::array<float, 3> urbanGravel = {0.185f, 0.175f, 0.155f};// sRGB yard/gravel
     };
 
     namespace detail {
@@ -95,6 +114,122 @@ namespace threepp::terrain {
         }
 
     }// namespace detail
+
+    // ── UrbanMask: smoothed built-coverage over the pack footprint ──────────
+    //
+    // A coarse world-space raster of "how built is the land here", 0..1:
+    // building footprints are rasterized as occupancy, box-blurred to a local
+    // COVERAGE fraction (radius ~ a town block), then soft-thresholded between
+    // urbanCoverLo and urbanCoverHi. Coverage — not proximity — is the gate:
+    // a lone cabin blurs to ~3% and stays natural ground, a dense block hits
+    // 30%+ and paints fully; suburbs land in between and read as the half
+    // garden / half street fabric they are. Built once at load (the mask is
+    // immutable after), sampled bilinearly by the provider callbacks.
+    struct UrbanMask {
+        int dim = 0;
+        float cell = 4.f;
+        float half = 0.f;
+        std::vector<float> w;// paint weight per cell, 0..1
+
+        float sample(float x, float z) const {
+            if (dim < 2) return 0.f;
+            const float fx = (x + half) / cell;
+            const float fz = (z + half) / cell;
+            const int ix = static_cast<int>(std::floor(fx));
+            const int iz = static_cast<int>(std::floor(fz));
+            if (ix < 0 || iz < 0 || ix >= dim - 1 || iz >= dim - 1) return 0.f;
+            const float tx = fx - static_cast<float>(ix);
+            const float tz = fz - static_cast<float>(iz);
+            const float* r0 = &w[static_cast<size_t>(iz) * dim + ix];
+            const float* r1 = r0 + dim;
+            const float a = r0[0] + (r0[1] - r0[0]) * tx;
+            const float b = r1[0] + (r1[1] - r1[0]) * tx;
+            return a + (b - a) * tz;
+        }
+    };
+
+    inline std::shared_ptr<const UrbanMask> buildUrbanMask(const GeoTerrainPack& pack,
+                                                           const GeoTerrainOptions& o = {}) {
+        if (pack.buildings.empty() || pack.region.worldSize <= 0.f) return nullptr;
+        auto mask = std::make_shared<UrbanMask>();
+        mask->cell = std::max(1.f, o.urbanCell);
+        mask->half = pack.region.worldSize * 0.5f;
+        mask->dim = static_cast<int>(std::ceil(pack.region.worldSize / mask->cell)) + 1;
+        const int dim = mask->dim;
+        const float cell = mask->cell;
+        const float half = mask->half;
+        mask->w.assign(static_cast<size_t>(dim) * dim, 0.f);
+        auto& w = mask->w;
+
+        // Occupancy: cell centres inside a footprint's outer ring (crossing
+        // number; courtyard holes count as built — they ARE town fabric).
+        for (const auto& b : pack.buildings) {
+            const auto& ring = b.outer;
+            if (ring.size() < 3) continue;
+            float minX = ring[0].x, maxX = ring[0].x, minZ = ring[0].y, maxZ = ring[0].y;
+            for (const auto& p : ring) {
+                minX = std::min(minX, p.x);
+                maxX = std::max(maxX, p.x);
+                minZ = std::min(minZ, p.y);
+                maxZ = std::max(maxZ, p.y);
+            }
+            const int ix0 = std::max(0, static_cast<int>(std::floor((minX + half) / cell)));
+            const int ix1 = std::min(dim - 1, static_cast<int>(std::ceil((maxX + half) / cell)));
+            const int iz0 = std::max(0, static_cast<int>(std::floor((minZ + half) / cell)));
+            const int iz1 = std::min(dim - 1, static_cast<int>(std::ceil((maxZ + half) / cell)));
+            for (int iz = iz0; iz <= iz1; ++iz) {
+                const float pz = -half + static_cast<float>(iz) * cell;
+                for (int ix = ix0; ix <= ix1; ++ix) {
+                    const float px = -half + static_cast<float>(ix) * cell;
+                    bool inside = false;
+                    for (size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++) {
+                        const Vector2& a = ring[i];
+                        const Vector2& c = ring[j];
+                        if ((a.y > pz) != (c.y > pz) &&
+                            px < (c.x - a.x) * (pz - a.y) / (c.y - a.y) + a.x)
+                            inside = !inside;
+                    }
+                    if (inside) w[static_cast<size_t>(iz) * dim + ix] = 1.f;
+                }
+            }
+        }
+
+        // Occupancy → local coverage fraction: two separable box-blur passes
+        // (≈ triangular kernel) at the block-scale radius.
+        const int r = std::max(1, static_cast<int>(std::lround(o.urbanBlurRadius / cell)));
+        std::vector<float> tmp(w.size());
+        const auto blurAxis = [&](const std::vector<float>& src, std::vector<float>& dst,
+                                  bool alongX) {
+            const float norm = 1.f / static_cast<float>(2 * r + 1);
+            for (int b = 0; b < dim; ++b) {
+                // Sliding-window mean along one row/column (clamped edges).
+                const auto at = [&](int a) -> const float& {
+                    const int c = std::clamp(a, 0, dim - 1);
+                    return alongX ? src[static_cast<size_t>(b) * dim + c]
+                                  : src[static_cast<size_t>(c) * dim + b];
+                };
+                float acc = 0.f;
+                for (int a = -r; a <= r; ++a) acc += at(a);
+                for (int a = 0; a < dim; ++a) {
+                    (alongX ? dst[static_cast<size_t>(b) * dim + a]
+                            : dst[static_cast<size_t>(a) * dim + b]) = acc * norm;
+                    acc += at(a + r + 1) - at(a - r);
+                }
+            }
+        };
+        blurAxis(w, tmp, true);
+        blurAxis(tmp, w, false);
+        blurAxis(w, tmp, true);
+        blurAxis(tmp, w, false);
+
+        // Coverage → paint weight (soft threshold).
+        const float lo = o.urbanCoverLo, hi = std::max(o.urbanCoverHi, o.urbanCoverLo + 1e-3f);
+        for (auto& v : w) {
+            const float t = std::clamp((v - lo) / (hi - lo), 0.f, 1.f);
+            v = t * t * (3.f - 2.f * t);
+        }
+        return mask;
+    }
 
     // ── carveRoads: bake the road cut into the DEM grid (call ONCE at load) ──
     //
@@ -348,6 +483,12 @@ namespace threepp::terrain {
         const float amp = o.detailAmplitude;
         const float freq = o.detailFreq;
 
+        // Built-coverage mask for the urban paint (null when the pack has no
+        // buildings or the paint is off). shared_ptr: the provider's callbacks
+        // co-own it, so the mask lives exactly as long as the provider.
+        const std::shared_ptr<const UrbanMask> urban =
+                o.paintUrban ? buildUrbanMask(pack, o) : nullptr;
+
         TerrainProvider prov;
 
         // Height: pure bicubic of the (carved) DEM + corridor-faded sub-grid
@@ -356,56 +497,78 @@ namespace threepp::terrain {
         // everywhere — nothing sub-quad-scale for a tile split to reveal. The
         // relief also fades to zero approaching sea level: the DTM stores water
         // as a flat seaLevel sheet, and noise there would dither the seabed up
-        // through the sea plane (patchy shoreline).
+        // through the sea plane (patchy shoreline). Urban ground is graded
+        // flat too — the relief fades with built coverage.
         const float sea = pack.region.seaLevel;
-        prov.height = [&grid, &network, amp, freq, sea](float x, float z) {
+        prov.height = [&grid, &network, urban, amp, freq, sea](float x, float z) {
             const float base = grid.sampleBicubic(x, z);
             const float cw = network.corridorWeight(x, z);
             if (cw >= 0.999f) return base;// fully paved — keep it dead smooth
             const float shore = std::clamp((base - (sea + 0.2f)) / 1.8f, 0.f, 1.f);
             if (shore <= 0.f) return base;
-            const float relief = (detail::geoFbm(x * freq, z * freq) - 0.5f) * 2.f * amp;
+            float relief = (detail::geoFbm(x * freq, z * freq) - 0.5f) * 2.f * amp;
+            if (urban) relief *= 1.f - urban->sample(x, z);
             return base + relief * (1.f - cw) * shore * shore * (3.f - 2.f * shore);
         };
 
-        // Albedo: Norwegian splat, plus (paintRoads) asphalt over the paved band.
-        // The paint uses pavedWeight — pavement + a NARROW edge feather, never
-        // the shoulder corridor: a corridor-wide darkened swath reads as a
-        // phantom second road wherever roads run close or stack (hairpins, dual
-        // carriageways). Legacy (paintRoads=false): pure splat, the ribbon is
-        // the only road-coloured thing in the scene.
-        if (o.paintRoads) {
+        // Albedo: Norwegian splat, then (buildings) the urban town-fabric
+        // blend, then (paintRoads) asphalt over the paved band ON TOP — the
+        // paint order keeps streets readable through town. The road paint uses
+        // pavedWeight — pavement + a NARROW edge feather, never the shoulder
+        // corridor: a corridor-wide darkened swath reads as a phantom second
+        // road wherever roads run close or stack (hairpins, dual carriageways).
+        {
+            const bool paint = o.paintRoads;
             const float edgeFeather = o.roadEdgeFeather;
             const std::array<float, 3> roadCol = o.roadColor;
-            prov.albedo = [rules, &network, edgeFeather, roadCol](float x, float z, float h,
-                                                                  float slope, float* rgb) {
-                const Rgb c = rules.evaluate(x, z, h, slope);
-                const float w = network.pavedWeight(x, z, edgeFeather);
-                rgb[0] = c[0] + (roadCol[0] - c[0]) * w;
-                rgb[1] = c[1] + (roadCol[1] - c[1]) * w;
-                rgb[2] = c[2] + (roadCol[2] - c[2]) * w;
-            };
-        } else {
-            prov.albedo = [rules](float x, float z, float h, float slope, float* rgb) {
+            const std::array<float, 3> urbA = o.urbanAsphalt;
+            const std::array<float, 3> urbG = o.urbanGravel;
+            const float urbMax = o.urbanMax;
+            prov.albedo = [rules, &network, urban, paint, edgeFeather, roadCol, urbA, urbG,
+                           urbMax](float x, float z, float h, float slope, float* rgb) {
                 const Rgb c = rules.evaluate(x, z, h, slope);
                 rgb[0] = c[0];
                 rgb[1] = c[1];
                 rgb[2] = c[2];
+                if (urban) {
+                    const float uw = urban->sample(x, z) * urbMax;
+                    if (uw > 0.f) {
+                        // Two-tone fabric: ~30 m fBm patches alternate between
+                        // asphalt lots and gravel/paved yards, so towns get
+                        // block-scale variation instead of one flat grey.
+                        const float t = std::clamp(
+                                (detail::geoFbm(x * 0.033f, z * 0.033f) - 0.35f) / 0.3f, 0.f, 1.f);
+                        for (int i = 0; i < 3; ++i) {
+                            const float urb = urbG[i] + (urbA[i] - urbG[i]) * t;
+                            rgb[i] += (urb - rgb[i]) * uw;
+                        }
+                    }
+                }
+                if (paint) {
+                    const float w = network.pavedWeight(x, z, edgeFeather);
+                    rgb[0] += (roadCol[0] - rgb[0]) * w;
+                    rgb[1] += (roadCol[1] - rgb[1]) * w;
+                    rgb[2] += (roadCol[2] - rgb[2]) * w;
+                }
             };
         }
 
         // Structure-band weights for the terrain shader's per-band texture
         // sets. Suppressed over painted pavement (asphalt is smooth — grass
-        // clump / rock plate relief crawling across a road reads as damage);
-        // the same pavedWeight the paint uses, so the two can never disagree.
+        // clump / rock plate relief crawling across a road reads as damage)
+        // and over urban ground (same reasoning; this also keeps TerrainScatter
+        // tufts/stones out of town, since scatter samples these weights);
+        // the same masks the paint uses, so they can never disagree.
         {
             const float edgeFeather = o.roadEdgeFeather;
             const bool paint = o.paintRoads;
-            prov.weights = [rules, &network, edgeFeather, paint](float x, float z, float h,
-                                                                 float slope, float* w4) {
+            prov.weights = [rules, &network, urban, edgeFeather, paint](float x, float z, float h,
+                                                                        float slope, float* w4) {
                 rules.evaluateWeights(x, z, h, slope, w4);
-                if (paint) {
-                    const float keep = 1.f - network.pavedWeight(x, z, edgeFeather);
+                float keep = 1.f;
+                if (paint) keep *= 1.f - network.pavedWeight(x, z, edgeFeather);
+                if (urban) keep *= 1.f - urban->sample(x, z);
+                if (keep < 1.f) {
                     w4[0] *= keep;
                     w4[1] *= keep;
                     w4[2] *= keep;

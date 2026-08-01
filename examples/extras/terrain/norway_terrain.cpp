@@ -237,6 +237,8 @@ int main(int argc, char** argv) {
     // Near-tile splat texels are ~0.6-1.3 m; a feather below the texel size
     // can't anti-alias the paint edge and reads as a staircase up close.
     gopt.roadEdgeFeather = 1.2f;
+    // (envSet is declared later; this runs before it exists)
+    gopt.paintUrban = !std::getenv("NT_NO_URBAN");// grey town fabric under dense buildings (A/B)
     const terrain::TerrainProvider prov = terrain::makeGeoProvider(pack, network, gopt);
 
     reportRoadConformance(pack, network);
