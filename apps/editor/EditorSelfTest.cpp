@@ -3657,6 +3657,26 @@ int EditorApp::runSelfTest() {
                 }
             }
 
+            // The grow verb: Insert After marches the wall along, one point at
+            // a time, each landing selected and past the previous end.
+            if (conveyor && !ConveyorConfig::wallNodes(*conveyor).empty()) {
+                auto* wallNode = ConveyorConfig::wallNodes(*conveyor).front();
+                const auto endBefore =
+                        ConveyorWallConfig::pointNodes(*wallNode).back()->position;
+                addConveyorWallPoint(*wallNode, AddObjectCommand::atEnd, "Insert Wall Point");
+                step();
+                const auto points = ConveyorWallConfig::pointNodes(*wallNode);
+                check(points.size() == 3, "Insert After grows the wall by one point");
+                check(selection_.get() == points.back(),
+                      "which lands selected, ready to drag");
+                check(points.back()->position.distanceTo(endBefore) > 0.05f,
+                      "past the previous end, so the wall visibly extends");
+                commands_.undo();
+                step();
+                check(ConveyorWallConfig::pointNodes(*wallNode).size() == 2,
+                      "and the growth is undoable");
+            }
+
             commands_.undo();
             step();
             conveyor = conveyorNow(conveyorUuid);

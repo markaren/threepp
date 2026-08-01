@@ -247,12 +247,13 @@ std::shared_ptr<Group> ObjectFactory::createConveyorWall(const Object3D& conveyo
     wall->name = uniqueName(conveyor, "Wall");
     ConveyorWallConfig{}.write(*wall);
 
-    // The default is a PASSIVE guide following the OUTER edge of the belt for
-    // most of its run — the wall every conveyor wants before any diverts. The
-    // user then decides the rest: drag an end point along the belt to set the
-    // length, drag any point toward the middle and that stretch sweeps inward
-    // into a diverter (the built wall follows the path between its points —
-    // see conveyor::followWall).
+    // The default is ONE SHORT segment on the OUTER edge at the path midpoint
+    // — a piece, not a plan. Building a real wall is incremental from there:
+    // slide the segment along the belt with the gizmo (the built wall follows
+    // the path between its points — see conveyor::followWall — so it rides
+    // the edge wherever it is dragged), then grow it point by point with
+    // Insert After, dragging each new point where it should go; any point
+    // pulled toward the middle sweeps that stretch inward into a diverter.
     namespace cv = threepp::conveyor;
     const auto config = ConveyorConfig::read(conveyor).value_or(ConveyorConfig{});
     const auto spec = config.spec(conveyor);
@@ -292,8 +293,10 @@ std::shared_ptr<Group> ObjectFactory::createConveyorWall(const Object3D& conveyo
             return edge;
         };
 
-        first = edgeAt(total * 0.06f);
-        second = edgeAt(total * 0.94f);
+        const float length = std::clamp(std::max(config.width, 0.1f) * 1.5f, 0.4f,
+                                        total * 0.4f);
+        first = edgeAt(total * 0.5f - length * 0.5f);
+        second = edgeAt(total * 0.5f + length * 0.5f);
     }
 
     auto p1 = createConveyorWallPoint(*wall);

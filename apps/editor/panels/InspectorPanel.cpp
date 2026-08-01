@@ -1942,7 +1942,20 @@ void EditorApp::drawConveyorSection(Object3D& object) {
         ImGui::TextColored(theme::muted(), "Point %zu of %zu in \"%s\"",
                            index + 1, points.size(), wall->name.c_str());
 
+        // The grow loop lives HERE, on the point being dragged: Insert After,
+        // drag the new point where the wall should reach next, repeat.
         const auto uuid = wall->uuid;
+        const auto insert = [this, uuid](std::size_t slot, const char* label) {
+            deferred_ = [this, uuid, slot, label] {
+                if (auto* live = findByUuid(document_.scene(), uuid)) {
+                    addConveyorWallPoint(*live, slot, label);
+                }
+            };
+        };
+        if (ImGui::Button("Insert Before")) insert(index, "Insert Wall Point");
+        ImGui::SameLine();
+        if (ImGui::Button("Insert After")) insert(index + 1, "Insert Wall Point");
+        ImGui::SameLine();
         if (ImGui::Button("Select Wall")) {
             deferred_ = [this, uuid] {
                 if (auto* live = findByUuid(document_.scene(), uuid)) selectObject(live);
@@ -1988,7 +2001,7 @@ void EditorApp::drawConveyorSection(Object3D& object) {
         if (ImGui::Button("Add Point")) {
             deferred_ = [this, uuid] {
                 if (auto* live = findByUuid(document_.scene(), uuid)) {
-                    addConveyorWallPoint(*live, "Add Wall Point");
+                    addConveyorWallPoint(*live, AddObjectCommand::atEnd, "Add Wall Point");
                 }
             };
         }
@@ -2006,8 +2019,10 @@ void EditorApp::drawConveyorSection(Object3D& object) {
         ImGui::TextColored(theme::muted(),
                            "The wall FOLLOWS the belt between its points, base on the deck.");
         ImGui::TextColored(theme::muted(),
-                           "Drag an end along the belt for length; drag a point toward");
-        ImGui::TextColored(theme::muted(), "the middle to sweep that stretch into a diverter.");
+                           "Slide the whole wall along the belt with the gizmo, then grow");
+        ImGui::TextColored(theme::muted(),
+                           "it point by point (Insert After on a point). A point pulled");
+        ImGui::TextColored(theme::muted(), "toward the middle sweeps that stretch into a diverter.");
         ImGui::TextColored(theme::muted(), "Stored in userData[\"conveyorWall\"]");
 
         ImGui::TreePop();

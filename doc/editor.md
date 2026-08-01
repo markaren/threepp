@@ -1841,13 +1841,14 @@ Waypoint** section edits both:
 attaches a wall as a child of the conveyor — a Group carrying
 `userData["conveyorWall"]` (`height=…`) whose own children are the wall's
 points, so dragging a point, rotating the whole wall with the gizmo, deleting
-and undoing are all the ordinary operations. The default **follows the outer
-edge of the belt** for most of its run — the passive guide every conveyor
-wants (on a bent path, the outside of the net turn, where cargo runs wide).
-From there the decisions are yours: drag an end point along the belt to set
-**where the wall starts and ends**, and drag any point **toward the middle**
-to sweep that stretch inward into a diverter that feeds cargo into a lane
-(Add Point splits longer walls into more stretches). The built wall always
+and undoing are all the ordinary operations. The default is **one short
+segment on the outer edge** at the path midpoint (on a bent path, the outside
+of the net turn, where cargo runs wide) — a piece, not a plan. Building the
+wall you mean is incremental: **slide the segment along the belt** with the
+gizmo (it stays on the edge — see below), then **grow it point by point**:
+select an end point, *Insert After*, drag the new point where the wall should
+reach next, repeat. Drag any point **toward the middle** to sweep that stretch
+inward into a diverter that feeds cargo into a lane. The built wall always
 FOLLOWS the path between its points — each point reads as a station along the
 belt plus a lateral offset, blended between points — so an edge guide hugs a
 bend exactly rather than cutting the chord, and its base rides the deck

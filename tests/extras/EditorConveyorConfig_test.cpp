@@ -185,10 +185,20 @@ TEST_CASE("attached walls are children, not waypoints, and snap their base to th
     CHECK(before.distanceTo(rotated) > 0.1f);
     wall->rotation.y = 0.f;
 
-    // The default wall is a PASSIVE EDGE GUIDE: every built sample rides at
-    // the belt edge (half width + clearance) at deck height — the length and
-    // any inward offsets are the user's edits, not the factory's guesses.
+    // The default wall is ONE SHORT SEGMENT at the path midpoint — a piece to
+    // slide and grow, not a plan to fight. Length ~1.5x the belt width.
     spec = config.spec(*conveyor);
+    {
+        const float span = spec.walls[0].points.front().distanceTo(spec.walls[0].points.back());
+        CHECK(span > 0.5f);
+        CHECK(span < 1.2f);
+        const float midX = (spec.walls[0].points.front().x + spec.walls[0].points.back().x) * 0.5f;
+        CHECK(std::abs(midX) < 0.15f);// centred on the (x-symmetric) path
+    }
+
+    // And a PASSIVE EDGE GUIDE: every built sample rides at the belt edge
+    // (half width + clearance) at deck height — inward offsets are the
+    // user's edits, not the factory's guesses.
     const auto centerline = conveyor::resamplePath(spec.waypoints, spec.smooth, spec.samples);
     const auto followed = conveyor::followWall(spec.walls[0].points, centerline);
     REQUIRE(followed.size() >= 2);

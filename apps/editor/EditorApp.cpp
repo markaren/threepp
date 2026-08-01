@@ -1938,31 +1938,42 @@ void EditorApp::addConveyorWall(Object3D& conveyor, const std::string& label) {
     scrollTo_ = raw;
 }
 
-void EditorApp::addConveyorWallPoint(Object3D& wall, const std::string& label) {
+void EditorApp::addConveyorWallPoint(Object3D& wall, std::size_t index, const std::string& label) {
 
     if (rejectWhilePlaying(label.c_str())) return;
     if (!ConveyorWallConfig::isWall(wall)) return;
 
-    // Past the last point along the last span, so the wall visibly extends.
+    // Same placement rule as every other point list: between two neighbours
+    // the midpoint, past either end the end span continued — so growing the
+    // wall point by point marches it visibly along the belt.
     const auto points = ConveyorWallConfig::pointNodes(wall);
+    const auto count = points.size();
+    const auto slot = std::min(index, count);
+
     Vector3 position;
-    if (points.empty()) {
+    if (count == 0) {
         // Nothing to extend; the wall's own origin.
-    } else if (points.size() == 1) {
+    } else if (slot == 0) {
+        position.copy(points.front()->position);
+        if (count > 1) position.sub(points[1]->position).add(points.front()->position);
+    } else if (slot >= count) {
         position.copy(points.back()->position);
-        position.x += 0.5f;
+        if (count > 1) {
+            position.sub(points[count - 2]->position).add(points.back()->position);
+        } else {
+            position.x += 0.5f;
+        }
     } else {
-        position.copy(points.back()->position)
-                .sub(points[points.size() - 2]->position)
-                .add(points.back()->position);
+        position.copy(points[slot - 1]->position)
+                .add(points[slot]->position)
+                .multiplyScalar(0.5f);
     }
 
     auto point = ObjectFactory::createConveyorWallPoint(wall);
     point->position.copy(position);
 
     auto* raw = point.get();
-    commands_.execute(std::make_unique<AddObjectCommand>(wall, point, label,
-                                                         AddObjectCommand::atEnd));
+    commands_.execute(std::make_unique<AddObjectCommand>(wall, point, label, slot));
     document_.setDirty(true);
     selectObject(raw);
     scrollTo_ = raw;
