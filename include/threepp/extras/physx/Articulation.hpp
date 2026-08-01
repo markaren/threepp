@@ -21,7 +21,9 @@
 
 #include <PxPhysicsAPI.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <stdexcept>
 #include <string>
@@ -60,15 +62,23 @@ namespace threepp {
             ::physx::PxTransform localPose{::physx::PxIdentity};
             bool valid = true;
         };
-        inline LinkShape inferLinkShape(const BufferGeometry& g) {
+        // `scale` is the link mesh's decomposed WORLD scale — a PhysX primitive
+        // cannot be scaled after the fact, so it is baked into the dimensions.
+        // A sphere keeps the largest component; a capsule scales its radius
+        // from the lateral pair and its height from Y (the threepp axis).
+        inline LinkShape inferLinkShape(const BufferGeometry& g,
+                                        const Vector3& scale = Vector3(1.f, 1.f, 1.f)) {
             using namespace ::physx;
             LinkShape s;
             if (auto* b = dynamic_cast<const BoxGeometry*>(&g)) {
-                s.geom = PxBoxGeometry(b->width * 0.5f, b->height * 0.5f, b->depth * 0.5f);
+                s.geom = PxBoxGeometry(b->width * 0.5f * std::abs(scale.x),
+                                       b->height * 0.5f * std::abs(scale.y),
+                                       b->depth * 0.5f * std::abs(scale.z));
             } else if (auto* sp = dynamic_cast<const SphereGeometry*>(&g)) {
-                s.geom = PxSphereGeometry(sp->radius);
+                s.geom = PxSphereGeometry(sp->radius * std::max({std::abs(scale.x), std::abs(scale.y), std::abs(scale.z)}));
             } else if (auto* c = dynamic_cast<const CapsuleGeometry*>(&g)) {
-                s.geom = PxCapsuleGeometry(c->radius, c->length * 0.5f);
+                s.geom = PxCapsuleGeometry(c->radius * std::max(std::abs(scale.x), std::abs(scale.z)),
+                                           c->length * 0.5f * std::abs(scale.y));
                 s.localPose = PxTransform(PxQuat(-PxHalfPi, PxVec3(0, 0, 1)));
             } else {
                 s.valid = false;
@@ -177,7 +187,17 @@ namespace threepp {
             if (finalized_) throw std::runtime_error("Articulation.add_link: already finalized (no links after finalize)");
             auto* g = mesh.geometry().get();
             if (!g) throw std::runtime_error("Articulation.add_link: mesh has no geometry");
-            const auto shape = physx_detail::inferLinkShape(*g);
+
+            // updateWorldMatrix, not updateMatrixWorld: the latter trusts the
+            // parent's cached matrixWorld, which is stale for a link added
+            // before the first render, and the link would spawn at the mesh's
+            // LOCAL coordinates. The world scale feeds the analytic shape.
+            mesh.updateWorldMatrix(true, false);
+            Vector3 pos, scl;
+            Quaternion rot;
+            mesh.matrixWorld->decompose(pos, rot, scl);
+
+            const auto shape = physx_detail::inferLinkShape(*g, scl);
 
             // A non-primitive geometry (a <mesh> collision from a URDF) cooks to
             // ONE convex hull rather than throwing. Primitives keep the exact,
@@ -185,19 +205,15 @@ namespace threepp {
             // accepts, it does not change any existing link.
             PxConvexMesh* convex = nullptr;
             if (!shape.valid) {
-                const auto* pos = g->getAttribute<float>("position");
-                if (!pos || pos->count() < 4) {
+                const auto* posAttr = g->getAttribute<float>("position");
+                if (!posAttr || posAttr->count() < 4) {
                     throw std::runtime_error("Articulation.add_link: unsupported geometry "
                                              "(use Box/Sphere/Capsule, or a mesh with >= 4 vertices for a convex hull)");
                 }
-                convex = world_.cookConvexHull(pos->array().data(), pos->count(), 64);
+                convex = world_.cookConvexHull(posAttr->array().data(), posAttr->count(), 64);
                 if (!convex) throw std::runtime_error("Articulation.add_link: convex hull cook failed");
             }
 
-            mesh.updateMatrixWorld();
-            Vector3 pos, scl;
-            Quaternion rot;
-            mesh.matrixWorld->decompose(pos, rot, scl);
             const PxTransform linkPose(toPxVec3(pos), toPxQuat(rot));
 
             PxArticulationLink* parentLink = parent ? parent->raw() : nullptr;

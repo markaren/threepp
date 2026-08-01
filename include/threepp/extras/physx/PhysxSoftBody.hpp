@@ -1017,7 +1017,7 @@ namespace threepp {
         using namespace ::physx;
         auto geom = mesh.geometry();
         if (!geom) throw std::runtime_error("PhysxWorld::addSoftBody(Mesh): no geometry");
-        mesh.updateMatrixWorld();
+        mesh.updateWorldMatrix(true, false);
         auto* posAttr = geom->getAttribute<float>("position");
         if (!posAttr) throw std::runtime_error("PhysxWorld::addSoftBody(Mesh): geometry has no position attribute");
 
