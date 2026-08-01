@@ -27,6 +27,7 @@
 #ifndef THREEPP_EXTRAS_TERRAIN_FACADETEXTURE_HPP
 #define THREEPP_EXTRAS_TERRAIN_FACADETEXTURE_HPP
 
+#include "threepp/extras/core/TextureBake.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
 #include <algorithm>
@@ -62,24 +63,10 @@ namespace threepp::terrain {
 
         // Periodic value noise (same trick as DetailTexture) so tiles wrap.
         std::mt19937 rng(o.seed);
-        std::uniform_real_distribution<float> u01(0.f, 1.f);
-        auto lattice = [&](int cells) {
-            std::vector<float> v(static_cast<size_t>(cells) * cells);
-            for (auto& x : v) x = u01(rng);
-            return v;
-        };
-        const auto l16 = lattice(16), l48 = lattice(48);
+        const auto l16 = texgen::noiseLattice(rng, 16), l48 = texgen::noiseLattice(rng, 48);
         auto noise = [&](float u, float v) {// [0,1], periodic, two octaves
-            auto samp = [](const std::vector<float>& lat, int cells, float u, float v) {
-                const float fu = u * static_cast<float>(cells), fv = v * static_cast<float>(cells);
-                const int iu = static_cast<int>(fu) % cells, iv = static_cast<int>(fv) % cells;
-                const int ju = (iu + 1) % cells, jv = (iv + 1) % cells;
-                const float tu = fu - std::floor(fu), tv = fv - std::floor(fv);
-                const float a = lat[static_cast<size_t>(iv) * cells + iu], b = lat[static_cast<size_t>(iv) * cells + ju];
-                const float c = lat[static_cast<size_t>(jv) * cells + iu], d = lat[static_cast<size_t>(jv) * cells + ju];
-                return (a + (b - a) * tu) * (1.f - tv) + (c + (d - c) * tu) * tv;
-            };
-            return 0.65f * samp(l16, 16, u, v) + 0.35f * samp(l48, 48, u, v);
+            return 0.65f * texgen::sampleLattice(l16, 16, u, v) +
+                   0.35f * texgen::sampleLattice(l48, 48, u, v);
         };
 
         // Per-pixel surface description a variant fills in.
@@ -133,15 +120,7 @@ namespace threepp::terrain {
                     npx[k + 2] = static_cast<unsigned char>((nz * 0.5f + 0.5f) * 255.f + 0.5f);
                 }
             auto mk = [&](std::vector<unsigned char> px) {
-                auto t = DataTexture::create(ImageData{std::move(px)},
-                                             static_cast<unsigned int>(D),
-                                             static_cast<unsigned int>(D));
-                t->colorSpace = ColorSpace::Linear;// authored linear — no sRGB decode
-                t->wrapS = t->wrapT = TextureWrapping::Repeat;
-                t->magFilter = Filter::Linear;
-                t->minFilter = Filter::LinearMipmapLinear;
-                t->generateMipmaps = true;// DataTexture defaults false → GL black
-                return t;
+                return texgen::makeLinearRepeatTexture(std::move(px), static_cast<unsigned int>(D));
             };
             FacadeSet s;
             s.albedo = mk(std::move(apx));

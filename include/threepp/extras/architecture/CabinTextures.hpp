@@ -20,6 +20,7 @@
 #define THREEPP_EXTRAS_ARCHITECTURE_CABINTEXTURES_HPP
 
 #include "threepp/extras/core/NoiseUtils.hpp"
+#include "threepp/extras/core/TextureBake.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
 #include <algorithm>
@@ -37,47 +38,10 @@ namespace threepp::architecture {
 
         constexpr float PI_F = 3.14159265358979f;
 
-        // Finish a generated texture: filtering, wrap mode, colour space.
-        inline void finishTexture(const std::shared_ptr<DataTexture>& t, bool srgb, bool repeat) {
-            t->magFilter = Filter::Linear;
-            t->minFilter = Filter::LinearMipmapLinear;
-            t->generateMipmaps = true;
-            t->wrapS = repeat ? TextureWrapping::Repeat : TextureWrapping::ClampToEdge;
-            t->wrapT = repeat ? TextureWrapping::Repeat : TextureWrapping::ClampToEdge;
-            t->colorSpace = srgb ? ColorSpace::sRGB : ColorSpace::NoColorSpace;
-            t->needsUpdate();
-        }
-
-        // Tangent-space normal map from a height function, by central difference.
-        // `tile` makes the differencing wrap at the tile edge so the normal map
-        // is seamless wherever the height field itself is.
-        template<class HeightFn>
-        void writeNormalFromHeight(const std::shared_ptr<DataTexture>& normal,
-                                   unsigned int size, float bumpScale,
-                                   HeightFn&& h, bool tile) {
-            auto& cn = normal->image().data<unsigned char>();
-            const auto S = static_cast<float>(size);
-            const float texel = 1.f / S;
-            auto at = [&](float u, float v) {
-                if (tile) return h(wrap01(u), wrap01(v));
-                return h(std::clamp(u, 0.f, 1.f), std::clamp(v, 0.f, 1.f));
-            };
-            for (unsigned int y = 0; y < size; ++y) {
-                for (unsigned int x = 0; x < size; ++x) {
-                    const float u = static_cast<float>(x) / S;
-                    const float v = static_cast<float>(y) / S;
-                    float nx = (at(u - texel, v) - at(u + texel, v)) * bumpScale;
-                    float ny = (at(u, v - texel) - at(u, v + texel)) * bumpScale;
-                    float nz = 1.f;
-                    const float inv = 1.f / std::sqrt(nx * nx + ny * ny + nz * nz);
-                    const size_t idx = (static_cast<size_t>(y) * size + x) * 4;
-                    cn[idx + 0] = toByte(nx * inv * 0.5f + 0.5f);
-                    cn[idx + 1] = toByte(ny * inv * 0.5f + 0.5f);
-                    cn[idx + 2] = toByte(nz * inv * 0.5f + 0.5f);
-                    cn[idx + 3] = 255;
-                }
-            }
-        }
+        // Texture finishing + height→normal conversion live in the shared
+        // extras/core/TextureBake.hpp (extracted verbatim from here).
+        using texgen::finishTexture;
+        using texgen::writeNormalFromHeight;
 
         inline void writeAlbedo(const std::shared_ptr<DataTexture>& tex, unsigned int size,
                                 unsigned int x, unsigned int y,
@@ -88,11 +52,6 @@ namespace threepp::architecture {
             c[idx + 1] = toByte(g);
             c[idx + 2] = toByte(b);
             c[idx + 3] = toByte(a);
-        }
-
-        // Signed distance to the border of the unit cell, 0 at the border.
-        inline float cellEdge(float fu, float fv) {
-            return std::min(std::min(fu, 1.f - fu), std::min(fv, 1.f - fv));
         }
 
     }// namespace detail

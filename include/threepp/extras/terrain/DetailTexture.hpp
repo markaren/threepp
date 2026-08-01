@@ -23,6 +23,7 @@
 #ifndef THREEPP_EXTRAS_TERRAIN_DETAILTEXTURE_HPP
 #define THREEPP_EXTRAS_TERRAIN_DETAILTEXTURE_HPP
 
+#include "threepp/extras/core/TextureBake.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
 #include <algorithm>
@@ -129,22 +130,11 @@ namespace threepp::terrain {
         const unsigned int seed = o.seed + static_cast<unsigned int>(kind) * 7919u;
 
         // Generic periodic value noise (same as makeDetailMaps, local seed).
+        // Draw ORDER matters: the l8/l24/l8g fills consume the rng stream in
+        // sequence, so reordering them reshuffles every texel.
         std::mt19937 rng(seed);
-        std::uniform_real_distribution<float> u01(0.f, 1.f);
-        auto lattice = [&](int cells) {
-            std::vector<float> v(static_cast<size_t>(cells) * cells);
-            for (auto& x : v) x = u01(rng);
-            return v;
-        };
-        auto sampleLat = [](const std::vector<float>& lat, int cells, float u, float v) {
-            const float fu = u * static_cast<float>(cells), fv = v * static_cast<float>(cells);
-            const int iu = static_cast<int>(fu) % cells, iv = static_cast<int>(fv) % cells;
-            const int ju = (iu + 1) % cells, jv = (iv + 1) % cells;
-            const float tu = fu - std::floor(fu), tv = fv - std::floor(fv);
-            const float a = lat[static_cast<size_t>(iv) * cells + iu], b = lat[static_cast<size_t>(iv) * cells + ju];
-            const float c = lat[static_cast<size_t>(jv) * cells + iu], d = lat[static_cast<size_t>(jv) * cells + ju];
-            return (a + (b - a) * tu) * (1.f - tv) + (c + (d - c) * tu) * tv;
-        };
+        auto lattice = [&](int cells) { return texgen::noiseLattice(rng, cells); };
+        const auto& sampleLat = texgen::sampleLattice;
         const auto l8 = lattice(8), l24 = lattice(24), l8g = lattice(8);
         auto sstep = [](float e0, float e1, float x) {
             const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
@@ -316,13 +306,7 @@ namespace threepp::terrain {
             }
 
         auto mk = [D](std::vector<unsigned char> px) {
-            auto t = DataTexture::create(ImageData{std::move(px)}, static_cast<unsigned int>(D), static_cast<unsigned int>(D));
-            t->colorSpace = ColorSpace::Linear;
-            t->wrapS = t->wrapT = TextureWrapping::Repeat;
-            t->magFilter = Filter::Linear;
-            t->minFilter = Filter::LinearMipmapLinear;
-            t->generateMipmaps = true;
-            return t;
+            return texgen::makeLinearRepeatTexture(std::move(px), static_cast<unsigned int>(D));
         };
 
         DetailMaps out;
@@ -361,24 +345,11 @@ namespace threepp::terrain {
 
     inline DetailMaps makeDetailMaps(const DetailMapOptions& o = {}) {
         const int D = std::max(o.dim, 8);
-        std::mt19937 rng(o.seed);
-        std::uniform_real_distribution<float> u01(0.f, 1.f);
-
-        auto lattice = [&](int cells) {
-            std::vector<float> v(static_cast<size_t>(cells) * cells);
-            for (auto& x : v) x = u01(rng);
-            return v;
-        };
         // Periodic (wrapping) bilinear value noise — guarantees the map tiles.
-        auto sampleLat = [](const std::vector<float>& lat, int cells, float u, float v) {
-            const float fu = u * static_cast<float>(cells), fv = v * static_cast<float>(cells);
-            const int iu = static_cast<int>(fu) % cells, iv = static_cast<int>(fv) % cells;
-            const int ju = (iu + 1) % cells, jv = (iv + 1) % cells;
-            const float tu = fu - std::floor(fu), tv = fv - std::floor(fv);
-            const float a = lat[static_cast<size_t>(iv) * cells + iu], b = lat[static_cast<size_t>(iv) * cells + ju];
-            const float c = lat[static_cast<size_t>(jv) * cells + iu], d = lat[static_cast<size_t>(jv) * cells + ju];
-            return (a + (b - a) * tu) * (1.f - tv) + (c + (d - c) * tu) * tv;
-        };
+        // Draw ORDER matters (see makeBandMaps).
+        std::mt19937 rng(o.seed);
+        auto lattice = [&](int cells) { return texgen::noiseLattice(rng, cells); };
+        const auto& sampleLat = texgen::sampleLattice;
         const auto l8 = lattice(8), l32 = lattice(32), l8g = lattice(8);
 
         // Shared heightfield in [0,1], periodic. Two octaves + fine speckle.
@@ -431,13 +402,7 @@ namespace threepp::terrain {
             }
 
         auto mk = [D](std::vector<unsigned char> px) {
-            auto t = DataTexture::create(ImageData{std::move(px)}, static_cast<unsigned int>(D), static_cast<unsigned int>(D));
-            t->colorSpace = ColorSpace::Linear;// 0.5-neutral / normal data — must NOT sRGB-decode
-            t->wrapS = t->wrapT = TextureWrapping::Repeat;
-            t->magFilter = Filter::Linear;
-            t->minFilter = Filter::LinearMipmapLinear;
-            t->generateMipmaps = true;// DataTexture defaults false → GL black
-            return t;
+            return texgen::makeLinearRepeatTexture(std::move(px), static_cast<unsigned int>(D));
         };
 
         DetailMaps out;

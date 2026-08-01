@@ -16,6 +16,7 @@
 #define THREEPP_EXTRAS_VEGETATION_TREETEXTURES_HPP
 
 #include "threepp/extras/core/NoiseUtils.hpp"
+#include "threepp/extras/core/TextureBake.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
 #include <algorithm>
@@ -405,13 +406,7 @@ namespace threepp::vegetation {
             px[pi * 4 + 3] = detail::toByte(alpha[pi]);
         }
 
-        tex->colorSpace = ColorSpace::sRGB;
-        tex->magFilter = Filter::Linear;
-        tex->minFilter = Filter::LinearMipmapLinear;
-        tex->generateMipmaps = true;
-        tex->wrapS = TextureWrapping::ClampToEdge;
-        tex->wrapT = TextureWrapping::ClampToEdge;
-        tex->needsUpdate();
+        texgen::finishTexture(tex, true, false);
         return tex;
     }
 
@@ -569,13 +564,7 @@ namespace threepp::vegetation {
             px[pi * 4 + 3] = detail::toByte(alpha[pi]);
         }
 
-        tex->colorSpace = ColorSpace::sRGB;
-        tex->magFilter = Filter::Linear;
-        tex->minFilter = Filter::LinearMipmapLinear;
-        tex->generateMipmaps = true;
-        tex->wrapS = TextureWrapping::ClampToEdge;
-        tex->wrapT = TextureWrapping::ClampToEdge;
-        tex->needsUpdate();
+        texgen::finishTexture(tex, true, false);
         return tex;
     }
 
@@ -592,7 +581,6 @@ namespace threepp::vegetation {
         auto albedo = DataTexture::create(4, size, size);
         auto normal = DataTexture::create(4, size, size);
         auto& ca = albedo->image().data<unsigned char>();
-        auto& cn = normal->image().data<unsigned char>();
 
         const auto S = static_cast<float>(size);
         const int period = 8;// noise lattice period (in tiles) → seamless wrap
@@ -683,7 +671,6 @@ namespace threepp::vegetation {
             }
         };
 
-        const float texel = 1.f / S;
         const float bumpScale = 2.5f;
 
         for (unsigned int y = 0; y < size; ++y) {
@@ -722,37 +709,15 @@ namespace threepp::vegetation {
                 ca[idx + 1] = detail::toByte(g);
                 ca[idx + 2] = detail::toByte(b);
                 ca[idx + 3] = 255;
-
-                // Normal from height gradient (central difference, wrapping).
-                auto wrap01 = [](float a) { return a - std::floor(a); };
-                const float hL = heightAt(wrap01(u - texel), v);
-                const float hR = heightAt(wrap01(u + texel), v);
-                const float hD = heightAt(u, wrap01(v - texel));
-                const float hU = heightAt(u, wrap01(v + texel));
-                float nx = (hL - hR) * bumpScale;
-                float ny = (hD - hU) * bumpScale;
-                float nz = 1.f;
-                const float inv = 1.f / std::sqrt(nx * nx + ny * ny + nz * nz);
-                nx *= inv;
-                ny *= inv;
-                nz *= inv;
-                cn[idx + 0] = detail::toByte(nx * 0.5f + 0.5f);
-                cn[idx + 1] = detail::toByte(ny * 0.5f + 0.5f);
-                cn[idx + 2] = detail::toByte(nz * 0.5f + 0.5f);
-                cn[idx + 3] = 255;
             }
         }
 
-        for (auto* tex : {&albedo, &normal}) {
-            (*tex)->magFilter = Filter::Linear;
-            (*tex)->minFilter = Filter::LinearMipmapLinear;
-            (*tex)->generateMipmaps = true;
-            (*tex)->wrapS = TextureWrapping::Repeat;
-            (*tex)->wrapT = TextureWrapping::Repeat;
-            (*tex)->needsUpdate();
-        }
-        albedo->colorSpace = ColorSpace::sRGB;
-        normal->colorSpace = ColorSpace::NoColorSpace;
+        // Matching normal map from the same (pure) height field, then finish
+        // both for tiling wrap — shared helpers, same arithmetic as the old
+        // inline block.
+        texgen::writeNormalFromHeight(normal, size, bumpScale, heightAt, true);
+        texgen::finishTexture(albedo, true, true);
+        texgen::finishTexture(normal, false, true);
 
         return {albedo, normal};
     }
@@ -837,13 +802,7 @@ namespace threepp::vegetation {
             px[pi * 4 + 3] = detail::toByte(alpha[pi]);
         }
 
-        tex->colorSpace = ColorSpace::sRGB;
-        tex->magFilter = Filter::Linear;
-        tex->minFilter = Filter::LinearMipmapLinear;
-        tex->generateMipmaps = true;
-        tex->wrapS = TextureWrapping::ClampToEdge;
-        tex->wrapT = TextureWrapping::ClampToEdge;
-        tex->needsUpdate();
+        texgen::finishTexture(tex, true, false);
         return tex;
     }
 
