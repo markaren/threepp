@@ -15,6 +15,7 @@
 #ifndef THREEPP_EXTRAS_VEGETATION_TREETEXTURES_HPP
 #define THREEPP_EXTRAS_VEGETATION_TREETEXTURES_HPP
 
+#include "threepp/extras/core/NoiseUtils.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
 #include <algorithm>
@@ -28,20 +29,12 @@ namespace threepp::vegetation {
 
     namespace detail {
 
-        inline unsigned char toByte(float v) {
-            return static_cast<unsigned char>(std::clamp(v, 0.f, 1.f) * 255.f + 0.5f);
-        }
-
-        // Cheap hash → [0,1).
-        inline float hash2(int x, int y, unsigned int seed) {
-            uint32_t n = static_cast<uint32_t>(x) * 374761393u +
-                         static_cast<uint32_t>(y) * 668265263u + seed * 362437u;
-            n = (n ^ (n >> 13)) * 1274126177u;
-            n = n ^ (n >> 16);
-            return static_cast<float>(n & 0xffffffu) / static_cast<float>(0xffffff);
-        }
-
-        inline float smooth(float t) { return t * t * (3.f - 2.f * t); }
+        // These lived here first and were re-extracted verbatim into the shared
+        // threepp::noise helpers (extras/core/NoiseUtils.hpp) — same bits, so
+        // every generated texture is unchanged.
+        using noise::hash2;
+        using noise::smooth;
+        using noise::toByte;
 
         // sin(PI*x)^e — the standard "widest in the middle, zero at both ends"
         // blade/taper profile.
@@ -112,20 +105,7 @@ namespace threepp::vegetation {
             }
         }
 
-        // Tileable 2D value noise over a [0,period) lattice.
-        inline float valueNoise(float x, float y, int period, unsigned int seed) {
-            const int xi = static_cast<int>(std::floor(x));
-            const int yi = static_cast<int>(std::floor(y));
-            const float fx = smooth(x - static_cast<float>(xi));
-            const float fy = smooth(y - static_cast<float>(yi));
-            auto wrap = [period](int v) { return ((v % period) + period) % period; };
-            const float a = hash2(wrap(xi), wrap(yi), seed);
-            const float b = hash2(wrap(xi + 1), wrap(yi), seed);
-            const float c = hash2(wrap(xi), wrap(yi + 1), seed);
-            const float d = hash2(wrap(xi + 1), wrap(yi + 1), seed);
-            return (a * (1.f - fx) + b * fx) * (1.f - fy) +
-                   (c * (1.f - fx) + d * fx) * fy;
-        }
+        using noise::valueNoise;
 
     }// namespace detail
 
