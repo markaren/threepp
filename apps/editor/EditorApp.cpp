@@ -299,7 +299,12 @@ EditorApp::EditorApp(const Options& options)
     // --- ImGui --------------------------------------------------------------
     ui_ = std::make_unique<ImguiFunctionalContext>(canvas_, *renderer_, [this] { drawUi(); });
 
-    ioCapture_.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
+    ioCapture_.preventMouseEvent = [this] {
+        // The view gizmo draws on the background list, so ImGui's own capture
+        // knows nothing about it - while the pointer is on it, a drag must
+        // not orbit and a click must not pick.
+        return ImGui::GetIO().WantCaptureMouse || viewGizmoHovered_;
+    };
     ioCapture_.preventScrollEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
     ioCapture_.preventKeyboardEvent = [] { return ImGui::GetIO().WantCaptureKeyboard; };
     canvas_.setIOCapture(&ioCapture_);
@@ -578,6 +583,9 @@ void EditorApp::frame(float dt) {
     // Before the orbit update, and a rigid translation of target AND camera, so
     // the damping the orbit is carrying still resolves against the same offset.
     updateFollow(dt);
+    // The gizmo's animated snap, before the orbit re-derives its spherical
+    // from wherever this leaves the camera.
+    updateViewTween(dt);
     orbit_->update();
     updateViewPreset();
     // The nudge that keeps the grid off a coplanar ground is measured against
@@ -632,6 +640,7 @@ void EditorApp::drawUi() {
     drawBottomPanel();
     drawStatusBar();
     drawPlayBanner();
+    drawViewGizmo();
     drawImportToast();
 
     if (preview_.visible) {
@@ -794,6 +803,7 @@ void EditorApp::drawUi() {
     // Picking runs last: it must see the WantCaptureMouse produced by every
     // panel drawn this frame.
     if (!io.WantCaptureMouse && !fileBrowser_.isOpen() && !radiusDragOwnsMouse &&
+        !viewGizmoHovered_ &&
         ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !gizmo_->isDragging()) {
         // A click, not the end of an orbit drag.
         const auto drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.f);
@@ -2665,6 +2675,9 @@ void EditorApp::setOrthographic(bool ortho) {
 }
 
 void EditorApp::setViewPreset(ViewPreset preset) {
+
+    // An explicit view set outranks a flight still on its way to an older one.
+    viewTween_.active = false;
 
     viewPreset_ = preset;
 

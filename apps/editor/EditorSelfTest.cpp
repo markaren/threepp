@@ -4805,6 +4805,43 @@ int EditorApp::runSelfTest() {
               "framing the same height it was showing in ortho");
     }
 
+    // --- the view gizmo's animated snap ------------------------------------
+    // The corner gizmo goes through startViewTween rather than setViewPreset:
+    // the camera swings over a third of a second and lands exactly on the
+    // axis, with the label following only at the end. Fixed steps, because
+    // the flight is a function of time and the assertions of frame counts.
+    {
+        setViewPreset(ViewPreset::Front);
+        stepFixed(2);
+
+        startViewTween(ViewPreset::Right);
+        stepFixed(5);
+        Vector3 direction;
+        direction.subVectors(viewCamera().position, orbit_->target).normalize();
+        check(viewTween_.active, "the view tween is still in flight after five frames");
+        check(direction.dot(viewPresetDirection(ViewPreset::Right)) < 0.999f,
+              "and has not teleported to the target axis");
+
+        stepFixed(30);
+        direction.subVectors(viewCamera().position, orbit_->target).normalize();
+        check(!viewTween_.active, "the tween retires when it lands");
+        check(direction.dot(viewPresetDirection(ViewPreset::Right)) > 0.9999f,
+              "landing exactly on the Right axis");
+        check(viewPreset_ == ViewPreset::Right, "with the label following");
+
+        // Asking for the axis the camera already stands on heads for the far
+        // side - the gizmo's click-again idiom, same as Ctrl on the numpad.
+        startViewTween(ViewPreset::Right);
+        check(viewTween_.active && viewTween_.preset == ViewPreset::Left,
+              "clicking the active axis heads for the opposite one");
+        stepFixed(40);
+        direction.subVectors(viewCamera().position, orbit_->target).normalize();
+        check(direction.dot(viewPresetDirection(ViewPreset::Left)) > 0.9999f,
+              "and lands there");
+
+        setViewPreset(ViewPreset::User);
+    }
+
     // --- the ortho view SHADES like the perspective one --------------------
     // The checks above are about the projection; this one is about the light.
     // The Vulkan backend reads an OrthographicCamera as a 2D HUD unless told

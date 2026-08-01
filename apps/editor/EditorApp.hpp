@@ -549,6 +549,24 @@ namespace threepp::editor {
         // active. Both hold a Camera& for life, so switching projection means
         // building new ones.
         void bindViewportControls();
+        // --- view gizmo (apps/editor/ViewGizmo.cpp) --------------------------
+        // The camera-orientation gizmo every 3D editor keeps in a viewport
+        // corner, after three.js editor's: a ball at each end of the three
+        // world axes, drawn where the axes actually point. Clicking a ball
+        // swings the view onto that axis; clicking the axis the camera already
+        // stands on heads for the far end, the same idiom as Ctrl on the
+        // numpad keys. Drawn with ImGui's background draw list - no second
+        // scene, no second render pass, the same picture on either backend.
+        void drawViewGizmo();
+        // Starts the swing. The projection is left alone here - the gizmo's
+        // click handler forces orthographic first, the numpad's policy - so
+        // the tween itself is usable from either projection.
+        void startViewTween(ViewPreset preset);
+        // One frame of it: slerp the orbit direction, keep the distance and
+        // target. Runs before orbit_->update(), which re-derives its spherical
+        // from wherever the camera stands - the same contract setViewPreset
+        // leans on, just spread over a third of a second.
+        void updateViewTween(float dt);
         // --- follow selection -----------------------------------------------
         // Chase camera. While it is on and something is selected, every frame
         // walks the orbit target towards the selection's world position and
@@ -699,6 +717,21 @@ namespace threepp::editor {
         std::unique_ptr<OrbitControls> orbit_;
         bool orthographic_ = false;
         ViewPreset viewPreset_ = ViewPreset::User;
+        // The view gizmo's animated snap. `from` is the unit orbit direction
+        // at the click; the flight slerps it onto the preset's axis while the
+        // distance and target stay the orbit's own. Retired by any explicit
+        // view set (setViewPreset) or by a viewport drag mid-flight.
+        struct ViewTween {
+            bool active = false;
+            float t = 0.f;
+            Vector3 from;
+            ViewPreset preset = ViewPreset::Front;
+        };
+        ViewTween viewTween_;
+        // Whether the pointer is on the gizmo this frame. The pick gate and
+        // the orbit's mouse capture both stand down while it is - the gizmo
+        // is background furniture ImGui's own capture knows nothing about.
+        bool viewGizmoHovered_ = false;
         // Follow Selection (View menu, Shift+F). Session state on purpose: it
         // belongs to what is open and what is selected, not to the editor's
         // saved preferences.

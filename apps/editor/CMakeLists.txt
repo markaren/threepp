@@ -26,6 +26,7 @@ add_executable(threepp_editor
         PhysicsDebugOverlay.cpp
         SensorOverlay.cpp
         SplineOverlay.cpp
+        ViewGizmo.cpp
         ViewportMarkers.cpp
         panels/AssetPanel.cpp
         panels/HierarchyPanel.cpp
