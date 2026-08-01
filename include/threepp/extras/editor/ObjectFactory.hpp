@@ -46,6 +46,10 @@ namespace threepp::editor {
         // `root` is only read — for the name search and nothing else.
         static std::shared_ptr<Mesh> createPrimitive(Primitive type, const Object3D& root);
         static std::shared_ptr<Object3D> createLight(LightKind kind, const Object3D& root);
+        // A Mesh carrying TextConfig, its geometry already built from the
+        // default content. Double-sided, because flat text seen from behind
+        // must read as text and not vanish.
+        static std::shared_ptr<Mesh> createText(const Object3D& root);
         static std::shared_ptr<Group> createGroup(const Object3D& root);
         static std::shared_ptr<PerspectiveCamera> createCamera(const Object3D& root);
         // A Group carrying SplineConfig, with four control-point children

@@ -14,6 +14,7 @@
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
+#include "threepp/extras/editor/TextConfig.hpp"
 
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/objects/Robot.hpp"
@@ -267,6 +268,7 @@ void EditorApp::drawInspector() {
         drawJointsSection(*selected);
         drawSplineSection(*selected);
         drawConveyorSection(*selected);
+        drawTextSection(*selected);
         drawScriptSection(*selected);
         drawPhysicsSection(*selected);
         drawSensorSection(*selected);
@@ -1918,6 +1920,106 @@ void EditorApp::drawSplineSection(Object3D& object) {
 
     ImGui::TextColored(theme::muted(), "Children are the control points, in order.");
     ImGui::TextColored(theme::muted(), "Stored in userData[\"spline\"]");
+
+    ImGui::TreePop();
+}
+
+
+// --------------------------------------------------------------------- text
+
+void EditorApp::drawTextSection(Object3D& object) {
+
+    if (!TextConfig::isText(object)) return;
+    if (!section("Text")) return;
+
+    auto* target = &object;
+    const auto config = TextConfig::read(object).value_or(TextConfig{});
+
+    // Same shape every other config section uses — one undoable property write
+    // per edit, merge-keyed so typing is not one undo step per keystroke. The
+    // setter goes through apply(), so execute, undo and redo all rebuild the
+    // geometry the entries describe.
+    const auto commit = [&](TextConfig after, const char* label) {
+        commands_.execute(makeProperty<TextConfig>(
+                label, "text:" + object.uuid,
+                [target](const TextConfig& value) { value.apply(*target); },
+                config, std::move(after)));
+        document_.setDirty(true);
+    };
+
+    // The content. Modest height: a label is a line or three, and the box
+    // grows nothing by being tall.
+    std::string buffer = config.text;
+    buffer.resize(std::max<std::size_t>(buffer.size() + 512, 1024));
+    if (ImGui::InputTextMultiline("##textContent", buffer.data(), buffer.size(),
+                                  {-1.f, ImGui::GetTextLineHeight() * 3.5f})) {
+        auto after = config;
+        after.text = buffer.c_str();
+        commit(std::move(after), "Edit Text");
+    }
+    if (config.text.empty()) {
+        ImGui::TextColored(theme::muted(), "Empty text draws nothing.");
+    }
+
+    ImGui::PushItemWidth(-100 * contentScale_);
+
+    {
+        float size = config.size;
+        const bool changed = ImGui::DragFloat("Size", &size, 0.01f, 0.01f, 100.f);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.size = std::clamp(size, 0.01f, 100.f);
+            commit(std::move(after), "Text Size");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+
+    {
+        float depth = config.depth;
+        const bool changed = ImGui::DragFloat("Depth", &depth, 0.005f, 0.f, 100.f);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.depth = std::clamp(depth, 0.f, 100.f);
+            commit(std::move(after), "Text Depth");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        if (config.depth <= 0.f) {
+            ImGui::TextColored(theme::muted(), "Depth 0 is flat - a sign, not solid type.");
+        }
+    }
+
+    {
+        static const char* aligns[] = {"Left", "Center", "Right"};
+        int align = static_cast<int>(config.align);
+        if (ImGui::Combo("Align", &align, aligns, IM_ARRAYSIZE(aligns))) {
+            auto after = config;
+            after.align = static_cast<TextConfig::Align>(align);
+            commit(std::move(after), "Text Align");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Where the origin sits on the block:\n"
+                              "what the gizmo grabs, and what Position means.");
+        }
+    }
+
+    {
+        int segments = config.curveSegments;
+        const bool changed = ImGui::DragInt("Curve Segments", &segments, 0.1f, 1,
+                                            TextConfig::maxCurveSegments);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.curveSegments = std::clamp(segments, 1, TextConfig::maxCurveSegments);
+            commit(std::move(after), "Text Curve Segments");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+
+    ImGui::PopItemWidth();
+
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"text\"]");
 
     ImGui::TreePop();
 }

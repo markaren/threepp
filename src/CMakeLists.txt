@@ -80,6 +80,7 @@ set(publicHeaders
         "threepp/extras/editor/Selection.hpp"
         "threepp/extras/editor/SensorConfig.hpp"
         "threepp/extras/editor/SplineConfig.hpp"
+        "threepp/extras/editor/TextConfig.hpp"
         "threepp/extras/editor/ViewSpec.hpp"
         "threepp/extras/imgui/ImguiContext.hpp"
 
@@ -389,6 +390,7 @@ set(sources
         "threepp/extras/editor/Selection.cpp"
         "threepp/extras/editor/SensorConfig.cpp"
         "threepp/extras/editor/SplineConfig.cpp"
+        "threepp/extras/editor/TextConfig.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"
         "threepp/geometries/CapsuleGeometry.cpp"

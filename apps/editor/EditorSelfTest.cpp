@@ -24,6 +24,7 @@
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
+#include "threepp/extras/editor/TextConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include "threepp/extras/editor/SensorPlaySession.hpp"
@@ -546,6 +547,22 @@ int EditorApp::runScreenshot() {
         sensor.rangeStddev = 0.01f;
         sensor.write(*mast);
         addObject(mast, scene, "Add Lidar Mast");
+    }
+
+    // The text feature's own acceptance: solid type standing over the tubes.
+    // Judged the way the tubes are — by looking. Outlines that fail to
+    // triangulate, holes that fill in (the counters of e and p), or a centring
+    // bug all show here and in no vertex count.
+    {
+        auto title = ObjectFactory::createText(scene);
+        auto config = TextConfig::read(*title).value_or(TextConfig{});
+        config.text = "threepp";
+        config.size = 1.4f;
+        config.depth = 0.35f;
+        config.apply(*title);
+        title->name = "Screenshot Title";
+        title->position.set(0.f, 4.5f, -2.f);
+        addObject(title, scene, "Add Screenshot Title");
     }
     sensorCloudVisible_ = true;
 
@@ -4840,6 +4857,84 @@ int EditorApp::runSelfTest() {
               "and lands there");
 
         setViewPreset(ViewPreset::User);
+    }
+
+    // --- text objects ------------------------------------------------------
+    // A text mesh is an ordinary Mesh whose geometry is built from its
+    // userData (TextConfig): created by the factory, edited through the same
+    // property command the inspector's Text section issues, and rebuilt on
+    // undo exactly as on execute.
+    {
+        auto text = ObjectFactory::createText(document_.scene());
+        check(TextConfig::isText(*text), "the factory's text mesh carries the text entry");
+        addObject(text, document_.scene(), "Add Text");
+        step(2);
+
+        const auto vertexCount = [](const Object3D& mesh) {
+            const auto* position = mesh.geometry()
+                                           ? mesh.geometry()->getAttribute<float>("position")
+                                           : nullptr;
+            return position ? position->count() : 0;
+        };
+        const int defaultVertices = vertexCount(*text);
+        check(defaultVertices > 0, "and its geometry has triangles to show");
+
+        // The inspector's edit, verbatim: apply() through a property command.
+        const auto before = TextConfig::read(*text).value_or(TextConfig{});
+        auto after = before;
+        after.text = "Hi";
+        after.depth = 0.f;
+        auto* target = text.get();
+        commands_.execute(makeProperty<TextConfig>(
+                "Edit Text", "text:" + text->uuid,
+                [target](const TextConfig& value) { value.apply(*target); },
+                before, after));
+
+        check(TextConfig::read(*text)->text == "Hi", "an edit rewrites the entry");
+        const int editedVertices = vertexCount(*text);
+        check(editedVertices > 0 && editedVertices != defaultVertices,
+              "and rebuilds the geometry from it");
+
+        commands_.undo();
+        check(TextConfig::read(*text)->text == before.text,
+              "undo restores the config");
+        check(vertexCount(*text) == defaultVertices,
+              "and rebuilds the geometry it described");
+
+        // Empty content is a document state, not an error: the mesh stays,
+        // draws nothing, and the guard keeps the centring math off an empty
+        // bounding box.
+        auto emptied = before;
+        emptied.text = "";
+        emptied.apply(*text);
+        check(vertexCount(*text) == 0, "empty text builds an empty geometry");
+
+        // The reported defect, pinned: the selection outline and the raycast
+        // both read the geometry's CACHED bounds, and applyMatrix4 used to
+        // leave them where the glyphs stood before the anchoring translate —
+        // a box beside the text, and a text nobody could click.
+        auto anchored = before;
+        anchored.text = "Aim";
+        const auto built = anchored.buildGeometry();
+        {
+            const auto cached = *built->boundingBox;
+            built->computeBoundingBox();
+            const auto& fresh = *built->boundingBox;
+            check(cached.min().distanceTo(fresh.min()) < 1e-5f &&
+                          cached.max().distanceTo(fresh.max()) < 1e-5f,
+                  "the built geometry's cached bounds sit on the glyphs");
+        }
+        check(std::abs(built->boundingBox->min().x + built->boundingBox->max().x) < 1e-3f,
+              "Center anchors the origin mid-block");
+        anchored.align = TextConfig::Align::Left;
+        check(std::abs(anchored.buildGeometry()->boundingBox->min().x) < 1e-4f,
+              "Left anchors it on the left edge");
+        anchored.align = TextConfig::Align::Right;
+        check(std::abs(anchored.buildGeometry()->boundingBox->max().x) < 1e-4f,
+              "Right anchors it on the right edge");
+
+        commands_.execute(std::make_unique<RemoveObjectCommand>(*text));
+        step();
     }
 
     // --- the ortho view SHADES like the perspective one --------------------

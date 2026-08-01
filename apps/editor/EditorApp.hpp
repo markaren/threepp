@@ -211,6 +211,10 @@ namespace threepp::editor {
         // points — both are ordinary scene nodes, so the section is what tells
         // them apart.
         void drawSplineSection(Object3D& object);
+        // Shown for a text mesh (TextConfig): the content and the type
+        // parameters, each edit rebuilding the geometry through the same
+        // undoable property write every other config section uses.
+        void drawTextSection(Object3D& object);
         // The conveyor twin: shown for a conveyor group and, in its waypoint
         // form, for one of its waypoints (arc centre / segment surface).
         void drawConveyorSection(Object3D& object);

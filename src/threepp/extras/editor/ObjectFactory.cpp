@@ -3,6 +3,7 @@
 
 #include "threepp/extras/editor/ConveyorConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
+#include "threepp/extras/editor/TextConfig.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
@@ -130,6 +131,34 @@ std::shared_ptr<Mesh> ObjectFactory::createPrimitive(Primitive type, const Objec
         mesh->rotation.x = -math::PI / 2;
         mesh->castShadow = false;
     }
+
+    return mesh;
+}
+
+std::shared_ptr<Mesh> ObjectFactory::createText(const Object3D& root) {
+
+    const TextConfig config;
+
+    auto material = defaultMaterial();
+    // Flat text (depth 0) is a sheet of one-sided triangles; from behind it
+    // would simply not be there. Solid text keeps the setting harmlessly.
+    material->side = Side::Double;
+    // The shadow pass flips Front to Back to keep a surface out of its own
+    // shadow map, but Double stays Double — so without this, the glyph caps
+    // self-shadow into speckle. Back is what the flip would have picked.
+    material->shadowSide = Side::Back;
+
+    auto mesh = Mesh::create(config.buildGeometry(), material);
+    config.write(*mesh);
+    mesh->name = uniqueName(root, "Text");
+    mesh->castShadow = true;
+    mesh->receiveShadow = true;
+
+    // Stood on the ground like the primitives. The geometry is centred, so
+    // half its height is what is below the baseline of position.y = 0.
+    mesh->geometry()->computeBoundingBox();
+    const auto& box = mesh->geometry()->boundingBox;
+    if (box && !box->isEmpty()) mesh->position.y = -box->min().y;
 
     return mesh;
 }
