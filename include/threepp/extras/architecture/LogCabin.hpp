@@ -210,6 +210,10 @@ namespace threepp::architecture {
         float roofHalfDepth = 0.f; // including the eave overhang
         float porchOuterZ = 0.f;   // front face of the porch posts
         int wallCourses = 0;
+        // Top of the flue, in cabin-local space — where a host anchors a smoke
+        // emitter. Remember it is LOCAL: transform it by the cabin's world
+        // matrix, or a rotated cabin will smoke from thin air beside itself.
+        Vector3 flueTip;
     };
 
     // ── Internal mesh accumulation ───────────────────────────────────────
@@ -655,6 +659,16 @@ namespace threepp::architecture {
         const float tanP = std::tan(p.roofPitchDeg * detail::DEG);
         m.ridgeY = m.eaveY + p.roofThickness + m.halfDepth * tanP;
         m.porchOuterZ = m.halfDepth + p.porchDepth;
+
+        // Matches the flue construction in buildCabinGeometry: the pipe exits
+        // the shingle plane at (flueX, flueZ) and rises flueRise above it, with
+        // the rain cap a little higher still.
+        {
+            const float zc = std::clamp(p.flueZ, -m.halfDepth + 0.4f, m.halfDepth - 0.4f);
+            const float xc = std::clamp(p.flueX, -m.halfLength + 0.4f, m.halfLength - 0.4f);
+            const float yExit = m.ridgeY - std::abs(zc) * tanP;
+            m.flueTip.set(xc, yExit + p.flueRise + 0.24f, zc);
+        }
         return m;
     }
 

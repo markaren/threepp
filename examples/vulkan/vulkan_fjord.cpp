@@ -30,6 +30,7 @@
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
 
+#include "threepp/extras/architecture/LogCabin.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
@@ -653,36 +654,6 @@ namespace {
 
     // ═══════════════════════════ cabin / dock / boat ════════════════════════
 
-    // Triangular gable prism: cross-section in XY (base spanX wide, apex `rise`
-    // above the base) extruded along Z. Flat-shaded via non-indexed triangles.
-    std::shared_ptr<BufferGeometry> makeGablePrism(float spanX, float rise, float lenZ) {
-        const float hx = spanX * 0.5f, hz = lenZ * 0.5f;
-        const Vector3 A(-hx, 0.f, -hz), B(hx, 0.f, -hz), C(0.f, rise, -hz);
-        const Vector3 D(-hx, 0.f, hz), E(hx, 0.f, hz), F(0.f, rise, hz);
-        std::vector<Vector3> tris = {
-                A, C, B,      // back gable
-                D, E, F,      // front gable
-                A, F, C, A, D, F,// left slope (as seen from -x)
-                B, C, F, B, F, E // right slope
-        };
-        std::vector<float> pos, nrm;
-        for (size_t i = 0; i < tris.size(); i += 3) {
-            Vector3 e1, e2, n;
-            e1.subVectors(tris[i + 1], tris[i]);
-            e2.subVectors(tris[i + 2], tris[i]);
-            n.crossVectors(e1, e2).normalize();
-            for (int k = 0; k < 3; ++k) {
-                pos.insert(pos.end(), {tris[i + k].x, tris[i + k].y, tris[i + k].z});
-                nrm.insert(nrm.end(), {n.x, n.y, n.z});
-            }
-        }
-        auto geo = BufferGeometry::create();
-        geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
-        geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
-        return geo;
-    }
-
-    // Lofted clinker-style rowing boat hull, origin at keel bottom, bow +Z.
     std::shared_ptr<BufferGeometry> makeBoatHull() {
         constexpr int N = 9;   // stations along the length
         constexpr float L = 4.2f;
@@ -725,109 +696,64 @@ namespace {
     struct Cabin {
         std::shared_ptr<Group> group;
         std::shared_ptr<MeshStandardMaterial> windowMat;// shared warm panes (night glow)
+        std::shared_ptr<MeshStandardMaterial> sconceMat;// porch lanterns, same schedule
         Vector3 chimneyTipLocal;
     };
 
+    // The hytte on the east bench, from the procedural log-cabin generator
+    // (extras/architecture). Shorter and shallower than the generator's own
+    // defaults so it sits inside the flattened pad without crowding the dock
+    // path, and stained dark the way decades of weather off the fjord leave it.
+    architecture::CabinParams fjordCabinParams() {
+        architecture::CabinParams cp;
+        cp.seed = 11u;
+        cp.length = 12.0f;
+        cp.depth = 7.4f;
+        cp.wallHeight = 3.2f;
+        cp.floorHeight = 0.72f;
+        cp.roofPitchDeg = 40.f;
+        cp.porchStartX = -6.0f;
+        cp.porchEndX = 6.0f;
+        cp.porchDepth = 2.4f;
+        cp.stepsCenterX = 0.f;// defaultOpenings puts the door on centre
+        cp.stepsWidth = 1.6f;
+        cp.dormerCenterX = -3.3f;
+        cp.dormerWidth = 4.0f;
+        cp.flueX = 3.6f;
+        cp.flueZ = -0.9f;
+        cp.flueRise = 1.5f;
+        cp.logColor = {0.355f, 0.205f, 0.098f};   // dark creosote stain
+        cp.logEndColor = {0.440f, 0.320f, 0.180f};
+        cp.shingleColor = {0.130f, 0.135f, 0.145f};// slate roof, as the old cabin had
+        cp.timberColor = {0.365f, 0.248f, 0.142f};
+        return cp;
+    }
+
+    // Built once and shared by every instance: the generator bakes five
+    // procedural textures, and the far cabin has no reason to bake its own.
+    architecture::CabinMaterials& fjordCabinMaterials() {
+        static architecture::CabinMaterials mats = [] {
+            auto m = architecture::makeCabinMaterials(fjordCabinParams());
+            // The panes double as the night light — the frame loop drives
+            // emissiveIntensity from the sun elevation.
+            m.glass->emissive = Color(1.0f, 0.62f, 0.28f);
+            m.glass->emissiveIntensity = 0.f;
+            m.lamp->emissiveIntensity = 0.f;// porch sconces: dark by day
+            return m;
+        }();
+        return mats;
+    }
+
     Cabin makeCabin() {
         Cabin cabin;
-        cabin.group = Group::create();
-        auto& g = *cabin.group;
-
-        auto red = MeshStandardMaterial::create(
-                MeshStandardMaterial::Params{}.color(Color(0.45f, 0.085f, 0.06f)).roughness(0.78f).metalness(0.f));
-        auto trim = MeshStandardMaterial::create(
-                MeshStandardMaterial::Params{}.color(Color(0.92f, 0.90f, 0.85f)).roughness(0.55f).metalness(0.f));
-        auto roof = MeshStandardMaterial::create(
-                MeshStandardMaterial::Params{}.color(Color(0.085f, 0.09f, 0.10f)).roughness(0.85f).metalness(0.f));
-        auto stone = MeshStandardMaterial::create(
-                MeshStandardMaterial::Params{}.color(Color(0.42f, 0.41f, 0.39f)).roughness(0.95f).metalness(0.f));
-        cabin.windowMat = MeshStandardMaterial::create(
-                MeshStandardMaterial::Params{}
-                        .color(Color(0.05f, 0.06f, 0.07f))
-                        .roughness(0.15f)
-                        .metalness(0.f)
-                        .emissive(Color(1.0f, 0.62f, 0.28f))
-                        .emissiveIntensity(0.f));
-
-        // Body: 4.6 m wide (X) × 7.2 m long (Z), walls 2.5 m, ridge along Z.
-        constexpr float W = 4.6f, D = 7.2f, H = 2.5f, RISE = 1.5f;
-
-        auto plinth = Mesh::create(BoxGeometry::create(W + 0.3f, 0.6f, D + 0.3f), stone);
-        plinth->position.y = 0.3f;
-        g.add(plinth);
-
-        auto body = Mesh::create(BoxGeometry::create(W, H, D), red);
-        body->position.y = 0.6f + H * 0.5f;
-        g.add(body);
-
-        auto attic = Mesh::create(makeGablePrism(W, RISE, D), red);
-        attic->position.y = 0.6f + H;
-        g.add(attic);
-
-        // Roof slabs with overhang, sloping down toward ±X.
-        const float slope = std::sqrt(RISE * RISE + (W * 0.5f) * (W * 0.5f));
-        const float ang = std::atan2(RISE, W * 0.5f);
-        for (int sgn = -1; sgn <= 1; sgn += 2) {
-            auto slab = Mesh::create(BoxGeometry::create(slope + 0.45f, 0.10f, D + 0.6f), roof);
-            slab->rotation.z = static_cast<float>(sgn) * ang;
-            slab->position.set(static_cast<float>(-sgn) * (W * 0.25f + 0.08f),
-                               0.6f + H + RISE * 0.5f + 0.10f, 0.f);
-            g.add(slab);
-        }
-
-        // Chimney near the ridge.
-        auto chimney = Mesh::create(BoxGeometry::create(0.55f, 1.6f, 0.55f), stone);
-        chimney->position.set(0.f, 0.6f + H + RISE + 0.35f, 1.4f);
-        g.add(chimney);
-        cabin.chimneyTipLocal.set(0.f, 0.6f + H + RISE + 1.2f, 1.4f);
-
-        // Window helper: white frame + crossbars + warm pane.
-        auto addWindow = [&](float w, float h, const Vector3& p, float rotY) {
-            auto win = Group::create();
-            auto frame = Mesh::create(BoxGeometry::create(w + 0.18f, h + 0.18f, 0.10f), trim);
-            win->add(frame);
-            // Pane sits PROUD of the solid frame box so the glow is visible.
-            auto pane = Mesh::create(BoxGeometry::create(w, h, 0.06f), cabin.windowMat);
-            pane->position.z = 0.055f;
-            win->add(pane);
-            auto barV = Mesh::create(BoxGeometry::create(0.05f, h, 0.045f), trim);
-            barV->position.z = 0.10f;
-            win->add(barV);
-            auto barH = Mesh::create(BoxGeometry::create(w, 0.05f, 0.045f), trim);
-            barH->position.z = 0.10f;
-            win->add(barH);
-            win->position.copy(p);
-            win->rotation.y = rotY;
-            g.add(win);
-        };
-
-        // Front (water-facing, -X): two windows.
-        addWindow(1.0f, 1.15f, Vector3(-W * 0.5f - 0.02f, 1.85f, -1.8f), -kPi / 2.f);
-        addWindow(1.0f, 1.15f, Vector3(-W * 0.5f - 0.02f, 1.85f, 1.4f), -kPi / 2.f);
-        // Gable ends: one each.
-        addWindow(0.9f, 1.0f, Vector3(0.9f, 1.85f, D * 0.5f + 0.02f), 0.f);
-        addWindow(0.8f, 0.8f, Vector3(0.f, 3.4f, -D * 0.5f - 0.02f), kPi);
-
-        // Door (south gable, toward the dock path) + white frame + step.
-        auto doorFrame = Mesh::create(BoxGeometry::create(1.14f, 2.14f, 0.10f), trim);
-        doorFrame->position.set(-1.1f, 0.6f + 1.05f, D * 0.5f + 0.02f);
-        g.add(doorFrame);
-        auto door = Mesh::create(BoxGeometry::create(0.98f, 2.0f, 0.08f), MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.10f, 0.16f, 0.18f)).roughness(0.6f).metalness(0.f)));
-        door->position.set(-1.1f, 0.6f + 1.0f, D * 0.5f + 0.055f);
-        g.add(door);
-        auto step = Mesh::create(BoxGeometry::create(1.4f, 0.25f, 0.8f), stone);
-        step->position.set(-1.1f, 0.12f, D * 0.5f + 0.5f);
-        g.add(step);
-
-        // Corner boards (white trim verticals).
-        for (int cx = -1; cx <= 1; cx += 2)
-            for (int cz = -1; cz <= 1; cz += 2) {
-                auto corner = Mesh::create(BoxGeometry::create(0.14f, H, 0.14f), trim);
-                corner->position.set(static_cast<float>(cx) * (W * 0.5f - 0.02f), 0.6f + H * 0.5f,
-                                     static_cast<float>(cz) * (D * 0.5f - 0.02f));
-                g.add(corner);
-            }
-
+        const auto cp = fjordCabinParams();
+        auto& mats = fjordCabinMaterials();
+        cabin.group = architecture::createLogCabin(cp, mats);
+        cabin.windowMat = mats.glass;
+        cabin.sconceMat = mats.lamp;
+        // Reported in cabin-LOCAL space; the smoke emitter transforms it by the
+        // group's world matrix (the cabin is rotated to face the water).
+        cabin.chimneyTipLocal = architecture::cabinMetrics(cp).flueTip;
         return cabin;
     }
 
@@ -1283,9 +1209,12 @@ int main(int argc, char** argv) {
 
     // ── cabin, dock, lantern, boat ──────────────────────────────────────────
     Cabin cabin = makeCabin();
-    constexpr float kCabinScale = 1.35f;
+    constexpr float kCabinScale = 1.0f;
     cabin.group->position.set(padX, kPadHeight - 0.1f, kPadZ);
     cabin.group->scale.set(kCabinScale, kCabinScale, kCabinScale);
+    // The generator builds with the porch on +Z; turn it to face the water
+    // (-X), so the veranda looks down the dock and out over the fjord.
+    cabin.group->rotation.y = -kPi * 0.5f;
     scene.add(cabin.group);
 
     // A second, distant cabin across the fjord — its lit windows carry across
@@ -1296,10 +1225,14 @@ int main(int argc, char** argv) {
         const float z2 = -430.f;
         const float x2 = channelCenterX(z2) - 205.f;
         other.group->position.set(x2, terrainH(x2, z2) - 0.25f, z2);
-        other.group->rotation.y = kPi;
+        // West bench, so it faces the channel the other way (+X).
+        other.group->rotation.y = kPi * 0.5f;
         other.group->name = "cabin_far";
         scene.add(other.group);
-        farWindowMat = other.windowMat;
+        // Both cabins now share one material set, so the near cabin's glow
+        // already drives this one; a second write would only cancel its
+        // flicker. Left null on purpose — the frame loop guards on it.
+        farWindowMat = nullptr;
     }
 
     // Waterline along -X from the pad (dock goes there).
@@ -1383,8 +1316,12 @@ int main(int argc, char** argv) {
         auto& s = smoke.settings();
         s.makeDefault();
         s.positionStyle = ParticleSystem::Type::BOX;
+        // Local -> world through the group's matrix, NOT position + scale: the
+        // cabin is rotated to face the water, so a naive offset would put the
+        // smoke column out in the meadow beside the roof.
+        cabin.group->updateMatrixWorld(true);
         Vector3 tip = cabin.chimneyTipLocal;
-        tip.multiplyScalar(kCabinScale).add(cabin.group->position);
+        tip.applyMatrix4(*cabin.group->matrixWorld);
         s.positionBase = tip;
         s.positionSpread = {0.15f, 0.05f, 0.15f};
         s.velocityStyle = ParticleSystem::Type::BOX;
@@ -1708,6 +1645,10 @@ int main(int argc, char** argv) {
                 }
                 lanternMat->emissiveIntensity = 42.f * glow;
                 lanternMat->needsUpdate();
+                if (cabin.sconceMat) {
+                    cabin.sconceMat->emissiveIntensity = 18.f * glow * flicker;
+                    cabin.sconceMat->needsUpdate();
+                }
             }
         }
 
