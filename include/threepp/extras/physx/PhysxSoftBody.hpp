@@ -911,6 +911,102 @@ namespace threepp {
         return physics_->createDeformableVolumeMaterial(youngsModulus, poissonsRatio, dynamicFriction);
     }
 
+    namespace softbody_detail {
+
+        // The four stages both addSoftBody overloads share. The uncached path
+        // runs them on the world-baked visual geometry; the cached path cooks
+        // from LOCAL geometry once and re-instantiates per spawn — same code,
+        // different inputs, previously two hand-maintained copies.
+
+        // Positions + indices (iota fallback when non-indexed) into PxArrays.
+        inline void extractTriMesh(const BufferGeometry& geometry,
+                                   ::physx::PxArray<::physx::PxVec3>& triVerts,
+                                   ::physx::PxArray<::physx::PxU32>& triIndices) {
+            using namespace ::physx;
+            const auto* posAttr = geometry.getAttribute<float>("position");
+            if (!posAttr) throw std::runtime_error("PhysxWorld::addSoftBody: geometry has no position attribute");
+            const auto count = static_cast<PxU32>(posAttr->count());
+            triVerts.resize(count);
+            for (PxU32 i = 0; i < count; ++i) {
+                triVerts[i] = PxVec3(posAttr->getX(i), posAttr->getY(i), posAttr->getZ(i));
+            }
+            const auto* idx = geometry.getIndex();
+            if (idx) {
+                const auto n = static_cast<PxU32>(idx->count());
+                triIndices.resize(n);
+                for (PxU32 i = 0; i < n; ++i) triIndices[i] = idx->getX(i);
+            } else {
+                triIndices.reserve(count);
+                for (PxU32 i = 0; i < count; ++i) triIndices.pushBack(i);
+            }
+        }
+
+        // Remesh + voxelise (well-conditioned sim mesh; skipped when
+        // voxelResolution <= 0), then cook the deformable volume mesh.
+        inline ::physx::PxDeformableVolumeMesh* remeshAndCook(
+                ::physx::PxPhysics& physics,
+                ::physx::PxArray<::physx::PxVec3>& triVerts,
+                ::physx::PxArray<::physx::PxU32>& triIndices,
+                int voxelResolution) {
+            using namespace ::physx;
+            if (voxelResolution > 0) {
+                PxRemeshingExt::limitMaxEdgeLength(triIndices, triVerts, 1.0f);
+                PxTetMaker::remeshTriangleMesh(triVerts, triIndices, static_cast<PxU32>(voxelResolution),
+                                               triVerts, triIndices);
+            }
+            PxCookingParams params(physics.getTolerancesScale());
+            params.meshWeldTolerance = 0.001f;
+            params.meshPreprocessParams = PxMeshPreprocessingFlags(PxMeshPreprocessingFlag::eWELD_VERTICES);
+            params.buildTriangleAdjacencies = false;
+            params.buildGPUData = true;
+            const int res = (voxelResolution > 0) ? voxelResolution : 6;
+            PxDeformableVolumeMesh* mesh = cookDeformableVolumeMesh(physics, params, triVerts, triIndices,
+                                                                    static_cast<unsigned>(res));
+            if (!mesh) throw std::runtime_error("PhysxWorld::addSoftBody: failed to cook deformable volume mesh");
+            return mesh;
+        }
+
+        // Deformable volume + shape + simulation mesh from a cooked mesh.
+        inline ::physx::PxDeformableVolume* instantiateVolume(
+                ::physx::PxPhysics& physics, ::physx::PxCudaContextManager& cuda,
+                ::physx::PxDeformableVolumeMesh* mesh,
+                ::physx::PxDeformableVolumeMaterial* material) {
+            using namespace ::physx;
+            PxDeformableVolume* volume = physics.createDeformableVolume(cuda);
+            const PxShapeFlags shapeFlags = PxShapeFlag::eVISUALIZATION | PxShapeFlag::eSIMULATION_SHAPE;
+            PxTetrahedronMeshGeometry tetGeom(mesh->getCollisionMesh());
+            PxShape* shape = physics.createShape(tetGeom, &material, 1, true, shapeFlags);
+            volume->attachShape(*shape);
+            volume->attachSimulationMesh(*mesh->getSimulationMesh(), *mesh->getDeformableVolumeAuxData());
+            shape->release();
+            return volume;
+        }
+
+        // Place at `pose`, set mass from density or explicit mass, push to GPU.
+        inline void placeAndUpload(::physx::PxDeformableVolume& volume,
+                                   ::physx::PxCudaContextManager* cuda,
+                                   const ::physx::PxTransform& pose, float mass) {
+            using namespace ::physx;
+            PxVec4 *simPos, *simVel, *collPos, *restPos;
+            PxDeformableVolumeExt::allocateAndInitializeHostMirror(
+                    volume, cuda, simPos, simVel, collPos, restPos);
+            constexpr PxReal maxInvMassRatio = 50.f;
+            PxDeformableVolumeExt::transform(volume, pose, 1.f, simPos, simVel, collPos, restPos);
+            if (mass > 0.f) {
+                PxDeformableVolumeExt::setMass(volume, mass, maxInvMassRatio, simPos);
+            } else {
+                PxDeformableVolumeExt::updateMass(volume, 1.f, maxInvMassRatio, simPos);
+            }
+            PxDeformableVolumeExt::copyToDevice(volume, PxDeformableVolumeDataFlag::eALL,
+                                                simPos, simVel, collPos, restPos);
+            PX_EXT_PINNED_MEMORY_FREE(*cuda, simPos);
+            PX_EXT_PINNED_MEMORY_FREE(*cuda, simVel);
+            PX_EXT_PINNED_MEMORY_FREE(*cuda, collPos);
+            PX_EXT_PINNED_MEMORY_FREE(*cuda, restPos);
+        }
+
+    }// namespace softbody_detail
+
     inline SoftBody* PhysxWorld::addSoftBody(
             const std::shared_ptr<BufferGeometry>& visualGeometry,
             ::physx::PxDeformableVolumeMaterial* material,
@@ -923,77 +1019,15 @@ namespace threepp {
         if (!visualGeometry) throw std::runtime_error("PhysxWorld::addSoftBody: visualGeometry is null");
         if (!material) material = defaultSoftBodyMaterial();
 
-        // 1. Extract positions/indices into PxArrays (world-space, since the visual
-        //    geometry is what we render). The simulation then runs in world space.
+        // Extract (world-space — the visual geometry is what we render, and the
+        // simulation then runs in world space), remesh + cook, instantiate,
+        // place at identity, upload. Shared with the cached path below.
         PxArray<PxVec3> triVerts;
         PxArray<PxU32> triIndices;
-        {
-            const auto* posAttr = visualGeometry->getAttribute<float>("position");
-            if (!posAttr) throw std::runtime_error("PhysxWorld::addSoftBody: geometry has no position attribute");
-            const auto count = static_cast<PxU32>(posAttr->count());
-            triVerts.resize(count);
-            for (PxU32 i = 0; i < count; ++i) {
-                triVerts[i] = PxVec3(posAttr->getX(i), posAttr->getY(i), posAttr->getZ(i));
-            }
-            const auto* idx = visualGeometry->getIndex();
-            if (idx) {
-                const auto n = static_cast<PxU32>(idx->count());
-                triIndices.resize(n);
-                for (PxU32 i = 0; i < n; ++i) triIndices[i] = idx->getX(i);
-            } else {
-                triIndices.reserve(count);
-                for (PxU32 i = 0; i < count; ++i) triIndices.pushBack(i);
-            }
-        }
-
-        // 2. Remesh + voxelise so the simulation mesh is well-conditioned. The
-        //    voxelResolution counts cells along the longest AABB axis; 10 is a
-        //    reasonable interactive default. Skip remeshing when resolution <= 0.
-        if (voxelResolution > 0) {
-            PxRemeshingExt::limitMaxEdgeLength(triIndices, triVerts, 1.0f);
-            PxTetMaker::remeshTriangleMesh(triVerts, triIndices, static_cast<PxU32>(voxelResolution),
-                                           triVerts, triIndices);
-        }
-
-        // 3. Cook deformable volume mesh.
-        PxCookingParams params(physics_->getTolerancesScale());
-        params.meshWeldTolerance = 0.001f;
-        params.meshPreprocessParams = PxMeshPreprocessingFlags(PxMeshPreprocessingFlag::eWELD_VERTICES);
-        params.buildTriangleAdjacencies = false;
-        params.buildGPUData = true;
-        const int res = (voxelResolution > 0) ? voxelResolution : 6;
-        PxDeformableVolumeMesh* mesh = cookDeformableVolumeMesh(*physics_, params, triVerts, triIndices,
-                                                                static_cast<unsigned>(res));
-        if (!mesh) throw std::runtime_error("PhysxWorld::addSoftBody: failed to cook deformable volume mesh");
-
-        // 4. Instantiate the deformable volume + shape + simulation mesh.
-        PxDeformableVolume* volume = physics_->createDeformableVolume(*cuda_);
-        const PxShapeFlags shapeFlags = PxShapeFlag::eVISUALIZATION | PxShapeFlag::eSIMULATION_SHAPE;
-        PxTetrahedronMeshGeometry tetGeom(mesh->getCollisionMesh());
-        PxShape* shape = physics_->createShape(tetGeom, &material, 1, true, shapeFlags);
-        volume->attachShape(*shape);
-        volume->attachSimulationMesh(*mesh->getSimulationMesh(), *mesh->getDeformableVolumeAuxData());
-        shape->release();
-
-        // 5. Place into world space, set mass from density, push to GPU.
-        PxVec4 *simPos, *simVel, *collPos, *restPos;
-        PxDeformableVolumeExt::allocateAndInitializeHostMirror(
-                *volume, cuda_, simPos, simVel, collPos, restPos);
-        constexpr PxReal maxInvMassRatio = 50.f;
-        constexpr PxReal scale = 1.f;
-        PxDeformableVolumeExt::transform(*volume, PxTransform(PxIdentity), scale,
-                                         simPos, simVel, collPos, restPos);
-        if (mass > 0.f) {
-            PxDeformableVolumeExt::setMass(*volume, mass, maxInvMassRatio, simPos);
-        } else {
-            PxDeformableVolumeExt::updateMass(*volume, 1.f, maxInvMassRatio, simPos);
-        }
-        PxDeformableVolumeExt::copyToDevice(*volume, PxDeformableVolumeDataFlag::eALL,
-                                            simPos, simVel, collPos, restPos);
-        PX_EXT_PINNED_MEMORY_FREE(*cuda_, simPos);
-        PX_EXT_PINNED_MEMORY_FREE(*cuda_, simVel);
-        PX_EXT_PINNED_MEMORY_FREE(*cuda_, collPos);
-        PX_EXT_PINNED_MEMORY_FREE(*cuda_, restPos);
+        softbody_detail::extractTriMesh(*visualGeometry, triVerts, triIndices);
+        PxDeformableVolumeMesh* mesh = softbody_detail::remeshAndCook(*physics_, triVerts, triIndices, voxelResolution);
+        PxDeformableVolume* volume = softbody_detail::instantiateVolume(*physics_, *cuda_, mesh, material);
+        softbody_detail::placeAndUpload(*volume, cuda_, PxTransform(PxIdentity), mass);
 
         volume->setDeformableBodyFlag(PxDeformableBodyFlag::eDISABLE_SELF_COLLISION, !selfCollision);
         volume->setSolverIterationCounts(solverIterations);
@@ -1075,69 +1109,22 @@ namespace threepp {
             cookedMesh = entry->mesh;
         } else {
             // Cook from LOCAL geometry (before world baking). This is the expensive
-            // part that the cache eliminates on subsequent spawns.
+            // part that the cache eliminates on subsequent spawns. NOTE: the
+            // baked clone above replaced mesh.geometry(), but `geom` still
+            // holds the ORIGINAL local geometry — cook from that.
             PxArray<PxVec3> triVerts;
             PxArray<PxU32> triIndices;
-            const auto count = static_cast<PxU32>(posAttr->count());
-            triVerts.resize(count);
-            for (PxU32 i = 0; i < count; ++i) {
-                triVerts[i] = PxVec3(posAttr->getX(i), posAttr->getY(i), posAttr->getZ(i));
-            }
-            const auto* idx = geom->getIndex();
-            if (idx) {
-                const auto n = static_cast<PxU32>(idx->count());
-                triIndices.resize(n);
-                for (PxU32 i = 0; i < n; ++i) triIndices[i] = idx->getX(i);
-            } else {
-                triIndices.reserve(count);
-                for (PxU32 i = 0; i < count; ++i) triIndices.pushBack(i);
-            }
-
-            if (voxelResolution > 0) {
-                PxRemeshingExt::limitMaxEdgeLength(triIndices, triVerts, 1.0f);
-                PxTetMaker::remeshTriangleMesh(triVerts, triIndices,
-                                               static_cast<PxU32>(voxelResolution), triVerts, triIndices);
-            }
-
-            PxCookingParams params(physics_->getTolerancesScale());
-            params.meshWeldTolerance = 0.001f;
-            params.meshPreprocessParams = PxMeshPreprocessingFlags(PxMeshPreprocessingFlag::eWELD_VERTICES);
-            params.buildTriangleAdjacencies = false;
-            params.buildGPUData = true;
-            const int res = (voxelResolution > 0) ? voxelResolution : 6;
-            cookedMesh = cookDeformableVolumeMesh(*physics_, params, triVerts, triIndices,
-                                                  static_cast<unsigned>(res));
-            if (!cookedMesh) throw std::runtime_error("PhysxWorld::addSoftBody: failed to cook deformable volume mesh");
+            softbody_detail::extractTriMesh(*geom, triVerts, triIndices);
+            cookedMesh = softbody_detail::remeshAndCook(*physics_, triVerts, triIndices, voxelResolution);
 
             cookCache_[fullKey] = {cookedMesh, {}, false};
             entry = &cookCache_[fullKey];
         }
 
-        // Instantiate a new deformable volume from the (possibly cached) mesh.
-        PxDeformableVolume* volume = physics_->createDeformableVolume(*cuda_);
-        const PxShapeFlags shapeFlags = PxShapeFlag::eVISUALIZATION | PxShapeFlag::eSIMULATION_SHAPE;
-        PxTetrahedronMeshGeometry tetGeom(cookedMesh->getCollisionMesh());
-        PxShape* shape = physics_->createShape(tetGeom, &material, 1, true, shapeFlags);
-        volume->attachShape(*shape);
-        volume->attachSimulationMesh(*cookedMesh->getSimulationMesh(), *cookedMesh->getDeformableVolumeAuxData());
-        shape->release();
-
-        PxVec4 *simPos, *simVel, *collPos, *restPos;
-        PxDeformableVolumeExt::allocateAndInitializeHostMirror(
-                *volume, cuda_, simPos, simVel, collPos, restPos);
-        constexpr PxReal maxInvMassRatio = 50.f;
-        PxDeformableVolumeExt::transform(*volume, spawnTf, 1.f, simPos, simVel, collPos, restPos);
-        if (mass > 0.f) {
-            PxDeformableVolumeExt::setMass(*volume, mass, maxInvMassRatio, simPos);
-        } else {
-            PxDeformableVolumeExt::updateMass(*volume, 1.f, maxInvMassRatio, simPos);
-        }
-        PxDeformableVolumeExt::copyToDevice(*volume, PxDeformableVolumeDataFlag::eALL,
-                                            simPos, simVel, collPos, restPos);
-        PX_EXT_PINNED_MEMORY_FREE(*cuda_, simPos);
-        PX_EXT_PINNED_MEMORY_FREE(*cuda_, simVel);
-        PX_EXT_PINNED_MEMORY_FREE(*cuda_, collPos);
-        PX_EXT_PINNED_MEMORY_FREE(*cuda_, restPos);
+        // Instantiate a new deformable volume from the (possibly cached) mesh,
+        // placed at the mesh's world pose.
+        PxDeformableVolume* volume = softbody_detail::instantiateVolume(*physics_, *cuda_, cookedMesh, material);
+        softbody_detail::placeAndUpload(*volume, cuda_, spawnTf, mass);
 
         volume->setDeformableBodyFlag(PxDeformableBodyFlag::eDISABLE_SELF_COLLISION, !selfCollision);
         volume->setSolverIterationCounts(solverIterations);

@@ -54,38 +54,6 @@ namespace threepp {
             return q;
         }
 
-        // Box/Sphere/Capsule collider inferred from a mesh geometry (mirrors
-        // PhysxWorld's private inferShape). localPose corrects the capsule axis
-        // (threepp capsule is Y-aligned; PhysX capsule is X-aligned).
-        struct LinkShape {
-            ::physx::PxGeometryHolder geom;
-            ::physx::PxTransform localPose{::physx::PxIdentity};
-            bool valid = true;
-        };
-        // `scale` is the link mesh's decomposed WORLD scale — a PhysX primitive
-        // cannot be scaled after the fact, so it is baked into the dimensions.
-        // A sphere keeps the largest component; a capsule scales its radius
-        // from the lateral pair and its height from Y (the threepp axis).
-        inline LinkShape inferLinkShape(const BufferGeometry& g,
-                                        const Vector3& scale = Vector3(1.f, 1.f, 1.f)) {
-            using namespace ::physx;
-            LinkShape s;
-            if (auto* b = dynamic_cast<const BoxGeometry*>(&g)) {
-                s.geom = PxBoxGeometry(b->width * 0.5f * std::abs(scale.x),
-                                       b->height * 0.5f * std::abs(scale.y),
-                                       b->depth * 0.5f * std::abs(scale.z));
-            } else if (auto* sp = dynamic_cast<const SphereGeometry*>(&g)) {
-                s.geom = PxSphereGeometry(sp->radius * std::max({std::abs(scale.x), std::abs(scale.y), std::abs(scale.z)}));
-            } else if (auto* c = dynamic_cast<const CapsuleGeometry*>(&g)) {
-                s.geom = PxCapsuleGeometry(c->radius * std::max(std::abs(scale.x), std::abs(scale.z)),
-                                           c->length * 0.5f * std::abs(scale.y));
-                s.localPose = PxTransform(PxQuat(-PxHalfPi, PxVec3(0, 0, 1)));
-            } else {
-                s.valid = false;
-            }
-            return s;
-        }
-
     }// namespace physx_detail
 
     // Handle to one articulation link + its inbound joint (null for the root).
@@ -188,16 +156,10 @@ namespace threepp {
             auto* g = mesh.geometry().get();
             if (!g) throw std::runtime_error("Articulation.add_link: mesh has no geometry");
 
-            // updateWorldMatrix, not updateMatrixWorld: the latter trusts the
-            // parent's cached matrixWorld, which is stale for a link added
-            // before the first render, and the link would spawn at the mesh's
-            // LOCAL coordinates. The world scale feeds the analytic shape.
-            mesh.updateWorldMatrix(true, false);
-            Vector3 pos, scl;
-            Quaternion rot;
-            mesh.matrixWorld->decompose(pos, rot, scl);
-
-            const auto shape = physx_detail::inferLinkShape(*g, scl);
+            // The world scale feeds the analytic shape; the rigid pose is the
+            // link's spawn pose (see worldPlacement for the stale-parent rule).
+            const auto pl = worldPlacement(mesh);
+            const auto shape = physx_detail::inferShape(*g, pl.scale);
 
             // A non-primitive geometry (a <mesh> collision from a URDF) cooks to
             // ONE convex hull rather than throwing. Primitives keep the exact,
@@ -214,7 +176,7 @@ namespace threepp {
                 if (!convex) throw std::runtime_error("Articulation.add_link: convex hull cook failed");
             }
 
-            const PxTransform linkPose(toPxVec3(pos), toPxQuat(rot));
+            const PxTransform linkPose = pl.pose;
 
             PxArticulationLink* parentLink = parent ? parent->raw() : nullptr;
             PxArticulationLink* link = art_->createLink(parentLink, linkPose);
@@ -226,7 +188,7 @@ namespace threepp {
 
             PxShape* s = convex
                                  ? world_.physics().createShape(
-                                           PxConvexMeshGeometry(convex, PxMeshScale(toPxVec3(scl))),
+                                           PxConvexMeshGeometry(convex, PxMeshScale(toPxVec3(pl.scale))),
                                            material ? *material : world_.defaultMaterial(), true)
                                  : world_.physics().createShape(shape.geom.any(),
                                                                 material ? *material : world_.defaultMaterial(), true);

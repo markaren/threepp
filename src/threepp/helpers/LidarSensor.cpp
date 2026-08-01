@@ -1,6 +1,8 @@
 
 #include "threepp/helpers/LidarSensor.hpp"
 
+#include "sensor_scan_util.hpp"
+
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
@@ -123,31 +125,7 @@ namespace {
     // Vulkan side, so the two backends agree on the boundary too.
     constexpr float kMaxSlant = 1.7320508f;// sqrt(3), at the corner of a 90-degree face
 
-    // Sensors render *data* (linearized + packed depth) into render targets and
-    // read it back. Color management (sRGB encode / tone mapping) would corrupt
-    // those bytes — silently, on any backend that applies the output encode to
-    // render targets. Force a linear, un-tonemapped pass for the scan and restore
-    // the renderer's settings afterwards, so callers need no backend-specific setup.
-    struct DataPassGuard {
-        Renderer& r;
-        ColorSpace cs;
-        ToneMapping tm;
-        bool ac;
-        explicit DataPassGuard(Renderer& renderer)
-            : r(renderer), cs(renderer.outputColorSpace), tm(renderer.toneMapping), ac(renderer.autoClear) {
-            r.outputColorSpace = LinearSRGBColorSpace;
-            r.toneMapping = ToneMapping::None;
-            // The scan re-renders its targets from scratch every call, so the
-            // caller's autoClear must not leak in (HUD-overlay apps leave it
-            // false between frames; the un-cleared depth freezes the readback).
-            r.autoClear = true;
-        }
-        ~DataPassGuard() {
-            r.outputColorSpace = cs;
-            r.toneMapping = tm;
-            r.autoClear = ac;
-        }
-    };
+    using sensorscan::DataPassGuard;
 
 }// namespace
 
@@ -204,37 +182,10 @@ void LidarSensor::init(float near, float far) {
         readbackTargets_[i] = GLRenderTarget::create(faceSize_, faceSize_, readOpts);
     }
 
-    // Post-process shader: linearize perspective depth, encode in RG for ~16-bit precision.
-    postMaterial_ = ShaderMaterial::create();
-    postMaterial_->vertexShader = R"(
-        varying vec2 vUv;
-        void main() {
-            vUv = uv;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-    )";
-    postMaterial_->fragmentShader = R"(
-        #include <packing>
-        varying vec2 vUv;
-        uniform sampler2D tDepth;
-        uniform float cameraNear;
-        uniform float cameraFar;
-        void main() {
-            float fragCoordZ = texture2D(tDepth, vUv).x;
-            float viewZ = perspectiveDepthToViewZ(fragCoordZ, cameraNear, cameraFar);
-            float d = clamp(-viewZ / cameraFar, 0.0, 1.0);
-            float r = floor(d * 255.0) / 255.0;
-            float g = fract(d * 255.0);
-            gl_FragColor = vec4(r, g, 0, 1.0);
-        }
-    )";
-    // The linearize pass must be told the plane the projection actually used,
-    // not the sensor's blind-sphere radius — perspectiveDepthToViewZ inverts the
-    // projection, and feeding it the wrong near would skew every depth read.
-    postMaterial_->uniforms = {
-            {"tDepth", Uniform()},
-            {"cameraNear", Uniform(rasterNear)},
-            {"cameraFar", Uniform(far_)}};
+    // Post-process: linearize + RG-encode (shared shader; the near plane must
+    // be the one the projection actually used, not the blind-sphere radius —
+    // see makeDepthLinearizeMaterial).
+    postMaterial_ = sensorscan::makeDepthLinearizeMaterial(rasterNear, far_);
 
     postScene_.add(Mesh::create(PlaneGeometry::create(2, 2), postMaterial_));
 }
@@ -499,7 +450,7 @@ void LidarSensor::unprojectDense(std::vector<LidarReturn>& points) {
             const float slantY = yd * yd + 1.f;
 
             for (unsigned x = 0; x < faceSize_; ++x, px += 2) {
-                const float nd = static_cast<float>(px[0]) * (1.f / 255.f) + static_cast<float>(px[1]) * (1.f / 65025.f);
+                const float nd = sensorscan::decodeDepthRG(px);
                 if (nd >= 0.9999f) continue;
 
                 const float xd = dir_[x];
@@ -555,7 +506,7 @@ void LidarSensor::unprojectBeams(std::vector<LidarReturn>& points) {
 
     for (const auto& b : beams_) {
         const unsigned char* px = facePixels[b.face] + (static_cast<unsigned>(b.pixelY) * faceSize_ + b.pixelX) * 2;
-        const float nd = static_cast<float>(px[0]) * (1.f / 255.f) + static_cast<float>(px[1]) * (1.f / 65025.f);
+        const float nd = sensorscan::decodeDepthRG(px);
 
         if (nd >= 0.9999f) continue;
 

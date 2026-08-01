@@ -1,6 +1,8 @@
 
 #include "threepp/helpers/DepthSensor.hpp"
 
+#include "sensor_scan_util.hpp"
+
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
@@ -28,35 +30,7 @@ using namespace threepp;
 
 namespace {
 
-    // Sensors render *data* (linearized + packed depth, raw color) into render
-    // targets and read it back. Color management (sRGB encode / tone mapping)
-    // would corrupt those bytes — silently, on any backend that applies the
-    // output encode to render targets. Force a linear, un-tonemapped pass for
-    // the scan and restore the renderer's settings afterwards, so callers don't
-    // need any backend-specific setup.
-    struct DataPassGuard {
-        Renderer& r;
-        ColorSpace cs;
-        ToneMapping tm;
-        bool ac;
-        explicit DataPassGuard(Renderer& renderer)
-            : r(renderer), cs(renderer.outputColorSpace), tm(renderer.toneMapping), ac(renderer.autoClear) {
-            r.outputColorSpace = LinearSRGBColorSpace;
-            r.toneMapping = ToneMapping::None;
-            // The scan re-renders its targets from scratch every call, so the
-            // caller's autoClear must not leak in. HUD-overlay apps leave
-            // autoClear=false between frames; without a depth clear the
-            // post-process quad fails its own depth test (Less vs the equal
-            // depth it wrote last scan) and the readback target silently
-            // freezes at the previous image.
-            r.autoClear = true;
-        }
-        ~DataPassGuard() {
-            r.outputColorSpace = cs;
-            r.toneMapping = tm;
-            r.autoClear = ac;
-        }
-    };
+    using sensorscan::DataPassGuard;
 
 #ifdef THREEPP_WITH_VULKAN
     // Vulkan backend: there is no raster depth buffer to read back, so reproduce
@@ -166,39 +140,10 @@ DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, fl
     readOpts.stencilBuffer = false;
     readbackTarget_ = RenderTarget::create(width_, height_, readOpts);
 
-    // Post-process: linearize perspective depth, encode in RG channels
-    // R = floor(d * 255) / 255  (high byte)
-    // G = fract(d * 255)        (low byte / 255 on CPU readback)
-    // This gives ~16-bit precision over the [0, far] range.
-    postMaterial_ = ShaderMaterial::create();
-
-    postMaterial_->vertexShader = R"(
-                varying vec2 vUv;
-                void main() {
-                    vUv = uv;
-                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                }
-            )";
-    postMaterial_->fragmentShader = R"(
-                #include <packing>
-                varying vec2 vUv;
-                uniform sampler2D tDepth;
-                uniform float cameraNear;
-                uniform float cameraFar;
-                void main() {
-                    float fragCoordZ = texture2D(tDepth, vUv).x;
-                    float viewZ = perspectiveDepthToViewZ(fragCoordZ, cameraNear, cameraFar);
-                    float d = clamp(-viewZ / cameraFar, 0.0, 1.0);
-                    float r = floor(d * 255.0) / 255.0;
-                    float g = fract(d * 255.0);
-                    gl_FragColor = vec4(r, g, 0, 1.0);
-                }
-            )";
-
-    postMaterial_->uniforms = {
-            {"tDepth", Uniform()},
-            {"cameraNear", Uniform(camera_.nearPlane)},
-            {"cameraFar", Uniform(camera_.farPlane)}};
+    // Post-process: linearize perspective depth, encode in RG channels for
+    // ~16-bit precision over [0, far]. Shader + decode live together in
+    // sensor_scan_util.hpp.
+    postMaterial_ = sensorscan::makeDepthLinearizeMaterial(camera_.nearPlane, camera_.farPlane);
 
     postScene_.add(Mesh::create(PlaneGeometry::create(2, 2), postMaterial_));
 
@@ -409,7 +354,7 @@ void DepthSensor::unprojectPoints(std::vector<Vector3>& points,
 
         for (unsigned x = 0; x < width_; ++x, px += 2) {
             // Unpack 16-bit normalised depth from RG channels
-            const float normalizedDepth = static_cast<float>(px[0]) * (1.f / 255.f) + static_cast<float>(px[1]) * (1.f / 65025.f);
+            const float normalizedDepth = sensorscan::decodeDepthRG(px);
 
             if (normalizedDepth >= 0.9999f) continue;
 

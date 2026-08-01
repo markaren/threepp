@@ -337,6 +337,71 @@ namespace threepp {
         return Quaternion(q.x, q.y, q.z, q.w);
     }
 
+    // World-space pose + scale of an object, as PhysX wants it: a rigid pose
+    // (PhysX actors carry no scale) plus the decomposed world scale for baking
+    // into shape dimensions.
+    //
+    // updateWorldMatrix, not updateMatrixWorld: the latter trusts the parent's
+    // cached matrixWorld, which is stale (identity) for a body added before
+    // the first render - the actor would spawn at the object's LOCAL
+    // coordinates. This helper exists so that comment lives ONCE.
+    struct WorldPlacement {
+        ::physx::PxTransform pose;
+        Vector3 scale{1, 1, 1};
+    };
+
+    inline WorldPlacement worldPlacement(Object3D& object) {
+        object.updateWorldMatrix(true, false);
+        Vector3 position, scale;
+        Quaternion rotation;
+        object.matrixWorld->decompose(position, rotation, scale);
+        return {toPxTransform(position, rotation), scale};
+    }
+
+    namespace physx_detail {
+
+        // Box/Sphere/Capsule collider inferred from a mesh geometry. THE one
+        // copy — PhysxWorld and the articulation builders all use this.
+        // localPose corrects the capsule axis (threepp capsule is Y-aligned;
+        // PhysX capsule is X-aligned).
+        struct InferredShape {
+            ::physx::PxGeometryHolder geom;
+            ::physx::PxTransform localPose{::physx::PxIdentity};
+            bool valid = true;
+        };
+
+        // `scale` is the mesh's decomposed WORLD scale, applied to the analytic
+        // dimensions here because a PhysX primitive cannot be scaled after the
+        // fact. A sphere has one radius, so a non-uniform scale keeps the
+        // largest component; a capsule scales its radius from the lateral pair
+        // and its height from Y (the threepp capsule axis).
+        inline InferredShape inferShape(const BufferGeometry& geometry,
+                                        const Vector3& scale = Vector3(1.f, 1.f, 1.f)) {
+            using namespace ::physx;
+            InferredShape out;
+            if (auto box = dynamic_cast<const BoxGeometry*>(&geometry)) {
+                out.geom = PxBoxGeometry(box->width * 0.5f * std::abs(scale.x),
+                                         box->height * 0.5f * std::abs(scale.y),
+                                         box->depth * 0.5f * std::abs(scale.z));
+                return out;
+            }
+            if (auto sph = dynamic_cast<const SphereGeometry*>(&geometry)) {
+                out.geom = PxSphereGeometry(sph->radius * std::max({std::abs(scale.x), std::abs(scale.y), std::abs(scale.z)}));
+                return out;
+            }
+            if (auto cap = dynamic_cast<const CapsuleGeometry*>(&geometry)) {
+                out.geom = PxCapsuleGeometry(cap->radius * std::max(std::abs(scale.x), std::abs(scale.z)),
+                                             cap->length * 0.5f * std::abs(scale.y));
+                // PhysX capsule axis is X; threepp capsule axis is Y. Rotate -PI/2 about Z.
+                out.localPose = PxTransform(PxQuat(-PxHalfPi, PxVec3(0, 0, 1)));
+                return out;
+            }
+            out.valid = false;
+            return out;
+        }
+
+    }// namespace physx_detail
+
     // Interpolate between two PxTransforms. Position is linear; orientation uses
     // shortest-arc nlerp, which is visually indistinguishable from slerp for the
     // small angles between fixed-timestep substeps and cheaper. Used by
@@ -949,18 +1014,10 @@ namespace threepp {
             auto* g = mesh.geometry().get();
             if (!g) throw std::runtime_error("PhysxWorld::add: mesh has no geometry");
             if (!mat) mat = defaultMat_;
-            // updateWorldMatrix, not updateMatrixWorld: the latter trusts the
-            // parent's cached matrixWorld, which is stale (identity) for a body
-            // added before the first render — the actor would spawn at the
-            // mesh's LOCAL coordinates.
-            mesh.updateWorldMatrix(true, false);
-            Vector3 pos, scale;
-            Quaternion rot;
-            mesh.matrixWorld->decompose(pos, rot, scale);
-            auto inferred = inferShape(*g, scale);
+            const auto pl = worldPlacement(mesh);
+            auto inferred = physx_detail::inferShape(*g, pl.scale);
             if (!inferred.valid) throw std::runtime_error("PhysxWorld::add: unsupported geometry");
-            PxRigidDynamic* body = physics_->createRigidDynamic(
-                    PxTransform(toPxVec3(pos), toPxQuat(rot)));
+            PxRigidDynamic* body = physics_->createRigidDynamic(pl.pose);
             PxShape* shape = physics_->createShape(inferred.geom.any(), *mat, true);
             shape->setLocalPose(inferred.localPose);
             body->attachShape(*shape);
@@ -976,14 +1033,10 @@ namespace threepp {
             auto* g = mesh.geometry().get();
             if (!g) throw std::runtime_error("PhysxWorld::addStatic: mesh has no geometry");
             if (!mat) mat = defaultMat_;
-            mesh.updateWorldMatrix(true, false);
-            Vector3 pos, scale;
-            Quaternion rot;
-            mesh.matrixWorld->decompose(pos, rot, scale);
-            auto inferred = inferShape(*g, scale);
+            const auto pl = worldPlacement(mesh);
+            auto inferred = physx_detail::inferShape(*g, pl.scale);
             if (!inferred.valid) throw std::runtime_error("PhysxWorld::addStatic: unsupported geometry");
-            PxRigidStatic* body = physics_->createRigidStatic(
-                    PxTransform(toPxVec3(pos), toPxQuat(rot)));
+            PxRigidStatic* body = physics_->createRigidStatic(pl.pose);
             PxShape* shape = physics_->createShape(inferred.geom.any(), *mat, true);
             shape->setLocalPose(inferred.localPose);
             body->attachShape(*shape);
@@ -1050,15 +1103,8 @@ namespace threepp {
         ::physx::PxRigidStatic* addStaticTrimesh(Mesh& mesh, ::physx::PxMaterial* mat = nullptr) {
             auto* g = mesh.geometry().get();
             if (!g) throw std::runtime_error("PhysxWorld::addStaticTrimesh: mesh has no geometry");
-            mesh.updateWorldMatrix(true, false);
-            Vector3 pos, scale;
-            Quaternion rot;
-            mesh.matrixWorld->decompose(pos, rot, scale);
-            return addStaticTrimesh(
-                    *g,
-                    ::physx::PxTransform(toPxVec3(pos), toPxQuat(rot)),
-                    scale,
-                    mat);
+            const auto pl = worldPlacement(mesh);
+            return addStaticTrimesh(*g, pl.pose, pl.scale, mat);
         }
 
         // Walk the subtree and add every Mesh as its own static trimesh. Useful for
@@ -1123,14 +1169,10 @@ namespace threepp {
             if (!convex) return nullptr;
 
             if (!mat) mat = defaultMat_;
-            mesh.updateWorldMatrix(true, false);
-            Vector3 pos, scale;
-            Quaternion rot;
-            mesh.matrixWorld->decompose(pos, rot, scale);
+            const auto pl = worldPlacement(mesh);
 
-            PxConvexMeshGeometry geom(convex, PxMeshScale(toPxVec3(scale)));
-            PxRigidDynamic* body = physics_->createRigidDynamic(
-                    PxTransform(toPxVec3(pos), toPxQuat(rot)));
+            PxConvexMeshGeometry geom(convex, PxMeshScale(toPxVec3(pl.scale)));
+            PxRigidDynamic* body = physics_->createRigidDynamic(pl.pose);
             PxShape* shape = physics_->createShape(geom, *mat, true);
             body->attachShape(*shape);
             shape->release();
@@ -1204,7 +1246,7 @@ namespace threepp {
             using namespace ::physx;
             auto* g = mesh.geometry().get();
             if (!g) throw std::runtime_error("PhysxWorld::add(InstancedMesh): no geometry");
-            if (!inferShape(*g).valid) throw std::runtime_error("PhysxWorld::add(InstancedMesh): unsupported geometry");
+            if (!physx_detail::inferShape(*g).valid) throw std::runtime_error("PhysxWorld::add(InstancedMesh): unsupported geometry");
             if (!mat) mat = defaultMat_;
             std::vector<PxRigidActor*> actors;
             actors.reserve(mesh.count());
@@ -1216,7 +1258,7 @@ namespace threepp {
                 m.decompose(pos, rot, scale);
                 // Per-instance shape: the mirror preserves per-instance scale
                 // (see bind), so the collider must carry it too.
-                const auto inferred = inferShape(*g, scale);
+                const auto inferred = physx_detail::inferShape(*g, scale);
                 PxRigidDynamic* body = physics_->createRigidDynamic(
                         PxTransform(toPxVec3(pos), toPxQuat(rot)));
                 PxShape* shape = physics_->createShape(inferred.geom.any(), *mat, true);
@@ -1324,42 +1366,6 @@ namespace threepp {
             std::vector<::physx::PxTransform> prevPoses;
             bool hasPrev = false;
         };
-
-        struct InferredShape {
-            ::physx::PxGeometryHolder geom;
-            ::physx::PxTransform localPose{::physx::PxIdentity};
-            bool valid = true;
-        };
-
-        // `scale` is the mesh's decomposed WORLD scale, applied to the analytic
-        // dimensions here because a PhysX primitive cannot be scaled after the
-        // fact. A sphere has one radius, so a non-uniform scale keeps the
-        // largest component; a capsule scales its radius from the lateral pair
-        // and its height from Y (the threepp capsule axis).
-        InferredShape inferShape(const BufferGeometry& geometry,
-                                 const Vector3& scale = Vector3(1.f, 1.f, 1.f)) const {
-            using namespace ::physx;
-            InferredShape out;
-            if (auto box = dynamic_cast<const BoxGeometry*>(&geometry)) {
-                out.geom = PxBoxGeometry(box->width * 0.5f * std::abs(scale.x),
-                                         box->height * 0.5f * std::abs(scale.y),
-                                         box->depth * 0.5f * std::abs(scale.z));
-                return out;
-            }
-            if (auto sph = dynamic_cast<const SphereGeometry*>(&geometry)) {
-                out.geom = PxSphereGeometry(sph->radius * std::max({std::abs(scale.x), std::abs(scale.y), std::abs(scale.z)}));
-                return out;
-            }
-            if (auto cap = dynamic_cast<const CapsuleGeometry*>(&geometry)) {
-                out.geom = PxCapsuleGeometry(cap->radius * std::max(std::abs(scale.x), std::abs(scale.z)),
-                                             cap->length * 0.5f * std::abs(scale.y));
-                // PhysX capsule axis is X; threepp capsule axis is Y. Rotate -PI/2 about Z.
-                out.localPose = PxTransform(PxQuat(-PxHalfPi, PxVec3(0, 0, 1)));
-                return out;
-            }
-            out.valid = false;
-            return out;
-        }
 
         void substep(float dt) {
             // Iterate by index, re-reading size each time: a callback is allowed
