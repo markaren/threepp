@@ -180,15 +180,13 @@ BufferGeometry& BufferGeometry::applyMatrix4(const Matrix4& matrix) {
         tangent->needsUpdate();
     }
 
-    if (!this->boundingBox) {
-
-        this->computeBoundingBox();
-    }
-
-    if (!this->boundingSphere) {
-
-        this->computeBoundingSphere();
-    }
+    // Unconditionally, where three.js recomputes only what was already
+    // computed. The old test here was INVERTED — compute only when absent —
+    // which left every cached box exactly where the geometry used to be:
+    // center() computes the box to find the offset, translates, and handed
+    // out an outline (and a raycast gate) sitting beside the vertices.
+    this->computeBoundingBox();
+    this->computeBoundingSphere();
 
     return *this;
 }
