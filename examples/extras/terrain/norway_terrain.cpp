@@ -454,9 +454,12 @@ int main(int argc, char** argv) {
 
     // Buildings (packs fetched with --buildings): extruded OSM footprints with
     // nDSM-measured heights, batched into 500 m chunk meshes with per-building
-    // vertex colours. NT_NO_BUILDINGS=1 hides them for A/B.
+    // vertex colours. NT_NO_BUILDINGS=1 hides them, NT_FLAT_ROOFS=1 disables
+    // the gable heuristic — both for A/B.
     if (!pack.buildings.empty() && !envSet("NT_NO_BUILDINGS")) {
-        auto buildings = terrain::buildGeoBuildingMeshes(pack);
+        terrain::GeoBuildingsOptions bo;
+        bo.pitchedRoofs = !envSet("NT_FLAT_ROOFS");
+        auto buildings = terrain::buildGeoBuildingMeshes(pack, bo);
         std::cout << "[norway] buildings: " << pack.buildings.size() << " footprints in "
                   << buildings->children.size() << " chunk meshes\n" << std::flush;
         scene.add(buildings);

@@ -2,9 +2,15 @@
 //
 // Turns GeoTerrainPack::buildings (OSM footprints + measured nDSM heights,
 // see the pack contract in GeoTerrainPack.hpp) into renderable geometry:
-// per building a flat-roof prism — earcut roof cap at groundMin + height,
 // walls dropped to groundMin − sink so sloped ground never shows a gap under
-// the downhill edge. No bottom cap (it is always buried).
+// the downhill edge, no bottom cap (it is always buried), and per building
+// either
+//   • a GABLED roof — near-rectangular non-utility footprints get a ridge
+//     along the long axis of the minimum-area bounding rectangle at
+//     groundMin + height (nDSM heights measure the ridge), roof planes
+//     falling to eaves walls, plain-clad gable triangles filling the ends; or
+//   • a FLAT cap at groundMin + height — utility types, courtyard rings,
+//     footprints the rectangle fit rejects, and OSM roof:shape=flat.
 //
 // Batching: buildings are grouped into square world-space CHUNKS (chunkSize
 // metres); each chunk becomes up to THREE non-indexed Meshes — windowed
@@ -48,6 +54,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -69,6 +76,15 @@ namespace threepp::terrain {
         float roughness = 0.85f;// fallback material roughness (facadeTextures off)
         float metalness = 0.f;
         float grime = 0.18f;// ground-contact darkening at the wall base (0 = off)
+
+        // Gabled roofs (see the header comment for the eligibility rules).
+        bool pitchedRoofs = true;      // false = every building keeps the flat cap
+        float roofPitchDeg = 35.f;     // nominal gable pitch
+        float minRoofRise = 1.f;       // shallower gables read flat — stay flat
+        float maxRoofRise = 5.f;       // rise clamp for wide footprints
+        float maxGableSpan = 18.f;     // rect short side beyond this stays flat (big-box)
+        float gableCoverageMin = 0.78f;// footprint/rect area ratio to count as rectangular
+        float minEavesWall = 2.4f;     // eaves height floor; the rise shrinks to keep it
     };
 
     namespace detail {
@@ -176,6 +192,98 @@ namespace threepp::terrain {
             return true;
         }
 
+        inline constexpr float kGeoBldDeg2Rad = 3.14159265358979323846f / 180.f;
+
+        // Convex hull (Andrew monotone chain) of the footprint points.
+        inline std::vector<Vector2> geoBldHull(std::vector<Vector2> pts) {
+            std::sort(pts.begin(), pts.end(), [](const Vector2& a, const Vector2& b) {
+                return a.x < b.x || (a.x == b.x && a.y < b.y);
+            });
+            pts.erase(std::unique(pts.begin(), pts.end(), [](const Vector2& a, const Vector2& b) {
+                          return a.x == b.x && a.y == b.y;
+                      }),
+                      pts.end());
+            const size_t n = pts.size();
+            if (n < 3) return pts;
+            const auto cross = [](const Vector2& o, const Vector2& a, const Vector2& b) {
+                return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+            };
+            std::vector<Vector2> hull(2 * n);
+            size_t k = 0;
+            for (size_t i = 0; i < n; ++i) {// lower chain
+                while (k >= 2 && cross(hull[k - 2], hull[k - 1], pts[i]) <= 0.f) --k;
+                hull[k++] = pts[i];
+            }
+            for (size_t i = n - 1, t = k + 1; i-- > 0;) {// upper chain
+                while (k >= t && cross(hull[k - 2], hull[k - 1], pts[i]) <= 0.f) --k;
+                hull[k++] = pts[i];
+            }
+            hull.resize(k - 1);
+            return hull;
+        }
+
+        struct GeoBldRectFit {
+            Vector2 u{1.f, 0.f}, v{0.f, 1.f};// unit axes in (x, z)
+            float uMin = 0.f, uMax = 0.f, vMin = 0.f, vMax = 0.f;
+        };
+
+        // Minimum-area oriented bounding rectangle of a footprint (rotating
+        // calipers over the convex hull — one candidate frame per hull edge).
+        inline bool geoBldMinRect(const std::vector<Vector2>& poly, GeoBldRectFit& out) {
+            const auto hull = geoBldHull(poly);
+            if (hull.size() < 3) return false;
+            float best = std::numeric_limits<float>::max();
+            for (size_t i = 0, n = hull.size(); i < n; ++i) {
+                const Vector2& a = hull[i];
+                const Vector2& b = hull[(i + 1) % n];
+                const float ex = b.x - a.x, ey = b.y - a.y;
+                const float el = std::sqrt(ex * ex + ey * ey);
+                if (el < 1e-4f) continue;
+                const Vector2 u(ex / el, ey / el);
+                const Vector2 v(-u.y, u.x);
+                float uMin = 1e30f, uMax = -1e30f, vMin = 1e30f, vMax = -1e30f;
+                for (const Vector2& p : hull) {
+                    const float pu = p.x * u.x + p.y * u.y;
+                    const float pv = p.x * v.x + p.y * v.y;
+                    uMin = std::min(uMin, pu);
+                    uMax = std::max(uMax, pu);
+                    vMin = std::min(vMin, pv);
+                    vMax = std::max(vMax, pv);
+                }
+                const float area = (uMax - uMin) * (vMax - vMin);
+                if (area < best) {
+                    best = area;
+                    out.u = u;
+                    out.v = v;
+                    out.uMin = uMin;
+                    out.uMax = uMax;
+                    out.vMin = vMin;
+                    out.vMax = vMax;
+                }
+            }
+            return best < std::numeric_limits<float>::max();
+        }
+
+        // Sutherland–Hodgman clip of a ring against the half-plane
+        // side·(dot(p, axis) − c) ≤ 0. Ring orientation is preserved.
+        inline std::vector<Vector2> geoBldClipHalfPlane(const std::vector<Vector2>& poly,
+                                                        const Vector2& axis, float c, float side) {
+            std::vector<Vector2> out;
+            out.reserve(poly.size() + 2);
+            for (size_t i = 0, n = poly.size(); i < n; ++i) {
+                const Vector2& a = poly[i];
+                const Vector2& b = poly[(i + 1) % n];
+                const float da = side * (a.x * axis.x + a.y * axis.y - c);
+                const float db = side * (b.x * axis.x + b.y * axis.y - c);
+                if (da <= 0.f) out.push_back(a);
+                if ((da < 0.f) != (db < 0.f) && std::abs(da - db) > 1e-9f) {
+                    const float t = da / (da - db);
+                    out.emplace_back(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+                }
+            }
+            return out;
+        }
+
         // Building types that read wrong with a residential window grid.
         inline bool geoBldIsPlainType(const std::string& t) {
             static const std::unordered_set<std::string> plain = {
@@ -260,13 +368,6 @@ namespace threepp::terrain {
             const float yBase = b.groundMin - o.sink;
             const float yTop = b.groundMin + b.height;
 
-            // Floor snap: an INTEGER number of texture floors spans base→roof
-            // exactly (window rows never cut at the roofline; the sunk strip
-            // lands on the tile's plain lower band).
-            const float wallH = yTop - yBase;
-            const int floors = std::max(1, static_cast<int>(std::lround(wallH / o.floorHeight)));
-            const float floorH = wallH / static_cast<float>(floors);
-
             // Normalize winding defensively (the pack contract already says
             // outer positive / holes negative shoelace in (x,z)).
             std::vector<Vector2> outer = b.outer;
@@ -276,6 +377,66 @@ namespace threepp::terrain {
             for (auto& hole : holes)
                 if (detail::geoBldRingArea(hole) > 0.f)
                     std::reverse(hole.begin(), hole.end());
+
+            const bool plainType = detail::geoBldIsPlainType(b.type);
+
+            // ── gable fit ───────────────────────────────────────────────────
+            // Near-rectangular non-utility footprints get a gabled roof: ridge
+            // along the long axis of the minimum-area bounding rectangle at
+            // yTop (nDSM heights measure the ridge — the old flat slab there
+            // OVERSTATED the volume), walls stopping at the eaves. Utility
+            // types, courtyard footprints and poor rectangle fits stay flat.
+            bool gable = false;
+            Vector2 gU, gV;// ridge / cross-ridge unit axes in (x, z)
+            float gVc = 0.f, gHalfW = 0.f, gRise = 0.f;
+            if (o.pitchedRoofs && !plainType && holes.empty() && b.roofShape != "flat") {
+                detail::GeoBldRectFit rect;
+                if (detail::geoBldMinRect(outer, rect)) {
+                    float longE = rect.uMax - rect.uMin, shortE = rect.vMax - rect.vMin;
+                    Vector2 axU = rect.u, axV = rect.v;
+                    float c0 = rect.vMin, c1 = rect.vMax;
+                    if (longE < shortE) {// ridge along the LONG rectangle axis
+                        std::swap(longE, shortE);
+                        std::swap(axU, axV);
+                        c0 = rect.uMin;
+                        c1 = rect.uMax;
+                    }
+                    const float cover = detail::geoBldRingArea(outer) /
+                                        std::max(1e-3f, longE * shortE);
+                    // An explicit OSM pitched-roof tag trusts the mapper on
+                    // less rectangular footprints; the heuristic needs a snug
+                    // fit before it overrules "unknown".
+                    const float coverMin = b.roofShape.empty() ? o.gableCoverageMin : 0.55f;
+                    if (cover >= coverMin && shortE >= 3.f && shortE <= o.maxGableSpan) {
+                        float rise = std::tan(o.roofPitchDeg * detail::kGeoBldDeg2Rad) * 0.5f * shortE;
+                        rise = std::min({rise, o.maxRoofRise, b.height - o.minEavesWall});
+                        if (rise >= o.minRoofRise) {
+                            gable = true;
+                            gU = axU;
+                            gV = axV;
+                            gVc = 0.5f * (c0 + c1);
+                            gHalfW = 0.5f * (c1 - c0);
+                            gRise = rise;
+                        }
+                    }
+                }
+            }
+            const float yWallTop = gable ? yTop - gRise : yTop;
+            const float gSlope = gable ? gRise / gHalfW : 0.f;
+            // Tent height over the footprint: yTop on the ridge line v = gVc,
+            // falling to the eaves at |v − gVc| = gHalfW (clamped so float
+            // slop at the rectangle boundary never dips below the eaves).
+            const auto tentH = [&](const Vector2& p) {
+                const float v = p.x * gV.x + p.y * gV.y;
+                return std::max(yWallTop, yTop - std::abs(v - gVc) * gSlope);
+            };
+
+            // Floor snap: an INTEGER number of texture floors spans base→eaves
+            // exactly (window rows never cut at the roofline; the sunk strip
+            // lands on the tile's plain lower band).
+            const float wallH = yWallTop - yBase;
+            const int floors = std::max(1, static_cast<int>(std::lround(wallH / o.floorHeight)));
+            const float floorH = wallH / static_cast<float>(floors);
 
             // Chunk by footprint centroid.
             float cx = 0.f, cz = 0.f;
@@ -287,10 +448,45 @@ namespace threepp::terrain {
             ChunkBuf& chunk = chunks[(static_cast<std::int64_t>(cellX) << 32) ^
                                      static_cast<std::uint32_t>(cellZ)];
 
-            // ── roof cap ────────────────────────────────────────────────────
+            // ── roof ────────────────────────────────────────────────────────
+            if (gable) {
+                // Two roof planes: the footprint clipped against the ridge
+                // line, each half lifted onto the tent (linear in v on one
+                // side, so each half is planar). Watertight against the walls:
+                // the plane height at any footprint edge equals the gable-fill
+                // top emitted with the walls below.
+                const float slopeLen = std::sqrt(1.f + gSlope * gSlope);// slope m per plan m
+                const float rt = 1.f / o.roofTileSize;
+                for (const float side : {-1.f, 1.f}) {
+                    std::vector<Vector2> half = detail::geoBldClipHalfPlane(outer, gV, gVc, side);
+                    if (half.size() < 3) continue;
+                    std::vector<std::vector<Vector2>> noHoles;
+                    const auto faces = shapeutils::triangulateShape(half, noHoles);
+                    float n[3] = {gV.x * side * gSlope, 1.f, gV.y * side * gSlope};
+                    const float nl = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+                    n[0] /= nl;
+                    n[1] /= nl;
+                    n[2] /= nl;
+                    for (const auto& f : faces) {
+                        if (f.size() < 3) continue;
+                        Vector2 a = half[f[0]], bb = half[f[1]], c = half[f[2]];
+                        // Same up-facing orientation rule as the flat cap.
+                        const float cross = (bb.x - a.x) * (c.y - a.y) - (bb.y - a.y) * (c.x - a.x);
+                        if (cross > 0.f) std::swap(bb, c);
+                        for (const Vector2* pt : {&a, &bb, &c}) {
+                            // UVs: metres along the ridge × true metres down
+                            // the slope, so the tile density matches flat roofs.
+                            const float tu = (pt->x * gU.x + pt->y * gU.y) * rt;
+                            const float tv = std::abs(pt->x * gV.x + pt->y * gV.y - gVc) * slopeLen * rt;
+                            chunk.roof.push(pt->x, tentH(*pt), pt->y, n, roof, tu, tv);
+                        }
+                    }
+                }
+            }
+            // ── roof cap (flat) ─────────────────────────────────────────────
             // triangulateShape mutates its inputs; feed it copies. Face indices
             // reference outer ⧺ holes concatenated.
-            {
+            else {
                 std::vector<Vector2> contour = outer;
                 std::vector<std::vector<Vector2>> triHoles = holes;
                 const auto faces = shapeutils::triangulateShape(contour, triHoles);
@@ -313,8 +509,7 @@ namespace threepp::terrain {
             }
 
             // ── walls (outer ring + courtyard rings) ───────────────────────
-            const bool plainType = detail::geoBldIsPlainType(b.type);
-            const float vTop = static_cast<float>(floors);// (yTop-yBase)/floorH exactly
+            const float vTop = static_cast<float>(floors);// (yWallTop-yBase)/floorH exactly
             const auto emitWalls = [&](const std::vector<Vector2>& ring) {
                 for (size_t i = 0, n = ring.size(); i < n; ++i) {
                     const Vector2& p = ring[i];
@@ -335,15 +530,65 @@ namespace threepp::terrain {
                     // Two triangles, wound to match the outward normal; grimed
                     // colour at the base fades up the wall.
                     buf.push(p.x, yBase, p.y, nrm, wallBase, 0.f, 0.f);
-                    buf.push(q.x, yTop, q.y, nrm, wall, u1, vTop);
+                    buf.push(q.x, yWallTop, q.y, nrm, wall, u1, vTop);
                     buf.push(q.x, yBase, q.y, nrm, wallBase, u1, 0.f);
                     buf.push(p.x, yBase, p.y, nrm, wallBase, 0.f, 0.f);
-                    buf.push(p.x, yTop, p.y, nrm, wall, 0.f, vTop);
-                    buf.push(q.x, yTop, q.y, nrm, wall, u1, vTop);
+                    buf.push(p.x, yWallTop, p.y, nrm, wall, 0.f, vTop);
+                    buf.push(q.x, yWallTop, q.y, nrm, wall, u1, vTop);
                 }
             };
             emitWalls(outer);
             for (const auto& hole : holes) emitWalls(hole);
+
+            // ── gable ends ─────────────────────────────────────────────────
+            // Fill between the eaves line and the roof tent with plain
+            // cladding (the window grid stays complete below the eaves; gable
+            // triangles above it read as painted wood). Edges near the eave
+            // lines contribute nothing and drop out; edges crossing the ridge
+            // split there so the apex lands exactly under the roof planes.
+            if (gable) {
+                for (size_t i = 0, n = outer.size(); i < n; ++i) {
+                    const Vector2& p = outer[i];
+                    const Vector2& q = outer[(i + 1) % n];
+                    const float dx = q.x - p.x, dz = q.y - p.y;
+                    const float len = std::sqrt(dx * dx + dz * dz);
+                    if (len < 1e-4f) continue;
+                    const float nrm[3] = {dz / len, 0.f, -dx / len};
+                    struct GablePt {
+                        Vector2 xy;
+                        float s, h;
+                    };
+                    GablePt pts[3];
+                    int m = 0;
+                    pts[m++] = {p, 0.f, tentH(p)};
+                    const float vp = p.x * gV.x + p.y * gV.y - gVc;
+                    const float vq = q.x * gV.x + q.y * gV.y - gVc;
+                    if ((vp < 0.f) != (vq < 0.f) && std::abs(vp - vq) > 1e-6f) {
+                        const float t = vp / (vp - vq);
+                        pts[m++] = {Vector2(p.x + dx * t, p.y + dz * t), len * t, yTop};
+                    }
+                    pts[m++] = {q, len, tentH(q)};
+                    for (int k = 0; k + 1 < m; ++k) {
+                        const GablePt& A = pts[k];
+                        const GablePt& B = pts[k + 1];
+                        const float ha = A.h - yWallTop, hb = B.h - yWallTop;
+                        if (ha < 1e-3f && hb < 1e-3f) continue;
+                        const float ua = A.s / o.bayWidth, ub = B.s / o.bayWidth;
+                        // The eaves→tent quad, wound like the walls below;
+                        // degenerate corner triangles (flat end) drop out.
+                        if (hb > 1e-3f) {
+                            chunk.plain.push(A.xy.x, yWallTop, A.xy.y, nrm, wall, ua, 0.f);
+                            chunk.plain.push(B.xy.x, B.h, B.xy.y, nrm, wall, ub, hb / floorH);
+                            chunk.plain.push(B.xy.x, yWallTop, B.xy.y, nrm, wall, ub, 0.f);
+                        }
+                        if (ha > 1e-3f) {
+                            chunk.plain.push(A.xy.x, yWallTop, A.xy.y, nrm, wall, ua, 0.f);
+                            chunk.plain.push(A.xy.x, A.h, A.xy.y, nrm, wall, ua, ha / floorH);
+                            chunk.plain.push(B.xy.x, B.h, B.xy.y, nrm, wall, ub, hb / floorH);
+                        }
+                    }
+                }
+            }
         }
 
         const auto addMesh = [&](Buf& buf, const std::shared_ptr<MeshStandardMaterial>& mat,
