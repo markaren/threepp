@@ -540,11 +540,19 @@ namespace {
             tp.maxIterations = 200;
             tp.tropism = -0.04f;
             tp.leafStyle = vegetation::LeafStyle::Blob;
-            tp.leavesPerCluster = 2;
-            tp.leafSize = 1.15f;
+            // Several SMALL puffs per node rather than two big ones: two
+            // 1.15m spheres per node merge into one smooth dome, so the tree
+            // reads as a broccoli floret standing next to the near band's thin
+            // dark conifer silhouettes. Smaller puffs let the cone profile show
+            // through and give the outline a ragged edge.
+            tp.leavesPerCluster = 3;
+            tp.leafSize = 0.80f;
             tp.attractorCount = 320;
             tp.radialSegments = 5;
-            tp.leafColor = {0.15f, 0.33f, 0.11f};
+            // Match the near spruce foliage colour ({0.13,0.34,0.10}) — the far
+            // bank reading a different green from the near band is most of what
+            // made the blob trees look pasted on.
+            tp.leafColor = {0.13f, 0.34f, 0.10f};
         }
 
         vegetation::TreeGenerator gen(seed);
@@ -554,7 +562,7 @@ namespace {
         v.trunkGeo = gen.makeTrunkGeometry(tp);
         v.leafGeo = gen.makeLeafGeometry(tp);
 
-        auto bark = vegetation::makeBarkTextures(cheapBlob ? 128 : 256, seed, tp.barkColor);
+        auto bark = vegetation::makeBarkTextures(cheapBlob ? 128 : 256, seed, tp.barkColor, tp.barkStyle);
         bark.first->repeat.set(3.f, 0.5f);
         bark.second->repeat.set(3.f, 0.5f);
         v.barkMat = MeshStandardMaterial::create(
@@ -570,12 +578,14 @@ namespace {
         v.leafMat->translucencyColor = Color(0.50f, 0.80f, 0.28f);
         v.leafMat->translucency = cheapBlob ? 0.35f : 0.5f;
         if (cheapBlob) {
-            // Slight brighten: the baked per-vertex canopy tint (0.6–1.1) multiplies this.
+            // The baked per-vertex canopy tint now spans 0.14–1.0 and only ever
+            // DARKENS, so the old 1.15 pre-brighten (which compensated a tint
+            // that could exceed 1) now just makes the far bank glow.
             // leafColor is an sRGB hint (TreeParams doc) — the card path bakes it into an
             // sRGB-tagged texture (decoded on sample), but material->color is LINEAR
             // working space. Without the conversion the blobs render ~4x too bright and
             // read "always lit" (glowing green even at night).
-            v.leafMat->color = Color(tp.leafColor[0] * 1.15f, tp.leafColor[1] * 1.15f, tp.leafColor[2] * 1.15f)
+            v.leafMat->color = Color(tp.leafColor[0], tp.leafColor[1], tp.leafColor[2])
                                        .convertSRGBToLinear();
             v.leafMat->vertexColors = true;// canopy tint gradient baked per-vertex
         } else {
@@ -583,8 +593,10 @@ namespace {
             // leaf-cluster atlas.
             v.leafMat->map = (tp.leafStyle == vegetation::LeafStyle::Frond)
                     ? vegetation::makeNeedleFrondTexture(256, seed, tp.leafColor)
-                    : vegetation::makeLeafClusterTexture(256, seed, tp.leafColor);
-            v.leafMat->alphaTest = 0.5f;
+                    : vegetation::makeLeafClusterTexture(256, seed, tp.leafColor, tp.leafShape);
+            // Below the antialiased margin of the thin leaflets/needles the
+            // atlases are drawn from — 0.5 eats whole leaves off mipped cards.
+            v.leafMat->alphaTest = 0.4f;
             v.leafMat->side = Side::Double;
             v.leafMat->vertexColors = true;
         }

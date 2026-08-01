@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <random>
+#include <vector>
 
 namespace threepp::vegetation {
 
@@ -42,6 +43,75 @@ namespace threepp::vegetation {
 
         inline float smooth(float t) { return t * t * (3.f - 2.f * t); }
 
+        // sin(PI*x)^e — the standard "widest in the middle, zero at both ends"
+        // blade/taper profile.
+        //
+        // MUST go through here rather than pow(sin(PI*x), e) written inline.
+        // PI in float is 3.14159274f, i.e. slightly ABOVE pi, so sin(PI*1.0f)
+        // evaluates to -8.7e-8 — negative. A fractional exponent on a negative
+        // base is NaN, and x lands exactly on 1.0 whenever the caller clamps
+        // with min(..., 1.f). The NaN then propagates into a blade length or
+        // half-width, where it is far worse than a bad pixel: every subsequent
+        // `if (v > limit) continue` bounds check silently fails (all comparisons
+        // against NaN are false), so the shape escapes its own extent and paints
+        // NaN — which quantises to BLACK — across the rest of the tile.
+        inline float lobe(float x, float e) {
+            return std::pow(std::max(std::sin(3.14159265358979f * std::clamp(x, 0.f, 1.f)), 0.f), e);
+        }
+
+        // ── Alpha-edge RGB dilation ──────────────────────────────────────
+        //
+        // Cutout foliage is drawn onto a ZERO-initialised (transparent BLACK)
+        // buffer, so every texel outside a leaf holds RGB 0. Bilinear filtering
+        // and mip generation both blend colour ACROSS the alpha edge, which
+        // drags that black into the outermost leaf texels — a dark fringe that
+        // survives alphaTest and reads as grime around every leaf, and gets
+        // worse with distance as coarser mips mix in more empty texels.
+        //
+        // Fix: push opaque colour outward into the transparent region before
+        // upload, so the RGB channel is continuous across the silhouette and
+        // there is no dark colour left to bleed in. Alpha is untouched — the
+        // cutout shape is unchanged, only the colour under it.
+        // `rgb` is size*size*3 colour, `filled` a parallel size*size mask that is
+        // true wherever the colour is meaningful (i.e. inside the cutout). Each
+        // pass grows the filled region by one texel, averaging the already-filled
+        // neighbours. Alpha lives elsewhere and is never touched.
+        inline void dilateRGB(std::vector<float>& rgb, std::vector<char>& filled,
+                              unsigned int size, int passes) {
+            const auto S = static_cast<int>(size);
+            for (int p = 0; p < passes; ++p) {
+                const std::vector<float> src = rgb;
+                const std::vector<char> was = filled;
+                bool grew = false;
+                for (int y = 0; y < S; ++y) {
+                    for (int x = 0; x < S; ++x) {
+                        const auto px = static_cast<size_t>(y) * static_cast<size_t>(S) + static_cast<size_t>(x);
+                        if (was[px]) continue;
+                        float r = 0.f, g = 0.f, b = 0.f, w = 0.f;
+                        for (int dy = -1; dy <= 1; ++dy) {
+                            for (int dx = -1; dx <= 1; ++dx) {
+                                const int nx = x + dx, ny = y + dy;
+                                if (nx < 0 || ny < 0 || nx >= S || ny >= S) continue;
+                                const auto q = static_cast<size_t>(ny) * static_cast<size_t>(S) + static_cast<size_t>(nx);
+                                if (!was[q]) continue;
+                                r += src[q * 3 + 0];
+                                g += src[q * 3 + 1];
+                                b += src[q * 3 + 2];
+                                w += 1.f;
+                            }
+                        }
+                        if (w <= 0.f) continue;
+                        rgb[px * 3 + 0] = r / w;
+                        rgb[px * 3 + 1] = g / w;
+                        rgb[px * 3 + 2] = b / w;
+                        filled[px] = 1;
+                        grew = true;
+                    }
+                }
+                if (!grew) break;
+            }
+        }
+
         // Tileable 2D value noise over a [0,period) lattice.
         inline float valueNoise(float x, float y, int period, unsigned int seed) {
             const int xi = static_cast<int>(std::floor(x));
@@ -59,117 +129,300 @@ namespace threepp::vegetation {
 
     }// namespace detail
 
-    // ── Leaf-cluster alpha cutout ────────────────────────────────────────
+    // ── Leaf blade outline, per species ──────────────────────────────────
+    // ── Bark surface character, per species ──────────────────────────────
+    enum class BarkStyle {
+        Furrowed = 0,// deep vertical ridges — oak, most broadleaves
+        Plated = 1,  // irregular scale plates split by fissures — pine, spruce
+        Papery = 2,  // smooth pale bark with horizontal lenticels — birch
+    };
+
+    enum class LeafShape {
+        Ovate = 0,     // broad, rounded, pointed tip — the generic broadleaf
+        Lobed = 1,     // deeply scalloped margin — oak
+        Serrate = 2,   // fine-toothed margin, small blade — birch
+        Lanceolate = 3,// long and narrow — willow
+    };
+
+    // ── Leaf-sprig alpha cutout ──────────────────────────────────────────
     //
-    // Draws several overlapping leaf silhouettes on a transparent background.
-    // `baseColor` is the mid-tone leaf albedo (sRGB 0..1); individual leaves
-    // are tinted around it for variety.  Use on a material as:
-    //   mat.map = tex;  mat.alphaTest = 0.5f;  mat.side = Side::Double;
+    // ONE foliage card = one SPRIG: a petiole running up the tile with a dozen
+    // small leaflets alternating down both sides, thinning toward the tip.
+    //
+    // This is the difference between foliage that reads as a tree and foliage
+    // that reads as a pile of green shapes. A card is ~0.5-0.8 world units
+    // across; if the texture holds three or four leaf silhouettes then each
+    // painted leaf is ~25cm and the canopy looks like cabbage. A real broadleaf
+    // is 5-10cm, so the card has to carry 10-16 of them — the density has to
+    // come from the TEXTURE, not from stacking more quads (which costs
+    // triangles, overdraw and depth-fighting for the same visual result).
+    //
+    // The sprig is oriented with the petiole along +v so it lines up with the
+    // card's growth axis (makeLeafGeometry spans v along the branch/up axis),
+    // i.e. the leaflets fan out sideways exactly as they would on a real twig.
+    //
+    // Use on a material as:
+    //   mat.map = tex;  mat.alphaTest = 0.4f;  mat.side = Side::Double;
     inline std::shared_ptr<DataTexture> makeLeafClusterTexture(
             unsigned int size = 256,
             unsigned int seed = 1337,
-            const std::array<float, 3>& baseColor = {0.26f, 0.45f, 0.14f}) {
+            const std::array<float, 3>& baseColor = {0.26f, 0.45f, 0.14f},
+            LeafShape shape = LeafShape::Ovate,
+            int leafletsPerTwig = 8) {
 
         auto tex = DataTexture::create(4, size, size);
-        auto& px = tex->image().data<unsigned char>();// zero-initialised → transparent
+        auto& px = tex->image().data<unsigned char>();// zero → transparent
 
         std::mt19937 rng(seed);
         std::uniform_real_distribution<float> u01(0.f, 1.f);
 
-        struct Leaf {
-            float cx, cy;     // centre (px)
-            float ca, sa;     // axis direction
-            float length;     // px
-            float halfWidth;  // px
-            float tint;       // brightness multiplier
-            float hue;        // -1 yellower .. +1 bluer
+        const auto S = static_cast<float>(size);
+        constexpr float PI = 3.14159265358979f;
+
+        struct Twig {
+            float bx, by;// base (uv)
+            float dx, dy;// unit axis
+            float length;
+            float curve; // lateral bow, uv units at the tip
+        };
+        struct Leaflet {
+            float bx, by;   // base on its twig (uv)
+            float dx, dy;   // unit axis, petiole → tip
+            float length;   // uv units
+            float halfWidth;// uv units at the widest point
+            float tint;     // brightness multiplier
+            float hue;      // <0 yellower (new growth) .. >0 cooler/darker
         };
 
-        const auto S = static_cast<float>(size);
-        const int leafCount = 16;
-        std::vector<Leaf> leaves;
-        leaves.reserve(static_cast<size_t>(leafCount));
-        for (int i = 0; i < leafCount; ++i) {
-            Leaf lf;
-            // Cluster the centres loosely around the middle.
-            lf.cx = S * (0.5f + (u01(rng) - 0.5f) * 0.7f);
-            lf.cy = S * (0.5f + (u01(rng) - 0.5f) * 0.7f);
-            const float ang = u01(rng) * 6.28318530718f;
-            lf.ca = std::cos(ang);
-            lf.sa = std::sin(ang);
-            lf.length = S * (0.28f + u01(rng) * 0.18f);
-            lf.halfWidth = lf.length * (0.20f + u01(rng) * 0.12f);
-            lf.tint = 0.75f + u01(rng) * 0.45f;
-            lf.hue = (u01(rng) - 0.5f) * 2.f;
-            leaves.push_back(lf);
+        // Species blade proportions. `lenScale` is deliberately small: a leaflet
+        // must be SHORTER than the gap between successive leaflets on the same
+        // side of a twig, or neighbouring blades merge into one solid lens and
+        // the sprig reads as a single fern frond instead of a spray of leaves.
+        // halfWidth = length * widthRatio, so widthRatio 0.35 gives a 1 : 0.7
+        // blade — leaf-shaped. Much above that and the leaflets render as peas.
+        float lenScale = 1.f, widthRatio = 0.35f;
+        switch (shape) {
+            case LeafShape::Lobed: lenScale = 1.12f; widthRatio = 0.40f; break;
+            case LeafShape::Serrate: lenScale = 0.88f; widthRatio = 0.37f; break;
+            case LeafShape::Lanceolate: lenScale = 1.45f; widthRatio = 0.17f; break;
+            case LeafShape::Ovate: break;
         }
+
+        // The card is a BRANCHLET, not a single sprig: a short stem near the
+        // bottom that forks into a fan of twigs. One narrow sprig up the middle
+        // would leave most of the tile empty (a thin card = a sparse canopy);
+        // fanning several twigs fills the tile while keeping every individual
+        // leaf small — which is the whole point.
+        const int twigCount = 4;
+        const float stemTop = 0.13f;
+        std::vector<Twig> twigs;
+        twigs.reserve(static_cast<size_t>(twigCount));
+        for (int i = 0; i < twigCount; ++i) {
+            const float f = (twigCount == 1) ? 0.5f
+                                             : static_cast<float>(i) / static_cast<float>(twigCount - 1);
+            const float spread = (f - 0.5f) * 1.45f + (u01(rng) - 0.5f) * 0.28f;// radians off +v
+            Twig tw;
+            tw.bx = 0.5f + (f - 0.5f) * 0.05f;
+            tw.by = stemTop;
+            tw.dx = std::sin(spread);
+            tw.dy = std::cos(spread);
+            // Ragged lengths: a fan of equal-length twigs gives the card a
+            // manicured circular outline, and a canopy of those reads as topiary.
+            tw.length = (0.60f + 0.28f * u01(rng)) * (1.f - 0.12f * std::abs(f - 0.5f) * 2.f);
+            tw.curve = (u01(rng) - 0.5f) * 0.14f;
+            twigs.push_back(tw);
+        }
+
+        const int perTwig = std::max(3, leafletsPerTwig);
+        std::vector<Leaflet> leaflets;
+        leaflets.reserve(static_cast<size_t>(twigCount) * (static_cast<size_t>(perTwig) + 1));
+
+        // Point on a twig at parameter t (0 base .. 1 tip), including its bow.
+        auto twigPoint = [](const Twig& tw, float t, float& ox, float& oy) {
+            const float px = -tw.dy, py = tw.dx;// left normal
+            const float bow = tw.curve * std::sin(t * PI);
+            ox = tw.bx + tw.dx * tw.length * t + px * bow;
+            oy = tw.by + tw.dy * tw.length * t + py * bow;
+        };
+
+        for (const auto& tw : twigs) {
+            for (int i = 0; i < perTwig; ++i) {
+                const float t = (static_cast<float>(i) + 0.6f) / static_cast<float>(perTwig);
+                Leaflet lf;
+                twigPoint(tw, t, lf.bx, lf.by);
+                // Alternate sides; angle up-and-out from the twig. The angle
+                // opens toward the base (older, more spread leaflets).
+                const float side = (i & 1) ? 1.f : -1.f;
+                const float a = (0.78f + 0.30f * (1.f - t)) + (u01(rng) - 0.5f) * 0.26f;
+                const float ca = std::cos(a), sa = std::sin(a);
+                // Rotate the twig axis by ±a to get the leaflet axis.
+                lf.dx = tw.dx * ca - side * tw.dy * sa;
+                lf.dy = tw.dy * ca + side * tw.dx * sa;
+                // Largest around the lower-middle of the twig, shrinking to the tip.
+                const float prof = 0.55f + 0.45f * detail::lobe(t * 1.10f, 0.6f);
+                lf.length = 0.150f * lenScale * prof * (0.80f + 0.40f * u01(rng));
+                lf.halfWidth = lf.length * widthRatio * (0.88f + 0.24f * u01(rng));
+                lf.tint = 0.84f + 0.32f * u01(rng);
+                // New growth at the twig tips runs yellower; shaded basal
+                // leaflets run cooler and darker. This within-card hue spread is
+                // what stops a canopy reading as one flat sheet of the same green.
+                lf.hue = (0.55f - t) * 1.3f + (u01(rng) - 0.5f) * 0.5f;
+                leaflets.push_back(lf);
+            }
+            {// terminal leaflet, on the twig axis
+                Leaflet lf;
+                twigPoint(tw, 1.f, lf.bx, lf.by);
+                lf.dx = tw.dx;
+                lf.dy = tw.dy;
+                lf.length = 0.13f * lenScale * (0.9f + 0.2f * u01(rng));
+                lf.halfWidth = lf.length * widthRatio;
+                lf.tint = 1.00f + 0.16f * u01(rng);
+                lf.hue = -0.6f;
+                leaflets.push_back(lf);
+            }
+        }
+
+        // Blade half-width profile along the leaflet (s = 0 petiole .. 1 tip).
+        // `s^0.85` skews the widest point below halfway and draws the tip out to
+        // a point — a symmetric sin() lobe reads as an almond, not a leaf.
+        auto bladeProfile = [&](float s) {
+            const float ovate = detail::lobe(std::pow(std::clamp(s, 0.f, 1.f), 0.85f), 0.70f);
+            switch (shape) {
+                case LeafShape::Lobed:
+                    // Deep rounded lobes down both margins — oak.
+                    return ovate * (0.62f + 0.38f * std::cos(6.f * PI * s + 0.6f));
+                case LeafShape::Serrate:
+                    // Fine marginal teeth — birch.
+                    return ovate * (0.90f + 0.10f * std::sin(26.f * s));
+                case LeafShape::Lanceolate:
+                    // Long, narrow, drawn out to a point — willow.
+                    return detail::lobe(std::pow(std::clamp(s, 0.f, 1.f), 0.72f), 1.00f);
+                case LeafShape::Ovate:
+                default:
+                    return ovate;
+            }
+        };
+
+        // Colour is accumulated in float and dilated across the cutout edge
+        // before it is quantised, so no black background bleeds into the leaves.
+        std::vector<float> rgb(static_cast<size_t>(size) * size * 3, 0.f);
+        std::vector<float> alpha(static_cast<size_t>(size) * size, 0.f);
+        std::vector<char> filled(static_cast<size_t>(size) * size, 0);
+
+        const float aa = 1.2f / S;// ~1px antialiased margin, in uv units
 
         for (unsigned int y = 0; y < size; ++y) {
             for (unsigned int x = 0; x < size; ++x) {
-                float bestCov = 0.f;
-                int bestLeaf = -1;
-                float bestShade = 1.f, bestVein = 0.f;
+                const float u = (static_cast<float>(x) + 0.5f) / S;
+                const float v = (static_cast<float>(y) + 0.5f) / S;
 
-                const float fx = static_cast<float>(x) + 0.5f;
-                const float fy = static_cast<float>(y) + 0.5f;
+                float outR = 0.f, outG = 0.f, outB = 0.f, outA = 0.f;
+                bool hit = false;
 
-                for (int i = 0; i < leafCount; ++i) {
-                    const Leaf& lf = leaves[static_cast<size_t>(i)];
-                    const float dx = fx - lf.cx;
-                    const float dy = fy - lf.cy;
-                    // Project into leaf-local (u along axis 0..length, v perpendicular).
-                    const float u = dx * lf.ca + dy * lf.sa;
-                    const float v = -dx * lf.sa + dy * lf.ca;
-                    if (u < 0.f || u > lf.length) continue;
-                    const float s = u / lf.length;
-                    // Teardrop profile: pointed at tip and petiole, widest mid.
-                    const float prof = std::pow(std::sin(s * 3.14159265f), 0.7f);
-                    const float hw = lf.halfWidth * prof;
-                    if (hw < 0.5f) continue;
-                    const float av = std::abs(v);
-                    if (av > hw) continue;
-
-                    // 1px antialiased edge.
-                    const float cov = std::clamp(hw - av, 0.f, 1.f);
-                    // Later leaves paint over earlier ones (painter's order).
-                    if (i >= bestLeaf) {
-                        bestLeaf = i;
-                        bestCov = cov;
-                        // Shade: darker toward the edge, slightly darker at base.
-                        const float edge = av / hw;            // 0 centre .. 1 edge
-                        bestShade = (1.f - 0.35f * edge * edge) * (0.8f + 0.2f * s);
-                        // Midrib vein + lateral veins.
-                        const float vein = std::exp(-av * av * 0.5f);// central rib
-                        bestVein = vein;
+                // Woody structure, drawn first so leaflets paint over it: the
+                // stem plus every twig. Bare twig visible through the canopy
+                // gaps is a strong realism cue — a card of pure leaves with no
+                // wood in it reads as moss draped over the branches.
+                {
+                    auto stroke = [&](float ax, float ay, float bx, float by,
+                                      float hw0, float hw1) {
+                        const float ex = bx - ax, ey = by - ay;
+                        const float len2 = ex * ex + ey * ey;
+                        if (len2 < 1e-9f) return;
+                        float t = ((u - ax) * ex + (v - ay) * ey) / len2;
+                        t = std::clamp(t, 0.f, 1.f);
+                        const float px2 = ax + ex * t, py2 = ay + ey * t;
+                        const float d = std::sqrt((u - px2) * (u - px2) + (v - py2) * (v - py2));
+                        const float hw = hw0 + (hw1 - hw0) * t;
+                        if (d > hw + aa) return;
+                        const float cov = std::clamp((hw - d) / aa + 0.5f, 0.f, 1.f);
+                        if (cov <= 0.f) return;
+                        outR = 0.25f; outG = 0.18f; outB = 0.11f;
+                        outA = std::max(outA, cov);
+                        hit = true;
+                    };
+                    stroke(0.5f, 0.f, twigs[0].bx, stemTop, 0.014f, 0.011f);
+                    for (const auto& tw : twigs) {
+                        float px0 = tw.bx, py0 = tw.by;
+                        constexpr int steps = 6;
+                        for (int s = 1; s <= steps; ++s) {
+                            const float t = static_cast<float>(s) / static_cast<float>(steps);
+                            float px1, py1;
+                            twigPoint(tw, t, px1, py1);
+                            stroke(px0, py0, px1, py1,
+                                   0.010f * (1.f - 0.8f * (t - 1.f / steps)),
+                                   0.010f * (1.f - 0.8f * t));
+                            px0 = px1;
+                            py0 = py1;
+                        }
                     }
                 }
 
-                if (bestLeaf < 0) continue;
-                const Leaf& lf = leaves[static_cast<size_t>(bestLeaf)];
+                for (size_t li = 0; li < leaflets.size(); ++li) {
+                    const Leaflet& lf = leaflets[li];
+                    const float ddx = u - lf.bx, ddy = v - lf.by;
+                    const float along = ddx * lf.dx + ddy * lf.dy;
+                    if (along < 0.f || along > lf.length) continue;
+                    const float perp = -ddx * lf.dy + ddy * lf.dx;
+                    const float s = along / lf.length;
+                    const float hw = lf.halfWidth * bladeProfile(s);
+                    if (hw <= 0.f) continue;
+                    const float ap = std::abs(perp);
+                    if (ap > hw + aa) continue;
 
-                float r = baseColor[0] * lf.tint;
-                float g = baseColor[1] * lf.tint;
-                float b = baseColor[2] * lf.tint;
-                // Hue shift: yellower (more r/g) vs cooler.
-                r += lf.hue < 0 ? -lf.hue * 0.10f : 0.f;
-                g += lf.hue < 0 ? -lf.hue * 0.06f : -lf.hue * 0.02f;
-                b += lf.hue > 0 ? lf.hue * 0.05f : 0.f;
+                    const float cov = std::clamp((hw - ap) / aa + 0.5f, 0.f, 1.f);
+                    if (cov <= 0.f) continue;
 
-                float shade = bestShade;
-                r *= shade;
-                g *= shade;
-                b *= shade;
-                // Vein slightly lighter/yellower along the rib.
-                const float veinAmt = bestVein * 0.25f;
-                r += veinAmt * 0.10f;
-                g += veinAmt * 0.12f;
+                    float r = baseColor[0] * lf.tint;
+                    float g = baseColor[1] * lf.tint;
+                    float b = baseColor[2] * lf.tint;
+                    // Hue: negative = new growth (yellow-green), positive = older
+                    // shade leaf (deeper, bluer).
+                    if (lf.hue < 0.f) {
+                        r += -lf.hue * 0.11f;
+                        g += -lf.hue * 0.08f;
+                        b -= -lf.hue * 0.015f;
+                    } else {
+                        r -= lf.hue * 0.045f;
+                        g -= lf.hue * 0.030f;
+                        b += lf.hue * 0.030f;
+                    }
 
-                const size_t idx = (static_cast<size_t>(y) * size + x) * 4;
-                px[idx + 0] = detail::toByte(r);
-                px[idx + 1] = detail::toByte(g);
-                px[idx + 2] = detail::toByte(b);
-                px[idx + 3] = detail::toByte(bestCov);
+                    // Blade shading: darker toward the margin and the petiole,
+                    // a lighter midrib, and faint lateral veins angled to the tip.
+                    const float edge = ap / std::max(hw, 1e-4f);
+                    float shade = (1.f - 0.20f * edge * edge) * (0.86f + 0.14f * s);
+                    const float midrib = std::exp(-(ap * ap) / (0.00004f + hw * hw * 0.006f));
+                    const float lateral = 0.5f + 0.5f * std::sin((s * 26.f) + ap * 40.f);
+                    shade *= (0.94f + 0.06f * lateral);
+                    r *= shade; g *= shade; b *= shade;
+                    r += midrib * 0.045f;
+                    g += midrib * 0.055f;
+                    b += midrib * 0.020f;
+
+                    // Painter's order: later leaflets sit on top.
+                    outR = r; outG = g; outB = b;
+                    outA = std::max(outA, cov);
+                    hit = true;
+                }
+
+                if (!hit) continue;
+                const auto pi = static_cast<size_t>(y) * size + x;
+                rgb[pi * 3 + 0] = outR;
+                rgb[pi * 3 + 1] = outG;
+                rgb[pi * 3 + 2] = outB;
+                alpha[pi] = outA;
+                filled[pi] = 1;
             }
+        }
+
+        detail::dilateRGB(rgb, filled, size, 6);
+
+        for (size_t pi = 0; pi < alpha.size(); ++pi) {
+            px[pi * 4 + 0] = detail::toByte(rgb[pi * 3 + 0]);
+            px[pi * 4 + 1] = detail::toByte(rgb[pi * 3 + 1]);
+            px[pi * 4 + 2] = detail::toByte(rgb[pi * 3 + 2]);
+            px[pi * 4 + 3] = detail::toByte(alpha[pi]);
         }
 
         tex->colorSpace = ColorSpace::sRGB;
@@ -202,61 +455,138 @@ namespace threepp::vegetation {
         std::uniform_real_distribution<float> u01(0.f, 1.f);
 
         const auto S = static_cast<float>(size);
-        // Rachis runs vertically at u≈0.5 from base (v=0.05) to tip (v=0.97).
-        const float rachisU = 0.5f;
-        const float vBase = 0.05f, vTip = 0.97f;
-        const float maxHW = 0.42f;// half-width of the frond at its widest
+        const float vBase = 0.03f, vTip = 0.97f;
 
-        // Per-row phase so the serrated needle edge is irregular (not a comb).
-        std::array<float, 96> edgePhase{};
-        for (auto& e : edgePhase) e = u01(rng);
+        // INDIVIDUAL needles, not a blade with a serrated margin.
+        //
+        // A solid lanceolate blade whose edge is nibbled by a ripple is a
+        // fundamentally different silhouette from a conifer spray: it is opaque
+        // through the middle, so no sky ever shows between the needles, and its
+        // outline reads as a saw or a fern at any distance where the ripple
+        // resolves. A real spruce spray is mostly EMPTY — a twig with a few
+        // hundred separate needles, and the gaps are most of what you see.
+        struct Needle {
+            float bx, by;// root on the twig (uv)
+            float dx, dy;// unit axis
+            float length;
+            float halfWidth;
+            float tint;
+        };
+
+        const float twigCurve = (u01(rng) - 0.5f) * 0.05f;
+        auto twigU = [&](float t) { return 0.5f + twigCurve * std::sin(t * 2.6f); };
+
+        constexpr int rows = 46;// needle pairs down the twig
+        std::vector<Needle> needles;
+        needles.reserve(static_cast<size_t>(rows) * 2 + 2);
+        for (int i = 0; i < rows; ++i) {
+            const float t = (static_cast<float>(i) + 0.5f) / static_cast<float>(rows);
+            const float by = vBase + t * (vTip - vBase);
+            // Lanceolate envelope: longest needles a third of the way up.
+            const float env = 0.42f + 0.58f * detail::lobe(std::min(t * 1.18f, 1.f), 0.5f);
+            for (int s = 0; s < 2; ++s) {
+                Needle n;
+                n.bx = twigU(t);
+                n.by = by;
+                // Sweep toward the tip: ~55-70° off the twig, so needles rake
+                // forward the way they do on a real shoot.
+                const float a = 0.95f + 0.28f * u01(rng);
+                const float side = (s == 0) ? -1.f : 1.f;
+                n.dx = side * std::sin(a);
+                n.dy = std::cos(a);
+                n.length = 0.34f * env * (0.78f + 0.44f * u01(rng));
+                n.halfWidth = 0.0085f * (0.75f + 0.5f * u01(rng));
+                n.tint = 0.72f + 0.52f * u01(rng);
+                needles.push_back(n);
+            }
+        }
+        {// leader needle off the tip
+            Needle n;
+            n.bx = twigU(1.f);
+            n.by = vTip - 0.06f;
+            n.dx = 0.f;
+            n.dy = 1.f;
+            n.length = 0.10f;
+            n.halfWidth = 0.009f;
+            n.tint = 1.05f;
+            needles.push_back(n);
+        }
+
+        std::vector<float> rgb(static_cast<size_t>(size) * size * 3, 0.f);
+        std::vector<float> alpha(static_cast<size_t>(size) * size, 0.f);
+        std::vector<char> filled(static_cast<size_t>(size) * size, 0);
+        const float aa = 1.1f / S;
 
         for (unsigned int y = 0; y < size; ++y) {
             for (unsigned int x = 0; x < size; ++x) {
                 const float u = (static_cast<float>(x) + 0.5f) / S;
                 const float v = (static_cast<float>(y) + 0.5f) / S;
-                const float tn = (v - vBase) / (vTip - vBase);// 0 base .. 1 tip
-                if (tn < 0.f || tn > 1.f) continue;
 
-                // Lanceolate blade: widest a third up, tapering to a point at the
-                // tip and narrowing at the petiole → a full needle spray, not a
-                // few sparse lines.
-                const float profile = std::pow(std::sin(tn * 3.14159265f), 0.55f);
-                float hw = maxHW * profile;
-                // Needles angle toward the tip: shear the horizontal coordinate by
-                // height so the serrations sweep upward like real needles.
-                const float du = std::abs(u - rachisU);
+                float outR = 0.f, outG = 0.f, outB = 0.f, outA = 0.f;
+                bool hit = false;
 
-                // Serrated (needled) edge: modulate the half-width with a high-
-                // frequency ripple whose phase wanders per row → a feathered
-                // silhouette that alpha-cutouts into individual needle tips.
-                const int row = std::min<int>(static_cast<int>(edgePhase.size()) - 1,
-                                              static_cast<int>(tn * static_cast<float>(edgePhase.size() - 1)));
-                const float ripple = 0.72f + 0.28f * std::sin((v * 46.f) + edgePhase[static_cast<size_t>(row)] * 6.283f);
-                const float hwEdge = hw * ripple;
-                if (du > hwEdge) continue;
+                // Woody twig up the middle.
+                {
+                    const float t = std::clamp((v - vBase) / (vTip - vBase), 0.f, 1.f);
+                    const float du = std::abs(u - twigU(t));
+                    const float hw = 0.0075f * (1.f - 0.5f * t);
+                    if (v >= vBase && v <= vTip && du < hw + aa) {
+                        const float cov = std::clamp((hw - du) / aa + 0.5f, 0.f, 1.f);
+                        if (cov > 0.f) {
+                            outR = 0.22f; outG = 0.15f; outB = 0.09f;
+                            outA = cov;
+                            hit = true;
+                        }
+                    }
+                }
 
-                // Coverage with a soft ~1px edge.
-                const float aa = 1.5f / S;
-                float cov = std::clamp((hwEdge - du) / aa + 0.5f, 0.f, 1.f);
+                for (const auto& n : needles) {
+                    const float ddx = u - n.bx, ddy = v - n.by;
+                    const float along = ddx * n.dx + ddy * n.dy;
+                    if (along < 0.f || along > n.length) continue;
+                    const float perp = -ddx * n.dy + ddy * n.dx;
+                    const float s = along / n.length;
+                    // Near-parallel sides tapering to a point in the last third —
+                    // a needle, not a lens.
+                    const float taper = (s < 0.7f) ? 1.f : (1.f - (s - 0.7f) / 0.3f);
+                    const float hw = n.halfWidth * (0.72f + 0.28f * taper) * taper;
+                    if (hw <= 0.f) continue;
+                    const float ap = std::abs(perp);
+                    if (ap > hw + aa) continue;
+                    const float cov = std::clamp((hw - ap) / aa + 0.5f, 0.f, 1.f);
+                    if (cov <= 0.f) continue;
 
-                // Interior needle striations (darker grooves between needle rows)
-                // give the blade internal texture instead of a flat green slab.
-                const float groove = 0.80f + 0.20f * std::abs(std::sin((du * 120.f) + v * 30.f));
-                // Midrib slightly lighter; tip a touch warmer/brighter.
-                const float rib = std::exp(-du * du * 900.f) * 0.15f;
-                const float tipLift = 0.80f + 0.35f * tn;
-                const float shade = groove * tipLift;
+                    // Bias the needle mass GREEN: red pulled down, green pushed
+                    // up, so shadowed fronds stay green-dark rather than drifting
+                    // bark-brown (near-silhouette conifers read as rock otherwise).
+                    const float shade = n.tint * (0.86f + 0.14f * s);
+                    outR = baseColor[0] * shade * 0.85f;
+                    outG = baseColor[1] * shade * 1.12f;
+                    outB = baseColor[2] * shade * 0.95f;
+                    outA = std::max(outA, cov);
+                    hit = true;
+                }
 
-                // Bias the needle mass GREEN: red pulled down, green pushed up, so
-                // shadowed/unlit fronds stay green-dark rather than drifting
-                // bark-brown (near-silhouette trees read as craggy rock otherwise).
-                const size_t idx = (static_cast<size_t>(y) * size + x) * 4;
-                px[idx + 0] = detail::toByte(baseColor[0] * shade * 0.85f + rib * 0.08f);
-                px[idx + 1] = detail::toByte(baseColor[1] * shade * 1.12f + rib * 0.12f);
-                px[idx + 2] = detail::toByte(baseColor[2] * shade * 0.95f);
-                px[idx + 3] = detail::toByte(cov);
+                if (!hit) continue;
+                const auto pi = static_cast<size_t>(y) * size + x;
+                rgb[pi * 3 + 0] = outR;
+                rgb[pi * 3 + 1] = outG;
+                rgb[pi * 3 + 2] = outB;
+                alpha[pi] = outA;
+                filled[pi] = 1;
             }
+        }
+
+        // Needles are only a couple of texels wide, so almost every needle texel
+        // is an edge texel — without this the whole spray filters toward the
+        // black background and a conifer goes charcoal at any distance.
+        detail::dilateRGB(rgb, filled, size, 6);
+
+        for (size_t pi = 0; pi < alpha.size(); ++pi) {
+            px[pi * 4 + 0] = detail::toByte(rgb[pi * 3 + 0]);
+            px[pi * 4 + 1] = detail::toByte(rgb[pi * 3 + 1]);
+            px[pi * 4 + 2] = detail::toByte(rgb[pi * 3 + 2]);
+            px[pi * 4 + 3] = detail::toByte(alpha[pi]);
         }
 
         tex->colorSpace = ColorSpace::sRGB;
@@ -276,7 +606,8 @@ namespace threepp::vegetation {
     inline std::pair<std::shared_ptr<DataTexture>, std::shared_ptr<DataTexture>>
     makeBarkTextures(unsigned int size = 256,
                      unsigned int seed = 1337,
-                     const std::array<float, 3>& baseColor = {0.34f, 0.24f, 0.16f}) {
+                     const std::array<float, 3>& baseColor = {0.34f, 0.24f, 0.16f},
+                     BarkStyle style = BarkStyle::Furrowed) {
 
         auto albedo = DataTexture::create(4, size, size);
         auto normal = DataTexture::create(4, size, size);
@@ -287,7 +618,7 @@ namespace threepp::vegetation {
         const int period = 8;// noise lattice period (in tiles) → seamless wrap
 
         // Height field: vertical furrows (stretched in y) + fbm detail.
-        auto heightAt = [&](float u, float v) -> float {
+        auto furrowedHeight = [&](float u, float v) -> float {
             // u,v in [0,1).  Furrows run vertically → high horizontal freq,
             // low vertical freq.
             float furrow = detail::valueNoise(u * period, v * (period / 4.f),
@@ -304,6 +635,74 @@ namespace threepp::vegetation {
             return std::clamp(furrow * 0.7f + detailN * 0.5f, 0.f, 1.f);
         };
 
+        // Irregular scale plates split by deep fissures — pine and spruce.
+        // Warping the lattice coordinate before quantising it breaks the grid
+        // up into uneven polygons; a plain quantised grid reads as brickwork.
+        auto platedHeight = [&](float u, float v) -> float {
+            const float wu = u + 0.06f * (detail::valueNoise(u * period, v * period, period, seed + 3u) - 0.5f);
+            const float wv = v + 0.06f * (detail::valueNoise(u * period, v * period, period, seed + 5u) - 0.5f);
+            const float cu = wu * static_cast<float>(period) * 1.5f;
+            const float cv = wv * static_cast<float>(period) * 2.2f;
+            const float fu = cu - std::floor(cu);
+            const float fv = cv - std::floor(cv);
+            // Distance to the nearest cell border → 0 in the fissure, 1 mid-plate.
+            const float edge = std::min(std::min(fu, 1.f - fu), std::min(fv, 1.f - fv));
+            const float plate = detail::smooth(std::clamp(edge * 5.f, 0.f, 1.f));
+            const float grain = detail::valueNoise(u * period * 5.f, v * period * 5.f,
+                                                   period * 5, seed + 17u);
+            return std::clamp(plate * 0.82f + grain * 0.30f, 0.f, 1.f);
+        };
+
+        // Smooth papery bark: almost flat, with horizontal LENTICELS — the
+        // short dark dashes that make birch instantly recognisable. Without
+        // them a pale trunk is just a white pole, which is exactly how the
+        // birch preset has been reading at any distance.
+        auto paperyHeight = [&](float u, float v) -> float {
+            // valueNoise only tiles when the coordinate SPAN is a multiple of
+            // the lattice period. The band term wants a low u-frequency (2
+            // lobes around the tile), so it gets its own period-2 lattice —
+            // sampling u*2 against the shared period-8 lattice leaves the u=1
+            // edge mid-cell, and with the bark repeating 3x around a trunk that
+            // seam renders as three lit vertical creases on every birch.
+            const float band = detail::valueNoise(u * 2.f, v * 12.f, 2, seed + 7u);
+            const float fine = detail::valueNoise(u * static_cast<float>(period) * 4.f,
+                                                  v * static_cast<float>(period) * 4.f,
+                                                  period * 4, seed + 23u);
+            return std::clamp(0.55f + band * 0.28f + fine * 0.17f, 0.f, 1.f);
+        };
+
+        // Lenticel mask, 1 inside a dash. Rows are spaced in v and each cell
+        // either holds a dash or does not, so they scatter rather than stripe.
+        auto lenticelAt = [&](float u, float v) -> float {
+            constexpr int rowsPerTile = 14;
+            constexpr int colsPerTile = 6;
+            const float cv = v * rowsPerTile;
+            const int row = static_cast<int>(std::floor(cv));
+            const float fv = cv - static_cast<float>(row);
+            const float cu = u * colsPerTile + detail::hash2(row, 0, seed + 41u) * 3.f;
+            const int col = static_cast<int>(std::floor(cu));
+            const float fu = cu - static_cast<float>(col);
+            const int colW = ((col % colsPerTile) + colsPerTile) % colsPerTile;
+            if (detail::hash2(colW, row, seed + 53u) > 0.55f) return 0.f;// empty cell
+            // Dash: wide in u, thin in v.
+            const float halfU = 0.14f + 0.26f * detail::hash2(colW, row, seed + 67u);
+            const float halfV = 0.055f + 0.045f * detail::hash2(colW, row, seed + 71u);
+            const float du = std::abs(fu - 0.5f);
+            const float dv = std::abs(fv - 0.5f);
+            if (du > halfU || dv > halfV) return 0.f;
+            const float e = std::min((halfU - du) / 0.05f, (halfV - dv) / 0.02f);
+            return std::clamp(e, 0.f, 1.f);
+        };
+
+        auto heightAt = [&](float u, float v) -> float {
+            switch (style) {
+                case BarkStyle::Plated: return platedHeight(u, v);
+                case BarkStyle::Papery: return paperyHeight(u, v);
+                case BarkStyle::Furrowed:
+                default: return furrowedHeight(u, v);
+            }
+        };
+
         const float texel = 1.f / S;
         const float bumpScale = 2.5f;
 
@@ -313,8 +712,11 @@ namespace threepp::vegetation {
                 const float v = static_cast<float>(y) / S;
                 const float h = heightAt(u, v);
 
-                // Albedo: darker in furrows (low h), lighter on ridges.
-                const float t = 0.45f + h * 0.55f;
+                // Albedo: darker in furrows (low h), lighter on ridges. Papery
+                // bark barely varies with height — its character is the
+                // lenticels, not relief — so it gets a much flatter ramp.
+                const float t = (style == BarkStyle::Papery) ? (0.86f + h * 0.14f)
+                                                             : (0.45f + h * 0.55f);
                 float r = baseColor[0] * t;
                 float g = baseColor[1] * t;
                 float b = baseColor[2] * t;
@@ -324,6 +726,16 @@ namespace threepp::vegetation {
                 r = r * (1.f - desat) + grey * desat;
                 g = g * (1.f - desat) + grey * desat;
                 b = b * (1.f - desat) + grey * desat;
+
+                if (style == BarkStyle::Papery) {
+                    const float len = lenticelAt(u, v);
+                    if (len > 0.f) {
+                        // Dark grey-brown scar, blended over the pale ground.
+                        r = r * (1.f - len) + 0.16f * len;
+                        g = g * (1.f - len) + 0.14f * len;
+                        b = b * (1.f - len) + 0.12f * len;
+                    }
+                }
 
                 const size_t idx = (static_cast<size_t>(y) * size + x) * 4;
                 ca[idx + 0] = detail::toByte(r);
@@ -396,6 +808,10 @@ namespace threepp::vegetation {
         const float centreR = 0.085f;
         const float stemHalf = 0.022f;
 
+        std::vector<float> rgb(static_cast<size_t>(size) * size * 3, 0.f);
+        std::vector<float> alpha(static_cast<size_t>(size) * size, 0.f);
+        std::vector<char> filled(static_cast<size_t>(size) * size, 0);
+
         for (unsigned int y = 0; y < size; ++y) {
             for (unsigned int x = 0; x < size; ++x) {
                 const float u = (static_cast<float>(x) + 0.5f) / S;
@@ -419,12 +835,26 @@ namespace threepp::vegetation {
                     r = centre[0]; g = centre[1]; b = centre[2]; a = 1.f;
                 }
 
-                const size_t idx = (static_cast<size_t>(y) * size + x) * 4;
-                px[idx + 0] = detail::toByte(r);
-                px[idx + 1] = detail::toByte(g);
-                px[idx + 2] = detail::toByte(b);
-                px[idx + 3] = detail::toByte(a);
+                const auto pi = static_cast<size_t>(y) * size + x;
+                if (a <= 0.f) continue;
+                rgb[pi * 3 + 0] = r;
+                rgb[pi * 3 + 1] = g;
+                rgb[pi * 3 + 2] = b;
+                alpha[pi] = a;
+                filled[pi] = 1;
             }
+        }
+
+        // Petals are small and bright against a transparent BLACK background;
+        // without dilation the mip chain drags that black into every bloom and
+        // a meadow of white flowers turns to grey specks with distance.
+        detail::dilateRGB(rgb, filled, size, 5);
+
+        for (size_t pi = 0; pi < alpha.size(); ++pi) {
+            px[pi * 4 + 0] = detail::toByte(rgb[pi * 3 + 0]);
+            px[pi * 4 + 1] = detail::toByte(rgb[pi * 3 + 1]);
+            px[pi * 4 + 2] = detail::toByte(rgb[pi * 3 + 2]);
+            px[pi * 4 + 3] = detail::toByte(alpha[pi]);
         }
 
         tex->colorSpace = ColorSpace::sRGB;

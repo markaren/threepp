@@ -76,9 +76,16 @@ IGNORE_INVALID_EXPRESSIONS = r"threepp::|<threepp\.threepp\."
 # such enum needs a mapping here, or stubgen reports an invalid expression and
 # --exit-code aborts the run before a single file is written. Nested enums take
 # the owning class in the path.
+# Every enum used as a py::arg DEFAULT needs an entry here. pybind11 renders
+# such a default into the docstring as `<Enum.Value: 0>`, which stubgen cannot
+# resolve to a type without being told where the enum lives — and it treats that
+# as a hard error, so the whole stub is skipped. Enums that only ever appear as
+# def_readwrite members or plain parameters do not need one.
 ENUM_CLASS_LOCATIONS = [
     f"AnimationBlendMode:{MODULE}",
     f"CurveType:{MODULE}.CatmullRomCurve3",
+    f"LeafShape:{MODULE}",
+    f"BarkStyle:{MODULE}",
 ]
 
 # A bound name that is a Python keyword cannot appear literally in a stub (or in

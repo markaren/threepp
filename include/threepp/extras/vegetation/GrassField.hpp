@@ -181,6 +181,17 @@ namespace threepp {
 
         // Self-contained shading (no IBL) keeps the thin blades from blowing out
         // to white under a bright sky: a soft wrap + ambient, then distance fog.
+        //
+        // The tail of main() mirrors the standard materials (meshphysical_frag):
+        // tone-map and encode the LIT colour, THEN blend fog in output space.
+        //
+        // <encodings_fragment> is not optional on GL. There is no sRGB default
+        // framebuffer, so every material applies the OETF itself via the
+        // `linearToOutputTexel` function the program prefix injects. A
+        // hand-written ShaderMaterial that skips it writes linear values into a
+        // buffer that is then read as sRGB — roughly a 0.2 → 0.48 shift on
+        // mid-tones — so the blades render as near-black spikes standing in a
+        // correctly-encoded, much brighter terrain.
         static const char* fragmentShader() {
             return R"(
                 uniform vec3  topColor;
@@ -194,9 +205,13 @@ namespace threepp {
                 varying float vFog;
                 void main() {
                     vec3 base = mix(bottomColor, topColor, vHeight);
-                    vec3 lit = base * (ambient + sunColor * 0.7);
+                    gl_FragColor = vec4(base * (ambient + sunColor * 0.7), 1.0);
+
+                    #include <tonemapping_fragment>
+                    #include <encodings_fragment>
+
                     float f = clamp((vFog - fogNear) / (fogFar - fogNear), 0.0, 1.0);
-                    gl_FragColor = vec4(mix(lit, fogColor, f), 1.0);
+                    gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor, f);
                 }
             )";
         }

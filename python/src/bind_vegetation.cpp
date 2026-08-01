@@ -30,6 +30,19 @@ namespace threepp_py {
                 .value("Frond",     LeafStyle::Frond)
                 .export_values();
 
+        py::enum_<LeafShape>(m, "LeafShape")
+                .value("Ovate",      LeafShape::Ovate)
+                .value("Lobed",      LeafShape::Lobed)
+                .value("Serrate",    LeafShape::Serrate)
+                .value("Lanceolate", LeafShape::Lanceolate)
+                .export_values();
+
+        py::enum_<BarkStyle>(m, "BarkStyle")
+                .value("Furrowed", BarkStyle::Furrowed)
+                .value("Plated",   BarkStyle::Plated)
+                .value("Papery",   BarkStyle::Papery)
+                .export_values();
+
         py::enum_<BranchingMode>(m, "BranchingMode")
                 .value("Colonise", BranchingMode::Colonise)
                 .value("Whorl",    BranchingMode::Whorl)
@@ -55,11 +68,13 @@ namespace threepp_py {
                 .def_readwrite("min_branch_radius",  &TreeParams::minBranchRadius)
                 .def_readwrite("radial_segments",    &TreeParams::radialSegments)
                 .def_readwrite("leaf_style",         &TreeParams::leafStyle)
+                .def_readwrite("leaf_shape",         &TreeParams::leafShape)
                 .def_readwrite("leaf_size",          &TreeParams::leafSize)
                 .def_readwrite("leaf_density",       &TreeParams::leafDensity)
                 .def_readwrite("leaves_per_cluster", &TreeParams::leavesPerCluster)
                 .def_readwrite("leaf_spread",        &TreeParams::leafSpread)
                 .def_readwrite("leaf_clumping",      &TreeParams::leafClumping)
+                .def_readwrite("foliage_occlusion",  &TreeParams::foliageOcclusion)
                 .def_readwrite("branching_mode",         &TreeParams::branchingMode)
                 .def_readwrite("whorl_spacing",          &TreeParams::whorlSpacing)
                 .def_readwrite("branches_per_whorl",     &TreeParams::branchesPerWhorl)
@@ -77,6 +92,7 @@ namespace threepp_py {
                 .def_readwrite("bark_bump_amp2",         &TreeParams::barkBumpAmp2)
                 .def_readwrite("bark_bump_lobes2",       &TreeParams::barkBumpLobes2)
                 .def_readwrite("root_flare_asym",        &TreeParams::rootFlareAsym)
+                .def_readwrite("bark_style",             &TreeParams::barkStyle)
                 .def_property("bark_color",
                         [](const TreeParams& p) {
                             return std::vector<float>(p.barkColor.begin(), p.barkColor.end());
@@ -129,16 +145,19 @@ namespace threepp_py {
         // ── Procedural textures ──────────────────────────────────────────
 
         m.def("make_leaf_texture",
-              [](unsigned int size, unsigned int seed, const std::vector<float>& color) -> std::shared_ptr<Texture> {
+              [](unsigned int size, unsigned int seed, const std::vector<float>& color,
+                 LeafShape shape, int leafletsPerTwig) -> std::shared_ptr<Texture> {
                   std::array<float, 3> c = {color.size() > 0 ? color[0] : 0.26f,
                                             color.size() > 1 ? color[1] : 0.45f,
                                             color.size() > 2 ? color[2] : 0.14f};
                   py::gil_scoped_release release;
-                  return makeLeafClusterTexture(size, seed, c);
+                  return makeLeafClusterTexture(size, seed, c, shape, leafletsPerTwig);
               },
               py::arg("size") = 256u, py::arg("seed") = 1337u,
               py::arg("base_color") = std::vector<float>{0.26f, 0.45f, 0.14f},
-              "RGBA leaf-cluster alpha-cutout DataTexture. Use mat.alpha_test = 0.5.");
+              py::arg("shape") = LeafShape::Ovate, py::arg("leaflets_per_twig") = 8,
+              "RGBA leaf-sprig alpha-cutout DataTexture: a branchlet of small leaflets "
+              "with the given blade outline. Use mat.alpha_test = 0.4.");
 
         m.def("make_needle_frond_texture",
               [](unsigned int size, unsigned int seed, const std::vector<float>& color) -> std::shared_ptr<Texture> {
@@ -154,22 +173,24 @@ namespace threepp_py {
               "+ BranchingMode.Whorl. Use mat.alpha_test = 0.5.");
 
         m.def("make_bark_textures",
-              [](unsigned int size, unsigned int seed, const std::vector<float>& color)
-                      -> py::tuple {
+              [](unsigned int size, unsigned int seed, const std::vector<float>& color,
+                 BarkStyle style) -> py::tuple {
                   std::array<float, 3> c = {color.size() > 0 ? color[0] : 0.34f,
                                             color.size() > 1 ? color[1] : 0.24f,
                                             color.size() > 2 ? color[2] : 0.16f};
                   std::shared_ptr<DataTexture> alb, nrm;
                   {
                       py::gil_scoped_release release;
-                      std::tie(alb, nrm) = makeBarkTextures(size, seed, c);
+                      std::tie(alb, nrm) = makeBarkTextures(size, seed, c, style);
                   }// GIL reacquired before constructing Python objects
                   std::shared_ptr<Texture> a = alb, n = nrm;
                   return py::make_tuple(a, n);
               },
               py::arg("size") = 256u, py::arg("seed") = 1337u,
               py::arg("base_color") = std::vector<float>{0.34f, 0.24f, 0.16f},
-              "Returns (albedo, normal) tiling bark Textures.");
+              py::arg("style") = BarkStyle::Furrowed,
+              "Returns (albedo, normal) tiling bark Textures. `style` selects furrowed "
+              "(oak), plated (conifer) or papery-with-lenticels (birch).");
 
         m.def("make_flower_texture",
               [](unsigned int size, unsigned int seed) -> std::shared_ptr<Texture> {

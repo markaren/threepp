@@ -15,15 +15,56 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <optional>
 #include <random>
+#include <string>
 
 using namespace threepp;
 using namespace threepp::vegetation;
 
-int main() {
+int main(int argc, char** argv) {
 
-    Canvas canvas("Procedural Tree Generator", {{"vsync", true}, {"aa", 4}});
-    auto renderer = createRenderer(canvas);
+    // Headless capture for A/B verification:
+    //   tree_demo --shot out.png [--preset 0..3] [--seed N] [--frames N]
+    //             [--cam x y z] [--target x y z]
+    // Renders N frames (TAA/denoiser convergence on Vulkan), writes one PNG,
+    // exits. Same camera + seed between two builds → a strict visual diff.
+    std::string shotPath;
+    int shotFrames = 200;
+    int shotFrame = 0;
+    int shotPreset = 0;
+    int shotSeed = -1;
+    float aoArg = -1.f;// <0 → keep the preset's foliageOcclusion
+    float envIntArg = -1.f;// <0 → leave leaf envMapIntensity at its default
+    float camArg[3] = {8.f, 6.f, 8.f};
+    float tgtArg[3] = {0.f, 4.f, 0.f};
+    std::optional<GraphicsAPI> api;// unset → interactive backend menu
+    std::string dumpTexPrefix;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--dump-tex") == 0 && i + 1 < argc) { dumpTexPrefix = argv[++i]; continue; }
+        if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
+        else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--preset") == 0 && i + 1 < argc) shotPreset = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--seed") == 0 && i + 1 < argc) shotSeed = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--ao") == 0 && i + 1 < argc) aoArg = std::stof(argv[++i]);
+        else if (std::strcmp(argv[i], "--envint") == 0 && i + 1 < argc) envIntArg = std::stof(argv[++i]);
+        else if (std::strcmp(argv[i], "--cam") == 0 && i + 3 < argc) {
+            for (float& c : camArg) c = std::stof(argv[++i]);
+        } else if (std::strcmp(argv[i], "--target") == 0 && i + 3 < argc) {
+            for (float& c : tgtArg) c = std::stof(argv[++i]);
+        } else if (std::strcmp(argv[i], "--vulkan") == 0) api = GraphicsAPI::Vulkan;
+        else if (std::strcmp(argv[i], "--gl") == 0) api = GraphicsAPI::OpenGL;
+    }
+    const bool capturing = !shotPath.empty();
+
+    Canvas canvas("Procedural Tree Generator", {{"vsync", !capturing}, {"aa", 4}});
+    auto renderer = createRenderer(canvas, api);
     renderer->setClearColor(Color(0.18f, 0.22f, 0.28f));
     renderer->toneMapping = ToneMapping::ACESFilmic;
     renderer->toneMappingExposure = 1.0f;
@@ -59,9 +100,11 @@ int main() {
 
     // ── Procedural textures ──────────────────────────────────────────────
     TreeParams params;
-    applyPreset(0, params);// start with Oak
+    applyPreset(std::clamp(shotPreset, 0, 3), params);// start with Oak
+    if (shotSeed >= 0) params.seed = static_cast<unsigned int>(shotSeed);
+    if (aoArg >= 0.f) params.foliageOcclusion = aoArg;
 
-    auto [barkAlbedo, barkNormal] = vegetation::makeBarkTextures(256, params.seed, params.barkColor);
+    auto [barkAlbedo, barkNormal] = vegetation::makeBarkTextures(256, params.seed, params.barkColor, params.barkStyle);
     barkAlbedo->repeat.set(3.f, 0.5f);
     barkNormal->repeat.set(3.f, 0.5f);
     // Conifer fronds want the elongated needle cutout; broadleaf styles the
@@ -69,9 +112,30 @@ int main() {
     auto makeLeafTex = [](const TreeParams& p) {
         return p.leafStyle == LeafStyle::Frond
                 ? vegetation::makeNeedleFrondTexture(256, p.seed, p.leafColor)
-                : vegetation::makeLeafClusterTexture(256, p.seed, p.leafColor);
+                : vegetation::makeLeafClusterTexture(256, p.seed, p.leafColor, p.leafShape);
     };
     auto leafTex = makeLeafTex(params);
+
+    // `--dump-tex <prefix>` writes the generated leaf + bark atlases as raw
+    // RGBA8 blobs (`<prefix>_<name>_<w>x<h>.rgba`) and exits. Inspecting the
+    // atlas directly is the only way to tune a cutout texture — from the
+    // rendered tree alone you cannot tell a bad silhouette from bad shading.
+    if (!dumpTexPrefix.empty()) {
+        auto dump = [&](const std::string& name, const std::shared_ptr<Texture>& t) {
+            const auto& img = t->image();
+            const auto& d = img.data<unsigned char>();
+            const std::string path = dumpTexPrefix + "_" + name + "_" +
+                                     std::to_string(img.width()) + "x" +
+                                     std::to_string(img.height()) + ".rgba";
+            std::ofstream f(path, std::ios::binary);
+            f.write(reinterpret_cast<const char*>(d.data()), static_cast<std::streamsize>(d.size()));
+            std::cout << "wrote " << path << " (" << d.size() << " bytes)\n";
+        };
+        dump("leaf", leafTex);
+        dump("barkAlbedo", barkAlbedo);
+        dump("barkNormal", barkNormal);
+        return 0;
+    }
 
     // Ground plane (receives shadows).
     auto groundMat = MeshStandardMaterial::create(
@@ -103,11 +167,14 @@ int main() {
                     .roughness(0.85f)
                     .metalness(0.0f));
     leafMat->map = leafTex;
-    leafMat->alphaTest = 0.5f;
+    // Below the antialiased margin of the thin leaflets/needles the atlases are
+    // drawn from — at 0.5 a mipped distant card loses whole leaves.
+    leafMat->alphaTest = 0.4f;
     leafMat->side = Side::Double;
     leafMat->vertexColors = true;// per-card tonal variation (top-lit gradient)
     // Foliage translucency: backlit canopy glow (Vulkan deferred). Live-editable
     // below — the material patch path propagates the value without a regen.
+    if (envIntArg >= 0.f) leafMat->envMapIntensity = envIntArg;
     leafMat->translucency = 0.45f;
     leafMat->translucencyColor = Color(0.55f, 0.85f, 0.30f);
 
@@ -122,9 +189,9 @@ int main() {
 
     // Camera.
     PerspectiveCamera camera(50.f, canvas.aspect(), 0.1f, 200.f);
-    camera.position.set(8.f, 6.f, 8.f);
+    camera.position.set(camArg[0], camArg[1], camArg[2]);
     OrbitControls controls{camera, canvas};
-    controls.target.set(0.f, 4.f, 0.f);
+    controls.target.set(tgtArg[0], tgtArg[1], tgtArg[2]);
     controls.update();
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -134,7 +201,7 @@ int main() {
     });
 
     // ── State ────────────────────────────────────────────────────────────
-    int preset = 0;
+    int preset = std::clamp(shotPreset, 0, 3);
     bool regenRequested = false;
     int crownShapeIdx = static_cast<int>(params.crownShape);
     int leafStyleIdx = static_cast<int>(params.leafStyle);
@@ -146,7 +213,7 @@ int main() {
         leafMesh->setGeometry(gen.makeLeafGeometry(params));
 
         // Albedo/colour lives in the procedural textures — rebuild them.
-        auto bark = vegetation::makeBarkTextures(256, params.seed, params.barkColor);
+        auto bark = vegetation::makeBarkTextures(256, params.seed, params.barkColor, params.barkStyle);
         bark.first->repeat.set(3.f, 0.5f);
         bark.second->repeat.set(3.f, 0.5f);
         barkMat->map = bark.first;
@@ -167,7 +234,8 @@ int main() {
     // ── ImGui ────────────────────────────────────────────────────────────
     // Generic renderer settings (tone map, shadows, ...) come from the shared
     // panel; the tree parameters are the app-specific widgets below.
-    RendererSettingsUi ui(canvas, *renderer, [&] {
+    std::unique_ptr<RendererSettingsUi> ui;
+    if (!capturing) ui = std::make_unique<RendererSettingsUi>(canvas, *renderer, [&] {
         ImGui::Text("nodes: %d", gen.nodeCount());
         ImGui::Separator();
 
@@ -282,6 +350,13 @@ int main() {
         }
 
         renderer->render(scene, camera);
-        ui.render();
+        if (!capturing) {
+            ui->render();
+        } else if (++shotFrame >= shotFrames) {
+            const std::filesystem::path out{shotPath};
+            renderer->writeFramebuffer(out);
+            std::cout << "wrote " << std::filesystem::absolute(out).string() << std::endl;
+            std::exit(0);
+        }
     });
 }

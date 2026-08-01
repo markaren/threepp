@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'Ellipsoid', 'ErosionType', 'Euler', 'FBXLoader', 'Filter', 'Fog', 'FogExp2', 'Font', 'FontLoader', 'ForceTorqueSensor', 'Frond', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxWorld', 'PlaneGeometry', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'Sphere', 'SphereGeometry', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'deg_to_rad', 'editor', 'euclidean_modulo', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'Ellipsoid', 'ErosionType', 'Euler', 'FBXLoader', 'Filter', 'Fog', 'FogExp2', 'Font', 'FontLoader', 'ForceTorqueSensor', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'Sphere', 'SphereGeometry', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'deg_to_rad', 'editor', 'euclidean_modulo', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -320,6 +320,46 @@ class Background:
     def is_color(self) -> bool:
         ...
     def is_texture(self) -> bool:
+        ...
+class BarkStyle:
+    """
+    Members:
+    
+      Furrowed
+    
+      Plated
+    
+      Papery
+    """
+    Furrowed: typing.ClassVar[BarkStyle]  # value = <BarkStyle.Furrowed: 0>
+    Papery: typing.ClassVar[BarkStyle]  # value = <BarkStyle.Papery: 2>
+    Plated: typing.ClassVar[BarkStyle]  # value = <BarkStyle.Plated: 1>
+    __members__: typing.ClassVar[dict[str, BarkStyle]]  # value = {'Furrowed': <BarkStyle.Furrowed: 0>, 'Plated': <BarkStyle.Plated: 1>, 'Papery': <BarkStyle.Papery: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class Blending:
     """
@@ -2042,6 +2082,49 @@ class KeyframeTrack:
         ...
     @property
     def values(self) -> list[float]:
+        ...
+class LeafShape:
+    """
+    Members:
+    
+      Ovate
+    
+      Lobed
+    
+      Serrate
+    
+      Lanceolate
+    """
+    Lanceolate: typing.ClassVar[LeafShape]  # value = <LeafShape.Lanceolate: 3>
+    Lobed: typing.ClassVar[LeafShape]  # value = <LeafShape.Lobed: 1>
+    Ovate: typing.ClassVar[LeafShape]  # value = <LeafShape.Ovate: 0>
+    Serrate: typing.ClassVar[LeafShape]  # value = <LeafShape.Serrate: 2>
+    __members__: typing.ClassVar[dict[str, LeafShape]]  # value = {'Ovate': <LeafShape.Ovate: 0>, 'Lobed': <LeafShape.Lobed: 1>, 'Serrate': <LeafShape.Serrate: 2>, 'Lanceolate': <LeafShape.Lanceolate: 3>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class LeafStyle:
     """
@@ -4823,8 +4906,10 @@ class TreeGenerator:
     def seed(self) -> int:
         ...
 class TreeParams:
+    bark_style: BarkStyle
     branching_mode: BranchingMode
     crown_shape: CrownShape
+    leaf_shape: LeafShape
     leaf_style: LeafStyle
     def __init__(self) -> None:
         ...
@@ -4911,6 +4996,12 @@ class TreeParams:
         ...
     @crown_radius_z.setter
     def crown_radius_z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def foliage_occlusion(self) -> float:
+        ...
+    @foliage_occlusion.setter
+    def foliage_occlusion(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
     def influence_distance(self) -> float:
@@ -5719,17 +5810,17 @@ def iso_mesh_to_geometry(iso_mesh: IsoMesh) -> BufferGeometry:
     """
 def lerp(x: typing.SupportsFloat | typing.SupportsIndex, y: typing.SupportsFloat | typing.SupportsIndex, t: typing.SupportsFloat | typing.SupportsIndex) -> float:
     ...
-def make_bark_textures(size: typing.SupportsInt | typing.SupportsIndex = 256, seed: typing.SupportsInt | typing.SupportsIndex = 1337, base_color: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] = [0.3400000035762787, 0.23999999463558197, 0.1599999964237213]) -> tuple:
+def make_bark_textures(size: typing.SupportsInt | typing.SupportsIndex = 256, seed: typing.SupportsInt | typing.SupportsIndex = 1337, base_color: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] = [0.3400000035762787, 0.23999999463558197, 0.1599999964237213], style: BarkStyle = BarkStyle.Furrowed) -> tuple:
     """
-    Returns (albedo, normal) tiling bark Textures.
+    Returns (albedo, normal) tiling bark Textures. `style` selects furrowed (oak), plated (conifer) or papery-with-lenticels (birch).
     """
 def make_flower_texture(size: typing.SupportsInt | typing.SupportsIndex = 128, seed: typing.SupportsInt | typing.SupportsIndex = 1337) -> Texture:
     """
     RGBA wildflower alpha-cutout Texture. seed % 5 selects petal colour.
     """
-def make_leaf_texture(size: typing.SupportsInt | typing.SupportsIndex = 256, seed: typing.SupportsInt | typing.SupportsIndex = 1337, base_color: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] = [0.25999999046325684, 0.44999998807907104, 0.14000000059604645]) -> Texture:
+def make_leaf_texture(size: typing.SupportsInt | typing.SupportsIndex = 256, seed: typing.SupportsInt | typing.SupportsIndex = 1337, base_color: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] = [0.25999999046325684, 0.44999998807907104, 0.14000000059604645], shape: LeafShape = LeafShape.Ovate, leaflets_per_twig: typing.SupportsInt | typing.SupportsIndex = 8) -> Texture:
     """
-    RGBA leaf-cluster alpha-cutout DataTexture. Use mat.alpha_test = 0.5.
+    RGBA leaf-sprig alpha-cutout DataTexture: a branchlet of small leaflets with the given blade outline. Use mat.alpha_test = 0.4.
     """
 def make_needle_frond_texture(size: typing.SupportsInt | typing.SupportsIndex = 256, seed: typing.SupportsInt | typing.SupportsIndex = 1337, base_color: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] = [0.10999999940395355, 0.28999999165534973, 0.10000000149011612]) -> Texture:
     """
@@ -5794,6 +5885,7 @@ Cylinder: CrownShape  # value = <CrownShape.Cylinder: 4>
 EXPONENTIAL: AudioDistanceModel  # value = <AudioDistanceModel.EXPONENTIAL: 3>
 Ellipsoid: CrownShape  # value = <CrownShape.Ellipsoid: 1>
 Frond: LeafStyle  # value = <LeafStyle.Frond: 4>
+Furrowed: BarkStyle  # value = <BarkStyle.Furrowed: 0>
 HAS_AUDIO: bool = True
 HAS_IMGUI: bool = True
 HAS_PHYSX: bool = True
@@ -5801,7 +5893,13 @@ HAS_VULKAN: bool = True
 Hemisphere: CrownShape  # value = <CrownShape.Hemisphere: 3>
 INVERSE: AudioDistanceModel  # value = <AudioDistanceModel.INVERSE: 1>
 LINEAR: AudioDistanceModel  # value = <AudioDistanceModel.LINEAR: 2>
+Lanceolate: LeafShape  # value = <LeafShape.Lanceolate: 3>
+Lobed: LeafShape  # value = <LeafShape.Lobed: 1>
 NONE: AudioDistanceModel  # value = <AudioDistanceModel.NONE: 0>
+Ovate: LeafShape  # value = <LeafShape.Ovate: 0>
+Papery: BarkStyle  # value = <BarkStyle.Papery: 2>
+Plated: BarkStyle  # value = <BarkStyle.Plated: 1>
 Quad: LeafStyle  # value = <LeafStyle.Quad: 0>
+Serrate: LeafShape  # value = <LeafShape.Serrate: 2>
 Sphere: CrownShape  # value = <CrownShape.Sphere: 0>
 Whorl: BranchingMode  # value = <BranchingMode.Whorl: 1>

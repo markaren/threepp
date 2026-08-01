@@ -20,6 +20,7 @@
 #define THREEPP_EXTRAS_VEGETATION_TREEGENERATOR_HPP
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/extras/vegetation/TreeTextures.hpp"// LeafShape (species blade outline)
 #include "threepp/math/Vector3.hpp"
 
 #include <algorithm>
@@ -123,14 +124,24 @@ namespace threepp::vegetation {
         float barkBumpAmp2 = 0.05f;      // secondary (finer) lobe amplitude
         int barkBumpLobes2 = 7;          // secondary lobe count
         float rootFlareAsym = 0.5f;      // 0..1 buttress-lobe strength at the base
+        // Surface character of the bark texture — see makeBarkTextures.
+        BarkStyle barkStyle = BarkStyle::Furrowed;
 
         // ── Leaves ───────────────────────────────────────────────────────
         LeafStyle leafStyle = LeafStyle::CrossQuad;
+        // Blade outline the leaf-card atlas is drawn with. Purely a texture
+        // concern, but it belongs with the species description — see
+        // makeLeafClusterTexture.
+        LeafShape leafShape = LeafShape::Ovate;
         float leafSize = 0.7f;// quad half-size (card), or puff radius for Blob
         float leafDensity = 0.9f;
         int leavesPerCluster = 5;
         float leafSpread = 0.5f;
         float leafClumping = 0.5f;// 0 = solid shell, →1 = clumped with sky-gaps
+        // Strength of the baked canopy occlusion written into the leaf vertex
+        // colours (see makeLeafGeometry). 0 disables it and leaves foliage lit
+        // only by its own normals — flat, with no interior depth.
+        float foliageOcclusion = 1.0f;
 
         // ── Albedo hints (sRGB) ──────────────────────────────────────────
         std::array<float, 3> barkColor = {0.35f, 0.25f, 0.18f};
@@ -507,10 +518,26 @@ namespace threepp::vegetation {
             const int depthThresh = static_cast<int>(static_cast<float>(maxDepth) * 0.4f);
             const float radiusThresh = tp.trunkRadius * 0.4f;
 
+            // ── Canopy occupancy grid (drives per-card AO) ────────────────
+            //
+            // Without this, every card is lit purely by its own normal, so a
+            // canopy renders as full sun on whatever faces the light and pure
+            // shadow-map black behind it — no mid-tones, which is exactly what
+            // makes procedural foliage read as plastic. Real canopies are a
+            // participating volume: a leaf is dimmed by how much foliage sits
+            // between it and the sky, and by how buried it is in the crown.
+            //
+            // Both terms are cheap to bake here: voxelise the leaf-bearing nodes
+            // once, then per card (a) march the column above it for sky
+            // occlusion and (b) read the local neighbourhood for burial depth.
+            // The result goes into the vertex colour, so it costs nothing at
+            // draw time and works identically on every backend.
+            const CanopyField field = buildCanopyField(tp, depthThresh, radiusThresh);
+
             // ── Low-poly foliage puff (deformed UV sphere, radial normals) ──
             auto emitBlob = [&](const Vector3& c, float radius, const Vector3& col) {
-                constexpr int latSegs = 4;
-                constexpr int lonSegs = 6;
+                constexpr int latSegs = 5;
+                constexpr int lonSegs = 8;
                 constexpr float PI = 3.14159265358979f;
                 const unsigned int start = baseVert;
                 for (int lat = 0; lat <= latSegs; ++lat) {
@@ -523,9 +550,30 @@ namespace threepp::vegetation {
                         const float nx = sinT * std::cos(phi);
                         const float ny = cosT;
                         const float nz = sinT * std::sin(phi);
-                        positions.push_back(c.x + nx * radius);
-                        positions.push_back(c.y + ny * radius);
-                        positions.push_back(c.z + nz * radius);
+                        // Lumpy, not spherical. A smooth UV sphere reads as a
+                        // green balloon on a stick — the single thing that gives
+                        // away a low-poly foliage puff at any distance. Two
+                        // octaves of noise in DIRECTION space (offset per puff by
+                        // its centre, so neighbours differ) break the outline
+                        // into an irregular clump.
+                        //
+                        // Sampling by direction rather than by world position is
+                        // what keeps the poles safe: at lat 0 and latSegs every
+                        // lon shares the same direction, so they all displace
+                        // identically and stay coincident. Displacing by a
+                        // phi-dependent amount instead would fan the pole vertex
+                        // into long sliver triangles whose sub-pixel coverage
+                        // flickers with the TAA jitter.
+                        const float n1 = noise3(nx * 2.3f + c.x * 0.7f,
+                                                ny * 2.3f + c.y * 0.7f,
+                                                nz * 2.3f + c.z * 0.7f);
+                        const float n2 = noise3(nx * 5.7f + c.z * 1.3f,
+                                                ny * 5.7f + c.x * 1.3f,
+                                                nz * 5.7f + c.y * 1.3f);
+                        const float rr = radius * (0.74f + 0.36f * n1 + 0.16f * (n2 - 0.5f));
+                        positions.push_back(c.x + nx * rr);
+                        positions.push_back(c.y + ny * rr);
+                        positions.push_back(c.z + nz * rr);
                         normals.push_back(nx);
                         normals.push_back(ny);
                         normals.push_back(nz);
@@ -581,26 +629,115 @@ namespace threepp::vegetation {
                 uvs.push_back(1.f); uvs.push_back(1.f);
                 uvs.push_back(0.f); uvs.push_back(1.f);
 
-                indices.push_back(baseVert);
-                indices.push_back(baseVert + 1);
-                indices.push_back(baseVert + 2);
-                indices.push_back(baseVert);
-                indices.push_back(baseVert + 2);
-                indices.push_back(baseVert + 3);
+                // WIND THE CARD SO ITS FRONT FACE IS THE SIDE ITS NORMAL POINTS.
+                //
+                // A leaf card's shading normal is deliberately NOT its plane
+                // normal — it is the crown-hull/up-biased normal, chosen to make
+                // the canopy shade as a volume. But the material is
+                // Side::Double, and the double-sided path multiplies the normal
+                // by gl_FrontFacing (`normal = normal * faceDirection`), which
+                // is decided by WINDING. With winding unrelated to the supplied
+                // normal, that flip is arbitrary: for any given viewpoint about
+                // half the cards get their normal negated into pointing away
+                // from the viewer and downward, so they sample lower-hemisphere
+                // (ground) irradiance and render as flat desaturated grey
+                // patches that swim around the canopy as the camera moves.
+                //
+                // Ordering the triangles so cross(r2, u2) agrees with the normal
+                // makes the flip meaningful again: a viewer on the far side sees
+                // the back face and gets -normal, which then points back toward
+                // them, instead of the pathological case of a front face whose
+                // normal already faced away.
+                Vector3 geo;
+                geo.crossVectors(r2, u2);
+                const bool flip = geo.dot(qn) < 0.f;
+                if (flip) {
+                    indices.push_back(baseVert);
+                    indices.push_back(baseVert + 2);
+                    indices.push_back(baseVert + 1);
+                    indices.push_back(baseVert);
+                    indices.push_back(baseVert + 3);
+                    indices.push_back(baseVert + 2);
+                } else {
+                    indices.push_back(baseVert);
+                    indices.push_back(baseVert + 1);
+                    indices.push_back(baseVert + 2);
+                    indices.push_back(baseVert);
+                    indices.push_back(baseVert + 2);
+                    indices.push_back(baseVert + 3);
+                }
                 baseVert += 4;
             };
 
-            // Per-card tint (vertex colour, multiplies the leaf texture):
-            // top-lit gradient — brighter & warmer toward the crown top,
-            // darker & cooler in the shaded interior — plus random jitter.
+            // Per-card tint (vertex colour, multiplies the leaf texture).
+            //
+            // Baked canopy occlusion: `sky` is how much foliage stands between
+            // this card and the sky, `deep` how buried it is in the crown. Both
+            // darken, but they are kept separate because they do different jobs
+            // — sky occlusion produces the top-lit falloff that gives a canopy
+            // its form, burial produces the dark core that makes it read as a
+            // solid volume rather than a hollow shell of cards.
+            //
+            // Shaded foliage also shifts HUE, not just brightness: leaves in the
+            // open are yellow-green (direct sun, thinner shade leaves), leaves
+            // in the core are a deep blue-green. Darkening alone looks like a
+            // dirty texture; the hue shift is what sells the depth.
             auto tintFor = [&](const Vector3& p) {
                 const float h = std::clamp((p.y - canopyMinY) / canopySpan, 0.f, 1.f);
-                const float bright = (0.62f + 0.5f * h) * (0.88f + unit(rng) * 0.24f);
+                const float ao = std::clamp(tp.foliageOcclusion, 0.f, 2.f);
+                const float sky = field.skyOcclusion(p) * ao;
+                const float deep = field.burial(p) * ao;
+                // Never reach zero: a canopy interior is dim, not black — it is
+                // still fed by sky bounce through the leaves around it.
+                const float occ = std::clamp(1.f - 0.70f * sky - 0.38f * deep, 0.18f, 1.f);
+                // Every factor is capped at 1, so the vertex colour only ever
+                // DARKENS the texture. Letting it climb above 1 turns it into a
+                // brightness gain on top of the albedo, and the best-lit foliage
+                // blows past the leaf colour into a pale mint that no amount of
+                // tone-mapping brings back.
+                const float bright = occ * (0.86f + unit(rng) * 0.14f) * (0.88f + 0.12f * h);
+                // exposure: 1 in full view of the sky, 0 buried.
+                const float expo = std::clamp(1.f - std::max(sky, deep), 0.f, 1.f);
                 Vector3 c;
-                c.set(bright * (1.f + 0.10f * h),
-                      bright * (1.f + 0.04f * h),
-                      bright * (1.f - 0.10f * h));
+                c.set(bright * (0.86f + 0.14f * expo),
+                      bright * (0.94f + 0.06f * expo),
+                      bright * (1.00f - 0.18f * expo));
                 return c;
+            };
+
+            // Crown-hull normal. A leaf card is a flat quad, but the canopy it
+            // belongs to is a volume, and it should shade like one — so the
+            // card's normal is pushed toward "outward from the crown centre"
+            // rather than its own geometric facing. This is what turns a cloud
+            // of independently-lit quads into a lit mass with a bright top, a
+            // soft terminator down the sides and a dark underside.
+            //
+            // Keeping a slice of +Y in the blend preserves the original intent
+            // of the up-biased normals (foliage catches sky light instead of
+            // going black when a card is edge-on to the sun); dropping to a pure
+            // hull normal makes the crown underside unreadably dark.
+            const Vector3 crownCentre = field.valid()
+                    ? field.centroid
+                    : Vector3{0.f, tp.trunkHeight + tp.crownHeight * 0.5f, 0.f};
+            // Broadleaf crowns are round masses, so they take a strong hull
+            // blend. Conifer sprays are near-horizontal SHELVES whose real
+            // normal points up; blending those hard toward "outward from the
+            // crown axis" turns them side-facing and starves them of overhead
+            // sun, so the whole tree goes black. They keep mostly their own
+            // up-biased normal and take only a touch of hull for the terminator.
+            const float hullBlend = (tp.leafStyle == LeafStyle::Frond) ? 0.34f : 0.78f;
+            auto hullNormal = [&](const Vector3& p, const Vector3& fallback) {
+                Vector3 outward;
+                outward.subVectors(p, crownCentre);
+                if (outward.lengthSq() < 1e-8f) outward.copy(fallback);
+                outward.normalize();
+                const float k = hullBlend, m = 1.f - hullBlend;
+                Vector3 n;
+                n.set(outward.x * k + fallback.x * m,
+                      outward.y * k + fallback.y * m + 0.30f,
+                      outward.z * k + fallback.z * m);
+                if (n.lengthSq() < 1e-8f) n.set(0.f, 1.f, 0.f);
+                return n.normalize();
             };
 
             for (size_t ni = 0; ni < nodes_.size(); ++ni) {
@@ -608,8 +745,12 @@ namespace threepp::vegetation {
                 // Frond conifers carry foliage ALONG every thin branch node (not
                 // just tips / upper canopy), so the whole drooping branch reads as
                 // a needle shelf. Broadleaf styles keep the tip+upper-canopy gate.
+                // Fronds hang on any thin node, INCLUDING the trunk leader near
+                // the apex (depth 0 but already down to twig radius). Requiring
+                // depth >= 1 excluded the leader entirely, which is what left a
+                // bare spike above the topmost whorl.
                 const bool eligible = (tp.leafStyle == LeafStyle::Frond)
-                        ? (node.parent >= 0 && node.depth >= 1 && node.radius <= radiusThresh)
+                        ? (node.parent >= 0 && node.radius <= radiusThresh)
                         : (node.terminal || (node.depth >= depthThresh && node.radius <= radiusThresh));
                 if (!eligible) continue;
 
@@ -656,6 +797,10 @@ namespace threepp::vegetation {
                     nrm.normalize();
                     Vector3 nShared;
                     nShared.set(nrm.x * 0.4f, std::abs(nrm.y) * 0.4f + 1.f, nrm.z * 0.4f).normalize();
+                    // Conifer sprays get the same crown-hull treatment, so a
+                    // whorl shades bright on top and dark underneath instead of
+                    // every shelf in the tree being lit identically.
+                    nShared = hullNormal(node.position, nShared);
 
                     // Clothe the WHOLE segment from the parent to this node with a
                     // short row of overlapping frond blades, so a spruce branch
@@ -699,7 +844,14 @@ namespace threepp::vegetation {
                             pos.y += (unit(rng) - 0.5f) * tp.leafSpread * 2.f;
                             pos.z += (unit(rng) - 0.5f) * tp.leafSpread * 2.f;
                         }
-                        emitBlob(pos, tp.leafSize * sizeVar(rng), tintFor(pos));
+                        // Hoisted, not inlined as call arguments: both draw from
+                        // `rng`, and C++ leaves the evaluation order of call
+                        // arguments unspecified — inline, the Blob path's output
+                        // depends on the compiler, so a "deterministic for a
+                        // given seed" tree differs between toolchains.
+                        const float puffR = tp.leafSize * sizeVar(rng);
+                        const Vector3 puffCol = tintFor(pos);
+                        emitBlob(pos, puffR, puffCol);
                     }
                     continue;
                 }
@@ -774,6 +926,10 @@ namespace threepp::vegetation {
                     // along the card normal keeps overlapping cards decisively
                     // separated; ±4% of leafSize is invisible inside a canopy.
                     const float depthSep = tp.leafSize * 0.08f * (unit(rng) - 0.5f);
+
+                    // Bend both toward the crown hull (see hullNormal above).
+                    nA = hullNormal(pos, nA);
+                    nB = hullNormal(pos, nB);
 
                     if (tp.leafStyle == LeafStyle::CrossQuad) {
                         // Proper 3D cross: two upright quads sharing the growth
@@ -855,6 +1011,173 @@ namespace threepp::vegetation {
     private:
         unsigned int seed_ = 1337;
         std::vector<detail::TreeNode> nodes_;
+
+        // ── Voxelised canopy, for baking foliage occlusion ───────────────
+        struct CanopyField {
+            Vector3 origin;      // grid corner (world)
+            Vector3 centroid;    // centre of foliage mass — the "crown centre"
+            float cell = 1.f;    // voxel edge (world units)
+            int nx = 0, ny = 0, nz = 0;
+            std::vector<float> density;// per-voxel leaf-node count
+            // Normalisers: the 90th percentile of each raw measure taken over
+            // the occupied voxels of THIS tree. Normalising by the busiest voxel
+            // instead makes the whole effect hostage to a single outlier cell,
+            // and its magnitude then drifts with crown size, leaf size and
+            // attractor count — so the same AO settings that look right on an
+            // oak wash out completely on a birch.
+            float skyNorm = 1.f;
+            float burialNorm = 1.f;
+
+            [[nodiscard]] bool valid() const { return nx > 0 && ny > 0 && nz > 0; }
+
+            [[nodiscard]] float at(int ix, int iy, int iz) const {
+                if (ix < 0 || iy < 0 || iz < 0 || ix >= nx || iy >= ny || iz >= nz) return 0.f;
+                return density[(static_cast<size_t>(iz) * static_cast<size_t>(ny) +
+                                static_cast<size_t>(iy)) *
+                                       static_cast<size_t>(nx) +
+                               static_cast<size_t>(ix)];
+            }
+
+            void index(const Vector3& p, int& ix, int& iy, int& iz) const {
+                ix = static_cast<int>(std::floor((p.x - origin.x) / cell));
+                iy = static_cast<int>(std::floor((p.y - origin.y) / cell));
+                iz = static_cast<int>(std::floor((p.z - origin.z) / cell));
+            }
+
+            // How much foliage sits between this point and the sky, 0..1.
+            // Nearer voxels shade more (they subtend more of the hemisphere),
+            // hence the 1/(1+d) falloff rather than a plain sum.
+            [[nodiscard]] float rawSky(int ix, int iy, int iz) const {
+                float occ = 0.f;
+                for (int y = iy + 1; y < ny; ++y) {
+                    const float d = static_cast<float>(y - iy);
+                    // Sample a 3-wide column: a 1-voxel ray through a sparse
+                    // grid aliases badly (a card either finds a hit directly
+                    // above or nothing at all, giving a blotchy canopy).
+                    float slab = 0.f;
+                    for (int dz = -1; dz <= 1; ++dz)
+                        for (int dx = -1; dx <= 1; ++dx)
+                            slab += at(ix + dx, y, iz + dz);
+                    occ += (slab / 9.f) / (1.f + d);
+                }
+                return occ;
+            }
+
+            [[nodiscard]] float rawBurial(int ix, int iy, int iz) const {
+                float sum = 0.f, wsum = 0.f;
+                for (int dz = -2; dz <= 2; ++dz) {
+                    for (int dy = -2; dy <= 2; ++dy) {
+                        for (int dx = -2; dx <= 2; ++dx) {
+                            const float d2 = static_cast<float>(dx * dx + dy * dy + dz * dz);
+                            const float w = 1.f / (1.f + d2);
+                            sum += at(ix + dx, iy + dy, iz + dz) * w;
+                            wsum += w;
+                        }
+                    }
+                }
+                return sum / wsum;
+            }
+
+            // How much foliage stands between this point and the sky, 0..1.
+            [[nodiscard]] float skyOcclusion(const Vector3& p) const {
+                if (!valid()) return 0.f;
+                int ix, iy, iz;
+                index(p, ix, iy, iz);
+                return std::clamp(rawSky(ix, iy, iz) / skyNorm, 0.f, 1.f);
+            }
+
+            // How buried the point is in surrounding foliage, 0 (exposed) .. 1.
+            [[nodiscard]] float burial(const Vector3& p) const {
+                if (!valid()) return 0.f;
+                int ix, iy, iz;
+                index(p, ix, iy, iz);
+                return std::clamp(rawBurial(ix, iy, iz) / burialNorm, 0.f, 1.f);
+            }
+        };
+
+        // Voxelise the leaf-bearing skeleton nodes. Uses the same eligibility
+        // and clumping tests as the emitter, so the density field matches the
+        // foliage that actually gets drawn (the per-card `leafDensity` dice roll
+        // is a uniform thinning and does not change the spatial distribution).
+        [[nodiscard]] CanopyField buildCanopyField(const TreeParams& tp, int depthThresh,
+                                                   float radiusThresh) const {
+            CanopyField f;
+            std::vector<Vector3> pts;
+            pts.reserve(nodes_.size());
+            for (const auto& node : nodes_) {
+                // Must match the emitter's gate in makeLeafGeometry exactly, or
+                // the density field describes foliage that is not there.
+                const bool eligible = (tp.leafStyle == LeafStyle::Frond)
+                        ? (node.parent >= 0 && node.radius <= radiusThresh)
+                        : (node.terminal || (node.depth >= depthThresh && node.radius <= radiusThresh));
+                if (!eligible) continue;
+                if (tp.leafClumping > 0.f) {
+                    constexpr float cf = 0.6f;
+                    const float n = noise3(node.position.x * cf + 13.1f,
+                                           node.position.y * cf + 7.7f,
+                                           node.position.z * cf + 41.3f);
+                    if (n < tp.leafClumping * 0.55f) continue;
+                }
+                pts.push_back(node.position);
+            }
+            if (pts.size() < 8) return f;
+
+            Vector3 lo{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                       std::numeric_limits<float>::max()};
+            Vector3 hi{-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(),
+                       -std::numeric_limits<float>::max()};
+            Vector3 sum{0.f, 0.f, 0.f};
+            for (const auto& p : pts) {
+                lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y); lo.z = std::min(lo.z, p.z);
+                hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y); hi.z = std::max(hi.z, p.z);
+                sum.add(p);
+            }
+            f.centroid.copy(sum).divideScalar(static_cast<float>(pts.size()));
+
+            // Voxel about the size of one leaf card: fine enough to resolve the
+            // sky-gaps that clumping carves, coarse enough to stay cheap.
+            f.cell = std::max(tp.leafSize * 1.2f, 0.15f);
+            const float pad = f.cell * 2.f;
+            f.origin.set(lo.x - pad, lo.y - pad, lo.z - pad);
+            f.nx = std::clamp(static_cast<int>((hi.x - lo.x + 2.f * pad) / f.cell) + 1, 1, 96);
+            f.ny = std::clamp(static_cast<int>((hi.y - lo.y + 2.f * pad) / f.cell) + 1, 1, 96);
+            f.nz = std::clamp(static_cast<int>((hi.z - lo.z + 2.f * pad) / f.cell) + 1, 1, 96);
+            f.density.assign(static_cast<size_t>(f.nx) * static_cast<size_t>(f.ny) *
+                                     static_cast<size_t>(f.nz),
+                             0.f);
+            for (const auto& p : pts) {
+                int ix, iy, iz;
+                f.index(p, ix, iy, iz);
+                if (ix < 0 || iy < 0 || iz < 0 || ix >= f.nx || iy >= f.ny || iz >= f.nz) continue;
+                f.density[(static_cast<size_t>(iz) * static_cast<size_t>(f.ny) +
+                           static_cast<size_t>(iy)) *
+                                  static_cast<size_t>(f.nx) +
+                          static_cast<size_t>(ix)] += 1.f;
+            }
+            // Calibrate against this tree: evaluate both raw measures over every
+            // occupied voxel and take the 90th percentile as "fully occluded".
+            std::vector<float> skySamples, burialSamples;
+            skySamples.reserve(pts.size());
+            burialSamples.reserve(pts.size());
+            for (int iz = 0; iz < f.nz; ++iz) {
+                for (int iy = 0; iy < f.ny; ++iy) {
+                    for (int ix = 0; ix < f.nx; ++ix) {
+                        if (f.at(ix, iy, iz) <= 0.f) continue;
+                        skySamples.push_back(f.rawSky(ix, iy, iz));
+                        burialSamples.push_back(f.rawBurial(ix, iy, iz));
+                    }
+                }
+            }
+            auto percentile90 = [](std::vector<float>& v, float fallback) {
+                if (v.empty()) return fallback;
+                const size_t k = (v.size() * 9) / 10;
+                std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(k), v.end());
+                return std::max(v[k], 1e-3f);
+            };
+            f.skyNorm = percentile90(skySamples, 1.f);
+            f.burialNorm = percentile90(burialSamples, 1.f);
+            return f;
+        }
 
         // ── Per-tree trunk curve (workstream 2) ──────────────────────────
         // A whole-tree lean (random azimuth) + a 3-octave sinusoidal "noise"
@@ -944,7 +1267,12 @@ namespace threepp::vegetation {
             //    ~zero at the top whorl (no length floor) and the topmost stretch
             //    of trunk stays branch-free except for tiny stubs.
             const float whorlStart = tp.trunkHeight;
-            const float leaderH = std::clamp(H * 0.07f, 0.5f, 1.0f);// bare apex leader
+            // Keep the bare leader SHORT. At 7% of tree height it left the top
+            // ~1m of trunk with no branches at all, and since the crown profile
+            // also drives branch length to ~0 near the top, the last whorls were
+            // then dropped by the stub test below — so a spruce ended in a bare
+            // wire poking out of the foliage.
+            const float leaderH = std::clamp(H * 0.035f, 0.20f, 0.55f);
             const float whorlTop = H - leaderH;
             const float baseLen = (tp.branchLength > 0.f) ? tp.branchLength
                                                           : std::max(tp.crownRadiusX, tp.crownRadiusZ);
@@ -965,7 +1293,9 @@ namespace threepp::vegetation {
                 // leader instead of capping the tree with a rounded tuft.
                 const float tW = std::clamp((wy - whorlStart) / std::max(whorlTop - whorlStart, 1e-3f), 0.f, 1.f);
                 const float lenScale = std::pow(1.f - tW, tp.crownProfileExponent);
-                const float branchLen = baseLen * (0.04f + 0.96f * lenScale);
+                // The floor has to leave the top whorls LONG enough to survive
+                // the stub test, or the apex loses its branches entirely.
+                const float branchLen = baseLen * (0.10f + 0.90f * lenScale);
                 if (branchLen < tp.segmentLength * 0.4f) continue;// too short even for a stub
 
                 // Alternate the whorl's phase so successive rings interleave.
@@ -1197,7 +1527,20 @@ namespace threepp::vegetation {
     };
 
     // ── Species presets ──────────────────────────────────────────────────
+    //
+    // Applying a preset RESETS to defaults first. Each case only assigns the
+    // fields it cares about, so without the reset the previous species leaks
+    // through: `branchingMode` and `leafClumping` are set by the Pine case
+    // alone, so Pine → Oak used to leave a whorled, unclumped "oak" that
+    // matches no preset. The seed is carried across, since it identifies the
+    // individual tree rather than the species.
     inline void applyPreset(int preset, TreeParams& p) {
+        if (preset < 0 || preset > 3) return;// Custom — leave params untouched
+
+        const unsigned int keepSeed = p.seed;
+        p = TreeParams{};
+        p.seed = keepSeed;
+
         switch (preset) {
             case 0: {// Oak — wide spreading canopy
                 p.trunkHeight = 3.5f;
@@ -1217,6 +1560,7 @@ namespace threepp::vegetation {
                 p.minBranchRadius = 0.006f;
                 p.radialSegments = 8;
                 p.leafStyle = LeafStyle::CrossQuad;
+                p.leafShape = LeafShape::Lobed;// deeply scalloped oak blade
                 p.leafSize = 0.8f;
                 p.leafDensity = 0.9f;
                 p.leavesPerCluster = 5;
@@ -1227,6 +1571,7 @@ namespace threepp::vegetation {
                 p.barkBumpAmp = 0.16f; p.barkBumpLobes = 5;
                 p.barkBumpAmp2 = 0.08f; p.barkBumpLobes2 = 11;
                 p.rootFlareAsym = 0.8f; p.trunkTwist = 0.35f;
+                p.barkStyle = BarkStyle::Furrowed;
                 break;
             }
             case 1: {// Pine / spruce — monopodial conifer (whorled branches)
@@ -1242,13 +1587,16 @@ namespace threepp::vegetation {
                 p.radiusExponent = 2.4f;
                 p.minBranchRadius = 0.004f;
                 p.radialSegments = 6;
-                // Whorl structure.
-                p.whorlSpacing = 0.62f;
-                p.branchesPerWhorl = 6;
-                p.whorlJitter = 0.35f;
+                // Whorl structure. The pitch has to be SMALLER than the vertical
+                // reach of one whorl's foliage, or the rings read as a stack of
+                // separate pancakes with bare trunk showing between them — the
+                // single thing that most gives a procedural conifer away.
+                p.whorlSpacing = 0.40f;
+                p.branchesPerWhorl = 7;
+                p.whorlJitter = 0.45f;
                 p.branchDroop = 0.42f;
                 p.branchTipUpturn = 0.4f;
-                p.crownProfileExponent = 1.35f;
+                p.crownProfileExponent = 1.5f;
                 p.sideTwigDensity = 0.7f;
                 // Frond foliage strung along the drooping branches.
                 p.leafStyle = LeafStyle::Frond;
@@ -1256,11 +1604,19 @@ namespace threepp::vegetation {
                 p.leafDensity = 0.9f;
                 p.leafClumping = 0.0f;
                 p.barkColor = {0.32f, 0.20f, 0.12f};
-                p.leafColor = {0.14f, 0.34f, 0.11f};
+                p.leafColor = {0.17f, 0.38f, 0.13f};
+                // A conifer already occludes itself hard through sheer geometry
+                // — overlapping whorls of dense sprays — so the full baked term
+                // on top only crushes it to a flat silhouette. Measured on the
+                // Vulkan deferred path (which adds ray-traced AO of its own),
+                // full strength took the crown to a near-black mass with almost
+                // no tonal range left.
+                p.foliageOcclusion = 0.72f;
                 // Spruce bark: lightly plated, gentle spiral.
                 p.barkBumpAmp = 0.08f; p.barkBumpLobes = 4;
                 p.barkBumpAmp2 = 0.04f; p.barkBumpLobes2 = 9;
                 p.rootFlareAsym = 0.45f; p.trunkTwist = 0.5f;
+                p.barkStyle = BarkStyle::Plated;
                 break;
             }
             case 2: {// Birch — slender, upward branches
@@ -1281,6 +1637,7 @@ namespace threepp::vegetation {
                 p.minBranchRadius = 0.004f;
                 p.radialSegments = 6;
                 p.leafStyle = LeafStyle::CrossQuad;
+                p.leafShape = LeafShape::Serrate;// small toothed birch blade
                 p.leafSize = 0.65f;
                 p.leafDensity = 0.9f;
                 p.leavesPerCluster = 4;
@@ -1291,6 +1648,7 @@ namespace threepp::vegetation {
                 p.barkBumpAmp = 0.035f; p.barkBumpLobes = 3;
                 p.barkBumpAmp2 = 0.02f; p.barkBumpLobes2 = 7;
                 p.rootFlareAsym = 0.25f; p.trunkTwist = 0.25f;
+                p.barkStyle = BarkStyle::Papery;// lenticels — the birch tell
                 break;
             }
             case 3: {// Willow — drooping branches
@@ -1311,6 +1669,7 @@ namespace threepp::vegetation {
                 p.minBranchRadius = 0.003f;
                 p.radialSegments = 6;
                 p.leafStyle = LeafStyle::CrossQuad;
+                p.leafShape = LeafShape::Lanceolate;// long narrow willow blade
                 p.leafSize = 0.6f;
                 p.leafDensity = 0.95f;
                 p.leavesPerCluster = 5;

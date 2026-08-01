@@ -33,8 +33,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <iostream>
 #include <memory>
+#include <optional>
 #include <random>
+#include <string>
 #include <vector>
 
 using namespace threepp;
@@ -125,10 +131,48 @@ namespace {
         return geo;
     }
 
-    TreeVariant makeVariant(int preset, unsigned int seed) {
+    // Cutout threshold for every foliage card in the scene.
+    //
+    // 0.5 was cutting into the antialiased margin of the thin leaflets and
+    // needles the atlases are now drawn from: with mipping, a distant card's
+    // alpha averages down and whole leaves drop below the test, so a forest
+    // visibly thins out with distance. 0.4 keeps the silhouette and still
+    // punches cleanly.
+    constexpr float kFoliageAlphaTest = 0.4f;
+
+    // Foliage material shared by trees and shrubs.
+    std::shared_ptr<MeshStandardMaterial> makeLeafMaterial(const std::shared_ptr<Texture>& map) {
+        auto m = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.85f).metalness(0.f));
+        m->map = map;
+        m->alphaTest = kFoliageAlphaTest;
+        m->side = Side::Double;
+        m->vertexColors = true;
+        // Thin-leaf subsurface: a canopy lit from behind glows rather than going
+        // to silhouette. Vulkan-deferred only — GLRenderer ignores it — but it
+        // costs nothing to set and it is most of what sells a backlit tree.
+        m->translucency = 0.45f;
+        m->translucencyColor = Color(0.55f, 0.85f, 0.30f);
+        return m;
+    }
+
+    // `hue` shifts the whole variant's foliage toward yellow-green (<0) or deep
+    // blue-green (>0). Real stands are never one colour: species, age, soil and
+    // sun exposure spread the canopy over a wide band of greens, and a forest
+    // built from a handful of identically-tinted clones reads as wallpaper no
+    // matter how good the individual tree is.
+    //
+    // Done per VARIANT rather than per instance on purpose: InstancedMesh
+    // supports setColorAt on GL but the Vulkan backend has no instanceColor
+    // path, so per-instance tinting would silently do nothing on the backend
+    // this scene is meant to show off.
+    TreeVariant makeVariant(int preset, unsigned int seed, float hue = 0.f, float lift = 0.f) {
         vegetation::TreeParams tp;
         vegetation::applyPreset(preset, tp);
         tp.seed = seed;
+        tp.leafColor = {std::clamp(tp.leafColor[0] * (1.f - hue * 0.55f) + lift, 0.f, 1.f),
+                        std::clamp(tp.leafColor[1] * (1.f - hue * 0.16f) + lift, 0.f, 1.f),
+                        std::clamp(tp.leafColor[2] * (1.f + hue * 0.75f) + lift * 0.6f, 0.f, 1.f)};
 
         if (preset == 2) {
             // Birch: the pure-white preset bark reads as a bare pole at forest
@@ -145,7 +189,7 @@ namespace {
         v.trunkGeo = gen.makeTrunkGeometry(tp);
         v.leafGeo = gen.makeLeafGeometry(tp);
 
-        auto bark = vegetation::makeBarkTextures(256, seed, tp.barkColor);
+        auto bark = vegetation::makeBarkTextures(256, seed, tp.barkColor, tp.barkStyle);
         bark.first->repeat.set(3.f, 0.5f);
         bark.second->repeat.set(3.f, 0.5f);
         v.barkMat = MeshStandardMaterial::create(
@@ -153,12 +197,12 @@ namespace {
         v.barkMat->map = bark.first;
         v.barkMat->normalMap = bark.second;
 
-        v.leafMat = MeshStandardMaterial::create(
-                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.85f).metalness(0.f));
-        v.leafMat->map = vegetation::makeLeafClusterTexture(256, seed, tp.leafColor);
-        v.leafMat->alphaTest = 0.5f;
-        v.leafMat->side = Side::Double;
-        v.leafMat->vertexColors = true;
+        // Conifers want the needle spray, broadleaves the leaf sprig drawn with
+        // that species' blade outline.
+        v.leafMat = makeLeafMaterial(
+                tp.leafStyle == vegetation::LeafStyle::Frond
+                        ? vegetation::makeNeedleFrondTexture(256, seed, tp.leafColor)
+                        : vegetation::makeLeafClusterTexture(256, seed, tp.leafColor, tp.leafShape));
         return v;
     }
 
@@ -196,19 +240,15 @@ namespace {
         TreeVariant v;
         v.trunkGeo = gen.makeTrunkGeometry(tp);
         v.leafGeo = gen.makeLeafGeometry(tp);
-        auto bark = vegetation::makeBarkTextures(128, seed, tp.barkColor);
+        auto bark = vegetation::makeBarkTextures(128, seed, tp.barkColor, tp.barkStyle);
         bark.first->repeat.set(2.f, 0.5f);
         bark.second->repeat.set(2.f, 0.5f);
         v.barkMat = MeshStandardMaterial::create(
                 MeshStandardMaterial::Params{}.color(Color::white).roughness(0.92f).metalness(0.f));
         v.barkMat->map = bark.first;
         v.barkMat->normalMap = bark.second;
-        v.leafMat = MeshStandardMaterial::create(
-                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.85f).metalness(0.f));
-        v.leafMat->map = vegetation::makeLeafClusterTexture(256, seed, tp.leafColor);
-        v.leafMat->alphaTest = 0.5f;
-        v.leafMat->side = Side::Double;
-        v.leafMat->vertexColors = true;
+        v.leafMat = makeLeafMaterial(
+                vegetation::makeLeafClusterTexture(256, seed, tp.leafColor, tp.leafShape));
         return v;
     }
 
@@ -365,10 +405,34 @@ namespace {
 
 }// namespace
 
-int main() {
+int main(int argc, char** argv) {
 
-    Canvas canvas("Procedural Forest", {{"vsync", true}, {"aa", 4}});
-    auto renderer = createRenderer(canvas);
+    // Headless capture: `forest_demo --shot out.png [--frames N] [--cam x y z]
+    // [--target x y z]` renders for N frames (long enough for TAA/denoiser to
+    // converge on the Vulkan path), writes one PNG next to the exe and exits.
+    // Used for the visual verification of vegetation changes.
+    std::string shotPath;
+    int shotFrames = 240;
+    int shotFrame = 0;
+    float camArg[3] = {70.f, 38.f, 70.f};
+    float tgtArg[3] = {0.f, 6.f, 0.f};
+    std::optional<GraphicsAPI> api;// unset → interactive backend menu
+    float fogScale = 1.f;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--fog") == 0 && i + 1 < argc) { fogScale = std::stof(argv[++i]); continue; }
+        if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
+        else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--cam") == 0 && i + 3 < argc) {
+            for (float& c : camArg) c = std::stof(argv[++i]);
+        } else if (std::strcmp(argv[i], "--target") == 0 && i + 3 < argc) {
+            for (float& c : tgtArg) c = std::stof(argv[++i]);
+        } else if (std::strcmp(argv[i], "--vulkan") == 0) api = GraphicsAPI::Vulkan;
+        else if (std::strcmp(argv[i], "--gl") == 0) api = GraphicsAPI::OpenGL;
+    }
+    const bool capturing = !shotPath.empty();
+
+    Canvas canvas("Procedural Forest", {{"vsync", !capturing}, {"aa", 4}});
+    auto renderer = createRenderer(canvas, api);
 
     bool vulkanBackend = false;
 #ifdef THREEPP_WITH_VULKAN
@@ -459,11 +523,11 @@ int main() {
 
     // ── Tree prototypes ──────────────────────────────────────────────────
     std::vector<TreeVariant> variants;
-    variants.push_back(makeVariant(0, 101u));// Oak
-    variants.push_back(makeVariant(0, 202u));// Oak (alt)
-    variants.push_back(makeVariant(1, 303u));// Pine
-    variants.push_back(makeVariant(1, 505u));// Pine (alt)
-    variants.push_back(makeVariant(2, 404u));// Birch (accent — 1 in 5)
+    variants.push_back(makeVariant(0, 101u, -0.25f, 0.02f));// Oak, sunlit yellow-green
+    variants.push_back(makeVariant(0, 202u, 0.30f));        // Oak, deep blue-green
+    variants.push_back(makeVariant(1, 303u, 0.35f));        // Pine, dark
+    variants.push_back(makeVariant(1, 505u, 0.05f));        // Pine, lighter
+    variants.push_back(makeVariant(2, 404u, -0.35f, 0.03f));// Birch (accent — 1 in 5)
 
     // ── Scatter trees onto the terrain (jittered grid + slope rejection) ──
     int treeCount = 0;
@@ -540,9 +604,15 @@ int main() {
     buildForest(scatterSeed, spacing, fillProb);
 
     // ── Distance fog (shared by the scene and the grass shader) ──────────
+    //
+    // These distances were tuned on GL's linear fog. The Vulkan deferred path
+    // turns the same Fog into aerial perspective and reads far denser, so at
+    // the default framing the forest washes out to flat blue-grey. `--fog N`
+    // scales the near/far pair so a capture can push it back; N=1 keeps the
+    // original look.
     const Color fogColor(0.66f, 0.75f, 0.86f);
-    const float fogNear = terr.worldSize * 0.35f;
-    const float fogFar = terr.worldSize * 1.05f;
+    const float fogNear = terr.worldSize * 0.35f * fogScale;
+    const float fogFar = terr.worldSize * 1.05f * fogScale;
     scene.fog = Fog(fogColor, fogNear, fogFar);
 
     // ── Swaying grass ────────────────────────────────────────────────────
@@ -745,9 +815,9 @@ int main() {
 
     // ── Camera ───────────────────────────────────────────────────────────
     PerspectiveCamera camera(55.f, canvas.aspect(), 0.1f, 1000.f);
-    camera.position.set(70.f, 38.f, 70.f);
+    camera.position.set(camArg[0], camArg[1], camArg[2]);
     OrbitControls controls{camera, canvas};
-    controls.target.set(0.f, 6.f, 0.f);
+    controls.target.set(tgtArg[0], tgtArg[1], tgtArg[2]);
     controls.update();
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -762,7 +832,8 @@ int main() {
     bool regen = false;
     float windStrength = 0.18f;
     float foliageUpdateMs = 0.f;// CPU cost of rewriting grass/flower matrices
-    RendererSettingsUi ui(canvas, *renderer, [&] {
+    std::unique_ptr<RendererSettingsUi> ui;
+    if (!capturing) ui = std::make_unique<RendererSettingsUi>(canvas, *renderer, [&] {
         ImGui::Text("trees: %d", treeCount);
         ImGui::Text("grass path: %s", shaderGrass ? "GPU shader" : "CPU tilt");
         ImGui::Text("foliage CPU update: %.3f ms", foliageUpdateMs);
@@ -782,7 +853,10 @@ int main() {
     Matrix4 m;
     Quaternion qLean, qOut;
     canvas.animate([&] {
-        const float dt = clock.getDelta();
+        // Capture runs on a fixed dt so the wind state at frame N is identical
+        // between two builds — otherwise an A/B pair differs by frame timing
+        // alone and every blade moves between "before" and "after".
+        const float dt = capturing ? (1.f / 60.f) : clock.getDelta();
         tElapsed += dt;
         controls.update();
 
@@ -837,6 +911,13 @@ int main() {
         }
 
         renderer->render(scene, camera);
-        ui.render();
+        if (!capturing) {
+            ui->render();
+        } else if (++shotFrame >= shotFrames) {
+            const std::filesystem::path out{shotPath};
+            renderer->writeFramebuffer(out);
+            std::cout << "wrote " << std::filesystem::absolute(out).string() << std::endl;
+            std::exit(0);
+        }
     });
 }
