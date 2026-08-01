@@ -32,6 +32,8 @@
 #include "threepp/extras/core/Shape.hpp"
 #include "threepp/geometries/ExtrudeGeometry.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/math/Matrix3.hpp"
+#include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Group.hpp"
@@ -463,7 +465,10 @@ namespace threepp::architecture {
             // profile, a scrolled bracket — is drawn once as a 2-D Shape and
             // extruded, then folded in here so it still costs no extra draw
             // call. `basis` columns map the source X/Y/Z axes; pass a scaled
-            // basis to size the part.
+            // basis to size the part — including a non-uniform one, since
+            // normals go through the proper inverse-transpose below. A basis
+            // with negative determinant mirrors the part; winding is left
+            // alone, so mirror in PAIRS (flip two axes) to stay right-handed.
             void append(const BufferGeometry& src, const Vector3& origin,
                         const Vector3& basisX, const Vector3& basisY, const Vector3& basisZ,
                         float texScale = 1.f) {
@@ -479,13 +484,19 @@ namespace threepp::architecture {
                 const auto base = static_cast<unsigned int>(positions_.size() / 3);
                 const int n = pos->count();
 
-                // Normals transform by the inverse-transpose; for the
-                // near-orthogonal bases used here, normalising the same basis
-                // is exact enough and avoids inverting a 3x3 per part.
-                Vector3 nx = basisX, ny = basisY, nz = basisZ;
-                if (nx.lengthSq() > 1e-12f) nx.normalize();
-                if (ny.lengthSq() > 1e-12f) ny.normalize();
-                if (nz.lengthSq() > 1e-12f) nz.normalize();
+                // Normals transform by the INVERSE-TRANSPOSE, which is only the
+                // basis itself when the basis is orthogonal. Reusing a scaled
+                // basis — which the contract above invites — tilts normals off
+                // the surface: squash a part in Y and its normals lean the
+                // wrong way, which reads as subtly wrong shading rather than as
+                // anything obviously broken. The inverse is a single 3x3 PER
+                // PART, not per vertex, so it costs nothing worth saving.
+                // A degenerate basis inverts to the zero matrix; the per-vertex
+                // fallback below then catches the zero-length normal.
+                Matrix4 partMatrix;
+                partMatrix.makeBasis(basisX, basisY, basisZ).setPosition(origin);
+                Matrix3 normalMatrix;
+                normalMatrix.getNormalMatrix(partMatrix);
 
                 for (int i = 0; i < n; ++i) {
                     const float x = pa[static_cast<size_t>(i) * 3 + 0];
@@ -497,12 +508,10 @@ namespace threepp::architecture {
                     Vector3 nv{0.f, 1.f, 0.f};
                     if (nrm) {
                         const auto& na = nrm->array();
-                        const float a = na[static_cast<size_t>(i) * 3 + 0];
-                        const float b = na[static_cast<size_t>(i) * 3 + 1];
-                        const float c = na[static_cast<size_t>(i) * 3 + 2];
-                        nv.set(nx.x * a + ny.x * b + nz.x * c,
-                               nx.y * a + ny.y * b + nz.y * c,
-                               nx.z * a + ny.z * b + nz.z * c);
+                        nv.set(na[static_cast<size_t>(i) * 3 + 0],
+                               na[static_cast<size_t>(i) * 3 + 1],
+                               na[static_cast<size_t>(i) * 3 + 2])
+                                .applyMatrix3(normalMatrix);
                         if (nv.lengthSq() < 1e-12f) nv.set(0.f, 1.f, 0.f);
                         nv.normalize();
                     }
