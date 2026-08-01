@@ -238,13 +238,16 @@ namespace threepp::terrain {
         });
 
         // ── roof: standing seams + down-slope weathering ────────────────────
+        // MATTE (rough 0.9): the palette is slate/felt/tile. Anything glossier
+        // lets grazing-angle Fresnel bounce the whole sky off dark roofs —
+        // from a distance every town roof flared near-WHITE at 0.72.
         const FacadeSet roof = bake([&](float u, float v) {
             Px p;
             const float streak = noise(u * 4.f, v * 0.5f);// elongated down-slope
             const float grain = noise(u, v);
             const float lum = 0.86f + 0.05f * (streak - 0.5f) + 0.03f * (grain - 0.5f);
             p.r = p.g = p.b = lum;
-            p.rough = 0.72f + 0.08f * (grain - 0.5f);
+            p.rough = 0.90f + 0.06f * (grain - 0.5f);
             p.h = 0.f;
             const float su = u * 6.f - std::floor(u * 6.f);// 6 seams / tile
             const float ds = std::min(su, 1.f - su);

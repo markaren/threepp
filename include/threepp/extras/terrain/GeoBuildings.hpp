@@ -85,6 +85,12 @@ namespace threepp::terrain {
         float maxGableSpan = 18.f;     // rect short side beyond this stays flat (big-box)
         float gableCoverageMin = 0.78f;// footprint/rect area ratio to count as rectangular
         float minEavesWall = 2.4f;     // eaves height floor; the rise shrinks to keep it
+
+        // Chimneys on gabled ridges (aerial lived-in clutter, 30 verts each,
+        // shares the plain-wall material — zero extra draw calls).
+        bool chimneys = true;
+        float chimneyHeight = 0.9f;// stack top above the ridge (m)
+        float chimneySide = 0.55f; // square cross-section (m)
     };
 
     namespace detail {
@@ -99,7 +105,7 @@ namespace threepp::terrain {
         }
 
         // Muted Nordic town palette (LINEAR space): white/cream painted wood,
-        // ochre, oxide red, grey render — and dark slate/tile/felt roofs.
+        // ochre, oxide red, grey render — and slate/zinc/tile roofs.
         inline const std::array<std::array<float, 3>, 5>& geoBldWallPalette() {
             static const std::array<std::array<float, 3>, 5> p{{
                     {0.62f, 0.60f, 0.56f},// white-painted wood
@@ -110,12 +116,17 @@ namespace threepp::terrain {
             }};
             return p;
         }
-        inline const std::array<std::array<float, 3>, 4>& geoBldRoofPalette() {
-            static const std::array<std::array<float, 3>, 4> p{{
-                    {0.055f, 0.060f, 0.068f},// slate
-                    {0.085f, 0.085f, 0.090f},// graphite felt
-                    {0.160f, 0.055f, 0.038f},// tile red
-                    {0.095f, 0.068f, 0.048f},// brown tile
+        // Calibrated against aerial photos of the real towns: mid-grey slate
+        // and weathered zinc dominate, with red/brown tile accents. The old
+        // values (slate 0.055) read near-BLACK from the air — a linear albedo
+        // must be ~0.2 to read as the photo's mid-grey under a bright sky.
+        inline const std::array<std::array<float, 3>, 5>& geoBldRoofPalette() {
+            static const std::array<std::array<float, 3>, 5> p{{
+                    {0.195f, 0.205f, 0.225f},// mid slate grey
+                    {0.320f, 0.330f, 0.340f},// weathered zinc/metal
+                    {0.095f, 0.100f, 0.110f},// charcoal felt
+                    {0.300f, 0.085f, 0.055f},// tile red
+                    {0.200f, 0.115f, 0.062f},// brown tile
             }};
             return p;
         }
@@ -357,10 +368,7 @@ namespace threepp::terrain {
                 const auto& wp = detail::geoBldWallPalette()[h % detail::geoBldWallPalette().size()];
                 for (int c = 0; c < 3; ++c) wall[c] = wp[c] * jitter;
             }
-            if (!detail::geoBldParseColour(b.roofColour, roof)) {
-                const auto& rp = detail::geoBldRoofPalette()[(h >> 16) % detail::geoBldRoofPalette().size()];
-                for (int c = 0; c < 3; ++c) roof[c] = rp[c] * jitter;
-            }
+            const bool plainType = detail::geoBldIsPlainType(b.type);
             const float wallBase[3] = {wall[0] * (1.f - o.grime),
                                        wall[1] * (1.f - o.grime),
                                        wall[2] * (1.f - o.grime)};
@@ -378,8 +386,6 @@ namespace threepp::terrain {
                 if (detail::geoBldRingArea(hole) > 0.f)
                     std::reverse(hole.begin(), hole.end());
 
-            const bool plainType = detail::geoBldIsPlainType(b.type);
-
             // ── gable fit ───────────────────────────────────────────────────
             // Near-rectangular non-utility footprints get a gabled roof: ridge
             // along the long axis of the minimum-area bounding rectangle at
@@ -389,17 +395,21 @@ namespace threepp::terrain {
             bool gable = false;
             Vector2 gU, gV;// ridge / cross-ridge unit axes in (x, z)
             float gVc = 0.f, gHalfW = 0.f, gRise = 0.f;
+            float gUc = 0.f, gHalfL = 0.f;// ridge centre / half-length along gU
             if (o.pitchedRoofs && !plainType && holes.empty() && b.roofShape != "flat") {
                 detail::GeoBldRectFit rect;
                 if (detail::geoBldMinRect(outer, rect)) {
                     float longE = rect.uMax - rect.uMin, shortE = rect.vMax - rect.vMin;
                     Vector2 axU = rect.u, axV = rect.v;
                     float c0 = rect.vMin, c1 = rect.vMax;
+                    float cL0 = rect.uMin, cL1 = rect.uMax;
                     if (longE < shortE) {// ridge along the LONG rectangle axis
                         std::swap(longE, shortE);
                         std::swap(axU, axV);
                         c0 = rect.uMin;
                         c1 = rect.uMax;
+                        cL0 = rect.vMin;
+                        cL1 = rect.vMax;
                     }
                     const float cover = detail::geoBldRingArea(outer) /
                                         std::max(1e-3f, longE * shortE);
@@ -416,11 +426,23 @@ namespace threepp::terrain {
                             gV = axV;
                             gVc = 0.5f * (c0 + c1);
                             gHalfW = 0.5f * (c1 - c0);
+                            gUc = 0.5f * (cL0 + cL1);
+                            gHalfL = 0.5f * (cL1 - cL0);
                             gRise = rise;
                         }
                     }
                 }
             }
+            // Roof colour (needs the gable verdict): real OSM tags win; tile
+            // red/brown only rolls on PITCHED roofs — flat caps and utility
+            // types stay in the grey entries (felt/metal), where a tile colour
+            // would read as a mistake.
+            if (!detail::geoBldParseColour(b.roofColour, roof)) {
+                const size_t n = (plainType || !gable) ? 3 : detail::geoBldRoofPalette().size();
+                const auto& rp = detail::geoBldRoofPalette()[(h >> 16) % n];
+                for (int c = 0; c < 3; ++c) roof[c] = rp[c] * jitter;
+            }
+
             const float yWallTop = gable ? yTop - gRise : yTop;
             const float gSlope = gable ? gRise / gHalfW : 0.f;
             // Tent height over the footprint: yTop on the ridge line v = gVc,
@@ -587,6 +609,87 @@ namespace threepp::terrain {
                             chunk.plain.push(B.xy.x, B.h, B.xy.y, nrm, wall, ub, hb / floorH);
                         }
                     }
+                }
+            }
+
+            // ── chimneys ───────────────────────────────────────────────────
+            // Small hashed-offset stacks straddling the ridge (long ridges get
+            // two), sunk into the roof planes so the joint is watertight from
+            // every angle. Shares the plain-wall material; brick/render/metal
+            // colour hashed per building.
+            if (gable && o.chimneys && gHalfL > 2.f) {
+                static const std::array<std::array<float, 3>, 3> chimPal{{
+                        {0.240f, 0.095f, 0.055f},// brick
+                        {0.420f, 0.410f, 0.390f},// rendered/light concrete
+                        {0.170f, 0.170f, 0.180f},// dark metal flue
+                }};
+                const auto& cc = chimPal[(h >> 24) % chimPal.size()];
+                const float capCol[3] = {cc[0] * 0.45f, cc[1] * 0.45f, cc[2] * 0.45f};
+                const auto insideOuter = [&](float px, float pz) {
+                    bool in = false;
+                    for (size_t i = 0, j = outer.size() - 1; i < outer.size(); j = i++) {
+                        const Vector2& a = outer[i];
+                        const Vector2& c = outer[j];
+                        if ((a.y > pz) != (c.y > pz) &&
+                            px < (c.x - a.x) * (pz - a.y) / (c.y - a.y) + a.x)
+                            in = !in;
+                    }
+                    return in;
+                };
+                const int count = gHalfL > 12.f ? 2 : 1;
+                const float hs = 0.5f * o.chimneySide;
+                const float yB = yTop - 0.45f;// sunk through both roof planes
+                const float yT = yTop + o.chimneyHeight;
+                for (int ci = 0; ci < count; ++ci) {
+                    const float frac =
+                            static_cast<float>((h >> (4 + 8 * ci)) & 0xff) / 255.f - 0.5f;
+                    float cu = (count == 2)
+                                       ? gUc + (ci == 0 ? -0.5f : 0.5f) * gHalfL + frac * 2.f
+                                       : gUc + frac * 0.9f * (gHalfL - 1.f);
+                    // Keep the stack on the roof: fall back toward the ridge
+                    // centre if the hashed spot leaves the footprint (possible
+                    // on the less rectangular tag-forced gables).
+                    if (!insideOuter(cu * gU.x + gVc * gV.x, cu * gU.y + gVc * gV.y)) {
+                        cu = gUc;
+                        if (!insideOuter(cu * gU.x + gVc * gV.x, cu * gU.y + gVc * gV.y))
+                            continue;
+                    }
+                    // Square ring, CCW in the (gU, gV) frame (the frame is a
+                    // pure rotation, so plan-winding conventions carry over).
+                    const std::array<std::array<float, 2>, 4> sq{{
+                            {cu - hs, gVc - hs},
+                            {cu + hs, gVc - hs},
+                            {cu + hs, gVc + hs},
+                            {cu - hs, gVc + hs},
+                    }};
+                    Vector2 w2[4];
+                    for (int i = 0; i < 4; ++i)
+                        w2[i] = Vector2(sq[i][0] * gU.x + sq[i][1] * gV.x,
+                                        sq[i][0] * gU.y + sq[i][1] * gV.y);
+                    const float u1 = 0.35f + o.chimneySide / o.bayWidth;
+                    const float v1 = 0.30f + (yT - yB) / floorH;
+                    for (int i = 0; i < 4; ++i) {// sides, wound like the walls
+                        const Vector2& p = w2[i];
+                        const Vector2& q = w2[(i + 1) % 4];
+                        const float dx = q.x - p.x, dz = q.y - p.y;
+                        const float len = std::sqrt(dx * dx + dz * dz);
+                        const float nrm[3] = {dz / len, 0.f, -dx / len};
+                        chunk.plain.push(p.x, yB, p.y, nrm, cc.data(), 0.35f, 0.30f);
+                        chunk.plain.push(q.x, yT, q.y, nrm, cc.data(), u1, v1);
+                        chunk.plain.push(q.x, yB, q.y, nrm, cc.data(), u1, 0.30f);
+                        chunk.plain.push(p.x, yB, p.y, nrm, cc.data(), 0.35f, 0.30f);
+                        chunk.plain.push(p.x, yT, p.y, nrm, cc.data(), 0.35f, v1);
+                        chunk.plain.push(q.x, yT, q.y, nrm, cc.data(), u1, v1);
+                    }
+                    // Cap: CCW plan winding has a downward normal (same rule
+                    // as the roof caps), so emit flipped.
+                    static constexpr float up[3] = {0.f, 1.f, 0.f};
+                    chunk.plain.push(w2[0].x, yT, w2[0].y, up, capCol, 0.5f, 0.15f);
+                    chunk.plain.push(w2[2].x, yT, w2[2].y, up, capCol, 0.5f, 0.15f);
+                    chunk.plain.push(w2[1].x, yT, w2[1].y, up, capCol, 0.5f, 0.15f);
+                    chunk.plain.push(w2[0].x, yT, w2[0].y, up, capCol, 0.5f, 0.15f);
+                    chunk.plain.push(w2[3].x, yT, w2[3].y, up, capCol, 0.5f, 0.15f);
+                    chunk.plain.push(w2[2].x, yT, w2[2].y, up, capCol, 0.5f, 0.15f);
                 }
             }
         }
