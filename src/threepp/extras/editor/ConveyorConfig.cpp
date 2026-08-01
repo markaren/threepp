@@ -581,8 +581,9 @@ void ConveyorConfig::syncDerived(Object3D& conveyor) const {
         }
     }
 
-    // Attached walls: side guides and diverters, their base dropped onto the
-    // deck wherever they stand over it — authored entirely in plan.
+    // Attached walls: side guides and diverters, built by FOLLOWING the belt
+    // between their points (see conveyor::followWall) with the base riding
+    // the deck — authored entirely in plan.
     if (!resolved.walls.empty()) {
         auto wallMat = MeshStandardMaterial::create();
         wallMat->color = Color(0xbfc6cc);
@@ -593,9 +594,9 @@ void ConveyorConfig::syncDerived(Object3D& conveyor) const {
         wallMat->side = Side::Double;
         int wallCount = 0;
         for (const auto& wall : resolved.walls) {
-            const auto snapped = cv::snapWallToDeck(wall.points, sampled, resolved.width);
-            if (snapped.size() < 2) continue;
-            group->add(part(cv::wallGeometry(snapped, wall.height), wallMat, "wall",
+            const auto followed = cv::followWall(wall.points, sampled);
+            if (followed.size() < 2) continue;
+            group->add(part(cv::wallGeometry(followed, wall.height), wallMat, "wall",
                             "Wall " + std::to_string(++wallCount)));
         }
     }

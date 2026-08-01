@@ -70,8 +70,15 @@ namespace threepp::conveyor {
             beltMaterial_ = world_->physics().createMaterial(1.0f, 1.0f, 0.1f);
             // Walls are the opposite: a diverter only FEEDS cargo into its lane
             // if cargo slides along it while the belt keeps pushing — a grippy
-            // wall would hold the cargo like a hand instead of a plow.
+            // wall would hold the cargo like a hand instead of a plow. Combine
+            // mode MIN, so the wall's slickness WINS whatever the cargo is made
+            // of (the default average re-grips the wall with the cargo's own
+            // friction, and a shallow plow then self-locks: it wedges the box
+            // to a crawl the moment tan(plow angle) drops near the combined
+            // friction — measured, not theorized).
             wallMaterial_ = world_->physics().createMaterial(0.08f, 0.08f, 0.f);
+            wallMaterial_->setFrictionCombineMode(::physx::PxCombineMode::eMIN);
+            wallMaterial_->setRestitutionCombineMode(::physx::PxCombineMode::eMIN);
 
             for (std::size_t i = 0; i < specs_.size(); ++i) {
                 const auto& spec = specs_[i];
@@ -477,14 +484,14 @@ namespace threepp::conveyor {
             addWallSegments(resamplePath(spec.waypoints, spec.smooth, 5), spec.wallHeight);
         }
 
-        // Attached walls: side guides and diverters riding the belt, base
-        // snapped onto the deck by the SAME helper the drawn ribbon uses.
+        // Attached walls: side guides and diverters, built by following the
+        // belt between their points — the SAME helper the drawn ribbon uses.
         void buildAttachedWalls(const ConveyorSpec& spec) {
 
             if (spec.walls.empty()) return;
             const auto centerline = resamplePath(spec.waypoints, spec.smooth, spec.samples);
             for (const auto& wall : spec.walls) {
-                addWallSegments(snapWallToDeck(wall.points, centerline, spec.width), wall.height);
+                addWallSegments(followWall(wall.points, centerline), wall.height);
             }
         }
 

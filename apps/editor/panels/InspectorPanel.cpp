@@ -2004,9 +2004,10 @@ void EditorApp::drawConveyorSection(Object3D& object) {
 
         ImGui::TextColored(theme::muted(), "Children are the wall's points, in order.");
         ImGui::TextColored(theme::muted(),
-                           "The base snaps onto the deck wherever it stands over the belt -");
+                           "The wall FOLLOWS the belt between its points, base on the deck.");
         ImGui::TextColored(theme::muted(),
-                           "author in plan. Angle it across the belt to divert cargo.");
+                           "Drag an end along the belt for length; drag a point toward");
+        ImGui::TextColored(theme::muted(), "the middle to sweep that stretch into a diverter.");
         ImGui::TextColored(theme::muted(), "Stored in userData[\"conveyorWall\"]");
 
         ImGui::TreePop();

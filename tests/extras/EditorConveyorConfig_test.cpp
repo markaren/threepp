@@ -185,32 +185,80 @@ TEST_CASE("attached walls are children, not waypoints, and snap their base to th
     CHECK(before.distanceTo(rotated) > 0.1f);
     wall->rotation.y = 0.f;
 
-    // The snap: the default belt's deck rides at y = 0.75, and the factory
-    // authored the wall's points there — flatten them to y = 0 and the
-    // generated base must still find the deck. A point dragged past the edge
-    // keeps its authored height.
+    // The default wall is a PASSIVE EDGE GUIDE: every built sample rides at
+    // the belt edge (half width + clearance) at deck height — the length and
+    // any inward offsets are the user's edits, not the factory's guesses.
     spec = config.spec(*conveyor);
-    auto flattened = spec.walls[0];
-    for (auto& p : flattened.points) p.y = 0.f;
     const auto centerline = conveyor::resamplePath(spec.waypoints, spec.smooth, spec.samples);
-    const auto snapped = conveyor::snapWallToDeck(flattened.points, centerline, spec.width);
-    REQUIRE(snapped.size() >= 2);
-    bool overDeckSnapped = true;
-    for (const auto& p : snapped) {
-        const bool overDeck = std::abs(p.z) < spec.width * 0.5f + 0.1f &&
-                              p.x > -1.6f && p.x < 1.6f;
-        if (overDeck && std::abs(p.y - 0.75f) > 1e-3f) overDeckSnapped = false;
+    const auto followed = conveyor::followWall(spec.walls[0].points, centerline);
+    REQUIRE(followed.size() >= 2);
+    const float edge = spec.width * 0.5f + 0.03f;
+    for (const auto& p : followed) {
+        CHECK(std::abs(std::abs(p.z) - edge) < 0.02f);
+        CHECK(std::abs(p.y - 0.75f) < 1e-3f);// base on the deck
     }
-    CHECK(overDeckSnapped);
 
-    std::vector<Vector3> outside{{0.f, 0.1f, 5.f}, {1.f, 0.1f, 5.f}};
-    const auto keptAuthored = conveyor::snapWallToDeck(outside, centerline, spec.width);
-    REQUIRE(!keptAuthored.empty());
-    CHECK(std::abs(keptAuthored.front().y - 0.1f) < 1e-4f);
+    // Dragging a point toward the middle sweeps that stretch inward — the
+    // wall still follows the path, its offset blending to the new value.
+    auto plow = spec.walls[0];
+    plow.points.back().z = 0.f;// end point pulled to the centreline
+    const auto swept = conveyor::followWall(plow.points, centerline);
+    REQUIRE(swept.size() >= 2);
+    CHECK(std::abs(swept.back().z) < 0.05f);
+    CHECK(std::abs(swept.front().z) > edge - 0.05f);
 
     // And the generated content grows the wall ribbon.
     config.syncDerived(*conveyor);
     CHECK(roleCount(*conveyor, "wall") == 1);
+}
+
+TEST_CASE("an edge wall HUGS a bend instead of cutting the chord") {
+
+    Scene scene;
+    auto conveyor = ObjectFactory::createConveyor(scene);
+    scene.add(conveyor);
+    auto config = ConveyorConfig::read(*conveyor).value();
+
+    // A right-angle bend, radius 1.2.
+    auto nodes = ConveyorConfig::waypointNodes(*conveyor);
+    nodes[0]->position.set(-2.f, 0.75f, 0.f);
+    nodes[1]->position.set(0.f, 0.75f, 0.f);
+    nodes[2]->position.set(0.f, 0.75f, 2.f);
+    ConveyorWaypointConfig corner;
+    corner.cornerRadius = 1.2f;
+    corner.write(*nodes[1]);
+
+    auto wall = ObjectFactory::createConveyorWall(*conveyor);
+    conveyor->add(wall);
+
+    const auto spec = config.spec(*conveyor);
+    REQUIRE(spec.walls.size() == 1);
+    const auto centerline = conveyor::resamplePath(spec.waypoints, spec.smooth, spec.samples);
+    const auto followed = conveyor::followWall(spec.walls[0].points, centerline);
+    REQUIRE(followed.size() >= 6);
+
+    // Every built sample keeps the edge offset from the PATH — around the arc
+    // too. Distance to the polyline's SEGMENTS (a corner-walk path keeps its
+    // straights as single long spans). A straight chord between the wall's
+    // end points would cut inside by far more than this tolerance.
+    const float edge = spec.width * 0.5f + 0.03f;
+    float worst = 0.f;
+    for (const auto& p : followed) {
+        float nearest = 1e30f;
+        for (std::size_t i = 0; i + 1 < centerline.size(); ++i) {
+            const auto& a = centerline[i];
+            const auto& b = centerline[i + 1];
+            const float abx = b.x - a.x, abz = b.z - a.z;
+            const float len2 = abx * abx + abz * abz;
+            if (len2 < 1e-10f) continue;
+            const float u = std::clamp(
+                    ((p.x - a.x) * abx + (p.z - a.z) * abz) / len2, 0.f, 1.f);
+            nearest = std::min(nearest, std::hypot(p.x - (a.x + abx * u),
+                                                   p.z - (a.z + abz * u)));
+        }
+        worst = std::max(worst, std::abs(nearest - edge));
+    }
+    CHECK(worst < 0.06f);
 }
 
 TEST_CASE("a conveyor round-trips the document with no editor attached") {

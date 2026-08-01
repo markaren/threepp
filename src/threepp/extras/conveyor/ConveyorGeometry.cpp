@@ -549,47 +549,86 @@ namespace threepp::conveyor {
         return runs;
     }
 
-    std::vector<Vector3> snapWallToDeck(const std::vector<Vector3>& wall,
-                                        const std::vector<Vector3>& centerline,
-                                        float beltWidth, float sampleStep) {
+    std::vector<Vector3> followWall(const std::vector<Vector3>& wallPoints,
+                                    const std::vector<Vector3>& centerline,
+                                    float sampleStep) {
 
         std::vector<Vector3> out;
-        if (wall.size() < 2) return out;
+        if (wallPoints.size() < 2 || centerline.size() < 2) return out;
 
-        // Nearest centerline sample in PLAN, with the lateral distance that
-        // says whether the point stands over the deck at all.
-        const auto deckHeightAt = [&](const Vector3& p, float& lateral) -> float {
-            float best = 1e30f;
-            float height = p.y;
-            lateral = 1e30f;
-            for (const auto& c : centerline) {
-                const float dx = p.x - c.x, dz = p.z - c.z;
-                const float d2 = dx * dx + dz * dz;
-                if (d2 < best) {
-                    best = d2;
-                    height = c.y;
-                    lateral = std::sqrt(d2);
-                }
-            }
-            return height;
+        // Cumulative arc length per centerline sample, once.
+        std::vector<float> station(centerline.size(), 0.f);
+        for (std::size_t i = 1; i < centerline.size(); ++i) {
+            station[i] = station[i - 1] + centerline[i].distanceTo(centerline[i - 1]);
+        }
+        const float total = station.back();
+        if (total < 1e-4f) return out;
+
+        const Vector3 up(0, 1, 0);
+
+        // The belt frame at an arc-length station: position, tangent and the
+        // horizontal lateral (the same one every ribbon builder uses).
+        const auto frameAtStation = [&](float s, Vector3& c, Vector3& lat) {
+            s = std::clamp(s, 0.f, total);
+            std::size_t i = 1;
+            while (i + 1 < centerline.size() && station[i] < s) ++i;
+            const float span = std::max(station[i] - station[i - 1], 1e-6f);
+            const float t = std::clamp((s - station[i - 1]) / span, 0.f, 1.f);
+            c.lerpVectors(centerline[i - 1], centerline[i], t);
+            Vector3 tangent;
+            tangent.subVectors(centerline[i], centerline[i - 1]).multiplyScalar(1.f / span);
+            if (std::abs(tangent.dot(up)) > 0.999f) lat.set(0, 0, 1);
+            else lat.crossVectors(tangent, up).normalize();
         };
 
-        const float margin = beltWidth * 0.5f + 0.15f;
-        const float step = std::max(sampleStep, 0.02f);
+        // Project an authored point onto the nearest centerline SEGMENT in
+        // plan (a corner-walk path keeps its straights as single long spans,
+        // so vertex snapping would quantize stations to the corners); the
+        // signed distance along that station's lateral gives the offset.
+        const auto project = [&](const Vector3& p, float& s, float& offset) {
+            float best = 1e30f;
+            s = 0.f;
+            for (std::size_t i = 0; i + 1 < centerline.size(); ++i) {
+                const Vector3& a = centerline[i];
+                const Vector3& b = centerline[i + 1];
+                const float abx = b.x - a.x, abz = b.z - a.z;
+                const float len2 = abx * abx + abz * abz;
+                if (len2 < 1e-10f) continue;
+                const float u = std::clamp(
+                        ((p.x - a.x) * abx + (p.z - a.z) * abz) / len2, 0.f, 1.f);
+                const float qx = a.x + abx * u, qz = a.z + abz * u;
+                const float d2 = (p.x - qx) * (p.x - qx) + (p.z - qz) * (p.z - qz);
+                if (d2 < best) {
+                    best = d2;
+                    s = station[i] + std::sqrt(len2) * u;
+                }
+            }
+            Vector3 c, lat;
+            frameAtStation(s, c, lat);
+            offset = (p.x - c.x) * lat.x + (p.z - c.z) * lat.z;
+        };
 
-        // Dense resample so a wall crossing a climbing belt follows the grade,
-        // then per-sample: over the deck -> base on the deck, past the edge ->
-        // the authored height, unchanged.
-        for (std::size_t i = 0; i + 1 < wall.size(); ++i) {
-            const int steps = std::max(1, static_cast<int>(
-                    std::ceil(wall[i].distanceTo(wall[i + 1]) / step)));
+        std::vector<float> stations(wallPoints.size());
+        std::vector<float> offsets(wallPoints.size());
+        for (std::size_t i = 0; i < wallPoints.size(); ++i) {
+            project(wallPoints[i], stations[i], offsets[i]);
+        }
+
+        // Walk the path span by span, offset blended between the points. A
+        // span may run against the belt direction (its stations just walk
+        // backward); a zero-length span (two points abreast) contributes its
+        // endpoint only.
+        const float step = std::max(sampleStep, 0.02f);
+        Vector3 c, lat;
+        for (std::size_t i = 0; i + 1 < wallPoints.size(); ++i) {
+            const float run = stations[i + 1] - stations[i];
+            const int steps = std::max(1, static_cast<int>(std::ceil(std::abs(run) / step)));
             for (int k = (i == 0 ? 0 : 1); k <= steps; ++k) {
-                Vector3 p;
-                p.lerpVectors(wall[i], wall[i + 1], static_cast<float>(k) / static_cast<float>(steps));
-                float lateral = 0.f;
-                const float deck = deckHeightAt(p, lateral);
-                if (lateral <= margin) p.y = deck;
-                out.push_back(p);
+                const float t = static_cast<float>(k) / static_cast<float>(steps);
+                frameAtStation(stations[i] + run * t, c, lat);
+                const float offset = offsets[i] + (offsets[i + 1] - offsets[i]) * t;
+                c.addScaledVector(lat, offset);
+                out.push_back(c);
             }
         }
         return out;

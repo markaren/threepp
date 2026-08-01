@@ -3682,13 +3682,12 @@ int EditorApp::runSelfTest() {
                 step();
             }
 
-            // An attached diverter rides along too (its colliders are counted
-            // below), parked downstream of the convey assertion's window so
-            // the cargo measurement stays a pure straight-belt read.
+            // An attached wall rides along too (its colliders are counted
+            // below). The default is a PASSIVE edge guide, so the centre-line
+            // convey measurement below is untouched by it — that passivity is
+            // itself part of the contract (the physics test pins it harder).
             if (auto* live = conveyorNow(conveyorUuid)) {
                 addConveyorWall(*live, "Add Wall");
-                auto walls = ConveyorConfig::wallNodes(*live);
-                if (!walls.empty()) walls.front()->position.x += 0.9f;
                 selectObject(nullptr);
                 step();
             }

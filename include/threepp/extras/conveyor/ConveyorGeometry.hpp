@@ -245,17 +245,19 @@ namespace threepp::conveyor {
     // point. Useful for spawn / inlet positions a bit onto the belt.
     Vector3 pointAlong(const std::vector<Vector3>& path, float dist);
 
-    // Resample a wall polyline densely and SNAP its base onto the conveying
-    // surface: wherever a sample stands over the deck (within halfWidth plus a
-    // small margin of the centerline, laterally), its height becomes the
-    // deck's height there — so a wall follows a climbing belt by itself, and a
-    // diverter's base never floats above (or digs into) the surface it is
-    // steering cargo across. Samples past the belt edge keep their authored
-    // height. The result feeds wallGeometry AND the wall colliders, so the two
-    // agree by construction. Both polylines must be in the SAME space.
-    std::vector<Vector3> snapWallToDeck(const std::vector<Vector3>& wall,
-                                        const std::vector<Vector3>& centerline,
-                                        float beltWidth, float sampleStep = 0.25f);
+    // Resolve a wall's authored points into its built polyline by FOLLOWING
+    // THE BELT: each point projects onto the centerline as (station along the
+    // path, signed lateral offset), and the wall walks the path between
+    // consecutive points with the offset blended linearly in between, its
+    // base riding the deck height throughout. Following is the contract, not
+    // an accident of where the points sit — an edge guide hugs a bend exactly
+    // instead of cutting the chord, a point dragged along the belt sets where
+    // the wall starts and ends, and a point dragged toward the middle sweeps
+    // that stretch inward into a diverter. Feeds wallGeometry AND the wall
+    // colliders, so the two agree by construction. Same space throughout.
+    std::vector<Vector3> followWall(const std::vector<Vector3>& wallPoints,
+                                    const std::vector<Vector3>& centerline,
+                                    float sampleStep = 0.15f);
 
     // --- Frame (first-party procedural "asset") --------------------------------
 

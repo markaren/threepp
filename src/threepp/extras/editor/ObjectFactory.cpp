@@ -247,35 +247,53 @@ std::shared_ptr<Group> ObjectFactory::createConveyorWall(const Object3D& conveyo
     wall->name = uniqueName(conveyor, "Wall");
     ConveyorWallConfig{}.write(*wall);
 
-    // The default is a plow: angled across the belt at the path midpoint,
-    // reaching from one edge to just past the centre, so cargo visibly
-    // diverts the moment Play is pressed. Heights ride at the deck so the
-    // point markers sit on the belt; the generated base snaps regardless.
+    // The default is a PASSIVE guide following the OUTER edge of the belt for
+    // most of its run — the wall every conveyor wants before any diverts. The
+    // user then decides the rest: drag an end point along the belt to set the
+    // length, drag any point toward the middle and that stretch sweeps inward
+    // into a diverter (the built wall follows the path between its points —
+    // see conveyor::followWall).
     namespace cv = threepp::conveyor;
     const auto config = ConveyorConfig::read(conveyor).value_or(ConveyorConfig{});
     const auto spec = config.spec(conveyor);
     const auto sampled = cv::resamplePath(spec.waypoints, spec.smooth, spec.samples);
 
-    Vector3 first(-0.5f, 0.f, 0.f), second(0.5f, 0.f, 0.3f);
+    Vector3 first(-0.5f, 0.f, 0.35f), second(0.5f, 0.f, 0.35f);
     if (sampled.size() >= 2) {
         float total = 0.f;
         for (std::size_t i = 0; i + 1 < sampled.size(); ++i) {
             total += sampled[i].distanceTo(sampled[i + 1]);
         }
-        const Vector3 mid = cv::pointAlong(sampled, total * 0.5f);
-        const Vector3 ahead = cv::pointAlong(sampled, std::min(total * 0.5f + 0.25f, total));
-        Vector3 tangent;
-        tangent.subVectors(ahead, mid);
-        if (tangent.length() < 1e-5f) tangent.set(1, 0, 0);
-        tangent.normalize();
-        const Vector3 up(0, 1, 0);
-        Vector3 lat;
-        if (std::abs(tangent.dot(up)) > 0.999f) lat.set(0, 0, 1);
-        else lat.crossVectors(tangent, up).normalize();
 
-        const float w = std::max(config.width, 0.1f);
-        first.copy(mid).addScaledVector(tangent, -0.7f * w).addScaledVector(lat, 0.55f * w);
-        second.copy(mid).addScaledVector(tangent, 0.7f * w).addScaledVector(lat, -0.15f * w);
+        // Which side is "outer": against the net turn of the path (cargo runs
+        // wide on a bend, so that is where a guide earns its keep). A straight
+        // path has no outer side; either will do.
+        float netTurn = 0.f;
+        for (std::size_t i = 1; i + 1 < spec.waypoints.size(); ++i) {
+            const auto fillet = cv::cornerFillet(spec.waypoints, i);
+            if (fillet.valid) netTurn += fillet.sweep;
+        }
+        const float side = netTurn > 1e-3f ? -1.f : 1.f;
+        const float offset = std::max(config.width, 0.1f) * 0.5f + 0.03f;
+
+        const Vector3 up(0, 1, 0);
+        const auto edgeAt = [&](float s) {
+            const Vector3 at = cv::pointAlong(sampled, s);
+            const Vector3 ahead = cv::pointAlong(sampled, std::min(s + 0.2f, total));
+            Vector3 tangent;
+            tangent.subVectors(ahead, at);
+            if (tangent.length() < 1e-5f) tangent.set(1, 0, 0);
+            tangent.normalize();
+            Vector3 lat;
+            if (std::abs(tangent.dot(up)) > 0.999f) lat.set(0, 0, 1);
+            else lat.crossVectors(tangent, up).normalize();
+            Vector3 edge = at;
+            edge.addScaledVector(lat, side * offset);
+            return edge;
+        };
+
+        first = edgeAt(total * 0.06f);
+        second = edgeAt(total * 0.94f);
     }
 
     auto p1 = createConveyorWallPoint(*wall);

@@ -1841,16 +1841,21 @@ Waypoint** section edits both:
 attaches a wall as a child of the conveyor — a Group carrying
 `userData["conveyorWall"]` (`height=…`) whose own children are the wall's
 points, so dragging a point, rotating the whole wall with the gizmo, deleting
-and undoing are all the ordinary operations. The default is a **diverter**: a
-plow angled across the belt at the path midpoint, ready to feed cargo into a
-lane the moment Play is pressed; drag its two fence-marked points to make it a
-side guide, a funnel, or a longer chicane (Add Point extends it). Two things
-make walls effortless: the base **snaps onto the deck** wherever the wall
-stands over the belt — author entirely in plan, slopes included, no cargo ever
-wedges underneath — and the wall collider is deliberately **low-friction**, so
-the grippy belt keeps pushing while cargo slides along the plow into its lane
-(a wall built from belt material would hold cargo like a hand instead). The
-old whole-conveyor `separator` flag remains for free-standing rails between
+and undoing are all the ordinary operations. The default **follows the outer
+edge of the belt** for most of its run — the passive guide every conveyor
+wants (on a bent path, the outside of the net turn, where cargo runs wide).
+From there the decisions are yours: drag an end point along the belt to set
+**where the wall starts and ends**, and drag any point **toward the middle**
+to sweep that stretch inward into a diverter that feeds cargo into a lane
+(Add Point splits longer walls into more stretches). The built wall always
+FOLLOWS the path between its points — each point reads as a station along the
+belt plus a lateral offset, blended between points — so an edge guide hugs a
+bend exactly rather than cutting the chord, and its base rides the deck
+throughout, slopes included: author entirely in plan, nothing ever wedges
+underneath. Wall colliders are deliberately **low-friction**, so the grippy
+belt keeps pushing while cargo slides along a plow into its lane (a wall built
+from belt material would hold cargo like a hand instead). The old
+whole-conveyor `separator` flag remains for free-standing rails between
 machines.
 
 The viewport helps you author this: every waypoint gets a clickable diamond

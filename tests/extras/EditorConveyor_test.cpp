@@ -157,10 +157,8 @@ TEST_CASE("a rollers run conveys on REAL roller colliders, with no belt box unde
     CHECK(conveyedBack);
 }
 
-TEST_CASE("an attached diverter wall FEEDS cargo across the belt") {
+TEST_CASE("the default wall is a passive edge guide; an inward offset makes it FEED") {
 
-    // The factory's default wall is a plow angled across the path midpoint —
-    // author it, save nothing, build physics straight from the spec.
     SceneDocument authoring;
     auto conveyorNode = ObjectFactory::createConveyor(authoring.scene());
     authoring.scene().add(conveyorNode);
@@ -170,27 +168,49 @@ TEST_CASE("an attached diverter wall FEEDS cargo across the belt") {
     auto wall = ObjectFactory::createConveyorWall(*conveyorNode);
     conveyorNode->add(wall);
 
-    const auto spec = config.spec(*conveyorNode);
-    REQUIRE(spec.walls.size() == 1);
-    REQUIRE(spec.walls[0].points.size() == 2);
+    // As authored, the wall follows the outer edge — centre cargo must ride
+    // straight past it, untouched.
+    {
+        const auto spec = config.spec(*conveyorNode);
+        REQUIRE(spec.walls.size() == 1);
+        PhysxWorld world;
+        conveyor::ConveyorPhysics belts(world, {spec});
+        CHECK(belts.wallCount() >= 1);
 
-    PhysxWorld world;
-    conveyor::ConveyorPhysics belts(world, {spec});
-    CHECK(belts.wallCount() >= 1);
-
-    // Cargo down the CENTRE of the belt: without the wall it would ride
-    // z = 0 the whole way (the straight-belt case pins that). The plow leans
-    // from the +z edge to past centre, so a diverted box exits pushed to -z —
-    // the wall put it where it should go.
-    auto* cargo = dropCargo(world, -1.2f, 1.f, 0.f);
-    bool diverted = false;
-    for (int i = 0; i < 400 && !diverted; ++i) {
-        world.step(1.f / 60.f);
-        const auto p = cargo->getGlobalPose().p;
-        if (p.y < 0.4f) break;// fell off — that is a failure, not a divert
-        if (p.x > 0.6f && p.z < -0.15f) diverted = true;
+        auto* cargo = dropCargo(world, -1.2f, 1.f, 0.f);
+        bool conveyedStraight = false;
+        for (int i = 0; i < 400 && !conveyedStraight; ++i) {
+            world.step(1.f / 60.f);
+            const auto p = cargo->getGlobalPose().p;
+            if (std::abs(p.z) > 0.1f) break;// the guide touched it — it must not
+            if (p.x > 0.6f && p.y > 0.6f) conveyedStraight = true;
+        }
+        CHECK(conveyedStraight);
     }
-    CHECK(diverted);
+
+    // The USER's edit: drag the far point toward the middle, and that stretch
+    // sweeps inward into a plow. Centre cargo now exits pushed across —
+    // the wall put it where it should go.
+    {
+        const auto points = ConveyorWallConfig::pointNodes(*wall);
+        REQUIRE(points.size() == 2);
+        points[0]->position.set(-0.6f, 0.75f, 0.33f);
+        points[1]->position.set(0.6f, 0.75f, -0.15f);
+
+        const auto spec = config.spec(*conveyorNode);
+        PhysxWorld world;
+        conveyor::ConveyorPhysics belts(world, {spec});
+
+        auto* cargo = dropCargo(world, -1.2f, 1.f, 0.f);
+        bool diverted = false;
+        for (int i = 0; i < 400 && !diverted; ++i) {
+            world.step(1.f / 60.f);
+            const auto p = cargo->getGlobalPose().p;
+            if (p.y < 0.4f) break;// fell off — that is a failure, not a divert
+            if (p.x > 0.7f && p.z < -0.15f) diverted = true;
+        }
+        CHECK(diverted);
+    }
 }
 
 TEST_CASE("reverse flips the travel direction, same document") {
