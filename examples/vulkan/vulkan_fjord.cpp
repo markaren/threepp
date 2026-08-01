@@ -270,10 +270,16 @@ namespace {
         const float snowLine = 300.f + 70.f * wig;
         const float snowT = smoothstepf(snowLine - 28.f, snowLine + 28.f, hC) *
                             (1.f - smoothstepf(0.50f, 0.68f, slope));// slope-shed, like the colour
-        w4[0] = (1.f - screeT) * (1.f - snowT);
-        w4[2] = screeT * (1.f - rockT) * (1.f - snowT);
-        w4[1] = rockT * (1.f - snowT);
-        w4[3] = snowT;
+        // STRUCTURE hands over to the snow band only where snow DOMINATES
+        // (squared): at partial snowT the colour is still mostly ground, and
+        // binning structure proportionally washed the whole snowline
+        // transition zone toward the snow band's soft field — the mid-flank
+        // "flat texture" report.
+        const float snowW = snowT * snowT;
+        w4[0] = (1.f - screeT) * (1.f - snowW);
+        w4[2] = screeT * (1.f - rockT) * (1.f - snowW);
+        w4[1] = rockT * (1.f - snowW);
+        w4[3] = snowW;
     }
 
     // ═════════════════════════ sun / moon / sky ═════════════════════════════

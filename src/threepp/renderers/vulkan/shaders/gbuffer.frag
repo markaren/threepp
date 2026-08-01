@@ -470,8 +470,15 @@ void main() {
 
         const float kTri = 7.0;
         vec3 aw = pow(abs(Ngeo), vec3(kTri));
-        aw = max(aw - 0.08, vec3(0.0));// drop negligible axes
-        aw /= max(aw.x + aw.y + aw.z, 1e-4);
+        // Drop negligible axes RELATIVE to the dominant one — an absolute cut
+        // (was −0.08) zeroed ALL THREE projections on ~45-60° slopes facing
+        // diagonally between the world axes (every |N| component ≈0.6-0.7,
+        // and 0.7^7 ≈ 0.08): whole fjord flanks silently skipped the layer
+        // and rendered as flat "untextured" patches, world-anchored and
+        // view-independent. Relative cut keeps the dominant axis alive by
+        // construction and still prunes minors below 8% of it.
+        aw = max(aw - 0.08 * max(aw.x, max(aw.y, aw.z)), vec3(0.0));
+        aw /= max(aw.x + aw.y + aw.z, 1e-6);
         const float maxw = max(aw.x, max(aw.y, aw.z));
 
         // Per-projection coords / derivatives / fade — computed unconditionally
@@ -554,11 +561,13 @@ void main() {
 
         // Projection weights from the GEOMETRIC normal (stable macro
         // orientation; the map normal above carries texel-scale relief that
-        // would dither the projection choice).
+        // would dither the projection choice). Relative minor-axis cut — an
+        // absolute one zeroes all three projections on diagonal-facing steep
+        // slopes (see the detail block above).
         const float kTri = 7.0;
         vec3 aw = pow(abs(Ngeo), vec3(kTri));
-        aw = max(aw - 0.08, vec3(0.0));
-        aw /= max(aw.x + aw.y + aw.z, 1e-4);
+        aw = max(aw - 0.08 * max(aw.x, max(aw.y, aw.z)), vec3(0.0));
+        aw /= max(aw.x + aw.y + aw.z, 1e-6);
         const float maxw = max(aw.x, max(aw.y, aw.z));
 
         // Un-scaled projected coords + derivatives, hoisted out of the band

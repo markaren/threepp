@@ -187,8 +187,12 @@ namespace threepp::terrain {
                 if (defH) chroma = 0.03f;
                 break;
             case BandKind::Snow:
-                if (defC) albedoContrast = 0.10f;
-                if (defN) normalStrength = 1.6f;
+                // NOT near-flat: a flat snow band reads as untextured plaster
+                // wherever the snowline transition assigns it partial weight
+                // (observed on the fjord's mid-flank — the "flat texture"
+                // report). Real snow carries sastrugi ripples and grain.
+                if (defC) albedoContrast = 0.20f;
+                if (defN) normalStrength = 2.8f;
                 if (defR) roughContrast = 0.30f;
                 if (defH) chroma = 0.01f;
                 break;
@@ -253,11 +257,16 @@ namespace threepp::terrain {
                     }
                     case BandKind::Snow: {
                         // Wind ripples (stretched noise) over a soft undulation,
-                        // plus rare sparkle glints (facet crystals).
+                        // plus rare sparkle glints (facet crystals) and a fine
+                        // surface grain so partial-coverage transition zones
+                        // never collapse to plaster.
                         const float undul = sampleLat(l8, 8, u, v);
                         const float ripple = sampleLat(l24, 24, u * 3.f, v * 1.f);// wind-aligned
+                        const float grain = banddetail::bandHash(i, j, seed + 11u);
                         const float glint = banddetail::bandHash(i, j, seed + 9u) > 0.995f ? 1.f : 0.f;
-                        h = std::clamp(0.42f + 0.16f * undul + 0.10f * (ripple - 0.5f) + 0.25f * glint, 0.f, 1.f);
+                        h = std::clamp(0.40f + 0.16f * undul + 0.16f * (ripple - 0.5f) +
+                                               0.08f * (grain - 0.5f) + 0.25f * glint,
+                                       0.f, 1.f);
                         id = undul;
                         r = 0.5f - 0.45f * glint + 0.06f * (ripple - 0.5f);// glints read glossy
                         break;
