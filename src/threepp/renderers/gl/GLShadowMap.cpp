@@ -56,6 +56,9 @@ struct GLShadowMap::Impl {
 
     std::unordered_map<std::string, std::unordered_map<std::string, std::shared_ptr<Material>>> _materialCache;
 
+    // Depth materials for alpha-cutout casters, one per SOURCE material.
+    std::unordered_map<std::string, std::shared_ptr<MeshDepthMaterial>> _cutoutDepthMaterials;
+
     int _maxTextureSize;
 
     std::shared_ptr<Mesh> fullScreenMesh;
@@ -116,6 +119,45 @@ struct GLShadowMap::Impl {
         return _depthMaterials[index].get();
     }
 
+    // Alpha-cutout casters (foliage cards, fences, grates) need their SILHOUETTE
+    // in the shadow map, not their quad. The shared depth variants carry no
+    // `map`/`alphaTest`, so a leaf card writes its full rectangle and a tree
+    // casts one solid blob instead of dappled light — and, worse, the same solid
+    // quads self-shadow the canopy into flat black. depth_frag.glsl already
+    // includes <map_fragment>/<alphamap_fragment>/<alphatest_fragment>; the
+    // properties simply have to be carried across.
+    //
+    // Cached per SOURCE material rather than set on the shared variant, because
+    // the program cache keys on material version: re-pointing `map` on one
+    // shared instance per object would need a version bump every draw (and so
+    // re-derive program parameters for every shadow caster in the scene), or
+    // else silently render with the previously-built program.
+    MeshDepthMaterial* getCutoutDepthMaterial(Material* material) {
+        if (material->alphaTest <= 0.f) return nullptr;
+
+        auto* withMap = material->as<MaterialWithMap>();
+        auto* withAlphaMap = material->as<MaterialWithAlphaMap>();
+        std::shared_ptr<Texture> map = withMap ? withMap->map : nullptr;
+        std::shared_ptr<Texture> alphaMap = withAlphaMap ? withAlphaMap->alphaMap : nullptr;
+        if (!map && !alphaMap) return nullptr;
+
+        auto& cached = _cutoutDepthMaterials[material->uuid()];
+        if (!cached) {
+            cached = MeshDepthMaterial::create();
+            cached->depthPacking = DepthPacking::RGBA;
+        }
+        // Only touch (and re-version) the material when something really moved —
+        // the source's map can be swapped at runtime, e.g. a regenerated tree.
+        if (cached->map != map || cached->alphaMap != alphaMap ||
+            cached->alphaTest != material->alphaTest) {
+            cached->map = map;
+            cached->alphaMap = alphaMap;
+            cached->alphaTest = material->alphaTest;
+            cached->needsUpdate();
+        }
+        return cached.get();
+    }
+
     MeshDistanceMaterial* getDistanceMaterialVariant(bool useMorphing) {
         unsigned index = useMorphing << 0;
 
@@ -137,7 +179,13 @@ struct GLShadowMap::Impl {
 
         if (light->type() == "PointLight") {
 
+            // MeshDistanceMaterial has no cutout path here — point-light shadows
+            // from alpha-tested casters still write the full quad.
             result = getDistanceMaterialVariant(false);
+
+        } else if (auto* cutout = getCutoutDepthMaterial(material)) {
+
+            result = cutout;
 
         } else {
 
