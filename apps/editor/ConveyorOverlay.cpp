@@ -62,8 +62,10 @@ namespace {
     // (the renderer caches GPU buffers by attribute identity; replacing the
     // attribute each rebuild can hand it a recycled pointer that reads as
     // already uploaded). The attribute is only replaced when outgrown.
-    template<class L>
-    void writePoints(L& line, int& capacity, const std::vector<Vector3>& points) {
+    // Takes Line by reference — LineSegments IS one, so the aids buffer fits
+    // through the same door (a template here tripped clang's dependent-name
+    // rules on the CI runners; MSVC was merely permissive).
+    void writePoints(Line& line, int& capacity, const std::vector<Vector3>& points) {
 
         const auto count = static_cast<int>(points.size());
         if (count > capacity) {
@@ -96,6 +98,27 @@ namespace {
         hashBytes(seed, encoded.data(), encoded.size());
         for (const auto* child : conveyor.children) {
             if (ConveyorConfig::isDerived(*child)) continue;
+            if (ConveyorWallConfig::isWall(*child)) {
+                // A wall's generated ribbon depends on the wall group's own
+                // transform (rotating a diverter swings its span), its config
+                // and every point under it.
+                const float trs[10]{child->position.x, child->position.y, child->position.z,
+                                    child->quaternion.x, child->quaternion.y,
+                                    child->quaternion.z, child->quaternion.w,
+                                    child->scale.x, child->scale.y, child->scale.z};
+                hashBytes(seed, trs, sizeof(trs));
+                const auto wall = ConveyorWallConfig::read(*child)
+                                          .value_or(ConveyorWallConfig{})
+                                          .encode();
+                hashBytes(seed, wall.data(), wall.size());
+                std::size_t wallPoints = child->children.size();
+                hashBytes(seed, &wallPoints, sizeof(wallPoints));
+                for (const auto* point : child->children) {
+                    const float xyz[3]{point->position.x, point->position.y, point->position.z};
+                    hashBytes(seed, xyz, sizeof(xyz));
+                }
+                continue;
+            }
             const float xyz[3]{child->position.x, child->position.y, child->position.z};
             hashBytes(seed, xyz, sizeof(xyz));
             // Corner-radius / segment-surface flags live on the waypoint node.
@@ -373,8 +396,13 @@ void EditorApp::syncConveyorOverlays() {
         it->aids->matrixWorldNeedsUpdate = true;
 
         // Tinted like a selected marker while the conveyor (or any of its
-        // waypoints) is what the user is working on.
-        const bool active = selected == owner || selectedWaypoint != nullptr;
+        // waypoints, walls or wall points) is what the user is working on.
+        auto* selectedWallGroup = selected && ConveyorWallConfig::isWall(*selected)
+                                          ? selected
+                                          : (selected ? ConveyorWallConfig::wallOf(*selected)
+                                                      : nullptr);
+        const bool active = selected == owner || selectedWaypoint != nullptr ||
+                            (selectedWallGroup && selectedWallGroup->parent == owner);
         it->material->color.setRGB(tint.x, tint.y, tint.z);
         it->material->opacity = active ? 1.f : 0.55f;
         it->material->transparent = !active;

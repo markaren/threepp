@@ -10,6 +10,8 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
+#include "threepp/math/Matrix4.hpp"
+
 #include <algorithm>
 #include <any>
 #include <cstdio>
@@ -155,6 +157,60 @@ const char* ConveyorWaypointConfig::label(conveyor::SegKind kind) {
 }
 
 
+// --- ConveyorWallConfig -----------------------------------------------------
+
+std::string ConveyorWallConfig::encode() const {
+
+    std::string out;
+    out += "height=";
+    out += number(height);
+    return out;
+}
+
+ConveyorWallConfig ConveyorWallConfig::decode(const std::string& text) {
+
+    ConveyorWallConfig config;
+    parsePairs(text, [&](std::string_view key, std::string_view value) {
+        if (key == "height") {
+            config.height = toFloat(value, config.height);
+        }
+        // Unknown keys ignored on purpose.
+    });
+    return config;
+}
+
+std::optional<ConveyorWallConfig> ConveyorWallConfig::read(const Object3D& object) {
+
+    const auto it = object.userData.find(userDataKey);
+    if (it == object.userData.end()) return std::nullopt;
+    if (it->second.type() != typeid(std::string)) return std::nullopt;
+    return decode(std::any_cast<const std::string&>(it->second));
+}
+
+void ConveyorWallConfig::write(Object3D& object) const {
+
+    object.userData[userDataKey] = encode();
+}
+
+bool ConveyorWallConfig::isWall(const Object3D& object) {
+
+    const auto it = object.userData.find(userDataKey);
+    return it != object.userData.end() && it->second.type() == typeid(std::string);
+}
+
+Object3D* ConveyorWallConfig::wallOf(const Object3D& object) {
+
+    auto* parent = object.parent;
+    if (!parent || !isWall(*parent)) return nullptr;
+    return parent;
+}
+
+std::vector<Object3D*> ConveyorWallConfig::pointNodes(const Object3D& wall) {
+
+    return wall.children;
+}
+
+
 // --- ConveyorConfig ---------------------------------------------------------
 
 std::string ConveyorConfig::encode() const {
@@ -246,7 +302,9 @@ Object3D* ConveyorConfig::conveyorOf(const Object3D& object) {
 
     auto* parent = object.parent;
     if (!parent || !isConveyor(*parent)) return nullptr;
-    return isDerived(object) ? nullptr : parent;
+    // Neither the generated group nor an attached wall is a waypoint.
+    if (isDerived(object) || ConveyorWallConfig::isWall(object)) return nullptr;
+    return parent;
 }
 
 bool ConveyorConfig::isDerived(const Object3D& object) {
@@ -276,12 +334,32 @@ std::string ConveyorConfig::roleOf(const Object3D& object) {
     return std::any_cast<const std::string&>(it->second);
 }
 
+namespace {
+
+    // A direct child that is neither generated content nor an attached wall
+    // IS a waypoint — the rule every count and index below shares.
+    bool isWaypointChild(const Object3D& child) {
+
+        return !ConveyorConfig::isDerived(child) && !ConveyorWallConfig::isWall(child);
+    }
+
+}// namespace
+
 std::vector<Object3D*> ConveyorConfig::waypointNodes(const Object3D& conveyor) {
 
     std::vector<Object3D*> nodes;
     nodes.reserve(conveyor.children.size());
     for (auto* child : conveyor.children) {
-        if (!isDerived(*child)) nodes.push_back(child);
+        if (isWaypointChild(*child)) nodes.push_back(child);
+    }
+    return nodes;
+}
+
+std::vector<Object3D*> ConveyorConfig::wallNodes(const Object3D& conveyor) {
+
+    std::vector<Object3D*> nodes;
+    for (auto* child : conveyor.children) {
+        if (ConveyorWallConfig::isWall(*child)) nodes.push_back(child);
     }
     return nodes;
 }
@@ -290,7 +368,7 @@ std::size_t ConveyorConfig::pointIndexOf(const Object3D& conveyor, const Object3
 
     std::size_t index = 0;
     for (const auto* candidate : conveyor.children) {
-        if (isDerived(*candidate)) continue;
+        if (!isWaypointChild(*candidate)) continue;
         if (candidate == &child) return index;
         ++index;
     }
@@ -302,7 +380,7 @@ std::size_t ConveyorConfig::childSlotForPointIndex(const Object3D& conveyor, std
     std::size_t points = 0;
     std::size_t afterLastPoint = 0;
     for (std::size_t i = 0; i < conveyor.children.size(); ++i) {
-        if (isDerived(*conveyor.children[i])) continue;
+        if (!isWaypointChild(*conveyor.children[i])) continue;
         if (points == pointIndex) return i;
         ++points;
         afterLastPoint = i + 1;
@@ -328,6 +406,23 @@ conveyor::ConveyorSpec ConveyorConfig::spec(const Object3D& conveyor) const {
     for (const auto* node : waypointNodes(conveyor)) {
         const auto wc = ConveyorWaypointConfig::read(*node);
         s.waypoints.push_back({node->position, std::max(wc.cornerRadius, 0.f), wc.segKind});
+    }
+
+    // Attached walls: each wall's points composed through the wall group's own
+    // local transform, so rotating a diverter with the gizmo swings its whole
+    // span in the conveyor's space.
+    for (auto* wallNode : wallNodes(conveyor)) {
+        const auto wallConfig = ConveyorWallConfig::read(*wallNode).value_or(ConveyorWallConfig{});
+        threepp::conveyor::WallSpec wall;
+        wall.height = std::max(wallConfig.height, 0.02f);
+        Matrix4 local;
+        local.compose(wallNode->position, wallNode->quaternion, wallNode->scale);
+        for (const auto* point : ConveyorWallConfig::pointNodes(*wallNode)) {
+            Vector3 p = point->position;
+            p.applyMatrix4(local);
+            wall.points.push_back(p);
+        }
+        if (wall.points.size() >= 2) s.walls.push_back(std::move(wall));
     }
     return s;
 }
@@ -483,6 +578,25 @@ void ConveyorConfig::syncDerived(Object3D& conveyor) const {
                 bar->quaternion.copy(c.orientation);
                 group->add(bar);
             }
+        }
+    }
+
+    // Attached walls: side guides and diverters, their base dropped onto the
+    // deck wherever they stand over it — authored entirely in plan.
+    if (!resolved.walls.empty()) {
+        auto wallMat = MeshStandardMaterial::create();
+        wallMat->color = Color(0xbfc6cc);
+        wallMat->roughness = 0.7f;
+        wallMat->metalness = 0.f;
+        wallMat->transparent = true;
+        wallMat->opacity = 0.55f;
+        wallMat->side = Side::Double;
+        int wallCount = 0;
+        for (const auto& wall : resolved.walls) {
+            const auto snapped = cv::snapWallToDeck(wall.points, sampled, resolved.width);
+            if (snapped.size() < 2) continue;
+            group->add(part(cv::wallGeometry(snapped, wall.height), wallMat, "wall",
+                            "Wall " + std::to_string(++wallCount)));
         }
     }
 

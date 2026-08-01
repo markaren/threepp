@@ -549,6 +549,52 @@ namespace threepp::conveyor {
         return runs;
     }
 
+    std::vector<Vector3> snapWallToDeck(const std::vector<Vector3>& wall,
+                                        const std::vector<Vector3>& centerline,
+                                        float beltWidth, float sampleStep) {
+
+        std::vector<Vector3> out;
+        if (wall.size() < 2) return out;
+
+        // Nearest centerline sample in PLAN, with the lateral distance that
+        // says whether the point stands over the deck at all.
+        const auto deckHeightAt = [&](const Vector3& p, float& lateral) -> float {
+            float best = 1e30f;
+            float height = p.y;
+            lateral = 1e30f;
+            for (const auto& c : centerline) {
+                const float dx = p.x - c.x, dz = p.z - c.z;
+                const float d2 = dx * dx + dz * dz;
+                if (d2 < best) {
+                    best = d2;
+                    height = c.y;
+                    lateral = std::sqrt(d2);
+                }
+            }
+            return height;
+        };
+
+        const float margin = beltWidth * 0.5f + 0.15f;
+        const float step = std::max(sampleStep, 0.02f);
+
+        // Dense resample so a wall crossing a climbing belt follows the grade,
+        // then per-sample: over the deck -> base on the deck, past the edge ->
+        // the authored height, unchanged.
+        for (std::size_t i = 0; i + 1 < wall.size(); ++i) {
+            const int steps = std::max(1, static_cast<int>(
+                    std::ceil(wall[i].distanceTo(wall[i + 1]) / step)));
+            for (int k = (i == 0 ? 0 : 1); k <= steps; ++k) {
+                Vector3 p;
+                p.lerpVectors(wall[i], wall[i + 1], static_cast<float>(k) / static_cast<float>(steps));
+                float lateral = 0.f;
+                const float deck = deckHeightAt(p, lateral);
+                if (lateral <= margin) p.y = deck;
+                out.push_back(p);
+            }
+        }
+        return out;
+    }
+
     Vector3 pointAlong(const std::vector<Vector3>& path, float dist) {
 
         if (path.empty()) return Vector3();

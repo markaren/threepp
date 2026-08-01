@@ -157,6 +157,42 @@ TEST_CASE("a rollers run conveys on REAL roller colliders, with no belt box unde
     CHECK(conveyedBack);
 }
 
+TEST_CASE("an attached diverter wall FEEDS cargo across the belt") {
+
+    // The factory's default wall is a plow angled across the path midpoint —
+    // author it, save nothing, build physics straight from the spec.
+    SceneDocument authoring;
+    auto conveyorNode = ObjectFactory::createConveyor(authoring.scene());
+    authoring.scene().add(conveyorNode);
+    auto config = ConveyorConfig::read(*conveyorNode).value();
+    config.speed = 1.f;
+    config.write(*conveyorNode);
+    auto wall = ObjectFactory::createConveyorWall(*conveyorNode);
+    conveyorNode->add(wall);
+
+    const auto spec = config.spec(*conveyorNode);
+    REQUIRE(spec.walls.size() == 1);
+    REQUIRE(spec.walls[0].points.size() == 2);
+
+    PhysxWorld world;
+    conveyor::ConveyorPhysics belts(world, {spec});
+    CHECK(belts.wallCount() >= 1);
+
+    // Cargo down the CENTRE of the belt: without the wall it would ride
+    // z = 0 the whole way (the straight-belt case pins that). The plow leans
+    // from the +z edge to past centre, so a diverted box exits pushed to -z —
+    // the wall put it where it should go.
+    auto* cargo = dropCargo(world, -1.2f, 1.f, 0.f);
+    bool diverted = false;
+    for (int i = 0; i < 400 && !diverted; ++i) {
+        world.step(1.f / 60.f);
+        const auto p = cargo->getGlobalPose().p;
+        if (p.y < 0.4f) break;// fell off — that is a failure, not a divert
+        if (p.x > 0.6f && p.z < -0.15f) diverted = true;
+    }
+    CHECK(diverted);
+}
+
 TEST_CASE("reverse flips the travel direction, same document") {
 
     const auto specs = exportedSpecs(1.f, true);

@@ -12,6 +12,7 @@
 #include "threepp/extras/editor/ObjectFactory.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
 
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -152,6 +153,64 @@ TEST_CASE("syncDerived generates the parts group, wholesale and re-adoptable") {
     CHECK(roleCount(*conveyor, "wall") == 1);
     CHECK(roleCount(*conveyor, "belt") == 0);
     CHECK(roleCount(*conveyor, "frame") == 0);
+}
+
+TEST_CASE("attached walls are children, not waypoints, and snap their base to the deck") {
+
+    Scene scene;
+    auto conveyor = ObjectFactory::createConveyor(scene);
+    scene.add(conveyor);
+    auto config = ConveyorConfig::read(*conveyor).value();
+
+    auto wall = ObjectFactory::createConveyorWall(*conveyor);
+    conveyor->add(wall);
+
+    // The wall child must NOT bend the path: waypoint bookkeeping skips it.
+    CHECK(ConveyorConfig::waypointNodes(*conveyor).size() == 3);
+    CHECK(ConveyorConfig::wallNodes(*conveyor).size() == 1);
+    CHECK(ConveyorConfig::conveyorOf(*wall) == nullptr);
+    const auto points = ConveyorWallConfig::pointNodes(*wall);
+    REQUIRE(points.size() == 2);
+    CHECK(ConveyorWallConfig::wallOf(*points[0]) == wall.get());
+
+    // The spec composes wall points through the wall group's own transform:
+    // rotate the group a quarter turn and the resolved span swings with it.
+    auto spec = config.spec(*conveyor);
+    REQUIRE(spec.walls.size() == 1);
+    const Vector3 before = spec.walls[0].points[0];
+    wall->rotation.y = math::PI / 2;
+    wall->updateMatrix();
+    spec = config.spec(*conveyor);
+    const Vector3 rotated = spec.walls[0].points[0];
+    CHECK(before.distanceTo(rotated) > 0.1f);
+    wall->rotation.y = 0.f;
+
+    // The snap: the default belt's deck rides at y = 0.75, and the factory
+    // authored the wall's points there — flatten them to y = 0 and the
+    // generated base must still find the deck. A point dragged past the edge
+    // keeps its authored height.
+    spec = config.spec(*conveyor);
+    auto flattened = spec.walls[0];
+    for (auto& p : flattened.points) p.y = 0.f;
+    const auto centerline = conveyor::resamplePath(spec.waypoints, spec.smooth, spec.samples);
+    const auto snapped = conveyor::snapWallToDeck(flattened.points, centerline, spec.width);
+    REQUIRE(snapped.size() >= 2);
+    bool overDeckSnapped = true;
+    for (const auto& p : snapped) {
+        const bool overDeck = std::abs(p.z) < spec.width * 0.5f + 0.1f &&
+                              p.x > -1.6f && p.x < 1.6f;
+        if (overDeck && std::abs(p.y - 0.75f) > 1e-3f) overDeckSnapped = false;
+    }
+    CHECK(overDeckSnapped);
+
+    std::vector<Vector3> outside{{0.f, 0.1f, 5.f}, {1.f, 0.1f, 5.f}};
+    const auto keptAuthored = conveyor::snapWallToDeck(outside, centerline, spec.width);
+    REQUIRE(!keptAuthored.empty());
+    CHECK(std::abs(keptAuthored.front().y - 0.1f) < 1e-4f);
+
+    // And the generated content grows the wall ribbon.
+    config.syncDerived(*conveyor);
+    CHECK(roleCount(*conveyor, "wall") == 1);
 }
 
 TEST_CASE("a conveyor round-trips the document with no editor attached") {

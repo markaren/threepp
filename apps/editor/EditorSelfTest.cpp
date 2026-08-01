@@ -736,6 +736,16 @@ int EditorApp::runScreenshot() {
             config.speed = 1.f;
             config.width = 0.9f;
             config.write(*straight);
+
+            // A diverter plowed across the belt: by the play shot the cargo is
+            // being fed toward the edge — the picture that says walls WORK.
+            auto wall = ObjectFactory::createConveyorWall(*straight);
+            const auto wallPoints = ConveyorWallConfig::pointNodes(*wall);
+            if (wallPoints.size() >= 2) {
+                wallPoints[0]->position.set(-0.9f, 0.75f, 0.5f);
+                wallPoints[1]->position.set(0.7f, 0.75f, -0.2f);
+            }
+            straight->add(wall);
         }
         addObject(straight, document_.scene(), "Add Conveyor");
 
@@ -866,6 +876,22 @@ int EditorApp::runScreenshot() {
             }
         }
         wrote = shoot(sibling("_conveyors_play")) && wrote;
+
+        // Close on the diverter, still playing: the cargo mid-plow, sliding
+        // along the low-friction wall while the belt keeps pushing — the
+        // picture that says an attached wall FEEDS rather than decorates.
+        camera_.position.set(32.5f, 3.5f, -2.f);
+        orbit_->target.set(29.7f, 0.9f, -6.f);
+        {
+            Clock divertClock;
+            float elapsed = 0.f;
+            for (int i = 0; i < 20000 && elapsed < 0.8f; ++i) {
+                const float dt = divertClock.getDelta();
+                elapsed += std::max(dt, 0.f);
+                canvas_.animateOnce([&] { frame(dt); });
+            }
+        }
+        wrote = shoot(sibling("_conveyor_divert")) && wrote;
 
         // Close on the climb, still playing: the travelling cleat bars behind
         // the cargo are the reason it is not sliding back down the incline —
@@ -3605,6 +3631,42 @@ int EditorApp::runSelfTest() {
                   "and the append is undoable");
         }
 
+        // Attached walls: a child of the conveyor, NOT a waypoint — adding one
+        // must not bend the path, and its ribbon appears among the parts.
+        if (conveyor) {
+            addConveyorWall(*conveyor, "Add Wall");
+            step();
+            conveyor = conveyorNow(conveyorUuid);
+            check(conveyor && ConveyorConfig::wallNodes(*conveyor).size() == 1,
+                  "Add Wall attaches a wall to the conveyor");
+            check(conveyor && ConveyorConfig::waypointNodes(*conveyor).size() == 3,
+                  "without becoming a waypoint");
+            check(roleCount("wall") == 1, "and its ribbon joins the generated parts");
+            auto* selectedWall = selection_.get();
+            check(selectedWall && ConveyorWallConfig::isWall(*selectedWall),
+                  "the new wall is selected, ready to drag");
+
+            // A dragged wall point regenerates the ribbon like any other edit.
+            if (conveyor) {
+                auto walls = ConveyorConfig::wallNodes(*conveyor);
+                const auto points = ConveyorWallConfig::pointNodes(*walls.front());
+                if (!points.empty()) {
+                    points.front()->position.z += 0.4f;
+                    step();
+                    check(roleCount("wall") == 1, "a dragged wall point keeps one ribbon");
+                }
+            }
+
+            commands_.undo();
+            step();
+            conveyor = conveyorNow(conveyorUuid);
+            check(conveyor && ConveyorConfig::wallNodes(*conveyor).empty() &&
+                          roleCount("wall") == 0,
+                  "undo removes the wall and its ribbon together");
+            selectObject(nullptr);
+            step();
+        }
+
 #ifdef THREEPP_EDITOR_WITH_PHYSX
         // Play: the belt CONVEYS. A dynamic box dropped onto the moving surface
         // must travel along it — that is the feature, everything else is décor.
@@ -3617,6 +3679,17 @@ int EditorApp::runSelfTest() {
                 ConveyorWaypointConfig rollers;
                 rollers.segKind = conveyor::SegKind::Rollers;
                 rollers.write(*nodes.front());
+                step();
+            }
+
+            // An attached diverter rides along too (its colliders are counted
+            // below), parked downstream of the convey assertion's window so
+            // the cargo measurement stays a pure straight-belt read.
+            if (auto* live = conveyorNow(conveyorUuid)) {
+                addConveyorWall(*live, "Add Wall");
+                auto walls = ConveyorConfig::wallNodes(*live);
+                if (!walls.empty()) walls.front()->position.x += 0.9f;
+                selectObject(nullptr);
                 step();
             }
 
@@ -3643,6 +3716,8 @@ int EditorApp::runSelfTest() {
                   "and builds belt colliders for it");
             check(conveyorSession_ && conveyorSession_->rollerCount() >= 3,
                   "and real roller colliders for the roller bed");
+            check(conveyorSession_ && conveyorSession_->wallCount() >= 1,
+                  "and wall colliders for the attached diverter");
 
             auto* cargo1 = findByUuid(document_.scene(), cargoUuid);
             float startX = cargo1 ? cargo1->position.x : 0.f;
@@ -3672,13 +3747,19 @@ int EditorApp::runSelfTest() {
             check(restored && std::abs(restored->position.x - (-1.2f)) < 1e-3f,
                   "and Stop puts the cargo back where it was authored");
 
-            // Back to an all-flat belt for the rounds that follow (the soft
-            // cargo lands on this conveyor too).
+            // Back to a bare flat belt for the rounds that follow (the soft
+            // cargo lands on this conveyor too): the cargo and the diverter
+            // leave through undo, the roller segment the way it came.
+            commands_.undo();// the cargo
+            commands_.undo();// the wall
             if (auto* live = conveyorNow(conveyorUuid)) {
                 auto nodes = ConveyorConfig::waypointNodes(*live);
                 ConveyorWaypointConfig::erase(*nodes.front());
                 step();
             }
+            check(conveyorNow(conveyorUuid) &&
+                          ConveyorConfig::wallNodes(*conveyorNow(conveyorUuid)).empty(),
+                  "undo clears the diverter after the run");
         }
 
         // A rounded corner is ONE rotating bend body, tangent by construction,

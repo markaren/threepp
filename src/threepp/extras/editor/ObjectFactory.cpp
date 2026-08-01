@@ -241,6 +241,60 @@ std::shared_ptr<Object3D> ObjectFactory::createConveyorPoint(const Object3D& con
     return point;
 }
 
+std::shared_ptr<Group> ObjectFactory::createConveyorWall(const Object3D& conveyor) {
+
+    auto wall = Group::create();
+    wall->name = uniqueName(conveyor, "Wall");
+    ConveyorWallConfig{}.write(*wall);
+
+    // The default is a plow: angled across the belt at the path midpoint,
+    // reaching from one edge to just past the centre, so cargo visibly
+    // diverts the moment Play is pressed. Heights ride at the deck so the
+    // point markers sit on the belt; the generated base snaps regardless.
+    namespace cv = threepp::conveyor;
+    const auto config = ConveyorConfig::read(conveyor).value_or(ConveyorConfig{});
+    const auto spec = config.spec(conveyor);
+    const auto sampled = cv::resamplePath(spec.waypoints, spec.smooth, spec.samples);
+
+    Vector3 first(-0.5f, 0.f, 0.f), second(0.5f, 0.f, 0.3f);
+    if (sampled.size() >= 2) {
+        float total = 0.f;
+        for (std::size_t i = 0; i + 1 < sampled.size(); ++i) {
+            total += sampled[i].distanceTo(sampled[i + 1]);
+        }
+        const Vector3 mid = cv::pointAlong(sampled, total * 0.5f);
+        const Vector3 ahead = cv::pointAlong(sampled, std::min(total * 0.5f + 0.25f, total));
+        Vector3 tangent;
+        tangent.subVectors(ahead, mid);
+        if (tangent.length() < 1e-5f) tangent.set(1, 0, 0);
+        tangent.normalize();
+        const Vector3 up(0, 1, 0);
+        Vector3 lat;
+        if (std::abs(tangent.dot(up)) > 0.999f) lat.set(0, 0, 1);
+        else lat.crossVectors(tangent, up).normalize();
+
+        const float w = std::max(config.width, 0.1f);
+        first.copy(mid).addScaledVector(tangent, -0.7f * w).addScaledVector(lat, 0.55f * w);
+        second.copy(mid).addScaledVector(tangent, 0.7f * w).addScaledVector(lat, -0.15f * w);
+    }
+
+    auto p1 = createConveyorWallPoint(*wall);
+    p1->position.copy(first);
+    wall->add(p1);
+    auto p2 = createConveyorWallPoint(*wall);
+    p2->position.copy(second);
+    wall->add(p2);
+
+    return wall;
+}
+
+std::shared_ptr<Object3D> ObjectFactory::createConveyorWallPoint(const Object3D& wall) {
+
+    auto point = Object3D::create();
+    point->name = uniqueName(wall, "Wall Point");
+    return point;
+}
+
 std::shared_ptr<Object3D> ObjectFactory::createSplinePoint(const Object3D& spline) {
 
     auto point = Object3D::create();

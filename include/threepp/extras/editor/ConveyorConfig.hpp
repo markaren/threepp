@@ -74,6 +74,40 @@ namespace threepp::editor {
         bool operator==(const ConveyorWaypointConfig&) const = default;
     };
 
+    // A wall ATTACHED to a conveyor: a Group child carrying
+    // `userData["conveyorWall"]`, whose own untagged children are the wall's
+    // points (in child order, two for the usual straight diverter). Because it
+    // is scene content like everything else, moving a point, rotating the
+    // whole wall with the gizmo, deleting and undoing are the editor's
+    // ordinary operations. The generated ribbon and collider drop their base
+    // onto the deck wherever the wall stands over the belt (see
+    // conveyor::snapWallToDeck), so authoring happens entirely in plan: a
+    // side guide hugs the edge, a diverter cuts across the belt to feed cargo
+    // into a lane, and both follow a climbing belt by themselves.
+    struct ConveyorWallConfig {
+
+        float height = 0.25f;
+
+        static constexpr const char* userDataKey = "conveyorWall";
+
+        [[nodiscard]] std::string encode() const;
+        [[nodiscard]] static ConveyorWallConfig decode(const std::string& text);
+
+        // nullopt when the object is not a wall — presence of the entry is
+        // what makes a Group child one.
+        [[nodiscard]] static std::optional<ConveyorWallConfig> read(const Object3D& object);
+        // Always writes: the entry IS the wall.
+        void write(Object3D& object) const;
+
+        [[nodiscard]] static bool isWall(const Object3D& object);
+        // The wall `object` is a point of, or nullptr (direct children only).
+        [[nodiscard]] static Object3D* wallOf(const Object3D& object);
+        // The wall's points, in child order.
+        [[nodiscard]] static std::vector<Object3D*> pointNodes(const Object3D& wall);
+
+        bool operator==(const ConveyorWallConfig&) const = default;
+    };
+
     struct ConveyorConfig {
 
         float width = 0.6f;
@@ -117,8 +151,11 @@ namespace threepp::editor {
         [[nodiscard]] static std::string roleOf(const Object3D& object);
 
         // Direct children that are waypoints, in order — every child but the
-        // generated group.
+        // generated group and any attached walls.
         [[nodiscard]] static std::vector<Object3D*> waypointNodes(const Object3D& conveyor);
+
+        // Direct children that are attached walls, in order.
+        [[nodiscard]] static std::vector<Object3D*> wallNodes(const Object3D& conveyor);
 
         // Position of `child` among the waypoints, or the waypoint count when
         // it is not one. See SplineConfig::pointIndexOf — never interchangeable

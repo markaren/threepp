@@ -68,6 +68,10 @@ namespace threepp::conveyor {
             // the combination of both bodies' materials, and the belt side must
             // be grippy for anything to convey up a slope.
             beltMaterial_ = world_->physics().createMaterial(1.0f, 1.0f, 0.1f);
+            // Walls are the opposite: a diverter only FEEDS cargo into its lane
+            // if cargo slides along it while the belt keeps pushing — a grippy
+            // wall would hold the cargo like a hand instead of a plow.
+            wallMaterial_ = world_->physics().createMaterial(0.08f, 0.08f, 0.f);
 
             for (std::size_t i = 0; i < specs_.size(); ++i) {
                 const auto& spec = specs_[i];
@@ -76,6 +80,7 @@ namespace threepp::conveyor {
                     buildWall(spec);
                 } else {
                     buildBelts(spec, i);
+                    buildAttachedWalls(spec);
                 }
             }
 
@@ -113,6 +118,9 @@ namespace threepp::conveyor {
         // Driven roller colliders built — one spinning capsule per roller. A
         // rollers run has NO drag box underneath: cargo rides these.
         [[nodiscard]] std::size_t rollerCount() const { return spinners_.size(); }
+
+        // Wall collider segments built (separators + attached walls/diverters).
+        [[nodiscard]] std::size_t wallCount() const { return wallSegments_; }
 
         // --- Cleat tracks, for visual mirroring ------------------------------
         //
@@ -435,16 +443,14 @@ namespace threepp::conveyor {
             if (!track.cleats.empty()) tracks_.push_back(std::move(track));
         }
 
-        // Separator: a collision-only vertical wall along the centerline —
-        // static thin boxes per segment. Kinematic (like the belts) so it
-        // reliably collides with GPU-simulated deformables, but never advanced,
-        // so it stays put.
-        void buildWall(const ConveyorSpec& spec) {
+        // Wall collider segments along a polyline: static thin boxes, one per
+        // span. Kinematic (like the belts) so they reliably collide with
+        // GPU-simulated deformables, but never advanced, so they stay put.
+        // Low-friction on purpose — see wallMaterial_.
+        void addWallSegments(const std::vector<Vector3>& pts, float height) {
 
             using namespace ::physx;
 
-            const auto pts = resamplePath(spec.waypoints, spec.smooth, 5);
-            const float height = spec.wallHeight;
             for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
                 const Vector3& a = pts[i];
                 const Vector3& b = pts[i + 1];
@@ -459,8 +465,26 @@ namespace threepp::conveyor {
                 auto* actor = makeKinematic(PxTransform(center, q));
                 PxShape* shape = world_->physics().createShape(
                         PxBoxGeometry(len * 0.5f, height * 0.5f, kWallThick * 0.5f),
-                        *beltMaterial_, true);
+                        *wallMaterial_, true);
                 commit(actor, shape);
+                ++wallSegments_;
+            }
+        }
+
+        // Separator: a collision-only vertical wall along the whole centerline.
+        void buildWall(const ConveyorSpec& spec) {
+
+            addWallSegments(resamplePath(spec.waypoints, spec.smooth, 5), spec.wallHeight);
+        }
+
+        // Attached walls: side guides and diverters riding the belt, base
+        // snapped onto the deck by the SAME helper the drawn ribbon uses.
+        void buildAttachedWalls(const ConveyorSpec& spec) {
+
+            if (spec.walls.empty()) return;
+            const auto centerline = resamplePath(spec.waypoints, spec.smooth, spec.samples);
+            for (const auto& wall : spec.walls) {
+                addWallSegments(snapWallToDeck(wall.points, centerline, spec.width), wall.height);
             }
         }
 
@@ -522,6 +546,8 @@ namespace threepp::conveyor {
         PhysxWorld* world_;
         std::vector<ConveyorSpec> specs_;
         ::physx::PxMaterial* beltMaterial_ = nullptr;
+        ::physx::PxMaterial* wallMaterial_ = nullptr;
+        std::size_t wallSegments_ = 0;
         PhysxWorld::SubstepHandle preHandle_ = 0, postHandle_ = 0;
 
         std::vector<::physx::PxRigidDynamic*> actors_;// everything built, for teardown

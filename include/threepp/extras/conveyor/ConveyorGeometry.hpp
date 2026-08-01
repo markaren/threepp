@@ -52,12 +52,23 @@ namespace threepp::conveyor {
         SegKind segKind = SegKind::Flat;
     };
 
+    // A wall attached to a conveyor: a short polyline of its own — a side
+    // guide along the edge, or a DIVERTER cutting across the belt to feed
+    // cargo into a lane. Points are free in plan; the generated wall drops its
+    // base onto the deck wherever it stands over the belt (see
+    // snapWallToDeck), so authoring is two draggable points and a height.
+    struct WallSpec {
+        std::vector<Vector3> points;
+        float height = 0.25f;
+    };
+
     // One conveyor: a centerline (waypoints) + its belt settings. This is the
     // resolved, self-contained description the physics runtime consumes — the
     // editor stores the same fields in userData (see editor::ConveyorConfig) and
     // resolves to this.
     struct ConveyorSpec {
         std::vector<Waypoint> waypoints;
+        std::vector<WallSpec> walls;
         float width = 0.6f;
         float speed = 0.6f;   // m/s along travel; the runtime can scale it live
         bool reverse = false; // flip travel direction (and inlet end)
@@ -233,6 +244,18 @@ namespace threepp::conveyor {
     // Point a given arc-length distance into a polyline; clamps to the last
     // point. Useful for spawn / inlet positions a bit onto the belt.
     Vector3 pointAlong(const std::vector<Vector3>& path, float dist);
+
+    // Resample a wall polyline densely and SNAP its base onto the conveying
+    // surface: wherever a sample stands over the deck (within halfWidth plus a
+    // small margin of the centerline, laterally), its height becomes the
+    // deck's height there — so a wall follows a climbing belt by itself, and a
+    // diverter's base never floats above (or digs into) the surface it is
+    // steering cargo across. Samples past the belt edge keep their authored
+    // height. The result feeds wallGeometry AND the wall colliders, so the two
+    // agree by construction. Both polylines must be in the SAME space.
+    std::vector<Vector3> snapWallToDeck(const std::vector<Vector3>& wall,
+                                        const std::vector<Vector3>& centerline,
+                                        float beltWidth, float sampleStep = 0.25f);
 
     // --- Frame (first-party procedural "asset") --------------------------------
 

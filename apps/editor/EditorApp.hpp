@@ -415,6 +415,10 @@ namespace threepp::editor {
         void addSplinePoint(Object3D& spline, std::size_t index, const std::string& label);
         // Same contract for a conveyor's waypoints.
         void addConveyorPoint(Object3D& conveyor, std::size_t index, const std::string& label);
+        // A wall (diverter / side guide) attached to `conveyor`, and a point
+        // appended to an existing wall. Both undoable, both select the result.
+        void addConveyorWall(Object3D& conveyor, const std::string& label);
+        void addConveyorWallPoint(Object3D& wall, const std::string& label);
         void deleteSelected();
         void duplicateSelected();
         void focusSelected();

@@ -67,6 +67,15 @@ namespace threepp::editor {
         // A new waypoint for `conveyor` — same contract as createSplinePoint.
         static std::shared_ptr<Object3D> createConveyorPoint(const Object3D& conveyor);
 
+        // A wall attached to `conveyor`: a Group carrying ConveyorWallConfig
+        // with two points forming a DIVERTER angled across the belt at the
+        // path's midpoint — the obvious starting shape; drag the points from
+        // there. The base snaps to the deck, so the points only matter in plan.
+        static std::shared_ptr<Group> createConveyorWall(const Object3D& conveyor);
+
+        // A new point for `wall` — same contract as the other point factories.
+        static std::shared_ptr<Object3D> createConveyorWallPoint(const Object3D& wall);
+
         // "Box" if free, else "Box 2", "Box 3", ... Matching is exact, so a
         // user-typed "Box copy" never blocks "Box".
         static std::string uniqueName(const Object3D& root, const std::string& base);

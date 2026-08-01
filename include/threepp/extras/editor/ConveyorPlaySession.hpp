@@ -61,6 +61,11 @@ namespace threepp::editor {
             return sim_ ? sim_->rollerCount() : 0;
         }
 
+        // Wall collider segments the sim built (separators + attached walls).
+        [[nodiscard]] std::size_t wallCount() const {
+            return sim_ ? sim_->wallCount() : 0;
+        }
+
         // Global speed multiplier (belt drag, texture scroll, roller spin,
         // cleat travel — all of it, so the visuals never disagree with the
         // physics).
@@ -106,6 +111,10 @@ namespace threepp::editor {
                 for (auto& wp : spec.waypoints) {
                     wp.pos.applyMatrix4(*object.matrixWorld);
                     wp.cornerRadius *= radiusScale;
+                }
+                for (auto& wall : spec.walls) {
+                    for (auto& point : wall.points) point.applyMatrix4(*object.matrixWorld);
+                    wall.height *= std::abs(s.y);
                 }
                 collectVisuals(object, *config);
                 specs.push_back(std::move(spec));

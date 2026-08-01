@@ -1927,9 +1927,92 @@ void EditorApp::drawSplineSection(Object3D& object) {
 
 void EditorApp::drawConveyorSection(Object3D& object) {
 
-    // Two forms of the same section, like the spline's: a conveyor and one of
-    // its waypoints are both ordinary scene nodes — the userData entry and the
-    // parent link tell them apart.
+    // Four forms of the same section, like the spline's two: a conveyor, one
+    // of its waypoints, an attached wall and one of the wall's points are all
+    // ordinary scene nodes — userData entries and parent links tell them apart.
+    if (auto* wall = ConveyorWallConfig::wallOf(object)) {
+
+        if (!section("Wall Point")) return;
+
+        const auto points = ConveyorWallConfig::pointNodes(*wall);
+        std::size_t index = 0;
+        for (std::size_t i = 0; i < points.size(); ++i) {
+            if (points[i] == &object) index = i;
+        }
+        ImGui::TextColored(theme::muted(), "Point %zu of %zu in \"%s\"",
+                           index + 1, points.size(), wall->name.c_str());
+
+        const auto uuid = wall->uuid;
+        if (ImGui::Button("Select Wall")) {
+            deferred_ = [this, uuid] {
+                if (auto* live = findByUuid(document_.scene(), uuid)) selectObject(live);
+            };
+        }
+
+        ImGui::TextColored(theme::muted(), "Drag it in plan - the base finds the deck.");
+        ImGui::TextColored(theme::muted(), "Delete removes it from the wall.");
+
+        ImGui::TreePop();
+        return;
+    }
+
+    if (ConveyorWallConfig::isWall(object)) {
+
+        if (!section("Conveyor Wall")) return;
+
+        auto* target = &object;
+        const auto before = ConveyorWallConfig::read(object).value_or(ConveyorWallConfig{});
+        const auto commitWall = [&](ConveyorWallConfig after, const char* label) {
+            commands_.execute(makeProperty<ConveyorWallConfig>(
+                    label, "conveyorWall:" + object.uuid,
+                    [target](const ConveyorWallConfig& value) { value.write(*target); },
+                    before, after));
+            document_.setDirty(true);
+        };
+
+        ImGui::PushItemWidth(-110 * contentScale_);
+        {
+            float height = before.height;
+            const bool changed = ImGui::DragFloat("Height", &height, 0.005f, 0.02f, 3.f);
+            if (ImGui::IsItemActivated()) commands_.beginTransaction();
+            if (changed) {
+                auto after = before;
+                after.height = std::clamp(height, 0.02f, 3.f);
+                commitWall(after, "Wall Height");
+            }
+            if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        }
+        ImGui::PopItemWidth();
+
+        const auto uuid = object.uuid;
+        if (ImGui::Button("Add Point")) {
+            deferred_ = [this, uuid] {
+                if (auto* live = findByUuid(document_.scene(), uuid)) {
+                    addConveyorWallPoint(*live, "Add Wall Point");
+                }
+            };
+        }
+        ImGui::SameLine();
+        if (object.parent) {
+            const auto parentUuid = object.parent->uuid;
+            if (ImGui::Button("Select Conveyor")) {
+                deferred_ = [this, parentUuid] {
+                    if (auto* live = findByUuid(document_.scene(), parentUuid)) selectObject(live);
+                };
+            }
+        }
+
+        ImGui::TextColored(theme::muted(), "Children are the wall's points, in order.");
+        ImGui::TextColored(theme::muted(),
+                           "The base snaps onto the deck wherever it stands over the belt -");
+        ImGui::TextColored(theme::muted(),
+                           "author in plan. Angle it across the belt to divert cargo.");
+        ImGui::TextColored(theme::muted(), "Stored in userData[\"conveyorWall\"]");
+
+        ImGui::TreePop();
+        return;
+    }
+
     if (auto* conveyor = ConveyorConfig::conveyorOf(object)) {
 
         if (!section("Conveyor Waypoint")) return;
@@ -2153,6 +2236,16 @@ void EditorApp::drawConveyorSection(Object3D& object) {
                 addConveyorPoint(*live, AddObjectCommand::atEnd, "Add Waypoint");
             }
         };
+    }
+    if (!config.separator) {
+        ImGui::SameLine();
+        if (ImGui::Button("Add Wall")) {
+            deferred_ = [this, uuid] {
+                if (auto* live = findByUuid(document_.scene(), uuid)) {
+                    addConveyorWall(*live, "Add Wall");
+                }
+            };
+        }
     }
 
     ImGui::TextColored(theme::muted(), "Children are the waypoints, in order.");

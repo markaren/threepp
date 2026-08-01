@@ -1924,6 +1924,50 @@ void EditorApp::addConveyorPoint(Object3D& conveyor, std::size_t index, const st
     scrollTo_ = raw;
 }
 
+void EditorApp::addConveyorWall(Object3D& conveyor, const std::string& label) {
+
+    if (rejectWhilePlaying(label.c_str())) return;
+    if (!ConveyorConfig::isConveyor(conveyor)) return;
+
+    auto wall = ObjectFactory::createConveyorWall(conveyor);
+    auto* raw = wall.get();
+    commands_.execute(std::make_unique<AddObjectCommand>(conveyor, wall, label,
+                                                         AddObjectCommand::atEnd));
+    document_.setDirty(true);
+    selectObject(raw);
+    scrollTo_ = raw;
+}
+
+void EditorApp::addConveyorWallPoint(Object3D& wall, const std::string& label) {
+
+    if (rejectWhilePlaying(label.c_str())) return;
+    if (!ConveyorWallConfig::isWall(wall)) return;
+
+    // Past the last point along the last span, so the wall visibly extends.
+    const auto points = ConveyorWallConfig::pointNodes(wall);
+    Vector3 position;
+    if (points.empty()) {
+        // Nothing to extend; the wall's own origin.
+    } else if (points.size() == 1) {
+        position.copy(points.back()->position);
+        position.x += 0.5f;
+    } else {
+        position.copy(points.back()->position)
+                .sub(points[points.size() - 2]->position)
+                .add(points.back()->position);
+    }
+
+    auto point = ObjectFactory::createConveyorWallPoint(wall);
+    point->position.copy(position);
+
+    auto* raw = point.get();
+    commands_.execute(std::make_unique<AddObjectCommand>(wall, point, label,
+                                                         AddObjectCommand::atEnd));
+    document_.setDirty(true);
+    selectObject(raw);
+    scrollTo_ = raw;
+}
+
 void EditorApp::deleteSelected() {
 
     // The one that is not merely confusing: PhysX holds an actor per body, and

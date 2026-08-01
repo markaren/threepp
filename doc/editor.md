@@ -1837,6 +1837,22 @@ Waypoint** section edits both:
   `speed / rollerRadius` — and a rollers span builds no belt box underneath,
   so cargo genuinely rides the rollers, gaps included.
 
+**Walls belong to conveyors.** The **Add Wall** button in the Conveyor section
+attaches a wall as a child of the conveyor — a Group carrying
+`userData["conveyorWall"]` (`height=…`) whose own children are the wall's
+points, so dragging a point, rotating the whole wall with the gizmo, deleting
+and undoing are all the ordinary operations. The default is a **diverter**: a
+plow angled across the belt at the path midpoint, ready to feed cargo into a
+lane the moment Play is pressed; drag its two fence-marked points to make it a
+side guide, a funnel, or a longer chicane (Add Point extends it). Two things
+make walls effortless: the base **snaps onto the deck** wherever the wall
+stands over the belt — author entirely in plan, slopes included, no cargo ever
+wedges underneath — and the wall collider is deliberately **low-friction**, so
+the grippy belt keeps pushing while cargo slides along the plow into its lane
+(a wall built from belt material would hold cargo like a hand instead). The
+old whole-conveyor `separator` flag remains for free-standing rails between
+machines.
+
 The viewport helps you author this: every waypoint gets a clickable diamond
 marker (the spline points' machinery, with its own glyph), the path overlay
 carries **chevrons pointing along the flow** (they flip with `reverse`), and

@@ -59,6 +59,7 @@ namespace {
         HemisphereLight,
         SplinePoint,
         ConveyorPoint,
+        WallPoint,
         Sensor,
         kCount
     };
@@ -138,6 +139,15 @@ namespace {
 <path d="M18 2.6 L16.7 1.85 L15.1 4.6 L16.4 5.35 Z"/>
 </svg>)";
 
+            // A fence: two posts and a rail — a conveyor wall's point. Says
+            // "this drags a barrier" before it is clicked.
+            case Icon::WallPoint:
+                return R"(<svg viewBox="0 0 24 24">
+<path d="M4.5 5.5 L8 5.5 L8 20 L4.5 20 Z"/>
+<path d="M16 5.5 L19.5 5.5 L19.5 20 L16 20 Z"/>
+<path d="M2.5 9 L21.5 9 L21.5 12.2 L2.5 12.2 Z"/>
+</svg>)";
+
             // A diamond handle with a core: a conveyor waypoint. Distinct from
             // the spline ring so a scene with both says which system a handle
             // belongs to before it is clicked.
@@ -171,6 +181,7 @@ namespace {
         // is told apart by its parent, not by what it is.
         if (SplineConfig::splineOf(object)) return Icon::SplinePoint;
         if (ConveyorConfig::conveyorOf(object)) return Icon::ConveyorPoint;
+        if (ConveyorWallConfig::wallOf(object)) return Icon::WallPoint;
         if (object.as<Camera>()) return Icon::Camera;
         if (object.as<DirectionalLight>()) return Icon::DirectionalLight;
         if (object.as<SpotLight>()) return Icon::SpotLight;
@@ -307,7 +318,8 @@ void EditorApp::syncViewportMarkers() {
         // discoverable by selecting every object in turn.
         const auto sensor = SensorConfig::read(object);
         if (object.as<Camera>() || object.as<Light>() || SplineConfig::splineOf(object) ||
-            ConveyorConfig::conveyorOf(object) || (sensor && sensor->enabled)) {
+            ConveyorConfig::conveyorOf(object) || ConveyorWallConfig::wallOf(object) ||
+            (sensor && sensor->enabled)) {
             owners.push_back(&object);
         }
     });
