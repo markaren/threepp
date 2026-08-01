@@ -894,8 +894,12 @@ namespace threepp::architecture {
         // all — a per-END overhang length. Real notched corners are trimmed by
         // eye and never line up; a column of ends all cut to the same
         // millimetre is the giveaway that a log wall was extruded, not built.
-        auto emitLogRun = [&](WallSide side, int course, float y, float halfSpan,
-                              bool overhang, bool cap) {
+        // `uCentre` places the run along the wall axis (0 for a full wall);
+        // `explicitCuts` overrides the byWall openings — the dormer face has
+        // its own window on its own course grid, but is otherwise built by
+        // exactly this function.
+        auto emitLogRun = [&](WallSide side, int course, float y, float uCentre, float halfSpan,
+                              bool overhang, bool cap, const std::vector<Span>* explicitCuts = nullptr) {
             const WallFrame wf{side, hx, hz};
             const int wid = static_cast<int>(side) * 31;
             auto rnd = [&](int salt) { return noise::hash2(course, wid + salt, p.seed + 613u); };
@@ -935,8 +939,8 @@ namespace threepp::architecture {
             }
 
             const float yc = y + yOff;
-            const auto cuts = cutsFor(side, yc);
-            const auto runs = subtractSpans({-halfSpan - oA, halfSpan + oB}, cuts);
+            const auto cuts = explicitCuts ? *explicitCuts : cutsFor(side, yc);
+            const auto runs = subtractSpans({uCentre - halfSpan - oA, uCentre + halfSpan + oB}, cuts);
             bLogs.tint = logTintFor(course, static_cast<int>(side));
             bEnds.tint = bLogs.tint;
             for (const auto& s : runs) {
@@ -955,11 +959,11 @@ namespace threepp::architecture {
         for (int k = 0; k < M.wallCourses; ++k) {
             const float y = M.floorY + r + static_cast<float>(k) * rise;
             if (k % 2 == 0) {
-                emitLogRun(WallSide::Front, k, y, hx, true, true);
-                emitLogRun(WallSide::Back, k, y, hx, true, true);
+                emitLogRun(WallSide::Front, k, y, 0.f, hx, true, true);
+                emitLogRun(WallSide::Back, k, y, 0.f, hx, true, true);
             } else {
-                emitLogRun(WallSide::Left, k, y, hz, true, true);
-                emitLogRun(WallSide::Right, k, y, hz, true, true);
+                emitLogRun(WallSide::Left, k, y, 0.f, hz, true, true);
+                emitLogRun(WallSide::Right, k, y, 0.f, hz, true, true);
             }
         }
 
@@ -979,8 +983,8 @@ namespace threepp::architecture {
                 const float avail = hz - (y + r - M.eaveY) / tanP;
                 if (avail < r * 1.4f) break;
                 const float span = std::min(hz, avail);
-                emitLogRun(WallSide::Left, gableCourse, y, span, false, false);
-                emitLogRun(WallSide::Right, gableCourse, y, span, false, false);
+                emitLogRun(WallSide::Left, gableCourse, y, 0.f, span, false, false);
+                emitLogRun(WallSide::Right, gableCourse, y, 0.f, span, false, false);
                 if (y > M.ridgeY) break;// safety
             }
         }
@@ -1119,7 +1123,7 @@ namespace threepp::architecture {
                 /*zBreak*/ rhz,
                 /*zOuter*/ hz + p.porchDepth + p.porchEaveOverhang,
                 /*tanPP*/ std::tan(p.porchRoofPitchDeg * DEG),
-                /*yBreak*/ roofTopY(rhz) - p.roofThickness};
+                /*yBreak*/ roofUnderY(rhz)};
         const float shTexU = 1.f / std::max(0.2f, p.shingleTileU);
         const float shTexV = 1.f / std::max(0.2f, p.shingleTileV);
 
@@ -1159,7 +1163,7 @@ namespace threepp::architecture {
         // porch. Emit the front fascia only on the stretches the porch does
         // not cover.
         {
-            const float yTop = roofTopY(rhz) - p.roofThickness + 0.02f;
+            const float yTop = roofUnderY(rhz) + 0.02f;
             // The fascia OVERLAPS the roof edge rather than butting onto it.
             // Butted flush, its inner face is exactly coplanar with the slab's
             // vertical rake/eave face and the two z-fight into a stippled line
@@ -1448,10 +1452,11 @@ namespace threepp::architecture {
             const float faceStart = roofTopY(hz - r) + r * 0.35f;
             // The dormer face has its own course grid (pitch 2*rise from
             // faceStart + r), so its window snaps to THAT, not the wall's.
+            // Unlike the wall's snapToJoint (joint planes), this snaps to a
+            // log CENTRE — the casing covers the sawn half-log either way.
             const float dCourse0 = faceStart + r;
             auto snapDormer = [&](float y) {
-                const float t = (y - dCourse0) / (2.f * rise);
-                return dCourse0 + (std::round(t) + 0.5f) * 2.f * rise - rise;
+                return dCourse0 + std::round((y - dCourse0) / (2.f * rise)) * 2.f * rise;
             };
             const float dWinY0 = snapDormer(faceStart + p.dormerWindowSill);
             const float dWinY1 = std::max(dWinY0 + 2.f * rise,
@@ -1463,22 +1468,14 @@ namespace threepp::architecture {
                 // under the rake boards.
                 const float span = dormerHalfSpanAt(y + r);
                 if (span < r * 0.75f) break;
-                // Reuse the front wall's cut logic so a dormer window trims the
-                // courses the same way a wall window does.
-                bLogs.tint = logTintFor(1000 + i, 0);
-                const WallFrame wf{WallSide::Front, hx, hz};
+                // The SAME course builder the walls use (jitter, taper, bow,
+                // wander), with the dormer window as an explicit cut on the
+                // dormer's own grid. Course ids start at 1000 so the tint and
+                // jitter streams cannot collide with the wall courses below.
                 std::vector<Span> cuts;
                 if (y > dWinY0 && y < dWinY1)
                     cuts.push_back({cx - p.dormerWindowWidth * 0.5f - BUCK, cx + p.dormerWindowWidth * 0.5f + BUCK});
-                const float rj = r * (1.f + p.logRadiusJitter * noise::hash2(i, 11, p.seed + 641u));
-                const Vector3 dBow{0.f, p.logSag * 0.6f, (noise::hash2(i, 13, p.seed + 641u) - 0.5f) * r * 0.16f};
-                for (const auto& s : subtractSpans({cx - span, cx + span}, cuts)) {
-                    if (s.length() < r * 1.1f) continue;
-                    bLogs.tube(wf.point(s.a, y, 0.f), wf.point(s.b, y, 0.f), rj, std::max(r, rj * 0.97f),
-                               p.logRadialSegments, p.logAxialSegments, dBow, logTex, nullptr,
-                               noise::hash2(i, 3, p.seed + 641u) * 3.f);
-                }
-                bLogs.tint.set(1.f, 1.f, 1.f);
+                emitLogRun(WallSide::Front, 1000 + i, y, cx, span, false, false, &cuts);
             }
             // Backing shell for the face (also seals the gap down to the roof).
             // Bands only — NO flat rear panel: a full-height rectangle behind
