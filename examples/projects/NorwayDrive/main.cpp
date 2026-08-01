@@ -331,6 +331,20 @@ int main(int argc, char** argv) {
         return network.corridorIntersects(cx, cz, half) ? 2.2f : 1.0f;
     };
     {
+        // Per-band structure sets (grass/rock/scree/snow) — screen-density
+        // material structure selected by the baked weight map; the macro splat
+        // (painted road included) stays the colour base. The single detail
+        // layer below remains as the band-less fallback.
+        const terrain::TerrainBandSet bands = terrain::makeTerrainBandSet();
+        for (size_t i = 0; i < 4; ++i) {
+            tileOpts.bandAlbedo[i] = bands.band[i].albedo;
+            tileOpts.bandNormalRough[i] = bands.band[i].normalRough;
+        }
+        tileOpts.bandRepeat = bands.repeat;
+        tileOpts.bandRoughness = bands.roughness;
+        tileOpts.bandStrength = 0.8f;
+        tileOpts.bandNormalScale = 1.4f;// relief lighting carries the depth read
+        tileOpts.bandRoughStrength = 0.6f;
         const terrain::DetailMaps dm = terrain::makeDetailMaps({});
         tileOpts.detailMap = dm.albedo;
         tileOpts.detailNormalMap = dm.normalRough;

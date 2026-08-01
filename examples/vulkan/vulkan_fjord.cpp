@@ -240,6 +240,42 @@ namespace {
         rgb[2] = col.z;
     }
 
+    // STRUCTURE-band coverage mirroring fjordAlbedo's band decisions (same
+    // thresholds and noise, so colour and structure can never disagree):
+    // 0 grass (grass/heath/fell ground), 1 rock, 2 scree (+gravel beach),
+    // 3 snow. Underwater and the wet shore band stay structure-free — the
+    // macro colour carries them (wet rock is smooth; sediment is invisible
+    // relief anyway).
+    void fjordWeights(float x, float z, float hC, float slope, float* w4) {
+        w4[0] = w4[1] = w4[2] = w4[3] = 0.f;
+        if (hC < 0.35f) {
+            // Wet shore / shallow bottom: modest ROCK structure so the band
+            // isn't a featureless smooth strip; fades out with depth (deep
+            // bottom stays macro-only — invisible relief anyway).
+            w4[1] = 0.35f * smoothstepf(-4.f, 0.35f, hC);
+            return;
+        }
+        if (hC < 1.2f && slope < 0.38f) {
+            // Gravel beach: scree-family structure, grass poking through where
+            // the albedo's breakup lerps toward grass.
+            const float breakup = smoothstepf(0.45f, 0.75f, fbm2(x * 0.038f, z * 0.038f));
+            const float grassT = std::max(breakup, smoothstepf(0.8f, 1.2f, hC) * 0.6f);
+            w4[2] = 0.85f * (1.f - grassT);
+            w4[0] = grassT;
+            return;
+        }
+        const float wig = fbm2(x * 0.019f, z * 0.019f) - 0.5f;
+        const float screeT = smoothstepf(0.24f, 0.42f, slope);
+        const float rockT = smoothstepf(0.45f, 0.62f, slope);
+        const float snowLine = 300.f + 70.f * wig;
+        const float snowT = smoothstepf(snowLine - 28.f, snowLine + 28.f, hC) *
+                            (1.f - smoothstepf(0.50f, 0.68f, slope));// slope-shed, like the colour
+        w4[0] = (1.f - screeT) * (1.f - snowT);
+        w4[2] = screeT * (1.f - rockT) * (1.f - snowT);
+        w4[1] = rockT * (1.f - snowT);
+        w4[3] = snowT;
+    }
+
     // ═════════════════════════ sun / moon / sky ═════════════════════════════
 
     struct CelestialState {
@@ -937,6 +973,7 @@ int main(int argc, char** argv) {
         return base + detailRelief(x, z, base, slopeMask, padX, kPadZ);
     };
     prov.albedo = &fjordAlbedo;
+    prov.weights = &fjordWeights;
 
     // Shallow tree, fat tiles: a 97²-vert tile at depth 3 already gives ~1 m
     // near vertex spacing, at a third of the live-mesh count of a depth-4 tree.
@@ -955,6 +992,29 @@ int main(int argc, char** argv) {
     // ground relief lighting + roughness breakup. The shader distance-fades
     // every term so the far fjord walls stay pattern-free and shimmer-free.
     {
+        // Per-band STRUCTURE sets (grass/rock/scree/snow), selected by the
+        // baked fjordWeights map: material structure resolves at screen
+        // density (stochastic-tiled, triplanar, height-blended) over the
+        // fjordAlbedo macro colour. FJ_NO_BANDS=1 falls back to the single
+        // detail layer below for A/B.
+        const bool noBands = [] {
+            const char* v = std::getenv("FJ_NO_BANDS");
+            return v && v[0] == '1';
+        }();
+        if (!noBands) {
+            const terrain::TerrainBandSet bands = terrain::makeTerrainBandSet();
+            for (size_t i = 0; i < 4; ++i) {
+                tileOpts.bandAlbedo[i] = bands.band[i].albedo;
+                tileOpts.bandNormalRough[i] = bands.band[i].normalRough;
+            }
+            tileOpts.bandRepeat = bands.repeat;
+            tileOpts.bandRoughness = bands.roughness;
+            tileOpts.bandStrength = 0.85f;
+            tileOpts.bandNormalScale = 1.4f;
+            tileOpts.bandRoughStrength = 0.5f;
+        }
+        // Legacy cm-scale detail layer — the band-less fallback (env override
+        // above; also what the tiles use if bands are ever cleared).
         terrain::DetailMapOptions dopt;
         dopt.dim = 256;
         dopt.seed = 4242u;

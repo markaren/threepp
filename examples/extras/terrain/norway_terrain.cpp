@@ -28,6 +28,7 @@
 #include "threepp/extras/terrain/GeoBuildings.hpp"
 #include "threepp/extras/terrain/GeoTerrain.hpp"
 #include "threepp/extras/terrain/GeoTerrainPack.hpp"
+#include "threepp/extras/terrain/TerrainScatter.hpp"
 #include "threepp/extras/terrain/TerrainTiles.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
@@ -283,6 +284,28 @@ int main(int argc, char** argv) {
         };
     }
     {
+        // Per-band STRUCTURE sets (grass/rock/scree/snow): the terrain shader
+        // resolves them at screen density over the macro splat, selected by
+        // the baked weight map (provider.weights ← the Norwegian splat rules).
+        // NT_NO_BANDS=1 falls back to the legacy single detail layer for A/B.
+        const bool noBands = [] {
+            const char* v = std::getenv("NT_NO_BANDS");
+            return v && v[0] == '1';
+        }();
+        if (!noBands) {
+            const terrain::TerrainBandSet bands = terrain::makeTerrainBandSet();
+            for (size_t i = 0; i < 4; ++i) {
+                tileOpts.bandAlbedo[i] = bands.band[i].albedo;
+                tileOpts.bandNormalRough[i] = bands.band[i].normalRough;
+            }
+            tileOpts.bandRepeat = bands.repeat;
+            tileOpts.bandRoughness = bands.roughness;
+            tileOpts.bandStrength = 0.8f;
+            tileOpts.bandNormalScale = 1.4f;// relief lighting carries the depth read
+            tileOpts.bandRoughStrength = 0.6f;
+        }
+        // Legacy cm-scale detail layer — the fallback wherever bands are off
+        // (env override above, or the GL backend which ignores band fields).
         const terrain::DetailMaps dm = terrain::makeDetailMaps({});
         tileOpts.detailMap = dm.albedo;
         tileOpts.detailNormalMap = dm.normalRough;
@@ -370,6 +393,18 @@ int main(int argc, char** argv) {
     auto tiles = terrain::TileTerrain::create(prov, tileOpts);
     tiles->name = "norway_terrain";
     scene.add(tiles);
+
+    // Near-field ground cover: instanced stones + grass tufts scattered from
+    // the SAME provider (weights keep them off pavement and pick species by
+    // band). Texture structure can't survive grazing-angle minification in the
+    // last metres — physical props are what carry that range. NT_NO_SCATTER=1
+    // disables for A/B.
+    std::shared_ptr<terrain::TerrainScatter> scatter;
+    if (!envSet("NT_NO_SCATTER")) {
+        scatter = terrain::TerrainScatter::create(prov, {});
+        scatter->name = "ground_cover";
+        scene.add(scatter);
+    }
 
     // Roads are BAKED into the terrain (carve + paint above); bridge decks are
     // always ribbon geometry. NEAR-DETAIL HYBRID: on-ground ribbon CHUNKS
@@ -600,6 +635,7 @@ int main(int argc, char** argv) {
             camera.lookAt(camTargetArg);
         }
         if (!freezeTiles) tiles->update(lodPos);
+        if (scatter && !freezeTiles) scatter->update(lodPos);
         renderer->render(scene, camera);
         if (ui) ui->render();
 
