@@ -33,6 +33,7 @@
 #include "threepp/extras/architecture/LogCabin.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
+#include "threepp/extras/terrain/RockGeometry.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
 #include "threepp/extras/terrain/TerrainTiles.hpp"
 #include "threepp/extras/vegetation/TreeGenerator.hpp"
@@ -608,49 +609,6 @@ namespace {
     // threepp::vegetation::buildGrassTiles (extras/vegetation/GrassTiles.hpp) —
     // see the "valley meadow grass" block in main().
 
-    // Low-poly faceted boulder (from the forest demo).
-    std::shared_ptr<BufferGeometry> makeRock(unsigned int seed) {
-        constexpr int latSegs = 5, lonSegs = 7;
-        std::mt19937 rng(seed);
-        std::uniform_real_distribution<float> u(-kPi, kPi);
-        const float p1 = u(rng), p2 = u(rng), p3 = u(rng);
-        std::vector<float> pos, nrm, uv;
-        std::vector<unsigned int> idx;
-        for (int lat = 0; lat <= latSegs; ++lat) {
-            const float theta = static_cast<float>(lat) / latSegs * kPi;
-            const float sinT = std::sin(theta), cosT = std::cos(theta);
-            for (int lon = 0; lon <= lonSegs; ++lon) {
-                const float phi = static_cast<float>(lon) / lonSegs * kTau;
-                const float nx = sinT * std::cos(phi), ny = cosT, nz = sinT * std::sin(phi);
-                // Every phi-dependent term is gated by sinT so it vanishes at the
-                // poles (theta = 0, PI). Ungated cos(3phi)/cos(5phi) give each pole
-                // vertex a DIFFERENT radius, smearing the single pole point into a
-                // fan of thin sliver triangles whose sub-pixel coverage toggles with
-                // the TAA jitter and flickers uniformly every frame. Gated, the pole
-                // vertices coincide → zero-area triangles that rasterize to nothing.
-                float disp = 1.f + sinT * (0.30f * std::sin(2.f * phi + p1) + 0.24f * std::cos(3.f * phi + p2) +
-                                           0.14f * std::cos(5.f * phi + 4.f * theta + p1)) +
-                             0.22f * std::sin(3.f * theta + p3);
-                disp = std::clamp(disp, 0.6f, 1.5f);
-                pos.insert(pos.end(), {nx * disp, ny * disp, nz * disp});
-                nrm.insert(nrm.end(), {nx, ny, nz});
-                uv.insert(uv.end(), {static_cast<float>(lon) / lonSegs, static_cast<float>(lat) / latSegs});
-            }
-        }
-        const int rowVerts = lonSegs + 1;
-        for (int lat = 0; lat < latSegs; ++lat)
-            for (int lon = 0; lon < lonSegs; ++lon) {
-                const auto a = static_cast<unsigned int>(lat * rowVerts + lon);
-                const auto b = static_cast<unsigned int>(a + rowVerts);
-                idx.insert(idx.end(), {a, a + 1, b, a + 1, b + 1, b});
-            }
-        auto geo = BufferGeometry::create();
-        geo->setIndex(idx);
-        geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
-        geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
-        geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
-        return geo;
-    }
 
     // ═══════════════════════════ cabin / dock / boat ════════════════════════
 
@@ -1107,7 +1065,9 @@ int main(int argc, char** argv) {
                 MeshStandardMaterial::Params{}.color(Color(0.30f, 0.29f, 0.27f)).roughness(1.f).metalness(0.f));
         rockMat->flatShading = true;
         rockMat->envMapIntensity = 0.35f;
-        std::vector<std::shared_ptr<BufferGeometry>> rgeos{makeRock(1u), makeRock(2u), makeRock(3u)};
+        std::vector<std::shared_ptr<BufferGeometry>> rgeos{terrain::makeRockGeometry(1u),
+                                                           terrain::makeRockGeometry(2u),
+                                                           terrain::makeRockGeometry(3u)};
         std::vector<std::vector<Matrix4>> xf(rgeos.size());
         std::mt19937 rng(99u);
         std::uniform_real_distribution<float> u01(0.f, 1.f);

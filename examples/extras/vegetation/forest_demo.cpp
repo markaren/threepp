@@ -13,6 +13,7 @@
 // sun, with distance fog for depth.
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
+#include "threepp/extras/terrain/RockGeometry.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
 #include "threepp/extras/vegetation/TreeGenerator.hpp"
 #include "threepp/extras/vegetation/TreeTextures.hpp"
@@ -344,64 +345,6 @@ namespace {
         return geo;
     }
 
-    // Low-poly faceted boulder: a sphere displaced by a few smooth lumps.
-    // Pair with a flat-shaded material for crisp facets.
-    std::shared_ptr<BufferGeometry> makeRock(unsigned int seed) {
-        constexpr int latSegs = 5, lonSegs = 7;
-        constexpr float PI = 3.14159265358979f;
-        std::mt19937 rng(seed);
-        std::uniform_real_distribution<float> u(-PI, PI);
-        const float p1 = u(rng), p2 = u(rng), p3 = u(rng);
-
-        std::vector<float> pos, nrm, uv;
-        std::vector<unsigned int> idx;
-        for (int lat = 0; lat <= latSegs; ++lat) {
-            const float theta = static_cast<float>(lat) / latSegs * PI;
-            const float sinT = std::sin(theta), cosT = std::cos(theta);
-            for (int lon = 0; lon <= lonSegs; ++lon) {
-                const float phi = static_cast<float>(lon) / lonSegs * 2.f * PI;
-                const float nx = sinT * std::cos(phi);
-                const float ny = cosT;
-                const float nz = sinT * std::sin(phi);
-                // Every phi-dependent term is gated by sinT so it vanishes at the
-                // poles (theta = 0, PI). Ungated cos(3phi)/cos(5phi) give each pole
-                // vertex a DIFFERENT radius, smearing the single pole point into a
-                // fan of long, thin sliver triangles stacked along Y — whose sub-
-                // pixel coverage toggles with the per-frame TAA jitter and flickers
-                // uniformly every frame (the 0-2 faces facing the camera). Gated,
-                // the pole vertices coincide → zero-area triangles that rasterize to
-                // nothing, leaving a clean pole fan. Only the phi-independent
-                // sin(3*theta) term survives at the poles (a uniform radius there).
-                float disp = 1.f + sinT * (0.30f * std::sin(2.f * phi + p1) +
-                                           0.24f * std::cos(3.f * phi + p2) +
-                                           0.14f * std::cos(5.f * phi + 4.f * theta + p1)) +
-                             0.22f * std::sin(3.f * theta + p3);
-                disp = std::clamp(disp, 0.6f, 1.5f);
-                pos.push_back(nx * disp);
-                pos.push_back(ny * disp);
-                pos.push_back(nz * disp);
-                nrm.push_back(nx); nrm.push_back(ny); nrm.push_back(nz);
-                uv.push_back(static_cast<float>(lon) / lonSegs);
-                uv.push_back(static_cast<float>(lat) / latSegs);
-            }
-        }
-        const int rowVerts = lonSegs + 1;
-        for (int lat = 0; lat < latSegs; ++lat) {
-            for (int lon = 0; lon < lonSegs; ++lon) {
-                const auto a = static_cast<unsigned int>(lat * rowVerts + lon);
-                const auto b = static_cast<unsigned int>(a + rowVerts);
-                // CCW from outside (outward-facing normals for flat shading).
-                idx.push_back(a); idx.push_back(a + 1); idx.push_back(b);
-                idx.push_back(a + 1); idx.push_back(b + 1); idx.push_back(b);
-            }
-        }
-        auto geo = BufferGeometry::create();
-        geo->setIndex(idx);
-        geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
-        geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
-        geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
-        return geo;
-    }
 
 }// namespace
 
@@ -785,7 +728,9 @@ int main(int argc, char** argv) {
                 MeshStandardMaterial::Params{}.color(Color(0.30f, 0.28f, 0.25f)).roughness(1.f).metalness(0.f));
         rockMat->flatShading = true;
         rockMat->envMapIntensity = 0.3f;// keep boulders grey stone, not white blobs
-        std::vector<std::shared_ptr<BufferGeometry>> rgeos{makeRock(1u), makeRock(2u), makeRock(3u)};
+        std::vector<std::shared_ptr<BufferGeometry>> rgeos{terrain::makeRockGeometry(1u),
+                                                           terrain::makeRockGeometry(2u),
+                                                           terrain::makeRockGeometry(3u)};
         std::vector<std::vector<Matrix4>> xf(rgeos.size());
         std::mt19937 rng(99u);
         std::uniform_real_distribution<float> u01(0.f, 1.f);

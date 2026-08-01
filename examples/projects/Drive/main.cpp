@@ -27,6 +27,7 @@
 #include "threepp/extras/physx/PhysxVehicleEngineDrive.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/road/RoadGenerator.hpp"
+#include "threepp/extras/terrain/RockGeometry.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
 #include "threepp/extras/vegetation/GrassField.hpp"
 #include "threepp/extras/vegetation/TreeGenerator.hpp"
@@ -131,45 +132,6 @@ namespace {
         return geo;
     }
 
-    std::shared_ptr<BufferGeometry> makeRock(unsigned int seed) {
-        constexpr int latSegs = 5, lonSegs = 7;
-        constexpr float PI = 3.14159265358979f;
-        std::mt19937 rng(seed);
-        std::uniform_real_distribution<float> u(-PI, PI);
-        const float p1 = u(rng), p2 = u(rng), p3 = u(rng);
-        std::vector<float> pos, nrm, uv;
-        std::vector<unsigned int> idx;
-        for (int lat = 0; lat <= latSegs; ++lat) {
-            const float theta = static_cast<float>(lat) / latSegs * PI;
-            const float sinT = std::sin(theta), cosT = std::cos(theta);
-            for (int lon = 0; lon <= lonSegs; ++lon) {
-                const float phi = static_cast<float>(lon) / lonSegs * 2.f * PI;
-                const float nx = sinT * std::cos(phi), ny = cosT, nz = sinT * std::sin(phi);
-                float disp = 1.f + 0.30f * std::sin(2.f * phi + p1) * sinT +
-                             0.24f * std::cos(3.f * phi + p2) +
-                             0.22f * std::sin(3.f * theta + p3);
-                disp = std::clamp(disp, 0.6f, 1.5f);
-                pos.push_back(nx * disp); pos.push_back(ny * disp); pos.push_back(nz * disp);
-                nrm.push_back(nx); nrm.push_back(ny); nrm.push_back(nz);
-                uv.push_back(static_cast<float>(lon) / lonSegs);
-                uv.push_back(static_cast<float>(lat) / latSegs);
-            }
-        }
-        const int rowVerts = lonSegs + 1;
-        for (int lat = 0; lat < latSegs; ++lat)
-            for (int lon = 0; lon < lonSegs; ++lon) {
-                const auto a = static_cast<unsigned int>(lat * rowVerts + lon);
-                const auto b = static_cast<unsigned int>(a + rowVerts);
-                idx.push_back(a); idx.push_back(a + 1); idx.push_back(b);
-                idx.push_back(a + 1); idx.push_back(b + 1); idx.push_back(b);
-            }
-        auto geo = BufferGeometry::create();
-        geo->setIndex(idx);
-        geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
-        geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
-        geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
-        return geo;
-    }
 
     float smooth01(float e0, float e1, float x) {
         const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
@@ -643,7 +605,9 @@ int main(int argc, char** argv) {
                 MeshStandardMaterial::Params{}.color(Color(0.30f, 0.28f, 0.25f)).roughness(1.f).metalness(0.f));
         rockMat->flatShading = true;
         rockMat->envMapIntensity = 0.3f;
-        std::vector<std::shared_ptr<BufferGeometry>> rgeos{makeRock(1u), makeRock(2u), makeRock(3u)};
+        std::vector<std::shared_ptr<BufferGeometry>> rgeos{terrain::makeRockGeometry(1u),
+                                                           terrain::makeRockGeometry(2u),
+                                                           terrain::makeRockGeometry(3u)};
         std::vector<std::vector<Matrix4>> xf(rgeos.size());
         std::mt19937 rng(99u);
         std::uniform_real_distribution<float> u01(0.f, 1.f);
