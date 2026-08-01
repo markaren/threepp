@@ -340,25 +340,44 @@ namespace {
             return 0.07957747154594767f * ((1.f - g2) / std::pow(1.f - 2.f * g * cosTheta + g2, 1.5f));
         }
 
-        [[nodiscard]] Vector3 radiance(const Vector3& dir, const CelestialState& cs) const {
+        // Rayleigh/Mie scattering coefficients for the current sun height (the
+        // Rayleigh term collapses as the sun sets, via sunfade). ONE source for
+        // both the sky radiance and the sun-light transmittance tint below —
+        // these were computed twice with independently-truncated constants
+        // (5.8e-6 vs 5.804...e-6) and a hard-coded 2.2 in place of
+        // rayleigh - (1 - sunfade), so the sun's colour came from a slightly
+        // different atmosphere than the sky it hung in.
+        void scatterCoeffs(const CelestialState& cs, Vector3& betaR, Vector3& betaM) const {
             const Vector3 totalRayleigh(5.804542996261093e-6f, 1.3562911419845635e-5f, 3.0265902468824876e-5f);
             const Vector3 mieConst(1.8399918514433978e14f, 2.7798023919660528e14f, 4.0790479543861094e14f);
-
-            const float sunE = sunIntensityEE(cs.sunDir.y);
             const float sunfade = 1.f - std::clamp(1.f - std::exp(cs.sunDir.y), 0.f, 1.f);
             const float rayleighCoeff = rayleigh - (1.f - sunfade);
-            const Vector3 betaR(totalRayleigh.x * rayleighCoeff, totalRayleigh.y * rayleighCoeff,
-                                totalRayleigh.z * rayleighCoeff);
+            betaR.set(totalRayleigh.x * rayleighCoeff, totalRayleigh.y * rayleighCoeff,
+                      totalRayleigh.z * rayleighCoeff);
             const float mieC = 0.434f * (0.2f * turbidity) * 1e-17f * mieCoefficient;
-            const Vector3 betaM(mieConst.x * mieC, mieConst.y * mieC, mieConst.z * mieC);
+            betaM.set(mieConst.x * mieC, mieConst.y * mieC, mieConst.z * mieC);
+        }
 
-            const float zenith = std::acos(std::max(0.f, dir.y));
+        // Beer-Lambert extinction along the view path toward elevation dirY:
+        // the Preetham optical depth for a slant path, applied to the combined
+        // scattering coefficients.
+        static Vector3 extinction(const Vector3& betaR, const Vector3& betaM, float dirY) {
+            const float zenith = std::acos(std::max(0.f, dirY));
             const float inv = 1.f / (std::cos(zenith) +
                                      0.15f * std::pow(93.885f - zenith * 180.f / kPi, -1.253f));
             const float sR = 8400.f * inv, sM = 1250.f * inv;
-            const Vector3 fex(std::exp(-(betaR.x * sR + betaM.x * sM)),
-                              std::exp(-(betaR.y * sR + betaM.y * sM)),
-                              std::exp(-(betaR.z * sR + betaM.z * sM)));
+            return {std::exp(-(betaR.x * sR + betaM.x * sM)),
+                    std::exp(-(betaR.y * sR + betaM.y * sM)),
+                    std::exp(-(betaR.z * sR + betaM.z * sM))};
+        }
+
+        [[nodiscard]] Vector3 radiance(const Vector3& dir, const CelestialState& cs) const {
+            const float sunE = sunIntensityEE(cs.sunDir.y);
+            const float sunfade = 1.f - std::clamp(1.f - std::exp(cs.sunDir.y), 0.f, 1.f);
+            Vector3 betaR, betaM;
+            scatterCoeffs(cs, betaR, betaM);
+
+            const Vector3 fex = extinction(betaR, betaM, dir.y);
 
             const float cosTheta = std::clamp(dir.dot(cs.sunDir), -1.f, 1.f);
             const float ct = cosTheta * 0.5f + 0.5f;
@@ -1675,14 +1694,14 @@ int main(int argc, char** argv) {
         // Sun light: direction + Preetham transmittance tint.
         {
             sun->position.copy(cs.sunDir).multiplyScalar(1500.f);
-            const float zen = std::acos(std::max(0.f, cs.sunDir.y));
-            const float inv = 1.f / (std::cos(zen) + 0.15f * std::pow(93.885f - zen * 180.f / kPi, -1.253f));
-            const float sR = 8400.f * inv, sM = 1250.f * inv;
-            const Vector3 betaR(5.8e-6f * 2.2f, 1.356e-5f * 2.2f, 3.026e-5f * 2.2f);
-            const float mieC = 0.434f * (0.2f * sky.turbidity) * 1e-17f * sky.mieCoefficient;
-            Color tint(std::exp(-(betaR.x * sR + 1.84e14f * mieC * sM)),
-                       std::exp(-(betaR.y * sR + 2.78e14f * mieC * sM)),
-                       std::exp(-(betaR.z * sR + 4.08e14f * mieC * sM)));
+            // Same atmosphere as the sky: SkyModel's own coefficients and slant
+            // extinction, evaluated toward the sun. (This block used to keep a
+            // private copy with truncated constants and a hard-coded Rayleigh
+            // scale — the sun could drift out of colour agreement with its sky.)
+            Vector3 betaR, betaM;
+            sky.scatterCoeffs(cs, betaR, betaM);
+            const Vector3 fex = SkyModel::extinction(betaR, betaM, cs.sunDir.y);
+            Color tint(fex.x, fex.y, fex.z);
             // Normalise the transmittance tint so a low sun turns ORANGE without
             // losing its punch (raw Beer-Lambert kills the energy with the hue),
             // then soften toward warm-white — full spectral tint paints whole
