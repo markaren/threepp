@@ -104,6 +104,59 @@ TEST_CASE("a saved conveyor rebuilds belt physics that conveys, without the edit
     CHECK(conveyed);
 }
 
+TEST_CASE("a rollers run conveys on REAL roller colliders, with no belt box underneath") {
+
+    // Author a conveyor whose every segment is a roller bed, straight to the
+    // spec (no document round-trip needed — the schema is covered elsewhere).
+    SceneDocument authoring;
+    auto conveyorNode = ObjectFactory::createConveyor(authoring.scene());
+    authoring.scene().add(conveyorNode);
+    auto config = ConveyorConfig::read(*conveyorNode).value();
+    config.speed = 1.f;
+    config.write(*conveyorNode);
+    ConveyorWaypointConfig rollers;
+    rollers.segKind = conveyor::SegKind::Rollers;
+    for (auto* node : ConveyorConfig::waypointNodes(*conveyorNode)) rollers.write(*node);
+
+    auto spec = config.spec(*conveyorNode);
+
+    // Scoped: only one PhysX foundation may exist, so the forward world must
+    // be gone before the reversed one comes up.
+    {
+        PhysxWorld world;
+        conveyor::ConveyorPhysics belts(world, {spec});
+
+        // The claim in numbers: rollers exist, drag boxes do not — whatever
+        // carries the cargo below can only be the spinning capsules.
+        CHECK(belts.beltCount() == 0);
+        CHECK(belts.rollerCount() >= 10);
+
+        auto* cargo = dropCargo(world, -1.2f, 1.f, 0.f);
+        bool conveyed = false;
+        for (int i = 0; i < 300 && !conveyed; ++i) {
+            world.step(1.f / 60.f);
+            const auto p = cargo->getGlobalPose().p;
+            // Riding AT roller height (top of the bed = the authored surface),
+            // carried along by rolling contact alone.
+            if (p.x > -1.2f + 0.8f && p.y > 0.6f && std::abs(p.z) < 0.3f) conveyed = true;
+        }
+        CHECK(conveyed);
+    }
+
+    // And reverse spins the same rollers the other way.
+    spec.reverse = true;
+    PhysxWorld reversedWorld;
+    conveyor::ConveyorPhysics reversedBelts(reversedWorld, {spec});
+    auto* back = dropCargo(reversedWorld, 1.2f, 1.f, 0.f);
+    bool conveyedBack = false;
+    for (int i = 0; i < 300 && !conveyedBack; ++i) {
+        reversedWorld.step(1.f / 60.f);
+        const auto p = back->getGlobalPose().p;
+        if (p.x < 1.2f - 0.8f && p.y > 0.6f) conveyedBack = true;
+    }
+    CHECK(conveyedBack);
+}
+
 TEST_CASE("reverse flips the travel direction, same document") {
 
     const auto specs = exportedSpecs(1.f, true);

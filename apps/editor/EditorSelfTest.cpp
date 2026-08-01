@@ -3608,7 +3608,18 @@ int EditorApp::runSelfTest() {
 #ifdef THREEPP_EDITOR_WITH_PHYSX
         // Play: the belt CONVEYS. A dynamic box dropped onto the moving surface
         // must travel along it — that is the feature, everything else is décor.
+        // The first segment is a roller bed, so the same run also proves the
+        // rollers are REAL colliders (a rollers span builds no drag box — the
+        // capsules carry the cargo) and that the rollers→belt handoff works.
         {
+            if (auto* live = conveyorNow(conveyorUuid)) {
+                auto nodes = ConveyorConfig::waypointNodes(*live);
+                ConveyorWaypointConfig rollers;
+                rollers.segKind = conveyor::SegKind::Rollers;
+                rollers.write(*nodes.front());
+                step();
+            }
+
             auto boxMesh = ObjectFactory::createPrimitive(Primitive::Box,
                                                           document_.scene());
             boxMesh->name = "ConveyorCargo";
@@ -3630,6 +3641,8 @@ int EditorApp::runSelfTest() {
                   "the play session picks the conveyor up");
             check(conveyorSession_ && conveyorSession_->beltCount() >= 2,
                   "and builds belt colliders for it");
+            check(conveyorSession_ && conveyorSession_->rollerCount() >= 3,
+                  "and real roller colliders for the roller bed");
 
             auto* cargo1 = findByUuid(document_.scene(), cargoUuid);
             float startX = cargo1 ? cargo1->position.x : 0.f;
@@ -3658,6 +3671,14 @@ int EditorApp::runSelfTest() {
             auto* restored = findByUuid(document_.scene(), cargoUuid);
             check(restored && std::abs(restored->position.x - (-1.2f)) < 1e-3f,
                   "and Stop puts the cargo back where it was authored");
+
+            // Back to an all-flat belt for the rounds that follow (the soft
+            // cargo lands on this conveyor too).
+            if (auto* live = conveyorNow(conveyorUuid)) {
+                auto nodes = ConveyorConfig::waypointNodes(*live);
+                ConveyorWaypointConfig::erase(*nodes.front());
+                step();
+            }
         }
 
         // A rounded corner is ONE rotating bend body, tangent by construction,

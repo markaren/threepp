@@ -22,6 +22,13 @@
 // convex annular wedges that share their radial faces (no overlap, no gap).
 // The wedges are cooked GPU-compatible so deformables collide with them.
 //
+// A ROLLERS span builds no drag box at all: every roller is a real collider —
+// a kinematic capsule at exactly the visual cylinder's pose, spun about its
+// own axis. A rotationally symmetric shape turning about that axis occupies
+// the same volume forever, so no teleport-back is needed and every contact
+// reads the true rolling surface velocity; cargo rides the rollers
+// themselves, gaps included.
+//
 // Cleats are the exception to the teleport-back trick: a teleported-back wall
 // un-does its push, so cleat bars GENUINELY travel along the path (kinematic
 // targets marching forward), wrapping end→start with a plain teleport. The
@@ -100,8 +107,12 @@ namespace threepp::conveyor {
 
         [[nodiscard]] const std::vector<ConveyorSpec>& specs() const { return specs_; }
 
-        // Belt colliders built (straight segments + bend bodies + walls).
+        // Belt colliders built (straight drag segments + bend bodies).
         [[nodiscard]] std::size_t beltCount() const { return belts_.size(); }
+
+        // Driven roller colliders built — one spinning capsule per roller. A
+        // rollers run has NO drag box underneath: cargo rides these.
+        [[nodiscard]] std::size_t rollerCount() const { return spinners_.size(); }
 
         // --- Cleat tracks, for visual mirroring ------------------------------
         //
@@ -139,6 +150,16 @@ namespace threepp::conveyor {
             ::physx::PxVec3 velocity{0, 0, 0};// straight: world m/s
             float omega = 0.f;                // bend: rad/s about the actor's own +Y (arc centre)
             ::physx::PxTransform saved{::physx::PxIdentity};
+        };
+
+        // A driven roller: a kinematic capsule spun about its own long axis.
+        // Spinning a rotationally symmetric shape about that axis leaves its
+        // volume untouched, so unlike the belts there is nothing to teleport
+        // back — the kinematic target just keeps turning, and every contact
+        // reads the true rolling surface velocity omega * radius.
+        struct Spinner {
+            ::physx::PxRigidDynamic* actor = nullptr;
+            float omega = 0.f;// rad/s about the capsule's local +X (the roller axis)
         };
 
         // One travelling cleat bar.
@@ -205,7 +226,7 @@ namespace threepp::conveyor {
         // flows A→B (a +Y turn moves a surface point to a LOWER path angle,
         // hence the minus).
         void addArcBelt(const Vector3& A, const Vector3& C, const Vector3& B,
-                        float width, float speed, const Vector3& incoming) {
+                        float width, float speed, float direction, const Vector3& incoming) {
 
             using namespace ::physx;
 
@@ -213,7 +234,7 @@ namespace threepp::conveyor {
             const Arc arc = computeArc(A, C, B, incoming);
             const float radius = 0.5f * (arc.radA + arc.radB);
             if (!arc.valid || radius < 1e-3f) {// degenerate — fall back to a straight chord
-                addStraightSeg(A, B, width, speed);
+                addStraightSeg(A, B, width, speed * direction);
                 return;
             }
             const float deckY = 0.5f * (A.y + B.y);// horizontal bend
@@ -262,69 +283,114 @@ namespace threepp::conveyor {
             }
             if (!any) {// every wedge failed to cook — keep the path conveying
                 actor->release();
-                addStraightSeg(A, B, width, speed);
+                addStraightSeg(A, B, width, speed * direction);
                 return;
             }
             world_->scene().addActor(*actor);
             actors_.push_back(actor);
-            const float omega = -std::copysign(speed / radius, arc.sweep);
+            const float omega = -std::copysign(speed / radius, arc.sweep) * direction;
             belts_.push_back({actor, true, PxVec3(0, 0, 0), omega, PxTransform(PxIdentity)});
         }
 
-        // Belt colliders along the waypoint path: straight runs become
-        // linearly-dragged boxes; each rounded corner becomes one
-        // rotationally-driven bend body built from the SAME fillet the drawn
-        // ribbon samples (cornerFillet), so collider and visual agree by
-        // construction. `reverse` flips the whole path.
+        // A bank of REAL rollers along a (straight) span: one kinematic capsule
+        // per roller at exactly the pose the visual bed draws, spun about its
+        // own axis so cargo is conveyed by rolling contact — no drag box hides
+        // underneath a rollers run.
+        void addRollerBank(const std::vector<Vector3>& pts, const ConveyorSpec& spec,
+                           float direction) {
+
+            using namespace ::physx;
+
+            const float radius = std::max(spec.rollerRadius, 1e-3f);
+            // Capsule total length == roller length == belt width (the caps
+            // round off inside where the frame rails sit).
+            const float halfLength = std::max(spec.width * 0.5f - radius, radius * 0.5f);
+            // Same sign convention as the visual bank: negative spins the top
+            // surface along travel; reverse flips it.
+            const float omega = -direction * spec.speed / radius;
+            // Roller.orientation maps a cylinder's +Y onto the width axis;
+            // a PhysX capsule's long axis is +X, hence the extra quarter turn.
+            const PxQuat xToY(PxHalfPi, PxVec3(0, 0, 1));
+
+            for (const auto& r : rollerTransforms(pts, radius, rollerSpacing(radius))) {
+                auto* actor = makeKinematic(
+                        PxTransform(toPxVec3(r.center), toPxQuat(r.orientation) * xToY));
+                PxShape* shape = world_->physics().createShape(
+                        PxCapsuleGeometry(radius, halfLength), *beltMaterial_, true);
+                commit(actor, shape);
+                spinners_.push_back({actor, omega});
+            }
+        }
+
+        // One span of the path with a known surface: rollers get the real
+        // roller bank, everything else the dragged belt boxes.
+        void addSpan(const std::vector<Vector3>& pts, SegKind kind, const ConveyorSpec& spec,
+                     float direction) {
+
+            if (pts.size() < 2) return;
+            if (kind == SegKind::Rollers) {
+                addRollerBank(pts, spec, direction);
+                return;
+            }
+            for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+                addStraightSeg(pts[i], pts[i + 1], spec.width, spec.speed * direction);
+            }
+        }
+
+        // Belt colliders along the waypoint path, per surface: flat and cleats
+        // spans become linearly-dragged boxes, ROLLERS spans become real
+        // driven roller colliders (see addRollerBank), and each rounded corner
+        // becomes one rotationally-driven bend body built from the SAME fillet
+        // the drawn ribbon samples (cornerFillet), so collider and visual
+        // agree by construction. `reverse` never reorders geometry — it flips
+        // every drag velocity, bend omega and roller spin instead.
         void buildBelts(const ConveyorSpec& spec, std::size_t specIndex) {
 
             const float speed = spec.speed;
+            const float direction = spec.reverse ? -1.f : 1.f;
             bool corners = false;
             for (std::size_t i = 1; i + 1 < spec.waypoints.size(); ++i) {
                 if (spec.waypoints[i].cornerRadius > 1e-4f) corners = true;
             }
 
             if (!corners) {
-                // No bends: coarse straight segments along the (spline/raw)
-                // centreline. A body spans several, so a curve needs far fewer
-                // here than for a smooth-looking ribbon.
-                auto pts = resamplePath(spec.waypoints, spec.smooth, 5);
-                if (pts.size() >= 2) {
-                    if (spec.reverse) std::reverse(pts.begin(), pts.end());
-                    for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
-                        addStraightSeg(pts[i], pts[i + 1], spec.width, speed);
-                    }
+                // No bends: coarse spans along the (spline/raw) centreline,
+                // split by surface kind. A body spans several segments, so a
+                // curve needs far fewer here than for a smooth-looking ribbon.
+                for (const auto& run : resamplePathByKind(spec.waypoints, spec.smooth, 5)) {
+                    addSpan(run.pts, run.kind, spec, direction);
                 }
             } else {
-                // Corner walk, mirroring resamplePath: straights between the
-                // fillets' tangent points, one bend body per rounded corner.
-                // Reversal flips travel by flipping the waypoint list; the
-                // fillet geometry is direction-independent.
-                std::vector<Waypoint> wps(spec.waypoints);
-                if (spec.reverse) std::reverse(wps.begin(), wps.end());
+                // Corner walk, mirroring resamplePath: spans between the
+                // fillets' tangent points (each lies wholly in one waypoint
+                // segment, whose surface it carries), one bend body per
+                // rounded corner — a fillet arc is always a flat surface, like
+                // the by-kind resampler says.
+                const auto& wps = spec.waypoints;
                 const std::size_t n = wps.size();
                 Vector3 cursor = wps.front().pos;
                 Vector3 incoming(0, 0, 0);
                 for (std::size_t i = 1; i + 1 < n; ++i) {
+                    const SegKind entering = wps[i - 1].segKind;
                     const CornerFillet f = cornerFillet(wps, i);
                     if (!f.valid) {
-                        addStraightSeg(cursor, wps[i].pos, spec.width, speed);
+                        addSpan({cursor, wps[i].pos}, entering, spec, direction);
                         incoming.set(wps[i].pos.x - cursor.x, 0.f, wps[i].pos.z - cursor.z);
                         cursor = wps[i].pos;
                         continue;
                     }
-                    addStraightSeg(cursor, f.t1, spec.width, speed);
+                    addSpan({cursor, f.t1}, entering, spec, direction);
                     incoming.set(f.t1.x - cursor.x, 0.f, f.t1.z - cursor.z);
-                    addArcBelt(f.t1, f.centre, f.t2, spec.width, speed, incoming);
+                    addArcBelt(f.t1, f.centre, f.t2, spec.width, speed, direction, incoming);
                     incoming.set(f.t2.x - f.t1.x, 0.f, f.t2.z - f.t1.z);
                     cursor = f.t2;
                 }
-                addStraightSeg(cursor, wps.back().pos, spec.width, speed);
+                addSpan({cursor, wps.back().pos}, wps[n - 2].segKind, spec, direction);
             }
 
-            // Travelling cleat bars per cleats-run. The box-belt colliders above
-            // span the whole path regardless, so the surface conveys everywhere;
-            // the bars add the pushing barrier an incline needs.
+            // Travelling cleat bars per cleats-run, ON TOP of the run's drag
+            // boxes: the surface conveys by friction, the bars add the pushing
+            // barrier an incline needs.
             if (spec.cleatHeight > 1e-3f && spec.cleatSpacing > 1e-3f) {
                 for (const auto& run : resamplePathByKind(spec.waypoints, spec.smooth, spec.samples)) {
                     if (run.kind != SegKind::Cleats || run.pts.size() < 2) continue;
@@ -419,6 +485,16 @@ namespace threepp::conveyor {
                 b.actor->setKinematicTarget(target);
             }
 
+            // Rollers spin for real and are never teleported back — turning a
+            // capsule about its own axis re-occupies the same volume, so the
+            // pose can advance forever. Normalized against slow drift.
+            for (auto& s : spinners_) {
+                PxTransform target = s.actor->getGlobalPose();
+                target.q = (target.q * PxQuat(s.omega * speedScale * dt, PxVec3(1, 0, 0)))
+                                   .getNormalized();
+                s.actor->setKinematicTarget(target);
+            }
+
             for (auto& tr : tracks_) {
                 if (tr.length < 1e-4f) continue;
                 tr.phase = std::fmod(tr.phase + tr.speed * speedScale * dt, tr.length);
@@ -450,6 +526,7 @@ namespace threepp::conveyor {
 
         std::vector<::physx::PxRigidDynamic*> actors_;// everything built, for teardown
         std::vector<Belt> belts_;
+        std::vector<Spinner> spinners_;
         std::vector<CleatTrack> tracks_;
     };
 

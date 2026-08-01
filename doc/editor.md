@@ -1829,10 +1829,13 @@ Waypoint** section edits both:
   surface velocity is exactly tangential everywhere along it. A U-turn is two
   90° corners.
 - **Segment surface** — the span leaving the waypoint is a flat belt by
-  default; per segment you can choose a **roller bed** (a row of spinning
-  cylinders) or **cleats** (flight bars standing across the belt that travel
-  with it and catch cargo on an incline). Runs share boundary points, so a
-  flat→rollers change meets gap-free.
+  default; per segment you can choose a **roller bed** or **cleats** (flight
+  bars standing across the belt that travel with it and catch cargo on an
+  incline). Runs share boundary points, so a flat→rollers change meets
+  gap-free. A roller bed is not décor: each roller is a **real driven
+  collider** — a kinematic capsule spinning about its own axis at
+  `speed / rollerRadius` — and a rollers span builds no belt box underneath,
+  so cargo genuinely rides the rollers, gaps included.
 
 The viewport helps you author this: every waypoint gets a clickable diamond
 marker (the spline points' machinery, with its own glyph), the path overlay

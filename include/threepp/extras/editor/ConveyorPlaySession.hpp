@@ -55,6 +55,12 @@ namespace threepp::editor {
             return sim_ ? sim_->beltCount() : 0;
         }
 
+        // Driven roller colliders the sim built — a rollers run has no drag
+        // box, so this being non-zero is what says cargo rides real rollers.
+        [[nodiscard]] std::size_t rollerCount() const {
+            return sim_ ? sim_->rollerCount() : 0;
+        }
+
         // Global speed multiplier (belt drag, texture scroll, roller spin,
         // cleat travel — all of it, so the visuals never disagree with the
         // physics).
