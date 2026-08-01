@@ -1465,8 +1465,14 @@ namespace threepp::architecture {
                 const float y = faceStart + r + static_cast<float>(i) * 2.f * rise;
                 // Run the courses as far into the apex as a stub of log still
                 // reads; stopping early leaves a bare triangle of backing
-                // under the rake boards.
-                const float span = dormerHalfSpanAt(y + r);
+                // under the rake boards. Measure the span with the WORST-CASE
+                // crown, not the nominal radius: the span line is the slab's
+                // TOP surface, and radius jitter and the centreline offset are
+                // both one-sided/up — measured with r alone, a jittered course
+                // pokes through the shingles as a tan sliver lying on the
+                // dormer roof just up-slope of the rake's lower end.
+                const float crown = r * (1.f + p.logRadiusJitter + 0.025f);
+                const float span = dormerHalfSpanAt(y + crown);
                 if (span < r * 0.75f) break;
                 // The SAME course builder the walls use (jitter, taper, bow,
                 // wander), with the dormer window as an explicit cut on the
@@ -1525,15 +1531,41 @@ namespace threepp::architecture {
             // would otherwise show as a pale strip under the lowest log.
             bTrim.box({cx, faceStart + 0.04f, hz + r * 0.55f}, {hw, 0.075f, r * 0.55f}, trimTex);
 
+            // Corner boards up both edges of the face below the eave. The
+            // full-width courses end at cx ± hw with their sawn ends bulging a
+            // log radius in front of the cheek plane — the cheek stops at the
+            // face plane and the rake board hangs 0.28 further out, so neither
+            // covers them and the ends read as tan stubs outside the trim. A
+            // vertical board over each corner closes the column, exactly the
+            // trim a real dormer carries where face meets cheek. Its top tucks
+            // under the dormer roof (kept below the slab's TOP surface across
+            // its own width), its bottom buries into the main roof at the
+            // board's forward edge, and its front clears the worst-case log
+            // bulge (jittered radius + centreline wander) while staying behind
+            // the rake board's back face.
+            for (float s : {-1.f, 1.f}) {
+                const float yTop = yEaveD - 0.08f;
+                const float yBot = roofTopY(hz + 0.24f) - 0.02f;
+                bTrim.box({cx + s * hw, (yTop + yBot) * 0.5f, hz + 0.0875f},
+                          {0.075f, (yTop - yBot) * 0.5f, 0.1525f}, trimTex);
+            }
+
             // Cheeks: right triangles between the main roof surface and the
-            // dormer eave line.
+            // dormer eave line. The top edge is dropped BELOW the eave line so
+            // the prism stays buried inside the slab's thickness: the slab's
+            // TOP surface at the prism's outer face sits 0.07*tanP under the
+            // eave, so a top at yEaveD crests the shingles as a tan timber
+            // wedge lying along the lower rake; the drop must still stay above
+            // the slab's underside (0.85 * roofThickness down) or a gap opens
+            // under the soffit instead.
             {
-                const float zMeet = (M.ridgeY - yEaveD) / tanP;
+                const float yCheekTop = yEaveD - (0.07f * tanP + 0.045f);
+                const float zMeet = (M.ridgeY - yCheekTop) / tanP;
                 for (float s : {-1.f, 1.f}) {
                     const float x = cx + s * hw;
                     const Vector3 a{x, roofTopY(faceZ), faceZ};
-                    const Vector3 b{x, yEaveD, faceZ};
-                    const Vector3 c{x, yEaveD, std::min(zMeet, faceZ - 0.02f)};
+                    const Vector3 b{x, yCheekTop, faceZ};
+                    const Vector3 c{x, yCheekTop, std::min(zMeet, faceZ - 0.02f)};
                     bTimber.triPrism(a, b, c, {s * 0.07f, 0.f, 0.f}, timberTex);
                 }
             }
