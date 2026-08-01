@@ -210,6 +210,24 @@ int main(int argc, char** argv) {
     if (const char* e = std::getenv("NT_CARVE_FILLFEATHER"); e && e[0] != '\0') rco.fillFeather = std::strtof(e, nullptr);
     terrain::carveRoads(pack.grid, network, rco);
 
+    // Synthetic bathymetry. The DTM stores water as a flat sheet at EXACTLY
+    // seaLevel (no soundings), so the seabed would sit 0.15 m under the ocean
+    // surface: the whole sea reads as a knee-deep pond (bottom splat visible
+    // through the water), and at any real wind the wave troughs dip below the
+    // bed and the terrain pokes through the sea as green polygonal plates.
+    // Sink the water cells a few metres: open water goes optically deep while
+    // the shore keeps a narrow shallow band (the drop spans the bicubic
+    // support, ~2 cells ≈ 4 m). AFTER conformTo + carveRoads — road profile
+    // classification (bridges/ferries) must see the real DTM water level, and
+    // only excluded/deck-spanning segments cross water so no roadbed cell sits
+    // at sea level. NT_SEA_DEPTH overrides; 0 restores the flat sheet.
+    float seaDepth = 6.f;
+    if (const char* e = std::getenv("NT_SEA_DEPTH"); e && e[0] != '\0') seaDepth = std::strtof(e, nullptr);
+    if (seaDepth > 0.f && reg.heightMin < 1.0f) {
+        for (float& h : pack.grid.data())
+            if (h <= reg.seaLevel + 0.05f) h -= seaDepth;
+    }
+
     // ── provider + tiles ───────────────────────────────────────────────────────
     terrain::GeoTerrainOptions gopt;
     gopt.snowHeightMin = std::max(reg.heightMax - 350.f, 900.f);// scene-relative snowline
@@ -456,6 +474,9 @@ int main(int argc, char** argv) {
     // up the single-quad grazing-precision problem. NT_FLAT_SEA keeps the old
     // plane for A/B.
     const bool coastal = reg.heightMin < 1.0f && !envSet("NT_NO_SEA");
+#ifdef THREEPP_WITH_VULKAN
+    std::shared_ptr<Ocean> ocean;// kept alive for the settings panel's live sea controls
+#endif
     if (coastal) {
         std::shared_ptr<Object3D> seaObj;
 #ifdef THREEPP_WITH_VULKAN
@@ -479,13 +500,18 @@ int main(int argc, char** argv) {
             Ocean::Options oo;
             oo.size = reg.worldSize * 1.2f;
             oo.resolution = 384;
-            oo.windSpeed = envF("NT_SEA_WIND", 4.0f);// calm coastal water
-            oo.windTheta = 215.f * kDeg2Rad;         // swell rolling in from the SW (the sun heading)
+            oo.look = Ocean::Look::Ocean;// open sea — never the small-body pond recipe
+            // Beaufort 4-ish: Phillips amplitude ∝ V⁴ and the dominant swell
+            // wavelength ∝ V², so below ~7 m/s the sea is glassy AND its short
+            // chop falls under this sheet's ~25 m vertex spacing — reads dead
+            // flat. Live-tunable in the settings panel; NT_SEA_WIND pins it.
+            oo.windSpeed = envF("NT_SEA_WIND", 9.0f);
+            oo.windTheta = 215.f * kDeg2Rad;// swell rolling in from the SW (the sun heading)
             oo.choppiness = 0.45f;
             oo.tileSize1 = 90.f;
             oo.tileSize2 = 7.f;
             oo.fftSize = 512;// half the default — a big calm sea needs less spectral detail; recovers FPS
-            auto ocean = Ocean::create(oo);
+            ocean = Ocean::create(oo);
             if (auto* wm = ocean->material()->as<MeshPhysicalMaterial>()) {
                 wm->attenuationColor = Color(0.045f, 0.13f, 0.16f);// dark Nordic fjord water
                 wm->attenuationDistance = 1.9f;
@@ -493,9 +519,10 @@ int main(int argc, char** argv) {
             seaObj = ocean;
         }
 #endif// THREEPP_WITH_VULKAN
-        // Slightly ABOVE the DTM's flat sea sheet (water reads as seaLevel exactly,
-        // and the provider suppresses relief noise there) so the seabed never dithers
-        // through; real land starts well above this.
+        // Slightly ABOVE the DTM's sea sheet — which the bathymetry carve above
+        // sank by NT_SEA_DEPTH so wave troughs have water under them (with the
+        // carve off, water reads as seaLevel exactly and the provider suppresses
+        // relief noise there); real land starts well above this.
         seaObj->position.y = reg.seaLevel + 0.15f;
         seaObj->name = "sea";
         scene.add(seaObj);
@@ -551,6 +578,21 @@ int main(int argc, char** argv) {
             ImGui::TextDisabled("tiles %d  baking %d",
                                 static_cast<int>(tiles->activeTiles()),
                                 static_cast<int>(tiles->pendingBakes()));
+#ifdef THREEPP_WITH_VULKAN
+            // Live sea state. Wind writes plain Params fields — the renderer
+            // detects the drift and re-bakes the Phillips spectra in place,
+            // morphing the sea into the new state over a few swell periods
+            // (no pop), so dragging the sliders every frame is fine.
+            if (ocean) {
+                ImGui::SeparatorText("Sea");
+                ImGui::SliderFloat("Wind (m/s)", &ocean->params.windSpeed, 0.f, 24.f, "%.1f");
+                float windDeg = ocean->params.windTheta / kDeg2Rad;
+                if (ImGui::SliderFloat("Wind heading (deg)", &windDeg, 0.f, 360.f, "%.0f"))
+                    ocean->params.windTheta = windDeg * kDeg2Rad;
+                ImGui::SliderFloat("Choppiness", &ocean->params.choppiness, 0.f, 1.f, "%.2f");
+                ImGui::SliderFloat("Wave scale", &ocean->params.waveScale, 0.f, 3.f, "%.2f");
+            }
+#endif
         }, "Norway terrain");
     }
 

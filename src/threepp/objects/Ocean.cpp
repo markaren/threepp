@@ -16,7 +16,7 @@ namespace threepp {
         // path tracer / deferred renderer refract through with Beer-Lambert
         // absorption. Lifted from examples/vulkan/vulkan_ocean.cpp so the tuned
         // values now live in one first-party place.
-        std::shared_ptr<MeshPhysicalMaterial> makeOceanMaterial(float size) {
+        std::shared_ptr<MeshPhysicalMaterial> makeOceanMaterial(bool pond) {
             auto mat = MeshPhysicalMaterial::create();
             // Pure water has no diffuse pigment — the blue comes from
             // Beer-Lambert absorption through the medium, not albedo.
@@ -42,12 +42,12 @@ namespace threepp {
             // Pond/lake regime: the tropical-ocean murk above (3 m visibility,
             // red almost fully absorbed) renders a metre-deep pond as opaque
             // teal — the shallow-water transmission never gets to show the
-            // bottom. Small bodies default to NATURAL POND water instead:
-            // green-brown, ~2.5 m visibility — the bottom reads through a
-            // clearly-present water medium rather than window glass (a first
-            // cut at 6 m visibility looked like a swimming pool). Override on
-            // the material afterwards for a clear alpine tarn or a black bog.
-            if (size < 100.f) {
+            // bottom. Ponds get NATURAL POND water instead: green-brown,
+            // ~2.5 m visibility — the bottom reads through a clearly-present
+            // water medium rather than window glass (a first cut at 6 m
+            // visibility looked like a swimming pool). Override on the
+            // material afterwards for a clear alpine tarn or a black bog.
+            if (pond) {
                 mat->attenuationColor = Color(0.22f, 0.45f, 0.38f);
                 mat->attenuationDistance = 2.5f;
                 // Body-veil proxy depth. The deep-water veil brightness goes as
@@ -83,6 +83,8 @@ namespace threepp {
         const float sizeX = options.size;
         const float sizeZ = options.sizeZ > 0.f ? options.sizeZ : options.size;
         const float scaleRef = std::max(sizeX, sizeZ);
+        const bool pond = options.look == Look::Auto ? scaleRef < 100.f
+                                                     : options.look == Look::Pond;
 
         const unsigned int resX = std::max<unsigned int>(2u, options.resolution);
         // Default row count keeps grid cells square-ish across the rectangle.
@@ -96,7 +98,7 @@ namespace threepp {
         auto geo = PlaneGeometry::create(sizeX, sizeZ, resX - 1u, resZ - 1u);
         geo->rotateX(-math::PI / 2.0f);
 
-        auto ocean = std::make_shared<Ocean>(geo, makeOceanMaterial(scaleRef));
+        auto ocean = std::make_shared<Ocean>(geo, makeOceanMaterial(pond));
         ocean->halfExtent_ = scaleRef * 0.5f;
         // Non-square grids can't be derived from sqrt(vertexCount) — hand the
         // renderer the actual topology.

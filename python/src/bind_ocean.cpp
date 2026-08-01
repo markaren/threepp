@@ -93,7 +93,8 @@ namespace threepp_py {
         py::class_<Ocean, DisplacedMesh, std::shared_ptr<Ocean>>(m, "Ocean")
                 .def(py::init([](float size, unsigned int resolution, float wind_speed, float wind_theta,
                                  float choppiness, float wave_scale, float tile_size_1, float tile_size_2,
-                                 unsigned int fft_size, float size_z, unsigned int resolution_z) {
+                                 unsigned int fft_size, float size_z, unsigned int resolution_z,
+                                 const std::string& look) {
                          Ocean::Options o;
                          o.size = size;
                          o.sizeZ = size_z;
@@ -106,6 +107,10 @@ namespace threepp_py {
                          o.tileSize1 = tile_size_1;
                          o.tileSize2 = tile_size_2;
                          o.fftSize = fft_size;
+                         if (look == "ocean") o.look = Ocean::Look::Ocean;
+                         else if (look == "pond") o.look = Ocean::Look::Pond;
+                         else if (look != "auto")
+                             throw py::value_error("look must be 'auto', 'ocean' or 'pond'");
                          return Ocean::create(o);
                      }),
                      py::arg("size") = 1000.0f, py::arg("resolution") = 512u,
@@ -114,6 +119,7 @@ namespace threepp_py {
                      py::arg("tile_size_1") = -1.0f, py::arg("tile_size_2") = -1.0f,
                      py::arg("fft_size") = 1024u,
                      py::arg("size_z") = 0.0f, py::arg("resolution_z") = 0u,
+                     py::arg("look") = "auto",
                      "A ready-to-use FFT ocean. Add it to a Scene and render with the Vulkan "
                      "renderer. size is the local-X extent (m); size_z=0 makes a square, >0 a "
                      "rectangle (vertices only where the water is — the wave field is unaffected). "
@@ -121,7 +127,9 @@ namespace threepp_py {
                      "fft_size caps the per-cascade FFT resolutions (band-passed cascades auto-size "
                      "below it). tile_size_1/2 default to -1 = auto: scaled from the larger extent "
                      "(a 1000 m ocean gets the classic 127/9.3 bands, a 16 m pond gets dm-scale "
-                     "ripples); 0 disables a cascade, >0 pins it. Ponds also want wind_speed 2-5.")
+                     "ripples); 0 disables a cascade, >0 pins it. Ponds also want wind_speed 2-5. "
+                     "look picks the water material: 'auto' = pond recipe under 100 m, ocean above; "
+                     "'ocean'/'pond' pin it regardless of scale.")
                 .def("warp_toward", &Ocean::warpToward,
                      py::arg("world_x"), py::arg("world_z"), py::arg("coef_a") = 0.1f,
                      "Pack vertex density toward a world-space focus point (e.g. the camera). "

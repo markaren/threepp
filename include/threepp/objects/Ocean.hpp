@@ -42,6 +42,16 @@ namespace threepp {
     class Ocean: public DisplacedMesh {
 
     public:
+        // Water-body material recipe. Auto keys on the larger extent: bodies
+        // under 100 m get the natural-pond water (green-brown, ~2.5 m
+        // visibility), larger ones the deep-ocean recipe (teal Beer-Lambert
+        // absorption). Set explicitly to pin either look regardless of scale —
+        // a small harbour basin that is really sea, or a big lake that should
+        // read as freshwater.
+        enum class Look { Auto,
+                          Ocean,
+                          Pond };
+
         struct Options {
             // Mesh extent in metres along local X. The LARGER of size/sizeZ
             // doubles as the cascade-0 FFT tile, i.e. the wavelength of the
@@ -105,6 +115,9 @@ namespace threepp {
             // is {128, 256} instead of {1024, 512}, at identical wave content.
             // The open-band fine cascade always runs at fftSize / 2.
             uint32_t fftSize = 1024;
+
+            // Material recipe — see Look. Auto = pond under 100 m, ocean above.
+            Look look = Look::Auto;
         };
 
         static std::shared_ptr<Ocean> create(const Options& options);
