@@ -1370,10 +1370,15 @@ int EditorApp::runSelfTest() {
         check(subject != nullptr, "Box available for the follow drive");
 
         // The approach is exponential and the frame rate is the machine's, so
-        // convergence is waited for rather than assumed after a frame count.
+        // convergence is waited for rather than assumed after a frame count —
+        // and waited for in WALL CLOCK, because that is the currency the filter
+        // spends: at an unthrottled frame rate a frame budget is only a few
+        // hundred milliseconds, and the loop runs out of frames before the
+        // filter runs out of error.
         Vector3 world;
         const auto settle = [&](Object3D& node, float tolerance) {
-            for (int i = 0; i < 900; ++i) {
+            Clock waited;
+            for (int i = 0; i < 100000 && waited.getElapsedTime() < 4.f; ++i) {
                 node.getWorldPosition(world);
                 if (orbit_->target.distanceTo(world) <= tolerance) break;
                 step();
@@ -1426,6 +1431,15 @@ int EditorApp::runSelfTest() {
     // so a subject that turns is followed round the corner rather than watched
     // flying sideways out of frame. Yaw only, and world up throughout — a body
     // that banks must not roll the horizon.
+    //
+    // Driven with stepFixed throughout: every assertion here is about where the
+    // dt-based heading filter ARRIVES, which is a question about simulated time.
+    // Under step() the same frame counts cover a machine-dependent slice of real
+    // time — at an unthrottled few hundred fps the 120-frame settles are a
+    // fraction of the filter's 150 ms time constant, and the block becomes a
+    // frame-rate measurement (it failed on GL and passed on Vulkan for exactly
+    // that reason). At the fixed dt, 120 frames is two seconds: thirteen time
+    // constants, on every machine.
     {
         auto* subject = document_.scene().getObjectByName("Box");
         check(subject != nullptr, "Box available for the heading drive");
@@ -1445,27 +1459,27 @@ int EditorApp::runSelfTest() {
             subject->rotation.set(0.f, 0.f, 0.f);
             selectObject(subject);
             setFollowSelection(true);
-            step(60);
+            stepFixed(60);
 
             // Directly astern and a little above — the vantage a chase camera is
             // named after, and the one the Hover Arena document authors.
             camera_.position.copy(orbit_->target).add(Vector3(0.f, 2.f, 8.f));
-            step(2);
+            stepFixed(2);
             Vector3 before;
             before.subVectors(camera_.position, orbit_->target);
             check(std::abs(before.length() - std::sqrt(68.f)) < 0.5f,
                   "the chase starts from the offset the camera was put at");
 
-            // A 90-degree yaw, flown rather than teleported: 90 frames of one
-            // degree is a turn the smoothing has to follow, not a step it could
-            // snap through.
+            // A 90-degree yaw, flown rather than teleported: 90 fixed-dt frames
+            // of one degree — a 60 deg/s turn — is a turn the smoothing has to
+            // follow, not a step it could snap through.
             for (int i = 0; i < 90; ++i) {
                 subject->rotateY(math::degToRad(1.f));
-                step();
+                stepFixed();
             }
             // Then let it settle: the heading follow is exponential, so what is
             // asserted is where it ARRIVES once the subject stops turning.
-            step(120);
+            stepFixed(120);
 
             Vector3 after;
             after.subVectors(camera_.position, orbit_->target);
@@ -1484,7 +1498,7 @@ int EditorApp::runSelfTest() {
             // rolled with it would make the picture unwatchable. A roll is about
             // the nose itself, so it moves the heading by nothing at all.
             subject->rotateZ(math::degToRad(35.f));
-            step(120);
+            stepFixed(120);
             Vector3 banked;
             banked.subVectors(camera_.position, orbit_->target);
             check(banked.distanceTo(after) < 0.05f, "a bank does not move the camera");
@@ -1494,7 +1508,7 @@ int EditorApp::runSelfTest() {
             // points on the ground plane is where it pointed.
             subject->rotateZ(math::degToRad(-35.f));
             subject->rotateX(math::degToRad(20.f));
-            step(120);
+            stepFixed(120);
             Vector3 pitched;
             pitched.subVectors(camera_.position, orbit_->target);
             check(pitched.distanceTo(after) < 0.05f, "and a pitch does not either");
@@ -1504,11 +1518,11 @@ int EditorApp::runSelfTest() {
             // tumbling through vertical must not whip the camera round with it.
             subject->rotation.set(0.f, 0.f, 0.f);
             subject->rotateY(math::degToRad(90.f));
-            step(60);
+            stepFixed(60);
             Vector3 upright;
             upright.subVectors(camera_.position, orbit_->target);
             subject->rotateX(math::degToRad(-90.f));// nose to the sky
-            step(120);
+            stepFixed(120);
             Vector3 tumbled;
             tumbled.subVectors(camera_.position, orbit_->target);
             check(tumbled.distanceTo(upright) < 0.15f,
@@ -1517,16 +1531,16 @@ int EditorApp::runSelfTest() {
             // Orbiting composes in the subject's frame: a camera dragged over
             // the subject's shoulder stays over that shoulder through the turn.
             subject->rotation.set(0.f, 0.f, 0.f);
-            step(60);
+            stepFixed(60);
             camera_.position.copy(orbit_->target).add(Vector3(6.f, 2.f, 6.f));
-            step(30);
+            stepFixed(30);
             Vector3 shoulder;
             shoulder.subVectors(camera_.position, orbit_->target);
             for (int i = 0; i < 90; ++i) {
                 subject->rotateY(math::degToRad(1.f));
-                step();
+                stepFixed();
             }
-            step(120);
+            stepFixed(120);
             Vector3 carried;
             carried.subVectors(camera_.position, orbit_->target);
             Vector3 wantShoulder(shoulder);
@@ -1537,16 +1551,16 @@ int EditorApp::runSelfTest() {
             // A parallel projection translates and does not rotate: an axis view
             // IS a direction of view, and turning it is not following.
             subject->rotation.set(0.f, 0.f, 0.f);
-            step(60);
+            stepFixed(60);
             setOrthographic(true);
-            step(2);
+            stepFixed(2);
             Vector3 orthoBefore;
             orthoBefore.subVectors(ortho_.position, orbit_->target);
             for (int i = 0; i < 90; ++i) {
                 subject->rotateY(math::degToRad(1.f));
-                step();
+                stepFixed();
             }
-            step(60);
+            stepFixed(60);
             Vector3 orthoAfter;
             orthoAfter.subVectors(ortho_.position, orbit_->target);
             check(orthoAfter.distanceTo(orthoBefore) < 0.05f,
@@ -1557,7 +1571,7 @@ int EditorApp::runSelfTest() {
             subject->position.set(0.f, 0.5f, 0.f);
             setFollowSelection(false);
             selectObject(nullptr);
-            step(2);
+            stepFixed(2);
         }
     }
 
