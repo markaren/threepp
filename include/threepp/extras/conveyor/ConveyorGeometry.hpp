@@ -245,6 +245,21 @@ namespace threepp::conveyor {
     // point. Useful for spawn / inlet positions a bit onto the belt.
     Vector3 pointAlong(const std::vector<Vector3>& path, float dist);
 
+    // Where a point stands relative to the belt: arc-length station along the
+    // centerline (clamped to its ends) and signed lateral offset from it in
+    // plan. The coordinate system every wall edit thinks in.
+    struct PathProjection {
+        float station = 0.f;
+        float offset = 0.f;
+    };
+
+    PathProjection projectOntoPath(const Vector3& point,
+                                   const std::vector<Vector3>& centerline);
+
+    // The inverse: the point at `station` metres along the centerline, offset
+    // laterally by `offset`, at deck height. Station clamps to the path.
+    Vector3 pointOnPath(const std::vector<Vector3>& centerline, float station, float offset);
+
     // Resolve a wall's authored points into its built polyline by FOLLOWING
     // THE BELT: each point projects onto the centerline as (station along the
     // path, signed lateral offset), and the wall walks the path between

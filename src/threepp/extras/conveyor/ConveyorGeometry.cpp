@@ -549,27 +549,26 @@ namespace threepp::conveyor {
         return runs;
     }
 
-    std::vector<Vector3> followWall(const std::vector<Vector3>& wallPoints,
-                                    const std::vector<Vector3>& centerline,
-                                    float sampleStep) {
+    namespace {
 
-        std::vector<Vector3> out;
-        if (wallPoints.size() < 2 || centerline.size() < 2) return out;
+        // Cumulative arc length per centerline sample.
+        std::vector<float> stationTable(const std::vector<Vector3>& centerline) {
 
-        // Cumulative arc length per centerline sample, once.
-        std::vector<float> station(centerline.size(), 0.f);
-        for (std::size_t i = 1; i < centerline.size(); ++i) {
-            station[i] = station[i - 1] + centerline[i].distanceTo(centerline[i - 1]);
+            std::vector<float> station(centerline.size(), 0.f);
+            for (std::size_t i = 1; i < centerline.size(); ++i) {
+                station[i] = station[i - 1] + centerline[i].distanceTo(centerline[i - 1]);
+            }
+            return station;
         }
-        const float total = station.back();
-        if (total < 1e-4f) return out;
 
-        const Vector3 up(0, 1, 0);
+        // The belt frame at an arc-length station: position and the horizontal
+        // lateral (the same one every ribbon builder uses).
+        void frameOnPath(const std::vector<Vector3>& centerline,
+                         const std::vector<float>& station, float s,
+                         Vector3& c, Vector3& lat) {
 
-        // The belt frame at an arc-length station: position, tangent and the
-        // horizontal lateral (the same one every ribbon builder uses).
-        const auto frameAtStation = [&](float s, Vector3& c, Vector3& lat) {
-            s = std::clamp(s, 0.f, total);
+            const Vector3 up(0, 1, 0);
+            s = std::clamp(s, 0.f, station.back());
             std::size_t i = 1;
             while (i + 1 < centerline.size() && station[i] < s) ++i;
             const float span = std::max(station[i] - station[i - 1], 1e-6f);
@@ -579,15 +578,17 @@ namespace threepp::conveyor {
             tangent.subVectors(centerline[i], centerline[i - 1]).multiplyScalar(1.f / span);
             if (std::abs(tangent.dot(up)) > 0.999f) lat.set(0, 0, 1);
             else lat.crossVectors(tangent, up).normalize();
-        };
+        }
 
-        // Project an authored point onto the nearest centerline SEGMENT in
-        // plan (a corner-walk path keeps its straights as single long spans,
-        // so vertex snapping would quantize stations to the corners); the
-        // signed distance along that station's lateral gives the offset.
-        const auto project = [&](const Vector3& p, float& s, float& offset) {
+        // Project onto the nearest centerline SEGMENT in plan (a corner-walk
+        // path keeps its straights as single long spans, so vertex snapping
+        // would quantize stations to the corners); the signed distance along
+        // that station's lateral gives the offset.
+        PathProjection projectImpl(const Vector3& p, const std::vector<Vector3>& centerline,
+                                   const std::vector<float>& station) {
+
+            PathProjection out;
             float best = 1e30f;
-            s = 0.f;
             for (std::size_t i = 0; i + 1 < centerline.size(); ++i) {
                 const Vector3& a = centerline[i];
                 const Vector3& b = centerline[i + 1];
@@ -600,18 +601,58 @@ namespace threepp::conveyor {
                 const float d2 = (p.x - qx) * (p.x - qx) + (p.z - qz) * (p.z - qz);
                 if (d2 < best) {
                     best = d2;
-                    s = station[i] + std::sqrt(len2) * u;
+                    out.station = station[i] + std::sqrt(len2) * u;
                 }
             }
             Vector3 c, lat;
-            frameAtStation(s, c, lat);
-            offset = (p.x - c.x) * lat.x + (p.z - c.z) * lat.z;
+            frameOnPath(centerline, station, out.station, c, lat);
+            out.offset = (p.x - c.x) * lat.x + (p.z - c.z) * lat.z;
+            return out;
+        }
+
+    }// namespace
+
+    PathProjection projectOntoPath(const Vector3& point,
+                                   const std::vector<Vector3>& centerline) {
+
+        if (centerline.size() < 2) return {};
+        const auto station = stationTable(centerline);
+        if (station.back() < 1e-4f) return {};
+        return projectImpl(point, centerline, station);
+    }
+
+    Vector3 pointOnPath(const std::vector<Vector3>& centerline, float s, float offset) {
+
+        if (centerline.size() < 2) return centerline.empty() ? Vector3() : centerline.front();
+        const auto station = stationTable(centerline);
+        if (station.back() < 1e-4f) return centerline.front();
+        Vector3 c, lat;
+        frameOnPath(centerline, station, s, c, lat);
+        c.addScaledVector(lat, offset);
+        return c;
+    }
+
+    std::vector<Vector3> followWall(const std::vector<Vector3>& wallPoints,
+                                    const std::vector<Vector3>& centerline,
+                                    float sampleStep) {
+
+        std::vector<Vector3> out;
+        if (wallPoints.size() < 2 || centerline.size() < 2) return out;
+
+        const auto station = stationTable(centerline);
+        const float total = station.back();
+        if (total < 1e-4f) return out;
+
+        const auto frameAtStation = [&](float s, Vector3& c, Vector3& lat) {
+            frameOnPath(centerline, station, s, c, lat);
         };
 
         std::vector<float> stations(wallPoints.size());
         std::vector<float> offsets(wallPoints.size());
         for (std::size_t i = 0; i < wallPoints.size(); ++i) {
-            project(wallPoints[i], stations[i], offsets[i]);
+            const auto projected = projectImpl(wallPoints[i], centerline, station);
+            stations[i] = projected.station;
+            offsets[i] = projected.offset;
         }
 
         // Walk the path span by span, offset blended between the points. A

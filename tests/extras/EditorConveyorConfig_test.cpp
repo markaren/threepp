@@ -185,15 +185,45 @@ TEST_CASE("attached walls are children, not waypoints, and snap their base to th
     CHECK(before.distanceTo(rotated) > 0.1f);
     wall->rotation.y = 0.f;
 
-    // The default wall is ONE SHORT SEGMENT at the path midpoint — a piece to
-    // slide and grow, not a plan to fight. Length ~1.5x the belt width.
+    // The default wall is ONE SHORT SEGMENT at the START of the belt — a
+    // piece to slide and grow downstream, not a plan to fight. Length ~1.5x
+    // the belt width.
     spec = config.spec(*conveyor);
     {
         const float span = spec.walls[0].points.front().distanceTo(spec.walls[0].points.back());
         CHECK(span > 0.5f);
         CHECK(span < 1.2f);
-        const float midX = (spec.walls[0].points.front().x + spec.walls[0].points.back().x) * 0.5f;
-        CHECK(std::abs(midX) < 0.15f);// centred on the (x-symmetric) path
+        const auto path = conveyor::resamplePath(spec.waypoints, spec.smooth, spec.samples);
+        const auto first = conveyor::projectOntoPath(spec.walls[0].points.front(), path);
+        CHECK(first.station < 0.3f);// where building naturally begins
+    }
+
+    // Walls come in SECTIONS with open stretches between them, and both edges
+    // eventually want some: repeated Add Wall TILES the same side, each new
+    // section a gap after the previous, and starts over on the other side
+    // when the first runs out of belt.
+    {
+        auto second = ObjectFactory::createConveyorWall(*conveyor);
+        conveyor->add(second);
+        auto third = ObjectFactory::createConveyorWall(*conveyor);
+        conveyor->add(third);
+
+        const auto tiled = config.spec(*conveyor);
+        REQUIRE(tiled.walls.size() == 3);
+        const auto path = conveyor::resamplePath(tiled.waypoints, tiled.smooth, tiled.samples);
+        const auto endOfFirst = conveyor::projectOntoPath(tiled.walls[0].points.back(), path);
+        const auto startOfSecond = conveyor::projectOntoPath(tiled.walls[1].points.front(), path);
+        const auto startOfThird = conveyor::projectOntoPath(tiled.walls[2].points.front(), path);
+
+        // Second: same side, a genuine gap downstream of the first.
+        CHECK(endOfFirst.offset * startOfSecond.offset > 0.f);
+        CHECK(startOfSecond.station > endOfFirst.station + 0.3f);
+        // Third: that side is built out, so it starts over across the belt.
+        CHECK(startOfThird.offset * endOfFirst.offset < 0.f);
+        CHECK(startOfThird.station < 0.3f);
+
+        third->removeFromParent();
+        second->removeFromParent();
     }
 
     // And a PASSIVE EDGE GUIDE: every built sample rides at the belt edge
@@ -269,6 +299,17 @@ TEST_CASE("an edge wall HUGS a bend instead of cutting the chord") {
         worst = std::max(worst, std::abs(nearest - edge));
     }
     CHECK(worst < 0.06f);
+
+    // The station/offset coordinate system round-trips — including on the
+    // arc, which is what path-aware point insertion leans on.
+    for (const float s : {0.4f, 1.7f, 2.9f}) {
+        for (const float o : {-0.4f, 0.25f}) {
+            const Vector3 p = conveyor::pointOnPath(centerline, s, o);
+            const auto back = conveyor::projectOntoPath(p, centerline);
+            CHECK(std::abs(back.station - s) < 0.05f);
+            CHECK(std::abs(back.offset - o) < 0.03f);
+        }
+    }
 }
 
 TEST_CASE("a conveyor round-trips the document with no editor attached") {

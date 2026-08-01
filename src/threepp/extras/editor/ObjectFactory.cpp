@@ -18,6 +18,7 @@
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 
@@ -247,13 +248,14 @@ std::shared_ptr<Group> ObjectFactory::createConveyorWall(const Object3D& conveyo
     wall->name = uniqueName(conveyor, "Wall");
     ConveyorWallConfig{}.write(*wall);
 
-    // The default is ONE SHORT segment on the OUTER edge at the path midpoint
-    // — a piece, not a plan. Building a real wall is incremental from there:
-    // slide the segment along the belt with the gizmo (the built wall follows
-    // the path between its points — see conveyor::followWall — so it rides
-    // the edge wherever it is dragged), then grow it point by point with
-    // Insert After, dragging each new point where it should go; any point
-    // pulled toward the middle sweeps that stretch inward into a diverter.
+    // The default is ONE SHORT segment on the edge at the START of the belt —
+    // a piece, not a plan, sitting where building naturally begins. Building
+    // a real wall is incremental from there: slide the segment along the belt
+    // with the gizmo (the built wall follows the path between its points —
+    // see conveyor::followWall — so it rides the edge wherever it is
+    // dragged), then grow it downstream point by point with Insert After;
+    // any point pulled toward the middle sweeps that stretch inward into a
+    // diverter.
     namespace cv = threepp::conveyor;
     const auto config = ConveyorConfig::read(conveyor).value_or(ConveyorConfig{});
     const auto spec = config.spec(conveyor);
@@ -266,37 +268,59 @@ std::shared_ptr<Group> ObjectFactory::createConveyorWall(const Object3D& conveyo
             total += sampled[i].distanceTo(sampled[i + 1]);
         }
 
-        // Which side is "outer": against the net turn of the path (cargo runs
-        // wide on a bend, so that is where a guide earns its keep). A straight
-        // path has no outer side; either will do.
+        // Placement TILES the line: walls come in SECTIONS with open stretches
+        // between them (an opening in a guide is where a diverter feeds cargo
+        // out), so each new wall continues after the furthest existing one on
+        // the SAME side, a gap downstream. When that side runs out of belt,
+        // the next wall starts over on the OTHER side — repeated Add Wall
+        // guards one edge section by section, then the other. With no walls
+        // yet: the start of the belt, on the outer side of the net turn
+        // (where cargo runs wide on a bend).
+        float furthestEnd = -1.f;
+        float furthestSide = 0.f;
+        for (const auto* existing : ConveyorConfig::wallNodes(conveyor)) {
+            const auto points = ConveyorWallConfig::pointNodes(*existing);
+            if (points.empty()) continue;
+            Matrix4 local;
+            local.compose(existing->position, existing->quaternion, existing->scale);
+            for (const auto* endpoint : {points.front(), points.back()}) {
+                Vector3 p = endpoint->position;
+                p.applyMatrix4(local);
+                const auto projected = cv::projectOntoPath(p, sampled);
+                if (projected.station > furthestEnd) {
+                    furthestEnd = projected.station;
+                    furthestSide = projected.offset >= 0.f ? 1.f : -1.f;
+                }
+            }
+        }
+
         float netTurn = 0.f;
         for (std::size_t i = 1; i + 1 < spec.waypoints.size(); ++i) {
             const auto fillet = cv::cornerFillet(spec.waypoints, i);
             if (fillet.valid) netTurn += fillet.sweep;
         }
-        const float side = netTurn > 1e-3f ? -1.f : 1.f;
+        const float outer = netTurn > 1e-3f ? -1.f : 1.f;
+
         const float offset = std::max(config.width, 0.1f) * 0.5f + 0.03f;
-
-        const Vector3 up(0, 1, 0);
-        const auto edgeAt = [&](float s) {
-            const Vector3 at = cv::pointAlong(sampled, s);
-            const Vector3 ahead = cv::pointAlong(sampled, std::min(s + 0.2f, total));
-            Vector3 tangent;
-            tangent.subVectors(ahead, at);
-            if (tangent.length() < 1e-5f) tangent.set(1, 0, 0);
-            tangent.normalize();
-            Vector3 lat;
-            if (std::abs(tangent.dot(up)) > 0.999f) lat.set(0, 0, 1);
-            else lat.crossVectors(tangent, up).normalize();
-            Vector3 edge = at;
-            edge.addScaledVector(lat, side * offset);
-            return edge;
-        };
-
         const float length = std::clamp(std::max(config.width, 0.1f) * 1.5f, 0.4f,
                                         total * 0.4f);
-        first = edgeAt(total * 0.5f - length * 0.5f);
-        second = edgeAt(total * 0.5f + length * 0.5f);
+        const float margin = std::min(0.15f, total * 0.05f);
+        constexpr float kGap = 0.5f;// the open stretch between tiled sections
+
+        float side = outer;
+        float start = margin;
+        if (furthestEnd >= 0.f) {
+            side = furthestSide != 0.f ? furthestSide : outer;
+            start = furthestEnd + kGap;
+            if (start + length > total) {
+                // That side is built out — begin the other one.
+                side = -side;
+                start = margin;
+            }
+        }
+
+        first = cv::pointOnPath(sampled, start, side * offset);
+        second = cv::pointOnPath(sampled, start + length, side * offset);
     }
 
     auto p1 = createConveyorWallPoint(*wall);

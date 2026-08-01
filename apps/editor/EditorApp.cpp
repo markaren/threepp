@@ -1943,30 +1943,73 @@ void EditorApp::addConveyorWallPoint(Object3D& wall, std::size_t index, const st
     if (rejectWhilePlaying(label.c_str())) return;
     if (!ConveyorWallConfig::isWall(wall)) return;
 
-    // Same placement rule as every other point list: between two neighbours
-    // the midpoint, past either end the end span continued — so growing the
-    // wall point by point marches it visibly along the belt.
     const auto points = ConveyorWallConfig::pointNodes(wall);
     const auto count = points.size();
     const auto slot = std::min(index, count);
 
+    // Placement thinks in the belt's own coordinates — station along the path
+    // and lateral offset — NOT in straight-line extrapolation: a wall grown
+    // around a bend must land its next point ON the edge it is following, and
+    // a chord-extended point would leave the belt entirely. Everything runs in
+    // the conveyor's space; the wall group's own transform bridges both ways
+    // (the group may have been slid along the belt with the gizmo).
+    namespace cv = threepp::conveyor;
+    auto* conveyor = wall.parent;
+    std::vector<Vector3> centerline;
+    if (conveyor && ConveyorConfig::isConveyor(*conveyor)) {
+        const auto config = ConveyorConfig::read(*conveyor).value_or(ConveyorConfig{});
+        const auto spec = config.spec(*conveyor);
+        centerline = cv::resamplePath(spec.waypoints, spec.smooth, spec.samples);
+    }
+
+    Matrix4 wallMatrix;
+    wallMatrix.compose(wall.position, wall.quaternion, wall.scale);
+    Matrix4 wallInverse(wallMatrix);
+    wallInverse.invert();
+
+    const auto projectPoint = [&](std::size_t i) {
+        Vector3 p = points[i]->position;
+        p.applyMatrix4(wallMatrix);
+        return cv::projectOntoPath(p, centerline);
+    };
+
     Vector3 position;
-    if (count == 0) {
-        // Nothing to extend; the wall's own origin.
-    } else if (slot == 0) {
-        position.copy(points.front()->position);
-        if (count > 1) position.sub(points[1]->position).add(points.front()->position);
-    } else if (slot >= count) {
-        position.copy(points.back()->position);
-        if (count > 1) {
-            position.sub(points[count - 2]->position).add(points.back()->position);
+    if (centerline.size() >= 2 && count > 0) {
+        // The march step a growing wall takes past its end.
+        const float step = 0.6f;
+        cv::PathProjection at;
+        if (slot == 0) {
+            at = projectPoint(0);
+            at.station -= step;
+        } else if (slot >= count) {
+            at = projectPoint(count - 1);
+            at.station += step;
         } else {
-            position.x += 0.5f;
+            const auto before = projectPoint(slot - 1);
+            const auto after = projectPoint(slot);
+            at.station = (before.station + after.station) * 0.5f;
+            at.offset = (before.offset + after.offset) * 0.5f;
         }
-    } else {
-        position.copy(points[slot - 1]->position)
-                .add(points[slot]->position)
-                .multiplyScalar(0.5f);
+        position = cv::pointOnPath(centerline, at.station, at.offset);
+        position.applyMatrix4(wallInverse);
+    } else if (count > 0) {
+        // No path to follow (a wall orphaned from its conveyor): the plain
+        // extrapolation fallback.
+        if (slot == 0) {
+            position.copy(points.front()->position);
+            if (count > 1) position.sub(points[1]->position).add(points.front()->position);
+        } else if (slot >= count) {
+            position.copy(points.back()->position);
+            if (count > 1) {
+                position.sub(points[count - 2]->position).add(points.back()->position);
+            } else {
+                position.x += 0.5f;
+            }
+        } else {
+            position.copy(points[slot - 1]->position)
+                    .add(points[slot]->position)
+                    .multiplyScalar(0.5f);
+        }
     }
 
     auto point = ObjectFactory::createConveyorWallPoint(wall);
