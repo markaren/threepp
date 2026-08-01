@@ -1087,6 +1087,39 @@ namespace threepp::architecture {
         // ── 5. Roof ──────────────────────────────────────────────────────
         const float rhx = M.roofHalfLength;
         const float rhz = M.roofHalfDepth;
+
+        // ── Porch frame ──────────────────────────────────────────────────
+        // The porch's defining planes, computed ONCE and shared by the roof
+        // fascia gap (§5), the porch builder (§8) and the baked-occlusion
+        // pass (§10). §10 used to re-declare all of these verbatim; a porch
+        // edit that was not mirrored there left the baked shade describing a
+        // porch that no longer existed.
+        struct PorchFrame {
+            float px0, px1; // porch extent along X
+            float margin;   // roof/fascia side overhang past the posts
+            float deckY;    // deck walking surface
+            float zWall;    // face of the logs
+            float zPost;    // post centreline
+            float zDeck;    // deck nosing
+            float zBreak;   // where the main eave ends and the porch pitch springs
+            float zOuter;   // porch eave line
+            float tanPP;    // porch pitch slope
+            float yBreak;   // roof-plane break height
+            // The porch roof plane through the break line.
+            [[nodiscard]] float topY(float z) const { return yBreak - (z - zBreak) * tanPP; }
+        };
+        const PorchFrame PF{
+                /*px0*/ std::min(p.porchStartX, p.porchEndX),
+                /*px1*/ std::max(p.porchStartX, p.porchEndX),
+                /*margin*/ 0.20f,
+                /*deckY*/ M.floorY - 0.035f,
+                /*zWall*/ hz + r,
+                /*zPost*/ hz + p.porchDepth,
+                /*zDeck*/ hz + p.porchDepth + 0.16f,
+                /*zBreak*/ rhz,
+                /*zOuter*/ hz + p.porchDepth + p.porchEaveOverhang,
+                /*tanPP*/ std::tan(p.porchRoofPitchDeg * DEG),
+                /*yBreak*/ roofTopY(rhz) - p.roofThickness};
         const float shTexU = 1.f / std::max(0.2f, p.shingleTileU);
         const float shTexV = 1.f / std::max(0.2f, p.shingleTileV);
 
@@ -1140,10 +1173,8 @@ namespace threepp::architecture {
             if (!p.porch) {
                 fasciaRun(1.f, -rhx, rhx);
             } else {
-                const float px0 = std::min(p.porchStartX, p.porchEndX) - 0.20f;
-                const float px1 = std::max(p.porchStartX, p.porchEndX) + 0.20f;
-                fasciaRun(1.f, -rhx, std::min(px0, rhx));
-                fasciaRun(1.f, std::max(px1, -rhx), rhx);
+                fasciaRun(1.f, -rhx, std::min(PF.px0 - PF.margin, rhx));
+                fasciaRun(1.f, std::max(PF.px1 + PF.margin, -rhx), rhx);
             }
         }
         for (float sx : {1.f, -1.f}) {
@@ -1573,17 +1604,11 @@ namespace threepp::architecture {
 
         // ── 8. Porch ─────────────────────────────────────────────────────
         if (p.porch) {
-            const float px0 = std::min(p.porchStartX, p.porchEndX);
-            const float px1 = std::max(p.porchStartX, p.porchEndX);
-            const float deckY = M.floorY - 0.035f;
-            const float zWall = hz + r;                    // face of the logs
-            const float zPost = hz + p.porchDepth;         // post centreline
-            const float zDeck = zPost + 0.16f;             // deck nosing
-            const float tanPP = std::tan(p.porchRoofPitchDeg * DEG);
-            const float zBreak = rhz;                      // where the main eave ends
-            const float yBreak = roofTopY(rhz) - p.roofThickness;
-            const float zOuter = zPost + p.porchEaveOverhang;
-            auto porchTopY = [&](float z) { return yBreak - (z - zBreak) * tanPP; };
+            // Local names for the shared frame (see PorchFrame above, §5).
+            const float px0 = PF.px0, px1 = PF.px1, deckY = PF.deckY;
+            const float zWall = PF.zWall, zPost = PF.zPost, zDeck = PF.zDeck;
+            const float zBreak = PF.zBreak, zOuter = PF.zOuter;
+            auto porchTopY = [&](float z) { return PF.topY(z); };
 
             // ── Deck ──
             {
@@ -1630,26 +1655,26 @@ namespace threepp::architecture {
             // ── Porch roof ──
             {
                 const std::array<Vector3, 4> top = {
-                        Vector3{px0 - 0.20f, porchTopY(zOuter), zOuter},
-                        Vector3{px1 + 0.20f, porchTopY(zOuter), zOuter},
-                        Vector3{px1 + 0.20f, porchTopY(zBreak), zBreak},
-                        Vector3{px0 - 0.20f, porchTopY(zBreak), zBreak}};
+                        Vector3{px0 - PF.margin, porchTopY(zOuter), zOuter},
+                        Vector3{px1 + PF.margin, porchTopY(zOuter), zOuter},
+                        Vector3{px1 + PF.margin, porchTopY(zBreak), zBreak},
+                        Vector3{px0 - PF.margin, porchTopY(zBreak), zBreak}};
                 const std::array<Vector2, 4> uv = {
-                        Vector2{(px0 - 0.20f) * shTexU, 0.f},
-                        Vector2{(px1 + 0.20f) * shTexU, 0.f},
-                        Vector2{(px1 + 0.20f) * shTexU, (zOuter - zBreak) / std::cos(p.porchRoofPitchDeg * DEG) * shTexV},
-                        Vector2{(px0 - 0.20f) * shTexU, (zOuter - zBreak) / std::cos(p.porchRoofPitchDeg * DEG) * shTexV}};
+                        Vector2{(px0 - PF.margin) * shTexU, 0.f},
+                        Vector2{(px1 + PF.margin) * shTexU, 0.f},
+                        Vector2{(px1 + PF.margin) * shTexU, (zOuter - zBreak) / std::cos(p.porchRoofPitchDeg * DEG) * shTexV},
+                        Vector2{(px0 - PF.margin) * shTexU, (zOuter - zBreak) / std::cos(p.porchRoofPitchDeg * DEG) * shTexV}};
                 bRoof.slab(top, uv, p.porchRoofThickness, shTexV);
                 // Fascia + gutter along the porch eave.
                 const float yEdge = porchTopY(zOuter) - p.porchRoofThickness;
                 // Overlaps the slab edge — see the main fascia note above.
                 bTrim.box({(px0 + px1) * 0.5f, yEdge - 0.065f, zOuter + 0.022f},
-                          {(px1 - px0) * 0.5f + 0.20f, 0.075f, 0.038f}, trimTex);
+                          {(px1 - px0) * 0.5f + PF.margin, 0.075f, 0.038f}, trimTex);
                 // Gutter: painted, not bright galvanised — a mirror-finish
                 // downpipe reflects raw sky and reads as a chrome pole.
                 bMetal.tint.set(0.42f, 0.32f, 0.24f);
                 bMetal.box({(px0 + px1) * 0.5f, yEdge - 0.170f, zOuter + 0.070f},
-                           {(px1 - px0) * 0.5f + 0.20f, 0.050f, 0.050f}, 1.f);
+                           {(px1 - px0) * 0.5f + PF.margin, 0.050f, 0.050f}, 1.f);
                 bMetal.tint.set(1.f, 1.f, 1.f);
             }
 
@@ -1832,14 +1857,11 @@ namespace threepp::architecture {
         // ground. It costs nothing at draw time and travels with the geometry
         // to any backend.
         if (p.bakeOcclusion) {
-            const float px0 = std::min(p.porchStartX, p.porchEndX);
-            const float px1 = std::max(p.porchStartX, p.porchEndX);
-            const float deckY = M.floorY - 0.035f;
-            const float zPost = hz + p.porchDepth;
-            const float zOuter = zPost + p.porchEaveOverhang;
-            const float zBreak = rhz;
-            const float tanPP = std::tan(p.porchRoofPitchDeg * DEG);
-            const float yBreak = roofTopY(rhz) - p.roofThickness;
+            // Shades against the SAME PorchFrame the porch was built from
+            // (§5/§8) — previously a verbatim copy of those constants.
+            const float px0 = PF.px0, px1 = PF.px1, deckY = PF.deckY;
+            const float zOuter = PF.zOuter, zBreak = PF.zBreak;
+            const float yBreak = PF.yBreak;
 
             auto aoAt = [&](float x, float y, float z) {
                 float f = 1.f;
@@ -1849,7 +1871,7 @@ namespace threepp::architecture {
                 if (p.porch && x > px0 - 0.35f && x < px1 + 0.35f &&
                     z > -hz && z < zOuter + 0.20f && y < yBreak + 0.25f && y > deckY - 1.4f) {
                     const float depth = std::clamp((zOuter - z) / std::max(0.5f, zOuter - hz), 0.f, 1.f);
-                    const float yRoof = yBreak - (std::clamp(z, zBreak, zOuter) - zBreak) * tanPP;
+                    const float yRoof = PF.topY(std::clamp(z, zBreak, zOuter));
                     const float hgt = std::clamp((y - deckY) / std::max(0.5f, yRoof - deckY), 0.f, 1.f);
                     f *= 1.f - 0.50f * std::pow(depth, 0.75f) * (0.28f + 0.72f * hgt);
                 }
