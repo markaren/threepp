@@ -15,6 +15,7 @@
 #include "EditorApp.hpp"
 #include "EditorTheme.hpp"
 
+#include "threepp/extras/editor/ConveyorConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 
@@ -57,6 +58,7 @@ namespace {
         AmbientLight,
         HemisphereLight,
         SplinePoint,
+        ConveyorPoint,
         Sensor,
         kCount
     };
@@ -136,6 +138,15 @@ namespace {
 <path d="M18 2.6 L16.7 1.85 L15.1 4.6 L16.4 5.35 Z"/>
 </svg>)";
 
+            // A diamond handle with a core: a conveyor waypoint. Distinct from
+            // the spline ring so a scene with both says which system a handle
+            // belongs to before it is clicked.
+            case Icon::ConveyorPoint:
+                return R"(<svg viewBox="0 0 24 24">
+<path d="M12 2.5 L21.5 12 L12 21.5 L2.5 12 Z M12 6.5 L6.5 12 L12 17.5 L17.5 12 Z"/>
+<path d="M12 9.5 L14.5 12 L12 14.5 L9.5 12 Z"/>
+</svg>)";
+
             // A ringed handle: a knot on a curve, small enough not to bury the
             // line it sits on. Drawn as a ring because a solid disc at the
             // sizes a spline is authored at reads as a blob.
@@ -159,6 +170,7 @@ namespace {
         // Before the type checks: a control point is an ordinary Object3D and
         // is told apart by its parent, not by what it is.
         if (SplineConfig::splineOf(object)) return Icon::SplinePoint;
+        if (ConveyorConfig::conveyorOf(object)) return Icon::ConveyorPoint;
         if (object.as<Camera>()) return Icon::Camera;
         if (object.as<DirectionalLight>()) return Icon::DirectionalLight;
         if (object.as<SpotLight>()) return Icon::SpotLight;
@@ -295,7 +307,7 @@ void EditorApp::syncViewportMarkers() {
         // discoverable by selecting every object in turn.
         const auto sensor = SensorConfig::read(object);
         if (object.as<Camera>() || object.as<Light>() || SplineConfig::splineOf(object) ||
-            (sensor && sensor->enabled)) {
+            ConveyorConfig::conveyorOf(object) || (sensor && sensor->enabled)) {
             owners.push_back(&object);
         }
     });

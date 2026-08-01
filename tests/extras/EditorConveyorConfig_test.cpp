@@ -52,6 +52,11 @@ TEST_CASE("ConveyorConfig encodes and decodes every field") {
     config.samples = 9;
     config.frame = false;
 
+    ConveyorWaypointConfig waypoint;
+    waypoint.cornerRadius = 1.75f;
+    waypoint.segKind = conveyor::SegKind::Cleats;
+    CHECK(ConveyorWaypointConfig::decode(waypoint.encode()) == waypoint);
+
     const auto decoded = ConveyorConfig::decode(config.encode());
     REQUIRE(decoded.has_value());
     CHECK(*decoded == config);
@@ -78,7 +83,7 @@ TEST_CASE("per-waypoint config lives on the waypoint node and defaults to absent
     CHECK(ConveyorWaypointConfig::read(*nodes[0]) == ConveyorWaypointConfig{});
 
     ConveyorWaypointConfig wp;
-    wp.arcCenter = true;
+    wp.cornerRadius = 2.f;
     wp.segKind = conveyor::SegKind::Rollers;
     wp.write(*nodes[1]);
     CHECK(ConveyorWaypointConfig::read(*nodes[1]) == wp);
@@ -203,26 +208,70 @@ TEST_CASE("a conveyor round-trips the document with no editor attached") {
     CHECK(spec.waypoints[1].segKind == conveyor::SegKind::Cleats);
 }
 
-TEST_CASE("path resampling honours arcs and per-segment kinds") {
+TEST_CASE("a rounded corner resolves to a tangent fillet, clamped to its segments") {
 
     using namespace threepp::conveyor;
 
-    // A quarter-circle bend: A at angle -90 about C, B at angle 0, radius 2.
+    // A right-angle corner at P, radius 0.8: the arc must enter along +x,
+    // leave along +z, and sit on the derived centre at exactly that radius.
     std::vector<Waypoint> wps(3);
     wps[0].pos.set(0.f, 0.f, 0.f);
-    wps[1].pos.set(0.f, 0.f, 2.f);
-    wps[1].arcCenter = true;
+    wps[1].pos.set(2.f, 0.f, 0.f);
+    wps[1].cornerRadius = 0.8f;
     wps[2].pos.set(2.f, 0.f, 2.f);
 
+    const auto fillet = cornerFillet(wps, 1);
+    REQUIRE(fillet.valid);
+    CHECK(fillet.radius == Catch::Approx(0.8f));
+    // Tangent points sit ON their segments, offset d = r for a right angle.
+    CHECK(fillet.t1.distanceTo(Vector3(1.2f, 0.f, 0.f)) < 1e-4f);
+    CHECK(fillet.t2.distanceTo(Vector3(2.f, 0.f, 0.8f)) < 1e-4f);
+    // The spokes are perpendicular to the segments — tangency, as one number.
+    CHECK(std::abs(fillet.t1.x - fillet.centre.x) < 1e-4f);
+    CHECK(std::abs(fillet.t2.z - fillet.centre.z) < 1e-4f);
+
+    // The sampled path: starts and ends on the waypoints, every arc point on
+    // the derived circle, and NO KINK anywhere — consecutive directions never
+    // turn more than the arc's own per-step angle (plus slack). This is the
+    // property the old authored-arc-centre model could not promise.
     const auto pts = resamplePath(wps, true, 12);
     REQUIRE(pts.size() >= 8);
-    // Every sampled point past the start sits on the radius-2 circle about C.
-    for (std::size_t i = 1; i < pts.size(); ++i) {
-        const float r = std::hypot(pts[i].x - 0.f, pts[i].z - 2.f);
-        CHECK(std::abs(r - 2.f) < 1e-3f);
-    }
-    // And it ends exactly at B.
+    CHECK(pts.front().distanceTo(wps[0].pos) < 1e-4f);
     CHECK(pts.back().distanceTo(wps[2].pos) < 1e-4f);
+    float maxTurn = 0.f;
+    for (std::size_t i = 0; i + 2 < pts.size(); ++i) {
+        Vector3 d1, d2;
+        d1.subVectors(pts[i + 1], pts[i]).normalize();
+        d2.subVectors(pts[i + 2], pts[i + 1]).normalize();
+        maxTurn = std::max(maxTurn, std::acos(std::clamp(d1.dot(d2), -1.f, 1.f)));
+    }
+    const float perStep = std::abs(fillet.sweep) / 2.f;// steps >= 2 per quarter
+    CHECK(maxTurn < perStep + 0.05f);
+
+    // An impossible radius CLAMPS instead of overrunning: the tangent points
+    // stay within their segments and the fillet stays tangent.
+    wps[1].cornerRadius = 100.f;
+    const auto clamped = cornerFillet(wps, 1);
+    REQUIRE(clamped.valid);
+    CHECK(clamped.radius < 100.f);
+    CHECK(clamped.t1.x >= 0.f);
+    CHECK(clamped.t2.z <= 2.f);
+    CHECK(std::abs(clamped.t1.x - clamped.centre.x) < 1e-3f);
+
+    // Chained corners split the straight they share instead of overlapping.
+    std::vector<Waypoint> chain(4);
+    chain[0].pos.set(0.f, 0.f, 0.f);
+    chain[1].pos.set(2.f, 0.f, 0.f);
+    chain[1].cornerRadius = 50.f;
+    chain[2].pos.set(2.f, 0.f, 2.f);
+    chain[2].cornerRadius = 50.f;
+    chain[3].pos.set(0.f, 0.f, 2.f);
+    const auto first = cornerFillet(chain, 1);
+    const auto second = cornerFillet(chain, 2);
+    REQUIRE((first.valid && second.valid));
+    // Both trimmed onto the shared 2 m segment, meeting in its middle at most.
+    CHECK(first.t2.z <= 1.f + 1e-3f);
+    CHECK(second.t1.z >= 1.f - 1e-3f);
 
     // Kind runs: flat, then rollers, then flat again — three runs sharing
     // boundary points so the surface meets gap-free.

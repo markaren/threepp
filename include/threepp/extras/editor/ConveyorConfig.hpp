@@ -5,9 +5,9 @@
 // parented to the conveyor is a waypoint, its local position is the waypoint's
 // position in the conveyor's space, and serialization, undo/redo, the gizmo and
 // deletion are the editor's ordinary ones. A waypoint may additionally carry
-// `userData["conveyorWp"]` (ConveyorWaypointConfig) marking it an arc CENTRE —
-// the exact circular bend between its two neighbours — or choosing the surface
-// of the segment leaving it (flat / rollers / cleats).
+// `userData["conveyorWp"]` (ConveyorWaypointConfig) rounding its corner with
+// an exact tangent fillet arc, or choosing the surface of the segment leaving
+// it (flat / rollers / cleats).
 //
 // What makes a Group a conveyor is `userData["conveyor"]`, one flat
 // `key=value;…` string like PhysicsConfig, carrying the belt parameters.
@@ -48,9 +48,14 @@ namespace threepp::editor {
 
     // Per-waypoint settings, on the waypoint node itself so they follow the
     // node through reorder, undo and serialization. Absent key = all defaults.
+    //
+    // cornerRadius rounds the corner AT this waypoint with a tangent fillet
+    // (see conveyor::cornerFillet) — the waypoint stays on the path and the
+    // arc's centre and tangent points are derived, so a bend cannot kink and
+    // the radius shrinks itself to what the neighbouring segments allow.
     struct ConveyorWaypointConfig {
 
-        bool arcCenter = false;
+        float cornerRadius = 0.f;// 0 = sharp corner
         conveyor::SegKind segKind = conveyor::SegKind::Flat;
 
         static constexpr const char* userDataKey = "conveyorWp";

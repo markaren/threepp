@@ -1951,24 +1951,33 @@ void EditorApp::drawConveyorSection(Object3D& object) {
 
         const auto parentConfig = ConveyorConfig::read(*conveyor).value_or(ConveyorConfig{});
 
-        {
-            bool arc = wpBefore.arcCenter;
-            if (ImGui::Checkbox("Arc centre (bend between neighbours)", &arc)) {
+        // Rounded corner, on interior waypoints only — the ends have no corner
+        // to round. The arc is inserted TANGENT to both neighbouring segments
+        // (centre and tangent points derived, drawn as an overlay helper while
+        // this waypoint is selected), and the radius clamps itself to what the
+        // segments allow — a bend cannot kink, whatever gets dragged where.
+        if (index > 0 && index + 1 < count) {
+            ImGui::PushItemWidth(-110 * contentScale_);
+            float radius = wpBefore.cornerRadius;
+            const bool changed = ImGui::DragFloat("Corner Radius", &radius, 0.01f, 0.f, 50.f);
+            if (ImGui::IsItemActivated()) commands_.beginTransaction();
+            if (changed) {
                 auto after = wpBefore;
-                after.arcCenter = arc;
-                commitWp(after, arc ? "Make Arc Centre" : "Make Regular Waypoint");
+                after.cornerRadius = std::max(radius, 0.f);
+                commitWp(after, "Corner Radius");
             }
-            if (wpBefore.arcCenter) {
-                ImGui::TextColored(theme::muted(),
-                                   "The bend runs from the previous waypoint to the next,\n"
-                                   "circling this one. Radius = distance to the previous.");
-            }
+            if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            ImGui::PopItemWidth();
+            ImGui::TextColored(theme::muted(),
+                               wpBefore.cornerRadius > 1e-4f
+                                       ? "Tangent bend; shrinks itself to fit the segments."
+                                       : "0 = sharp corner. Raise it to round the bend.");
         }
 
         // Surface of the segment LEAVING this waypoint. Hidden on the last
-        // waypoint (no segment leaves it), on an arc centre (arc spans are
-        // always flat) and on a separator (a wall has no surface).
-        if (!parentConfig.separator && !wpBefore.arcCenter && index + 1 < count) {
+        // waypoint (no segment leaves it) and on a separator (a wall has no
+        // surface).
+        if (!parentConfig.separator && index + 1 < count) {
             int kind = static_cast<int>(wpBefore.segKind);
             ImGui::Text("Segment to next:");
             bool changed = ImGui::RadioButton("Flat", &kind, 0);
@@ -2105,7 +2114,6 @@ void EditorApp::drawConveyorSection(Object3D& object) {
         const auto nodes = ConveyorConfig::waypointNodes(object);
         for (std::size_t i = 0; i + 1 < nodes.size(); ++i) {
             const auto wp = ConveyorWaypointConfig::read(*nodes[i]);
-            if (wp.arcCenter) continue;
             if (wp.segKind == conveyor::SegKind::Rollers) anyRollers = true;
             else if (wp.segKind == conveyor::SegKind::Cleats) anyCleats = true;
         }
@@ -2148,7 +2156,7 @@ void EditorApp::drawConveyorSection(Object3D& object) {
     }
 
     ImGui::TextColored(theme::muted(), "Children are the waypoints, in order.");
-    ImGui::TextColored(theme::muted(), "Pick a waypoint for arc bends and per-segment surfaces.");
+    ImGui::TextColored(theme::muted(), "Pick a waypoint for rounded corners and per-segment surfaces.");
     ImGui::TextColored(theme::muted(), "Play drives the belt; bodies and soft bodies convey.");
     ImGui::TextColored(theme::muted(), "Stored in userData[\"conveyor\"]");
 

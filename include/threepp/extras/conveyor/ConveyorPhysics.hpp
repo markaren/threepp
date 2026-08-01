@@ -272,21 +272,20 @@ namespace threepp::conveyor {
         }
 
         // Belt colliders along the waypoint path: straight runs become
-        // linearly-dragged boxes; arc-centre waypoints each become one
-        // rotationally-driven bend body. `reverse` flips the whole path.
+        // linearly-dragged boxes; each rounded corner becomes one
+        // rotationally-driven bend body built from the SAME fillet the drawn
+        // ribbon samples (cornerFillet), so collider and visual agree by
+        // construction. `reverse` flips the whole path.
         void buildBelts(const ConveyorSpec& spec, std::size_t specIndex) {
 
             const float speed = spec.speed;
-            bool hasArc = false;
-            for (const auto& w : spec.waypoints) {
-                if (w.arcCenter) {
-                    hasArc = true;
-                    break;
-                }
+            bool corners = false;
+            for (std::size_t i = 1; i + 1 < spec.waypoints.size(); ++i) {
+                if (spec.waypoints[i].cornerRadius > 1e-4f) corners = true;
             }
 
-            if (!hasArc) {
-                // No arcs: coarse straight segments along the (spline/raw)
+            if (!corners) {
+                // No bends: coarse straight segments along the (spline/raw)
                 // centreline. A body spans several, so a curve needs far fewer
                 // here than for a smooth-looking ribbon.
                 auto pts = resamplePath(spec.waypoints, spec.smooth, 5);
@@ -297,36 +296,30 @@ namespace threepp::conveyor {
                     }
                 }
             } else {
-                // Walk waypoints (mirroring resamplePath): straight runs between
-                // regular points, a rotational bend body at each arc centre.
+                // Corner walk, mirroring resamplePath: straights between the
+                // fillets' tangent points, one bend body per rounded corner.
+                // Reversal flips travel by flipping the waypoint list; the
+                // fillet geometry is direction-independent.
                 std::vector<Waypoint> wps(spec.waypoints);
                 if (spec.reverse) std::reverse(wps.begin(), wps.end());
-                const int n = static_cast<int>(wps.size());
-                bool haveLast = false;
-                Vector3 lastPt, incoming(0, 0, 0);
-                for (int i = 0; i < n;) {
-                    if (wps[i].arcCenter) {
-                        if (!haveLast || i + 1 >= n || wps[i + 1].arcCenter) {
-                            ++i;
-                            continue;
-                        }
-                        const Vector3 A = lastPt, C = wps[i].pos, B = wps[i + 1].pos;
-                        addArcBelt(A, C, B, spec.width, speed, incoming);
-                        incoming.set(B.x - A.x, 0.f, B.z - A.z);
-                        lastPt = B;
-                        haveLast = true;
-                        i += 2;
-                    } else {
-                        const Vector3 p = wps[i].pos;
-                        if (haveLast) {
-                            addStraightSeg(lastPt, p, spec.width, speed);
-                            incoming.set(p.x - lastPt.x, 0.f, p.z - lastPt.z);
-                        }
-                        lastPt = p;
-                        haveLast = true;
-                        ++i;
+                const std::size_t n = wps.size();
+                Vector3 cursor = wps.front().pos;
+                Vector3 incoming(0, 0, 0);
+                for (std::size_t i = 1; i + 1 < n; ++i) {
+                    const CornerFillet f = cornerFillet(wps, i);
+                    if (!f.valid) {
+                        addStraightSeg(cursor, wps[i].pos, spec.width, speed);
+                        incoming.set(wps[i].pos.x - cursor.x, 0.f, wps[i].pos.z - cursor.z);
+                        cursor = wps[i].pos;
+                        continue;
                     }
+                    addStraightSeg(cursor, f.t1, spec.width, speed);
+                    incoming.set(f.t1.x - cursor.x, 0.f, f.t1.z - cursor.z);
+                    addArcBelt(f.t1, f.centre, f.t2, spec.width, speed, incoming);
+                    incoming.set(f.t2.x - f.t1.x, 0.f, f.t2.z - f.t1.z);
+                    cursor = f.t2;
                 }
+                addStraightSeg(cursor, wps.back().pos, spec.width, speed);
             }
 
             // Travelling cleat bars per cleats-run. The box-belt colliders above

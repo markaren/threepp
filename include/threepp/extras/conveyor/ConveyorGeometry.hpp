@@ -37,14 +37,18 @@ namespace threepp::conveyor {
         Cleats = 2
     };
 
-    // A path waypoint. Normally a point on the centerline; if arcCenter is set,
-    // this point is the CENTRE of a circular arc between its two neighbours
-    // (start, end) — used for exact 90/180 degree horizontal bends instead of a
-    // spline approximation. segKind is the surface of the segment leaving this
-    // waypoint (unused on the last waypoint).
+    // A path waypoint — always a point ON the centerline. A non-zero
+    // cornerRadius rounds the corner at this waypoint with an exact circular
+    // fillet: the arc is inserted TANGENT to both adjacent segments, its centre
+    // and tangent points derived (see cornerFillet), so a bend can never kink —
+    // the radius is clamped to what the neighbouring segments allow rather than
+    // trusted. That replaces the earlier authored-arc-centre model, where
+    // tangency depended on placing the centre exactly perpendicular to both
+    // neighbours and was trivially violated by a gizmo drag. segKind is the
+    // surface of the segment leaving this waypoint (unused on the last).
     struct Waypoint {
         Vector3 pos;
-        bool arcCenter = false;
+        float cornerRadius = 0.f;// 0 = sharp corner
         SegKind segKind = SegKind::Flat;
     };
 
@@ -155,10 +159,10 @@ namespace threepp::conveyor {
 
     // --- Arcs + path resampling ------------------------------------------------
 
-    // Circular-arc parameters for a bend defined by an arc-CENTRE waypoint: the
-    // arc runs from A (the last centreline point) to B (the next waypoint)
-    // around centre C in the horizontal (XZ) plane. `incoming` is the travel
-    // direction arriving at A, used only to break the ~180 degree tie.
+    // Circular-arc parameters for a bend from A to B around centre C in the
+    // horizontal (XZ) plane. `incoming` is the travel direction arriving at A,
+    // used only to break the ~180 degree tie. Fed by cornerFillet's derived
+    // points on the sim side, so the collider matches the drawn arc exactly.
     struct Arc {
         bool valid = false;
         float a0 = 0.f;   // start angle atan2(z,x) of (A-C)
@@ -169,9 +173,28 @@ namespace threepp::conveyor {
     Arc computeArc(const Vector3& A, const Vector3& C, const Vector3& B,
                    const Vector3& incoming);
 
+    // The resolved fillet at an interior waypoint with a cornerRadius: the two
+    // tangent points (t1 on the incoming segment, t2 on the outgoing), the arc
+    // centre and the effective radius AFTER clamping — the authored radius is
+    // reduced whenever the tangent offset would overrun a neighbouring segment
+    // (half of it when that neighbour is itself a rounded corner, so chained
+    // fillets never fight over the straight they share). The arc lies in the
+    // XZ plane; height interpolates linearly t1 → t2. Invalid at the path
+    // ends, on a (near-)straight corner, and for radius <= 0.
+    struct CornerFillet {
+        bool valid = false;
+        Vector3 t1, t2;   // tangent points, on the two segments
+        Vector3 centre;   // arc centre (y = mid-height, for drawing)
+        float radius = 0.f;// effective radius after clamping
+        float a0 = 0.f;    // start angle atan2(z,x) of (t1-centre)
+        float sweep = 0.f; // signed swept angle t1 -> t2 (|sweep| < PI)
+    };
+
+    CornerFillet cornerFillet(const std::vector<Waypoint>& wps, std::size_t index);
+
     // Resample the waypoints into a dense point list shared by the preview and
-    // the sim. Any arc-centre present: straight runs between regular points and
-    // a true circular arc at each arc-centre node. Else smooth: centripetal
+    // the sim. Any rounded corner present: straight runs between waypoints
+    // with a tangent fillet arc at each rounded one. Else smooth: centripetal
     // Catmull-Rom through the points. Else: the raw polyline.
     std::vector<Vector3> resamplePath(const std::vector<Waypoint>& wps, bool smooth,
                                       int samplesPerSegment = 12);
@@ -186,7 +209,7 @@ namespace threepp::conveyor {
 
     // Like resamplePath, but split into runs by per-segment kind (Waypoint
     // segKind of the segment's starting waypoint). Adjacent same-kind segments
-    // merge; arc spans are always flat.
+    // merge; fillet arc spans are always flat.
     std::vector<PathRun> resamplePathByKind(const std::vector<Waypoint>& wps, bool smooth,
                                             int samplesPerSegment = 12);
 

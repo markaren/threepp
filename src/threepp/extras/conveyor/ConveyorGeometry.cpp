@@ -5,6 +5,7 @@
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Vector2.hpp"
 #include "threepp/textures/DataTexture.hpp"
 
 #include <algorithm>
@@ -315,19 +316,103 @@ namespace threepp::conveyor {
         return r;
     }
 
+    CornerFillet cornerFillet(const std::vector<Waypoint>& wps, std::size_t index) {
+
+        CornerFillet f;
+        const std::size_t n = wps.size();
+        if (index == 0 || index + 1 >= n) return f;// a corner needs both neighbours
+        const float authored = wps[index].cornerRadius;
+        if (authored <= 1e-4f) return f;
+
+        const Vector3& A = wps[index - 1].pos;
+        const Vector3& P = wps[index].pos;
+        const Vector3& B = wps[index + 1].pos;
+
+        // The fillet lives in plan (XZ); heights ride along the segments.
+        const Vector2 a(A.x, A.z), p(P.x, P.z), b(B.x, B.z);
+        Vector2 u(p.x - a.x, p.y - a.y);
+        Vector2 v(b.x - p.x, b.y - p.y);
+        const float lenIn = u.length();
+        const float lenOut = v.length();
+        if (lenIn < 1e-4f || lenOut < 1e-4f) return f;
+        u.divideScalar(lenIn);
+        v.divideScalar(lenOut);
+
+        // Turn angle between the two segment directions. (Near-)straight needs
+        // no arc; a full double-back leaves no room for one.
+        const float dot = std::clamp(u.x * v.x + u.y * v.y, -1.f, 1.f);
+        const float turn = std::acos(dot);
+        if (turn < 0.02f || turn > static_cast<float>(math::PI) - 0.02f) return f;
+
+        // Tangent offset d along each segment for radius r: d = r * tan(turn/2).
+        // Clamp d to the usable part of the SHORTER neighbour — half of a
+        // segment whose far end is itself a rounded corner, so chained fillets
+        // split the straight between them instead of overlapping.
+        const float usableIn = lenIn * (index >= 2 && wps[index - 1].cornerRadius > 1e-4f ? 0.5f : 1.f);
+        const float usableOut = lenOut * (index + 2 < n && wps[index + 1].cornerRadius > 1e-4f ? 0.5f : 1.f);
+        const float tanHalf = std::tan(turn * 0.5f);
+        float d = authored * tanHalf;
+        const float dMax = std::min(usableIn, usableOut) * 0.95f;
+        if (d > dMax) d = dMax;
+        const float r = d / std::max(tanHalf, 1e-5f);
+        if (r < 1e-4f) return f;
+
+        // Tangent points, with height interpolated along their segments.
+        const Vector2 t1(p.x - u.x * d, p.y - u.y * d);
+        const Vector2 t2(p.x + v.x * d, p.y + v.y * d);
+        const float y1 = P.y + (A.y - P.y) * (d / lenIn);
+        const float y2 = P.y + (B.y - P.y) * (d / lenOut);
+
+        // Centre: perpendicular to the incoming direction at t1, on the side
+        // the path turns to. cross > 0 means the turn is toward +90 degrees
+        // (left in the XZ plane's atan2 sense).
+        const float cross = u.x * v.y - u.y * v.x;
+        const float side = cross >= 0.f ? 1.f : -1.f;
+        const Vector2 normal(-u.y * side, u.x * side);
+        const Vector2 c(t1.x + normal.x * r, t1.y + normal.y * r);
+
+        f.valid = true;
+        f.radius = r;
+        f.t1.set(t1.x, y1, t1.y);
+        f.t2.set(t2.x, y2, t2.y);
+        f.centre.set(c.x, (y1 + y2) * 0.5f, c.y);
+        f.a0 = std::atan2(t1.y - c.y, t1.x - c.x);
+        // The arc turns exactly the corner's turn angle, in the turn's sense.
+        f.sweep = side * turn;
+        return f;
+    }
+
+    namespace {
+
+        bool hasRoundedCorner(const std::vector<Waypoint>& wps) {
+
+            for (std::size_t i = 1; i + 1 < wps.size(); ++i) {
+                if (wps[i].cornerRadius > 1e-4f) return true;
+            }
+            return false;
+        }
+
+        int filletSteps(float sweep, int samplesPerSegment) {
+
+            const float PI = static_cast<float>(math::PI);
+            return std::max(2, static_cast<int>(std::ceil(
+                    std::abs(sweep) / (PI * 0.5f) * static_cast<float>(std::max(2, samplesPerSegment)))));
+        }
+
+        Vector3 filletPoint(const CornerFillet& f, float t) {
+
+            const float ang = f.a0 + f.sweep * t;
+            return {f.centre.x + f.radius * std::cos(ang),
+                    f.t1.y + (f.t2.y - f.t1.y) * t,
+                    f.centre.z + f.radius * std::sin(ang)};
+        }
+
+    }// namespace
+
     std::vector<Vector3> resamplePath(const std::vector<Waypoint>& wps, bool smooth,
                                       int samplesPerSegment) {
 
-        const float PI = static_cast<float>(math::PI);
-        bool hasArc = false;
-        for (const auto& w : wps) {
-            if (w.arcCenter) {
-                hasArc = true;
-                break;
-            }
-        }
-
-        if (!hasArc) {
+        if (!hasRoundedCorner(wps)) {
             std::vector<Vector3> ctrl;
             ctrl.reserve(wps.size());
             for (const auto& w : wps) ctrl.push_back(w.pos);
@@ -338,68 +423,40 @@ namespace threepp::conveyor {
             return curve.getSpacedPoints(divisions);
         }
 
+        // Corner walk: straight runs between waypoints, a tangent fillet arc at
+        // each rounded one. Tangency is by construction, so the sampled path
+        // can never kink at a bend.
         std::vector<Vector3> out;
-        const int n = static_cast<int>(wps.size());
-        int i = 0;
-        while (i < n) {
-            if (wps[i].arcCenter) {
-                // Need a preceding emitted point (A) and a following regular point (B).
-                if (out.empty() || i + 1 >= n || wps[i + 1].arcCenter) {
-                    ++i;
-                    continue;
-                }
-                const Vector3 A = out.back();
-                const Vector3 C = wps[i].pos;
-                const Vector3 B = wps[i + 1].pos;
-                Vector3 incoming(0.f, 0.f, 0.f);
-                if (out.size() >= 2) {
-                    incoming.set(out.back().x - out[out.size() - 2].x, 0.f,
-                                 out.back().z - out[out.size() - 2].z);
-                }
-                const Arc arc = computeArc(A, C, B, incoming);
-                if (!arc.valid) {
-                    out.push_back(B);
-                    i += 2;
-                    continue;
-                }
-                const int steps = std::max(2, static_cast<int>(std::ceil(
-                        std::abs(arc.sweep) / (PI * 0.5f) * static_cast<float>(std::max(2, samplesPerSegment)))));
-                for (int k = 1; k <= steps; ++k) {
-                    const float t = static_cast<float>(k) / static_cast<float>(steps);
-                    const float ang = arc.a0 + arc.sweep * t;
-                    const float rad = arc.radA + (arc.radB - arc.radA) * t;
-                    out.emplace_back(C.x + rad * std::cos(ang), A.y + (B.y - A.y) * t,
-                                     C.z + rad * std::sin(ang));
-                }
-                i += 2;
-            } else {
+        const std::size_t n = wps.size();
+        out.push_back(wps.front().pos);
+        for (std::size_t i = 1; i + 1 < n; ++i) {
+            const CornerFillet f = cornerFillet(wps, i);
+            if (!f.valid) {
                 out.push_back(wps[i].pos);
-                ++i;
+                continue;
+            }
+            const int steps = filletSteps(f.sweep, samplesPerSegment);
+            for (int k = 0; k <= steps; ++k) {
+                out.push_back(filletPoint(f, static_cast<float>(k) / static_cast<float>(steps)));
             }
         }
+        out.push_back(wps.back().pos);
         return out;
     }
 
     std::vector<PathRun> resamplePathByKind(const std::vector<Waypoint>& wps, bool smooth,
                                             int samplesPerSegment) {
 
-        const float PI = static_cast<float>(math::PI);
         const int n = static_cast<int>(wps.size());
-        bool hasArc = false;
-        for (const auto& w : wps) {
-            if (w.arcCenter) {
-                hasArc = true;
-                break;
-            }
-        }
+        const bool corners = hasRoundedCorner(wps);
 
         std::vector<Vector3> pts;
         std::vector<SegKind> edgeKind;// kind of edge pts[i] -> pts[i+1]
 
-        if (!hasArc && (!smooth || n < 3)) {
+        if (!corners && (!smooth || n < 3)) {
             for (const auto& w : wps) pts.push_back(w.pos);
             for (int j = 0; j + 1 < n; ++j) edgeKind.push_back(wps[j].segKind);
-        } else if (!hasArc) {
+        } else if (!corners) {
             // Smooth Catmull-Rom: sample each control-point span over its own
             // t-subrange so every output edge maps to a known waypoint segment
             // (the curve passes through each control point at t = j/(n-1)).
@@ -421,47 +478,28 @@ namespace threepp::conveyor {
                 }
             }
         } else {
-            // Arc walk (mirrors resamplePath). A straight edge into a regular
-            // waypoint carries the previous waypoint's kind; arc spans are flat.
-            int i = 0;
-            while (i < n) {
-                if (wps[i].arcCenter) {
-                    if (pts.empty() || i + 1 >= n || wps[i + 1].arcCenter) {
-                        ++i;
-                        continue;
-                    }
-                    const Vector3 A = pts.back();
-                    const Vector3 C = wps[i].pos;
-                    const Vector3 B = wps[i + 1].pos;
-                    Vector3 incoming(0.f, 0.f, 0.f);
-                    if (pts.size() >= 2) {
-                        incoming.set(pts.back().x - pts[pts.size() - 2].x, 0.f,
-                                     pts.back().z - pts[pts.size() - 2].z);
-                    }
-                    const Arc arc = computeArc(A, C, B, incoming);
-                    if (!arc.valid) {
-                        pts.push_back(B);
-                        edgeKind.push_back(SegKind::Flat);
-                        i += 2;
-                        continue;
-                    }
-                    const int steps = std::max(2, static_cast<int>(std::ceil(
-                            std::abs(arc.sweep) / (PI * 0.5f) * static_cast<float>(std::max(2, samplesPerSegment)))));
-                    for (int k = 1; k <= steps; ++k) {
-                        const float t = static_cast<float>(k) / static_cast<float>(steps);
-                        const float ang = arc.a0 + arc.sweep * t;
-                        const float rad = arc.radA + (arc.radB - arc.radA) * t;
-                        pts.emplace_back(C.x + rad * std::cos(ang), A.y + (B.y - A.y) * t,
-                                         C.z + rad * std::sin(ang));
-                        edgeKind.push_back(SegKind::Flat);
-                    }
-                    i += 2;
-                } else {
-                    if (!pts.empty()) edgeKind.push_back(wps[i - 1].segKind);
+            // Corner walk (mirrors resamplePath). The straight into a corner
+            // carries the entering segment's kind, the straight out of it the
+            // leaving segment's; the fillet arc itself is always flat.
+            pts.push_back(wps.front().pos);
+            for (int i = 1; i + 1 < n; ++i) {
+                const CornerFillet f = cornerFillet(wps, static_cast<std::size_t>(i));
+                if (!f.valid) {
+                    edgeKind.push_back(wps[i - 1].segKind);
                     pts.push_back(wps[i].pos);
-                    ++i;
+                    continue;
+                }
+                // Up to the first tangent point: still the entering segment.
+                edgeKind.push_back(wps[i - 1].segKind);
+                pts.push_back(f.t1);
+                const int steps = filletSteps(f.sweep, samplesPerSegment);
+                for (int k = 1; k <= steps; ++k) {
+                    edgeKind.push_back(SegKind::Flat);
+                    pts.push_back(filletPoint(f, static_cast<float>(k) / static_cast<float>(steps)));
                 }
             }
+            edgeKind.push_back(wps[n - 2].segKind);
+            pts.push_back(wps.back().pos);
         }
 
         std::vector<PathRun> runs;

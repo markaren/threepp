@@ -787,10 +787,23 @@ namespace threepp::editor {
         std::shared_ptr<Group> splines_;
         std::vector<SplineOverlay> splineOverlays_;
 
-        // Conveyor path overlays — same struct, same lifetime rules. The hash
-        // additionally covers each waypoint's own config (arc centre, segment
-        // surface), which lives on the waypoint node rather than the owner.
-        std::vector<SplineOverlay> conveyorOverlays_;
+        // Conveyor path overlays — same lifetime rules as the spline ones. The
+        // hash additionally covers each waypoint's own config (corner radius,
+        // segment surface), which lives on the waypoint node rather than the
+        // owner. `aids` carries the design helpers — travel-direction chevrons
+        // and the selected rounded corner's derived centre + tangent spokes —
+        // rebuilt on its own key since selection is not part of the hash.
+        struct ConveyorOverlay {
+            Object3D* owner = nullptr;
+            std::shared_ptr<Line> line;
+            std::shared_ptr<LineBasicMaterial> material;
+            std::size_t hash = 0;
+            int capacity = 0;
+            std::shared_ptr<LineSegments> aids;
+            std::size_t aidsKey = 0;
+            int aidsCapacity = 0;
+        };
+        std::vector<ConveyorOverlay> conveyorOverlays_;
         std::shared_ptr<Group> conveyors_;
 
         // Physics collider overlay. The line buffer PhysX hands out changes

@@ -1815,21 +1815,30 @@ width=0.6;speed=0.6;reverse=0;smooth=1;separator=0;wallHeight=0.5;rollerRadius=0
 | `frame` | `0`, `1` | generate the support frame (rails, legs, end drums) |
 
 Two things live **on the waypoint node itself**, under
-`userData["conveyorWp"]` (`arc=0/1;seg=flat|rollers|cleats`), so they follow
+`userData["conveyorWp"]` (`radius=…;seg=flat|rollers|cleats`), so they follow
 the node through reorder, undo and serialization; the inspector's **Conveyor
 Waypoint** section edits both:
 
-- **Arc centre** — the waypoint stops being a point *on* the path and becomes
-  the CENTRE of an exact circular bend between its two neighbours: the bend
-  enters at the previous waypoint (which fixes the radius) and leaves at the
-  next. This is how you author true 90°/180° turns instead of spline
-  approximations — and under Play the whole bend is one rotating collider, so
-  the surface velocity is exactly tangential everywhere along it.
+- **Corner radius** — a non-zero radius rounds the corner at this waypoint
+  with an exact circular fillet. The waypoint stays *on* the path; the arc's
+  centre and tangent points are DERIVED, inserted tangent to both adjacent
+  segments, and the radius **clamps itself** to what those segments allow —
+  so a bend cannot kink, whatever gets dragged where. (Chained rounded
+  corners split the straight they share rather than overlapping.) Under Play
+  the whole bend is one rotating collider built from the same fillet, so the
+  surface velocity is exactly tangential everywhere along it. A U-turn is two
+  90° corners.
 - **Segment surface** — the span leaving the waypoint is a flat belt by
   default; per segment you can choose a **roller bed** (a row of spinning
   cylinders) or **cleats** (flight bars standing across the belt that travel
   with it and catch cargo on an incline). Runs share boundary points, so a
   flat→rollers change meets gap-free.
+
+The viewport helps you author this: every waypoint gets a clickable diamond
+marker (the spline points' machinery, with its own glyph), the path overlay
+carries **chevrons pointing along the flow** (they flip with `reverse`), and
+selecting a rounded corner draws its derived arc centre and the two tangent
+spokes, so what the radius is doing to the path is visible while it is tuned.
 
 **The look is generated, and it is first-party.** Every conveyor carries one
 tagged child (`userData["conveyorDerived"]`), a Group holding the parts: the

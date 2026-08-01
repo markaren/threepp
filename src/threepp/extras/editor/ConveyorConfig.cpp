@@ -96,8 +96,8 @@ namespace {
 std::string ConveyorWaypointConfig::encode() const {
 
     std::string out;
-    out += "arc=";
-    out += arcCenter ? "1" : "0";
+    out += "radius=";
+    out += number(cornerRadius);
     out += ";seg=";
     out += segToken(segKind);
     return out;
@@ -107,12 +107,14 @@ ConveyorWaypointConfig ConveyorWaypointConfig::decode(const std::string& text) {
 
     ConveyorWaypointConfig config;
     parsePairs(text, [&](std::string_view key, std::string_view value) {
-        if (key == "arc") {
-            config.arcCenter = value == "1" || value == "true";
+        if (key == "radius") {
+            config.cornerRadius = toFloat(value, config.cornerRadius);
         } else if (key == "seg") {
             config.segKind = segFrom(value, config.segKind);
         }
-        // Unknown keys ignored on purpose.
+        // Unknown keys ignored on purpose — which also retires the earlier
+        // `arc` centre flag: a document authored under that model degrades to
+        // sharp corners rather than failing to load.
     });
     return config;
 }
@@ -324,7 +326,7 @@ conveyor::ConveyorSpec ConveyorConfig::spec(const Object3D& conveyor) const {
 
     for (const auto* node : waypointNodes(conveyor)) {
         const auto wc = ConveyorWaypointConfig::read(*node);
-        s.waypoints.push_back({node->position, wc.arcCenter, wc.segKind});
+        s.waypoints.push_back({node->position, std::max(wc.cornerRadius, 0.f), wc.segKind});
     }
     return s;
 }

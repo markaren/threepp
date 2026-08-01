@@ -755,24 +755,23 @@ int EditorApp::runScreenshot() {
         }
         addObject(rail, document_.scene(), "Add Conveyor Rail");
 
-        // A roller bed running into an exact 90-degree bend (arc-centre
-        // waypoint) — the two per-segment surfaces the flat shot can't show.
+        // A roller bed running into an exact right-angle bend (a rounded
+        // corner waypoint) — the two per-segment surfaces the flat shot can't
+        // show, and the tangent fillet the corner model guarantees.
         auto bend = ObjectFactory::createConveyor(document_.scene());
         bend->name = "Conveyor Bend";
         bend->position.set(28.f, 0.f, 2.f);
         {
-            bend->add(ObjectFactory::createConveyorPoint(*bend));
             const auto nodes = ConveyorConfig::waypointNodes(*bend);
             nodes[0]->position.set(-3.f, 0.75f, 0.f);
             nodes[1]->position.set(0.f, 0.75f, 0.f);
-            nodes[2]->position.set(0.f, 0.75f, 2.5f);// arc centre, radius 2.5
-            nodes[3]->position.set(2.5f, 0.75f, 2.5f);
+            nodes[2]->position.set(0.f, 0.75f, 3.f);
             ConveyorWaypointConfig rollers;
             rollers.segKind = conveyor::SegKind::Rollers;
             rollers.write(*nodes[0]);
-            ConveyorWaypointConfig arc;
-            arc.arcCenter = true;
-            arc.write(*nodes[2]);
+            ConveyorWaypointConfig corner;
+            corner.cornerRadius = 2.f;
+            corner.write(*nodes[1]);
             auto config = ConveyorConfig::read(*bend).value_or(ConveyorConfig{});
             config.speed = 0.8f;
             config.smooth = false;
@@ -829,6 +828,14 @@ int EditorApp::runScreenshot() {
         cargo({25.3f, 1.3f, 2.f}, "Cargo on rollers");
         cargo({21.5f, 1.2f, 8.f}, "Cargo on climb");
         playFor(0.2f);
+
+        // The bend's rounded corner, selected: the still shot then carries the
+        // design aids — the derived arc centre, its tangent spokes and the
+        // flow chevrons — exactly as an author sees them.
+        if (auto* liveBend = document_.scene().getObjectByName("Conveyor Bend")) {
+            const auto nodes = ConveyorConfig::waypointNodes(*liveBend);
+            if (nodes.size() >= 2) selectObject(nodes[1]);
+        }
 
         camera_.position.set(38.f, 8.f, 15.f);
         orbit_->target.set(26.5f, 0.8f, 2.5f);
@@ -3653,33 +3660,52 @@ int EditorApp::runSelfTest() {
                   "and Stop puts the cargo back where it was authored");
         }
 
-        // An arc bend is ONE rotating body, and it really turns cargo. 90
-        // degrees around (0, 2): in from -Z, out along +X.
+        // A rounded corner is ONE rotating bend body, tangent by construction,
+        // and it really turns cargo. A right-angle corner, radius 2.
         {
             auto arcConveyor = ObjectFactory::createConveyor(document_.scene());
             const auto arcUuid = arcConveyor->uuid;
-            addObject(arcConveyor, document_.scene(), "Add Arc Conveyor");
+            addObject(arcConveyor, document_.scene(), "Add Bend Conveyor");
             arcConveyor.reset();
             step();
 
+            // The fillet the corner resolves to, read from the same helper the
+            // preview and the physics build from — the test asserts against
+            // the DERIVED centre, not a hand-computed one.
+            conveyor::CornerFillet fillet;
             auto* arc = conveyorNow(arcUuid);
             if (arc) {
                 auto nodes = ConveyorConfig::waypointNodes(*arc);
-                // A (start), C (arc centre), B (end): radius 2, quarter turn.
-                nodes[0]->position.set(0.f, 0.75f, 0.f);
-                nodes[1]->position.set(0.f, 0.75f, 2.f);
-                nodes[2]->position.set(2.f, 0.75f, 2.f);
+                nodes[0]->position.set(-3.f, 0.75f, 0.f);
+                nodes[1]->position.set(0.f, 0.75f, 0.f);
+                nodes[2]->position.set(0.f, 0.75f, 3.f);
                 ConveyorWaypointConfig wp;
-                wp.arcCenter = true;
+                wp.cornerRadius = 2.f;
                 wp.write(*nodes[1]);
                 step();
+
+                const auto spec = ConveyorConfig::read(*arc)
+                                          .value_or(ConveyorConfig{})
+                                          .spec(*arc);
+                fillet = conveyor::cornerFillet(spec.waypoints, 1);
+                check(fillet.valid, "the corner resolves to a tangent fillet");
+                check(std::abs(fillet.radius - 2.f) < 1e-3f,
+                      "at the authored radius, which these segments allow");
+                // Tangency in one number: the spokes to the tangent points are
+                // perpendicular to their segments.
+                const float inDot = (fillet.t1.x - fillet.centre.x) * 1.f;// incoming dir +x
+                const float outDot = (fillet.t2.z - fillet.centre.z) * 1.f;// outgoing dir +z
+                check(std::abs(inDot) < 1e-3f && std::abs(outDot) < 1e-3f,
+                      "with its spokes perpendicular to both segments");
             }
 
             auto cargo = ObjectFactory::createPrimitive(Primitive::Box,
                                                         document_.scene());
             cargo->name = "ArcCargo";
-            // On the arc's midpoint (angle -45 degrees about the centre).
-            cargo->position.set(1.414f, 1.32f, 0.586f);
+            // On the arc's midpoint, halfway around the sweep.
+            const float midAngle = fillet.a0 + fillet.sweep * 0.5f;
+            cargo->position.set(fillet.centre.x + fillet.radius * std::cos(midAngle), 1.32f,
+                                fillet.centre.z + fillet.radius * std::sin(midAngle));
             cargo->scale.set(0.4f, 0.4f, 0.4f);
             PhysicsConfig cargoConfig;
             cargoConfig.enabled = true;
@@ -3694,11 +3720,12 @@ int EditorApp::runSelfTest() {
             check(conveyorSession_ && conveyorSession_->conveyorCount() == 2,
                   "both conveyors play at once");
 
-            const Vector3 centre(0.f, 0.f, 2.f);
+            const Vector3 centre(fillet.centre.x, 0.f, fillet.centre.z);
             auto* riding = findByUuid(document_.scene(), cargoUuid);
             const float angle0 = riding ? std::atan2(riding->position.z - centre.z,
                                                      riding->position.x - centre.x)
                                         : 0.f;
+            const float direction = fillet.sweep >= 0.f ? 1.f : -1.f;
             bool turned = false, onArc = true;
             for (int i = 0; i < 200000 && !turned && play_.elapsed() < 8.f; ++i) {
                 step();
@@ -3706,15 +3733,16 @@ int EditorApp::runSelfTest() {
                 if (!riding) break;
                 const float angle = std::atan2(riding->position.z - centre.z,
                                                riding->position.x - centre.x);
-                if (angle - angle0 > 0.15f) turned = true;// toward B (angle 0 -> +?)
+                if (direction * (angle - angle0) > 0.15f) turned = true;// toward t2
                 const float radius = std::hypot(riding->position.x - centre.x,
                                                 riding->position.z - centre.z);
-                if (riding->position.y < 0.4f || radius < 1.3f || radius > 2.7f) {
+                if (riding->position.y < 0.4f || radius < fillet.radius - 0.7f ||
+                    radius > fillet.radius + 0.7f) {
                     onArc = false;
                     break;
                 }
             }
-            check(turned, "the bend carries cargo around the arc");
+            check(turned, "the bend carries cargo around the corner's arc");
             check(onArc, "keeping it on the annulus at belt height");
 
             stopPlay();

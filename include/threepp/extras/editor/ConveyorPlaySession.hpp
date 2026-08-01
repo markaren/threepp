@@ -90,8 +90,16 @@ namespace threepp::editor {
 
                 auto spec = config->spec(object);
                 object.updateWorldMatrix(true, false);
+                // Corner radii are authored in the conveyor's local units; a
+                // scaled group scales its bends with it (mean horizontal scale
+                // — the fillet lives in the XZ plane).
+                Vector3 p, s;
+                Quaternion q;
+                object.matrixWorld->decompose(p, q, s);
+                const float radiusScale = (std::abs(s.x) + std::abs(s.z)) * 0.5f;
                 for (auto& wp : spec.waypoints) {
                     wp.pos.applyMatrix4(*object.matrixWorld);
+                    wp.cornerRadius *= radiusScale;
                 }
                 collectVisuals(object, *config);
                 specs.push_back(std::move(spec));
