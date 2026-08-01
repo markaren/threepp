@@ -10,6 +10,8 @@
 //   • Anisotropy slider sweeping the HG phase from backscatter (-) to
 //     forward-scatter (+) god rays.
 
+#include "capture_util.hpp"
+
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
@@ -208,10 +210,7 @@ int main(int argc, char** argv) {
         if (shotPath.empty()) {
             ui->render();
         } else if (++shotFrame >= shotFrames) {
-            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
-            renderer.writeFramebuffer(path);
-            std::cout << "wrote " << path.string() << std::endl;
-            std::exit(0);
+            capture::finishShot(renderer, shotPath);
         }
     });
 

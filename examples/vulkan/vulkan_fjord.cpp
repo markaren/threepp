@@ -28,6 +28,8 @@
 // Controls:  drag = orbit   scroll = zoom   C = cinematic camera   SPACE = play/pause time
 // Headless:  vulkan_fjord --shot out.png [--frames N] [--time H] [--cam 0..3] [--cycle H_per_s]
 
+#include "capture_util.hpp"
+
 #include "threepp/extras/imgui/RendererSettings.hpp"
 
 #include "threepp/extras/architecture/LogCabin.hpp"
@@ -777,18 +779,22 @@ int main(int argc, char** argv) {
     int   winW = 0, winH = 0;   // --size W H: window/render size (default 960x600)
     int   debugView = 0;        // --debugview N: blit a G-buffer channel (1=normal 2=motion 3=id 4=albedo)
     float tile2Override = -1.f; // --tile2 F: cascade-2 tile (0 disables the fine cascade)
-    // --campos x,y,z / --look x,y,z: free camera override for shot mode —
+    // --cam x,y,z / --look x,y,z: free camera override for shot mode —
+    // (--cam is the capture_util convention every Vulkan demo shares; the
+    // camera PRESET index moved to --view. --campos stays as a legacy alias.) —
     // scouting artefacts at arbitrary viewpoints without adding a preset each time.
     bool  hasCamPos = false, hasCamLook = false;
     float camPos[3]{}, camLook[3]{};
     auto parseVec3 = [](const char* s, float out[3]) {
-        return std::sscanf(s, "%f,%f,%f", &out[0], &out[1], &out[2]) == 3;
+        const auto v = capture::parseVec3(s);// shared: accepts "x,y,z" and "x y z"
+        if (v) { out[0] = v->x; out[1] = v->y; out[2] = v->z; }
+        return v.has_value();
     };
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--time") == 0 && i + 1 < argc) startTime = static_cast<float>(std::atof(argv[++i]));
-        else if (std::strcmp(argv[i], "--cam") == 0 && i + 1 < argc) shotCam = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--view") == 0 && i + 1 < argc) shotCam = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--cycle") == 0 && i + 1 < argc) startCycle = static_cast<float>(std::atof(argv[++i]));
         else if (std::strcmp(argv[i], "--fly") == 0) startFly = true;
         else if (std::strcmp(argv[i], "--single-grass") == 0) singleGrass = true;
@@ -813,7 +819,8 @@ int main(int argc, char** argv) {
         }
         else if (std::strcmp(argv[i], "--debugview") == 0 && i + 1 < argc) debugView = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--tile2") == 0 && i + 1 < argc) tile2Override = static_cast<float>(std::atof(argv[++i]));
-        else if (std::strcmp(argv[i], "--campos") == 0 && i + 1 < argc) hasCamPos = parseVec3(argv[++i], camPos);
+        else if (std::strcmp(argv[i], "--cam") == 0 && i + 1 < argc) hasCamPos = parseVec3(argv[++i], camPos);
+        else if (std::strcmp(argv[i], "--campos") == 0 && i + 1 < argc) hasCamPos = parseVec3(argv[++i], camPos);// legacy alias
         else if (std::strcmp(argv[i], "--look") == 0 && i + 1 < argc) hasCamLook = parseVec3(argv[++i], camLook);
     }
 
@@ -1852,7 +1859,7 @@ int main(int argc, char** argv) {
             char cmd[512];
             std::snprintf(cmd, sizeof(cmd),
                           "vulkan_fjord --shot %s_replay.png --frames 220 --time %.2f --wind %.1f "
-                          "--fogscale %.2f%s --campos %.1f,%.1f,%.1f --look %.1f,%.1f,%.1f",
+                          "--fogscale %.2f%s --cam %.1f,%.1f,%.1f --look %.1f,%.1f,%.1f",
                           base, timeOfDay, windSpeed, fogScale,
                           cloudsOn ? "" : " --noclouds",
                           camera.position.x, camera.position.y, camera.position.z,
@@ -1865,7 +1872,7 @@ int main(int argc, char** argv) {
         if (shotPath.empty()) {
             ui->render();
         } else if (++shotFrame >= shotFrames) {
-            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
+            const auto path = capture::shotOutputPath(shotPath);
             renderer.writeFramebuffer(path);
             const auto t = renderer.lastFrameTimings();
             const auto ls = renderer.autoLodStats();

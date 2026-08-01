@@ -13,6 +13,8 @@
 // pass runs on demand via the Generate button. Presets bake fully eroded.
 //
 
+#include "capture_util.hpp"
+
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/extras/terrain/DetailTexture.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
@@ -31,6 +33,7 @@
 #include <filesystem>
 #include <iostream>
 #include <random>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -681,11 +684,9 @@ int main(int argc, char** argv) {
         if (!shotPath.empty()) {
             static int shotFrame = 0;
             if (++shotFrame >= shotFrames) {
-                const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
-                std::filesystem::create_directories(path.parent_path());
-                renderer->writeFramebuffer(path);
-                std::cout << "wrote " << path.string() << " (" << fps << " fps)" << std::endl;
-                std::exit(0);
+                std::ostringstream stats;
+                stats << " (" << fps << " fps)";
+                capture::finishShot(*renderer, shotPath, stats.str());
             }
         } else {
             ui.render();

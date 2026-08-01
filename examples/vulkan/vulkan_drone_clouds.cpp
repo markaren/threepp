@@ -15,6 +15,8 @@
 // the scene's DirectionalLight sun (Beer light-march + powder + dual-lobe HG
 // phase) composited over the HDR sky.  Phase A: sky-only compositing.
 
+#include "capture_util.hpp"
+
 #include "threepp/extras/imgui/RendererSettings.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
@@ -28,6 +30,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -276,12 +279,10 @@ int main(int argc, char** argv) {
         if (shotPath.empty()) {
             ui->render();
         } else if (++shotFrame >= shotFrames) {
-            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
-            renderer.writeFramebuffer(path);
             const auto tm = renderer.lastFrameTimings();
-            std::cout << "wrote " << path.string() << " (" << fps << " fps)"
-                      << "  shade " << tm.pathTraceMs << " ms\n";
-            std::exit(0);
+            std::ostringstream stats;
+            stats << " (" << fps << " fps)  shade " << tm.pathTraceMs << " ms";
+            capture::finishShot(renderer, shotPath, stats.str());
         }
     });
 

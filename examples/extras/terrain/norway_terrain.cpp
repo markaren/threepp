@@ -20,6 +20,8 @@
 //   norway_terrain --shot out.png [--frames N]   headless capture (forces Vulkan)
 //   default pack: <PROJECT_FOLDER>/geodata/trollstigen
 
+#include "capture_util.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include "threepp/extras/imgui/RendererSettings.hpp"
@@ -40,7 +42,6 @@
 #ifdef THREEPP_WITH_VULKAN
 #include "threepp/objects/Ocean.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
-#include "threepp/renderers/VulkanRenderer.hpp"
 #endif
 
 #include <algorithm>
@@ -53,6 +54,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -711,13 +713,10 @@ int main(int argc, char** argv) {
         }
 
         if (!shotPath.empty() && ++frame >= shotFrames) {
-            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
-            std::filesystem::create_directories(path.parent_path());
-            renderer->writeFramebuffer(path);
-            std::cout << "wrote " << path.string() << " (" << fps << " fps, tiles "
-                      << tiles->activeTiles() << ", baking " << tiles->pendingBakes() << ")"
-                      << std::endl;
-            std::exit(0);
+            std::ostringstream stats;
+            stats << " (" << fps << " fps, tiles " << tiles->activeTiles()
+                  << ", baking " << tiles->pendingBakes() << ")";
+            capture::finishShot(*renderer, shotPath, stats.str());
         }
     });
 
