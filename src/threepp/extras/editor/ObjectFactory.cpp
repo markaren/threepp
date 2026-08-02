@@ -6,6 +6,7 @@
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
+#include "threepp/extras/editor/TreeConfig.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
@@ -25,6 +26,7 @@
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 
+#include <random>
 #include <string>
 #include <unordered_set>
 
@@ -163,6 +165,47 @@ std::shared_ptr<Mesh> ObjectFactory::createText(const Object3D& root) {
     if (box && !box->isEmpty()) mesh->position.y = -box->min().y;
 
     return mesh;
+}
+
+std::shared_ptr<Group> ObjectFactory::createTree(const Object3D& root) {
+
+    auto tree = Group::create();
+    tree->name = uniqueName(root, "Tree");
+
+    TreeConfig config;
+    // Oak: the preset that most obviously reads as "a tree" the moment it
+    // appears, and the one the vegetation demo opens on.
+    vegetation::applyPreset(0, config.params);
+    // A fresh seed per tree, so a second Add Tree is a DIFFERENT oak and not a
+    // clone standing in the same wood. The seed lives in the config, so the
+    // tree itself stays deterministic through undo, save and reload — only the
+    // choice of individual is random, and only once.
+    config.params.seed = std::random_device{}();
+    config.write(*tree);
+
+    // Built here rather than left to the sync pass, so the tree is a tree the
+    // frame it appears — and so undo of the Add carries the meshes away with
+    // it, AddObjectCommand owning the whole subtree.
+    const auto geometries = config.build();
+
+    // Named against their siblings rather than the scene, like spline control
+    // points: every tree having a "Trunk" reads better than one of them
+    // starting at "Trunk 7".
+    auto trunk = Mesh::create(geometries.trunk, config.makeBarkMaterial());
+    trunk->name = TreeConfig::label(TreeConfig::Part::Trunk);
+    trunk->castShadow = true;
+    trunk->receiveShadow = true;
+    TreeConfig::markDerived(*trunk, TreeConfig::Part::Trunk);
+    tree->add(trunk);
+
+    auto leaves = Mesh::create(geometries.leaves, config.makeLeafMaterial());
+    leaves->name = TreeConfig::label(TreeConfig::Part::Leaves);
+    leaves->castShadow = true;
+    leaves->receiveShadow = true;
+    TreeConfig::markDerived(*leaves, TreeConfig::Part::Leaves);
+    tree->add(leaves);
+
+    return tree;
 }
 
 std::shared_ptr<Object3D> ObjectFactory::createSound(const Object3D& root) {

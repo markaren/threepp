@@ -338,6 +338,7 @@ EditorApp::EditorApp(const Options& options)
         clearViewportMarkers();
         clearSplineOverlays();
         clearConveyorOverlays();
+        clearTreeOverlays();
         // The rings are keyed by the outgoing scene's uuid; the audition is
         // playing a file for a node that is about to stop existing.
         clearSoundRings();
@@ -2604,6 +2605,7 @@ void EditorApp::refreshSelectionHelpers() {
     syncViewportMarkers();
     syncSplineOverlays();
     syncConveyorOverlays();
+    syncTreeOverlays();
     syncPhysicsDebug();
     syncDebugDraw();
     syncSensorOverlay();

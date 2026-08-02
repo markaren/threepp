@@ -246,6 +246,11 @@ namespace threepp::editor {
         // parameters, each edit rebuilding the geometry through the same
         // undoable property write every other config section uses.
         void drawTextSection(Object3D& object);
+        // Shown for a procedural tree (TreeConfig): the species presets, the
+        // seed and the generator's parameters. Edits write the CONFIG only —
+        // the trunk and foliage meshes are derived state that syncTreeOverlays
+        // regrows to follow it, which is also what makes undo cheap.
+        void drawTreeSection(Object3D& object);
         // The conveyor twin: shown for a conveyor group and, in its waypoint
         // form, for one of its waypoints (arc centre / segment surface).
         void drawConveyorSection(Object3D& object);
@@ -577,6 +582,12 @@ namespace threepp::editor {
         // the conveyor twin of the spline overlay pass.
         void syncConveyorOverlays();
         void clearConveyorOverlays();
+        // --- procedural trees (apps/editor/TreeOverlay.cpp) -----------------
+        // Regrows the trunk and foliage meshes an authored TreeConfig
+        // describes. No editor furniture of its own: unlike the two passes
+        // above, everything a tree has to show IS the generated geometry.
+        void syncTreeOverlays();
+        void clearTreeOverlays();
         // The corner-radius handle: a draggable ball on the selected corner's
         // arc midpoint. Interaction runs in the ImGui frame (it reads the same
         // mouse state picking does); placement rides syncConveyorOverlays.
@@ -977,6 +988,22 @@ namespace threepp::editor {
             int aidsCapacity = 0;
         };
         std::vector<ConveyorOverlay> conveyorOverlays_;
+
+        // Procedural trees. Same lifetime rules as the two above, but pure
+        // bookkeeping — a tree owns no editor-side node, so there is nothing
+        // to retire but the record. Strings rather than a decoded config so
+        // this header stays clear of the vegetation generator: `encoded` is
+        // the userData entry the meshes were last grown from, and comparing it
+        // is how a frame where nothing moved costs nothing. The texture key is
+        // tracked apart because the atlases are redrawn on a slower clock than
+        // the geometry — see TreeOverlay.cpp.
+        struct TreeOverlay {
+            Object3D* owner = nullptr;
+            std::string encoded;
+            std::string textureKey;
+            std::string wantedTextureKey;
+        };
+        std::vector<TreeOverlay> treeOverlays_;
         std::shared_ptr<Group> conveyors_;
 
         // The corner-radius handle: one ball, re-aimed at whichever corner

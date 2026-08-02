@@ -50,6 +50,11 @@ namespace threepp::editor {
         // default content. Double-sided, because flat text seen from behind
         // must read as text and not vanish.
         static std::shared_ptr<Mesh> createText(const Object3D& root);
+        // A Group carrying TreeConfig (the Oak preset, on a fresh seed) with
+        // its trunk and foliage meshes already generated under it. See
+        // TreeConfig: the two tagged children ARE the tree, and the sync pass
+        // keeps them following the config from there.
+        static std::shared_ptr<Group> createTree(const Object3D& root);
         // A plain Object3D carrying a default SoundConfig — a sound has no
         // geometry of its own; the viewport speaker marker is what shows it.
         // The file is attached afterwards, from the inspector.

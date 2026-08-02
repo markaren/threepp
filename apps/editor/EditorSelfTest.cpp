@@ -27,6 +27,7 @@
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
+#include "threepp/extras/editor/TreeConfig.hpp"
 #include "threepp/extras/editor/VehicleConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
@@ -5133,6 +5134,173 @@ int EditorApp::runSelfTest() {
 
         commands_.execute(std::make_unique<RemoveObjectCommand>(*text));
         step();
+    }
+
+    // --- procedural trees ---------------------------------------------------
+    // A tree is a Group carrying TreeConfig with its trunk and foliage
+    // generated under it. What is pinned here is the split the design rests
+    // on: the config is the authored state and the two meshes are derived, so
+    // an edit regrows them, undo regrows them back, a deleted half returns —
+    // and a document that already carries them is ADOPTED rather than regrown,
+    // which is what keeps opening a forest from costing seconds.
+    {
+        const auto treeNow = [&](const std::string& uuid) {
+            return findByUuid(document_.scene(), uuid);
+        };
+        const auto partGeometry = [](const Object3D* tree, TreeConfig::Part part) {
+            auto* node = tree ? TreeConfig::derivedPart(*tree, part) : nullptr;
+            return node ? node->geometry() : nullptr;
+        };
+        const auto partVertices = [&](const Object3D* tree, TreeConfig::Part part) {
+            const auto geometry = partGeometry(tree, part);
+            const auto* position = geometry ? geometry->getAttribute<float>("position") : nullptr;
+            return position ? position->count() : 0;
+        };
+        // How tall the trunk actually came out — a vertex count can collide
+        // between two different trees, a silhouette cannot.
+        const auto trunkTop = [&](const Object3D* tree) {
+            const auto geometry = partGeometry(tree, TreeConfig::Part::Trunk);
+            if (!geometry) return 0.f;
+            geometry->computeBoundingBox();
+            return geometry->boundingBox->max().y;
+        };
+        const auto leafMap = [](const Object3D* tree) {
+            auto* node = tree ? TreeConfig::derivedPart(*tree, TreeConfig::Part::Leaves) : nullptr;
+            auto* material = node ? node->materialAs<MeshStandardMaterial>() : nullptr;
+            return material ? material->map : nullptr;
+        };
+        const auto derivedChildren = [](const Object3D& tree) {
+            int found = 0;
+            for (const auto* child : tree.children) {
+                if (TreeConfig::isDerived(*child)) ++found;
+            }
+            return found;
+        };
+
+        auto created = ObjectFactory::createTree(document_.scene());
+        const auto treeUuid = created->uuid;
+        check(TreeConfig::isTree(*created), "the factory's tree carries the tree entry");
+        addObject(created, document_.scene(), "Add Tree");
+        created.reset();// the command owns it now; nothing here may outlive a replace
+        step(2);
+
+        auto* tree = treeNow(treeUuid);
+        check(tree && derivedChildren(*tree) == 2, "with a trunk and a foliage mesh under it");
+        check(partVertices(tree, TreeConfig::Part::Trunk) > 0 &&
+                      partVertices(tree, TreeConfig::Part::Leaves) > 0,
+              "both of which have triangles to show");
+        check(leafMap(tree) != nullptr, "and the foliage carries its procedural atlas");
+
+        // Adoption. The factory already grew these from the config the group
+        // carries, so the sync has to leave them alone — a regrow would swap
+        // the geometry object, which is exactly what this compares.
+        const auto adoptedTrunk = partGeometry(tree, TreeConfig::Part::Trunk);
+        step(3);
+        check(partGeometry(treeNow(treeUuid), TreeConfig::Part::Trunk) == adoptedTrunk,
+              "a tree the document already carries is adopted, not regrown every frame");
+
+        // The inspector's edit, verbatim: the property command writes the
+        // CONFIG only, and the sync pass is what turns that into geometry.
+        const auto before = TreeConfig::read(*tree).value_or(TreeConfig{});
+        const float topBefore = trunkTop(tree);
+        {
+            auto after = before;
+            after.params.trunkHeight = before.params.trunkHeight * 2.f;
+            auto* target = tree;
+            commands_.execute(makeProperty<TreeConfig>(
+                    "Tree Height", "tree:" + tree->uuid,
+                    [target](const TreeConfig& value) { value.write(*target); },
+                    before, after));
+        }
+        step(2);
+        tree = treeNow(treeUuid);
+        check(tree && TreeConfig::read(*tree)->params.trunkHeight == before.params.trunkHeight * 2.f,
+              "an edit rewrites the entry");
+        check(partGeometry(tree, TreeConfig::Part::Trunk) != adoptedTrunk,
+              "and the sync regrows the trunk from it");
+        check(trunkTop(tree) > topBefore + 1e-3f, "into the taller tree the config now describes");
+
+        commands_.undo();
+        step(2);
+        tree = treeNow(treeUuid);
+        check(tree && TreeConfig::read(*tree) == before, "undo restores the config");
+        check(std::abs(trunkTop(tree) - topBefore) < 1e-3f,
+              "and the sync regrows the tree it described");
+
+        // Half a tree is not a document state: the config is the source of
+        // truth, so a derived mesh the user deleted comes back.
+        if (auto* leaves = TreeConfig::derivedPart(*tree, TreeConfig::Part::Leaves)) {
+            leaves->removeFromParent();
+        }
+        step(2);
+        tree = treeNow(treeUuid);
+        check(tree && derivedChildren(*tree) == 2, "a deleted half regrows on the next sync");
+
+        // The atlases run on their own, slower clock (they cost 30-80 ms where
+        // the geometry costs 4), so a colour change has to be seen to reach
+        // them and not just the mesh.
+        const auto mapBefore = leafMap(tree);
+        {
+            const auto now = TreeConfig::read(*tree).value_or(TreeConfig{});
+            auto recolored = now;
+            recolored.params.leafColor = {0.82f, 0.34f, 0.08f};
+            auto* target = tree;
+            commands_.execute(makeProperty<TreeConfig>(
+                    "Tree Leaf Color", "tree:" + tree->uuid,
+                    [target](const TreeConfig& value) { value.write(*target); },
+                    now, recolored));
+        }
+        step(2);
+        tree = treeNow(treeUuid);
+        check(mapBefore && leafMap(tree) && leafMap(tree) != mapBefore,
+              "a leaf colour change repaints the foliage atlas");
+
+        // Save and reload. Everything a tree is — the config, both meshes and
+        // the procedural atlases — is ordinary document content, which is the
+        // claim that a saved scene shows a tree with no editor and no
+        // generator present.
+        const auto treePath = std::filesystem::temp_directory_path() /
+                              "threepp-editor-selftest-tree.json";
+        auto* trunkNode = tree ? TreeConfig::derivedPart(*tree, TreeConfig::Part::Trunk) : nullptr;
+        const auto trunkUuid = trunkNode ? trunkNode->uuid : std::string{};
+        // A hand-edit on the derived node, so the round trip proves what a
+        // user put there survives the regeneration too.
+        if (auto* material = trunkNode ? trunkNode->materialAs<MeshStandardMaterial>() : nullptr) {
+            material->color.setHex(0x3366aa);
+        }
+        const auto authored = TreeConfig::read(*tree).value_or(TreeConfig{});
+        const float authoredTop = trunkTop(tree);
+
+        saveSceneAs(treePath);
+        openScene(treePath);
+        step(2);
+
+        auto* reloaded = treeNow(treeUuid);
+        check(reloaded != nullptr, "the tree survives save and reload");
+        check(reloaded && TreeConfig::read(*reloaded) == authored,
+              "its config round-trips through the document");
+        check(reloaded && derivedChildren(*reloaded) == 2,
+              "with both halves adopted, not duplicated");
+        auto* reloadedTrunk = reloaded ? TreeConfig::derivedPart(*reloaded, TreeConfig::Part::Trunk)
+                                       : nullptr;
+        check(reloadedTrunk && reloadedTrunk->uuid == trunkUuid,
+              "the same trunk node, by uuid, as the one that was saved");
+        check(reloadedTrunk && reloadedTrunk->materialAs<MeshStandardMaterial>() &&
+                      reloadedTrunk->materialAs<MeshStandardMaterial>()->color.getHex() == 0x3366aa,
+              "carrying the material the user edited");
+        check(reloaded && std::abs(trunkTop(reloaded) - authoredTop) < 1e-3f,
+              "and the geometry it was saved with rather than a freshly grown one");
+        // Without this the reloaded foliage would be an untextured green slab,
+        // and nothing short of an edit would bring the atlas back.
+        check(leafMap(reloaded) != nullptr,
+              "the procedural leaf atlas round-trips with the material");
+
+        if (auto* live = treeNow(treeUuid)) {
+            commands_.execute(std::make_unique<RemoveObjectCommand>(*live));
+        }
+        step();
+        check(treeNow(treeUuid) == nullptr, "and the tree can be removed again");
+        check(treeOverlays_.empty(), "retiring its sync record with it");
     }
 
     // --- sound -------------------------------------------------------------

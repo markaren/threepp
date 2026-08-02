@@ -80,6 +80,11 @@ void EditorApp::drawAddMenu(Object3D& parent) {
             addObject(ObjectFactory::createText(document_.scene()), *target, "Add Text");
         };
     }
+    if (ImGui::MenuItem("Tree")) {
+        deferred_ = [this, target] {
+            addObject(ObjectFactory::createTree(document_.scene()), *target, "Add Tree");
+        };
+    }
     if (ImGui::MenuItem("Sound")) {
         deferred_ = [this, target] {
             addObject(ObjectFactory::createSound(document_.scene()), *target, "Add Sound");

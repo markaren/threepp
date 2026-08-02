@@ -17,6 +17,7 @@
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
+#include "threepp/extras/editor/TreeConfig.hpp"
 #include "threepp/extras/editor/VehicleConfig.hpp"
 
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
@@ -39,6 +40,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <random>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -275,6 +277,7 @@ void EditorApp::drawInspector() {
         drawConveyorSection(*selected);
         drawSoundSection(*selected);
         drawTextSection(*selected);
+        drawTreeSection(*selected);
         drawScriptSection(*selected);
         drawPhysicsSection(*selected);
         drawVehicleSection(*selected);
@@ -1008,7 +1011,18 @@ void EditorApp::drawGeneratorSection(Object3D& object) {
     // the generator above it, which is a trap rather than a feature.
     const bool isGeneratedOutput =
             object.userData.find(GeneratorConfig::generatedKey) != object.userData.end();
-    const bool eligible = !isGeneratedOutput && (isScene || object.as<Group>() != nullptr);
+    // Not on an object that already carries an authoring rule of its own. A
+    // tree is not a generic container: it HAS a generator, a specific one, and
+    // a second generic one on top would put a `generated` child beside Trunk
+    // and Leaves meaning something else entirely. The generic pattern is for
+    // things that have no pattern.
+    //
+    // Splines and conveyors are Groups with exactly the same claim and are
+    // still offered one, which is a wrinkle older than this predicate; left
+    // alone deliberately rather than missed.
+    const bool ownAuthoring = TreeConfig::isTree(object);
+    const bool eligible =
+            !isGeneratedOutput && !ownAuthoring && (isScene || object.as<Group>() != nullptr);
     const auto stored = GeneratorConfig::read(object);
     if (!eligible && !stored) return;
     if (!section("Generator", stored.has_value())) return;
@@ -3159,6 +3173,224 @@ void EditorApp::drawTextSection(Object3D& object) {
     ImGui::PopItemWidth();
 
     ImGui::TextColored(theme::muted(), "Stored in userData[\"text\"]");
+
+    ImGui::TreePop();
+}
+
+
+// --------------------------------------------------------------------- tree
+
+void EditorApp::drawTreeSection(Object3D& object) {
+
+    if (!TreeConfig::isTree(object)) return;
+    if (!section("Tree")) return;
+
+    using vegetation::BarkStyle;
+    using vegetation::BranchingMode;
+    using vegetation::CrownShape;
+    using vegetation::LeafShape;
+    using vegetation::LeafStyle;
+    using vegetation::TreeParams;
+
+    auto* target = &object;
+    const auto config = TreeConfig::read(object).value_or(TreeConfig{});
+
+    // Only the config is edited here. The meshes are derived state that
+    // syncTreeOverlays regrows to follow it — see TreeOverlay.cpp. That is also
+    // what keeps undo cheap: the command carries forty floats, not a canopy.
+    const auto commit = [&](TreeConfig after, std::string label) {
+        commands_.execute(makeProperty<TreeConfig>(
+                std::move(label), "tree:" + object.uuid,
+                [target](const TreeConfig& value) { value.write(*target); },
+                config, std::move(after)));
+        document_.setDirty(true);
+    };
+
+    // The three widget shapes below are written once and driven by
+    // pointer-to-member: the generator has forty-odd knobs, and forty
+    // hand-inlined copies of the transaction dance is how one of them ends up
+    // silently missing its beginTransaction.
+    const auto sliderFloat = [&](const char* label, float TreeParams::* field,
+                                 float min, float max, const char* format = "%.2f") {
+        float value = config.params.*field;
+        const bool changed = ImGui::SliderFloat(label, &value, min, max, format);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.params.*field = std::clamp(value, min, max);
+            commit(std::move(after), std::string("Tree ") + label);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    const auto sliderInt = [&](const char* label, int TreeParams::* field, int min, int max) {
+        int value = config.params.*field;
+        const bool changed = ImGui::SliderInt(label, &value, min, max);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.params.*field = std::clamp(value, min, max);
+            commit(std::move(after), std::string("Tree ") + label);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    const auto colorEdit = [&](const char* label, std::array<float, 3> TreeParams::* field) {
+        std::array<float, 3> value = config.params.*field;
+        const bool changed = ImGui::ColorEdit3(label, value.data());
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.params.*field = value;
+            commit(std::move(after), std::string("Tree ") + label);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    // Combos are not draggable, so they need no transaction — one click, one
+    // undo step.
+    const auto combo = [&](const char* label, int current, const char* items,
+                           const std::function<void(TreeConfig&, int)>& apply) {
+        int value = current;
+        if (ImGui::Combo(label, &value, items)) {
+            auto after = config;
+            apply(after, value);
+            commit(std::move(after), std::string("Tree ") + label);
+        }
+    };
+
+    // --- species ----------------------------------------------------------
+    // Buttons rather than a combo showing the current species: applying a
+    // preset RESETS every field but the seed, so after one edit the params no
+    // longer name a preset and a combo would have to lie about which.
+    ImGui::TextUnformatted("Preset");
+    for (int preset = 0; preset < TreeConfig::presetCount; ++preset) {
+        ImGui::SameLine();
+        if (ImGui::Button(TreeConfig::presetLabel(preset))) {
+            auto after = config;
+            vegetation::applyPreset(preset, after.params);
+            commit(std::move(after), std::string("Tree ") + TreeConfig::presetLabel(preset));
+        }
+        // Inside the loop: IsItemHovered() reads the item just submitted, so
+        // hanging one tooltip off the end would label only the last button.
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s. Replaces every parameter but the seed.",
+                              TreeConfig::presetLabel(preset));
+        }
+    }
+
+    ImGui::PushItemWidth(-110 * contentScale_);
+
+    // --- the individual ----------------------------------------------------
+    {
+        int seed = static_cast<int>(config.params.seed);
+        if (ImGui::InputInt("Seed", &seed)) {
+            auto after = config;
+            after.params.seed = static_cast<unsigned int>(std::max(seed, 0));
+            commit(std::move(after), "Tree Seed");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Randomize")) {
+            auto after = config;
+            after.params.seed = std::random_device{}();
+            commit(std::move(after), "Tree Seed");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Another tree of the same species.");
+        }
+    }
+
+    ImGui::SeparatorText("Trunk");
+    sliderFloat("Height", &TreeParams::trunkHeight, 0.5f, 12.f, "%.1f");
+    sliderFloat("Radius", &TreeParams::trunkRadius, 0.02f, 0.5f, "%.3f");
+    sliderFloat("Lean", &TreeParams::trunkLean, 0.f, 0.25f, "%.3f");
+    sliderFloat("Bend", &TreeParams::trunkBend, 0.f, 3.f);
+    sliderFloat("Twist", &TreeParams::trunkTwist, -1.5f, 1.5f);
+
+    ImGui::SeparatorText("Crown");
+    combo("Shape", static_cast<int>(config.params.crownShape),
+          "Sphere\0Ellipsoid\0Cone\0Hemisphere\0Cylinder\0",
+          [](TreeConfig& c, int v) { c.params.crownShape = static_cast<CrownShape>(v); });
+    sliderFloat("Radius X", &TreeParams::crownRadiusX, 0.5f, 10.f, "%.1f");
+    sliderFloat("Radius Z", &TreeParams::crownRadiusZ, 0.5f, 10.f, "%.1f");
+    sliderFloat("Crown Height", &TreeParams::crownHeight, 1.f, 15.f, "%.1f");
+
+    ImGui::SeparatorText("Branching");
+    combo("Mode", static_cast<int>(config.params.branchingMode), "Colonise\0Whorl\0",
+          [](TreeConfig& c, int v) { c.params.branchingMode = static_cast<BranchingMode>(v); });
+
+    // The two skeleton builders take disjoint parameter sets, so showing both
+    // at once would be forty knobs of which half do nothing.
+    if (config.params.branchingMode == BranchingMode::Colonise) {
+        sliderInt("Attractors", &TreeParams::attractorCount, 100, 3000);
+        sliderFloat("Influence Dist", &TreeParams::influenceDistance, 1.f, 10.f, "%.1f");
+        sliderFloat("Kill Dist", &TreeParams::killDistance, 0.2f, 3.f);
+        sliderFloat("Segment Length", &TreeParams::segmentLength, 0.1f, 1.5f);
+        sliderInt("Max Iterations", &TreeParams::maxIterations, 50, 500);
+        sliderFloat("Randomness", &TreeParams::randomness, 0.f, 0.3f, "%.3f");
+        sliderFloat("Tropism", &TreeParams::tropism, -0.2f, 0.1f, "%.3f");
+    } else {
+        sliderFloat("Whorl Spacing", &TreeParams::whorlSpacing, 0.3f, 1.5f);
+        sliderInt("Branches / Whorl", &TreeParams::branchesPerWhorl, 2, 10);
+        sliderFloat("Whorl Jitter", &TreeParams::whorlJitter, 0.f, 1.f);
+        sliderFloat("Branch Droop", &TreeParams::branchDroop, 0.f, 1.f);
+        sliderFloat("Tip Upturn", &TreeParams::branchTipUpturn, 0.f, 1.f);
+        sliderFloat("Crown Profile", &TreeParams::crownProfileExponent, 0.5f, 3.f);
+        sliderFloat("Side Twigs", &TreeParams::sideTwigDensity, 0.f, 1.f);
+        sliderFloat("Segment Length", &TreeParams::segmentLength, 0.1f, 1.5f);
+    }
+
+    sliderFloat("Radius Exponent", &TreeParams::radiusExponent, 1.5f, 4.f, "%.1f");
+    sliderFloat("Min Branch Radius", &TreeParams::minBranchRadius, 0.001f, 0.02f, "%.4f");
+    sliderInt("Radial Segments", &TreeParams::radialSegments, 3, 12);
+
+    ImGui::SeparatorText("Bark");
+    combo("Bark Style", static_cast<int>(config.params.barkStyle), "Furrowed\0Plated\0Papery\0",
+          [](TreeConfig& c, int v) { c.params.barkStyle = static_cast<BarkStyle>(v); });
+    sliderFloat("Bark Bump", &TreeParams::barkBumpAmp, 0.f, 0.3f, "%.3f");
+    sliderInt("Bark Lobes", &TreeParams::barkBumpLobes, 2, 12);
+    sliderFloat("Root Flare", &TreeParams::rootFlareAsym, 0.f, 1.f);
+
+    ImGui::SeparatorText("Leaves");
+    combo("Leaf Style", static_cast<int>(config.params.leafStyle),
+          "Quad\0Cluster\0CrossQuad\0Blob\0Frond\0",
+          [](TreeConfig& c, int v) { c.params.leafStyle = static_cast<LeafStyle>(v); });
+    // Frond draws the needle atlas, which has no blade outline to pick.
+    if (config.params.leafStyle != LeafStyle::Frond) {
+        combo("Leaf Shape", static_cast<int>(config.params.leafShape),
+              "Ovate\0Lobed\0Serrate\0Lanceolate\0",
+              [](TreeConfig& c, int v) { c.params.leafShape = static_cast<LeafShape>(v); });
+    }
+    sliderFloat("Leaf Size", &TreeParams::leafSize, 0.05f, 1.f);
+    sliderFloat("Leaf Density", &TreeParams::leafDensity, 0.f, 1.f);
+    sliderFloat("Clumping", &TreeParams::leafClumping, 0.f, 0.9f);
+    sliderInt("Per Cluster", &TreeParams::leavesPerCluster, 1, 10);
+    sliderFloat("Leaf Spread", &TreeParams::leafSpread, 0.f, 1.f);
+    sliderFloat("Foliage AO", &TreeParams::foliageOcclusion, 0.f, 1.f);
+
+    ImGui::SeparatorText("Colors");
+    colorEdit("Bark Color", &TreeParams::barkColor);
+    colorEdit("Leaf Color", &TreeParams::leafColor);
+
+    ImGui::PopItemWidth();
+
+    // What the config actually grew, since a canopy is hard to count by eye
+    // and the parameters that drive the cost are not the obvious ones.
+    {
+        const auto triangles = [](const Object3D* node) {
+            const auto* mesh = node ? node->as<Mesh>() : nullptr;
+            const auto geometry = mesh ? mesh->geometry() : nullptr;
+            if (!geometry) return 0;
+            if (const auto* index = geometry->getIndex()) return static_cast<int>(index->count() / 3);
+            const auto* position = geometry->getAttribute<float>("position");
+            return position ? static_cast<int>(position->count() / 3) : 0;
+        };
+        ImGui::TextColored(theme::muted(), "%d + %d triangles (trunk + leaves)",
+                           triangles(TreeConfig::derivedPart(object, TreeConfig::Part::Trunk)),
+                           triangles(TreeConfig::derivedPart(object, TreeConfig::Part::Leaves)));
+    }
+    ImGui::TextColored(theme::muted(), "Bark and leaf textures redraw when you let go.");
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"tree\"]");
 
     ImGui::TreePop();
 }

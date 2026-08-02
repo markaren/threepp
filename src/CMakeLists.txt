@@ -83,6 +83,7 @@ set(publicHeaders
         "threepp/extras/editor/SoundConfig.hpp"
         "threepp/extras/editor/SplineConfig.hpp"
         "threepp/extras/editor/TextConfig.hpp"
+        "threepp/extras/editor/TreeConfig.hpp"
         "threepp/extras/editor/VehicleConfig.hpp"
         "threepp/extras/editor/ViewSpec.hpp"
         "threepp/extras/imgui/ImguiContext.hpp"
@@ -396,6 +397,7 @@ set(sources
         "threepp/extras/editor/SoundConfig.cpp"
         "threepp/extras/editor/SplineConfig.cpp"
         "threepp/extras/editor/TextConfig.cpp"
+        "threepp/extras/editor/TreeConfig.cpp"
         "threepp/extras/editor/VehicleConfig.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"

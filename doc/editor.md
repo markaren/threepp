@@ -139,6 +139,12 @@ degenerate speck at the origin.
 nodes — drag them with the gizmo, insert and delete them, and the sampled curve
 redraws live. See [Splines in `userData`](#splines-in-userdata).
 
+**Trees.** Add ▸ Tree grows a procedural tree — four species presets (oak, pine,
+birch, willow), a seed that picks the individual, and forty-odd generator knobs
+that regrow the trunk and canopy live as you drag them. Bark and leaf textures
+are procedural too, and the whole thing saves as ordinary meshes. See
+[Trees in `userData`](#trees-in-userdata).
+
 **Sound.** Add ▸ Sound places an emitter — a speaker marker, an audio file, and
 a distance falloff drawn as min/max rings on the ground while it is selected.
 **Audition** hears the file without pressing Play; Play spatializes it through
@@ -1942,6 +1948,73 @@ there are no inspector inputs for parameters — a script's own module-level
 `count = 400` would overwrite an injected global, and resolving that needs a
 convention rather than plumbing. There is also no headless entry point yet, so
 batch generation over many seeds is not a one-liner.
+
+### Trees in `userData`
+
+**Add ▸ Tree** creates a `Group` carrying `userData["tree"]` — the parameters
+`threepp::vegetation::TreeGenerator` takes — with two generated children under
+it, tagged `userData["treeDerived"]` with the values `trunk` and `leaves`:
+
+```
+Tree                    userData["tree"] = seed=1337;trunkHeight=3.5;...
+├── Trunk               userData["treeDerived"] = "trunk"
+└── Leaves              userData["treeDerived"] = "leaves"
+```
+
+Two meshes rather than one because the halves want different materials: opaque
+bark, and alpha-tested double-sided foliage reading a baked canopy occlusion out
+of its vertex colours. They are **real document nodes**, like the spline's tube —
+saved, picked, materialled, physics-configurable — so a saved scene shows its
+trees with no editor and no generator present. The config is only needed to
+*edit* the tree again, and it travels in the same file.
+
+The entry is the flat `key=value;…` format the rest of the file uses, one key per
+`TreeParams` field, so a saved document reads as the parameter block it is:
+
+```
+seed=1337;trunkHeight=3.5;trunkRadius=0.18;crownShape=sphere;crownRadiusX=4;…;barkColor=0.3,0.22,0.15;leafColor=0.24,0.44,0.13
+```
+
+Enums are written as words (`crownShape=sphere`, `barkStyle=furrowed`,
+`leafStyle=crossQuad`) rather than ordinals, so reordering one in the header
+cannot silently reinterpret an existing document. Colours are one key holding a
+comma-separated triple. `TreeConfig::encode()` / `decode()` own the format,
+unknown keys are ignored on read, and `write()` never erases: the entry *is* the
+tree.
+
+**Authoring.** Select the tree and the inspector's **Tree** section offers the
+four species presets, the seed (with **Randomize** for another individual of the
+same species), and the generator's parameters grouped as trunk, crown,
+branching, bark, leaves and colours. Applying a preset replaces every parameter
+*but* the seed — a species is a whole description, and leaking half the previous
+one is how you get a whorled "oak". The branching group swaps its contents with
+the mode, because the space-colonisation builder and the conifer whorl builder
+take disjoint parameters and showing both would be forty knobs of which half do
+nothing.
+
+**Edits write the config, and the config regrows the tree.** Like the spline's
+tube, the meshes are derived state: `syncTreeOverlays()` follows the entry
+wherever an edit, an undo, a redo or a load leaves it. That is what keeps undo
+cheap — the command carries forty floats, not a canopy — and what makes a
+deleted half come back on the next frame.
+
+**Two clocks**, because the halves of the work cost three orders of magnitude
+apart (measured, RelWithDebInfo, across the four presets):
+
+| | cost | when |
+| --- | --- | --- |
+| geometry (skeleton + trunk + leaves) | 1.4 – 4.6 ms | immediately, so a dragged slider regrows the tree live |
+| procedural bark + leaf atlases | 34 – 77 ms | once you let go of the widget |
+
+The atlases are a function of only a handful of parameters (seed, bark style,
+leaf style/shape and the two colours), so changing the trunk height does not
+redraw the bark at all. Two trees whose atlas parameters match **share** the
+textures, which is what keeps a saved forest from embedding a base64 PNG per
+tree.
+
+A tree the document already carries is **adopted, not regrown**: a loaded scene's
+meshes were generated from the config that loaded with them, so opening a forest
+costs nothing.
 
 ### Splines in `userData`
 

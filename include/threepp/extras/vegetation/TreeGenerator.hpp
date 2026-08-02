@@ -146,6 +146,12 @@ namespace threepp::vegetation {
         // ── Albedo hints (sRGB) ──────────────────────────────────────────
         std::array<float, 3> barkColor = {0.35f, 0.25f, 0.18f};
         std::array<float, 3> leafColor = {0.25f, 0.45f, 0.15f};
+
+        // Field-wise, which is exactly what a parameter block means by equal:
+        // two TreeParams that compare equal describe the same tree, so a
+        // caller can skip regenerating one. The editor's TreeConfig defaults
+        // its own comparison to this.
+        bool operator==(const TreeParams&) const = default;
     };
 
     // ── Internal skeleton node ───────────────────────────────────────────
