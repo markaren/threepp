@@ -1981,103 +1981,155 @@ namespace threepp {
         // recordRasterGbufPass and only renders non-overlay geometry.
         VkPipeline       overlayDepthPrepassPipeline = VK_NULL_HANDLE;
 
-        // ── Masked overlay edge-AA ──────────────────────────────────────────
-        // The overlay renders post-TAA onto the 1-sample swapchain, so its
-        // vector edges (SVG fills, lines, wireframes) get no AA from either
-        // MSAA (no multisampled swapchains in Vulkan) or TAA (deliberately
-        // after it, to avoid ghosting). Instead of MSAA'ing the whole pass
-        // (4x depth prepass + raster), every overlay pipeline writes a 1-byte
-        // coverage mask as attachment 1, and a fullscreen FXAA-style pass
-        // afterwards edge-blends ONLY the masked pixels (dilated 1 px). The
-        // TAA-resolved scene is untouched. Gated on Canvas antialiasing > 1.
-        // srcTex is a swapchain copy (a pass can't sample its own target).
-        Image2D               overlayAaMask_{};   // R8 coverage, swapchain-sized
-        Image2D               overlayAaScratch_{};// post-overlay swapchain copy
-        VkDescriptorSetLayout overlayAaSetLayout_      = VK_NULL_HANDLE;
-        VkDescriptorPool      overlayAaPool_           = VK_NULL_HANDLE;
-        VkDescriptorSet       overlayAaSet_            = VK_NULL_HANDLE;
-        VkPipelineLayout      overlayAaPipelineLayout_ = VK_NULL_HANDLE;
-        VkPipeline            overlayAaPipeline_       = VK_NULL_HANDLE;
+        // ── Hardware-MSAA overlay ───────────────────────────────────────────
+        // The overlay renders post-TAA, so its vector edges (SVG fills, lines,
+        // wireframes, points) get no AA from TAA (deliberately after it, to
+        // avoid ghosting) and none from the swapchain (Vulkan has no
+        // multisampled swapchains). So when Canvas antialiasing > 1 the whole
+        // overlay pass rasterizes into a multisampled color+depth pair and
+        // vkCmdEndRendering RESOLVES it onto the swapchain — the exact
+        // mechanism GL gets for free from a 4x default framebuffer.
+        //
+        // Because the swapchain already holds the composited scene and the
+        // MS target starts undefined, the first draw in the pass is a
+        // fullscreen "scene inject" that seeds every sample from a 1-sample
+        // copy of the swapchain (a pass may not sample its own target).
+        // That makes every blend state in the pass composite against the true
+        // background and makes untouched pixels resolve back unchanged.
+        //
+        // overlaySamples_ == 1 keeps the original direct-to-swapchain path
+        // (no inject, no scratch copy, no resolve).
+        uint32_t              overlaySamples_    = 0;// 0 = not yet resolved
+        VkSampleCountFlagBits overlaySampleBits_ = VK_SAMPLE_COUNT_1_BIT;
+        Image2D               overlayMsColor_{};  // swapchain format, N samples
+        Image2D               overlayMsDepth_{};  // D32_SFLOAT, N samples
+        Image2D               overlayAaScratch_{};// 1-sample swapchain copy (inject source)
+        VkDescriptorSetLayout overlayInjectSetLayout_      = VK_NULL_HANDLE;
+        VkDescriptorPool      overlayInjectPool_           = VK_NULL_HANDLE;
+        VkDescriptorSet       overlayInjectSet_            = VK_NULL_HANDLE;
+        VkPipelineLayout      overlayInjectPipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline            overlayInjectPipeline_       = VK_NULL_HANDLE;
 
-        // Lazily (re)size the mask + scratch to the swapchain extent and
-        // point overlayAaSet_ at them. Extent only changes across a swapchain
-        // recreate (device drained) and the first call precedes any submit
-        // that references the set, so the descriptor update never races the
-        // GPU. Old images go through the frame-serial retire queue.
-        void ensureOverlayAaImages(VkExtent2D ext) {
-            if (overlayAaMask_.image != VK_NULL_HANDLE &&
-                overlayAaMask_.width == ext.width && overlayAaMask_.height == ext.height) return;
-            if (overlayAaMask_.image != VK_NULL_HANDLE) retire(std::move(overlayAaMask_));
+        // Canvas antialiasing rounded DOWN to a power of two the device can
+        // actually use for BOTH a color and a depth framebuffer attachment,
+        // capped at 8. Resolved once (the answer can't change: it depends only
+        // on the Canvas parameter and the physical device) and cached, because
+        // the sample count must be known before createOverlayPipeline builds
+        // the pass's pipelines AND before createRasterGbufImages decides
+        // whether to allocate the single-sample unjitDepth at all.
+        uint32_t overlaySamples() {
+            if (overlaySamples_ != 0) return overlaySamples_;
+            uint32_t want = canvas.samples();
+            if (want < 2) {
+                overlaySamples_    = 1;
+                overlaySampleBits_ = VK_SAMPLE_COUNT_1_BIT;
+                return overlaySamples_;
+            }
+            if (want > 8) want = 8;
+            uint32_t p = 8;
+            while (p > want) p >>= 1;// round DOWN to a power of two
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
+            // VK_SAMPLE_COUNT_N_BIT == N numerically, so the count doubles as
+            // its own flag bit.
+            const VkSampleCountFlags supported = props.limits.framebufferColorSampleCounts &
+                                                 props.limits.framebufferDepthSampleCounts;
+            while (p > 1 && !(supported & static_cast<VkSampleCountFlags>(p))) p >>= 1;
+            overlaySamples_    = p;
+            overlaySampleBits_ = static_cast<VkSampleCountFlagBits>(p);
+            return overlaySamples_;
+        }
+
+        // Same answer as overlaySamples(), as the VkSampleCountFlagBits the
+        // pipeline / image create infos want.
+        VkSampleCountFlagBits overlaySampleBits() {
+            overlaySamples();
+            return overlaySampleBits_;
+        }
+
+        // Lazily (re)size the multisampled overlay targets + the 1-sample
+        // inject scratch to the swapchain extent and point overlayInjectSet_
+        // at the scratch. Single images (NOT per-frame-in-flight): each is
+        // written and read inside one command buffer, and cross-frame WAR is
+        // handled by UNDEFINED-discard barriers at the point of use. Extent
+        // only changes across a swapchain recreate (device drained) and the
+        // first call precedes any submit that references the set, so the
+        // descriptor update never races the GPU. Old images go through the
+        // frame-serial retire queue. No-op when MSAA is off.
+        void ensureOverlayMsaaImages(VkExtent2D ext) {
+            if (overlaySamples() <= 1) return;
+            if (overlayMsColor_.image != VK_NULL_HANDLE &&
+                overlayMsColor_.width == ext.width && overlayMsColor_.height == ext.height) return;
+            if (overlayMsColor_.image != VK_NULL_HANDLE) retire(std::move(overlayMsColor_));
+            if (overlayMsDepth_.image != VK_NULL_HANDLE) retire(std::move(overlayMsDepth_));
             if (overlayAaScratch_.image != VK_NULL_HANDLE) retire(std::move(overlayAaScratch_));
-            auto make = [&](VkFormat fmt, VkImageUsageFlags usage, const char* name) {
+
+            overlayMsColor_ = createAttachmentImage2D(
+                    ext.width, ext.height, ctx->swapchainFormat(),
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
+                    "overlayMsColor", overlaySampleBits_);
+            overlayMsDepth_ = createAttachmentImage2D(
+                    ext.width, ext.height, VK_FORMAT_D32_SFLOAT,
+                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
+                    "overlayMsDepth", overlaySampleBits_);
+
+            // Scratch needs a sampler (the inject shader reads it), which
+            // createAttachmentImage2D doesn't make.
+            {
                 Image2D out{};
                 out.width  = ext.width;
                 out.height = ext.height;
-                out.format = fmt;
+                out.format = ctx->swapchainFormat();
                 VkImageCreateInfo ici{};
                 ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
                 ici.imageType     = VK_IMAGE_TYPE_2D;
-                ici.format        = fmt;
+                ici.format        = out.format;
                 ici.extent        = {ext.width, ext.height, 1};
                 ici.mipLevels     = 1;
                 ici.arrayLayers   = 1;
                 ici.samples       = VK_SAMPLE_COUNT_1_BIT;
                 ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
-                ici.usage         = usage;
+                ici.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
                 ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
                 ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
                 VmaAllocationCreateInfo aci{};
                 aci.usage = VMA_MEMORY_USAGE_AUTO;
                 check(vmaCreateImage(ctx->allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
-                      "vmaCreateImage(overlayAa)");
+                      "vmaCreateImage(overlayAaScratch)");
                 VkImageViewCreateInfo vci{};
                 vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
                 vci.image    = out.image;
                 vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-                vci.format   = fmt;
+                vci.format   = out.format;
                 vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 vci.subresourceRange.levelCount = 1;
                 vci.subresourceRange.layerCount = 1;
                 check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
-                      "vkCreateImageView(overlayAa)");
+                      "vkCreateImageView(overlayAaScratch)");
                 VkSamplerCreateInfo sci{};
                 sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-                sci.magFilter    = VK_FILTER_LINEAR;
-                sci.minFilter    = VK_FILTER_LINEAR;
+                sci.magFilter    = VK_FILTER_NEAREST;// inject texelFetches 1:1
+                sci.minFilter    = VK_FILTER_NEAREST;
                 sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
                 sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
                 sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
                 check(vkCreateSampler(ctx->device(), &sci, nullptr, &out.sampler),
-                      "vkCreateSampler(overlayAa)");
-                ctx->setObjectName(out.image, name);
-                return out;
-            };
-            overlayAaMask_ = make(VK_FORMAT_R8_UNORM,
-                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                  "overlayAaMask");
-            // The swapchain-sized scratch copy is only needed when the AA
-            // pass actually runs (Canvas antialiasing on); the mask must
-            // exist regardless — the overlay pipelines declare it.
-            if (canvas.samples() <= 1) return;
-            overlayAaScratch_ = make(ctx->swapchainFormat(),
-                                     VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                     "overlayAaScratch");
-            if (overlayAaSet_ != VK_NULL_HANDLE) {
-                VkDescriptorImageInfo ii[2]{};
-                ii[0] = {overlayAaScratch_.sampler, overlayAaScratch_.view,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                ii[1] = {overlayAaMask_.sampler, overlayAaMask_.view,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-                VkWriteDescriptorSet ws[2]{};
-                for (uint32_t i = 0; i < 2; ++i) {
-                    ws[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    ws[i].dstSet          = overlayAaSet_;
-                    ws[i].dstBinding      = i;
-                    ws[i].descriptorCount = 1;
-                    ws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    ws[i].pImageInfo      = &ii[i];
-                }
-                vkUpdateDescriptorSets(ctx->device(), 2, ws, 0, nullptr);
+                      "vkCreateSampler(overlayAaScratch)");
+                ctx->setObjectName(out.image, "overlayAaScratch");
+                overlayAaScratch_ = out;
+            }
+
+            if (overlayInjectSet_ != VK_NULL_HANDLE) {
+                VkDescriptorImageInfo ii{overlayAaScratch_.sampler, overlayAaScratch_.view,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                VkWriteDescriptorSet w{};
+                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w.dstSet          = overlayInjectSet_;
+                w.dstBinding      = 0;
+                w.descriptorCount = 1;
+                w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w.pImageInfo      = &ii;
+                vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
             }
         }
 
@@ -3377,13 +3429,15 @@ namespace threepp {
             if (overlayPointListPipeline)         vkDestroyPipeline(d, overlayPointListPipeline, nullptr);
             if (overlayDepthPrepassPipeline)      vkDestroyPipeline(d, overlayDepthPrepassPipeline, nullptr);
             if (overlayPipelineLayout)      vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
-            // Masked overlay edge-AA resources.
-            if (overlayAaPipeline_)         vkDestroyPipeline(d, overlayAaPipeline_, nullptr);
-            if (overlayAaPipelineLayout_)   vkDestroyPipelineLayout(d, overlayAaPipelineLayout_, nullptr);
-            if (overlayAaSetLayout_)        vkDestroyDescriptorSetLayout(d, overlayAaSetLayout_, nullptr);
-            if (overlayAaPool_)             vkDestroyDescriptorPool(d, overlayAaPool_, nullptr);
-            if (overlayAaMask_.image != VK_NULL_HANDLE)
-                destroyImage2D(ctx->allocator(), d, overlayAaMask_);
+            // Hardware-MSAA overlay resources.
+            if (overlayInjectPipeline_)       vkDestroyPipeline(d, overlayInjectPipeline_, nullptr);
+            if (overlayInjectPipelineLayout_) vkDestroyPipelineLayout(d, overlayInjectPipelineLayout_, nullptr);
+            if (overlayInjectSetLayout_)      vkDestroyDescriptorSetLayout(d, overlayInjectSetLayout_, nullptr);
+            if (overlayInjectPool_)           vkDestroyDescriptorPool(d, overlayInjectPool_, nullptr);
+            if (overlayMsColor_.image != VK_NULL_HANDLE)
+                destroyImage2D(ctx->allocator(), d, overlayMsColor_);
+            if (overlayMsDepth_.image != VK_NULL_HANDLE)
+                destroyImage2D(ctx->allocator(), d, overlayMsDepth_);
             if (overlayAaScratch_.image != VK_NULL_HANDLE)
                 destroyImage2D(ctx->allocator(), d, overlayAaScratch_);
             // Particle billboard pass resources.
