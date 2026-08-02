@@ -207,13 +207,19 @@ namespace threepp::vulkan {
     }
 
     void AutoExposure::tick(uint32_t currentFrame, float dt) {
-        // The previous frame's GPU slot is retired (framesInFlight fence logic).
-        const uint32_t prev = (currentFrame + framesInFlight_ - 1) % framesInFlight_;
+        // Read THIS slot, not the previous one. tick() is called from
+        // beginDeferredFrame right after vkWaitForFences(inFlight[currentFrame])
+        // (VulkanCoreFrame.cpp), so the only histogram provably retired on the GPU
+        // is this slot's previous occupant — frame N-framesInFlight. The slot
+        // before it (currentFrame-1) is the frame submitted last; its fence has
+        // not been waited, so reading it raced the GPU still filling it. Costs one
+        // extra frame of metering latency, invisible behind the EMA below.
+        const uint32_t slot = currentFrame;
         // Invalidate CPU cache (required for non-HOST_COHERENT; harmless otherwise).
-        invalidateHostReads(ctx_.allocator(), histBufs_[prev].buf.alloc,
+        invalidateHostReads(ctx_.allocator(), histBufs_[slot].buf.alloc,
                             0, kBins * sizeof(uint32_t));
 
-        const uint32_t* bins = histBufs_[prev].ptr;
+        const uint32_t* bins = histBufs_[slot].ptr;
         if (!bins) return;
 
         uint64_t total = 0;
@@ -249,7 +255,7 @@ namespace threepp::vulkan {
         // bakes the exposure into sceneHdr); un-bake to true scene EV. Both
         // corrections are exact subtractions of 0.0 in legacy mode.
         const float meanEV = static_cast<float>(sumEV / static_cast<double>(count)) -
-                             std::log2(std::max(histBufs_[prev].preExposure, 1e-30f));
+                             std::log2(std::max(histBufs_[slot].preExposure, 1e-30f));
 
         // Target EV compensation: map scene mean to 18% gray (EV ≈ -2.47 =
         // log2(0.18)) RELATIVE to baseExposure (1.0 legacy → absolute).
