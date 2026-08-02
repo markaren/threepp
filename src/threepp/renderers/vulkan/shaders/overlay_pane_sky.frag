@@ -23,7 +23,6 @@ layout(push_constant) uniform Pc {
 layout(set = 0, binding = 0) uniform sampler2D envTex;
 
 layout(location = 0) out vec4 outColor;
-layout(location = 1) out vec4 outMask;// unused (single color attachment) — layout parity
 
 const float PI     = 3.14159265358979;
 const float TWO_PI = 6.28318530717959;
@@ -61,5 +60,4 @@ void main() {
     vec3 c = textureLod(envTex, vec2(u, v), 0.0).rgb * pc.params.x;
     c = acesFilm(c);
     outColor = vec4(linearToSRGB(c), 1.0);
-    outMask  = vec4(1.0);
 }

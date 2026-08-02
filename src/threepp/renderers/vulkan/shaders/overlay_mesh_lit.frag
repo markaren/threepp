@@ -32,10 +32,6 @@ layout(set = 0, binding = 0) uniform PaneLightUbo {
 layout(location = 0) in vec3 vNormal;
 
 layout(location = 0) out vec4 outColor;
-// Coverage mask (attachment 1) — present for layout parity with overlay.frag;
-// the pane's rendering scope binds a single color attachment, so writes to
-// location 1 are simply discarded.
-layout(location = 1) out vec4 outMask;
 
 vec3 linearToSRGB(vec3 x) {
     const vec3 cutoff = vec3(lessThan(x, vec3(0.0031308)));
@@ -60,5 +56,4 @@ void main() {
     vec3 c = pc.color.rgb * (lit.ambient.rgb + lit.sunColor.rgb * lit.sunDir.w * ndl);
     c = acesFilm(c);
     outColor = vec4(linearToSRGB(c), pc.color.a);
-    outMask  = vec4(1.0);
 }
