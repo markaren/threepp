@@ -478,6 +478,97 @@ namespace {
     };
 
 
+    // One authored joint, played: the node it was authored on and the live
+    // constraint the session built from it. Same weak-lifetime discipline as
+    // every other handle here — reads raise once the session stops.
+    class JointHandle {
+
+    public:
+        JointHandle(std::shared_ptr<Object3D> object, Joint* joint, Lifetime lifetime)
+            : object_(std::move(object)), joint_(joint), lifetime_(std::move(lifetime)) {}
+
+        [[nodiscard]] bool valid() const { return lifetime_.alive(); }
+
+        [[nodiscard]] std::shared_ptr<Object3D> object() const { return object_; }
+
+        [[nodiscard]] const char* type() const {
+
+            require();
+            switch (joint_->type()) {
+                case Joint::Type::Fixed: return "fixed";
+                case Joint::Type::Revolute: return "revolute";
+                case Joint::Type::Prismatic: return "prismatic";
+                case Joint::Type::Spherical: return "spherical";
+                case Joint::Type::Distance: return "distance";
+            }
+            return "revolute";
+        }
+
+        [[nodiscard]] float position() const {
+
+            require();
+            return joint_->position();
+        }
+
+        [[nodiscard]] float velocity() const {
+
+            require();
+            return joint_->velocity();
+        }
+
+        [[nodiscard]] bool broken() const {
+
+            require();
+            return joint_->broken();
+        }
+
+        void setDriveTarget(float value) {
+
+            require();
+            joint_->setDriveTarget(value);
+        }
+
+        void setDriveVelocity(float value) {
+
+            require();
+            joint_->setDriveVelocity(value);
+        }
+
+        [[nodiscard]] Vector3 reactionForce() const {
+
+            require();
+            Vector3 force, torque;
+            joint_->reactionForce(force, torque);
+            return force;
+        }
+
+        [[nodiscard]] Vector3 reactionTorque() const {
+
+            require();
+            Vector3 force, torque;
+            joint_->reactionForce(force, torque);
+            return torque;
+        }
+
+        [[nodiscard]] std::string repr() const {
+
+            const std::string name =
+                    object_ ? (object_->name.empty() ? object_->type() : object_->name) : "?";
+            if (!lifetime_.alive()) return "<threepp.editor.Joint '" + name + "' (stopped)>";
+            std::string out = "<threepp.editor.Joint '" + name + "' " + type();
+            if (joint_->broken()) out += " BROKEN";
+            return out + ">";
+        }
+
+    private:
+        void require() const { lifetime_.require("joint"); }
+
+        std::shared_ptr<Object3D> object_;
+        Joint* joint_;
+        Lifetime lifetime_;
+    };
+
+
     // The world the editor is playing right now, or nullptr outside Play.
     editor::PhysicsPlaySession* playing() {
 
@@ -585,6 +676,38 @@ namespace threepp_py {
                                        "Root link angular velocity in rad/s, world frame.")
                 .def("__repr__", &ArticulationHandle::repr);
 
+        py::class_<JointHandle, std::shared_ptr<JointHandle>>(sub, "Joint")
+                .def_property_readonly("object", &JointHandle::object,
+                                       "The joint NODE this handle was built from — the node whose "
+                                       "transform is the joint frame.")
+                .def_property_readonly("valid", &JointHandle::valid,
+                                       "False once the play session that created it has stopped.")
+                .def_property_readonly("type", &JointHandle::type,
+                                       "\"fixed\" | \"revolute\" | \"prismatic\" | \"spherical\" | "
+                                       "\"distance\".")
+                .def_property_readonly("position", &JointHandle::position,
+                                       "The joint coordinate: radians about the axis for a revolute "
+                                       "(and a spherical's twist), metres along it for a prismatic, "
+                                       "anchor distance for a distance joint. Zero for fixed.")
+                .def_property_readonly("velocity", &JointHandle::velocity,
+                                       "Its rate: rad/s or m/s, same convention as position.")
+                .def_property_readonly("broken", &JointHandle::broken,
+                                       "True once the solver exceeded the break threshold; the "
+                                       "constraint never comes back. A script ON the joint node "
+                                       "hears on_break() at that moment.")
+                .def("set_drive_target", &JointHandle::setDriveTarget, py::arg("value"),
+                     "PD setpoint along the motion axis (radians / metres). Acts through the "
+                     "authored stiffness — inert while stiffness is zero.")
+                .def("set_drive_velocity", &JointHandle::setDriveVelocity, py::arg("value"),
+                     "Velocity setpoint (rad/s or m/s). Acts through the authored damping — "
+                     "inert while damping is zero.")
+                .def_property_readonly("reaction_force", &JointHandle::reactionForce,
+                                       "Force (N, world axes) the solver applied to hold the "
+                                       "constraint on the last step.")
+                .def_property_readonly("reaction_torque", &JointHandle::reactionTorque,
+                                       "Torque (N*m, world axes) alongside reaction_force.")
+                .def("__repr__", &JointHandle::repr);
+
         // The world ITSELF, not a handle onto something it is simulating. This
         // is the one thing in this file a script cannot build for itself and
         // must not try to: the session owns the world, and threepp.PhysxWorld's
@@ -666,6 +789,23 @@ namespace threepp_py {
                 "running or no articulated robot governs it. The lookup walks up the scene "
                 "graph, so a script on any link of a robot finds the robot's articulation. "
                 "Robots simulate only when their Articulation section says Simulate.");
+
+        sub.def(
+                "joint_from_object", [](const py::handle& h) -> py::object {
+                    auto object = as_object3d(h);
+                    auto* session = playing();
+                    if (!object || !session) return py::none();
+                    const auto* played = session->findJoint(object.get());
+                    if (!played || !played->joint) return py::none();
+                    return py::cast(std::make_shared<JointHandle>(
+                            std::move(object), played->joint.get(),
+                            Lifetime{session->lifetime()}));
+                },
+                py::arg("object"),
+                "The live Joint built from `object`'s authored joint entry, or None when Play "
+                "is not running or the object is not a joint node. NO ancestor walk, unlike the "
+                "other from_object verbs: a joint is its own node, so the script asking is "
+                "normally sitting on it.");
 
         py::class_<RaycastHit>(
                 sub, "RaycastHit",

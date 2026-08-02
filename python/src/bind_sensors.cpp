@@ -241,6 +241,18 @@ namespace threepp_py {
                      py::keep_alive<1, 2>(),// the encoder keeps its attachment node alive
                      "Attach to `node` (normally the mesh bound to the joint's child link) and "
                      "measure `link`'s inbound joint. Raises if `link` is the root.")
+                .def(py::init([](const py::handle& node, const Joint& joint,
+                                 double rate_hz, std::size_t buffer_capacity) {
+                         auto obj = as_object3d(node);// see the ArticulationLink ctor above
+                         return new JointEncoder(*obj, joint, rate_hz, buffer_capacity);
+                     }),
+                     py::arg("node"), py::arg("joint"), py::arg("rate_hz") = 0.0,
+                     py::arg("buffer_capacity") = 2048,
+                     py::keep_alive<1, 2>(),// the attachment node
+                     py::keep_alive<1, 3>(),// and the Joint it reads every sample
+                     "The same encoder on a plain Joint: the coordinate is the joint's scalar "
+                     "axis (twist for a hinge, displacement for a slider, anchor distance for "
+                     "a tether).")
                 .def_readwrite("resolution", &JointEncoder::resolution,
                                "Quantization step: rad (revolute) or m (prismatic) per tick. "
                                "0 = ideal continuous encoder.")
@@ -372,6 +384,17 @@ namespace threepp_py {
                      py::keep_alive<1, 3>(),// and the articulation, whose cache it borrows
                      "Measure `link`'s inbound joint. Raises if `link` is the root, or if the "
                      "articulation has not been finalized.")
+                .def(py::init([](const py::handle& node, const Joint& joint,
+                                 double rate_hz, std::size_t buffer_capacity) {
+                         auto obj = as_object3d(node);
+                         return new ForceTorqueSensor(*obj, joint, rate_hz, buffer_capacity);
+                     }),
+                     py::arg("node"), py::arg("joint"), py::arg("rate_hz") = 0.0,
+                     py::arg("buffer_capacity") = 2048,
+                     py::keep_alive<1, 2>(),// the attachment node
+                     py::keep_alive<1, 3>(),// and the Joint it reads every sample
+                     "The same load cell across a plain Joint: the wrench is the solver's "
+                     "constraint force on it, in world axes.")
                 .def_readwrite("force_noise", &ForceTorqueSensor::forceNoise,
                                "NoiseModel for the force channel (N). Change then call reset().")
                 .def_readwrite("torque_noise", &ForceTorqueSensor::torqueNoise,

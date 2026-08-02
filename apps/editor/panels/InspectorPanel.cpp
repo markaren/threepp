@@ -3283,6 +3283,13 @@ void EditorApp::drawSensorSection(Object3D& object) {
     // one live encoder per DOF at Play. A load cell sits in one joint, so the
     // Force/Torque picker does not offer it.
     const auto jointPicker = [&](bool offerAll) {
+        // On a JOINT NODE the node itself is the reference: the play session
+        // reads that joint and consults no name, so a picker here would be a
+        // control wired to nothing.
+        if (JointConfig::isJoint(object)) {
+            ImGui::TextColored(theme::muted(), "Reads this node's own joint.");
+            return;
+        }
         Robot* robot = nullptr;
         for (Object3D* o = &object; o != nullptr; o = o->parent) {
             if (auto* r = o->as<Robot>()) {

@@ -8,7 +8,7 @@ import numpy.typing
 import typing
 from . import editor
 from . import imgui
-__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'Ellipsoid', 'ErosionType', 'Euler', 'FBXLoader', 'Filter', 'Fog', 'FogExp2', 'Font', 'FontLoader', 'ForceTorqueSensor', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'Sphere', 'SphereGeometry', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'deg_to_rad', 'editor', 'euclidean_modulo', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'write_wav']
+__all__: list[str] = ['AmbientLight', 'AnimationAction', 'AnimationBlendMode', 'AnimationClip', 'AnimationMixer', 'ArrowHelper', 'Articulation', 'ArticulationLink', 'Audio', 'AudioDistanceModel', 'AudioListener', 'AxesHelper', 'Background', 'BarkStyle', 'Blending', 'Blob', 'Box3', 'Box3Helper', 'BoxGeometry', 'BoxHelper', 'BranchingMode', 'BufferGeometry', 'Camera', 'CameraHelper', 'Canvas', 'CapsuleGeometry', 'CatmullRomCurve3', 'CircleGeometry', 'Clock', 'Cluster', 'Colonise', 'Color', 'ColorKeyframeTrack', 'ColorSpace', 'CombineOperation', 'Cone', 'ConeGeometry', 'ContactPoint', 'ContactSample', 'ContactSensor', 'ConvexGeometry', 'CrossQuad', 'CrownShape', 'Cylinder', 'CylinderGeometry', 'DepthPacking', 'DepthSensor', 'DirectionalLight', 'DirectionalLightHelper', 'DisplacedMesh', 'EXPONENTIAL', 'Ellipsoid', 'ErosionType', 'Euler', 'FBXLoader', 'Filter', 'Fog', 'FogExp2', 'Font', 'FontLoader', 'ForceTorqueSensor', 'Frond', 'Furrowed', 'GLRenderer', 'GLTFLoader', 'GLTFResult', 'GrassMesh', 'GridHelper', 'Group', 'HAS_AUDIO', 'HAS_IMGUI', 'HAS_PHYSX', 'HAS_VULKAN', 'Hemisphere', 'HemisphereLight', 'HemisphereLightHelper', 'HorizontalAlignment', 'INVERSE', 'IcosahedronGeometry', 'IcpOptions', 'IcpResult', 'ImguiContext', 'Imu', 'ImuSample', 'InstancedMesh', 'Interpolation', 'IsoMesh', 'Joint', 'JointEncoder', 'JointInfo', 'JointRange', 'JointSample', 'JointType', 'KeyframeTrack', 'LINEAR', 'Lanceolate', 'LeafShape', 'LeafStyle', 'LidarBeam', 'LidarModel', 'LidarParams', 'LidarReturn', 'Light', 'Line', 'LineBasicMaterial', 'LineSegments', 'Lobed', 'Loop', 'Mapping', 'Material', 'Matrix3', 'Matrix4', 'Mesh', 'MeshBasicMaterial', 'MeshDepthMaterial', 'MeshLambertMaterial', 'MeshNormalMaterial', 'MeshPhongMaterial', 'MeshPhysicalMaterial', 'MeshStandardMaterial', 'ModelLoader', 'NONE', 'NoiseModel', 'NoiseType', 'NumberKeyframeTrack', 'OBJLoader', 'Object3D', 'Ocean', 'OctahedronGeometry', 'OrbitControls', 'OrthographicCamera', 'Ovate', 'Papery', 'PerspectiveCamera', 'PhysxGpuBatch', 'PhysxMaterial', 'PhysxWorld', 'PlaneGeometry', 'Plated', 'PointLight', 'PointLightHelper', 'Points', 'PointsMaterial', 'PolarGridHelper', 'PositionalAudio', 'Quad', 'Quaternion', 'QuaternionKeyframeTrack', 'RGBELoader', 'RangeNoiseModel', 'RectAreaLight', 'RigidBody', 'RingGeometry', 'Robot', 'RotationOrder', 'STLLoader', 'SVGLoader', 'ScalarField', 'Scene', 'Sensor', 'Serrate', 'ShadowMaterial', 'Side', 'SkeletonHelper', 'Sphere', 'SphereGeometry', 'SpotLight', 'SpotLightHelper', 'Sprite', 'SpriteMaterial', 'TerrainFalloff', 'TerrainGenerator', 'TerrainParams', 'Text2D', 'Text3D', 'TextSprite', 'Texture', 'TextureLoader', 'TextureWrapping', 'ToneMapping', 'TorusGeometry', 'TorusKnotGeometry', 'TransformControls', 'TreeGenerator', 'TreeParams', 'URDFLoader', 'Vector2', 'Vector3', 'Vector4', 'VectorKeyframeTrack', 'VerticalAlignment', 'VoxelGrid', 'VulkanRenderer', 'Whorl', 'WrenchSample', 'apply_terrain_preset', 'apply_tree_preset', 'clamp', 'damp', 'deg_to_rad', 'editor', 'euclidean_modulo', 'generate_uuid', 'icp_point_to_point', 'imgui', 'inverse_lerp', 'is_power_of_two', 'iso_mesh_to_geometry', 'lerp', 'make_bark_textures', 'make_flower_texture', 'make_leaf_texture', 'make_needle_frond_texture', 'map_linear', 'marching_cubes', 'merge_buffer_geometries', 'merge_vertices', 'rad_to_deg', 'rand_float', 'rand_float_range', 'rand_float_spread', 'rand_int', 'rotate_equirect', 'simplify_geometry', 'splat_points_to_field', 'terrain_from_json', 'terrain_load_config', 'terrain_save_config', 'terrain_to_json', 'voxel_downsample', 'write_wav']
 class AmbientLight(Light):
     def __init__(self, color: Color = ..., intensity: typing.SupportsFloat | typing.SupportsIndex = 1.0) -> None:
         ...
@@ -1509,9 +1509,15 @@ class ForceTorqueSensor(Sensor):
     """
     Load cell on an articulation joint: the wrench the parent link transmits to the child through their joint, as the solver computed it. The input to force control, admittance control and payload estimation.
     """
+    @typing.overload
     def __init__(self, node: typing.Any, articulation: ..., link: ..., rate_hz: typing.SupportsFloat | typing.SupportsIndex = 0.0, buffer_capacity: typing.SupportsInt | typing.SupportsIndex = 2048) -> None:
         """
         Measure `link`'s inbound joint. Raises if `link` is the root, or if the articulation has not been finalized.
+        """
+    @typing.overload
+    def __init__(self, node: typing.Any, joint: ..., rate_hz: typing.SupportsFloat | typing.SupportsIndex = 0.0, buffer_capacity: typing.SupportsInt | typing.SupportsIndex = 2048) -> None:
+        """
+        The same load cell across a plain Joint: the wrench is the solver's constraint force on it, in world axes.
         """
     def drain(self) -> list[WrenchSample]:
         """
@@ -1901,13 +1907,178 @@ class IsoMesh:
         """
         (N,3) float32 vertex positions (3 per triangle, unwelded).
         """
+class Joint:
+    """
+    A joint between two rigid bodies, or one body and the world (pass None for that side). fixed/revolute/prismatic/spherical ride one configured PxD6Joint; distance is a tether. The frame is world-space: anchor at `position`, hinge/slide axis along the frame's local X (`rotation` aims it). Valid only while its world lives.
+    """
+    class Params:
+        """
+        Everything a joint is configured with. Angles in radians, lengths in metres. The drive is force-mode PD: `target` acts through stiffness, `velocity` through damping. break_force / break_torque of 0 = unbreakable.
+        """
+        collide: bool
+        limited: bool
+        type: Joint.Type
+        def __init__(self) -> None:
+            ...
+        @property
+        def break_force(self) -> float:
+            ...
+        @break_force.setter
+        def break_force(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def break_torque(self) -> float:
+            ...
+        @break_torque.setter
+        def break_torque(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def cone_y(self) -> float:
+            ...
+        @cone_y.setter
+        def cone_y(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def cone_z(self) -> float:
+            ...
+        @cone_z.setter
+        def cone_z(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def damping(self) -> float:
+            ...
+        @damping.setter
+        def damping(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def lower(self) -> float:
+            ...
+        @lower.setter
+        def lower(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def max_force(self) -> float:
+            ...
+        @max_force.setter
+        def max_force(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def stiffness(self) -> float:
+            ...
+        @stiffness.setter
+        def stiffness(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def target(self) -> float:
+            ...
+        @target.setter
+        def target(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def upper(self) -> float:
+            ...
+        @upper.setter
+        def upper(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+        @property
+        def velocity(self) -> float:
+            ...
+        @velocity.setter
+        def velocity(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+            ...
+    class Type:
+        """
+        Members:
+        
+          FIXED
+        
+          REVOLUTE
+        
+          PRISMATIC
+        
+          SPHERICAL
+        
+          DISTANCE
+        """
+        DISTANCE: typing.ClassVar[Joint.Type]  # value = <Type.DISTANCE: 4>
+        FIXED: typing.ClassVar[Joint.Type]  # value = <Type.FIXED: 0>
+        PRISMATIC: typing.ClassVar[Joint.Type]  # value = <Type.PRISMATIC: 2>
+        REVOLUTE: typing.ClassVar[Joint.Type]  # value = <Type.REVOLUTE: 1>
+        SPHERICAL: typing.ClassVar[Joint.Type]  # value = <Type.SPHERICAL: 3>
+        __members__: typing.ClassVar[dict[str, Joint.Type]]  # value = {'FIXED': <Type.FIXED: 0>, 'REVOLUTE': <Type.REVOLUTE: 1>, 'PRISMATIC': <Type.PRISMATIC: 2>, 'SPHERICAL': <Type.SPHERICAL: 3>, 'DISTANCE': <Type.DISTANCE: 4>}
+        def __eq__(self, other: typing.Any) -> bool:
+            ...
+        def __getstate__(self) -> int:
+            ...
+        def __hash__(self) -> int:
+            ...
+        def __index__(self) -> int:
+            ...
+        def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __int__(self) -> int:
+            ...
+        def __ne__(self, other: typing.Any) -> bool:
+            ...
+        def __repr__(self) -> str:
+            ...
+        def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+            ...
+        def __str__(self) -> str:
+            ...
+        @property
+        def name(self) -> str:
+            ...
+        @property
+        def value(self) -> int:
+            ...
+    def __init__(self, world: ..., body_a: typing.Any, body_b: typing.Any, position: Vector3, rotation: Quaternion = ..., params: Joint.Params = ...) -> None:
+        """
+        Create a joint in `world` between body_a and body_b (either may be None, meaning the world itself — not both). Default params are a fixed weld.
+        """
+    def reaction(self) -> tuple[Vector3, Vector3]:
+        """
+        (force N, torque N*m) the solver applied to hold the constraint on the last step, world axes.
+        """
+    def set_drive_target(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        PD setpoint along the motion axis (radians / metres). Acts through stiffness — inert at zero stiffness.
+        """
+    def set_drive_velocity(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Velocity setpoint (rad/s or m/s). Acts through damping.
+        """
+    @property
+    def broken(self) -> bool:
+        """
+        True once the solver exceeded the break threshold; the constraint never comes back.
+        """
+    @property
+    def position(self) -> float:
+        """
+        The joint coordinate: radians (revolute / a spherical's twist), metres (prismatic), anchor distance (distance).
+        """
+    @property
+    def type(self) -> Joint.Type:
+        ...
+    @property
+    def velocity(self) -> float:
+        """
+        Its rate: rad/s or m/s, same convention as position.
+        """
 class JointEncoder(Sensor):
     """
     Joint position/velocity encoder on an articulation link's inbound joint. Adds what a real encoder has and Articulation.joint_positions does not: tick quantization, noise, rate gating and buffering.
     """
+    @typing.overload
     def __init__(self, node: typing.Any, link: ..., rate_hz: typing.SupportsFloat | typing.SupportsIndex = 0.0, buffer_capacity: typing.SupportsInt | typing.SupportsIndex = 2048) -> None:
         """
         Attach to `node` (normally the mesh bound to the joint's child link) and measure `link`'s inbound joint. Raises if `link` is the root.
+        """
+    @typing.overload
+    def __init__(self, node: typing.Any, joint: ..., rate_hz: typing.SupportsFloat | typing.SupportsIndex = 0.0, buffer_capacity: typing.SupportsInt | typing.SupportsIndex = 2048) -> None:
+        """
+        The same encoder on a plain Joint: the coordinate is the joint's scalar axis (twist for a hinge, displacement for a slider, anchor distance for a tether).
         """
     def drain(self) -> list[JointSample]:
         """

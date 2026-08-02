@@ -8,12 +8,14 @@
 
 #include "Scripting.hpp"
 
+#include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/ObjectFactory.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
@@ -549,6 +551,112 @@ class Spawner:
     CHECK_THAT(spawned->position.y, WithinAbs(0.3f, 0.05f));
     // And it fell straight down - it did not land on the spawner.
     CHECK_THAT(spawned->position.x, WithinAbs(3.f, 0.05f));
+
+    scripts.stop();
+    physics.stop();
+}
+
+TEST_CASE("a script on a joint node reads its joint", "[editor][scripting][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    // A world-anchored pendulum (see EditorJointPlay_test for the geometry):
+    // bob at (1, 4, 0), anchor at (0, 4, 0), hinging about world Z.
+    auto bob = ObjectFactory::createPrimitive(Primitive::Box, scene);
+    bob->name = "Bob";
+    bob->position.set(1.f, 4.f, 0.f);
+    PhysicsConfig physicsConfig;
+    physicsConfig.enabled = true;
+    physicsConfig.body = PhysicsConfig::Body::Dynamic;
+    physicsConfig.shape = PhysicsConfig::Shape::Box;
+    physicsConfig.write(*bob);
+    scene.add(bob);
+
+    auto joint = Object3D::create();
+    joint->name = "Hinge";
+    joint->position.set(-1.f, 0.f, 0.f);
+    joint->rotation.y = -math::PI / 2;
+    JointConfig jointConfig;
+    jointConfig.type = JointConfig::Type::Revolute;
+    jointConfig.write(*joint);
+
+    // The script rides the joint node itself — the same node the handle names.
+    ScriptConfig script;
+    script.source = R"(
+import threepp
+
+class Probe:
+    def start(self, obj):
+        self.obj = obj
+        self.joint = threepp.editor.joint_from_object(obj)
+        if self.joint and self.joint.type == "revolute":
+            self.obj.name = "resolved"
+
+    def update(self, dt):
+        if self.joint and abs(self.joint.position) > 0.5:
+            self.obj.name = "swinging"
+)";
+    script.write(*joint);
+    bob->add(joint);
+
+    PhysicsPlaySession physics;
+    ScriptPlaySession scripts;
+
+    physics.start(scene);
+    scripts.start(scene);
+    REQUIRE(scripts.errorFor(joint->uuid).empty());
+    CHECK(joint->name == "resolved");// the handle existed at start(), typed right
+
+    run(physics, scripts, 90);// 1.5 s: well past half a radian of swing
+
+    // The script watched the coordinate move — the handle reads live state.
+    CHECK(joint->name == "swinging");
+
+    scripts.stop();
+    physics.stop();
+}
+
+TEST_CASE("a script on a joint node hears on_break", "[editor][scripting][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    // A weld armed to fail under the crate's own weight (1 N against ~20 N).
+    auto crate = addBox(scene, "Crate", PhysicsConfig::Body::Dynamic);
+    crate->position.set(0.f, 3.f, 0.f);
+
+    auto joint = Object3D::create();
+    joint->name = "Fuse";
+    JointConfig jointConfig;
+    jointConfig.type = JointConfig::Type::Fixed;
+    jointConfig.breakForce = 1.f;
+    jointConfig.breakTorque = 1.f;
+    jointConfig.write(*joint);
+
+    ScriptConfig script;
+    script.source = R"(
+class Fuse:
+    def start(self, obj):
+        self.obj = obj
+
+    def on_break(self):
+        self.obj.name = "snapped"
+)";
+    script.write(*joint);
+    crate->add(joint);
+
+    PhysicsPlaySession physics;
+    ScriptPlaySession scripts;
+
+    physics.start(scene);
+    scripts.start(scene);
+    REQUIRE(scripts.errorFor(joint->uuid).empty());
+
+    run(physics, scripts, 30);// 0.5 s: far more than the break needs
+
+    // The callback fired exactly where it was authored: on the joint node.
+    CHECK(joint->name == "snapped");
 
     scripts.stop();
     physics.stop();

@@ -85,6 +85,20 @@ namespace threepp::editor {
 
         void buildBodySensors(Object3D& node, const SensorConfig& config) override {
 
+            // A joint sensor authored ON a joint node (see JointConfig) reads
+            // THAT joint: the node is the reference, so no name is needed and
+            // none is consulted — a leftover joint name (or the all-joints
+            // sentinel) from a previous home on a robot means nothing here,
+            // which is why this intercept comes before the fan-out below.
+            if ((config.type == SensorConfig::Type::Encoder ||
+                 config.type == SensorConfig::Type::ForceTorque) &&
+                JointConfig::isJoint(node)) {
+                auto entry = makeEntry(node, config);
+                buildForPlainJoint(*entry, node, config);
+                commit(std::move(entry));
+                return;
+            }
+
             // One authored entry normally becomes one sensor. The whole-robot
             // encoder (joint == allJoints) is the exception: an object carries
             // ONE sensor entry, so covering every DOF from the robot's root has
@@ -349,6 +363,60 @@ namespace threepp::editor {
                 entry->config.joint = played->jointNames[i];// which joint this one became
                 buildEncoderFor(*entry, node, config, played->links[i], static_cast<int>(i));
                 commit(std::move(entry));
+            }
+        }
+
+        // The plain-joint twin of resolveJoint + buildEncoderFor/buildForceTorque:
+        // the sensor's node IS the authored joint, so resolution is presence,
+        // not naming. Same error-path shape as everything else in this file —
+        // status set, entry left dead, play intact.
+        void buildForPlainJoint(Entry& entry, Object3D& node, const SensorConfig& config) {
+
+            if (!liveWorld()) {
+                entry.status = "no physics world - a joint sensor rides the physics session";
+                return;
+            }
+            if (!physics_) {
+                entry.status = "no physics session - a joint sensor rides it";
+                return;
+            }
+            const auto* played = physics_->findJoint(&node);
+            if (!played || !played->joint) {
+                // The joint entry is authored but nothing was built from it —
+                // a missing body name, or a body with no rigid actor. The
+                // physics session already said which on the console.
+                entry.status = "this joint did not build - see the console for why";
+                return;
+            }
+
+            if (config.type == SensorConfig::Type::Encoder) {
+                auto encoder = std::make_unique<JointEncoder>(
+                        node, *played->joint, static_cast<double>(std::max(config.rateHz, 0.f)));
+                encoder->resolution = std::max(config.encoderResolution, 0.f);
+                encoder->positionNoise = encoderPositionNoise(config, 0);
+                try {
+                    liveWorld()->registerSensor(encoder.get());
+                } catch (const std::exception& e) {
+                    entry.status = e.what();
+                    return;
+                }
+                entry.encoder = std::move(encoder);
+                entry.traceNames = {"position", "velocity", nullptr, nullptr, nullptr, nullptr};
+                entry.traceCount = 2;
+            } else {
+                auto ft = std::make_unique<ForceTorqueSensor>(
+                        node, *played->joint, static_cast<double>(std::max(config.rateHz, 0.f)));
+                try {
+                    // No articulation cache on this form (abandonCache is a
+                    // no-op), so registration is just the direct-GPU guard.
+                    liveWorld()->registerSensor(ft.get());
+                } catch (const std::exception& e) {
+                    entry.status = e.what();
+                    return;
+                }
+                entry.forceTorque = std::move(ft);
+                entry.traceNames = {"force x", "force y", "force z", "torque x", "torque y", "torque z"};
+                entry.traceCount = 6;
             }
         }
 

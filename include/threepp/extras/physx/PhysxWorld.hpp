@@ -92,6 +92,18 @@ namespace threepp {
     };
 
     /**
+     * A joint (constraint) broke this substep: the solver needed more than its
+     * break force/torque, the constraint stopped acting for good, and this is
+     * the one notification PhysX gives about it. `joint` is the PxJoint whose
+     * setBreakForce armed the break — compare it against your own records
+     * (e.g. Joint::raw()) to name it; do not dereference beyond identity if
+     * you cannot prove it is yours.
+     */
+    struct ConstraintBreakEvent {
+        ::physx::PxJoint* joint = nullptr;
+    };
+
+    /**
      * Routes PhysX contact notifications to per-actor callbacks.
      *
      * Owned by PhysxWorld and installed as the scene's simulation event
@@ -140,6 +152,22 @@ namespace threepp {
                             triggers_.end());
         }
 
+        // Constraint breaks have no per-actor key: a subscriber hears about
+        // EVERY break and matches the PxJoint* against its own records. There
+        // is rarely more than one subscriber (a session mapping joints back to
+        // scene nodes), so filtering here would buy nothing.
+        Handle addBreak(std::function<void(const ConstraintBreakEvent&)> fn) {
+            const Handle h = next_++;
+            breaks_.push_back({h, std::move(fn)});
+            return h;
+        }
+
+        void removeBreak(Handle handle) {
+            breaks_.erase(std::remove_if(breaks_.begin(), breaks_.end(),
+                                         [handle](const BreakEntry& e) { return e.handle == handle; }),
+                          breaks_.end());
+        }
+
         // Drop every watcher of `actor` — called when the actor is released, so
         // a stale watch entry cannot match a recycled pointer later. Both kinds:
         // one released actor invalidates every entry naming it.
@@ -152,7 +180,9 @@ namespace threepp {
                             triggers_.end());
         }
 
-        [[nodiscard]] bool empty() const { return entries_.empty() && triggers_.empty(); }
+        [[nodiscard]] bool empty() const {
+            return entries_.empty() && triggers_.empty() && breaks_.empty();
+        }
 
         void onContact(const ::physx::PxContactPairHeader& header,
                        const ::physx::PxContactPair* pairs, ::physx::PxU32 nbPairs) override {
@@ -243,8 +273,25 @@ namespace threepp {
             }
         }
 
+        // Constraint breaks. Reporting is armed by setBreakForce alone (no
+        // filter bit, no scene parameter), so like onTrigger the early-out on
+        // an empty subscriber list is the whole cost of not listening.
+        void onConstraintBreak(::physx::PxConstraintInfo* constraints, ::physx::PxU32 count) override {
+            using namespace ::physx;
+            if (breaks_.empty()) return;
+
+            for (PxU32 i = 0; i < count; ++i) {
+                // externalReference is typed by `type`: only a joint's is a
+                // PxJoint*. Anything else (a custom constraint) is skipped
+                // rather than mis-cast.
+                if (constraints[i].type != PxConstraintExtIDs::eJOINT) continue;
+                ConstraintBreakEvent ev;
+                ev.joint = static_cast<PxJoint*>(constraints[i].externalReference);
+                for (const auto& e : breaks_) e.fn(ev);
+            }
+        }
+
         // Unused halves of the interface. PhysX requires all of them.
-        void onConstraintBreak(::physx::PxConstraintInfo*, ::physx::PxU32) override {}
         void onWake(::physx::PxActor**, ::physx::PxU32) override {}
         void onSleep(::physx::PxActor**, ::physx::PxU32) override {}
         void onAdvance(const ::physx::PxRigidBody* const*, const ::physx::PxTransform*,
@@ -261,8 +308,13 @@ namespace threepp {
             ::physx::PxRigidActor* watch;
             std::function<void(const TriggerEvent&)> fn;
         };
+        struct BreakEntry {
+            Handle handle;
+            std::function<void(const ConstraintBreakEvent&)> fn;
+        };
         std::vector<Entry> entries_;
         std::vector<TriggerEntry> triggers_;
+        std::vector<BreakEntry> breaks_;
         // Shared by both lists, so a handle names exactly one entry whichever
         // kind it is and unwatch cannot cross the streams.
         Handle next_ = 1;// 0 reserved as "no handle"
@@ -811,6 +863,22 @@ namespace threepp {
         }
 
         void unwatchTriggers(TriggerHandle handle) { contacts_.removeTrigger(handle); }
+
+        // Hear about every joint that BREAKS — exceeds the break force/torque
+        // its creator set — in this world. No per-actor key: the subscriber
+        // matches ConstraintBreakEvent::joint against its own joints (there is
+        // no other way to name one). Reporting is armed by setBreakForce alone,
+        // so an unbreakable joint never costs a notification. Delivered from
+        // inside fetchResults(), i.e. during step(): queue, do not re-enter the
+        // world from the callback.
+        using BreakHandle = ContactDispatcher::Handle;
+
+        BreakHandle watchConstraintBreaks(std::function<void(const ConstraintBreakEvent&)> cb) {
+            if (!cb) return 0;
+            return contacts_.addBreak(std::move(cb));
+        }
+
+        void unwatchConstraintBreaks(BreakHandle handle) { contacts_.removeBreak(handle); }
 
         // Turn every shape of `actor` into a trigger shape, or back into a
         // simulation shape. Returns false if any shape refused.

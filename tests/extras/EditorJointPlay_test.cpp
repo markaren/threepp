@@ -13,13 +13,19 @@
 #include "threepp/extras/editor/ObjectFactory.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
+#include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
+#include "threepp/extras/editor/SensorConfig.hpp"
+
+#include "threepp/extras/sensors/ForceTorqueSensor.hpp"
+#include "threepp/extras/sensors/JointEncoder.hpp"
 
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -281,6 +287,178 @@ TEST_CASE("a distance joint tethers a falling box", "[editor][physx]") {
     CHECK(crate->position.distanceTo(anchor) < 1.7f);
 
     session.stop();
+}
+
+TEST_CASE("a joint encoder reads a plain hinge", "[editor][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto bob = makeDynamicBox(scene, "Bob", {1.f, 4.f, 0.f});
+    scene.add(bob);
+
+    JointConfig config;
+    config.type = JointConfig::Type::Revolute;
+    auto joint = makeJointNode(*bob, {-1.f, 0.f, 0.f}, config);
+
+    PhysicsPlaySession session;
+    session.start(scene);
+    REQUIRE(session.jointCount() == 1);
+    const auto* played = session.findJoint(joint.get());
+    REQUIRE(played);
+    REQUIRE(played->joint);
+
+    JointEncoder encoder(*joint, *played->joint);
+    session.world()->registerSensor(&encoder);
+
+    run(session, 60);// 1 s: mid-swing, a decidedly nonzero angle
+
+    const auto sample = encoder.latest();
+    REQUIRE(sample.has_value());
+    CHECK(std::abs(sample->position) > 0.2f);
+    // The encoder agrees with the geometry: the bob sits at
+    // anchor + R(angle)·(1 m, 0, 0), so the angle is recoverable from where
+    // the bob actually is. Magnitudes, to stay out of sign conventions.
+    const float geometric = std::atan2(4.f - bob->position.y, bob->position.x);
+    CHECK_THAT(std::abs(sample->position), WithinAbs(std::abs(geometric), 0.1f));
+
+    session.world()->unregisterSensor(&encoder);
+    session.stop();
+}
+
+TEST_CASE("a force/torque sensor reads a plain joint's reaction", "[editor][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    // A 1 kg crate WELDED to the world with nothing under it: the weld
+    // carries its whole weight, so the load cell across it must read m*g.
+    auto crate = makeDynamicBox(scene, "Crate", {0.f, 3.f, 0.f});
+    scene.add(crate);
+
+    JointConfig config;
+    config.type = JointConfig::Type::Fixed;
+    auto joint = Object3D::create();
+    joint->name = "Weld";
+    config.write(*joint);
+    crate->add(joint);
+
+    PhysicsPlaySession session;
+    session.start(scene);
+    REQUIRE(session.jointCount() == 1);
+    const auto* played = session.findJoint(joint.get());
+    REQUIRE(played);
+    REQUIRE(played->joint);
+
+    ForceTorqueSensor ft(*joint, *played->joint);
+    session.world()->registerSensor(&ft);
+
+    run(session, 120);// settle
+
+    const auto sample = ft.latest();
+    REQUIRE(sample.has_value());
+    CHECK_THAT(sample->force.length(), WithinAbs(9.81f, 1.f));
+
+    session.world()->unregisterSensor(&ft);
+    session.stop();
+}
+
+TEST_CASE("a breakable joint reports its break", "[editor][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    // A weld armed to fail: 1 N against a 1 kg crate's ~10 N of weight, so
+    // gravity alone snaps it within the first steps.
+    auto crate = makeDynamicBox(scene, "Crate", {0.f, 3.f, 0.f});
+    scene.add(crate);
+
+    JointConfig config;
+    config.type = JointConfig::Type::Fixed;
+    config.breakForce = 1.f;
+    config.breakTorque = 1.f;
+    auto joint = Object3D::create();
+    joint->name = "Fuse";
+    config.write(*joint);
+    crate->add(joint);
+
+    PhysicsPlaySession session;
+    std::vector<std::string> logged;
+    session.setLogger([&](const std::string& line) { logged.push_back(line); });
+    session.start(scene);
+    REQUIRE(session.jointCount() == 1);
+
+    run(session, 30);// 0.5 s: far more than the break needs
+
+    // The constraint is gone...
+    const auto* played = session.findJoint(joint.get());
+    REQUIRE(played);
+    CHECK(played->joint->broken());
+    // ...the crate is in free fall...
+    CHECK(crate->position.y < 2.5f);
+    // ...the break was queued once, against the authored node...
+    std::vector<Object3D*> broken;
+    session.drainBrokenJoints(broken);
+    REQUIRE(broken.size() == 1);
+    CHECK(broken.front() == joint.get());
+    // ...draining drained it...
+    broken.clear();
+    session.drainBrokenJoints(broken);
+    CHECK(broken.empty());
+    // ...and the console heard, listener or not.
+    const bool reported = std::any_of(logged.begin(), logged.end(), [](const std::string& line) {
+        return line.find("Fuse") != std::string::npos && line.find("broke") != std::string::npos;
+    });
+    CHECK(reported);
+
+    session.stop();
+}
+
+TEST_CASE("a sensor authored on a joint node reads the joint", "[editor][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    auto bob = makeDynamicBox(scene, "Bob", {1.f, 4.f, 0.f});
+    scene.add(bob);
+
+    JointConfig jointConfig;
+    jointConfig.type = JointConfig::Type::Revolute;
+    auto joint = makeJointNode(*bob, {-1.f, 0.f, 0.f}, jointConfig);
+
+    // The encoder rides the joint node itself — no joint name needed. The
+    // all-joints sentinel is planted on purpose: a leftover from a previous
+    // home on a robot, and it must be ignored here rather than fanned out.
+    SensorConfig sensorConfig;
+    sensorConfig.enabled = true;
+    sensorConfig.type = SensorConfig::Type::Encoder;
+    sensorConfig.rateHz = 0.f;
+    sensorConfig.joint = SensorConfig::allJoints;
+    sensorConfig.write(*joint);
+
+    PhysicsPlaySession physics;
+    PhysxSensorPlaySession sensors;
+    sensors.setPhysics(&physics);
+
+    physics.start(scene);
+    sensors.start(scene);
+
+    for (int i = 0; i < 60; ++i) {
+        physics.update(1.f / 60.f);
+        sensors.update(1.f / 60.f);
+    }
+
+    REQUIRE(sensors.entries().size() == 1);
+    const auto& entry = *sensors.entries().front();
+    INFO("status: " << entry.status);
+    CHECK(entry.status.empty());
+    REQUIRE(entry.encoder != nullptr);
+    CHECK(entry.samples > 0);
+
+    // The controller's stop order: physics first, sensors after, with the
+    // world already gone — the seam where a stale world pointer would crash.
+    physics.stop();
+    sensors.stop();
 }
 
 TEST_CASE("a joint naming a missing body is skipped, play intact", "[editor][physx]") {

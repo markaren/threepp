@@ -4,7 +4,7 @@ The runtime face of editor-authored data.
 from __future__ import annotations
 import typing
 import threepp
-__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object']
+__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'Joint', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'joint_from_object', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object']
 class SplinePath:
     def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> threepp.Vector3:
         """
@@ -223,6 +223,59 @@ class Articulation:
     def root_angular_velocity(self) -> threepp.Vector3:
         """
         Root link angular velocity in rad/s, world frame.
+        """
+class Joint:
+    """
+    One authored joint, played: the constraint PhysX built from a joint node's
+    userData. Only exists during Play, and only in a build with the PhysX SDK.
+    """
+    @property
+    def object(self) -> threepp.Object3D:
+        """
+        The joint NODE this handle was built from - the node whose transform is the joint frame.
+        """
+    @property
+    def valid(self) -> bool:
+        """
+        False once the play session that created it has stopped.
+        """
+    @property
+    def type(self) -> str:
+        """
+        "fixed" | "revolute" | "prismatic" | "spherical" | "distance".
+        """
+    @property
+    def position(self) -> float:
+        """
+        The joint coordinate: radians about the axis for a revolute (and a spherical's twist), metres along it for a prismatic, anchor distance for a distance joint. Zero for fixed.
+        """
+    @property
+    def velocity(self) -> float:
+        """
+        Its rate: rad/s or m/s, same convention as position.
+        """
+    @property
+    def broken(self) -> bool:
+        """
+        True once the solver exceeded the break threshold; the constraint never comes back. A script ON the joint node hears on_break() at that moment.
+        """
+    def set_drive_target(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        PD setpoint along the motion axis (radians / metres). Acts through the authored stiffness - inert while stiffness is zero.
+        """
+    def set_drive_velocity(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Velocity setpoint (rad/s or m/s). Acts through the authored damping - inert while damping is zero.
+        """
+    @property
+    def reaction_force(self) -> threepp.Vector3:
+        """
+        Force (N, world axes) the solver applied to hold the constraint on the last step.
+        """
+    @property
+    def reaction_torque(self) -> threepp.Vector3:
+        """
+        Torque (N*m, world axes) alongside reaction_force.
         """
 class RaycastHit:
     """
@@ -506,6 +559,10 @@ def world() -> threepp.PhysxWorld | None:
     This is the ONLY way to a world inside the editor: threepp.PhysxWorld's own constructor raises there, because the session owns the one world and a second would bring up a second PhysX foundation beside it.
 
     NOTE the handle difference: what world.add returns is a raw threepp.RigidBody, valid while the world is alive - which includes stop(), since sessions stop in reverse order and physics goes down last - but NOT invalidated when the world dies, so one stashed beyond its session dereferences a released actor. rigid_body_from_object returns the lifetime-checked threepp.editor.RigidBody, which raises instead. Prefer that one for anything held longer than the session.
+    """
+def joint_from_object(object: threepp.Object3D | None) -> Joint | None:
+    """
+    The live Joint built from `object`'s authored joint entry, or None when Play is not running or the object is not a joint node. NO ancestor walk, unlike the other from_object verbs: a joint is its own node, so the script asking is normally sitting on it.
     """
 def rigid_body_from_object(object: threepp.Object3D | None) -> RigidBody | None:
     """

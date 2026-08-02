@@ -79,6 +79,10 @@ struct ScriptPlaySession::Impl {
         // The trigger half of the same story, read from inside onTrigger().
         bool hasTriggerEnter = false;
         bool hasTriggerExit = false;
+        // on_break, for a script riding a JOINT node: called once when the
+        // joint's constraint exceeds its break threshold and separates for
+        // good. Polled per frame (not per contact), so a plain flag suffices.
+        bool hasBreak = false;
         // Set the first time this script raises. It stays set for the rest of
         // the session: a script that throws every frame must not fill the
         // console with the same traceback sixty times a second.
@@ -721,6 +725,63 @@ struct ScriptPlaySession::Impl {
             std::to_string(wanted) + (wanted == 1 ? " script" : " scripts"));
     }
 
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    // Joint nodes whose constraint broke, pulled from the physics session each
+    // frame. The physics session queues them as they happen (and logs them —
+    // the console line is not this session's job); this is the single consumer
+    // of that queue.
+    std::vector<Object3D*> brokenJoints;
+#endif
+
+    // GIL-free, called before the frame sweep decides whether to acquire it.
+    // Resolved through the active session directly rather than bindWorld():
+    // that binding only happens when a script wants fixed_update, collisions
+    // or triggers, and a script whose ONLY callback is on_break never asked —
+    // the same "the session that is playing" seam the from_object verbs use.
+    void harvestBreaks() {
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        if (auto* session = PhysicsPlaySession::active()) {
+            session->drainBrokenJoints(brokenJoints);
+        }
+#endif
+    }
+
+    [[nodiscard]] bool breaksPending() const {
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        return !brokenJoints.empty();
+#else
+        return false;
+#endif
+    }
+
+    // deliverCollisions for breaks: same held GIL, same disable-once. No
+    // payload — the script IS on the joint that broke, and everything about
+    // it is reachable from self. A break on a node with no script (or no
+    // on_break) is consumed silently; the console already carried the news.
+    void deliverBreaks() {
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        const auto broken = std::move(brokenJoints);
+        brokenJoints.clear();
+        for (auto* node : broken) {
+            for (auto& instance : instances) {
+                if (instance.failed || !instance.hasBreak) continue;
+                const auto object = instance.object.lock();
+                if (object.get() != node) continue;
+                try {
+                    instance.self.attr("on_break")();
+                } catch (py::error_already_set& e) {
+                    fail(instance, "on_break", scripting::describeError(e));
+                } catch (const std::exception& e) {
+                    fail(instance, "on_break", e.what());
+                }
+            }
+        }
+#endif
+    }
+
     // deliverCollisions for overlaps: same order (instance, then queue), same
     // held GIL, same disable-once. What it hands over is the object rather than
     // a Collision, since there is no contact data to put beside it.
@@ -939,6 +1000,7 @@ void ScriptPlaySession::start(Scene& scene) {
             instance.hasCollisionExit = py::hasattr(self, "on_collision_exit");
             instance.hasTriggerEnter = py::hasattr(self, "on_trigger_enter");
             instance.hasTriggerExit = py::hasattr(self, "on_trigger_exit");
+            instance.hasBreak = py::hasattr(self, "on_break");
             instance.self = self;
             // Kept so attachCollisions() can resolve the body governing it,
             // without a second traversal of the scene to find the object again.
@@ -1013,10 +1075,14 @@ void ScriptPlaySession::update(float dt) {
         if (!instance.failed && instance.hasUpdate) any = true;
     }
     // Contacts and trigger overlaps queued by this frame's substeps are
-    // delivered here even when no script defines update() at all.
+    // delivered here even when no script defines update() at all. Joint
+    // breaks the same — harvested first (GIL-free), so a frame whose only
+    // event is a break still sweeps.
+    impl_->harvestBreaks();
     const bool collisions = impl_->collisionsPending();
     const bool triggers = impl_->triggersPending();
-    if (!any && !collisions && !triggers) return;
+    const bool breaks = impl_->breaksPending();
+    if (!any && !collisions && !triggers && !breaks) return;
 
     // Once for the whole sweep, not once per script: acquiring the GIL is the
     // expensive part, and there is nothing else running that wants it.
@@ -1038,6 +1104,9 @@ void ScriptPlaySession::update(float dt) {
     // before triggers is an arbitrary but FIXED order: a script defining both
     // sees the same sequence every run.
     if (triggers) impl_->deliverTriggers();
+    // Breaks last, same fixed-order rationale: the contact that snapped the
+    // joint is delivered before the snap it caused.
+    if (breaks) impl_->deliverBreaks();
 
     for (auto& instance : impl_->instances) {
         if (instance.failed || !instance.hasUpdate) continue;

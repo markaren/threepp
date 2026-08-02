@@ -26,6 +26,7 @@
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/physx/Articulation.hpp"
+#include "threepp/extras/physx/Joint.hpp"
 #include "threepp/extras/physx/PhysxGpuBatch.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/physx/UrdfArticulation.hpp"
@@ -252,6 +253,86 @@ namespace threepp_py {
                      "Per add-order joint, its low-level DOF slot in the direct-GPU joint buffers "
                      "(PhysX cache order != add-order). Use to map a GPU-trained policy back to the "
                      "CPU getters: obs_gpu[dof_order[i]] = cpu[i]; cpu_target[i] = gpu_target[dof_order[i]].");
+
+        // One maximal-coordinate constraint between two RigidBodies (or one
+        // body and the world). The joint MUST die before its world (its
+        // destructor releases the PxJoint), which the keep_alive on the
+        // constructor guarantees for the GC path.
+        py::class_<Joint> joint(m, "Joint",
+                                "A joint between two rigid bodies, or one body and the world "
+                                "(pass None for that side). fixed/revolute/prismatic/spherical "
+                                "ride one configured PxD6Joint; distance is a tether. The frame "
+                                "is world-space: anchor at `position`, hinge/slide axis along "
+                                "the frame's local X (`rotation` aims it). Valid only while its "
+                                "world lives.");
+
+        py::enum_<Joint::Type>(joint, "Type")
+                .value("FIXED", Joint::Type::Fixed)
+                .value("REVOLUTE", Joint::Type::Revolute)
+                .value("PRISMATIC", Joint::Type::Prismatic)
+                .value("SPHERICAL", Joint::Type::Spherical)
+                .value("DISTANCE", Joint::Type::Distance);
+
+        py::class_<Joint::Params>(joint, "Params",
+                                  "Everything a joint is configured with. Angles in radians, "
+                                  "lengths in metres. The drive is force-mode PD: `target` acts "
+                                  "through stiffness, `velocity` through damping. break_force / "
+                                  "break_torque of 0 = unbreakable.")
+                .def(py::init<>())
+                .def_readwrite("type", &Joint::Params::type)
+                .def_readwrite("limited", &Joint::Params::limited)
+                .def_readwrite("lower", &Joint::Params::lower)
+                .def_readwrite("upper", &Joint::Params::upper)
+                .def_readwrite("cone_y", &Joint::Params::coneY)
+                .def_readwrite("cone_z", &Joint::Params::coneZ)
+                .def_readwrite("stiffness", &Joint::Params::stiffness)
+                .def_readwrite("damping", &Joint::Params::damping)
+                .def_readwrite("max_force", &Joint::Params::maxForce)
+                .def_readwrite("target", &Joint::Params::target)
+                .def_readwrite("velocity", &Joint::Params::velocity)
+                .def_readwrite("break_force", &Joint::Params::breakForce)
+                .def_readwrite("break_torque", &Joint::Params::breakTorque)
+                .def_readwrite("collide", &Joint::Params::collide);
+
+        joint.def(py::init([](PhysxWorld& world, const py::object& bodyA, const py::object& bodyB,
+                              const Vector3& position, const Quaternion& rotation,
+                              const Joint::Params& params) {
+                      // RigidBody keeps its actor private; unwrapping happens
+                      // here, C++-side, exactly as PhysxWorld.remove does.
+                      auto* a = bodyA.is_none() ? nullptr : bodyA.cast<RigidBody*>()->raw();
+                      auto* b = bodyB.is_none() ? nullptr : bodyB.cast<RigidBody*>()->raw();
+                      return std::make_unique<Joint>(world, a, b,
+                                                     toPxTransform(position, rotation), params);
+                  }),
+                  py::arg("world"), py::arg("body_a"), py::arg("body_b"),
+                  py::arg("position"), py::arg("rotation") = Quaternion(),
+                  py::arg("params") = Joint::Params{},
+                  py::keep_alive<1, 2>(),// the world outlives the joint
+                  "Create a joint in `world` between body_a and body_b (either may be None, "
+                  "meaning the world itself — not both). Default params are a fixed weld.")
+                .def_property_readonly("type", &Joint::type)
+                .def_property_readonly("position", &Joint::position,
+                                       "The joint coordinate: radians (revolute / a spherical's "
+                                       "twist), metres (prismatic), anchor distance (distance).")
+                .def_property_readonly("velocity", &Joint::velocity,
+                                       "Its rate: rad/s or m/s, same convention as position.")
+                .def_property_readonly("broken", &Joint::broken,
+                                       "True once the solver exceeded the break threshold; the "
+                                       "constraint never comes back.")
+                .def("set_drive_target", &Joint::setDriveTarget, py::arg("value"),
+                     "PD setpoint along the motion axis (radians / metres). Acts through "
+                     "stiffness — inert at zero stiffness.")
+                .def("set_drive_velocity", &Joint::setDriveVelocity, py::arg("value"),
+                     "Velocity setpoint (rad/s or m/s). Acts through damping.")
+                .def(
+                        "reaction",
+                        [](const Joint& j) {
+                            Vector3 force, torque;
+                            j.reactionForce(force, torque);
+                            return py::make_tuple(force, torque);
+                        },
+                        "(force N, torque N*m) the solver applied to hold the constraint on "
+                        "the last step, world axes.");
 
         py::class_<PhysxMaterial>(m, "PhysxMaterial",
                                   "A contact material (surface friction + restitution). Create via "

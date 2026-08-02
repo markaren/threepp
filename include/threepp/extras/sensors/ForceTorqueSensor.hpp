@@ -10,17 +10,26 @@
 // measurement is the SOLVER's constraint force — the same quantity a load cell
 // would see, not a finite-difference estimate.
 //
-// Frame: PhysX reports the wrench in the CHILD JOINT FRAME of the measured
-// link's inbound joint (see PxArticulationJointReducedCoordinate::getChildPose),
-// which is the joint frame this library orients with its X axis along the
-// hinge/slide axis. Magnitudes are of course frame-independent, and are usually
-// what a threshold is written against.
+// The same instrument also bolts across a plain authored Joint (a weld, a
+// hinge between two rigid bodies): there the wrench is the constraint force
+// PxConstraint::getForce reports, the maximal-coordinate twin of the quantity
+// above. Which source feeds the sensor is fixed at construction; the noise
+// model, rate gate and buffering are identical either way.
+//
+// Frame: PhysX reports the articulation wrench in the CHILD JOINT FRAME of the
+// measured link's inbound joint (see
+// PxArticulationJointReducedCoordinate::getChildPose), which is the joint
+// frame this library orients with its X axis along the hinge/slide axis. A
+// plain joint's constraint force is reported in WORLD axes. Magnitudes are of
+// course frame-independent, and are usually what a threshold is written
+// against.
 
 #ifndef THREEPP_SENSORS_FORCETORQUESENSOR_HPP
 #define THREEPP_SENSORS_FORCETORQUESENSOR_HPP
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/physx/Articulation.hpp"
+#include "threepp/extras/physx/Joint.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/sensors/Sensor.hpp"
 #include "threepp/math/Vector3.hpp"
@@ -78,13 +87,31 @@ namespace threepp {
             linkIndex_ = raw->getLinkIndex();
         }
 
+        /**
+         * The same load cell across a plain authored Joint: the wrench is the
+         * solver's constraint force on that joint (Joint::reactionForce), in
+         * world axes. No articulation, no cache — abandonCache() is a no-op on
+         * this form. The joint must outlive the sensor; in the editor that
+         * ordering is the play controller's (sensors stop before the physics
+         * session that owns the joints).
+         */
+        ForceTorqueSensor(Object3D& node, const Joint& joint,
+                          double rateHz = 0.0, std::size_t bufferCapacity = 2048)
+            : Sensor(node, rateHz), joint_(&joint), ring_(bufferCapacity) {}
+
         ~ForceTorqueSensor() override { releaseCache(); }
 
         void onRegister(PhysxWorld& world) override {
             if (world.directGpuEnabled()) {
                 throw std::runtime_error(
-                        "ForceTorqueSensor: not valid under direct_gpu - the CPU articulation cache "
-                        "is not synced. Read link forces through PhysxGpuBatch instead.");
+                        "ForceTorqueSensor: not valid under direct_gpu - the CPU-side constraint "
+                        "state is not synced. Read link forces through PhysxGpuBatch instead.");
+            }
+            // The plain-joint form has no cache lifecycle at all: the wrench
+            // is read straight off the constraint each sample.
+            if (joint_) {
+                reset();
+                return;
             }
             if (!art_->finalized()) {
                 throw std::runtime_error(
@@ -120,14 +147,20 @@ namespace threepp {
 
         void sample(double dt, double simTime) override {
             using namespace ::physx;
-            if (!cache_) return;// not registered
 
-            art_->rawArt()->copyInternalStateToCache(
-                    *cache_, PxArticulationCacheFlag::eLINK_INCOMING_JOINT_FORCE);
+            Vector3 force, torque;
+            if (joint_) {
+                joint_->reactionForce(force, torque);
+            } else {
+                if (!cache_) return;// not registered
 
-            const PxSpatialForce& w = cache_->linkIncomingJointForce[linkIndex_];
-            Vector3 force(w.force.x, w.force.y, w.force.z);
-            Vector3 torque(w.torque.x, w.torque.y, w.torque.z);
+                art_->rawArt()->copyInternalStateToCache(
+                        *cache_, PxArticulationCacheFlag::eLINK_INCOMING_JOINT_FORCE);
+
+                const PxSpatialForce& w = cache_->linkIncomingJointForce[linkIndex_];
+                force.set(w.force.x, w.force.y, w.force.z);
+                torque.set(w.torque.x, w.torque.y, w.torque.z);
+            }
 
             force = forceNoiseState_.apply(force, dt);
             torque = torqueNoiseState_.apply(torque, dt);
@@ -149,9 +182,12 @@ namespace threepp {
             }
         }
 
-        Articulation* art_;
+        // Exactly one of these is set (see the two constructors): the
+        // articulation + cache + link index, or the plain joint.
+        Articulation* art_ = nullptr;
         ::physx::PxArticulationCache* cache_ = nullptr;
         ::physx::PxU32 linkIndex_ = 0;
+        const Joint* joint_ = nullptr;
 
         GaussianNoise forceNoiseState_;
         GaussianNoise torqueNoiseState_;

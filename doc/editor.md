@@ -766,6 +766,26 @@ PhysX's own colours. That is the running counterpart of the authored axis
 helper, which Play hides with the rest of the authoring layer — and a joint
 that **broke** vanishes from the overlay, which is exactly the news.
 
+**Sensors sit on joints too.** Author an Encoder or a Force/Torque sensor on
+the joint node itself and it reads *that* joint — no joint-name picker (the
+node is the reference): the encoder reports the joint coordinate and its rate
+(twist angle, slide displacement, tether distance), the load cell reports the
+solver's constraint force, `PxConstraint::getForce`, in world axes — the
+maximal-coordinate twin of the articulation cache's incoming joint force. Same
+noise/quantization/rate model as their articulation forms, same Sensors-panel
+traces, same CSV.
+
+**Scripts.** `threepp.editor.joint_from_object(obj)` on the joint node returns
+the live `Joint` handle: `position` / `velocity` (the joint coordinate and its
+rate), `broken`, `reaction_force` / `reaction_torque`, and
+`set_drive_target` / `set_drive_velocity` — the setpoints act through the
+authored stiffness and damping respectively, exactly like the inspector's
+fields. A script **on the joint node** may also define `on_break()`, called
+once when the constraint exceeds its break threshold; every break also gets a
+console line, listener or not. The standalone wheel binds the same runtime
+type as `threepp.Joint` (with `Joint.Params` / `Joint.Type`), taking two
+`RigidBody` handles — or `None` for the world — and a world-space frame.
+
 The runtime type is `threepp::Joint` (`extras/physx/Joint.hpp`), usable
 without the editor: two `PxRigidActor*` (either may be null, meaning the
 world), one world-space frame, one `Params` struct — the same escape the

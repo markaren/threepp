@@ -275,6 +275,17 @@ namespace threepp::editor {
             return nullptr;
         }
 
+        // Joint nodes whose constraint BROKE since the last drain, in break
+        // order. Single consumer, and draining empties it: the script session
+        // turns these into on_break callbacks each frame. The console line is
+        // not the consumer's job — the session logs every break itself the
+        // moment it happens, listener or not.
+        void drainBrokenJoints(std::vector<Object3D*>& out) {
+
+            out.insert(out.end(), brokenJoints_.begin(), brokenJoints_.end());
+            brokenJoints_.clear();
+        }
+
         // A session destroyed without a stop() — the editor tearing down mid-Play
         // — must not leave active() pointing at freed memory.
         ~PhysicsPlaySession() override {
@@ -298,6 +309,8 @@ namespace threepp::editor {
             actors_.clear();
             objects_.clear();
             joints_.clear();
+            brokenJoints_.clear();
+            breakWatch_ = 0;
             articulations_.clear();
             decompCache_.clear();
 
@@ -361,6 +374,23 @@ namespace threepp::editor {
                 if (JointConfig::isJoint(object)) jointNodes.push_back(&object);
             });
             for (auto* node : jointNodes) buildJoint(scene, *node);
+
+            // One watch for the lot of them: a break is worth a console line
+            // whether or not anything scripted is listening (the constraint is
+            // gone for good), and the node is queued for drainBrokenJoints.
+            // Fired from inside step(), so only bookkeeping happens here.
+            if (!joints_.empty()) {
+                breakWatch_ = world_->watchConstraintBreaks([this](const ConstraintBreakEvent& event) {
+                    for (const auto& played : joints_) {
+                        if (played.joint && played.joint->raw() == event.joint) {
+                            log("joint: \"" + played.node->name +
+                                "\" broke - the load exceeded its break threshold");
+                            brokenJoints_.push_back(played.node);
+                            return;
+                        }
+                    }
+                });
+            }
         }
 
         void update(float dt) override {
@@ -381,10 +411,14 @@ namespace threepp::editor {
             if (active_ == this) active_ = nullptr;
             actors_.clear();
             objects_.clear();
-            // Joints go FIRST: a Joint releases its PxJoint in its destructor,
-            // which must happen while the actors it constrains — including any
+            // The break watch goes before the joints it names, and both go
+            // FIRST: a Joint releases its PxJoint in its destructor, which
+            // must happen while the actors it constrains — including any
             // articulation link it attached to — and the world that owns them
             // are all still alive (see Joint's lifetime note).
+            if (world_ && breakWatch_) world_->unwatchConstraintBreaks(breakWatch_);
+            breakWatch_ = 0;
+            brokenJoints_.clear();
             joints_.clear();
             // Destroy the articulations while the world is still alive: an
             // Articulation releases itself back into the scene it belongs to, so
@@ -1458,6 +1492,11 @@ namespace threepp::editor {
         std::vector<std::unique_ptr<PlayedArticulation>> articulations_;
         // Cleared before articulations_ and world_ — see stop().
         std::vector<PlayedJoint> joints_;
+        // The constraint-break subscription and its per-frame harvest (see
+        // drainBrokenJoints). Node pointers are stable for the whole play —
+        // the edit lock guarantees it — so no uuid indirection is needed.
+        PhysxWorld::BreakHandle breakWatch_ = 0;
+        std::vector<Object3D*> brokenJoints_;
 
         // V-HACD is the expensive part of a Pieces cook (seconds on a dense
         // mesh), so N copies of one geometry decompose once — keyed on the

@@ -226,6 +226,62 @@ namespace threepp {
             return joint_->getConstraintFlags().isSet(::physx::PxConstraintFlag::eBROKEN);
         }
 
+        // --- joint-space state, for encoders and scripts -------------------
+        // The scalar coordinate along the motion axis: the twist angle in
+        // radians (Revolute — and Spherical, whose twist is the one scalar it
+        // has), the X displacement in metres (Prismatic), the anchor distance
+        // (Distance). Zero for Fixed, which has no coordinate.
+        [[nodiscard]] float position() const {
+            using namespace ::physx;
+            switch (type_) {
+                case Type::Revolute:
+                case Type::Spherical:
+                    return joint_->is<PxD6Joint>()->getTwistAngle();
+                case Type::Prismatic:
+                    return joint_->getRelativeTransform().p.x;
+                case Type::Distance:
+                    return joint_->is<PxDistanceJoint>()->getDistance();
+                case Type::Fixed:
+                    break;
+            }
+            return 0.f;
+        }
+
+        // Its rate: rad/s or m/s. PhysX reports the relative velocities in
+        // actor0's CONSTRAINT frame, whose X is the motion axis — so the X
+        // component is the joint rate directly. Distance projects the linear
+        // velocity onto the anchor separation instead (the rate the tether
+        // pays out at).
+        [[nodiscard]] float velocity() const {
+            using namespace ::physx;
+            switch (type_) {
+                case Type::Revolute:
+                case Type::Spherical:
+                    return joint_->getRelativeAngularVelocity().x;
+                case Type::Prismatic:
+                    return joint_->getRelativeLinearVelocity().x;
+                case Type::Distance: {
+                    const PxVec3 p = joint_->getRelativeTransform().p;
+                    const float d = p.magnitude();
+                    if (d < 1e-6f) return 0.f;
+                    return joint_->getRelativeLinearVelocity().dot(p) / d;
+                }
+                case Type::Fixed:
+                    break;
+            }
+            return 0.f;
+        }
+
+        // The force and torque the solver applied to hold the constraint on
+        // the last step — what a force/torque sensor bolted across the joint
+        // reads. Zero before the first step, and forever once broken.
+        void reactionForce(Vector3& force, Vector3& torque) const {
+            ::physx::PxVec3 f(::physx::PxZero), t(::physx::PxZero);
+            if (auto* constraint = joint_->getConstraint()) constraint->getForce(f, t);
+            force.set(f.x, f.y, f.z);
+            torque.set(t.x, t.y, t.z);
+        }
+
         [[nodiscard]] Type type() const { return type_; }
         [[nodiscard]] ::physx::PxJoint* raw() const { return joint_; }
 

@@ -17,20 +17,25 @@
 //   buffering     latest()/drain(), so a controller running at its own cadence
 //                 sees every reading rather than the last one.
 //
-// The measured quantity is the inbound joint of an articulation link: an angle
-// in radians for a revolute joint, a displacement in metres for a prismatic one.
-// Units follow the joint, so `resolution` is rad/tick or m/tick to match.
+// The measured quantity is one joint-space scalar: an angle in radians for a
+// revolute joint, a displacement in metres for a prismatic one. Units follow
+// the joint, so `resolution` is rad/tick or m/tick to match. Two things carry
+// such a coordinate — the inbound joint of an articulation link, and a plain
+// authored Joint (a hinge between two rigid bodies) — and the same instrument
+// reads either: the error model is the encoder's, not the joint's.
 
 #ifndef THREEPP_SENSORS_JOINTENCODER_HPP
 #define THREEPP_SENSORS_JOINTENCODER_HPP
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/physx/Articulation.hpp"
+#include "threepp/extras/physx/Joint.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/sensors/Sensor.hpp"
 #include "threepp/math/MathUtils.hpp"
 
 #include <cmath>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -101,13 +106,33 @@ namespace threepp {
          */
         JointEncoder(Object3D& node, const ArticulationLink& link,
                      double rateHz = 0.0, std::size_t bufferCapacity = 2048)
-            : Sensor(node, rateHz), link_(link), ring_(bufferCapacity) {
-            if (link_.isRoot()) {
+            : Sensor(node, rateHz),
+              // An ArticulationLink is a value handle, so the closures own
+              // their copy; only the articulation itself has to outlive us.
+              position_([link] { return link.jointPosition(); }),
+              velocity_([link] { return link.jointVelocity(); }),
+              ring_(bufferCapacity) {
+            if (link.isRoot()) {
                 throw std::invalid_argument(
                         "JointEncoder: the root link has no inbound joint to measure. "
                         "Attach the encoder to a child link.");
             }
         }
+
+        /**
+         * The same encoder on a plain authored Joint: the coordinate is the
+         * joint's scalar axis (Joint::position/velocity — twist for a hinge,
+         * displacement for a slider, anchor distance for a tether). The joint
+         * must outlive the encoder; in the editor that ordering is the play
+         * controller's (sensors stop before the physics session that owns the
+         * joints).
+         */
+        JointEncoder(Object3D& node, const Joint& joint,
+                     double rateHz = 0.0, std::size_t bufferCapacity = 2048)
+            : Sensor(node, rateHz),
+              position_([&joint] { return joint.position(); }),
+              velocity_([&joint] { return joint.velocity(); }),
+              ring_(bufferCapacity) {}
 
         /// Set `resolution` from a rotary encoder's counts per revolution.
         void setCountsPerRev(int counts) {
@@ -144,7 +169,7 @@ namespace threepp {
             // electrical read is noisy, and the tick boundary is the last thing
             // applied — so noise smaller than half a tick is mostly swallowed,
             // exactly as on hardware.
-            float pos = link_.jointPosition();
+            float pos = position_();
             pos = posNoiseState_.apply(Vector3(pos, 0.f, 0.f), dt).x;
             pos = quantize(pos);
 
@@ -154,7 +179,7 @@ namespace threepp {
                 // than differencing against an undefined previous position.
                 vel = (hasPrevPos_ && dt > 0.0) ? static_cast<float>((pos - prevPos_) / dt) : 0.f;
             } else {
-                vel = velNoiseState_.apply(Vector3(link_.jointVelocity(), 0.f, 0.f), dt).x;
+                vel = velNoiseState_.apply(Vector3(velocity_(), 0.f, 0.f), dt).x;
             }
             prevPos_ = pos;
             hasPrevPos_ = true;
@@ -174,7 +199,10 @@ namespace threepp {
             return std::round(v / resolution) * resolution;
         }
 
-        ArticulationLink link_;
+        // Where the two scalars come from — an articulation link's inbound
+        // joint or a plain Joint, fixed at construction (see the two ctors).
+        std::function<float()> position_;
+        std::function<float()> velocity_;
 
         bool hasPrevPos_ = false;
         float prevPos_ = 0.f;
