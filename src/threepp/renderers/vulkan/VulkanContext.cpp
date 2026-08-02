@@ -70,6 +70,21 @@ namespace threepp::vulkan {
                 const VkDebugUtilsMessengerCallbackDataEXT* data,
                 void*) {
             if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+                // Known third-party noise: FidelityFX FSR 3.1's own SPIR-V
+                // declares its luma-history storage image Rgba8 while its own
+                // runtime allocates it R16G16B16A16_SFLOAT
+                // (Undefined-Value-StorageImage-FormatMismatch-ImageView, once
+                // per FSR dispatch). Both sides live inside
+                // amd_fidelityfx_vk.dll, so it is not fixable here and no
+                // first-party code is involved — the resource name appears
+                // nowhere outside that DLL, which is what makes this filter
+                // safe. Drop it so validation output stays readable on FSR
+                // runs. Note the layer's duplicate_message_limit still counts
+                // the suppressed reports; a first-party instance of the same
+                // VUID would surface among the first few reports regardless.
+                if (data->pMessage && std::strstr(data->pMessage, "rw_luma_history")) {
+                    return VK_FALSE;
+                }
                 std::cerr << "[Vulkan] " << data->pMessage << "\n";
             }
             return VK_FALSE;
