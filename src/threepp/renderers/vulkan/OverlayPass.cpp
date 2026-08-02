@@ -1235,7 +1235,18 @@ const OverlayPass::SpriteGeomRec*
 OverlayPass::ensureSpriteGeometryUploaded(const BufferGeometry* geom) {
     if (!geom) return nullptr;
     auto it = spriteGeomCache_.find(geom);
-    if (it != spriteGeomCache_.end()) return &it->second;
+    if (it != spriteGeomCache_.end() && it->second.geomId != geom->id) {
+        // Recycled pointer: this address was a DIFFERENT geometry whose
+        // buffers we still hold (same hazard the line cache guards against).
+        retireBuffer(it->second.vertex);
+        retireBuffer(it->second.index);
+        spriteGeomCache_.erase(it);
+        it = spriteGeomCache_.end();
+    }
+    if (it != spriteGeomCache_.end()) {
+        it->second.lastTouch = overlayFrameCounter_;
+        return &it->second;
+    }
 
     // Sprite's geometry uses one InterleavedBuffer (5 floats /
     // vertex: pos.xyz at 0..2, uv.xy at 3..4). Pull the underlying
@@ -1273,6 +1284,8 @@ OverlayPass::ensureSpriteGeometryUploaded(const BufferGeometry* geom) {
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
     uploadHostVisible(ctx_.allocator(), rec.index, idx32.data(), ibSize);
     rec.indexCount = static_cast<uint32_t>(idx32.size());
+    rec.geomId     = geom->id;
+    rec.lastTouch  = overlayFrameCounter_;
 
     auto [ins, _] = spriteGeomCache_.emplace(geom, std::move(rec));
     return &ins->second;
@@ -1505,6 +1518,18 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
                 retireBuffer(it->second.color);
                 retireBuffer(it->second.normal);
                 it = lineGeomCache_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        // Same sweep, same cutoff, for the Sprite quad cache — a HUD that
+        // creates and drops TextSprites (or any Sprite) otherwise accumulates
+        // two VMA allocations per sprite for the lifetime of the renderer.
+        for (auto it = spriteGeomCache_.begin(); it != spriteGeomCache_.end();) {
+            if (it->second.lastTouch < cutoff) {
+                retireBuffer(it->second.vertex);
+                retireBuffer(it->second.index);
+                it = spriteGeomCache_.erase(it);
             } else {
                 ++it;
             }

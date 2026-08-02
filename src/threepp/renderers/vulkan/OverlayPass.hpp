@@ -121,12 +121,17 @@ namespace threepp::vulkan {
             std::weak_ptr<Texture> liveCheck;
         };
 
-        // Per-BufferGeometry vertex/index upload for Sprite quads.
+        // Per-BufferGeometry vertex/index upload for Sprite quads. geomId +
+        // lastTouch mirror LineRec: the cache is keyed on a raw pointer, so a
+        // recycled address must invalidate the record, and an entry untouched
+        // for longer than the in-flight window is evicted — without that, every
+        // Sprite ever constructed left two VMA allocations behind forever.
         struct SpriteGeomRec {
-            Buffer   vertex;
-            Buffer   index;
-            uint32_t indexCount = 0;
-            std::weak_ptr<BufferGeometry> liveCheck;
+            Buffer       vertex;
+            Buffer       index;
+            uint32_t     indexCount = 0;
+            unsigned int geomId     = 0;// BufferGeometry::id; detects pointer recycle
+            uint64_t     lastTouch  = 0;// overlay-frame counter; for stale eviction
         };
 
         // Lazy pipeline setup — called from record() on first use.
