@@ -34,12 +34,14 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/canvas/Canvas.hpp"
+#include "threepp/constants.hpp"
 #include "threepp/controls/OrbitControls.hpp"
 #include "threepp/controls/TransformControls.hpp"
 #include "threepp/core/Raycaster.hpp"
 #include "threepp/helpers/Box3Helper.hpp"
 #include "threepp/helpers/BoxHelper.hpp"
 #include "threepp/input/IOCapture.hpp"
+#include "threepp/math/Vector2.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/renderers/Renderer.hpp"
@@ -224,6 +226,49 @@ namespace threepp::editor {
                              const std::shared_ptr<Texture>& current,
                              const std::function<void(const std::shared_ptr<Texture>&)>& setter,
                              bool srgb);
+        // Tiling / offset / rotation, drawn once for the whole material rather
+        // than once per slot. GL feeds a SINGLE uvTransform uniform for every
+        // uv1 map (GLMaterials picks the first assigned map by priority and
+        // copies ITS matrix), so a per-slot transform would silently not render
+        // there. `textures` is every distinct map on the material and every one
+        // of them is written.
+        void drawUvTransformBlock(Material& material,
+                                  const std::vector<std::shared_ptr<Texture>>& textures);
+        // The slot row's "..." button: wrap, filtering, anisotropy and colour
+        // space for that one texture. Textures are shared instances, so this
+        // deliberately changes every material using it - there is no
+        // clone-on-edit.
+        void drawTextureSettingsPopup(Material& material, const std::shared_ptr<Texture>& texture);
+
+        // What the UV transform block writes. The command stores one of these
+        // PER texture, so undo restores each map's own prior transform - a
+        // loaded document may well arrive with unequal ones.
+        struct UvTransform {
+            Vector2 repeat{1, 1};
+            Vector2 offset{0, 0};
+            Vector2 center{0, 0};
+            float rotation = 0;// radians, as Texture stores it
+        };
+        // What the per-slot popup writes, as one value: undo puts the whole
+        // sampling state back, and each widget names the entry it pushed.
+        struct TextureSampling {
+            TextureWrapping wrapS{TextureWrapping::ClampToEdge};
+            TextureWrapping wrapT{TextureWrapping::ClampToEdge};
+            Filter minFilter{Filter::LinearMipmapLinear};
+            Filter magFilter{Filter::Linear};
+            int anisotropy = 1;
+            ColorSpace colorSpace{ColorSpace::NoColorSpace};
+        };
+        [[nodiscard]] static UvTransform uvTransformOf(const Texture& texture);
+        [[nodiscard]] static TextureSampling samplingOf(const Texture& texture);
+        // The undoable writes behind those two, factored out of the widgets so
+        // the self-test drives exactly what a click drives. `label` names the
+        // undo entry.
+        void applyUvTransform(Material& material,
+                              const std::vector<std::shared_ptr<Texture>>& textures,
+                              const UvTransform& after, const char* label);
+        void applyTextureSampling(Material& material, const std::shared_ptr<Texture>& texture,
+                                  const TextureSampling& after, const char* label);
         // Thumbnails are cached per texture; drop the lot. Called when the scene
         // is replaced, alongside every other cache that points into the old one.
         void clearThumbnailCache();

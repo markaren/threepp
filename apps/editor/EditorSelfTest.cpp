@@ -4685,6 +4685,126 @@ int EditorApp::runSelfTest() {
         std::filesystem::remove(named, ec);
     }
 
+    // --- texture settings ---------------------------------------------------
+    // Tiling and the per-slot sampling settings, driven through the very
+    // commands the inspector's widgets push. GL shares ONE uv transform between
+    // a material's maps, so the tiling command writes every assigned map at
+    // once; wrap, filtering and anisotropy belong to the texture and write it
+    // alone.
+    //
+    // The two documents this leaves behind are as much the point as the
+    // assertions: `--screenshot` over them is how a person LOOKS at what a
+    // repeat of 4 did, without a bespoke scene having to be authored for it.
+    {
+        newScene();
+        step(2);
+
+        auto* box = document_.scene().getObjectByName("Box");
+        auto* mesh = box ? box->as<Mesh>() : nullptr;
+        auto material = mesh ? mesh->materialAs<MeshStandardMaterial>() : nullptr;
+        check(material != nullptr, "the template Box has a standard material");
+
+        if (material) {
+
+            // An 8x8 checker built here rather than loaded: what the settings do
+            // to it is the subject, and a checker is the one pattern where a
+            // repeat of 4 is unmistakable in a photograph.
+            std::vector<unsigned char> pixels;
+            pixels.reserve(8 * 8 * 4);
+            for (int y = 0; y < 8; ++y) {
+                for (int x = 0; x < 8; ++x) {
+                    const unsigned char v = ((x + y) % 2) ? 235 : 30;
+                    pixels.insert(pixels.end(), {v, v, v, 255});
+                }
+            }
+            auto texture = Texture::create(Image(std::move(pixels), 8, 8));
+            texture->name = "checker";
+            texture->colorSpace = ColorSpace::sRGB;
+            texture->needsUpdate();
+
+            const auto setMap = [material](const std::shared_ptr<Texture>& t) { material->map = t; };
+            commands_.execute(std::make_unique<SetMaterialMapCommand>(
+                    *material, "map", setMap, material->map, texture));
+            step(2);
+            check(material->map == texture, "the checker lands in the map slot");
+
+            const auto plainDoc = std::filesystem::temp_directory_path() / "threepp_editor_tiling_1x1.json";
+            const auto tiledDoc = std::filesystem::temp_directory_path() / "threepp_editor_tiling_4x4.json";
+            saveSceneAs(plainDoc);
+            std::cout << "[tiling] wrote " << plainDoc.string() << std::endl;
+
+            const std::vector<std::shared_ptr<Texture>> maps{texture};
+
+            auto tiling = uvTransformOf(*texture);
+            tiling.repeat.set(4, 4);
+            applyUvTransform(*material, maps, tiling, "Tiling");
+            check(texture->repeat.x == 4.f && texture->repeat.y == 4.f,
+                  "the UV transform block tiles every assigned map");
+
+            // A repeat above 1 only tiles where the map WRAPS, and a threepp
+            // texture arrives clamped - so the picture below tests the wrap path
+            // as much as the tiling one.
+            auto sampling = samplingOf(*texture);
+            sampling.wrapS = sampling.wrapT = TextureWrapping::Repeat;
+            sampling.minFilter = Filter::NearestMipmapLinear;
+            sampling.magFilter = Filter::Nearest;
+            sampling.anisotropy = 4;
+            applyTextureSampling(*material, texture, sampling, "Texture Wrap");
+            check(texture->wrapS == TextureWrapping::Repeat && texture->wrapT == TextureWrapping::Repeat,
+                  "the slot popup writes both wrap axes");
+            check(texture->magFilter == Filter::Nearest, "and the filtering");
+            check(texture->anisotropy == 4, "and the anisotropy");
+            step(2);
+
+            commands_.undo();
+            check(texture->wrapS == TextureWrapping::ClampToEdge && texture->magFilter == Filter::Linear,
+                  "undo puts the whole sampling state back as one entry");
+            commands_.redo();
+            check(texture->wrapS == TextureWrapping::Repeat, "and redo re-applies it");
+
+            commands_.undo();// the sampling
+            commands_.undo();// the tiling
+            check(texture->repeat.x == 1.f && texture->repeat.y == 1.f,
+                  "undo restores each map's own tiling");
+            commands_.redo();
+            commands_.redo();
+            check(texture->repeat.x == 4.f && texture->wrapS == TextureWrapping::Repeat,
+                  "and redo brings both back");
+
+            // And a picture of the panel that drove all of it: a PASS line says
+            // the command reached the texture, never what the section looks
+            // like. The bottom panel steps aside for it - the Textures tree is
+            // the last thing in a long inspector and sits below the fold with
+            // the console open.
+            const bool bottomPanelWas = bottomPanelOpen_;
+            bottomPanelOpen_ = false;
+            selectObject(mesh);
+            openTextureSectionOnce_ = true;
+            step(3);
+            shootTo(std::filesystem::temp_directory_path() / "threepp_editor_tiling_inspector.png");
+            bottomPanelOpen_ = bottomPanelWas;
+
+            saveSceneAs(tiledDoc);
+            std::cout << "[tiling] wrote " << tiledDoc.string() << std::endl;
+            openScene(tiledDoc);
+            step(2);
+
+            auto* reopened = document_.scene().getObjectByName("Box");
+            auto* reopenedMesh = reopened ? reopened->as<Mesh>() : nullptr;
+            auto reloaded = reopenedMesh ? reopenedMesh->materialAs<MeshStandardMaterial>() : nullptr;
+            check(reloaded && reloaded->map != nullptr, "the map survives a save and a reopen");
+            if (reloaded && reloaded->map) {
+                const auto& map = *reloaded->map;
+                check(map.repeat.x == 4.f && map.repeat.y == 4.f, "with its tiling");
+                check(map.wrapS == TextureWrapping::Repeat && map.wrapT == TextureWrapping::Repeat,
+                      "its wrap");
+                check(map.magFilter == Filter::Nearest && map.minFilter == Filter::NearestMipmapLinear,
+                      "its filtering");
+                check(map.anisotropy == 4, "and its anisotropy");
+            }
+        }
+    }
+
     // --- material shadowSide ----------------------------------------------
     // The inspector's answer to a Double-sided material self-shadowing into a
     // moire. It is only worth exposing if it survives being written down, and

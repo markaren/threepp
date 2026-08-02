@@ -424,6 +424,267 @@ void EditorApp::drawTransformSection(Object3D& object) {
 
 // ------------------------------------------------------------------ material
 
+EditorApp::UvTransform EditorApp::uvTransformOf(const Texture& texture) {
+
+    return {texture.repeat, texture.offset, texture.center, texture.rotation};
+}
+
+EditorApp::TextureSampling EditorApp::samplingOf(const Texture& texture) {
+
+    return {texture.wrapS, texture.wrapT, texture.minFilter, texture.magFilter,
+            texture.anisotropy, texture.colorSpace};
+}
+
+void EditorApp::applyUvTransform(Material& material,
+                                 const std::vector<std::shared_ptr<Texture>>& textures,
+                                 const UvTransform& after, const char* label) {
+
+    if (textures.empty()) return;
+
+    std::vector<UvTransform> before;
+    before.reserve(textures.size());
+    for (const auto& texture : textures) before.push_back(uvTransformOf(*texture));
+
+    auto* raw = &material;
+    commands_.execute(makeProperty<std::vector<UvTransform>>(
+            label, "uv:" + material.uuid() + ":" + label,
+            [textures, raw](const std::vector<UvTransform>& values) {
+                for (std::size_t i = 0; i < textures.size() && i < values.size(); ++i) {
+                    auto& texture = *textures[i];
+                    texture.repeat = values[i].repeat;
+                    texture.offset = values[i].offset;
+                    texture.center = values[i].center;
+                    texture.rotation = values[i].rotation;
+                }
+                // No texture version bump: matrixAutoUpdate has GL re-derive the
+                // matrix every frame from these four fields. Vulkan instead
+                // copies it into the entry's MaterialDesc, which only refreshes
+                // when the material's version moves - hence the bump.
+                raw->needsUpdate();
+            },
+            std::move(before), std::vector<UvTransform>(textures.size(), after)));
+    document_.setDirty(true);
+}
+
+void EditorApp::applyTextureSampling(Material& material, const std::shared_ptr<Texture>& texture,
+                                     const TextureSampling& after, const char* label) {
+
+    auto* raw = &material;
+    commands_.execute(makeProperty<TextureSampling>(
+            label, "sampling:" + texture->uuid(),
+            [texture, raw](const TextureSampling& value) {
+                texture->wrapS = value.wrapS;
+                texture->wrapT = value.wrapT;
+                texture->minFilter = value.minFilter;
+                texture->magFilter = value.magFilter;
+                texture->anisotropy = value.anisotropy;
+                texture->colorSpace = value.colorSpace;
+                // Wrap, filtering and anisotropy are sampler state that GL only
+                // re-applies while uploading, and that Vulkan reads while
+                // rebuilding the image - both gated on the TEXTURE's version.
+                // The colour space additionally decides a shader define in GL
+                // and the image format in Vulkan, which is a material rebuild.
+                texture->needsUpdate();
+                raw->needsUpdate();
+            },
+            samplingOf(*texture), after));
+    document_.setDirty(true);
+}
+
+void EditorApp::drawUvTransformBlock(Material& material,
+                                     const std::vector<std::shared_ptr<Texture>>& textures) {
+
+    if (textures.empty()) return;
+
+    const UvTransform current = uvTransformOf(*textures.front());
+
+    // A loaded document can arrive with its maps transformed differently. The
+    // block shows the first one and says so; the next edit unifies them, which
+    // is the only honest thing one set of fields can do.
+    const auto mixed = [&textures](auto read) {
+        for (const auto& texture : textures) {
+            if (read(*texture) != read(*textures.front())) return true;
+        }
+        return false;
+    };
+
+    ImGui::PushID("uv");
+    ImGui::PushItemWidth(-100 * contentScale_);
+
+    {
+        // The ### keeps the widget's identity while the visible label picks up
+        // "(mixed)", so a drag is not interrupted by the maps agreeing.
+        const char* title = mixed([](const Texture& t) { return t.repeat; })
+                                    ? "Tiling (mixed)###tiling"
+                                    : "Tiling###tiling";
+        float repeat[2]{current.repeat.x, current.repeat.y};
+        const bool changed = ImGui::DragFloat2(title, repeat, 0.01f);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = current;
+            after.repeat.set(repeat[0], repeat[1]);
+            applyUvTransform(material, textures, after, "Tiling");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("How many times the image repeats across the surface.\n"
+                              "Above 1 it only tiles when Wrap is Repeat - see the\n"
+                              "\"...\" button on a slot.\n"
+                              "Applies to every map on this material: the OpenGL\n"
+                              "backend shares one UV transform between them.");
+        }
+    }
+
+    {
+        const char* title = mixed([](const Texture& t) { return t.offset; })
+                                    ? "Offset (mixed)###offset"
+                                    : "Offset###offset";
+        float offset[2]{current.offset.x, current.offset.y};
+        const bool changed = ImGui::DragFloat2(title, offset, 0.005f);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = current;
+            after.offset.set(offset[0], offset[1]);
+            applyUvTransform(material, textures, after, "Offset");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+
+    {
+        const char* title = mixed([](const Texture& t) { return t.rotation; })
+                                    ? "Rotation (mixed)###rotation"
+                                    : "Rotation###rotation";
+        float degrees = math::radToDeg(current.rotation);
+        const bool changed = ImGui::DragFloat(title, &degrees, 0.5f, -360.f, 360.f, "%.1f deg");
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = current;
+            after.rotation = math::degToRad(degrees);
+            // Turning a map about its (0,0) corner swings it off the surface,
+            // which reads as a bug rather than as a rotation. So the first
+            // non-zero angle also moves an UNTOUCHED pivot to the middle of the
+            // tile, the same default three.js and Unity present. A pivot the
+            // user already moved is left where they put it.
+            if (after.rotation != 0.f && current.center.x == 0.f && current.center.y == 0.f) {
+                after.center.set(0.5f, 0.5f);
+            }
+            applyUvTransform(material, textures, after, "Rotation");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Turns the maps about the middle of a tile.");
+        }
+    }
+
+    ImGui::PopItemWidth();
+    ImGui::PopID();
+    ImGui::Separator();
+}
+
+void EditorApp::drawTextureSettingsPopup(Material& material, const std::shared_ptr<Texture>& texture) {
+
+    if (!ImGui::BeginPopup("settings")) return;
+
+    if (!texture->images().empty()) {
+        const auto& image = texture->image();
+        ImGui::TextColored(theme::muted(), "%u x %u", image.width(), image.height());
+    }
+    if (!texture->sourceFile.empty()) {
+        ImGui::TextColored(theme::muted(), "%s", texture->sourceFile.filename().string().c_str());
+    }
+
+    ImGui::PushItemWidth(120 * contentScale_);
+
+    {
+        // One control for both axes. A loaded asset can have them differ, and
+        // that is shown rather than quietly unified - but picking anything
+        // writes both, which is what an authoring tool is for.
+        static const char* wraps[] = {"Repeat", "Clamp", "Mirror", "Mixed"};
+        static const TextureWrapping modes[] = {TextureWrapping::Repeat,
+                                                TextureWrapping::ClampToEdge,
+                                                TextureWrapping::MirroredRepeat};
+        const bool mixed = texture->wrapS != texture->wrapT;
+        int wrap = 3;
+        if (!mixed) {
+            for (int i = 0; i < 3; ++i) {
+                if (modes[i] == texture->wrapS) wrap = i;
+            }
+        }
+        if (ImGui::Combo("Wrap", &wrap, wraps, mixed ? 4 : 3) && wrap < 3) {
+            auto after = samplingOf(*texture);
+            after.wrapS = after.wrapT = modes[wrap];
+            applyTextureSampling(material, texture, after, "Texture Wrap");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("What is sampled outside the image: Repeat tiles it,\n"
+                              "Clamp stretches its edge pixels, Mirror alternates.\n"
+                              "The Vulkan backend draws Mirror as Repeat.");
+        }
+    }
+
+    {
+        static const char* filters[] = {"Smooth", "Pixelated"};
+        int filter = texture->magFilter == Filter::Nearest ? 1 : 0;
+        if (ImGui::Combo("Filtering", &filter, filters, IM_ARRAYSIZE(filters))) {
+            auto after = samplingOf(*texture);
+            after.magFilter = filter ? Filter::Nearest : Filter::Linear;
+            // NearestMipmapLinear, not NearestMipmapNearest: hard TEXELS are the
+            // whole point, but a hard jump between mip levels is a visible band
+            // crossing the surface, and blending the two mips costs none of the
+            // crispness that was asked for.
+            after.minFilter = filter ? Filter::NearestMipmapLinear : Filter::LinearMipmapLinear;
+            applyTextureSampling(material, texture, after, "Texture Filtering");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Pixelated keeps hard texel edges (pixel art).\n"
+                              "OpenGL only - the Vulkan backend samples every\n"
+                              "material texture the same way.");
+        }
+    }
+
+    {
+        static const char* levels[] = {"1x", "2x", "4x", "8x", "16x"};
+        static const int values[] = {1, 2, 4, 8, 16};
+        int level = 0;
+        for (int i = 0; i < IM_ARRAYSIZE(levels); ++i) {
+            if (texture->anisotropy >= values[i]) level = i;
+        }
+        if (ImGui::Combo("Anisotropy", &level, levels, IM_ARRAYSIZE(levels))) {
+            auto after = samplingOf(*texture);
+            after.anisotropy = values[level];
+            applyTextureSampling(material, texture, after, "Texture Anisotropy");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Sharpens a map seen edge-on, like a floor running\n"
+                              "away to the horizon. OpenGL only.");
+        }
+    }
+
+    ImGui::Separator();
+
+    {
+        // Last, and rarely the right thing to touch: the loaders already tag a
+        // slot the way it is meant to be read. Getting it wrong leaves the
+        // shading quietly off rather than visibly broken, which is exactly why
+        // being able to see and correct it is worth a row.
+        static const char* spaces[] = {"sRGB", "Linear"};
+        int space = texture->colorSpace == ColorSpace::sRGB ? 0 : 1;
+        if (ImGui::Combo("Color space", &space, spaces, IM_ARRAYSIZE(spaces))) {
+            auto after = samplingOf(*texture);
+            after.colorSpace = space == 0 ? ColorSpace::sRGB : ColorSpace::NoColorSpace;
+            applyTextureSampling(material, texture, after, "Texture Color Space");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("sRGB for images of colour (base colour, emissive).\n"
+                              "Linear for data (normals, roughness, metalness,\n"
+                              "occlusion) - decoding those as colour is wrong.");
+        }
+    }
+
+    ImGui::PopItemWidth();
+    ImGui::EndPopup();
+}
+
 void EditorApp::drawTextureSlot(const Object3D& owner, Material& material, const char* label,
                                 const std::shared_ptr<Texture>& current,
                                 const std::function<void(const std::shared_ptr<Texture>&)>& setter,
@@ -461,6 +722,9 @@ void EditorApp::drawTextureSlot(const Object3D& owner, Material& material, const
                     material, label, setter, current, nullptr));
             document_.setDirty(true);
         }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("...")) ImGui::OpenPopup("settings");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Wrapping, filtering, colour space");
     } else {
         ImGui::TextColored(theme::muted(), "none");
     }
@@ -475,6 +739,11 @@ void EditorApp::drawTextureSlot(const Object3D& owner, Material& material, const
     const auto rowMax = ImGui::GetItemRectMax();
     frameTextureSlots_.push_back({{&material, setter, current, label, srgb},
                                   rowMin.x, rowMin.y, rowMax.x, rowMax.y});
+
+    // After the rect is taken, and outside both groups: a popup is its own
+    // window, and the row's drop target must be the row rather than whatever
+    // the settings panel happens to cover this frame.
+    if (current) drawTextureSettingsPopup(material, current);
 
     ImGui::PopID();
 }
@@ -669,7 +938,20 @@ void EditorApp::drawMaterialSection(Object3D& object) {
 
         // Same list the file-drop handler resolves against — see
         // MaterialTextureSlots.hpp for why it is not spelled out twice.
-        for (const auto& slot : textureSlotsOf(*raw)) {
+        const auto slots = textureSlotsOf(*raw);
+
+        // One entry per DISTINCT texture: the same image assigned to two slots
+        // must not be written twice by the transform block.
+        std::vector<std::shared_ptr<Texture>> assigned;
+        for (const auto& slot : slots) {
+            if (!slot.current) continue;
+            if (std::find(assigned.begin(), assigned.end(), slot.current) == assigned.end()) {
+                assigned.push_back(slot.current);
+            }
+        }
+        drawUvTransformBlock(*raw, assigned);
+
+        for (const auto& slot : slots) {
             drawTextureSlot(object, *raw, slot.name.c_str(), slot.current, slot.set, slot.srgb);
         }
 
