@@ -705,6 +705,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/helpers/PathTracedLidarSensor.cpp"
             "threepp/objects/DisplacedMesh.cpp"
             "threepp/objects/Ocean.cpp"
+            "threepp/renderers/vulkan/VmaImpl.cpp"
             "threepp/renderers/vulkan/VulkanContext.cpp"
             "threepp/renderers/vulkan/VulkanResources.cpp"
             "threepp/renderers/vulkan/VulkanCoreGeometry.cpp"

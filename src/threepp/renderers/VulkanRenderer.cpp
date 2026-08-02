@@ -13,7 +13,9 @@
 //   deferred_shade.comp lights it analytically and adds ray-query accents
 //   (shadows, reflections, AO/GI), denoised (SVGF) + TAA-resolved.
 
-#define VMA_IMPLEMENTATION
+// VMA's implementation is compiled in vulkan/VmaImpl.cpp — defining
+// VMA_IMPLEMENTATION here rebuilt the whole allocator on every edit to the
+// public setters below.
 #include "vulkan/VulkanCoreImpl.hpp"
 
 // stb_image_write - implementation is compiled in utils/StbImageWrite.cpp.
