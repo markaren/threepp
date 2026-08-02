@@ -212,6 +212,13 @@ void EditorApp::drawHierarchyNode(Object3D& object) {
                 renaming_ = &object;
                 renameBuffer_ = object.name;
             }
+            // Read-only, so it stays available while playing (like Focus).
+            // The name is what every by-name reference wants pasted — the
+            // vehicle wheel picker's search, a joint's Body B, editorFollow —
+            // and retyping "Wheel_FL_mesh_003" by eye is how typos get in.
+            if (ImGui::MenuItem("Copy Name", nullptr, false, !object.name.empty())) {
+                ImGui::SetClipboardText(object.name.c_str());
+            }
             if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, editable)) {
                 deferred_ = [this] { duplicateSelected(); };
             }
