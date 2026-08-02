@@ -20,6 +20,7 @@
 #include "threepp/audio/Audio.hpp"
 #include "threepp/audio/WavFile.hpp"
 #include "threepp/cameras/Camera.hpp"
+#include "threepp/extras/audio/SynthUtil.hpp"
 #include "threepp/extras/physx/PhysxVehicle.hpp"
 #include "threepp/math/MathUtils.hpp"
 
@@ -37,55 +38,15 @@ namespace threepp::vehiclesound {
 
     namespace detail {
 
-        struct OnePole {
-            float y = 0.f;
-            float operator()(float x, float a) {
-                y += a * (x - y);
-                return y;
-            }
-        };
-        inline float lpAlpha(float cutoffHz, int sr) {
-            return 1.f - std::exp(-2.f * math::PI * cutoffHz / static_cast<float>(sr));
-        }
-
-        // Two-pole resonator (narrow bandpass). Noise through this is the
-        // physically-honest way to get a squeal/ring: the band wanders in
-        // phase and amplitude like a real resonance, where a raw sin() reads
-        // as a flute. r in [0.98, 0.999] sets the Q.
-        struct Resonator {
-            float a1 = 0.f, a2 = 0.f, g = 1.f, y1 = 0.f, y2 = 0.f;
-            void set(float freqHz, float r, int sr) {
-                a1 = 2.f * r * std::cos(2.f * math::PI * freqHz / static_cast<float>(sr));
-                a2 = -r * r;
-                g  = 1.f - r;// rough gain normalisation
-            }
-            float operator()(float x) {
-                const float y = g * x + a1 * y1 + a2 * y2;
-                y2 = y1;
-                y1 = y;
-                return y;
-            }
-        };
-
-        inline std::vector<float> normalized(std::vector<float> s, float peak) {
-            float m = 0.f;
-            for (float x : s) m = std::max(m, std::abs(x));
-            if (m > 1e-6f)
-                for (float& x : s) x *= peak / m;
-            return s;
-        }
-
-        // Fold the `extra`-sample overhang back onto the head (linear crossfade)
-        // so noise/filter state passes the loop seam without a click.
-        inline std::vector<float> loopable(const std::vector<float>& s, int n, int extra) {
-            std::vector<float> out(s.begin(), s.begin() + n);
-            for (int i = 0; i < extra; ++i) {
-                const float w = static_cast<float>(i) / static_cast<float>(extra);
-                out[i] = s[n + i] * (1.f - w) + s[i] * w;
-            }
-            return out;
-        }
-
+        // The filters, the normaliser and the loop-seam crossfade now live in
+        // threepp/extras/audio/SynthUtil.hpp — the editor's generated sounds
+        // are built from the same ones. Pulled in unqualified so the recipes
+        // below read exactly as they were written.
+        using audio::synth::lpAlpha;
+        using audio::synth::loopable;
+        using audio::synth::normalized;
+        using audio::synth::OnePole;
+        using audio::synth::Resonator;
 
         // Road/rolling noise, 2 s loop: deep low-passed rumble + a 13 Hz
         // texture flutter (26 exact cycles) that reads as seams/grain.
