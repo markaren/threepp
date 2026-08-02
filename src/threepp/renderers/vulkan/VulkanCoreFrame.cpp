@@ -743,7 +743,19 @@ void VulkanRenderer::Impl::endFrame() {
             VkSemaphoreSubmitInfo waitInfo{};
             waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
             waitInfo.semaphore = imageAvailable[currentFrame];
-            waitInfo.stageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            // Must cover EVERY stage that first touches the swapchain image. The
+            // presentation engine's release is only ordered against the stages
+            // named here, and these stage chains are independent of each other —
+            // waiting at RAY_TRACING alone (as this used to) ordered nothing,
+            // because raygen no longer writes the swapchain: the first touches are
+            // the UNDEFINED->GENERAL transition (COMPUTE|TRANSFER dst), the clear /
+            // blit paths (TRANSFER, which subsumes CLEAR/COPY/BLIT), the TAA and
+            // upscale stores (COMPUTE) and the overlay/ImGui dynamic-rendering
+            // passes (COLOR_ATTACHMENT_OUTPUT). Deliberately not ALL_COMMANDS, so
+            // the frame's offscreen work still overlaps the acquire.
+            waitInfo.stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 
             // Per-IMAGE, not per-frame: safe to re-signal only once this image
             // index has been re-acquired, which is exactly when the prior
