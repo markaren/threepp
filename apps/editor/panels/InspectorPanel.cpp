@@ -8,6 +8,7 @@
 #include "threepp/extras/editor/ArticulationConfig.hpp"
 #include "threepp/extras/editor/ConveyorConfig.hpp"
 #include "threepp/extras/editor/GeneratorConfig.hpp"
+#include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/MaterialTextureSlots.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
@@ -273,6 +274,7 @@ void EditorApp::drawInspector() {
         drawTextSection(*selected);
         drawScriptSection(*selected);
         drawPhysicsSection(*selected);
+        drawJointAuthoringSection(*selected);
         drawSensorSection(*selected);
 
         if (locked) ImGui::EndDisabled();
@@ -1570,6 +1572,293 @@ void EditorApp::drawJointsSection(Object3D& object) {
                            std::filesystem::path(config->urdf).filename().string().c_str());
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", config->urdf.c_str());
     }
+
+    ImGui::TreePop();
+}
+
+
+// ------------------------------------------------------------ joint authoring
+
+// The section for a JOINT NODE (see JointConfig): its transform is the joint
+// frame, its parent chain is body A, and the other body is picked here by
+// name. Not to be confused with drawJointsSection above, which slides a
+// robot's URDF joints.
+void EditorApp::drawJointAuthoringSection(Object3D& object) {
+
+    if (!JointConfig::isJoint(object)) return;
+    if (!section("Joint")) return;
+
+    auto* target = &object;
+    auto config = JointConfig::read(object).value_or(JointConfig{});
+    const auto before = config;
+
+    const auto commit = [&](const JointConfig& after, const char* label, const char* field) {
+        commands_.execute(makeProperty<JointConfig>(
+                label, "joint:" + object.uuid + ":" + field,
+                [target](const JointConfig& value) { value.write(*target); },
+                before, after));
+        document_.setDirty(true);
+    };
+
+    // Which body this node hangs off — the walk the play session does — so
+    // the model (parent chain = body A) is visible rather than remembered.
+    {
+        const char* bodyA = nullptr;
+        for (const auto* o = object.parent; o != nullptr; o = o->parent) {
+            const auto physics = PhysicsConfig::read(*o);
+            const bool robot = RobotConfig::read(*o).has_value() &&
+                               ArticulationConfig::read(*o).has_value();
+            if ((physics && physics->enabled) || robot) {
+                bodyA = o->name.empty() ? "(unnamed)" : o->name.c_str();
+                break;
+            }
+        }
+        ImGui::TextColored(theme::muted(), "Connects %s to %s",
+                           bodyA ? bodyA : "the world",
+                           config.body.empty() ? "the world" : config.body.c_str());
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Body A is the nearest ancestor with a rigid body.\n"
+                              "This node's transform is the joint frame:\n"
+                              "anchor at its origin, axis along its local X.");
+        }
+    }
+
+    ImGui::PushItemWidth(-110 * contentScale_);
+
+    if (ImGui::BeginCombo("Type", JointConfig::label(config.type))) {
+        for (const auto type : JointConfig::types) {
+            if (ImGui::Selectable(JointConfig::label(type), type == config.type)) {
+                auto after = config;
+                after.type = type;
+                commit(after, "Joint Type", "type");
+                config.type = type;// so the widgets below reflect it this frame
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    // The other body, from the bodies that exist to be picked: everything the
+    // play session could resolve (an enabled rigid body, or a simulated
+    // robot). A combo rather than a text field because the reference IS a
+    // scene object — typing a name that resolves is the error path, choosing
+    // one that exists is the feature.
+    {
+        const char* shown = config.body.empty() ? "(world)" : config.body.c_str();
+        if (ImGui::BeginCombo("Body B", shown)) {
+            if (ImGui::Selectable("(world)", config.body.empty())) {
+                auto after = config;
+                after.body.clear();
+                commit(after, "Joint Body", "body");
+            }
+            document_.scene().traverse([&](Object3D& candidate) {
+                if (&candidate == &object) return;
+                // Ancestors are body A's side of this joint already.
+                for (const auto* o = object.parent; o != nullptr; o = o->parent) {
+                    if (o == &candidate) return;
+                }
+                const auto physics = PhysicsConfig::read(candidate);
+                const bool robot = RobotConfig::read(candidate).has_value() &&
+                                   ArticulationConfig::read(candidate).has_value();
+                if (!(physics && physics->enabled) && !robot) return;
+                if (candidate.name.empty()) return;// no name, no reference
+                if (ImGui::Selectable(candidate.name.c_str(), candidate.name == config.body)) {
+                    auto after = config;
+                    after.body = candidate.name;
+                    commit(after, "Joint Body", "body");
+                }
+            });
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("The other side of the joint, by name.\n"
+                              "(world) pins body A to a fixed point in space.");
+        }
+    }
+
+    const auto floatField = [&](const char* label, float value, float speed, float min, float max,
+                                const char* format, void (*assign)(JointConfig&, float),
+                                const char* action, const char* field,
+                                ImGuiSliderFlags flags = 0) {
+        float edited = value;
+        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max, format, flags);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            assign(after, edited);
+            commit(after, action, field);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    // --- motion range. Angles are shown in degrees and stored in radians,
+    // the same split the Robot section's sliders make.
+    if (config.type == JointConfig::Type::Distance) {
+        floatField(
+                "Min Distance", config.lower, 0.01f, 0.f, 1000.f, "%.2f m",
+                [](JointConfig& c, float v) { c.lower = v; }, "Joint Min Distance", "lower");
+        floatField(
+                "Max Distance", config.upper, 0.01f, 0.f, 1000.f, "%.2f m",
+                [](JointConfig& c, float v) { c.upper = v; }, "Joint Max Distance", "upper");
+    } else if (config.type != JointConfig::Type::Fixed) {
+        bool limited = config.limited;
+        if (ImGui::Checkbox("Limited", &limited)) {
+            auto after = config;
+            after.limited = limited;
+            commit(after, "Joint Limited", "limited");
+            config.limited = limited;
+        }
+        if (config.limited) {
+            switch (config.type) {
+                case JointConfig::Type::Revolute:
+                    floatField(
+                            "Lower", math::radToDeg(config.lower), 0.5f, -360.f, 360.f, "%.1f deg",
+                            [](JointConfig& c, float v) { c.lower = math::degToRad(v); },
+                            "Joint Lower Limit", "lower");
+                    floatField(
+                            "Upper", math::radToDeg(config.upper), 0.5f, -360.f, 360.f, "%.1f deg",
+                            [](JointConfig& c, float v) { c.upper = math::degToRad(v); },
+                            "Joint Upper Limit", "upper");
+                    break;
+                case JointConfig::Type::Prismatic:
+                    floatField(
+                            "Lower", config.lower, 0.01f, -100.f, 100.f, "%.3f m",
+                            [](JointConfig& c, float v) { c.lower = v; },
+                            "Joint Lower Limit", "lower");
+                    floatField(
+                            "Upper", config.upper, 0.01f, -100.f, 100.f, "%.3f m",
+                            [](JointConfig& c, float v) { c.upper = v; },
+                            "Joint Upper Limit", "upper");
+                    break;
+                default:// Spherical: the swing cone
+                    floatField(
+                            "Cone Y", math::radToDeg(config.coneY), 0.5f, 1.f, 179.f, "%.1f deg",
+                            [](JointConfig& c, float v) { c.coneY = math::degToRad(v); },
+                            "Joint Cone Y", "coney");
+                    floatField(
+                            "Cone Z", math::radToDeg(config.coneZ), 0.5f, 1.f, 179.f, "%.1f deg",
+                            [](JointConfig& c, float v) { c.coneZ = math::degToRad(v); },
+                            "Joint Cone Z", "conez");
+                    break;
+            }
+        }
+    }
+
+    // --- drive. "Driven" is not a stored flag — it IS stiffness/damping > 0,
+    // which is exactly the condition under which the play session builds a
+    // drive. The checkbox seeds a WORKING drive (the articulation defaults)
+    // rather than leaving the sliders at zero: these are logarithmic drags,
+    // and a log drag anchored at 0 compresses so hard near the bottom that it
+    // can never escape it — the fields read 0 or 0.001 forever. Seeded, they
+    // drag normally; dragged back to zero, the joint is passive again and the
+    // checkbox reads accordingly.
+    if (config.type != JointConfig::Type::Fixed) {
+        ImGui::Spacing();
+        const bool distance = config.type == JointConfig::Type::Distance;
+        bool driven = config.stiffness > 0.f || config.damping > 0.f;
+        if (ImGui::Checkbox(distance ? "Spring" : "Driven", &driven)) {
+            auto after = config;
+            after.stiffness = driven ? 500.f : 0.f;
+            after.damping = driven ? 50.f : 0.f;
+            commit(after, driven ? (distance ? "Joint Spring" : "Joint Driven") : "Joint Passive",
+                   "driven");
+            config = after;// so the fields below appear/vanish this frame
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(distance
+                                      ? "Softens the tether: stiffness/damping act as its spring.\n"
+                                        "Off, the max distance is a hard stop."
+                                      : "PD drive: stiffness pulls toward Target, damping toward\n"
+                                        "Velocity. Off, the joint is passive.");
+        }
+        if (driven) {
+            floatField(
+                    "Stiffness", config.stiffness, 1.f, 0.f, 100000.f, "%.3f",
+                    [](JointConfig& c, float v) { c.stiffness = v; }, "Joint Stiffness", "stiffness",
+                    ImGuiSliderFlags_Logarithmic);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Target acts through this. Ctrl+click to type a value.");
+            }
+            floatField(
+                    "Damping", config.damping, 0.5f, 0.f, 10000.f, "%.3f",
+                    [](JointConfig& c, float v) { c.damping = v; }, "Joint Damping", "damping",
+                    ImGuiSliderFlags_Logarithmic);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Velocity acts through this. Ctrl+click to type a value.");
+            }
+            if (!distance) {
+                floatField(
+                        "Max Force", config.maxForce, 100.f, 0.f, 1e7f, "%.3f",
+                        [](JointConfig& c, float v) { c.maxForce = v; }, "Joint Max Force",
+                        "maxforce", ImGuiSliderFlags_Logarithmic);
+            }
+            if (config.type == JointConfig::Type::Revolute) {
+                floatField(
+                        "Target", math::radToDeg(config.target), 0.5f, -360.f, 360.f, "%.1f deg",
+                        [](JointConfig& c, float v) { c.target = math::degToRad(v); },
+                        "Joint Target", "target");
+                floatField(
+                        "Velocity", math::radToDeg(config.velocity), 1.f, -3600.f, 3600.f, "%.1f deg/s",
+                        [](JointConfig& c, float v) { c.velocity = math::degToRad(v); },
+                        "Joint Velocity", "velocity");
+            } else if (config.type == JointConfig::Type::Prismatic) {
+                floatField(
+                        "Target", config.target, 0.01f, -100.f, 100.f, "%.3f m",
+                        [](JointConfig& c, float v) { c.target = v; }, "Joint Target", "target");
+                floatField(
+                        "Velocity", config.velocity, 0.01f, -100.f, 100.f, "%.3f m/s",
+                        [](JointConfig& c, float v) { c.velocity = v; }, "Joint Velocity", "velocity");
+            } else if (config.type == JointConfig::Type::Spherical) {
+                ImGui::TextColored(theme::muted(), "Springs back to the frame's rest orientation.");
+            }
+        }
+    }
+
+    // --- failure. Same derived-checkbox pattern as the drive, for the same
+    // log-drag-from-zero reason; the seed is sturdy but within reach of a hard
+    // crash on a metre-scale prop.
+    {
+        ImGui::Spacing();
+        bool breakable = config.breakForce > 0.f || config.breakTorque > 0.f;
+        if (ImGui::Checkbox("Breakable", &breakable)) {
+            auto after = config;
+            after.breakForce = breakable ? 1e4f : 0.f;
+            after.breakTorque = breakable ? 1e4f : 0.f;
+            commit(after, breakable ? "Joint Breakable" : "Joint Unbreakable", "breakable");
+            config = after;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("The joint separates for good past these solver loads.\n"
+                              "Off = unbreakable.");
+        }
+        if (breakable) {
+            floatField(
+                    "Break Force", config.breakForce, 10.f, 0.f, 1e9f, "%.3f",
+                    [](JointConfig& c, float v) { c.breakForce = v; }, "Joint Break Force",
+                    "breakforce", ImGuiSliderFlags_Logarithmic);
+            floatField(
+                    "Break Torque", config.breakTorque, 10.f, 0.f, 1e9f, "%.3f",
+                    [](JointConfig& c, float v) { c.breakTorque = v; }, "Joint Break Torque",
+                    "breaktorque", ImGuiSliderFlags_Logarithmic);
+        }
+    }
+
+    bool collide = config.collide;
+    if (ImGui::Checkbox("Collide", &collide)) {
+        auto after = config;
+        after.collide = collide;
+        commit(after, "Joint Collide", "collide");
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Whether the two jointed bodies still collide with\n"
+                          "each other. Off keeps contacts at the anchor from\n"
+                          "fighting the constraint.");
+    }
+
+    ImGui::PopItemWidth();
+
+#ifndef THREEPP_EDITOR_WITH_PHYSX
+    ImGui::TextColored(theme::muted(), "Built without PhysX - authored and saved, not simulated.");
+#endif
 
     ImGui::TreePop();
 }

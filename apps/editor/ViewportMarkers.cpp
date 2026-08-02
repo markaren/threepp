@@ -16,6 +16,7 @@
 #include "EditorTheme.hpp"
 
 #include "threepp/extras/editor/ConveyorConfig.hpp"
+#include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
@@ -68,6 +69,7 @@ namespace {
         WallPoint,
         Sensor,
         Sound,
+        Joint,
         kCount
     };
 
@@ -156,6 +158,16 @@ namespace {
 <path d="M17.61 7.85 A6.2 6.2 0 0 1 17.61 16.15 L16.79 15.41 A5.1 5.1 0 0 0 16.79 8.59 Z"/>
 </svg>)";
 
+            // An open hinge: two leaves meeting at a knuckle ring. Says "two
+            // bodies are constrained here" — which type, and to what, is the
+            // inspector's business.
+            case Icon::Joint:
+                return R"(<svg viewBox="0 0 24 24">
+<path d="M2.5 10.6 L8 10.6 L8 13.4 L2.5 13.4 Z"/>
+<path d="M14.4 9.7 L18.9 4.6 L21.1 6.5 L16.6 11.6 Z"/>
+<path d="M12 8 C14.21 8 16 9.79 16 12 C16 14.21 14.21 16 12 16 C9.79 16 8 14.21 8 12 C8 9.79 9.79 8 12 8 Z M12 10.2 C11.01 10.2 10.2 11.01 10.2 12 C10.2 12.99 11.01 13.8 12 13.8 C12.99 13.8 13.8 12.99 13.8 12 C13.8 11.01 12.99 10.2 12 10.2 Z"/>
+</svg>)";
+
             // A fence: two posts and a rail — a conveyor wall's point. Says
             // "this drags a barrier" before it is clicked.
             case Icon::WallPoint:
@@ -198,6 +210,8 @@ namespace {
         // mesh or a light, and "there is a sound here" is the more specific
         // fact. After the sensor, which is the rarer authoring of the two.
         if (SoundConfig::isSound(object)) return Icon::Sound;
+        // A joint is its own plain node — the entry is its whole identity.
+        if (JointConfig::isJoint(object)) return Icon::Joint;
         // Before the type checks: a control point is an ordinary Object3D and
         // is told apart by its parent, not by what it is.
         if (SplineConfig::splineOf(object)) return Icon::SplinePoint;
@@ -350,7 +364,8 @@ void EditorApp::syncViewportMarkers() {
         const auto sensor = SensorConfig::read(object);
         if (object.as<Camera>() || object.as<Light>() || SplineConfig::splineOf(object) ||
             ConveyorConfig::conveyorOf(object) || ConveyorWallConfig::wallOf(object) ||
-            (sensor && sensor->enabled) || SoundConfig::isSound(object)) {
+            (sensor && sensor->enabled) || SoundConfig::isSound(object) ||
+            JointConfig::isJoint(object)) {
             owners.push_back(&object);
         }
     });
@@ -574,4 +589,137 @@ void EditorApp::clearSoundRings() {
     soundRings_->removeFromParent();
     soundRings_.reset();
     soundRingsKey_.clear();
+}
+
+// -------------------------------------------------------------- joint helper
+
+void EditorApp::syncJointHelper() {
+
+    // Only for the SELECTED joint, the sound rings' rule: the helper answers
+    // "where is the anchor and which way does the axis point" for the node
+    // being edited, and a scene full of axes buries the scene.
+    auto* selected = selection_.get();
+    const auto config = selected ? JointConfig::read(*selected) : std::nullopt;
+
+    if (!config) {
+        clearJointHelper();
+        return;
+    }
+
+    // Keyed by uuid, not by pointer (a play/stop replaces the whole graph),
+    // plus the one field the picture is built from.
+    char key[160];
+    std::snprintf(key, sizeof(key), "%s|%d", selected->uuid.c_str(),
+                  static_cast<int>(config->type));
+
+    if (!jointHelper_) {
+        auto material = LineBasicMaterial::create(
+                LineBasicMaterial::Params().vertexColors(true).toneMapped(false));
+        material->transparent = true;
+        material->opacity = 0.9f;
+        // The anchor usually sits ON a body — often inside it — and an axis
+        // hidden by the mesh it hinges is an axis authored blind.
+        material->depthTest = false;
+        jointHelper_ = LineSegments::create(BufferGeometry::create(), material);
+        jointHelper_->renderOrder = kSoundRingRenderOrder;
+        jointHelper_->frustumCulled = false;
+        jointHelper_->matrixAutoUpdate = false;
+        jointHelperKey_.clear();
+        overlay_->add(jointHelper_);
+    }
+
+    if (jointHelperKey_ != key) {
+        jointHelperKey_ = key;
+
+        // Built in UNIT space: the axis is ±1 along local X, and the frame
+        // matrix below scales it to constant screen size. The X axis is the
+        // hinge/slide axis by convention, so that line IS the authoring aid.
+        std::vector<float> positions;
+        std::vector<float> colors;
+        const auto tint = theme::accent();
+
+        const auto seg = [&](float ax, float ay, float az,
+                             float bx, float by, float bz, float shade) {
+            positions.insert(positions.end(), {ax, ay, az, bx, by, bz});
+            for (int v = 0; v < 2; ++v) {
+                colors.insert(colors.end(), {tint.x * shade, tint.y * shade, tint.z * shade});
+            }
+        };
+        // A circle around the local X axis (in the YZ plane, `plane` == 0) or
+        // around Z (XY plane) — the "this rotates" glyph.
+        const auto circle = [&](int plane, float radius, float shade) {
+            constexpr int segments = 32;
+            for (int i = 0; i < segments; ++i) {
+                const float a0 = math::TWO_PI * static_cast<float>(i) / segments;
+                const float a1 = math::TWO_PI * static_cast<float>(i + 1) / segments;
+                if (plane == 0) {
+                    seg(0.f, radius * std::cos(a0), radius * std::sin(a0),
+                        0.f, radius * std::cos(a1), radius * std::sin(a1), shade);
+                } else {
+                    seg(radius * std::cos(a0), radius * std::sin(a0), 0.f,
+                        radius * std::cos(a1), radius * std::sin(a1), 0.f, shade);
+                }
+            }
+        };
+
+        const bool axial = config->type == JointConfig::Type::Revolute ||
+                           config->type == JointConfig::Type::Prismatic ||
+                           config->type == JointConfig::Type::Spherical;
+        if (axial) {
+            seg(-1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f);
+            // Arrowhead on +X, so the axis reads as a direction, not a bar —
+            // a positive drive target turns/slides towards it.
+            seg(1.f, 0.f, 0.f, 0.86f, 0.06f, 0.f, 1.f);
+            seg(1.f, 0.f, 0.f, 0.86f, -0.06f, 0.f, 1.f);
+            if (config->type == JointConfig::Type::Prismatic) {
+                seg(-1.f, 0.f, 0.f, -0.86f, 0.06f, 0.f, 1.f);
+                seg(-1.f, 0.f, 0.f, -0.86f, -0.06f, 0.f, 1.f);
+            }
+        }
+        if (config->type == JointConfig::Type::Revolute) {
+            circle(0, 0.45f, 0.55f);// the rotation plane
+        }
+        if (config->type == JointConfig::Type::Spherical) {
+            circle(0, 0.45f, 0.55f);
+            circle(1, 0.45f, 0.55f);// two rings read as a ball
+        }
+        // The anchor cross, every type: the point the bodies are tied at.
+        const float tick = axial ? 0.18f : 0.3f;
+        if (!axial) seg(-tick, 0.f, 0.f, tick, 0.f, 0.f, 0.8f);
+        seg(0.f, -tick, 0.f, 0.f, tick, 0.f, 0.8f);
+        seg(0.f, 0.f, -tick, 0.f, 0.f, tick, 0.8f);
+
+        // Replaced wholesale rather than rewritten: the buffer only changes
+        // when the type does, and the old geometry is disposed so the renderer
+        // provably lets go of it (see the sound rings above).
+        const auto old = jointHelper_->geometry();
+        auto geometry = BufferGeometry::create();
+        geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
+        geometry->setAttribute("color", FloatBufferAttribute::create(colors, 3));
+        jointHelper_->setGeometry(geometry);
+        if (old) old->dispose();
+    }
+
+    // Every frame: applyAuthoringVisibility hides the node for a screenshot
+    // pass or a Play, and nothing else would turn it back on.
+    jointHelper_->visible = true;
+
+    // Placed every frame — the gizmo can be dragging the node. Position AND
+    // rotation, unlike the rings: the orientation is the payload here. Scale
+    // is constant screen size, so the axis is legible at any zoom.
+    selected->updateWorldMatrix(true, false);
+    Vector3 position, scale;
+    Quaternion rotation;
+    selected->matrixWorld->decompose(position, rotation, scale);
+    const float size = 70.f * contentScale_ * viewportWorldPerPixel(position);
+    jointHelper_->matrix->compose(position, rotation, Vector3(size, size, size));
+    jointHelper_->matrixWorldNeedsUpdate = true;
+}
+
+void EditorApp::clearJointHelper() {
+
+    if (!jointHelper_) return;
+    jointHelper_->removeFromParent();
+    jointHelper_.reset();
+    jointHelperKey_.clear();
 }

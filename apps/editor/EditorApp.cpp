@@ -341,6 +341,8 @@ EditorApp::EditorApp(const Options& options)
         // The rings are keyed by the outgoing scene's uuid; the audition is
         // playing a file for a node that is about to stop existing.
         clearSoundRings();
+        // Keyed by uuid too, and placed off a node that is going away.
+        clearJointHelper();
         stopAudition();
         // The collider lines are world-space and belong to a world that stop()
         // has already destroyed; the node itself is parented to the surviving
@@ -2604,6 +2606,7 @@ void EditorApp::refreshSelectionHelpers() {
     syncSensorOverlay();
     syncCameraHelper();
     syncSoundRings();
+    syncJointHelper();
 
     // After the syncs, because two of them BUILD the nodes it hides: a camera
     // selected mid-play gets a fresh frustum helper, and an object that only
@@ -3204,6 +3207,8 @@ void EditorApp::applyAuthoringVisibility() {
     // Only ever hidden here: syncSoundRings owns the other direction (a config
     // whose radii are all past the cap leaves nothing to draw).
     if (soundRings_ && !visible) soundRings_->visible = false;
+    // Same contract as the rings: syncJointHelper re-asserts visibility.
+    if (jointHelper_ && !visible) jointHelper_->visible = false;
 }
 
 bool EditorApp::gizmoActive() const {

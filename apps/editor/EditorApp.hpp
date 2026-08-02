@@ -211,6 +211,11 @@ namespace threepp::editor {
         void drawArticulationBlock(Object3D& object, Robot& robot);
         void drawScriptSection(Object3D& object);
         void drawPhysicsSection(Object3D& object);
+        // Joint authoring: shown for a node carrying a JointConfig (its own
+        // scene node — the transform is the joint frame, the parent chain is
+        // body A, the other body is picked here by name). NOT the Robot
+        // section's joint sliders — that is drawJointsSection above.
+        void drawJointAuthoringSection(Object3D& object);
         // Sensor authoring: type, rate, seed and the per-type noise model, all
         // written into userData["sensor"]. Fields for the types you are not on
         // are hidden, never dropped — see SensorConfig.
@@ -542,6 +547,12 @@ namespace threepp::editor {
         // falloff is otherwise a pair of numbers with no picture.
         void syncSoundRings();
         void clearSoundRings();
+        // Anchor cross + hinge/slide axis for the SELECTED joint node, same
+        // file and same selected-only rule as the sound rings: the node's
+        // transform IS the joint frame, and an axis you cannot see is an axis
+        // authored by trial and error.
+        void syncJointHelper();
+        void clearJointHelper();
         void clearViewportMarkers();
         // --- spline overlay (apps/editor/SplineOverlay.cpp) -----------------
         // One Line per spline, sampled from the CatmullRomCurve3 its control
@@ -894,6 +905,11 @@ namespace threepp::editor {
         // radii it is drawn from.
         std::shared_ptr<LineSegments> soundRings_;
         std::string soundRingsKey_;
+        // Axis + anchor helper for the selected joint node. Same lifetime and
+        // keying rules as the sound rings above (uuid + the fields the picture
+        // is built from); placed every frame at constant screen size.
+        std::shared_ptr<LineSegments> jointHelper_;
+        std::string jointHelperKey_;
         // The other half of authoringVisible(): a --screenshot pass over a
         // document has no user and nothing being authored, so the whole layer is
         // off for its duration. One flag instead of the four hand-hidden nodes

@@ -54,6 +54,12 @@ namespace threepp::editor {
         // geometry of its own; the viewport speaker marker is what shows it.
         // The file is attached afterwards, from the inspector.
         static std::shared_ptr<Object3D> createSound(const Object3D& root);
+        // A plain Object3D carrying a default JointConfig. Its transform IS
+        // the joint frame (anchor + axis), so it is added at its parent's
+        // origin and moved with the ordinary gizmo; the parent chain is body
+        // A and the other body is chosen in the inspector. The viewport hinge
+        // marker is what shows it.
+        static std::shared_ptr<Object3D> createJoint(const Object3D& root);
         static std::shared_ptr<Group> createGroup(const Object3D& root);
         static std::shared_ptr<PerspectiveCamera> createCamera(const Object3D& root);
         // A Group carrying SplineConfig, with four control-point children

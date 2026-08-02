@@ -237,9 +237,10 @@ void EditorApp::drawMenuBar() {
             ImGui::Separator();
             if (grid_) ImGui::MenuItem("Grid", nullptr, &grid_->visible);
             if (axes_) ImGui::MenuItem("Origin Axes", nullptr, &axes_->visible);
-            // Only draws anything while playing — the colliders do not exist
-            // before that — but the toggle is a preference, not a play state.
-            ImGui::MenuItem("Physics Colliders", nullptr, &physicsDebug_);
+            // Only draws anything while playing — the colliders and joints do
+            // not exist before that — but the toggle is a preference, not a
+            // play state.
+            ImGui::MenuItem("Physics Debug", nullptr, &physicsDebug_);
             // On by default, unlike the colliders: a sensor's cloud IS the
             // sensor as far as the viewport is concerned, and a feature nobody
             // switches on is a feature nobody knows works. Costs nothing in a

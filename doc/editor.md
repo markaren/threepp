@@ -123,7 +123,8 @@ document can ask for it on open — see [`editorView`](#opening-a-document-edito
 icon at a constant screen size, tinted with the accent colour while selected.
 Every kind has its own shape — a camera body, a sun for directional, a bulb for
 point, a beam for spot, a ringed core for ambient, a dome over ground for
-hemisphere, a speaker for a sound — so a scene reads without clicking anything.
+hemisphere, a speaker for a sound, an open hinge for a joint — so a scene reads
+without clicking anything.
 Clicking an icon selects its owner, and it wins over geometry behind it — the
 icons draw on top, so picking follows what you see rather than raw depth order.
 The artwork is SVG parsed at startup by threepp's `SVGLoader` and embedded as
@@ -485,7 +486,7 @@ starts rather than freezing silently. A build without V-HACD (no PhysX, or the
 `v-hacd` vcpkg dependency absent) falls back to a single hull with one log line,
 so *Convex Pieces* still simulates — just without the concavity.
 
-The cooked hulls are drawn by the **Physics Colliders** overlay (PhysX's own
+The cooked hulls are drawn by the **Physics Debug** overlay (PhysX's own
 collision-shape visualization), so the quality of a decomposition is visible in
 the viewport, not just inferred from behaviour.
 
@@ -521,7 +522,7 @@ with no script anywhere it is simply a body that collides with nothing.
   [`threepp.editor.raycast`](#raycasts-threeppeditorraycast) hits it like
   anything else — which is what lets a script find a zone before entering it, and
   what a ground check has to know when casting through one.
-* **The overlay draws it.** The **Physics Colliders** overlay shows a trigger
+* **The overlay draws it.** The **Physics Debug** overlay shows a trigger
   volume exactly as it shows a collider (measured: PhysX's collision-shape
   visualization emits the same lines either way), so a volume you cannot see
   bodies bouncing off is still visible in the viewport.
@@ -687,6 +688,88 @@ document does not lose its sounds by being opened on the wrong build.
 
 miniaudio decodes `.wav`, `.mp3` and `.flac` with no third-party code, and those
 are exactly the three the file dialog offers.
+
+### Joints in `userData`
+
+**Add ▸ Joint** creates a plain `Object3D` carrying `userData["joint"]`. A
+joint has no geometry — what shows it in the viewport is a hinge marker, and
+what *edits* it is the ordinary transform gizmo, because **the node's transform
+is the joint frame**: anchor at its origin, hinge/slide axis along its local X
+(the same convention the articulation builder uses). Its **parent chain is body
+A** — the nearest ancestor with a rigid body governs it, the same walk a sensor
+resolves its attachment with — and the **other body is referenced by name**;
+empty means the world (a pendulum pivot, a door frame bolted to nothing).
+Because each joint is its own child node, a chassis carries four wheel joints
+as four children, and deleting a joint is deleting a node.
+
+Two entries, because a scene-object name is user-typed and free to contain the
+`=` and `;` the flat format uses as delimiters — the same wall the sound file
+hit:
+
+```
+userData["joint"]      type=revolute;limited=1;lower=-0.5236;upper=0.5236;coney=0.785398;conez=0.785398;stiffness=0;damping=0;maxforce=1000000;target=0;velocity=0;breakforce=0;breaktorque=0;collide=0
+userData["jointBody"]  Post
+```
+
+`JointConfig` owns the format. Angles are radians in the document and degrees
+in the inspector, the same split the robot joint sliders make. Presence of the
+entry is what makes the node a joint (writing it never omits defaults), and
+every field rides along whatever the type is, so switching type and back does
+not reset the ones the other type hides.
+
+Five types: **Fixed** welds body A to body B; **Revolute** hinges about X, with
+optional lower/upper limits and a PD drive (a door, a wheel, a pendulum);
+**Prismatic** slides along X, limits and drive in metres (a piston, a drawer);
+**Spherical** is a ball socket with an optional swing cone (cone Y/Z
+half-angles; twist stays free); **Distance** is a tether that keeps the anchors
+within min/max metres, its stiffness/damping pair acting as the tether's spring
+instead of a motor. Drives are **force mode**, so stiffness/damping/max-force
+mean the same as they do in `userData["articulation"]` — and each half gates
+its own input: the drive force is `stiffness·(target−x) + damping·(velocity−v)`,
+so **Target acts through stiffness and Velocity through damping**. The
+inspector makes that structural: a **Driven** checkbox (a **Spring** one for
+Distance) that seeds both to the articulation defaults (500/50) when ticked —
+"driven" is not a stored flag, it *is* stiffness/damping > 0, exactly the
+condition the play session builds a drive under. The seeding also matters
+mechanically: the sliders are logarithmic, and a log drag anchored at zero
+compresses so hard near the bottom it can never escape it. Every type can be
+made **breakable** (a checkbox seeding break force/torque the same way; off =
+unbreakable) and can opt back into **collision** between the two bodies it
+joins — off by default, since bodies meeting at a joint overlap at the anchor
+and contacts there fight the constraint.
+
+The **Joint** inspector section leads with what actually connects ("Connects
+Gate to Post"), resolved the way the play session will resolve it. Body B is a
+combo over the bodies that *exist to be picked* — every enabled rigid body and
+every simulated robot, ancestors excluded (they are body A's side) — because
+the reference is a scene object: choosing one that exists is the feature,
+typing one that resolves is the error path. Selecting a joint draws its **axis
+helper** under the editor overlay: the anchor cross, the X axis with an
+arrowhead (both ways for prismatic), the rotation ring for a hinge, two rings
+for a ball — constant screen size, drawn through geometry, because the anchor
+usually sits inside the body it hinges.
+
+During Play, `PhysicsPlaySession` builds the authored joints **last**, after
+every rigid body and articulation exists: body A from the parent walk, body B
+by name — and either side may be an **articulation link** (a
+`PxArticulationLink` is a rigid actor), which is how a prop attaches to a
+robot's gripper. One `PxD6Joint` configured per type backs everything except
+Distance, which is PhysX's own `PxDistanceJoint`. An unresolvable joint — a
+missing name, a body with no rigid actor — is one console line and no joint,
+never a refused Play. Stop releases the joints before the world, and the play
+snapshot takes the scene back.
+
+While playing, the **Physics Debug** overlay (View menu) draws the joints the
+solver is actually enforcing, from PhysX's own render buffer: an RGB frame
+triad at each constraint's live anchor and its limit geometry beside it, in
+PhysX's own colours. That is the running counterpart of the authored axis
+helper, which Play hides with the rest of the authoring layer — and a joint
+that **broke** vanishes from the overlay, which is exactly the news.
+
+The runtime type is `threepp::Joint` (`extras/physx/Joint.hpp`), usable
+without the editor: two `PxRigidActor*` (either may be null, meaning the
+world), one world-space frame, one `Params` struct — the same escape the
+examples used to hand-roll per demo.
 
 ### Robots (URDF) in `userData`
 

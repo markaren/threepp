@@ -2,6 +2,7 @@
 #include "threepp/extras/editor/ObjectFactory.hpp"
 
 #include "threepp/extras/editor/ConveyorConfig.hpp"
+#include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
@@ -174,6 +175,19 @@ std::shared_ptr<Object3D> ObjectFactory::createSound(const Object3D& root) {
     // Off the floor, where an emitter usually lives and where the marker is
     // not buried in the ground plane.
     node->position.y = 1.f;
+
+    return node;
+}
+
+std::shared_ptr<Object3D> ObjectFactory::createJoint(const Object3D& root) {
+
+    // A plain Object3D: the joint frame is the node's own transform, and what
+    // makes it visible in the viewport is the hinge marker keyed off the entry
+    // below. Left at the local origin — the natural anchor guess is "where the
+    // parent body is", and the gizmo takes it from there.
+    auto node = Object3D::create();
+    JointConfig{}.write(*node);
+    node->name = uniqueName(root, "Joint");
 
     return node;
 }

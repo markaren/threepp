@@ -18,6 +18,7 @@
 
 #include "threepp/extras/editor/AnimationConfig.hpp"
 #include "threepp/extras/editor/ArticulationConfig.hpp"
+#include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
@@ -5322,6 +5323,172 @@ int EditorApp::runSelfTest() {
         std::filesystem::remove_all(soundDir, ec);
     }
 
+    // --- joint authoring ----------------------------------------------------
+    // The whole authoring path for a joint node: Add ▸ Joint under a body, the
+    // marker and the axis helper it earns, an edit through the same property
+    // command the inspector issues, a document round trip, and Play — where
+    // the authored hinge must actually constrain the two bodies it names.
+    {
+        newScene();
+        step(2);
+
+        // Two bodies to join: a static post and a dynamic gate beside it.
+        auto post = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        post->name = "Post";
+        post->position.set(0.f, 3.f, 0.f);
+        {
+            PhysicsConfig config;
+            config.enabled = true;
+            config.body = PhysicsConfig::Body::Static;
+            config.shape = PhysicsConfig::Shape::Box;
+            config.write(*post);
+        }
+        addObject(post, document_.scene(), "Add Post");
+
+        auto gate = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        gate->name = "Gate";
+        gate->position.set(1.f, 3.f, 0.f);
+        {
+            PhysicsConfig config;
+            config.enabled = true;
+            config.body = PhysicsConfig::Body::Dynamic;
+            config.shape = PhysicsConfig::Shape::Box;
+            config.write(*gate);
+        }
+        addObject(gate, document_.scene(), "Add Gate");
+        step();
+
+        auto joint = ObjectFactory::createJoint(document_.scene());
+        const auto jointUuid = joint->uuid;
+        check(JointConfig::isJoint(*joint), "the factory's joint node carries the joint entry");
+        check(JointConfig::read(*joint) == JointConfig{}, "at the documented defaults");
+
+        // Under the GATE — the parent chain is body A. Anchored at the post
+        // (1 m towards it), hinging about world Z (the node's X rotated onto
+        // it), which is the plane the play assertions below read.
+        addObject(joint, *gate, "Add Joint");
+        joint->position.set(-1.f, 0.f, 0.f);
+        joint->rotation.y = -math::PI / 2;
+        step();
+
+        selectObject(joint.get());
+        step();
+        check(std::any_of(viewportMarkers_.begin(), viewportMarkers_.end(),
+                          [&](const ViewportMarker& marker) { return marker.owner == joint.get(); }),
+              "an authored joint gets a viewport marker");
+        check(jointHelper_ != nullptr && jointHelper_->visible,
+              "and a selected joint draws its axis helper");
+
+        // The inspector's edit, verbatim: one JointConfig property command
+        // carrying both userData entries (the flat string and the body name).
+        JointConfig authored;
+        authored.type = JointConfig::Type::Revolute;
+        authored.body = "Post";
+        authored.limited = true;
+        // ±30°, written as the codec-exact 4-decimal radians: the flat format
+        // stores 6 decimals, so a value that needs more (degToRad(30) does)
+        // would fail the exact struct compares below by a quantization step.
+        authored.lower = -0.5236f;
+        authored.upper = 0.5236f;
+        {
+            auto* target = joint.get();
+            const auto before = JointConfig::read(*joint).value_or(JointConfig{});
+            commands_.execute(makeProperty<JointConfig>(
+                    "Edit Joint", "joint:" + jointUuid + ":selftest",
+                    [target](const JointConfig& value) { value.write(*target); },
+                    before, authored));
+            step();
+        }
+        check(JointConfig::read(*joint) == authored, "an edit rewrites the entry");
+
+        const auto document = std::filesystem::temp_directory_path() / "threepp_editor_joint.json";
+        saveSceneAs(document);
+        openScene(document);
+        step();
+
+        // Everything past the reload goes through the uuid: openScene replaced
+        // the scene, and `joint` names a node in the outgoing one.
+        auto* reloaded = findByUuid(document_.scene(), jointUuid);
+        check(reloaded != nullptr, "the joint survives save and reload");
+        check(reloaded && JointConfig::read(*reloaded) == authored,
+              "its config (body name included) round-trips through the document");
+
+        // A picture of what the PASS lines cannot describe: the hinge marker,
+        // the axis helper pointing down world Z, the populated Joint section.
+        {
+            const bool bottomPanelWas = bottomPanelOpen_;
+            const auto gizmoWas = gizmoMode_;
+            bottomPanelOpen_ = false;
+            // Select mode: the transform gizmo would sit exactly on the
+            // anchor the helper is the picture of.
+            gizmoMode_ = "select";
+            applyGizmoMode();
+            selectObject(reloaded);
+            camera_.position.set(4.f, 5.5f, 7.f);
+            orbit_->target.set(0.5f, 3.f, 0.f);
+            step(4);
+            shootTo(std::filesystem::temp_directory_path() / "threepp_editor_joint.png");
+            bottomPanelOpen_ = bottomPanelWas;
+            gizmoMode_ = gizmoWas;
+            applyGizmoMode();
+            step();
+        }
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        // Play: the hinge holds the gate on the post and the limit holds the
+        // swing. stepFixed throughout — the lowest point of a swing is a
+        // question about simulated time, and step() would make it a frame-rate
+        // measurement (the doctrine written above kFixedDt).
+        {
+            startPlay();
+            stepFixed(2);
+            check(isPlaying(), "Play starts with an authored joint in the scene");
+            check(physics_ && physics_->jointCount() == 1, "the session built the joint");
+
+            auto* playedGate = document_.scene().getObjectByName("Gate");
+            check(playedGate != nullptr, "the played scene still has the gate");
+
+            // The debug view, mid-play: PhysX draws the LIVE joint (frame
+            // triad at the anchor, the ±30° limit geometry) into the same
+            // buffer as the colliders. A picture, because the lines' shapes
+            // and colours are the payload and no counter reads a picture.
+            physicsDebug_ = true;
+            stepFixed(6);// a substep fills the render buffer
+            check(physicsDebugLines_ != nullptr && physicsDebugLines_->visible &&
+                          physicsDebugLines_->geometry()->drawRange.count > 0,
+                  "the physics debug view draws lines with a joint in the scene");
+            {
+                const bool bottomPanelWas = bottomPanelOpen_;
+                bottomPanelOpen_ = false;
+                camera_.position.set(3.f, 4.5f, 5.f);
+                orbit_->target.set(0.5f, 2.8f, 0.f);
+                step(4);
+                shootTo(std::filesystem::temp_directory_path() / "threepp_editor_joint_debug.png");
+                bottomPanelOpen_ = bottomPanelWas;
+            }
+            physicsDebug_ = false;
+
+            float lowestY = 1e30f;
+            for (int i = 0; i < 180 && playedGate; ++i) {// 3 s
+                stepFixed(1);
+                lowestY = std::min(lowestY, playedGate->position.y);
+            }
+            // ±30° on the 1 m arm puts the bottom of the swing at
+            // y = 3 - sin(30°) = 2.5; an unjointed gate free-falls to the
+            // template floor and an unlimited hinge passes 2.1 at the bottom.
+            check(lowestY > 2.3f && lowestY < 2.95f, "the limited hinge held the gate");
+            stopPlay();
+            step(2);
+        }
+#else
+        std::cout << "[selftest] SKIP built without PhysX - the joint play block did not run"
+                  << std::endl;
+#endif
+
+        std::error_code ec;
+        std::filesystem::remove(document, ec);
+    }
+
     // --- the ortho view SHADES like the perspective one --------------------
     // The checks above are about the projection; this one is about the light.
     // The Vulkan backend reads an OrthographicCamera as a 2D HUD unless told
@@ -5540,7 +5707,7 @@ int EditorApp::runSelfTest() {
         // The lines arrive one substep after the visualization parameter is
         // set, which is one substep after play started.
         stepUntilColliders(600);
-        check(physicsDebugLines_ != nullptr, "toggling Physics Colliders on while playing draws an overlay");
+        check(physicsDebugLines_ != nullptr, "toggling Physics Debug on while playing draws an overlay");
         check(physicsDebugLines_ && physicsDebugLines_->visible, "which is visible");
         check(colliderVertices() > 0, "with a non-empty line buffer");
 

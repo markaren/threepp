@@ -22,12 +22,14 @@
 #define THREEPP_EDITOR_PHYSICSPLAYSESSION_HPP
 
 #include "threepp/extras/editor/ArticulationConfig.hpp"
+#include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/PlaySession.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 
 
+#include "threepp/extras/physx/Joint.hpp"
 #include "threepp/extras/physx/PhysxSoftBody.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/physx/UrdfArticulation.hpp"
@@ -251,6 +253,28 @@ namespace threepp::editor {
         // How many robots this session is simulating, for the status readout.
         [[nodiscard]] std::size_t articulationCount() const { return articulations_.size(); }
 
+        // One authored joint: the node it was authored on and the live
+        // constraint (see JointConfig for the authoring model).
+        struct PlayedJoint {
+            Object3D* node = nullptr;
+            std::unique_ptr<Joint> joint;
+        };
+
+        // Joints created on the last start(), for the status readout and the
+        // tests. Unresolvable ones (a missing body name, a body with no rigid
+        // actor) are logged and left out rather than failing the play.
+        [[nodiscard]] std::size_t jointCount() const { return joints_.size(); }
+
+        // The joint authored on `node`, or nullptr. No ancestor walk: a joint
+        // is its own node, not a property smeared over a subtree.
+        [[nodiscard]] const PlayedJoint* findJoint(const Object3D* node) const {
+
+            for (const auto& played : joints_) {
+                if (played.node == node) return &played;
+            }
+            return nullptr;
+        }
+
         // A session destroyed without a stop() — the editor tearing down mid-Play
         // — must not leave active() pointing at freed memory.
         ~PhysicsPlaySession() override {
@@ -273,6 +297,7 @@ namespace threepp::editor {
             decompCookCount_ = 0;
             actors_.clear();
             objects_.clear();
+            joints_.clear();
             articulations_.clear();
             decompCache_.clear();
 
@@ -326,6 +351,16 @@ namespace threepp::editor {
                 if (!config) continue;
                 if (createActor(*object, *config)) ++bodyCount_;
             }
+
+            // Joints last: they resolve their OTHER body by name against
+            // whatever the passes above built, so every rigid actor and every
+            // articulation link must already exist. Collected into a list
+            // first, like the bodies, for the same reason.
+            std::vector<Object3D*> jointNodes;
+            scene.traverse([&](Object3D& object) {
+                if (JointConfig::isJoint(object)) jointNodes.push_back(&object);
+            });
+            for (auto* node : jointNodes) buildJoint(scene, *node);
         }
 
         void update(float dt) override {
@@ -346,6 +381,11 @@ namespace threepp::editor {
             if (active_ == this) active_ = nullptr;
             actors_.clear();
             objects_.clear();
+            // Joints go FIRST: a Joint releases its PxJoint in its destructor,
+            // which must happen while the actors it constrains — including any
+            // articulation link it attached to — and the world that owns them
+            // are all still alive (see Joint's lifetime note).
+            joints_.clear();
             // Destroy the articulations while the world is still alive: an
             // Articulation releases itself back into the scene it belongs to, so
             // it must go before the world it was added to. (On the normal Stop
@@ -580,6 +620,98 @@ namespace threepp::editor {
                 worldMat.decompose(localPos, localRot, localScale);
                 played.robot->position.copy(localPos);
                 played.robot->quaternion.copy(localRot);
+            }
+        }
+
+        // A body for a joint to grab: the session's own actors first (static
+        // bodies included), then the world's associations, which is where an
+        // articulated robot's links live — so a joint node parented under a
+        // gripper link, or naming a link as its other body, resolves too.
+        [[nodiscard]] ::physx::PxRigidActor* resolveJointBody(const Object3D* object) const {
+
+            if (auto* actor = findActor(object)) return actor;
+            return world_ ? world_->findActor(object) : nullptr;
+        }
+
+        // Build one authored joint (see JointConfig for the model: the node's
+        // transform is the joint frame, its parent chain is body A, the other
+        // body is named). Anything unresolvable is one log line and no joint —
+        // a broken reference must not take the whole play down.
+        void buildJoint(Scene& scene, Object3D& node) {
+
+            const auto config = JointConfig::read(node);
+            if (!config) return;
+
+            // Body A: the nearest ancestor with a body — the walk a sensor
+            // resolves its attachment with. The node itself is skipped: the
+            // joint entry makes it a joint, not a body. No ancestor = the
+            // world, which is fine as long as the OTHER side is a body.
+            ::physx::PxRigidActor* actorA = node.parent ? resolveJointBody(node.parent) : nullptr;
+
+            ::physx::PxRigidActor* actorB = nullptr;
+            if (!config->body.empty()) {
+                auto* other = scene.getObjectByName(config->body);
+                if (!other) {
+                    log("joint: \"" + node.name + "\" names body \"" + config->body +
+                        "\" and nothing in the scene answers to it - not created");
+                    return;
+                }
+                actorB = resolveJointBody(other);
+                if (!actorB) {
+                    log("joint: \"" + node.name + "\" body \"" + config->body +
+                        "\" has no rigid body (enable Physics on it) - not created");
+                    return;
+                }
+            }
+
+            if (!actorA && !actorB) {
+                log("joint: \"" + node.name + "\" has no rigid body above it and no other "
+                    "body named - nothing to constrain");
+                return;
+            }
+            if (actorA == actorB) {
+                log("joint: \"" + node.name + "\" would join \"" + config->body +
+                    "\" to itself - not created");
+                return;
+            }
+
+            // The node's world pose IS the joint frame; scale is dropped (a
+            // frame has none), same as every actor pose in this file.
+            node.updateWorldMatrix(true, false);
+            Vector3 position, scale;
+            Quaternion rotation;
+            node.matrixWorld->decompose(position, rotation, scale);
+
+            Joint::Params params;
+            switch (config->type) {
+                case JointConfig::Type::Fixed: params.type = Joint::Type::Fixed; break;
+                case JointConfig::Type::Revolute: params.type = Joint::Type::Revolute; break;
+                case JointConfig::Type::Prismatic: params.type = Joint::Type::Prismatic; break;
+                case JointConfig::Type::Spherical: params.type = Joint::Type::Spherical; break;
+                case JointConfig::Type::Distance: params.type = Joint::Type::Distance; break;
+            }
+            params.limited = config->limited;
+            // A hand-edited document can invert the pair; PhysX asserts on
+            // lower > upper, so hand it the ordered pair instead.
+            params.lower = std::min(config->lower, config->upper);
+            params.upper = std::max(config->lower, config->upper);
+            params.coneY = std::max(config->coneY, 0.f);
+            params.coneZ = std::max(config->coneZ, 0.f);
+            params.stiffness = std::max(config->stiffness, 0.f);
+            params.damping = std::max(config->damping, 0.f);
+            params.maxForce = std::max(config->maxForce, 0.f);
+            params.target = config->target;
+            params.velocity = config->velocity;
+            params.breakForce = config->breakForce;
+            params.breakTorque = config->breakTorque;
+            params.collide = config->collide;
+
+            try {
+                joints_.push_back({&node, std::make_unique<Joint>(
+                                                  *world_, actorA, actorB,
+                                                  toPxTransform(position, rotation), params)});
+            } catch (const std::exception& e) {
+                log("joint: \"" + node.name + "\" could not be created - " + e.what());
             }
         }
 
@@ -1324,6 +1456,8 @@ namespace threepp::editor {
         // here against the one root that owns them.
         std::unordered_map<const ::physx::PxRigidActor*, Object3D*> objects_;
         std::vector<std::unique_ptr<PlayedArticulation>> articulations_;
+        // Cleared before articulations_ and world_ — see stop().
+        std::vector<PlayedJoint> joints_;
 
         // V-HACD is the expensive part of a Pieces cook (seconds on a dense
         // mesh), so N copies of one geometry decompose once — keyed on the

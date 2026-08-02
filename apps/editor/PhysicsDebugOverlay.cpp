@@ -1,9 +1,12 @@
-// Physics collider overlay: what the simulation is actually colliding with.
+// Physics debug overlay: what the simulation is actually doing.
 //
 // Everything else about a body is authored (PhysicsConfig in userData) and
 // therefore visible in the inspector — but the SHAPE that authoring resolves to
 // is not, and a body resting on nothing is indistinguishable from a body whose
-// collider is somewhere else entirely. PhysX draws its own colliders into a
+// collider is somewhere else entirely. The same goes for a JOINT: the authored
+// axis helper is hidden with the rest of the authoring layer during Play, and
+// the constraint the solver actually enforces (its live frames, its limits, its
+// absence once it breaks) is knowable only from here. PhysX draws both into a
 // per-scene line buffer; this turns that buffer into one LineSegments under the
 // editor overlay, so the answer is in the viewport.
 //
@@ -20,7 +23,6 @@
 // is off.
 
 #include "EditorApp.hpp"
-#include "EditorTheme.hpp"
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
@@ -29,8 +31,6 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/objects/LineSegments.hpp"
-
-#include <imgui.h>// theme colours are ImVec4
 
 using namespace threepp;
 using namespace threepp::editor;
@@ -64,6 +64,14 @@ void EditorApp::syncPhysicsDebug() {
     auto& scene = world->scene();
     scene.setVisualizationParameter(PxVisualizationParameter::eSCALE, 1.f);
     scene.setVisualizationParameter(PxVisualizationParameter::eCOLLISION_SHAPES, 1.f);
+    // Joints too: the local frames say where each constraint actually acts and
+    // the limits say what it allows — the live counterpart of the authored
+    // axis helper, which Play hides with the rest of the authoring layer. A
+    // broken joint stops being drawn, which is exactly the news. Only joints
+    // carrying PxConstraintFlag::eVISUALIZATION appear; the Joint wrapper
+    // raises it on every one it creates.
+    scene.setVisualizationParameter(PxVisualizationParameter::eJOINT_LOCAL_FRAMES, 1.f);
+    scene.setVisualizationParameter(PxVisualizationParameter::eJOINT_LIMITS, 1.f);
 
     // Filled by simulate(); a frame that ran no substep keeps the last one,
     // which is what the toggle wants (the lines do not blink at low dt).
@@ -72,13 +80,15 @@ void EditorApp::syncPhysicsDebug() {
     const int vertices = lineCount * 2;
 
     if (!physicsDebugLines_) {
+        // PhysX's own per-line colours, not one flat tint. That was the right
+        // call when the buffer held only colliders — "this is the collider"
+        // was the whole message — but the joints draw into the same buffer,
+        // and their colour IS their meaning: RGB triads for the local frames,
+        // the limit arcs in their own colours. Flattening that would erase
+        // exactly what the joint lines add.
         auto material = LineBasicMaterial::create(LineBasicMaterial::Params()
-                                                          .color(Color(0xffffff))
+                                                          .vertexColors(true)
                                                           .toneMapped(false));
-        const auto tint = theme::accent();
-        // One colour for the lot. PhysX tags each line with a shape-state
-        // colour, which says less here than "this is the collider" does.
-        material->color.setRGB(tint.x, tint.y, tint.z);
         physicsDebugLines_ = LineSegments::create(BufferGeometry::create(), material);
         physicsDebugLines_->renderOrder = kColliderRenderOrder;
         // In-place updates never refresh cached bounds, and PhysX hands out
@@ -94,13 +104,16 @@ void EditorApp::syncPhysicsDebug() {
         auto geometry = BufferGeometry::create();
         geometry->setAttribute("position", FloatBufferAttribute::create(
                                                    std::vector<float>(vertices * 3), 3));
+        geometry->setAttribute("color", FloatBufferAttribute::create(
+                                                std::vector<float>(vertices * 3), 3));
         physicsDebugLines_->setGeometry(geometry);
         if (old) old->dispose();
         physicsDebugCapacity_ = vertices;
     }
 
     auto* position = physicsDebugLines_->geometry()->getAttribute<float>("position");
-    if (!position) {
+    auto* color = physicsDebugLines_->geometry()->getAttribute<float>("color");
+    if (!position || !color) {
         physicsDebugLines_->visible = false;
         return;
     }
@@ -115,11 +128,21 @@ void EditorApp::syncPhysicsDebug() {
     physicsDebugLines_->visible = true;
 
     const PxDebugLine* lines = buffer.getLines();
+    // PxDebugLine colours are 0xAARRGGBB words, one per endpoint.
+    const auto writeColor = [color](int vertex, PxU32 argb) {
+        color->setXYZ(vertex,
+                      static_cast<float>((argb >> 16) & 0xffu) / 255.f,
+                      static_cast<float>((argb >> 8) & 0xffu) / 255.f,
+                      static_cast<float>(argb & 0xffu) / 255.f);
+    };
     for (int i = 0; i < lineCount; ++i) {
         position->setXYZ(i * 2, lines[i].pos0.x, lines[i].pos0.y, lines[i].pos0.z);
         position->setXYZ(i * 2 + 1, lines[i].pos1.x, lines[i].pos1.y, lines[i].pos1.z);
+        writeColor(i * 2, lines[i].color0);
+        writeColor(i * 2 + 1, lines[i].color1);
     }
     position->needsUpdate();
+    color->needsUpdate();
     // The tail beyond `vertices` still holds whatever a busier frame left there.
     physicsDebugLines_->geometry()->drawRange = {0, vertices};
 
