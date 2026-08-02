@@ -424,6 +424,7 @@ set(sources
         "threepp/helpers/EventCameraSensor.cpp"
         "threepp/helpers/LidarSensor.cpp"
         "threepp/helpers/LidarWaveform.cpp"
+        "threepp/helpers/TracedRasterVisionSensor.cpp"
         "threepp/helpers/DirectionalLightHelper.cpp"
         "threepp/helpers/GridHelper.cpp"
         "threepp/helpers/HemisphereLightHelper.cpp"

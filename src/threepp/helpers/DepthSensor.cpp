@@ -6,7 +6,6 @@
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
-#include "threepp/math/Quaternion.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/renderers/Renderer.hpp"
@@ -14,8 +13,8 @@
 #include "threepp/utils/ImageUtils.hpp"
 
 // The path-traced back-end is only *used* on a Vulkan build (there is no raster
-// depth pass there), but its header is included unconditionally so the cached
-// unique_ptr member has a complete type to destroy. The header itself is
+// depth pass there), but its header is included unconditionally so the hook
+// signatures below have a complete type. The header itself is
 // Vulkan-include-free; only the renderer header below is gated.
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
 
@@ -33,26 +32,6 @@ namespace {
     using sensorscan::DataPassGuard;
 
 #ifdef THREEPP_WITH_VULKAN
-    // Vulkan backend: there is no raster depth buffer to read back, so reproduce
-    // the same pinhole ray pattern with a PathTracedLidarSensor (camera mode —
-    // identical fovY / width / height and the look-down-local-(-Z) convention)
-    // and trace it through the renderer's path-tracing TLAS. The TLAS, not the
-    // `scene` graph, is what gets traced, so the scene must have been render()-ed
-    // at least once before scanning (the public scan() doc spells this out).
-    //
-    // `lidar` is the DepthSensor's cached back-end, not a fresh one per scan:
-    // its RNG stream has to continue across scans, or every frame would be
-    // perturbed by the identical noise pattern (a seeded sensor rebuilt each
-    // frame replays its seed each frame — noise frozen into the geometry).
-    void aimAtWorld(PathTracedLidarSensor& lidar, const Matrix4& world) {
-        Vector3 pos, scl;
-        Quaternion quat;
-        world.decompose(pos, quat, scl);
-        lidar.position = pos;
-        lidar.quaternion = quat;
-        lidar.scale = scl;
-    }
-
     // Turn the tracer's returns into the depth camera's point cloud.
     void gatherPoints(const std::vector<LidarReturn>& returns,
                       std::vector<Vector3>& cloud, std::vector<Color>* colors) {
@@ -69,8 +48,8 @@ namespace {
             // says callers must drop (hitInstanceId < 0): -1 = miss, -2 = volume
             // scatter (fog / haze / participating media). Without this filter, any
             // scene with fog set fills the cloud with mid-air fog-scatter points —
-            // the raster (GL) DepthSensor never sees fog, so this also restores
-            // GL/Vulkan parity.
+            // the raster DepthSensor never sees fog, so this also restores
+            // raster/Vulkan parity.
             if (ret.hitInstanceId < 0) continue;
             cloud.push_back(ret.position);
             // The path tracer returns LIDAR intensity, not surface colour; expose
@@ -83,14 +62,12 @@ namespace {
 }// namespace
 
 DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, float near, float far)
-    // The sensor frame is this node's own world frame, so it attaches to itself.
     // Default noise mirrors the pre-port constant: 2 cm sigma, fixed seed.
-    : VisionSensor(*this, RangeNoiseModel{/*stddev*/ 0.02f, /*stddevPerMetre*/ 0.f,
-                                          /*bias*/ 0.f, /*seed*/ 0x94D049BB133111EBULL}),
+    : TracedRasterVisionSensor<Vector3>(RangeNoiseModel{/*stddev*/ 0.02f, /*stddevPerMetre*/ 0.f,
+                                                        /*bias*/ 0.f, /*seed*/ 0x94D049BB133111EBULL},
+                                        near, far),
       width_(width),
       height_(height),
-      near_(near),
-      far_(far),
       postCamera_(-1, 1, 1, -1, 0, 1),
       camera_(fovY, static_cast<float>(width) / static_cast<float>(height), near, far) {
 
@@ -107,7 +84,7 @@ DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, fl
     //
     // Fix: pull the raster near plane in by the worst-case k so it cannot clip
     // anything inside the shell, then reject on the exact per-pixel range in
-    // unprojectPoints. Anything the pulled-in plane still clips has
+    // unprojectPoints (shellRange). Anything the pulled-in plane still clips has
     // viewZ < near/kMax, hence range = k*viewZ < near — outside the shell
     // regardless. far needs no widening: range >= viewZ always, so viewZ > far
     // already implies range > far. Both bounds are INCLUSIVE, matching
@@ -167,71 +144,23 @@ DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, fl
 
 DepthSensor::~DepthSensor() = default;
 
-void DepthSensor::resetNoise() {
-    VisionSensor::resetNoise();
-    // On Vulkan the back-end draws the noise, so resetting only our own stream
-    // would silently leave that path unreplayable.
-    if (tracedBackend_) tracedBackend_->resetNoise();
-}
-
+std::unique_ptr<PathTracedLidarSensor> DepthSensor::createTracedBackend() {
 #ifdef THREEPP_WITH_VULKAN
-PathTracedLidarSensor& DepthSensor::tracedBackend() {
-    if (!tracedBackend_) {
-        tracedBackend_ = std::make_unique<PathTracedLidarSensor>(
-                camera_.fov, width_, height_, far_);
-    }
-    // The depth sensor owns the noise contract; the back-end just applies it,
-    // so its model tracks ours (including a seed the caller re-rolled). Copying
-    // an unchanged seed does not restart the stream — see VisionSensor.
-    tracedBackend_->rangeNoise = rangeNoise;
-    // The range shell, handed to the tracer as its [tMin, tMax] interval — the
-    // sensor's near_, NOT the pulled-in raster plane. This is the same bound the
-    // raster path applies per pixel after unprojecting, which is what makes the
-    // two backends report the same points. Without it every beam returns the
-    // sensor's own housing mesh from the inside.
-    tracedBackend_->params.minRange = near_;
-    return *tracedBackend_;
-}
+    // Camera mode: the same pinhole ray pattern (identical fovY / width /
+    // height and the look-down-local-(-Z) convention) as the raster pass.
+    return std::make_unique<PathTracedLidarSensor>(camera_.fov, width_, height_, far_);
+#else
+    return nullptr;
 #endif
-
-void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
-
-    // Fire and take delivery in one call. Both halves run unconditionally: the
-    // raster path has already filled `cloud`, and its collect is what clears
-    // the "one delivery owed" flag so the pair stays balanced.
-    const bool immediate = scanBegin(renderer, scene, cloud);
-    const bool delivered = scanCollect(renderer, cloud);
-    // Synchronous contract: this call's cloud, or nothing.
-    if (!immediate && !delivered) cloud.clear();
 }
 
-bool DepthSensor::scanBegin(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
-
-    beginScan();
-    scanPending_ = true;
-
-#ifdef THREEPP_WITH_VULKAN
-    if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
-        auto& lidar = tracedBackend();
-        aimAtWorld(lidar, *matrixWorld);
-        lidar.scanBegin(*vk);
-        // Refused (too many scans already in flight): nothing is owed, and the
-        // caller keeps the cloud it had rather than being handed an empty one.
-        scanPending_ = lidar.scanFired();
-        // `cloud` is deliberately NOT cleared — it still holds the last
-        // delivered scan, which is what a viewer reading it between fire and
-        // delivery must see. See LidarSensor::scanBegin.
-        return false;
-    }
-#endif
-
-    DataPassGuard guard(renderer);
+void DepthSensor::rasterScan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
 
     // Render scene from sensor viewpoint to capture depth
     renderer.setRenderTarget(sceneTarget_.get());
     renderer.render(scene, camera_);
 
-    // Linearize depth into packed RGBA8
+    // Linearize depth into packed RG16
     postMaterial_->uniforms.at("tDepth").setValue(sceneTarget_->depthTexture.get());
     renderer.setRenderTarget(readbackTarget_.get());
     renderer.render(postScene_, postCamera_);
@@ -242,42 +171,20 @@ bool DepthSensor::scanBegin(Renderer& renderer, Scene& scene, std::vector<Vector
     renderer.setRenderTarget(nullptr);
 
     unprojectPoints(cloud);
+}
+
+bool DepthSensor::collectTraced(PathTracedLidarSensor& backend, VulkanRenderer& renderer, std::vector<Vector3>& cloud) {
+#ifdef THREEPP_WITH_VULKAN
+    std::vector<LidarReturn> returns;
+    if (!backend.scanCollect(renderer, returns)) return false;
+    gatherPoints(returns, cloud, nullptr);
     return true;
-}
-
-bool DepthSensor::scanReady(const Renderer& renderer) const {
-
-    if (!scanPending_) return false;
-#ifdef THREEPP_WITH_VULKAN
-    if (const auto* vk = dynamic_cast<const VulkanRenderer*>(&renderer)) {
-        return tracedBackend_ && tracedBackend_->scanReady(*vk);
-    }
 #else
-    (void) renderer;
-#endif
-    return true;// raster: filled by scanBegin
-}
-
-bool DepthSensor::scanCollect(Renderer& renderer, std::vector<Vector3>& cloud) {
-
-    if (!scanPending_) return false;
-
-#ifdef THREEPP_WITH_VULKAN
-    if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
-        scanPending_ = false;
-        if (!tracedBackend_) return false;
-        std::vector<LidarReturn> returns;
-        if (!tracedBackend_->scanCollect(*vk, returns)) return false;
-        gatherPoints(returns, cloud, nullptr);
-        return true;
-    }
-#else
+    (void) backend;
     (void) renderer;
     (void) cloud;
+    return false;
 #endif
-
-    scanPending_ = false;
-    return true;// raster: scanBegin already filled it
 }
 
 void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud, std::vector<Color>& colors) {
@@ -286,8 +193,7 @@ void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& c
 
 #ifdef THREEPP_WITH_VULKAN
     if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
-        auto& lidar = tracedBackend();
-        aimAtWorld(lidar, *matrixWorld);
+        auto& lidar = aimedTracedBackend();
         std::vector<LidarReturn> returns;
         lidar.scan(*vk, returns);// range noise applied by the back-end
         gatherPoints(returns, cloud, &colors);
@@ -343,7 +249,6 @@ void DepthSensor::unprojectPoints(std::vector<Vector3>& points,
     const float m8 = me[8], m9 = me[9], m10 = me[10];
     const float m12 = me[12], m13 = me[13], m14 = me[14];
 
-    const float far = camera_.farPlane;// == far_; the depth pack normalises by it
     const bool addNoise = rangeNoise.active();
 
     for (unsigned y = 0; y < height_; ++y) {
@@ -356,26 +261,14 @@ void DepthSensor::unprojectPoints(std::vector<Vector3>& points,
             // Unpack 16-bit normalised depth from RG channels
             const float normalizedDepth = sensorscan::decodeDepthRG(px);
 
-            if (normalizedDepth >= 0.9999f) continue;
+            if (normalizedDepth >= sensorscan::kMissDepth) continue;
 
             const float xd = xDir_[x];
             // Range (Euclidean), not view-space depth: the shell is a sphere,
             // and off-axis pixels travel k times further per unit of view z.
             const float k = std::sqrt(xd * xd + slantY);
-            float depth = normalizedDepth * far;// positive distance along view axis
-            float range = depth * k;
-
-            // The shell, applied to the true geometry — the same interval the
-            // traced backend passes as tMin/tMax. Inclusive at both ends.
-            if (range < near_ || range > far_) continue;
-
-            if (addNoise) {
-                // The model corrupts a RANGE (that is what its sigmas mean, and
-                // what the traced backend perturbs); view depth follows from it.
-                range = applyRangeNoise(range);
-                if (range < near_ || range > far_) continue;
-                depth = range / k;
-            }
+            float depth, range;
+            if (!shellRange(normalizedDepth, k, addNoise, depth, range)) continue;
 
             // Inline world-space transform: view point = (xDir*depth, yDir*depth, -depth)
             points.emplace_back(

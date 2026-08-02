@@ -89,6 +89,10 @@ namespace threepp::sensorscan {
         return static_cast<float>(px[0]) * (1.f / 255.f) + static_cast<float>(px[1]) * (1.f / 65025.f);
     }
 
+    // A cleared (missed) pixel decodes to ~1.0; every depth the shader can
+    // produce for a real hit sits below this.
+    constexpr float kMissDepth = 0.9999f;
+
 }// namespace threepp::sensorscan
 
 #endif//THREEPP_SENSOR_SCAN_UTIL_HPP

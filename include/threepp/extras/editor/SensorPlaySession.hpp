@@ -587,6 +587,53 @@ namespace threepp::editor {
             commit(std::move(entry));
         }
 
+        // The one vision sensor this entry carries, handed to `fn` with its
+        // cloud. Depth and lidar share the whole scan protocol (see
+        // TracedRasterVisionSensor), so everything that drives them is written
+        // once against fn(sensor, cloud) and dispatched here.
+        template<class Fn>
+        static void withVision(Entry& entry, Fn&& fn) {
+            if (entry.depth) {
+                fn(*entry.depth, entry.cloud);
+            } else if (entry.lidar) {
+                fn(*entry.lidar, entry.returns);
+            }
+        }
+
+        // Visit every point of the entry's newest cloud as (world position,
+        // range from the sensor), whichever vision kind this is — the depth
+        // cloud carries positions only, so its ranges are measured here.
+        template<class Fn>
+        static void forEachPoint(const Entry& entry, Fn&& fn) {
+            if (entry.depth) {
+                Vector3 origin;
+                entry.depth->getWorldPosition(origin);
+                for (const auto& p : entry.cloud) fn(p, p.distanceTo(origin));
+            } else if (entry.lidar) {
+                for (const auto& r : entry.returns) fn(r.position, r.distance);
+            }
+        }
+
+        // The shared tail of a vision build: seeded noise from the authored
+        // config, the rate gate, parenting into the rig, and the one trace a
+        // vision entry plots. Written once because the sensors share
+        // TracedRasterVisionSensor — only the construction above it differs.
+        template<class SensorT>
+        void adoptVision(Entry& entry, std::unique_ptr<SensorT>& slot,
+                         std::unique_ptr<SensorT> sensor,
+                         const SensorConfig& config, const char* traceName) {
+
+            sensor->rangeNoise = rangeNoise(config);
+            sensor->resetNoise();
+            sensor->setRateHz(static_cast<double>(std::max(config.rateHz, 0.f)));
+            rig_->addRef(*sensor);
+            slot = std::move(sensor);
+
+            entry.traceNames = {traceName, nullptr, nullptr, nullptr, nullptr, nullptr};
+            entry.traceCount = 1;
+            if (!renderer_) entry.status = "no renderer - built but not scanning";
+        }
+
         void buildDepth(Entry& entry, const SensorConfig& config) {
 
             if (!rig_) {
@@ -604,15 +651,7 @@ namespace threepp::editor {
                     std::max(config.nearPlane, 1e-3f),
                     std::max(config.farPlane, std::max(config.nearPlane, 1e-3f) + 1e-3f));
             depth->name = entry.label + " (depth)";
-            depth->rangeNoise = rangeNoise(config);
-            depth->resetNoise();
-            depth->setRateHz(static_cast<double>(std::max(config.rateHz, 0.f)));
-            rig_->addRef(*depth);
-            entry.depth = std::move(depth);
-
-            entry.traceNames = {"points", nullptr, nullptr, nullptr, nullptr, nullptr};
-            entry.traceCount = 1;
-            if (!renderer_) entry.status = "no renderer - built but not scanning";
+            adoptVision(entry, entry.depth, std::move(depth), config, "points");
         }
 
         void buildLidar(Entry& entry, const SensorConfig& config) {
@@ -632,15 +671,7 @@ namespace threepp::editor {
                                  : std::make_unique<LidarSensor>(beamModel(config.beams),
                                                                  faceSize, near, far);
             lidar->name = entry.label + " (lidar)";
-            lidar->rangeNoise = rangeNoise(config);
-            lidar->resetNoise();
-            lidar->setRateHz(static_cast<double>(std::max(config.rateHz, 0.f)));
-            rig_->addRef(*lidar);
-            entry.lidar = std::move(lidar);
-
-            entry.traceNames = {"returns", nullptr, nullptr, nullptr, nullptr, nullptr};
-            entry.traceCount = 1;
-            if (!renderer_) entry.status = "no renderer - built but not scanning";
+            adoptVision(entry, entry.lidar, std::move(lidar), config, "returns");
         }
 
         // Park the sensor node on the authored object's world pose. Scale is
@@ -648,22 +679,23 @@ namespace threepp::editor {
         // directions, and "the sensor is 2x bigger" is not a thing a sensor is.
         void placeVision(Entry& entry) {
 
-            Object3D* sensorNode = entry.depth ? static_cast<Object3D*>(entry.depth.get())
-                                               : static_cast<Object3D*>(entry.lidar.get());
-            if (!sensorNode || !entry.node) return;
+            if (!entry.node) return;
 
             entry.node->updateWorldMatrix(true, false);
             Vector3 position, scale;
             Quaternion rotation;
             entry.node->matrixWorld->decompose(position, rotation, scale);
 
-            sensorNode->position.copy(position);
-            sensorNode->quaternion.copy(rotation);
-            sensorNode->scale.set(1.f, 1.f, 1.f);
-            // The rig is an identity-transformed child of the scene root, so the
-            // local pose above IS the world pose. Force it down into the child
-            // cameras now — the scan reads their world matrices directly.
-            sensorNode->updateWorldMatrix(true, true);
+            withVision(entry, [&](Object3D& sensorNode, auto&) {
+                sensorNode.position.copy(position);
+                sensorNode.quaternion.copy(rotation);
+                sensorNode.scale.set(1.f, 1.f, 1.f);
+                // The rig is an identity-transformed child of the scene root, so
+                // the local pose above IS the world pose. Force it down into the
+                // child cameras now — the scan reads their world matrices
+                // directly.
+                sensorNode.updateWorldMatrix(true, true);
+            });
         }
 
         // A vision scan is FIRED on one frame and DELIVERED on a later one.
@@ -692,8 +724,9 @@ namespace threepp::editor {
             // landed yet simply stays owed for another frame, and the entry
             // keeps the cloud it already had rather than blinking empty.
             for (const auto& entry : entries_) {
-                if (entry->depth && entry->depth->scanReady(*renderer_)) deliverDepth(*entry);
-                if (entry->lidar && entry->lidar->scanReady(*renderer_)) deliverLidar(*entry);
+                withVision(*entry, [&](auto& sensor, auto& cloud) {
+                    if (sensor.scanReady(*renderer_)) deliver(*entry, sensor, cloud);
+                });
             }
 
             // Arm the gate and latch the clock on the pulled sensors. They are
@@ -706,14 +739,10 @@ namespace threepp::editor {
             // after delivery instead.
             bool any = false;
             for (const auto& entry : entries_) {
-                if (entry->depth) {
-                    entry->depth->tick(static_cast<double>(dt), simTime_);
-                    any = any || (entry->depth->scanDue() && !entry->depth->scanPending());
-                }
-                if (entry->lidar) {
-                    entry->lidar->tick(static_cast<double>(dt), simTime_);
-                    any = any || (entry->lidar->scanDue() && !entry->lidar->scanPending());
-                }
+                withVision(*entry, [&](auto& sensor, auto&) {
+                    sensor.tick(static_cast<double>(dt), simTime_);
+                    any = any || (sensor.scanDue() && !sensor.scanPending());
+                });
             }
             if (!any) return;
 
@@ -728,18 +757,13 @@ namespace threepp::editor {
             // in one run and N+1 in the next, and "which frame did this sensor
             // report on" would become a property of GPU scheduling.
             for (const auto& entry : entries_) {
-                if (entry->depth && entry->depth->scanDue() && !entry->depth->scanPending()) {
+                withVision(*entry, [&](auto& sensor, auto& cloud) {
+                    if (!sensor.scanDue() || sensor.scanPending()) return;
                     placeVision(*entry);
-                    if (entry->depth->scanBegin(*renderer_, *scene_, entry->cloud)) {
-                        deliverDepth(*entry);
+                    if (sensor.scanBegin(*renderer_, *scene_, cloud)) {
+                        deliver(*entry, sensor, cloud);
                     }
-                }
-                if (entry->lidar && entry->lidar->scanDue() && !entry->lidar->scanPending()) {
-                    placeVision(*entry);
-                    if (entry->lidar->scanBegin(*renderer_, *scene_, entry->returns)) {
-                        deliverLidar(*entry);
-                    }
-                }
+                });
             }
 
             if (hidden_) hidden_->visible = wasVisible;
@@ -748,19 +772,12 @@ namespace threepp::editor {
         // One delivered scan: stamp, count, plot, record. Shared by the two
         // places delivery can happen (immediately on a raster backend, a frame
         // later on Vulkan) so a scan is booked identically either way.
-        void deliverDepth(Entry& entry) {
-            if (!entry.depth->scanCollect(*renderer_, entry.cloud)) return;
-            entry.lastTime = entry.depth->lastScanTime();
+        template<class SensorT, class CloudT>
+        void deliver(Entry& entry, SensorT& sensor, CloudT& cloud) {
+            if (!sensor.scanCollect(*renderer_, cloud)) return;
+            entry.lastTime = sensor.lastScanTime();
             ++entry.scans;
-            entry.traces[0].push(static_cast<float>(entry.cloud.size()));
-            recordVision(entry);
-        }
-
-        void deliverLidar(Entry& entry) {
-            if (!entry.lidar->scanCollect(*renderer_, entry.returns)) return;
-            entry.lastTime = entry.lidar->lastScanTime();
-            ++entry.scans;
-            entry.traces[0].push(static_cast<float>(entry.returns.size()));
+            entry.traces[0].push(static_cast<float>(cloud.size()));
             recordVision(entry);
         }
 
@@ -775,25 +792,12 @@ namespace threepp::editor {
             std::size_t count = 0;
             Vector3 sum;
             float rmin = 0.f, rmax = 0.f;
-
-            if (entry.depth) {
-                Vector3 origin;
-                entry.depth->getWorldPosition(origin);
-                for (const auto& p : entry.cloud) {
-                    sum.add(p);
-                    const float r = p.distanceTo(origin);
-                    if (count == 0 || r < rmin) rmin = r;
-                    if (count == 0 || r > rmax) rmax = r;
-                    ++count;
-                }
-            } else if (entry.lidar) {
-                for (const auto& r : entry.returns) {
-                    sum.add(r.position);
-                    if (count == 0 || r.distance < rmin) rmin = r.distance;
-                    if (count == 0 || r.distance > rmax) rmax = r.distance;
-                    ++count;
-                }
-            }
+            forEachPoint(entry, [&](const Vector3& p, float r) {
+                sum.add(p);
+                if (count == 0 || r < rmin) rmin = r;
+                if (count == 0 || r > rmax) rmax = r;
+                ++count;
+            });
             if (count > 0) sum.multiplyScalar(1.f / static_cast<float>(count));
 
             entry.csv << entry.lastTime << ',' << count << ',' << sum.x << ',' << sum.y << ','
@@ -825,19 +829,10 @@ namespace threepp::editor {
 
             out << std::setprecision(9);
             out << "t,x,y,z,range\n";
-            if (entry.depth) {
-                Vector3 origin;
-                entry.depth->getWorldPosition(origin);
-                for (const auto& p : entry.cloud) {
-                    out << entry.lastTime << ',' << p.x << ',' << p.y << ',' << p.z << ','
-                        << p.distanceTo(origin) << '\n';
-                }
-            } else {
-                for (const auto& r : entry.returns) {
-                    out << entry.lastTime << ',' << r.position.x << ',' << r.position.y << ','
-                        << r.position.z << ',' << r.distance << '\n';
-                }
-            }
+            forEachPoint(entry, [&](const Vector3& p, float r) {
+                out << entry.lastTime << ',' << p.x << ',' << p.y << ',' << p.z << ','
+                    << r << '\n';
+            });
         }
 
         // A label becomes a filename, and object names carry whatever the user

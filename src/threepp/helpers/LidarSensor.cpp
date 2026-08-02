@@ -7,20 +7,15 @@
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
-#include "threepp/math/Quaternion.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/renderers/Renderer.hpp"
 #include "threepp/textures/DepthTexture.hpp"
 
 // The path-traced back-end is only *used* on a Vulkan build (there is no raster
-// depth cube there), but its header is included unconditionally so the cached
-// unique_ptr member has a complete type to destroy. The header itself is
-// Vulkan-include-free; only the renderer header below is gated.
+// depth cube there), but its header is included unconditionally so the hook
+// signatures below have a complete type. The header itself is
+// Vulkan-include-free.
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
-
-#ifdef THREEPP_WITH_VULKAN
-#include "threepp/renderers/VulkanRenderer.hpp"
-#endif
 
 #include <algorithm>
 #include <cmath>
@@ -114,18 +109,16 @@ namespace {
     // returned by Vulkan (range 1.35). That is the parity bug this shell fixes.
     //
     // So: pull the raster near plane in by the worst-case k, then reject on the
-    // exact range per pixel. Nothing inside the shell can be clipped, because
-    // anything the pulled-in plane still clips has viewZ < near/kMaxSlant, hence
-    // range = k*viewZ < near. The far plane needs no widening, by the same
-    // argument in reverse: range >= viewZ always, so viewZ > far implies the
-    // point is outside the shell anyway.
+    // exact range per pixel (shellRange). Nothing inside the shell can be
+    // clipped, because anything the pulled-in plane still clips has
+    // viewZ < near/kMaxSlant, hence range = k*viewZ < near. The far plane needs
+    // no widening, by the same argument in reverse: range >= viewZ always, so
+    // viewZ > far implies the point is outside the shell anyway.
     //
     // Both bounds are INCLUSIVE — a surface exactly at near or at far is
     // reported — which is what traceRayEXT's [tMin, tMax] interval gives on the
     // Vulkan side, so the two backends agree on the boundary too.
     constexpr float kMaxSlant = 1.7320508f;// sqrt(3), at the corner of a 90-degree face
-
-    using sensorscan::DataPassGuard;
 
 }// namespace
 
@@ -231,11 +224,11 @@ void LidarSensor::buildBeamTable(const LidarModel& model) {
 // ---------------------------------------------------------------------------
 
 LidarSensor::LidarSensor(unsigned int faceSize, float near, float far)
-    // The sensor frame is this node's own world frame, so it attaches to itself.
     // Default noise mirrors the pre-port constant: 2 cm sigma, fixed seed.
-    : VisionSensor(*this, RangeNoiseModel{/*stddev*/ 0.02f, /*stddevPerMetre*/ 0.f,
-                                          /*bias*/ 0.f, /*seed*/ 0x2545F4914F6CDD1DULL}),
-      faceSize_(faceSize), near_(near), far_(far), postCamera_(-1, 1, 1, -1, 0, 1) {
+    : TracedRasterVisionSensor<LidarReturn>(RangeNoiseModel{/*stddev*/ 0.02f, /*stddevPerMetre*/ 0.f,
+                                                            /*bias*/ 0.f, /*seed*/ 0x2545F4914F6CDD1DULL},
+                                            near, far),
+      faceSize_(faceSize), postCamera_(-1, 1, 1, -1, 0, 1) {
 
     init(near, far);
 
@@ -247,11 +240,11 @@ LidarSensor::LidarSensor(unsigned int faceSize, float near, float far)
 }
 
 LidarSensor::LidarSensor(const LidarModel& model, unsigned int faceSize, float near, float far)
-    // The sensor frame is this node's own world frame, so it attaches to itself.
     // Default noise mirrors the pre-port constant: 2 cm sigma, fixed seed.
-    : VisionSensor(*this, RangeNoiseModel{/*stddev*/ 0.02f, /*stddevPerMetre*/ 0.f,
-                                          /*bias*/ 0.f, /*seed*/ 0x2545F4914F6CDD1DULL}),
-      faceSize_(faceSize), near_(near), far_(far), postCamera_(-1, 1, 1, -1, 0, 1),
+    : TracedRasterVisionSensor<LidarReturn>(RangeNoiseModel{/*stddev*/ 0.02f, /*stddevPerMetre*/ 0.f,
+                                                            /*bias*/ 0.f, /*seed*/ 0x2545F4914F6CDD1DULL},
+                                            near, far),
+      faceSize_(faceSize), postCamera_(-1, 1, 1, -1, 0, 1),
       model_(model) {
 
     init(near, far);
@@ -260,140 +253,55 @@ LidarSensor::LidarSensor(const LidarModel& model, unsigned int faceSize, float n
 
 LidarSensor::~LidarSensor() = default;
 
-void LidarSensor::resetNoise() {
-    VisionSensor::resetNoise();
-    // On Vulkan the back-end draws the noise, so resetting only our own stream
-    // would silently leave that path unreplayable.
-    if (tracedBackend_) tracedBackend_->resetNoise();
-}
-
+std::unique_ptr<PathTracedLidarSensor> LidarSensor::createTracedBackend() {
 #ifdef THREEPP_WITH_VULKAN
-PathTracedLidarSensor& LidarSensor::tracedBackend() {
-    if (!tracedBackend_) {
-        if (model_) {
-            tracedBackend_ = std::make_unique<PathTracedLidarSensor>(*model_, far_);
-        } else {
-            // Dense-grid mode: the cube resolves ~90° per faceSize pixels, so
-            // match that angular resolution on the tracer's az × el grid.
-            tracedBackend_ = std::make_unique<PathTracedLidarSensor>(faceSize_ * 4, faceSize_ * 2, far_);
-        }
+    if (model_) {
+        return std::make_unique<PathTracedLidarSensor>(*model_, far_);
     }
-    // This sensor owns the noise contract; the back-end just applies it, so
-    // its model tracks ours (including a seed the caller re-rolled). Copying
-    // an unchanged seed does not restart the stream — see VisionSensor.
-    tracedBackend_->rangeNoise = rangeNoise;
-    // The range shell, handed to the tracer as its [tMin, tMax] interval. This
-    // is the SAME bound the raster path applies per pixel after unprojecting
-    // (see kMaxSlant) — near is a blind sphere on both backends, not a plane.
-    // Without it every beam returns the sensor's own housing from the inside.
-    tracedBackend_->params.minRange = near_;
-    return *tracedBackend_;
-}
+    // Dense-grid mode: the cube resolves ~90° per faceSize pixels, so match
+    // that angular resolution on the tracer's az × el grid.
+    return std::make_unique<PathTracedLidarSensor>(faceSize_ * 4, faceSize_ * 2, far_);
+#else
+    return nullptr;
 #endif
+}
 
 // ---------------------------------------------------------------------------
 // Scan
 // ---------------------------------------------------------------------------
 
-void LidarSensor::scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud) {
-    // Fire and take delivery in one call. Both halves run unconditionally: the
-    // raster path has already filled `cloud`, and its collect is what clears
-    // the "one delivery owed" flag so the pair stays balanced.
-    const bool immediate = scanBegin(renderer, scene, cloud);
-    const bool delivered = scanCollect(renderer, cloud);
-    // Synchronous contract: this call's cloud, or nothing.
-    if (!immediate && !delivered) cloud.clear();
-}
+void LidarSensor::rasterScan(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud) {
 
-bool LidarSensor::scanBegin(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud) {
-    beginScan();
-    scanPending_ = true;
-
-#ifdef THREEPP_WITH_VULKAN
-    if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
-        // No raster depth cube to read back here: trace the same beam pattern
-        // through the renderer's TLAS instead. The TLAS, not the `scene` graph,
-        // is what gets traced, so the scene must have been render()-ed at least
-        // once before scanning. Range noise is applied by the back-end.
-        if (!parent) updateMatrixWorld();
-
-        auto& lidar = tracedBackend();
-        Vector3 pos, scl;
-        Quaternion quat;
-        matrixWorld->decompose(pos, quat, scl);
-        lidar.position = pos;
-        lidar.quaternion = quat;
-        lidar.scale = scl;
-
-        lidar.scanBegin(*vk);
-        // Refused (too many scans already in flight): nothing is owed, so the
-        // caller keeps whatever cloud it had rather than being handed an empty
-        // one, and tries again next frame.
-        scanPending_ = lidar.scanFired();
-        // `cloud` is deliberately NOT cleared. It still holds the last delivered
-        // scan, and a viewer reading it between fire and delivery must see that
-        // rather than an empty one — clearing here made the overlay blink and
-        // made "the cloud is not empty" a coin flip on the frame you asked.
-        return false;
-    }
-#endif
-
-    // Raster: the six face renders and their readbacks ARE the scan, and they
-    // block anyway. Do it here and let scanCollect hand the same cloud over.
+    // The six face renders and their readbacks ARE the scan.
     cloud.clear();
-    DataPassGuard guard(renderer);
     renderFaces(renderer, scene);
 
     if (beams_.empty())
         unprojectDense(cloud);
     else
         unprojectBeams(cloud);
+}
+
+bool LidarSensor::collectTraced(PathTracedLidarSensor& backend, VulkanRenderer& renderer, std::vector<LidarReturn>& cloud) {
+#ifdef THREEPP_WITH_VULKAN
+    if (!backend.scanCollect(renderer, cloud)) return false;
+
+    // The raster path emits only real surface hits inside the range shell.
+    // Drop the tracer's sentinel returns (hitInstanceId < 0: -1 = miss,
+    // -2 = fog/volume scatter — a raster scan never sees atmosphere) to
+    // match. The shell itself is already enforced on this path (tMin/tMax
+    // on the true range, then again after noise in applyNoise), so the
+    // range test here is belt-and-braces on the same inclusive bound.
+    std::erase_if(cloud, [this](const LidarReturn& r) {
+        return r.hitInstanceId < 0 || r.distance < near_ || r.distance > far_;
+    });
     return true;
-}
-
-bool LidarSensor::scanReady(const Renderer& renderer) const {
-
-    if (!scanPending_) return false;
-#ifdef THREEPP_WITH_VULKAN
-    if (const auto* vk = dynamic_cast<const VulkanRenderer*>(&renderer)) {
-        return tracedBackend_ && tracedBackend_->scanReady(*vk);
-    }
 #else
-    (void) renderer;
-#endif
-    return true;// raster: filled by scanBegin
-}
-
-bool LidarSensor::scanCollect(Renderer& renderer, std::vector<LidarReturn>& cloud) {
-
-    if (!scanPending_) return false;
-
-#ifdef THREEPP_WITH_VULKAN
-    if (auto* vk = dynamic_cast<VulkanRenderer*>(&renderer)) {
-        if (!tracedBackend_ || !tracedBackend_->scanCollect(*vk, cloud)) {
-            scanPending_ = false;
-            return false;
-        }
-        scanPending_ = false;
-
-        // The raster path emits only real surface hits inside the range shell.
-        // Drop the tracer's sentinel returns (hitInstanceId < 0: -1 = miss,
-        // -2 = fog/volume scatter — a raster scan never sees atmosphere) to
-        // match. The shell itself is already enforced on this path (tMin/tMax
-        // on the true range, then again after noise in applyNoise), so the
-        // range test here is belt-and-braces on the same inclusive bound.
-        std::erase_if(cloud, [this](const LidarReturn& r) {
-            return r.hitInstanceId < 0 || r.distance < near_ || r.distance > far_;
-        });
-        return true;
-    }
-#else
+    (void) backend;
     (void) renderer;
     (void) cloud;
+    return false;
 #endif
-
-    scanPending_ = false;
-    return true;// raster: scanBegin already filled it
 }
 
 void LidarSensor::renderFaces(Renderer& renderer, Scene& scene) {
@@ -451,28 +359,14 @@ void LidarSensor::unprojectDense(std::vector<LidarReturn>& points) {
 
             for (unsigned x = 0; x < faceSize_; ++x, px += 2) {
                 const float nd = sensorscan::decodeDepthRG(px);
-                if (nd >= 0.9999f) continue;
+                if (nd >= sensorscan::kMissDepth) continue;
 
                 const float xd = dir_[x];
                 // Slant range (Euclidean): depth is along the cube-face camera's
                 // view axis; off-axis beams travel further per unit of view-z.
                 const float k = std::sqrt(xd * xd + slantY);
-                float depth = nd * far_;
-                float slant = depth * k;
-
-                // The range shell, applied to the true geometry — the same
-                // interval the traced backend passes as tMin/tMax. Inclusive at
-                // both ends (see kMaxSlant).
-                if (slant < near_ || slant > far_) continue;
-
-                if (addNoise) {
-                    // Noise corrupts the RANGE, which is what the model is
-                    // specified in (and what the traced backend perturbs); the
-                    // view-space depth follows from it.
-                    slant = applyRangeNoise(slant);
-                    if (slant < near_ || slant > far_) continue;
-                    depth = slant / k;
-                }
+                float depth, slant;
+                if (!shellRange(nd, k, addNoise, depth, slant)) continue;
 
                 LidarReturn r;
                 r.position.set(
@@ -508,21 +402,11 @@ void LidarSensor::unprojectBeams(std::vector<LidarReturn>& points) {
         const unsigned char* px = facePixels[b.face] + (static_cast<unsigned>(b.pixelY) * faceSize_ + b.pixelX) * 2;
         const float nd = sensorscan::decodeDepthRG(px);
 
-        if (nd >= 0.9999f) continue;
+        if (nd >= sensorscan::kMissDepth) continue;
 
         const float k = std::sqrt(b.u * b.u + b.v * b.v + 1.f);
-        float depth = nd * far_;
-        float slant = depth * k;
-
-        // The range shell, applied to the true geometry — the same interval the
-        // traced backend passes as tMin/tMax. Inclusive at both ends.
-        if (slant < near_ || slant > far_) continue;
-
-        if (addNoise) {
-            slant = applyRangeNoise(slant);
-            if (slant < near_ || slant > far_) continue;
-            depth = slant / k;
-        }
+        float depth, slant;
+        if (!shellRange(nd, k, addNoise, depth, slant)) continue;
 
         // view-space point for this beam: (u*depth, v*depth, -depth)
         // transformed to world space via the face camera's world matrix
