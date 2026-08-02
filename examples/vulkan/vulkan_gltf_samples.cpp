@@ -169,7 +169,7 @@ int main(int argc, char** argv) {
     Canvas canvas(Canvas::Parameters()
                           .title(title)
                           .vsync(false)
-                          .antialiasing(useGl ? 4 : 0)
+                          .antialiasing(4)
                           .size(winW > 0 ? winW : 960, winH > 0 ? winH : 600));
 
     // One of the two backends owns the window; `renderer` is the backend-neutral
