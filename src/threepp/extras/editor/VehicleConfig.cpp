@@ -53,6 +53,41 @@ namespace {
         return "awd";
     }
 
+    // Resolve a wheel reference against the model's descendants: a node name,
+    // or "name#N" for the N-th node with that name in document order — how
+    // the inspector tells duplicates apart, since imported assets repeat
+    // names freely (four wheel assemblies all called "Wheel" is the normal
+    // case, not the odd one). A literal match wins first, so a real name that
+    // happens to contain '#' still resolves. The root itself never counts:
+    // the picks are the model's PARTS.
+    Object3D* resolveReference(Object3D& root, const std::string& reference) {
+
+        const auto nth = [&root](const std::string& name, int ordinal) -> Object3D* {
+            Object3D* found = nullptr;
+            int count = 0;
+            root.traverse([&](Object3D& node) {
+                if (found || &node == &root || node.name != name) return;
+                if (++count == ordinal) found = &node;
+            });
+            return found;
+        };
+
+        if (auto* node = nth(reference, 1)) return node;
+
+        const auto hash = reference.rfind('#');
+        if (hash == std::string::npos || hash == 0 || hash + 1 >= reference.size()) {
+            return nullptr;
+        }
+        int ordinal = 0;
+        for (std::size_t i = hash + 1; i < reference.size(); ++i) {
+            const char c = reference[i];
+            if (c < '0' || c > '9') return nullptr;
+            ordinal = ordinal * 10 + (c - '0');
+        }
+        if (ordinal < 1) return nullptr;
+        return nth(reference.substr(0, hash), ordinal);
+    }
+
     // Union of every mesh's geometry bounds under `node`, with each mesh's
     // world matrix mapped through `intoFrame` — pass identity for world-space
     // bounds, a frame inverse for frame-space ones. Empty when nothing under
@@ -248,8 +283,8 @@ VehicleGeometry VehicleConfig::derived(Object3D& root) const {
             geo.problem = std::string(wheelLabels[i]) + " wheel is not picked";
             return geo;
         }
-        auto* node = root.getObjectByName(wheels[i]);
-        if (!node || node == &root) {
+        auto* node = resolveReference(root, wheels[i]);
+        if (!node) {
             geo.problem = std::string(wheelLabels[i]) + " wheel \"" + wheels[i] +
                           "\" is not a node under the model";
             return geo;

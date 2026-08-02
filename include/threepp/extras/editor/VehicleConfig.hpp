@@ -126,8 +126,13 @@ namespace threepp::editor {
         float maxSteerAngle = 0.6f;    // radians; ~34 degrees
         float throttleTorque = 1500.f; // N*m at full throttle, Direct only
 
-        // The four wheel mesh names, FR/FL/RR/RL. Not part of
-        // encode()/decode() — each lives on its own wheelKeys entry.
+        // The four wheel references, FR/FL/RR/RL: a descendant node's name,
+        // or "name#N" for the N-th node of that name in document order — how
+        // duplicates are told apart (imported assets repeat names freely).
+        // The node may be a Group: a wheel authored as an assembly (rim +
+        // tire + caliper) measures as its whole subtree, which is usually
+        // what is right. Not part of encode()/decode() — each lives on its
+        // own wheelKeys entry.
         std::array<std::string, 4> wheels{};
 
         static constexpr const char* userDataKey = "vehicle";

@@ -40,6 +40,7 @@
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
 
 using namespace threepp;
 using namespace threepp::editor;
@@ -1933,19 +1934,33 @@ void EditorApp::drawVehicleSection(Object3D& object) {
 
     ImGui::PushItemWidth(-110 * contentScale_);
 
-    // --- the four picks. Combos over the descendant meshes by name — the
-    // reference is a scene object, so choosing one that exists is the feature
-    // (the Joint section's Body B rule). Wheel order is the runtime's:
+    // --- the four picks. Combos over every named descendant with mesh
+    // geometry beneath it — groups included, because an imported wheel is
+    // often an ASSEMBLY (rim + tire + caliper) whose group is the node that
+    // measures right. The reference is a scene object, so choosing one that
+    // exists is the feature (the Joint section's Body B rule). A repeated
+    // name is listed (and stored) with an ordinal — "Wheel", "Wheel#2" — the
+    // N-th node of that name in document order, so four wheels all called
+    // "Wheel" are still four distinct picks. Wheel order is the runtime's:
     // FR, FL, RR, RL.
     static constexpr const char* wheelFields[4] = {"wheelfr", "wheelfl", "wheelrr", "wheelrl"};
-    std::vector<std::string> meshNames;
-    object.traverseType<Mesh>([&](Mesh& mesh) {
-        if (&mesh == &object) return;
-        if (mesh.name.empty()) return;// no name, no reference
-        if (std::find(meshNames.begin(), meshNames.end(), mesh.name) == meshNames.end()) {
-            meshNames.push_back(mesh.name);
-        }
-    });
+    std::vector<std::string> wheelCandidates;
+    {
+        std::unordered_set<const Object3D*> withMesh;
+        object.traverseType<Mesh>([&](Mesh& mesh) {
+            for (Object3D* node = &mesh; node && node != &object; node = node->parent) {
+                withMesh.insert(node);
+            }
+        });
+        std::unordered_map<std::string, int> seen;
+        object.traverse([&](Object3D& node) {
+            if (&node == &object || node.name.empty()) return;
+            if (!withMesh.count(&node)) return;
+            const int n = ++seen[node.name];
+            wheelCandidates.push_back(n == 1 ? node.name
+                                             : node.name + "#" + std::to_string(n));
+        });
+    }
     // An imported car is hundreds of meshes, so each combo opens on a SEARCH
     // field: case-insensitive substring over the names, keyboard already in
     // the box, and Enter commits a lone match — "type fl, Enter" is the
@@ -1963,7 +1978,7 @@ void EditorApp::drawVehicleSection(Object3D& object) {
         return lower(name).find(lower(needle)) != std::string::npos;
     };
     for (int i = 0; i < 4; ++i) {
-        const char* shown = config.wheels[i].empty() ? "(pick a mesh)" : config.wheels[i].c_str();
+        const char* shown = config.wheels[i].empty() ? "(pick a wheel)" : config.wheels[i].c_str();
         if (ImGui::BeginCombo(VehicleConfig::wheelLabels[i], shown, ImGuiComboFlags_HeightLarge)) {
             if (ImGui::IsWindowAppearing()) {
                 wheelSearch[0] = '\0';
@@ -1989,7 +2004,7 @@ void EditorApp::drawVehicleSection(Object3D& object) {
             }
             const std::string* lone = nullptr;
             int matched = 0;
-            for (const auto& name : meshNames) {
+            for (const auto& name : wheelCandidates) {
                 if (!matchesSearch(name, wheelSearch)) continue;
                 ++matched;
                 lone = matched == 1 ? &name : nullptr;
@@ -1998,7 +2013,7 @@ void EditorApp::drawVehicleSection(Object3D& object) {
                 }
             }
             if (matched == 0) {
-                ImGui::TextColored(theme::muted(), "No mesh name matches.");
+                ImGui::TextColored(theme::muted(), "No node name matches.");
             }
             if (entered && lone) {
                 pick(*lone);

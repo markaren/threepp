@@ -260,6 +260,80 @@ TEST_CASE("the derived frame follows the picks, not a facing convention") {
     CHECK_THAT(fwd.dot(fwdFlipped), WithinAbs(-1.f, 1e-3f));
 }
 
+TEST_CASE("a wheel pick may be a group, measured as its assembly") {
+
+    // Wheels authored the way imports actually arrive: an assembly group per
+    // corner holding a tire mesh and a hub block. Picking the GROUP measures
+    // the union — the tire's radius wins, the hub adds nothing.
+    auto car = Group::create();
+    car->name = "Car";
+    auto body = Mesh::create(BoxGeometry::create(1.6f, 0.8f, 4.2f));
+    body->name = "Body";
+    body->position.set(0.f, 1.f, 0.f);
+    car->add(body);
+
+    const char* names[4] = {"AssemblyFR", "AssemblyFL", "AssemblyRR", "AssemblyRL"};
+    const Vector3 hubs[4] = {{0.8f, 0.4f, 1.4f},
+                             {-0.8f, 0.4f, 1.4f},
+                             {0.8f, 0.4f, -1.4f},
+                             {-0.8f, 0.4f, -1.4f}};
+    for (int i = 0; i < 4; ++i) {
+        auto assembly = Group::create();
+        assembly->name = names[i];
+        assembly->position.copy(hubs[i]);
+        auto tire = Mesh::create(CylinderGeometry::create(0.4f, 0.4f, 0.3f, 24));
+        tire->name = "Tire";
+        tire->rotation.z = math::PI / 2;
+        assembly->add(tire);
+        auto hub = Mesh::create(BoxGeometry::create(0.15f, 0.15f, 0.15f));
+        hub->name = "Hub";
+        assembly->add(hub);
+        car->add(assembly);
+    }
+
+    VehicleConfig config;
+    config.wheels = {"AssemblyFR", "AssemblyFL", "AssemblyRR", "AssemblyRL"};
+    const auto geo = config.derived(*car);
+    REQUIRE(geo.valid);
+    CHECK_THAT(geo.wheelRadius, WithinAbs(0.4f, 0.01f));
+    CHECK_THAT(geo.wheelWidth, WithinAbs(0.3f, 0.01f));
+    CHECK_THAT(geo.wheelbase, WithinAbs(2.8f, 0.01f));
+    CHECK_THAT(geo.trackWidth, WithinAbs(1.6f, 0.01f));
+}
+
+TEST_CASE("duplicate names are told apart by ordinal references") {
+
+    // Four wheels ALL named "Wheel" — the normal shape of an imported asset,
+    // not the odd one. "Wheel" is the first in document order and "Wheel#N"
+    // the N-th, which is exactly what the inspector's combos offer.
+    auto car = makeCar();
+    for (const char* name : {"FR", "FL", "RR", "RL"}) {
+        car->getObjectByName(name)->name = "Wheel";
+    }
+
+    VehicleConfig config;
+    config.wheels = {"Wheel", "Wheel#2", "Wheel#3", "Wheel#4"};
+    const auto geo = config.derived(*car);
+    REQUIRE(geo.valid);
+    // Document order is the order makeCar added them: FR, FL, RR, RL — so
+    // each slot landed on its own corner.
+    CHECK(geo.hubs[0].x > 0.f);
+    CHECK(geo.hubs[0].z > 0.f);
+    CHECK(geo.hubs[1].x < 0.f);
+    CHECK(geo.hubs[1].z > 0.f);
+    CHECK(geo.hubs[2].x > 0.f);
+    CHECK(geo.hubs[2].z < 0.f);
+    CHECK(geo.hubs[3].x < 0.f);
+    CHECK(geo.hubs[3].z < 0.f);
+    CHECK_THAT(geo.wheelbase, WithinAbs(2.8f, 0.01f));
+    CHECK_THAT(geo.trackWidth, WithinAbs(1.6f, 0.01f));
+
+    // An ordinal past the duplicates is a plain unresolvable pick.
+    VehicleConfig overshoot = config;
+    overshoot.wheels[3] = "Wheel#5";
+    CHECK_FALSE(overshoot.derived(*car).valid);
+}
+
 TEST_CASE("an unresolvable pick says which wheel is the problem") {
 
     auto car = makeCar();

@@ -802,10 +802,17 @@ examples used to hand-roll per demo.
 
 Import a car, open its **Vehicle** section (offered on any node with enough
 descendant meshes to pick four wheels from), tick **Simulate as Vehicle**,
-point the four combos at the wheel meshes — each opens on a search field,
-because an imported car is hundreds of meshes: type a fragment of the name
-and Enter commits a lone match — press Play, and drive it with **W/S/A/D**
-(SPACE brakes). That closed loop is the whole feature: everything
+point the four combos at the wheels — each opens on a search field, because
+an imported car is hundreds of nodes: type a fragment of the name and Enter
+commits a lone match — press Play, and drive it with **W/S/A/D** (SPACE
+brakes). A pick may be a **group**: a wheel authored as an assembly (rim +
+tire + caliper) measures as its whole subtree, which is usually what is
+right. **Duplicate names** — four assemblies all called `Wheel` is the
+normal shape of an imported asset — are told apart by an ordinal reference:
+`Wheel` is the first in document order, `Wheel#2` the second, and the combos
+list exactly those, so every duplicate is individually pickable (a literal
+name match always wins first, so a node genuinely named `Wheel#2` still
+resolves as itself). That closed loop is the whole feature: everything
 geometric — chassis dimensions, wheel radius, track, wheelbase, where the
 suspension attaches — is **derived from the four picked wheels**, so an
 imported car drives on its first Play with no number typed. Even the facing
