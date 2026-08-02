@@ -87,6 +87,35 @@ void VulkanRenderer::Impl::clearGbufImages() {
             endAndSubmitOneShot(cb);
         }
 
+void VulkanRenderer::Impl::destroyRasterGbufMsObjects() {
+            if (!ctx) return;
+            VkDevice d = ctx->device();
+            if (rasterGbufPipelineMS != VK_NULL_HANDLE) {
+                vkDestroyPipeline(d, rasterGbufPipelineMS, nullptr);
+                rasterGbufPipelineMS = VK_NULL_HANDLE;
+            }
+            if (rasterGbufIndirectPipelineMS != VK_NULL_HANDLE) {
+                vkDestroyPipeline(d, rasterGbufIndirectPipelineMS, nullptr);
+                rasterGbufIndirectPipelineMS = VK_NULL_HANDLE;
+            }
+            if (rasterGbufDecalPipelineMS != VK_NULL_HANDLE) {
+                vkDestroyPipeline(d, rasterGbufDecalPipelineMS, nullptr);
+                rasterGbufDecalPipelineMS = VK_NULL_HANDLE;
+            }
+            if (rasterGbufRenderPassMS != VK_NULL_HANDLE) {
+                vkDestroyRenderPass(d, rasterGbufRenderPassMS, nullptr);
+                rasterGbufRenderPassMS = VK_NULL_HANDLE;
+            }
+            if (occlRenderPassAMS_ != VK_NULL_HANDLE) {
+                vkDestroyRenderPass(d, occlRenderPassAMS_, nullptr);
+                occlRenderPassAMS_ = VK_NULL_HANDLE;
+            }
+            if (occlRenderPassBMS_ != VK_NULL_HANDLE) {
+                vkDestroyRenderPass(d, occlRenderPassBMS_, nullptr);
+                occlRenderPassBMS_ = VK_NULL_HANDLE;
+            }
+        }
+
 void VulkanRenderer::Impl::destroyRasterGbufImages() {
             if (!ctx) return;
             VkDevice d = ctx->device();

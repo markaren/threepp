@@ -3370,8 +3370,10 @@ namespace threepp {
             if (rasterGbufRenderPass)   vkDestroyRenderPass(d, rasterGbufRenderPass, nullptr);
             if (occlRenderPassA_)       vkDestroyRenderPass(d, occlRenderPassA_, nullptr);
             if (occlRenderPassB_)       vkDestroyRenderPass(d, occlRenderPassB_, nullptr);
-            if (occlRenderPassAMS_)     vkDestroyRenderPass(d, occlRenderPassAMS_, nullptr);
-            if (occlRenderPassBMS_)     vkDestroyRenderPass(d, occlRenderPassBMS_, nullptr);
+            // MSAA render passes + pipelines: the four rasterGbuf*MS handles used
+            // to be leaked here (only the occl MS passes were destroyed). Same
+            // owner as the runtime MSAA-off path now. Device is idle at this point.
+            destroyRasterGbufMsObjects();
             if (overlayWireframePipeline)         vkDestroyPipeline(d, overlayWireframePipeline, nullptr);
             if (overlayBasicPipeline)             vkDestroyPipeline(d, overlayBasicPipeline, nullptr);
             if (overlayBasicTransparentPipeline)  vkDestroyPipeline(d, overlayBasicTransparentPipeline, nullptr);
@@ -6220,6 +6222,15 @@ namespace threepp {
         }
 
         void destroyRasterGbufImages();
+
+        // Every MSAA-only render pass / pipeline the hybrid raster path owns
+        // (the MS *images* live in rasterGbufs and go through
+        // destroyRasterGbufImages instead). ONE owner for the whole set, called
+        // both when MSAA is switched off at runtime and from ~Impl, so a future
+        // teardown path cannot silently forget half of it — the destructor used
+        // to miss the four rasterGbuf*MS handles entirely. Handles are nulled,
+        // so calling it twice is safe. Caller must guarantee the device is idle.
+        void destroyRasterGbufMsObjects();
 
         void createRasterGbufRenderPass();
 

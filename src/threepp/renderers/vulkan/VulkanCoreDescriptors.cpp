@@ -432,33 +432,10 @@ void VulkanRenderer::Impl::ensureHybridResources() {
                                                              : VK_SAMPLE_COUNT_1_BIT;
             if (wantSamples != gbufMsaaBuiltSamples_) {
                 if (wantSamples == VK_SAMPLE_COUNT_1_BIT) {
-                    // Turned MSAA off — tear down the MS render pass/pipelines.
+                    // Turned MSAA off — tear down the MS render passes/pipelines.
                     // The MS *images* are freed by destroyRasterGbufImages,
                     // called unconditionally from createRasterGbufImages below.
-                    if (rasterGbufPipelineMS != VK_NULL_HANDLE) {
-                        vkDestroyPipeline(ctx->device(), rasterGbufPipelineMS, nullptr);
-                        rasterGbufPipelineMS = VK_NULL_HANDLE;
-                    }
-                    if (rasterGbufIndirectPipelineMS != VK_NULL_HANDLE) {
-                        vkDestroyPipeline(ctx->device(), rasterGbufIndirectPipelineMS, nullptr);
-                        rasterGbufIndirectPipelineMS = VK_NULL_HANDLE;
-                    }
-                    if (rasterGbufDecalPipelineMS != VK_NULL_HANDLE) {
-                        vkDestroyPipeline(ctx->device(), rasterGbufDecalPipelineMS, nullptr);
-                        rasterGbufDecalPipelineMS = VK_NULL_HANDLE;
-                    }
-                    if (rasterGbufRenderPassMS != VK_NULL_HANDLE) {
-                        vkDestroyRenderPass(ctx->device(), rasterGbufRenderPassMS, nullptr);
-                        rasterGbufRenderPassMS = VK_NULL_HANDLE;
-                    }
-                    if (occlRenderPassAMS_ != VK_NULL_HANDLE) {
-                        vkDestroyRenderPass(ctx->device(), occlRenderPassAMS_, nullptr);
-                        occlRenderPassAMS_ = VK_NULL_HANDLE;
-                    }
-                    if (occlRenderPassBMS_ != VK_NULL_HANDLE) {
-                        vkDestroyRenderPass(ctx->device(), occlRenderPassBMS_, nullptr);
-                        occlRenderPassBMS_ = VK_NULL_HANDLE;
-                    }
+                    destroyRasterGbufMsObjects();
                 } else {
                     createRasterGbufRenderPassMS(wantSamples);
                     createRasterGbufPipelineMS(wantSamples);
