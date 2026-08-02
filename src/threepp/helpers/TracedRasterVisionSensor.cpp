@@ -109,8 +109,11 @@ bool TracedRasterVisionSensor<PointT>::scanCollect(Renderer& renderer, Cloud& cl
     return true;// raster: scanBegin already filled it
 }
 
-#ifdef THREEPP_WITH_VULKAN
-
+// Defined unconditionally (the explicit instantiations below need every
+// member), but only ever CALLED from the Vulkan-gated branches above — on a
+// raster-only build createTracedBackend() returns nullptr and this would
+// dereference it. Nothing here touches a Vulkan-gated symbol: only data
+// members and this class's own virtual hook.
 template<typename PointT>
 PathTracedLidarSensor& TracedRasterVisionSensor<PointT>::tracedBackend() {
     if (!tracedBackend_) tracedBackend_ = createTracedBackend();
@@ -139,8 +142,6 @@ PathTracedLidarSensor& TracedRasterVisionSensor<PointT>::aimedTracedBackend() {
     lidar.scale = scl;
     return lidar;
 }
-
-#endif
 
 namespace threepp {
     template class TracedRasterVisionSensor<Vector3>;

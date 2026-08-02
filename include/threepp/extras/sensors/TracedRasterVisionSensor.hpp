@@ -147,8 +147,8 @@ namespace threepp {
         // ── shared machinery for the sensors ─────────────────────────────────
 
         // The cached back-end, built on first call, with the noise model and
-        // range shell synced onto it. Only defined on a Vulkan build (the
-        // back-end's TU is Vulkan-gated).
+        // range shell synced onto it. Only meaningful on a Vulkan build — the
+        // raster-only createTracedBackend() stub returns nullptr.
         PathTracedLidarSensor& tracedBackend();
 
         // tracedBackend() with the sensor's world pose decomposed onto it —
