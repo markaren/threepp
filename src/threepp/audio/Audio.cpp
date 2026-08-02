@@ -187,7 +187,12 @@ void PositionalAudio::setDistanceModel(DistanceModel model) {
 void PositionalAudio::updateMatrixWorld(bool force) {
     Object3D::updateMatrixWorld(force);
 
-    matrixWorld->decompose(_pos, _quat, scale);
+    // Into the file-local scratch, not into this object's own `scale`: writing
+    // the decomposed WORLD scale back into the LOCAL one re-multiplies it by
+    // the parent's every frame, so a sound attached to a scaled node shrank
+    // geometrically. Nothing audible depends on it (spatialization reads the
+    // translation and the direction) — it is the node that went wrong.
+    matrixWorld->decompose(_pos, _quat, _scale);
 
     _orientation.set(0, 0, -1).applyQuaternion(_quat);
 
