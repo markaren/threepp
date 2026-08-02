@@ -52,6 +52,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -569,6 +570,109 @@ namespace {
     };
 
 
+    // One authored vehicle, played: the model root the config was authored on
+    // and the PhysX vehicle the session built from it. Same weak-lifetime
+    // discipline as every other handle here — reads raise once the session
+    // stops. Controls are the teleop's: throttle/brake/steer plus a reverse
+    // selector; the transmission stays automatic, so there is nothing to
+    // shift.
+    class VehicleHandle {
+
+    public:
+        VehicleHandle(std::shared_ptr<Object3D> object,
+                      const editor::PhysicsPlaySession::PlayedVehicle* played,
+                      Lifetime lifetime)
+            : object_(std::move(object)), played_(played), lifetime_(std::move(lifetime)) {}
+
+        [[nodiscard]] bool valid() const { return lifetime_.alive(); }
+
+        [[nodiscard]] std::shared_ptr<Object3D> object() const { return object_; }
+
+        void setThrottle(float value) {
+
+            require();
+            played_->drive->setThrottle(value);
+        }
+
+        void setBrake(float value) {
+
+            require();
+            played_->drive->setBrake(value);
+        }
+
+        void setSteer(float value) {
+
+            require();
+            played_->drive->setSteer(value);
+        }
+
+        [[nodiscard]] bool reverse() const {
+
+            require();
+            return played_->drive->reverse();
+        }
+
+        void setReverse(bool reverse) {
+
+            require();
+            played_->drive->setReverse(reverse);
+        }
+
+        [[nodiscard]] float speed() const {
+
+            require();
+            return played_->drive->forwardSpeed();
+        }
+
+        [[nodiscard]] std::vector<float> wheelSpinRates() const {
+
+            require();
+            std::vector<float> rates(4);
+            for (int i = 0; i < 4; ++i) rates[i] = played_->drive->wheelAngularSpeed(i);
+            return rates;
+        }
+
+        [[nodiscard]] std::vector<bool> wheelsGrounded() const {
+
+            require();
+            std::vector<bool> grounded(4);
+            for (int i = 0; i < 4; ++i) grounded[i] = played_->drive->wheelGrounded(i);
+            return grounded;
+        }
+
+        [[nodiscard]] Vector3 position() const {
+
+            require();
+            return toVector3(played_->drive->chassisPose().p);
+        }
+
+        [[nodiscard]] Quaternion rotation() const {
+
+            require();
+            const auto q = played_->drive->chassisPose().q;
+            return Quaternion(q.x, q.y, q.z, q.w);
+        }
+
+        [[nodiscard]] std::string repr() const {
+
+            const std::string name =
+                    object_ ? (object_->name.empty() ? object_->type() : object_->name) : "?";
+            if (!lifetime_.alive()) return "<threepp.editor.Vehicle '" + name + "' (stopped)>";
+            char speedText[32];
+            std::snprintf(speedText, sizeof(speedText), "%.1f", static_cast<double>(speed() * 3.6f));
+            return "<threepp.editor.Vehicle '" + name + "' " + speedText + " km/h" +
+                   (reverse() ? " R" : "") + ">";
+        }
+
+    private:
+        void require() const { lifetime_.require("vehicle"); }
+
+        std::shared_ptr<Object3D> object_;
+        const editor::PhysicsPlaySession::PlayedVehicle* played_;
+        Lifetime lifetime_;
+    };
+
+
     // The world the editor is playing right now, or nullptr outside Play.
     editor::PhysicsPlaySession* playing() {
 
@@ -708,6 +812,35 @@ namespace threepp_py {
                                        "Torque (N*m, world axes) alongside reaction_force.")
                 .def("__repr__", &JointHandle::repr);
 
+        py::class_<VehicleHandle, std::shared_ptr<VehicleHandle>>(sub, "Vehicle")
+                .def_property_readonly("object", &VehicleHandle::object,
+                                       "The model root the vehicle was authored on — the root "
+                                       "itself, even when the handle was asked for from a wheel.")
+                .def_property_readonly("valid", &VehicleHandle::valid,
+                                       "False once the play session that created it has stopped.")
+                .def("set_throttle", &VehicleHandle::setThrottle, py::arg("value"),
+                     "Throttle in [0, 1]. A held pedal, not an impulse - it stays where it "
+                     "was set until set again.")
+                .def("set_brake", &VehicleHandle::setBrake, py::arg("value"),
+                     "Brake in [0, 1].")
+                .def("set_steer", &VehicleHandle::setSteer, py::arg("value"),
+                     "Steer in [-1, 1]; positive steers left, matching the editor's A key.")
+                .def_property("reverse", &VehicleHandle::reverse, &VehicleHandle::setReverse,
+                              "Direction selector. The transmission is automatic all the way - "
+                              "True selects reverse, False drive; there is nothing to shift.")
+                .def_property_readonly("speed", &VehicleHandle::speed,
+                                       "Forward speed in m/s (negative while rolling backwards).")
+                .def_property_readonly("wheel_spin_rates", &VehicleHandle::wheelSpinRates,
+                                       "Wheel spin in rad/s, [FR, FL, RR, RL].")
+                .def_property_readonly("wheels_grounded", &VehicleHandle::wheelsGrounded,
+                                       "Whether each wheel's suspension found ground, "
+                                       "[FR, FL, RR, RL].")
+                .def_property_readonly("position", &VehicleHandle::position,
+                                       "WORLD-SPACE position of the chassis centre.")
+                .def_property_readonly("rotation", &VehicleHandle::rotation,
+                                       "WORLD-SPACE orientation of the chassis (+Z is forward).")
+                .def("__repr__", &VehicleHandle::repr);
+
         // The world ITSELF, not a handle onto something it is simulating. This
         // is the one thing in this file a script cannot build for itself and
         // must not try to: the session owns the world, and threepp.PhysxWorld's
@@ -806,6 +939,25 @@ namespace threepp_py {
                 "is not running or the object is not a joint node. NO ancestor walk, unlike the "
                 "other from_object verbs: a joint is its own node, so the script asking is "
                 "normally sitting on it.");
+
+        sub.def(
+                "vehicle_from_object", [](const py::handle& h) -> py::object {
+                    auto object = as_object3d(h);
+                    auto* session = playing();
+                    if (!object || !session) return py::none();
+                    const auto* played = session->findVehicle(object.get());
+                    if (!played || !played->root || !played->drive) return py::none();
+                    // The handle's object is the model ROOT, whatever node
+                    // asked: the vehicle governs the whole subtree, and a
+                    // script on a wheel wants the car.
+                    return py::cast(std::make_shared<VehicleHandle>(
+                            played->root->shared_from_this(), played,
+                            Lifetime{session->lifetime()}));
+                },
+                py::arg("object"),
+                "The Vehicle PhysX is simulating for `object`, or None when Play is not "
+                "running or no authored vehicle governs it. The lookup walks up the scene "
+                "graph, so a script on a wheel (or anywhere in the model) finds the car.");
 
         py::class_<RaycastHit>(
                 sub, "RaycastHit",

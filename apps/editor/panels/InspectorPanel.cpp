@@ -17,6 +17,7 @@
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
+#include "threepp/extras/editor/VehicleConfig.hpp"
 
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/objects/Robot.hpp"
@@ -35,6 +36,7 @@
 #include "threepp/textures/Texture.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
@@ -274,6 +276,7 @@ void EditorApp::drawInspector() {
         drawTextSection(*selected);
         drawScriptSection(*selected);
         drawPhysicsSection(*selected);
+        drawVehicleSection(*selected);
         drawJointAuthoringSection(*selected);
         drawSensorSection(*selected);
 
@@ -1853,6 +1856,312 @@ void EditorApp::drawJointAuthoringSection(Object3D& object) {
                           "each other. Off keeps contacts at the anchor from\n"
                           "fighting the constraint.");
     }
+
+    ImGui::PopItemWidth();
+
+#ifndef THREEPP_EDITOR_WITH_PHYSX
+    ImGui::TextColored(theme::muted(), "Built without PhysX - authored and saved, not simulated.");
+#endif
+
+    ImGui::TreePop();
+}
+
+
+// ------------------------------------------------------------------- vehicle
+
+void EditorApp::drawVehicleSection(Object3D& object) {
+
+    const bool authored = VehicleConfig::isVehicle(object);
+
+    // The section invites: any node with enough descendant meshes to pick
+    // four wheels from gets the checkbox. A bare mesh or an empty group is
+    // not a car, and stays uncluttered.
+    if (!authored) {
+        int meshes = 0;
+        object.traverseType<Mesh>([&](Mesh& mesh) {
+            if (&mesh != &object) ++meshes;
+        });
+        if (meshes < 4) return;
+    }
+
+    // Open for an authored vehicle — the section IS what the node is about —
+    // collapsed while it is only the invitation on a plausible model.
+    if (!section("Vehicle", authored)) return;
+
+    auto* target = &object;
+
+    // Presence is the identity (VehicleConfig's rule), so the checkbox moves
+    // the whole authoring as one optional value — one undo step either way.
+    bool simulate = authored;
+    if (ImGui::Checkbox("Simulate as Vehicle", &simulate)) {
+        const auto was = VehicleConfig::read(object);
+        commands_.execute(makeProperty<std::optional<VehicleConfig>>(
+                simulate ? "Add Vehicle" : "Remove Vehicle",
+                "vehicle:" + object.uuid + ":presence",
+                [target](const std::optional<VehicleConfig>& value) {
+                    if (value) {
+                        value->write(*target);
+                    } else {
+                        VehicleConfig::erase(*target);
+                    }
+                },
+                was, simulate ? std::optional<VehicleConfig>(VehicleConfig{}) : std::nullopt));
+        document_.setDirty(true);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Play builds a drivable PhysX vehicle from this model.\n"
+                          "Pick the four wheel meshes below; everything geometric\n"
+                          "is derived from them. Drive with W/S/A/D, SPACE brakes.");
+    }
+
+    if (!simulate) {
+        ImGui::TextColored(theme::muted(), "Not simulated as a vehicle.");
+        ImGui::TreePop();
+        return;
+    }
+
+    auto config = VehicleConfig::read(object).value_or(VehicleConfig{});
+    const auto before = config;
+
+    const auto commit = [&](const VehicleConfig& after, const char* label, const char* field) {
+        commands_.execute(makeProperty<VehicleConfig>(
+                label, "vehicle:" + object.uuid + ":" + field,
+                [target](const VehicleConfig& value) { value.write(*target); },
+                before, after));
+        document_.setDirty(true);
+    };
+
+    ImGui::PushItemWidth(-110 * contentScale_);
+
+    // --- the four picks. Combos over the descendant meshes by name — the
+    // reference is a scene object, so choosing one that exists is the feature
+    // (the Joint section's Body B rule). Wheel order is the runtime's:
+    // FR, FL, RR, RL.
+    static constexpr const char* wheelFields[4] = {"wheelfr", "wheelfl", "wheelrr", "wheelrl"};
+    std::vector<std::string> meshNames;
+    object.traverseType<Mesh>([&](Mesh& mesh) {
+        if (&mesh == &object) return;
+        if (mesh.name.empty()) return;// no name, no reference
+        if (std::find(meshNames.begin(), meshNames.end(), mesh.name) == meshNames.end()) {
+            meshNames.push_back(mesh.name);
+        }
+    });
+    // An imported car is hundreds of meshes, so each combo opens on a SEARCH
+    // field: case-insensitive substring over the names, keyboard already in
+    // the box, and Enter commits a lone match — "type fl, Enter" is the
+    // intended gesture. One buffer serves all four combos, since only one
+    // popup is ever open; it resets on every open.
+    static char wheelSearch[64] = "";
+    const auto matchesSearch = [](const std::string& name, const char* needle) {
+        if (!*needle) return true;
+        const auto lower = [](std::string text) {
+            for (auto& ch : text) {
+                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            }
+            return text;
+        };
+        return lower(name).find(lower(needle)) != std::string::npos;
+    };
+    for (int i = 0; i < 4; ++i) {
+        const char* shown = config.wheels[i].empty() ? "(pick a mesh)" : config.wheels[i].c_str();
+        if (ImGui::BeginCombo(VehicleConfig::wheelLabels[i], shown, ImGuiComboFlags_HeightLarge)) {
+            if (ImGui::IsWindowAppearing()) {
+                wheelSearch[0] = '\0';
+                ImGui::SetKeyboardFocusHere();
+            }
+            ImGui::SetNextItemWidth(-1);
+            const bool entered = ImGui::InputTextWithHint(
+                    "##wheelSearch", "Search...", wheelSearch, sizeof(wheelSearch),
+                    ImGuiInputTextFlags_EnterReturnsTrue);
+
+            const auto pick = [&](const std::string& name) {
+                auto after = config;
+                after.wheels[i] = name;
+                commit(after, "Vehicle Wheel", wheelFields[i]);
+            };
+
+            // "(none)" only on an empty search: once something is typed, the
+            // list is candidates, and clearing the slot is not one.
+            if (!wheelSearch[0] && ImGui::Selectable("(none)", config.wheels[i].empty())) {
+                auto after = config;
+                after.wheels[i].clear();
+                commit(after, "Vehicle Wheel", wheelFields[i]);
+            }
+            const std::string* lone = nullptr;
+            int matched = 0;
+            for (const auto& name : meshNames) {
+                if (!matchesSearch(name, wheelSearch)) continue;
+                ++matched;
+                lone = matched == 1 ? &name : nullptr;
+                if (ImGui::Selectable(name.c_str(), name == config.wheels[i])) {
+                    pick(name);
+                }
+            }
+            if (matched == 0) {
+                ImGui::TextColored(theme::muted(), "No mesh name matches.");
+            }
+            if (entered && lone) {
+                pick(*lone);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    // --- drive train. Automatic all the way: the engine drive keeps its
+    // autobox, and no manual-shift control exists anywhere in the editor.
+    if (ImGui::BeginCombo("Drive", VehicleConfig::label(config.drive))) {
+        for (const auto drive : VehicleConfig::drives) {
+            if (ImGui::Selectable(VehicleConfig::label(drive), drive == config.drive)) {
+                auto after = config;
+                after.drive = drive;
+                commit(after, "Vehicle Drive", "drive");
+                config.drive = drive;// so the widgets below reflect it this frame
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Direct: throttle torque straight to the wheels - simple and robust.\n"
+                          "Engine: engine/clutch/gearbox chain with an automatic gearbox.");
+    }
+    if (ImGui::BeginCombo("Driven Wheels", VehicleConfig::label(config.driven))) {
+        for (const auto driven : VehicleConfig::drivens) {
+            if (ImGui::Selectable(VehicleConfig::label(driven), driven == config.driven)) {
+                auto after = config;
+                after.driven = driven;
+                commit(after, "Vehicle Driven Wheels", "driven");
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    const auto floatField = [&](const char* label, float value, float speed, float min, float max,
+                                const char* format, void (*assign)(VehicleConfig&, float),
+                                const char* action, const char* field) {
+        float edited = value;
+        const bool changed = ImGui::DragFloat(label, &edited, speed, min, max, format);
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            assign(after, edited);
+            commit(after, action, field);
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    };
+
+    // --- geometry. Derived from the picks while Auto is on, and shown, so
+    // the numbers Play will use are never a mystery. Unticking seeds every
+    // field with the derived values so nothing jumps — the Joint section's
+    // Driven-checkbox pattern.
+    ImGui::Spacing();
+    const auto geo = config.derived(object);
+
+    bool autoGeo = config.autoGeometry;
+    if (ImGui::Checkbox("Auto Geometry", &autoGeo)) {
+        auto after = config;
+        after.autoGeometry = autoGeo;
+        if (!autoGeo && geo.valid) {
+            after.chassisWidth = geo.chassisWidth;
+            after.chassisHeight = geo.chassisHeight;
+            after.chassisLength = geo.chassisLength;
+            after.wheelRadius = geo.wheelRadius;
+            after.wheelWidth = geo.wheelWidth;
+            after.trackWidth = geo.trackWidth;
+            after.wheelbase = geo.wheelbase;
+            after.suspensionY = geo.suspensionY;
+        }
+        commit(after, autoGeo ? "Vehicle Auto Geometry" : "Vehicle Manual Geometry", "auto");
+        config = after;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Read chassis dimensions, wheel radius, track and wheelbase\n"
+                          "off the picked wheel meshes. Untick to type them instead\n"
+                          "(seeded with the derived values).");
+    }
+    if (config.autoGeometry) {
+        if (geo.valid) {
+            ImGui::TextColored(theme::muted(), "Chassis %.2f x %.2f x %.2f m",
+                               static_cast<double>(geo.chassisWidth),
+                               static_cast<double>(geo.chassisHeight),
+                               static_cast<double>(geo.chassisLength));
+            ImGui::TextColored(theme::muted(), "Wheel r %.2f m, track %.2f m, wheelbase %.2f m",
+                               static_cast<double>(geo.wheelRadius),
+                               static_cast<double>(geo.trackWidth),
+                               static_cast<double>(geo.wheelbase));
+        } else {
+            ImGui::TextColored(theme::warning(), "%s", geo.problem.c_str());
+        }
+    } else {
+        floatField(
+                "Chassis Width", config.chassisWidth, 0.01f, 0.1f, 10.f, "%.2f m",
+                [](VehicleConfig& c, float v) { c.chassisWidth = v; },
+                "Vehicle Chassis Width", "chassiswidth");
+        floatField(
+                "Chassis Height", config.chassisHeight, 0.01f, 0.1f, 10.f, "%.2f m",
+                [](VehicleConfig& c, float v) { c.chassisHeight = v; },
+                "Vehicle Chassis Height", "chassisheight");
+        floatField(
+                "Chassis Length", config.chassisLength, 0.01f, 0.1f, 30.f, "%.2f m",
+                [](VehicleConfig& c, float v) { c.chassisLength = v; },
+                "Vehicle Chassis Length", "chassislength");
+        floatField(
+                "Wheel Radius", config.wheelRadius, 0.005f, 0.01f, 3.f, "%.3f m",
+                [](VehicleConfig& c, float v) { c.wheelRadius = v; },
+                "Vehicle Wheel Radius", "wheelradius");
+        floatField(
+                "Wheel Width", config.wheelWidth, 0.005f, 0.02f, 2.f, "%.3f m",
+                [](VehicleConfig& c, float v) { c.wheelWidth = v; },
+                "Vehicle Wheel Width", "wheelwidth");
+        floatField(
+                "Track Width", config.trackWidth, 0.01f, 0.1f, 10.f, "%.2f m",
+                [](VehicleConfig& c, float v) { c.trackWidth = v; },
+                "Vehicle Track Width", "track");
+        floatField(
+                "Wheelbase", config.wheelbase, 0.01f, 0.1f, 20.f, "%.2f m",
+                [](VehicleConfig& c, float v) { c.wheelbase = v; },
+                "Vehicle Wheelbase", "wheelbase");
+        floatField(
+                "Suspension Y", config.suspensionY, 0.005f, -5.f, 5.f, "%.3f m",
+                [](VehicleConfig& c, float v) { c.suspensionY = v; },
+                "Vehicle Suspension Y", "suspensiony");
+    }
+
+    // --- the always-authored scalars.
+    ImGui::Spacing();
+    floatField(
+            "Mass", config.mass, 5.f, 1.f, 50000.f, "%.0f kg",
+            [](VehicleConfig& c, float v) { c.mass = v; }, "Vehicle Mass", "mass");
+    if (config.drive == VehicleConfig::Drive::Direct) {
+        floatField(
+                "Throttle Torque", config.throttleTorque, 10.f, 0.f, 20000.f, "%.0f N*m",
+                [](VehicleConfig& c, float v) { c.throttleTorque = v; },
+                "Vehicle Throttle Torque", "throttle");
+    }
+    floatField(
+            "Tire Friction", config.tireFriction, 0.01f, 0.1f, 4.f, "%.2f",
+            [](VehicleConfig& c, float v) { c.tireFriction = v; },
+            "Vehicle Tire Friction", "friction");
+    floatField(
+            "Max Steer", math::radToDeg(config.maxSteerAngle), 0.5f, 5.f, 85.f, "%.1f deg",
+            [](VehicleConfig& c, float v) { c.maxSteerAngle = math::degToRad(v); },
+            "Vehicle Max Steer", "steer");
+    floatField(
+            "Brake Torque", config.maxBrakeTorque, 10.f, 0.f, 50000.f, "%.0f N*m",
+            [](VehicleConfig& c, float v) { c.maxBrakeTorque = v; },
+            "Vehicle Brake Torque", "brake");
+    floatField(
+            "Susp. Travel", config.suspensionTravel, 0.005f, 0.02f, 2.f, "%.3f m",
+            [](VehicleConfig& c, float v) { c.suspensionTravel = v; },
+            "Vehicle Suspension Travel", "travel");
+    floatField(
+            "Susp. Stiffness", config.suspensionStiffness, 100.f, 100.f, 500000.f, "%.0f N/m",
+            [](VehicleConfig& c, float v) { c.suspensionStiffness = v; },
+            "Vehicle Suspension Stiffness", "stiffness");
+    floatField(
+            "Susp. Damping", config.suspensionDamping, 10.f, 0.f, 100000.f, "%.0f Ns/m",
+            [](VehicleConfig& c, float v) { c.suspensionDamping = v; },
+            "Vehicle Suspension Damping", "damping");
 
     ImGui::PopItemWidth();
 

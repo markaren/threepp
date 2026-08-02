@@ -343,6 +343,7 @@ EditorApp::EditorApp(const Options& options)
         clearSoundRings();
         // Keyed by uuid too, and placed off a node that is going away.
         clearJointHelper();
+        clearVehicleHelper();
         stopAudition();
         // The collider lines are world-space and belong to a world that stop()
         // has already destroyed; the node itself is parented to the surviving
@@ -584,6 +585,8 @@ int EditorApp::run() {
 
 void EditorApp::frame(float dt) {
 
+    // Before the sessions step, so this frame's step drives on this frame's keys.
+    updateVehicleTeleop(dt);
     play_.update(dt);
     // Before anything reads the graph: the Generator section asked for this last
     // frame, and it replaces a node the panel was drawing from.
@@ -2607,6 +2610,7 @@ void EditorApp::refreshSelectionHelpers() {
     syncCameraHelper();
     syncSoundRings();
     syncJointHelper();
+    syncVehicleHelper();
 
     // After the syncs, because two of them BUILD the nodes it hides: a camera
     // selected mid-play gets a fresh frustum helper, and an object that only
@@ -3134,6 +3138,7 @@ void EditorApp::startPlay() {
 
     // Per-session, so a scene whose script does not read the keyboard keeps its shortcuts.
     scriptsPolledKeys_ = false;
+    vehicleTeleopActive_ = false;
 
     std::string error;
     if (!play_.play(document_, &error)) {
@@ -3159,6 +3164,45 @@ void EditorApp::togglePause() {
     if (!isPlaying()) return;
     play_.togglePause();
     log(play_.paused() ? "paused" : "resumed");
+}
+
+void EditorApp::updateVehicleTeleop(float dt) {
+
+    vehicleDriving_ = false;
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    if (!isPlaying() || !physics_ || physics_->vehicleCount() == 0) return;
+    // A vehicle exists in the played scene, so the plain keys are the pedals
+    // whether or not one is pressed right now — see handleShortcuts.
+    vehicleDriving_ = true;
+
+    // ImGui's key state, for the reasons the script key provider documents:
+    // the canvas's held-key set goes stale while a panel keeps focus. Same
+    // suppression rules as the shortcuts.
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool suppressed =
+            io.WantTextInput ||
+            ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ||
+            fileBrowser_.isOpen();
+    const auto down = [&](ImGuiKey key) { return !suppressed && ImGui::IsKeyDown(key); };
+
+    const bool forward = down(ImGuiKey_W) || down(ImGuiKey_UpArrow);
+    const bool backward = down(ImGuiKey_S) || down(ImGuiKey_DownArrow);
+    const bool left = down(ImGuiKey_A) || down(ImGuiKey_LeftArrow);
+    const bool right = down(ImGuiKey_D) || down(ImGuiKey_RightArrow);
+    const bool handbrake = down(ImGuiKey_Space);
+
+    // Write controls only while keys are involved — plus the tail where the
+    // released steer is still slewing back to centre — so a script driving
+    // the same vehicle through its handle is not overwritten by silence.
+    const bool any = forward || backward || left || right || handbrake;
+    if (!any && !vehicleTeleopActive_) return;
+
+    const float steer = (left ? 1.f : 0.f) - (right ? 1.f : 0.f);
+    physics_->driveVehicles(forward, backward, steer, handbrake, dt);
+    vehicleTeleopActive_ = any || physics_->vehiclesSteering();
+#else
+    (void) dt;
+#endif
 }
 
 void EditorApp::stopPlay() {
@@ -3209,6 +3253,8 @@ void EditorApp::applyAuthoringVisibility() {
     if (soundRings_ && !visible) soundRings_->visible = false;
     // Same contract as the rings: syncJointHelper re-asserts visibility.
     if (jointHelper_ && !visible) jointHelper_->visible = false;
+    // And the wheel rings, through syncVehicleHelper.
+    if (vehicleHelper_ && !visible) vehicleHelper_->visible = false;
 }
 
 bool EditorApp::gizmoActive() const {
@@ -3262,6 +3308,9 @@ void EditorApp::handleShortcuts() {
     // Alt+digit viewpoints are not what a script polls, and silently losing save-while-playing
     // would be its own surprise.
     if (scriptsPolledKeys_ && isPlaying() && !ctrl && !alt && !io.KeySuper) return;
+    // Driving a played vehicle owns the same plain keys for the same reason:
+    // W is the throttle, and it must not also switch the gizmo to translate.
+    if (vehicleDriving_ && isPlaying() && !ctrl && !alt && !io.KeySuper) return;
 
     // --- viewpoints -------------------------------------------------------
     // The numpad bindings every 3D editor shares, with Ctrl for the opposite

@@ -216,6 +216,12 @@ namespace threepp::editor {
         // body A, the other body is picked here by name). NOT the Robot
         // section's joint sliders — that is drawJointsSection above.
         void drawJointAuthoringSection(Object3D& object);
+        // Vehicle authoring: shown for a node carrying a VehicleConfig, and —
+        // as an invitation — for any node with enough descendant meshes to
+        // pick four wheels from. Point at the wheels, press Play, drive; the
+        // geometry is derived from the picks unless overridden. See
+        // VehicleConfig.
+        void drawVehicleSection(Object3D& object);
         // Sensor authoring: type, rate, seed and the per-type noise model, all
         // written into userData["sensor"]. Fields for the types you are not on
         // are hidden, never dropped — see SensorConfig.
@@ -553,6 +559,12 @@ namespace threepp::editor {
         // authored by trial and error.
         void syncJointHelper();
         void clearJointHelper();
+        // Wheel rings for the SELECTED vehicle: a circle of the derived radius
+        // at each picked wheel, same selected-only rule as the joint helper —
+        // the picture that says which meshes the config resolved and what
+        // radius it read off them.
+        void syncVehicleHelper();
+        void clearVehicleHelper();
         void clearViewportMarkers();
         // --- spline overlay (apps/editor/SplineOverlay.cpp) -----------------
         // One Line per spline, sampled from the CatmullRomCurve3 its control
@@ -686,6 +698,16 @@ namespace threepp::editor {
         void togglePause();
         void stopPlay();
         [[nodiscard]] bool isPlaying() const;
+
+        // --- vehicle teleop -------------------------------------------------
+        // While a played scene has vehicles, W/S/A/D and SPACE drive them:
+        // polled every frame before the sessions step, pushed through
+        // PhysicsPlaySession::driveVehicles. Only writes controls while a key
+        // is actually held (plus one release), so a script driving the same
+        // vehicle through its handle is not overwritten by silence. The
+        // transmission stays automatic — teleop only ever selects
+        // forward/reverse.
+        void updateVehicleTeleop(float dt);
 
         // --- animation preview ---------------------------------------------
         // Edit-mode preview of one clip on one subtree. Every touched value
@@ -910,6 +932,10 @@ namespace threepp::editor {
         // is built from); placed every frame at constant screen size.
         std::shared_ptr<LineSegments> jointHelper_;
         std::string jointHelperKey_;
+        // Wheel rings for the selected vehicle. Same lifetime and keying rules
+        // as the joint helper (uuid + the numbers the picture is built from).
+        std::shared_ptr<LineSegments> vehicleHelper_;
+        std::string vehicleHelperKey_;
         // The other half of authoringVisible(): a --screenshot pass over a
         // document has no user and nothing being authored, so the whole layer is
         // off for its duration. One flag instead of the four hand-hidden nodes
@@ -981,6 +1007,14 @@ namespace threepp::editor {
         std::shared_ptr<LineSegments> physicsDebugLines_;
         int physicsDebugCapacity_ = 0;
         bool physicsDebug_ = false;
+        // A vehicle is being played this frame: the teleop keys are live, so
+        // the plain editor shortcuts yield until Stop — the same rule (and the
+        // same keys) as a script that polls the keyboard. Recomputed every
+        // frame by updateVehicleTeleop; always false without PhysX.
+        bool vehicleDriving_ = false;
+        // Teleop wrote controls last frame, so one all-keys-released frame
+        // still writes the zeros (and nothing after it does).
+        bool vehicleTeleopActive_ = false;
 
         // Script debug draw. Same in-place-rewrite contract as the collider
         // lines above, plus a colour attribute (each call picks its own). No

@@ -4,7 +4,7 @@ The runtime face of editor-authored data.
 from __future__ import annotations
 import typing
 import threepp
-__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'Joint', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'joint_from_object', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object']
+__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'Joint', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'Vehicle', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'joint_from_object', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object', 'vehicle_from_object']
 class SplinePath:
     def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> threepp.Vector3:
         """
@@ -276,6 +276,66 @@ class Joint:
     def reaction_torque(self) -> threepp.Vector3:
         """
         Torque (N*m, world axes) alongside reaction_force.
+        """
+class Vehicle:
+    """
+    One authored vehicle, played: the PhysX vehicle built from a model root's
+    userData. Only exists during Play, and only in a build with the PhysX SDK.
+    """
+    @property
+    def object(self) -> threepp.Object3D:
+        """
+        The model root the vehicle was authored on - the root itself, even when the handle was asked for from a wheel.
+        """
+    @property
+    def valid(self) -> bool:
+        """
+        False once the play session that created it has stopped.
+        """
+    def set_throttle(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Throttle in [0, 1]. A held pedal, not an impulse - it stays where it was set until set again.
+        """
+    def set_brake(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Brake in [0, 1].
+        """
+    def set_steer(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        """
+        Steer in [-1, 1]; positive steers left, matching the editor's A key.
+        """
+    @property
+    def reverse(self) -> bool:
+        """
+        Direction selector. The transmission is automatic all the way - True selects reverse, False drive; there is nothing to shift.
+        """
+    @reverse.setter
+    def reverse(self, value: bool) -> None:
+        ...
+    @property
+    def speed(self) -> float:
+        """
+        Forward speed in m/s (negative while rolling backwards).
+        """
+    @property
+    def wheel_spin_rates(self) -> list[float]:
+        """
+        Wheel spin in rad/s, [FR, FL, RR, RL].
+        """
+    @property
+    def wheels_grounded(self) -> list[bool]:
+        """
+        Whether each wheel's suspension found ground, [FR, FL, RR, RL].
+        """
+    @property
+    def position(self) -> threepp.Vector3:
+        """
+        WORLD-SPACE position of the chassis centre.
+        """
+    @property
+    def rotation(self) -> threepp.Quaternion:
+        """
+        WORLD-SPACE orientation of the chassis (+Z is forward).
         """
 class RaycastHit:
     """
@@ -563,6 +623,10 @@ def world() -> threepp.PhysxWorld | None:
 def joint_from_object(object: threepp.Object3D | None) -> Joint | None:
     """
     The live Joint built from `object`'s authored joint entry, or None when Play is not running or the object is not a joint node. NO ancestor walk, unlike the other from_object verbs: a joint is its own node, so the script asking is normally sitting on it.
+    """
+def vehicle_from_object(object: threepp.Object3D | None) -> Vehicle | None:
+    """
+    The Vehicle PhysX is simulating for `object`, or None when Play is not running or no authored vehicle governs it. The lookup walks up the scene graph, so a script on a wheel (or anywhere in the model) finds the car.
     """
 def rigid_body_from_object(object: threepp.Object3D | None) -> RigidBody | None:
     """

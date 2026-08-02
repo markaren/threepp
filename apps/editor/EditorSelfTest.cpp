@@ -27,6 +27,7 @@
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
+#include "threepp/extras/editor/VehicleConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #ifdef THREEPP_WITH_AUDIO
@@ -5482,6 +5483,165 @@ int EditorApp::runSelfTest() {
         }
 #else
         std::cout << "[selftest] SKIP built without PhysX - the joint play block did not run"
+                  << std::endl;
+#endif
+
+        std::error_code ec;
+        std::filesystem::remove(document, ec);
+    }
+
+    // --- vehicle authoring --------------------------------------------------
+    // The whole authoring path for a drivable car: a primitives car with four
+    // named wheels, the marker and the wheel-ring helper it earns, a config
+    // edit through the same property command the inspector issues, a document
+    // round trip, and Play — where the teleop entry point must actually drive
+    // it several metres.
+    {
+        newScene();
+        step(2);
+
+        // A road to drive on: the template floor draws but has no collider.
+        auto road = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        road->name = "Road";
+        road->scale.set(200.f, 1.f, 200.f);
+        road->position.set(0.f, -0.5f, 0.f);
+        {
+            PhysicsConfig config;
+            config.enabled = true;
+            config.body = PhysicsConfig::Body::Static;
+            config.shape = PhysicsConfig::Shape::Box;
+            config.write(*road);
+        }
+        addObject(road, document_.scene(), "Add Road");
+
+        // The car: box body over four named cylinder wheels, hubs at
+        // (±0.8, 0.4, ±1.4), radius 0.4 — resting exactly on the road.
+        auto car = Group::create();
+        car->name = "Car";
+        const auto carUuid = car->uuid;
+        auto body = ObjectFactory::createPrimitive(Primitive::Box, document_.scene());
+        body->name = "CarBody";
+        body->scale.set(1.6f, 0.8f, 4.2f);
+        body->position.set(0.f, 1.f, 0.f);
+        car->add(body);
+        const char* wheelNames[4] = {"FR", "FL", "RR", "RL"};
+        const Vector3 hubs[4] = {{0.8f, 0.4f, 1.4f},
+                                 {-0.8f, 0.4f, 1.4f},
+                                 {0.8f, 0.4f, -1.4f},
+                                 {-0.8f, 0.4f, -1.4f}};
+        for (int i = 0; i < 4; ++i) {
+            auto wheel = ObjectFactory::createPrimitive(Primitive::Cylinder, document_.scene());
+            wheel->name = wheelNames[i];
+            wheel->scale.set(0.8f, 0.3f, 0.8f);// unit cylinder r=0.5 -> r=0.4, width 0.3
+            wheel->rotation.z = math::PI / 2;  // cylinder height (Y) onto the axle (X)
+            wheel->position.copy(hubs[i]);
+            car->add(wheel);
+        }
+        {
+            VehicleConfig config;
+            config.wheels = {"FR", "FL", "RR", "RL"};
+            config.write(*car);
+        }
+        addObject(car, document_.scene(), "Add Car");
+        step();
+
+        check(VehicleConfig::isVehicle(*car), "the car carries the vehicle entry");
+        {
+            const auto geo = VehicleConfig::read(*car)->derived(*car);
+            check(geo.valid, "the geometry derives from the four picked wheels");
+            check(geo.valid && std::abs(geo.wheelbase - 2.8f) < 0.02f &&
+                          std::abs(geo.trackWidth - 1.6f) < 0.02f &&
+                          std::abs(geo.wheelRadius - 0.4f) < 0.02f,
+                  "and reads the authored wheelbase, track and radius off them");
+        }
+
+        selectObject(car.get());
+        step();
+        check(std::any_of(viewportMarkers_.begin(), viewportMarkers_.end(),
+                          [&](const ViewportMarker& marker) { return marker.owner == car.get(); }),
+              "an authored vehicle gets a viewport marker");
+        check(vehicleHelper_ != nullptr && vehicleHelper_->visible,
+              "and a selected vehicle draws its wheel rings");
+
+        // The inspector's edit, verbatim: one VehicleConfig property command
+        // carrying the flat string and the four wheel keys.
+        VehicleConfig authored = VehicleConfig::read(*car).value_or(VehicleConfig{});
+        authored.mass = 1200.f;
+        authored.driven = VehicleConfig::Driven::Rear;
+        {
+            auto* target = car.get();
+            const auto before = VehicleConfig::read(*car).value_or(VehicleConfig{});
+            commands_.execute(makeProperty<VehicleConfig>(
+                    "Edit Vehicle", "vehicle:" + carUuid + ":selftest",
+                    [target](const VehicleConfig& value) { value.write(*target); },
+                    before, authored));
+            step();
+        }
+        check(VehicleConfig::read(*car) == authored, "an edit rewrites the entry");
+
+        const auto document = std::filesystem::temp_directory_path() / "threepp_editor_vehicle.json";
+        saveSceneAs(document);
+        openScene(document);
+        step();
+
+        // Everything past the reload goes through the uuid: openScene replaced
+        // the scene, and `car` names a node in the outgoing one.
+        auto* reloaded = findByUuid(document_.scene(), carUuid);
+        check(reloaded != nullptr, "the vehicle survives save and reload");
+        check(reloaded && VehicleConfig::read(*reloaded) == authored,
+              "its config (wheel names included) round-trips through the document");
+
+        // A picture of what the PASS lines cannot describe: the wheel rings on
+        // the wheels, the forward chevron, the populated Vehicle section.
+        {
+            const bool bottomPanelWas = bottomPanelOpen_;
+            const auto gizmoWas = gizmoMode_;
+            bottomPanelOpen_ = false;
+            // Select mode: the transform gizmo would sit on the chassis centre
+            // the chevron is the picture of.
+            gizmoMode_ = "select";
+            applyGizmoMode();
+            selectObject(reloaded);
+            camera_.position.set(6.f, 4.5f, 8.f);
+            orbit_->target.set(0.f, 0.7f, 0.f);
+            step(4);
+            shootTo(std::filesystem::temp_directory_path() / "threepp_editor_vehicle.png");
+            bottomPanelOpen_ = bottomPanelWas;
+            gizmoMode_ = gizmoWas;
+            applyGizmoMode();
+            step();
+        }
+
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        // Play: the car drives. stepFixed throughout — "how far did it get" is
+        // a question about simulated time (the doctrine written above
+        // kFixedDt), and the controls go through the same session entry point
+        // the W key does.
+        {
+            startPlay();
+            stepFixed(2);
+            check(isPlaying(), "Play starts with an authored vehicle in the scene");
+            check(physics_ && physics_->vehicleCount() == 1, "the session built the vehicle");
+
+            auto* playedCar = document_.scene().getObjectByName("Car");
+            check(playedCar != nullptr, "the played scene still has the car");
+
+            float maxZ = 0.f;
+            for (int i = 0; i < 240 && playedCar; ++i) {// 4 s of full throttle
+                physics_->driveVehicles(true, false, 0.f, false, kFixedDt);
+                stepFixed(1);
+                maxZ = std::max(maxZ, playedCar->position.z);
+            }
+            check(maxZ > 3.f, "full throttle drove the car several metres");
+
+            stopPlay();
+            step(2);
+            auto* restored = findByUuid(document_.scene(), carUuid);
+            check(restored != nullptr && std::abs(restored->position.z) < 0.01f,
+                  "and Stop puts the car back where it was authored");
+        }
+#else
+        std::cout << "[selftest] SKIP built without PhysX - the vehicle play block did not run"
                   << std::endl;
 #endif
 

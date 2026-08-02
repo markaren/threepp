@@ -123,8 +123,8 @@ document can ask for it on open — see [`editorView`](#opening-a-document-edito
 icon at a constant screen size, tinted with the accent colour while selected.
 Every kind has its own shape — a camera body, a sun for directional, a bulb for
 point, a beam for spot, a ringed core for ambient, a dome over ground for
-hemisphere, a speaker for a sound, an open hinge for a joint — so a scene reads
-without clicking anything.
+hemisphere, a speaker for a sound, an open hinge for a joint, a car in profile
+for a vehicle — so a scene reads without clicking anything.
 Clicking an icon selects its owner, and it wins over geometry behind it — the
 icons draw on top, so picking follows what you see rather than raw depth order.
 The artwork is SVG parsed at startup by threepp's `SVGLoader` and embedded as
@@ -145,6 +145,11 @@ a distance falloff drawn as min/max rings on the ground while it is selected.
 miniaudio and the sound follows whatever moves its object. See
 [Sounds in `userData`](#sounds-in-userdata).
 
+**Vehicles.** Import a car, point the Vehicle section at its four wheel
+meshes, press Play, and drive it with `W`/`S`/`A`/`D` — chassis, wheels, track
+and wheelbase are derived from the picks, so no number needs typing. See
+[Vehicles in `userData`](#vehicles-in-userdata).
+
 **Generators.** A scene can carry inline Python that BUILDS it: select `Scene`,
 write a rule, press Regenerate, and what the script creates becomes ordinary
 saved scene content. Editable in VS Code with completion, where a save re-runs it.
@@ -154,8 +159,10 @@ placed by rule, reproducible from a seed. See
 
 **Hierarchy.** The full `Object3D` tree, selection synced both ways with the
 viewport, double-click to rename, drag-and-drop to reparent (undoable, world
-transform preserved), and a right-click menu with Add ▸ / Duplicate / Delete /
-Focus.
+transform preserved), and a right-click menu with Add ▸ / Rename / Copy Name /
+Duplicate / Focus / Delete. Copy Name puts the node's name on the clipboard —
+it is what every by-name reference (a vehicle wheel pick, a joint's Body B)
+wants pasted.
 
 **Inspector.** Object flags, transform (rotation shown in degrees), material
 (type, colour, emissive, roughness, metalness, opacity, transparency, side,
@@ -790,6 +797,93 @@ The runtime type is `threepp::Joint` (`extras/physx/Joint.hpp`), usable
 without the editor: two `PxRigidActor*` (either may be null, meaning the
 world), one world-space frame, one `Params` struct — the same escape the
 examples used to hand-roll per demo.
+
+### Vehicles in `userData`
+
+Import a car, open its **Vehicle** section (offered on any node with enough
+descendant meshes to pick four wheels from), tick **Simulate as Vehicle**,
+point the four combos at the wheel meshes — each opens on a search field,
+because an imported car is hundreds of meshes: type a fragment of the name
+and Enter commits a lone match — press Play, and drive it with **W/S/A/D**
+(SPACE brakes). That closed loop is the whole feature: everything
+geometric — chassis dimensions, wheel radius, track, wheelbase, where the
+suspension attaches — is **derived from the four picked wheels**, so an
+imported car drives on its first Play with no number typed. Even the facing
+comes from the picks: forward is rear axle towards front axle, so a model
+authored facing −Z (or +X) drives the way it looks, with no convention
+imposed.
+
+The authoring sits **on the model's root node**, five entries. One flat string
+for the scalars, and one plain key per wheel *name* — user-typed, so free to
+contain the flat format's `=`/`;` delimiters, the same wall `jointBody` and
+the sound file hit:
+
+```
+userData["vehicle"]         drive=direct;driven=awd;auto=1;chassiswidth=1.8;chassisheight=1;chassislength=4.5;wheelradius=0.4;wheelwidth=0.3;track=1.6;wheelbase=2.8;suspensiony=-0.4;mass=1500;travel=0.3;stiffness=35000;damping=4500;friction=2;brake=5000;steer=0.6;throttle=1500
+userData["vehicleWheelFR"]  WheelFrontRight
+userData["vehicleWheelFL"]  WheelFrontLeft
+userData["vehicleWheelRR"]  WheelRearRight
+userData["vehicleWheelRL"]  WheelRearLeft
+```
+
+`VehicleConfig` owns the format. Presence of the entry is what makes the node
+a vehicle (writing it never omits defaults), the steer angle is radians in the
+document and degrees in the inspector, and wheel order everywhere is the
+runtime's: FR, FL, RR, RL. **Four wheels only** — the runtime is a
+`std::array<4>`; trucks and trailers are out of scope as vehicles, but a
+trailer *is* buildable as a second body hitched to the car with an authored
+joint (the chassis actor answers to the root's name, so Body B can be the
+car).
+
+While `auto=1` the stored geometry fields are ignored and the derived numbers
+show in the section; unticking **Auto Geometry** seeds every field with the
+derived values (the Joint section's Driven-checkbox pattern) and the fields
+become yours. The derivation also compensates for static suspension settle,
+so the car *rests* at its authored ride height instead of sagging on the
+first Play. Two drive types, both through the proven `PhysxVehicle` runtime
+the demo ships: **Direct** (throttle torque straight to the wheels — the
+robust default) and **Engine** (the engine/clutch/gearbox chain). The
+transmission is **automatic all the way** — teleop and scripts only ever
+select forward or reverse; no manual-shift control exists in the editor.
+Driven wheels are AWD by default (grip before wheelspin), RWD/FWD a combo
+away.
+
+Selecting a vehicle draws its **wheel rings** under the editor overlay: a
+circle of the effective radius lying exactly on each resolved wheel, plus a
+forward chevron at the derived chassis centre — real metres, drawn through
+bodywork, because the rings are the proof of the picks. The root also gets a
+car icon marker, the same argument as the sensor's: "this drives" is
+otherwise only discoverable by selecting everything in turn.
+
+During Play, `PhysicsPlaySession` builds one PhysX vehicle per authored root
+— its own chassis actor plus wheel rigs, stepped through the world's substep
+loop — and **excludes the model's subtree from rigid-body cooking** (the
+vehicle is the body for all of it, the articulated-robot rule). The model
+root *mirrors* the chassis pose each frame and the wheel meshes mirror the
+per-wheel local poses, steer and suspension included; the mesh's authored
+orientation is preserved and spin composes on top in chassis space, so no
+spin axis is ever inferred from the geometry. An unresolvable pick — a
+missing name, a wheel with no geometry — is one console line and no vehicle,
+never a refused Play. Stop tears the vehicle down and the play snapshot puts
+the model back where it was authored.
+
+While a played scene has a vehicle, the editor's plain keys become the
+pedals (and the editor shortcuts on those keys yield until Stop, the same
+rule as a script that polls the keyboard): **W** throttle, **S** brake while
+rolling and reverse once stopped, **A/D** steer with speed-sensitive slew,
+**SPACE** handbrake.
+
+**Sensors ride along**: an IMU authored on the vehicle root (or anything in
+the model) resolves to the chassis actor, so acceleration and rates read the
+drive.
+
+**Scripts.** `threepp.editor.vehicle_from_object(obj)` — from the root or
+anything under it — returns the live `Vehicle` handle: `set_throttle` /
+`set_brake` / `set_steer`, the `reverse` selector, `speed`,
+`wheel_spin_rates`, `wheels_grounded`, and the chassis `position` /
+`rotation`. The controls are held pedals, not impulses, so a driving script
+sets them when they change rather than every frame — and teleop only writes
+while its keys are involved, so the two do not fight.
 
 ### Robots (URDF) in `userData`
 

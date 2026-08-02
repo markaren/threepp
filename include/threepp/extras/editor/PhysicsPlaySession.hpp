@@ -27,10 +27,13 @@
 #include "threepp/extras/editor/PlaySession.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
+#include "threepp/extras/editor/VehicleConfig.hpp"
 
 
 #include "threepp/extras/physx/Joint.hpp"
 #include "threepp/extras/physx/PhysxSoftBody.hpp"
+#include "threepp/extras/physx/PhysxVehicle.hpp"
+#include "threepp/extras/physx/PhysxVehicleEngineDrive.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/physx/UrdfArticulation.hpp"
 
@@ -275,6 +278,123 @@ namespace threepp::editor {
             return nullptr;
         }
 
+        // One authored vehicle, played: the model root the config was authored
+        // on, the four resolved wheel nodes (FR/FL/RR/RL), and the PhysX
+        // vehicle driving them. The vehicle creates its own chassis actor; the
+        // root MIRRORS the chassis pose each frame and the wheel nodes mirror
+        // the per-wheel local poses — nothing binds via PhysxWorld::bind.
+        struct PlayedVehicle {
+
+            Object3D* root = nullptr;
+            std::array<Object3D*, 4> wheels{};
+
+            // Controls + readouts over whichever drive leaf was built. The
+            // runtime base is a class template (one instantiation per settings
+            // type), so there is no common base pointer to hold — this small
+            // interface stands in for one.
+            struct Drive {
+                virtual ~Drive() = default;
+                virtual void setThrottle(float value) = 0;
+                virtual void setBrake(float value) = 0;
+                virtual void setSteer(float value) = 0;
+                // Direction selector, forward or reverse. Automatic all the
+                // way: the engine drive keeps its autobox and only ever hears
+                // Drive/Reverse, the direct drive flips its gear.
+                virtual void setReverse(bool reverse) = 0;
+                [[nodiscard]] virtual bool reverse() const = 0;
+                [[nodiscard]] virtual float forwardSpeed() const = 0;
+                [[nodiscard]] virtual float wheelAngularSpeed(int wheel) const = 0;
+                [[nodiscard]] virtual float wheelRotationAngle(int wheel) const = 0;
+                [[nodiscard]] virtual bool wheelGrounded(int wheel) const = 0;
+                [[nodiscard]] virtual ::physx::PxTransform chassisPose() const = 0;
+                [[nodiscard]] virtual ::physx::PxTransform wheelLocalPose(int wheel) const = 0;
+                [[nodiscard]] virtual ::physx::PxRigidDynamic* chassisActor() const = 0;
+            };
+            std::unique_ptr<Drive> drive;
+
+            // Mirror offsets, fixed at build (see buildVehicle): the model
+            // root relative to the chassis frame, and each wheel node relative
+            // to a hub-centred chassis-aligned frame at its PhysX rest
+            // position. The latter is what lets steer/spin compose in chassis
+            // space ON TOP of the wheel mesh's authored orientation — no spin
+            // axis is ever inferred from the mesh.
+            Matrix4 rootFromChassis;
+            std::array<Matrix4, 4> wheelFromHub;
+
+            // Teleop steer smoothing state (see driveVehicles).
+            float steer = 0.f;
+        };
+
+        // Vehicles built on the last start(), for the status readout and the
+        // tests. An unresolvable one (a missing wheel name, wheels with no
+        // geometry) is logged and left out rather than failing the play.
+        [[nodiscard]] std::size_t vehicleCount() const { return vehicles_.size(); }
+
+        // The vehicle governing `object`, or the nearest ancestor of it that
+        // is one — the same walk-up-parents contract as findActor, so a script
+        // or sensor authored on a wheel resolves to the car that owns it.
+        [[nodiscard]] const PlayedVehicle* findVehicle(const Object3D* object) const {
+
+            for (const Object3D* o = object; o != nullptr; o = o->parent) {
+                for (const auto& played : vehicles_) {
+                    if (played->root == o) return played.get();
+                }
+            }
+            return nullptr;
+        }
+
+        // Teleop for every played vehicle, straight from the Vehicle demo's
+        // proven feel: slewed speed-sensitive steering, and a brake/reverse
+        // split on the backward input — S brakes while rolling forward and
+        // reverses once (nearly) stopped, the arcade convention. Called by the
+        // editor each frame with its key state; the transmission choice stays
+        // automatic throughout (see PlayedVehicle::Drive::setReverse).
+        void driveVehicles(bool forward, bool backward, float steerInput,
+                           bool handbrake, float dt) {
+
+            for (auto& played : vehicles_) {
+                if (!played->drive) continue;
+                auto& drive = *played->drive;
+                const float speed = drive.forwardSpeed();
+
+                const float steerScale = 1.f / (1.f + std::abs(speed) * 3.6f * 0.015f);
+                const float slew = std::min(1.f, dt * 2.f);
+                played->steer += (steerInput * steerScale - played->steer) * slew;
+                drive.setSteer(played->steer);
+
+                float throttle = 0.f;
+                float brake = handbrake ? 1.f : 0.f;
+                if (forward && !backward) {
+                    if (drive.reverse() && speed < -0.5f) {
+                        brake = 1.f;// still rolling backwards: stop first
+                    } else {
+                        drive.setReverse(false);
+                        throttle = 1.f;
+                    }
+                } else if (backward && !forward) {
+                    if (!drive.reverse() && speed > 0.5f) {
+                        brake = 1.f;// rolling forward: S is the brake pedal
+                    } else {
+                        drive.setReverse(true);
+                        throttle = 1.f;
+                    }
+                }
+                drive.setThrottle(throttle);
+                drive.setBrake(brake);
+            }
+        }
+
+        // Whether any played vehicle's teleop steer is still slewing back to
+        // centre — the editor keeps feeding released-keys frames until it is,
+        // so letting go of A does not leave the wheels cranked.
+        [[nodiscard]] bool vehiclesSteering() const {
+
+            for (const auto& played : vehicles_) {
+                if (std::abs(played->steer) > 0.005f) return true;
+            }
+            return false;
+        }
+
         // Joint nodes whose constraint BROKE since the last drain, in break
         // order. Single consumer, and draining empties it: the script session
         // turns these into on_break callbacks each frame. The console line is
@@ -312,6 +432,7 @@ namespace threepp::editor {
             brokenJoints_.clear();
             breakWatch_ = 0;
             articulations_.clear();
+            vehicles_.clear();
             decompCache_.clear();
 
             // Collect first, create second: creating an actor binds the object,
@@ -335,6 +456,15 @@ namespace threepp::editor {
                 }
             });
 
+            // The vehicles to simulate, found before the rigid-body walk for the
+            // same reason the robots are: a vehicle's subtree — its bodywork,
+            // its wheel meshes — is simulated BY the vehicle, and a rigid body
+            // cooked over any of it would double the dynamics there.
+            std::vector<Object3D*> vehicleRoots;
+            scene.traverse([&](Object3D& object) {
+                if (VehicleConfig::isVehicle(object)) vehicleRoots.push_back(&object);
+            });
+
             std::vector<Object3D*> targets;
             bool wantsSoftBodies = false;
             scene.traverse([&](Object3D& object) {
@@ -343,6 +473,8 @@ namespace threepp::editor {
                     // simulated link; a second rigid body over it would double the
                     // dynamics at that spot.
                     if (insideArticulatedRobot(object, articulatedRobots)) return;
+                    // Same rule for a vehicle's subtree (the root included).
+                    if (insideVehicle(object, vehicleRoots)) return;
                     targets.push_back(&object);
                     if (config->body == PhysicsConfig::Body::Soft) wantsSoftBodies = true;
                 }
@@ -363,6 +495,14 @@ namespace threepp::editor {
                 const auto config = PhysicsConfig::read(*object);
                 if (!config) continue;
                 if (createActor(*object, *config)) ++bodyCount_;
+            }
+
+            // Vehicles after the rigid bodies and before the joints: each one
+            // creates its own chassis actor, and registering that actor here
+            // is what lets a joint below name the chassis — a trailer is a
+            // second vehicle plus an authored joint.
+            for (auto* root : vehicleRoots) {
+                buildVehicle(*root);
             }
 
             // Joints last: they resolve their OTHER body by name against
@@ -401,6 +541,9 @@ namespace threepp::editor {
             // AFTER the step, so the inspector and any sensor read the pose the
             // frame ended on. The play snapshot undoes all of it on Stop.
             for (const auto& played : articulations_) mirrorArticulation(*played);
+            // And each vehicle's chassis + wheel poses onto the model, same
+            // timing, same snapshot rule.
+            for (const auto& played : vehicles_) mirrorVehicle(*played);
         }
 
         void stop() override {
@@ -420,6 +563,11 @@ namespace threepp::editor {
             breakWatch_ = 0;
             brokenJoints_.clear();
             joints_.clear();
+            // Vehicles before the world: a vehicle's destructor unregisters
+            // its substep callback and pulls its chassis actor out of the
+            // scene, both of which need the world alive. After the joints,
+            // which may be constraining that chassis.
+            vehicles_.clear();
             // Destroy the articulations while the world is still alive: an
             // Articulation releases itself back into the scene it belongs to, so
             // it must go before the world it was added to. (On the normal Stop
@@ -450,6 +598,254 @@ namespace threepp::editor {
                 }
             }
             return false;
+        }
+
+        // The same walk against the authored vehicle roots (roots included):
+        // everything under one is simulated by its vehicle.
+        static bool insideVehicle(const Object3D& object, const std::vector<Object3D*>& roots) {
+
+            for (const Object3D* o = &object; o != nullptr; o = o->parent) {
+                for (const auto* root : roots) {
+                    if (o == root) return true;
+                }
+            }
+            return false;
+        }
+
+        // PlayedVehicle::Drive over a concrete leaf. The reverse selector is
+        // the one call the two leaves spell differently — the direct drive has
+        // a gear, the engine drive a direction (its gearbox stays automatic).
+        template<class V>
+        struct VehicleDrive final : PlayedVehicle::Drive {
+
+            std::unique_ptr<V> vehicle;
+
+            explicit VehicleDrive(std::unique_ptr<V> v) : vehicle(std::move(v)) {}
+
+            void setThrottle(float value) override { vehicle->setThrottle(value); }
+            void setBrake(float value) override { vehicle->setBrake(value); }
+            void setSteer(float value) override { vehicle->setSteer(value); }
+            void setReverse(bool reverse) override { setReverseOn(*vehicle, reverse); }
+            [[nodiscard]] bool reverse() const override { return reverseOf(*vehicle); }
+            [[nodiscard]] float forwardSpeed() const override { return vehicle->forwardSpeed(); }
+            [[nodiscard]] float wheelAngularSpeed(int wheel) const override {
+                return vehicle->wheelAngularSpeed(wheel);
+            }
+            [[nodiscard]] float wheelRotationAngle(int wheel) const override {
+                return vehicle->wheelRotationAngle(wheel);
+            }
+            [[nodiscard]] bool wheelGrounded(int wheel) const override {
+                return vehicle->wheelGrounded(wheel);
+            }
+            [[nodiscard]] ::physx::PxTransform chassisPose() const override {
+                return vehicle->chassisPose();
+            }
+            [[nodiscard]] ::physx::PxTransform wheelLocalPose(int wheel) const override {
+                return vehicle->wheelLocalPose(wheel);
+            }
+            [[nodiscard]] ::physx::PxRigidDynamic* chassisActor() const override {
+                return vehicle->chassisActor();
+            }
+
+        private:
+            static void setReverseOn(PhysxVehicle& v, bool reverse) {
+                v.setGear(reverse ? PhysxVehicle::Gear::Reverse : PhysxVehicle::Gear::Forward);
+            }
+            static void setReverseOn(PhysxVehicleEngineDrive& v, bool reverse) {
+                v.setDirection(reverse ? PhysxVehicleEngineDrive::Direction::Reverse
+                                       : PhysxVehicleEngineDrive::Direction::Drive);
+            }
+            static bool reverseOf(const PhysxVehicle& v) {
+                return v.gear() == PhysxVehicle::Gear::Reverse;
+            }
+            static bool reverseOf(const PhysxVehicleEngineDrive& v) {
+                return v.direction() == PhysxVehicleEngineDrive::Direction::Reverse;
+            }
+        };
+
+        // Build one authored vehicle (see VehicleConfig for the model: config
+        // on the imported model's root, four wheels by name, geometry derived
+        // from them unless overridden). Anything unresolvable is one log line
+        // and no vehicle — a broken pick must not take the whole play down.
+        void buildVehicle(Object3D& root) {
+
+            const auto config = VehicleConfig::read(root);
+            if (!config) return;
+
+            auto geo = config->derived(root);
+            if (!geo.valid) {
+                log("vehicle: \"" + root.name + "\" - " + geo.problem + " - not simulated");
+                return;
+            }
+
+            auto played = std::make_unique<PlayedVehicle>();
+            played->root = &root;
+            played->wheels = geo.wheels;
+
+            // The values actually simulated: derived while auto is on,
+            // authored (clamped sane) once it is off. The chassis frame is
+            // never authorable — the wheels are it (see VehicleGeometry).
+            const bool autoGeo = config->autoGeometry;
+            const float track = autoGeo ? geo.trackWidth : std::max(config->trackWidth, 0.1f);
+            const float base = autoGeo ? geo.wheelbase : std::max(config->wheelbase, 0.1f);
+            const float attachY = autoGeo ? geo.suspensionY : config->suspensionY;
+            const float radius = autoGeo ? geo.wheelRadius : std::max(config->wheelRadius, 0.01f);
+            const float halfWidth =
+                    0.5f * (autoGeo ? geo.wheelWidth : std::max(config->wheelWidth, 0.02f));
+
+            const auto fill = [&](PhysxVehicleBaseSettings& s) {
+                s.chassisWidth = autoGeo ? geo.chassisWidth : std::max(config->chassisWidth, 0.1f);
+                s.chassisHeight = autoGeo ? geo.chassisHeight : std::max(config->chassisHeight, 0.1f);
+                s.chassisLength = autoGeo ? geo.chassisLength : std::max(config->chassisLength, 0.1f);
+                s.chassisMass = std::max(config->mass, 1.f);
+                s.wheelRadius = radius;
+                s.wheelHalfWidth = std::max(halfWidth, 0.01f);
+                s.trackWidth = track;
+                s.wheelbase = base;
+                s.suspensionTravelDist = std::max(config->suspensionTravel, 0.01f);
+                s.suspensionStiffness = std::max(config->suspensionStiffness, 100.f);
+                s.suspensionDamping = std::max(config->suspensionDamping, 0.f);
+                s.suspensionAttachmentY = attachY;
+                s.maxBrakeTorque = std::max(config->maxBrakeTorque, 0.f);
+                s.maxSteerAngleRad = std::clamp(config->maxSteerAngle, 0.05f, 1.5f);
+                s.tireFriction = std::max(config->tireFriction, 0.1f);
+                // The Vehicle demo's street tuning, for the demo's reason: the
+                // contact patch has to transmit force faster than the drive
+                // can spin the wheel, or the first Play is a burnout.
+                s.longitudinalStiffness = 100'000.f;
+                switch (config->driven) {
+                    case VehicleConfig::Driven::Rear:
+                        s.drivenWheels = {false, false, true, true};
+                        break;
+                    case VehicleConfig::Driven::Front:
+                        s.drivenWheels = {true, true, false, false};
+                        break;
+                    case VehicleConfig::Driven::All:
+                        s.drivenWheels = {true, true, true, true};
+                        break;
+                }
+                s.spawnPosition = geo.position;
+                s.spawnRotation = geo.rotation;
+            };
+
+            try {
+                if (config->drive == VehicleConfig::Drive::Engine) {
+                    PhysxVehicleEngineDrive::Settings s;// its ctor's overrides, then ours
+                    fill(s);
+                    played->drive = std::make_unique<VehicleDrive<PhysxVehicleEngineDrive>>(
+                            std::make_unique<PhysxVehicleEngineDrive>(*world_, s));
+                } else {
+                    PhysxVehicle::Settings s;
+                    fill(s);
+                    s.maxThrottleTorque = std::max(config->throttleTorque, 0.f);
+                    played->drive = std::make_unique<VehicleDrive<PhysxVehicle>>(
+                            std::make_unique<PhysxVehicle>(*world_, s));
+                }
+            } catch (const std::exception& e) {
+                log("vehicle: \"" + root.name + "\" could not be built - " + e.what());
+                return;
+            }
+
+            // --- mirror offsets, from the authored rest pose ----------------
+            // Root offset: where the model sits relative to the chassis frame.
+            Matrix4 chassisRest;
+            chassisRest.compose(geo.position, geo.rotation, Vector3(1.f, 1.f, 1.f));
+            Matrix4 chassisRestInv(chassisRest);
+            chassisRestInv.invert();
+
+            root.updateWorldMatrix(true, false);
+            played->rootFromChassis.multiplyMatrices(chassisRestInv, *root.matrixWorld);
+
+            // Per-wheel offset: the wheel node relative to a hub frame at the
+            // PhysX rest position — symmetric (±track/2, restY, ±base/2), with
+            // restY the static-equilibrium hang below the attachment. At rest
+            // the composed mirror reproduces the authored pose exactly (any
+            // hub asymmetry lives in this offset); from there steer and spin
+            // rotate the mesh about its own hub in chassis space.
+            const float travel = std::max(config->suspensionTravel, 0.01f);
+            const float jounceStatic = std::clamp(
+                    0.25f * std::max(config->mass, 1.f) * 9.81f /
+                            std::max(config->suspensionStiffness, 100.f),
+                    0.f, travel);
+            const float restY = attachY - (travel - jounceStatic);
+            const float halfTrack = track * 0.5f;
+            const float halfBase = base * 0.5f;
+            const Vector3 rest[4] = {
+                    {+halfTrack, restY, +halfBase},// 0 front-right
+                    {-halfTrack, restY, +halfBase},// 1 front-left
+                    {+halfTrack, restY, -halfBase},// 2 rear-right
+                    {-halfTrack, restY, -halfBase},// 3 rear-left
+            };
+            for (int i = 0; i < 4; ++i) {
+                geo.wheels[i]->updateWorldMatrix(true, false);
+                Matrix4 hubInv;
+                hubInv.makeTranslation(-rest[i].x, -rest[i].y, -rest[i].z);
+                Matrix4 relRest;
+                relRest.multiplyMatrices(chassisRestInv, *geo.wheels[i]->matrixWorld);
+                played->wheelFromHub[i].multiplyMatrices(hubInv, relRest);
+            }
+
+            // Register the chassis actor against the root, so a joint can name
+            // the car (a trailer hitch), a sensor authored on it resolves, and
+            // rigid_body_from_object answers with the chassis.
+            if (auto* actor = played->drive->chassisActor()) {
+                actors_.emplace(&root, actor);
+                objects_.emplace(actor, &root);
+                world_->associate(root, *actor);
+            }
+
+            vehicles_.push_back(std::move(played));
+        }
+
+        // World matrix -> the node's local position/quaternion. Scale is left
+        // alone: the mirror moves models, it does not resize them.
+        static void writeLocalPose(Object3D& node, const Matrix4& world) {
+
+            Matrix4 local(world);
+            if (node.parent) {
+                node.parent->updateWorldMatrix(true, false);
+                Matrix4 parentInv(*node.parent->matrixWorld);
+                parentInv.invert();
+                local.premultiply(parentInv);
+            }
+            Vector3 position, scale;
+            Quaternion rotation;
+            local.decompose(position, rotation, scale);
+            node.position.copy(position);
+            node.quaternion.copy(rotation);
+        }
+
+        // Read the chassis pose and the per-wheel local poses back onto the
+        // model: root = chassis × rest offset, wheel = chassis × wheelLocalPose
+        // × hub offset. The wheel write comes after the root's, and resolves
+        // its parent chain through the root pose just written.
+        void mirrorVehicle(const PlayedVehicle& played) {
+
+            if (!played.root || !played.drive) return;
+
+            const auto pose = played.drive->chassisPose();
+            Matrix4 chassisNow;
+            chassisNow.compose(Vector3(pose.p.x, pose.p.y, pose.p.z),
+                               Quaternion(pose.q.x, pose.q.y, pose.q.z, pose.q.w),
+                               Vector3(1.f, 1.f, 1.f));
+
+            Matrix4 rootWorld(chassisNow);
+            rootWorld.multiply(played.rootFromChassis);
+            writeLocalPose(*played.root, rootWorld);
+
+            for (int i = 0; i < 4; ++i) {
+                auto* wheel = played.wheels[i];
+                if (!wheel) continue;
+                const auto wp = played.drive->wheelLocalPose(i);
+                Matrix4 wheelLocal;
+                wheelLocal.compose(Vector3(wp.p.x, wp.p.y, wp.p.z),
+                                   Quaternion(wp.q.x, wp.q.y, wp.q.z, wp.q.w),
+                                   Vector3(1.f, 1.f, 1.f));
+                Matrix4 wheelWorld(chassisNow);
+                wheelWorld.multiply(wheelLocal);
+                wheelWorld.multiply(played.wheelFromHub[i]);
+                writeLocalPose(*wheel, wheelWorld);
+            }
         }
 
         // Build one reduced-coordinate articulation for a visual robot and wire it
@@ -1490,6 +1886,9 @@ namespace threepp::editor {
         // here against the one root that owns them.
         std::unordered_map<const ::physx::PxRigidActor*, Object3D*> objects_;
         std::vector<std::unique_ptr<PlayedArticulation>> articulations_;
+        // Cleared after the joints and before the world — see stop().
+        // unique_ptr so PlayedVehicle* handles (Python's) stay stable.
+        std::vector<std::unique_ptr<PlayedVehicle>> vehicles_;
         // Cleared before articulations_ and world_ — see stop().
         std::vector<PlayedJoint> joints_;
         // The constraint-break subscription and its per-frame harvest (see

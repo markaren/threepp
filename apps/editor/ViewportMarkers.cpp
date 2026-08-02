@@ -20,6 +20,7 @@
 #include "threepp/extras/editor/SensorConfig.hpp"
 #include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
+#include "threepp/extras/editor/VehicleConfig.hpp"
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/core/BufferGeometry.hpp"
@@ -70,6 +71,7 @@ namespace {
         Sensor,
         Sound,
         Joint,
+        Vehicle,
         kCount
     };
 
@@ -168,6 +170,16 @@ namespace {
 <path d="M12 8 C14.21 8 16 9.79 16 12 C16 14.21 14.21 16 12 16 C9.79 16 8 14.21 8 12 C8 9.79 9.79 8 12 8 Z M12 10.2 C11.01 10.2 10.2 11.01 10.2 12 C10.2 12.99 11.01 13.8 12 13.8 C12.99 13.8 13.8 12.99 13.8 12 C13.8 11.01 12.99 10.2 12 10.2 Z"/>
 </svg>)";
 
+            // A car in profile: cabin over body, two ringed wheels. Says
+            // "this model drives" — the picks and the tuning are the
+            // inspector's business.
+            case Icon::Vehicle:
+                return R"(<svg viewBox="0 0 24 24">
+<path d="M2.5 10.5 L6 10 L8.5 6.5 L15.5 6.5 L18.5 10 L21.5 11 L21.5 15 L2.5 15 Z"/>
+<path d="M7 13.9 C8.44 13.9 9.6 15.06 9.6 16.5 C9.6 17.94 8.44 19.1 7 19.1 C5.56 19.1 4.4 17.94 4.4 16.5 C4.4 15.06 5.56 13.9 7 13.9 Z M7 15.3 C6.34 15.3 5.8 15.84 5.8 16.5 C5.8 17.16 6.34 17.7 7 17.7 C7.66 17.7 8.2 17.16 8.2 16.5 C8.2 15.84 7.66 15.3 7 15.3 Z"/>
+<path d="M17 13.9 C18.44 13.9 19.6 15.06 19.6 16.5 C19.6 17.94 18.44 19.1 17 19.1 C15.56 19.1 14.4 17.94 14.4 16.5 C14.4 15.06 15.56 13.9 17 13.9 Z M17 15.3 C16.34 15.3 15.8 15.84 15.8 16.5 C15.8 17.16 16.34 17.7 17 17.7 C17.66 17.7 18.2 17.16 18.2 16.5 C18.2 15.84 17.66 15.3 17 15.3 Z"/>
+</svg>)";
+
             // A fence: two posts and a rail — a conveyor wall's point. Says
             // "this drags a barrier" before it is clicked.
             case Icon::WallPoint:
@@ -212,6 +224,10 @@ namespace {
         if (SoundConfig::isSound(object)) return Icon::Sound;
         // A joint is its own plain node — the entry is its whole identity.
         if (JointConfig::isJoint(object)) return Icon::Joint;
+        // A vehicle is authored on a model that renders fine; the icon is the
+        // sensor's argument — "this drives" is otherwise only discoverable by
+        // selecting everything in turn.
+        if (VehicleConfig::isVehicle(object)) return Icon::Vehicle;
         // Before the type checks: a control point is an ordinary Object3D and
         // is told apart by its parent, not by what it is.
         if (SplineConfig::splineOf(object)) return Icon::SplinePoint;
@@ -365,7 +381,7 @@ void EditorApp::syncViewportMarkers() {
         if (object.as<Camera>() || object.as<Light>() || SplineConfig::splineOf(object) ||
             ConveyorConfig::conveyorOf(object) || ConveyorWallConfig::wallOf(object) ||
             (sensor && sensor->enabled) || SoundConfig::isSound(object) ||
-            JointConfig::isJoint(object)) {
+            JointConfig::isJoint(object) || VehicleConfig::isVehicle(object)) {
             owners.push_back(&object);
         }
     });
@@ -722,4 +738,128 @@ void EditorApp::clearJointHelper() {
     jointHelper_->removeFromParent();
     jointHelper_.reset();
     jointHelperKey_.clear();
+}
+
+// ------------------------------------------------------------- vehicle rings
+
+void EditorApp::syncVehicleHelper() {
+
+    // Only for the SELECTED vehicle, the joint helper's rule. The rings are
+    // the proof of the picks: a circle of the effective radius lying exactly
+    // on each resolved wheel mesh, plus a forward chevron at the chassis
+    // centre — the two facts (which meshes, which way is forward) a car is
+    // authored wrong without.
+    auto* selected = selection_.get();
+    const auto config = selected && VehicleConfig::isVehicle(*selected)
+                                ? VehicleConfig::read(*selected)
+                                : std::nullopt;
+    if (!config) {
+        clearVehicleHelper();
+        return;
+    }
+
+    const auto geo = config->derived(*selected);
+    if (!geo.valid) {
+        // Nothing measurable to draw; the inspector names the missing pick.
+        clearVehicleHelper();
+        return;
+    }
+
+    // What Play will actually use, so the picture cannot flatter the config.
+    const float radius = config->autoGeometry ? geo.wheelRadius
+                                              : std::max(config->wheelRadius, 0.01f);
+    float hubY = 0.f;
+    for (const auto& hub : geo.hubs) hubY += 0.25f * hub.y;
+
+    // Keyed by uuid plus every number the picture is built from — a rebuild
+    // trigger, not a hash; the placement below is per-frame regardless.
+    char key[256];
+    std::snprintf(key, sizeof(key),
+                  "%s|%.3f|%.3f|%.2f,%.2f,%.2f|%.2f,%.2f,%.2f|%.2f,%.2f,%.2f|%.2f,%.2f,%.2f",
+                  selected->uuid.c_str(), static_cast<double>(radius), static_cast<double>(hubY),
+                  static_cast<double>(geo.hubs[0].x), static_cast<double>(geo.hubs[0].y),
+                  static_cast<double>(geo.hubs[0].z),
+                  static_cast<double>(geo.hubs[1].x), static_cast<double>(geo.hubs[1].y),
+                  static_cast<double>(geo.hubs[1].z),
+                  static_cast<double>(geo.hubs[2].x), static_cast<double>(geo.hubs[2].y),
+                  static_cast<double>(geo.hubs[2].z),
+                  static_cast<double>(geo.hubs[3].x), static_cast<double>(geo.hubs[3].y),
+                  static_cast<double>(geo.hubs[3].z));
+
+    if (!vehicleHelper_) {
+        auto material = LineBasicMaterial::create(
+                LineBasicMaterial::Params().vertexColors(true).toneMapped(false));
+        material->transparent = true;
+        material->opacity = 0.9f;
+        // The wheels sit inside their arches; a ring hidden by bodywork
+        // proves nothing.
+        material->depthTest = false;
+        vehicleHelper_ = LineSegments::create(BufferGeometry::create(), material);
+        vehicleHelper_->renderOrder = kSoundRingRenderOrder;
+        vehicleHelper_->frustumCulled = false;
+        vehicleHelper_->matrixAutoUpdate = false;
+        vehicleHelperKey_.clear();
+        overlay_->add(vehicleHelper_);
+    }
+
+    if (vehicleHelperKey_ != key) {
+        vehicleHelperKey_ = key;
+
+        // Built in the chassis frame, real metres — the rings claim "this is
+        // the wheel", so they must lie on it at any zoom, unlike the
+        // screen-sized joint helper.
+        std::vector<float> positions;
+        std::vector<float> colors;
+        const auto tint = theme::accent();
+
+        const auto seg = [&](const Vector3& a, const Vector3& b, float shade) {
+            positions.insert(positions.end(), {a.x, a.y, a.z, b.x, b.y, b.z});
+            for (int v = 0; v < 2; ++v) {
+                colors.insert(colors.end(), {tint.x * shade, tint.y * shade, tint.z * shade});
+            }
+        };
+
+        // One ring per wheel, in the YZ plane (the axle is chassis X).
+        constexpr int segments = 48;
+        for (const auto& hub : geo.hubs) {
+            for (int i = 0; i < segments; ++i) {
+                const float a0 = math::TWO_PI * static_cast<float>(i) / segments;
+                const float a1 = math::TWO_PI * static_cast<float>(i + 1) / segments;
+                seg(Vector3(hub.x, hub.y + radius * std::cos(a0), hub.z + radius * std::sin(a0)),
+                    Vector3(hub.x, hub.y + radius * std::cos(a1), hub.z + radius * std::sin(a1)),
+                    1.f);
+            }
+        }
+
+        // The forward chevron: +Z is where W takes it.
+        const float r = radius;
+        seg(Vector3(0.f, hubY, -r), Vector3(0.f, hubY, 2.f * r), 0.6f);
+        seg(Vector3(0.f, hubY, 2.f * r), Vector3(0.3f * r, hubY, 1.4f * r), 0.6f);
+        seg(Vector3(0.f, hubY, 2.f * r), Vector3(-0.3f * r, hubY, 1.4f * r), 0.6f);
+
+        // Replaced wholesale rather than rewritten, the sound rings' rule.
+        const auto old = vehicleHelper_->geometry();
+        auto geometry = BufferGeometry::create();
+        geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
+        geometry->setAttribute("color", FloatBufferAttribute::create(colors, 3));
+        vehicleHelper_->setGeometry(geometry);
+        if (old) old->dispose();
+    }
+
+    // Every frame: applyAuthoringVisibility hides the node for a screenshot
+    // pass or a Play, and nothing else would turn it back on.
+    vehicleHelper_->visible = true;
+
+    // Placed every frame at the derived chassis frame — the gizmo can be
+    // dragging the model. Unit scale: the vertices are already metres.
+    vehicleHelper_->matrix->compose(geo.position, geo.rotation, Vector3(1.f, 1.f, 1.f));
+    vehicleHelper_->matrixWorldNeedsUpdate = true;
+}
+
+void EditorApp::clearVehicleHelper() {
+
+    if (!vehicleHelper_) return;
+    vehicleHelper_->removeFromParent();
+    vehicleHelper_.reset();
+    vehicleHelperKey_.clear();
 }

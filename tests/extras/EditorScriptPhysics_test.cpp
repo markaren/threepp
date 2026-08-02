@@ -14,6 +14,11 @@
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
+#include "threepp/extras/editor/VehicleConfig.hpp"
+
+#include "threepp/geometries/BoxGeometry.hpp"
+#include "threepp/geometries/CylinderGeometry.hpp"
+#include "threepp/objects/Group.hpp"
 
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -657,6 +662,77 @@ class Fuse:
 
     // The callback fired exactly where it was authored: on the joint node.
     CHECK(joint->name == "snapped");
+
+    scripts.stop();
+    physics.stop();
+}
+
+TEST_CASE("a script drives the vehicle physics is simulating", "[editor][scripting][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+    addGround(scene);
+
+    // The primitives car from EditorVehiclePlay_test: box body over four
+    // named cylinder wheels, hubs at (±0.8, 0.4, ±1.4), radius 0.4, resting
+    // on the ground and authored facing +Z.
+    auto car = Group::create();
+    car->name = "Car";
+    auto body = Mesh::create(BoxGeometry::create(1.6f, 0.8f, 4.2f));
+    body->name = "Body";
+    body->position.set(0.f, 1.f, 0.f);
+    car->add(body);
+    const char* wheelNames[4] = {"FR", "FL", "RR", "RL"};
+    const Vector3 hubs[4] = {{0.8f, 0.4f, 1.4f},
+                             {-0.8f, 0.4f, 1.4f},
+                             {0.8f, 0.4f, -1.4f},
+                             {-0.8f, 0.4f, -1.4f}};
+    for (int i = 0; i < 4; ++i) {
+        auto wheel = Mesh::create(CylinderGeometry::create(0.4f, 0.4f, 0.3f, 24));
+        wheel->name = wheelNames[i];
+        wheel->rotation.z = math::PI / 2;
+        wheel->position.copy(hubs[i]);
+        car->add(wheel);
+    }
+    VehicleConfig vehicleConfig;
+    vehicleConfig.wheels = {"FR", "FL", "RR", "RL"};
+    vehicleConfig.write(*car);
+
+    // The script rides the model root and floors it — the handle is the
+    // programmatic twin of the editor's W key.
+    ScriptConfig script;
+    script.source = R"(
+import threepp
+
+class Driver:
+    def start(self, obj):
+        self.obj = obj
+        self.car = threepp.editor.vehicle_from_object(obj)
+        if self.car and not self.car.reverse:
+            self.obj.name = "resolved"
+
+    def update(self, dt):
+        if self.car:
+            self.car.set_throttle(1.0)
+            if self.car.speed > 2.0 and all(self.car.wheels_grounded):
+                self.obj.name = "rolling"
+)";
+    script.write(*car);
+    scene.add(car);
+
+    PhysicsPlaySession physics;
+    ScriptPlaySession scripts;
+
+    physics.start(scene);
+    scripts.start(scene);
+    REQUIRE(physics.vehicleCount() == 1);
+    REQUIRE(scripts.errorFor(car->uuid).empty());
+    CHECK(car->name == "resolved");// the handle existed at start(), typed right
+
+    run(physics, scripts, 240);// 4 s of full throttle
+
+    CHECK(car->position.z > 3.f);// the script's throttle moved the car
+    CHECK(car->name == "rolling");// and the readouts saw it happen
 
     scripts.stop();
     physics.stop();
