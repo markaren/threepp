@@ -90,10 +90,23 @@ struct OverlayRecordScratch {
 // ─────────────────────────────────────────────────────────────────────────────
 
 OverlayPass::OverlayPass(VulkanContext& ctx, uint32_t framesInFlight,
-                         SampledImageCreator uploadFn, RetireImageFn retireFn)
+                         SampledImageCreator uploadFn, RetireImageFn retireFn,
+                         RetireBufferFn retireBufferFn)
     : ctx_(ctx), framesInFlight_(framesInFlight), uploadFn_(std::move(uploadFn)),
-      retireFn_(std::move(retireFn)), scratch_(std::make_unique<OverlayRecordScratch>()) {
+      retireFn_(std::move(retireFn)), retireBufferFn_(std::move(retireBufferFn)),
+      scratch_(std::make_unique<OverlayRecordScratch>()) {
     spriteDescPools_.resize(framesInFlight_, VK_NULL_HANDLE);
+}
+
+void OverlayPass::retireBuffer(Buffer& b) {
+    if (b.handle == VK_NULL_HANDLE) return;
+    if (retireBufferFn_) {
+        retireBufferFn_(std::move(b));// zeroes b (RetireQueue::retire)
+    } else {
+        vkDeviceWaitIdle(ctx_.device());
+        destroyBuffer(ctx_.allocator(), b);
+    }
+    b = {};
 }
 
 OverlayPass::~OverlayPass() {
@@ -1292,10 +1305,10 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
         // Recycled pointer: this address was a DIFFERENT geometry whose
         // buffers we still hold. Retire them and re-upload from scratch
         // (the version fields would otherwise alias — both at 0).
-        destroyBuffer(ctx_.allocator(), it->second.vertex);
-        if (it->second.index.handle) destroyBuffer(ctx_.allocator(), it->second.index);
-        if (it->second.color.handle) destroyBuffer(ctx_.allocator(), it->second.color);
-        if (it->second.normal.handle) destroyBuffer(ctx_.allocator(), it->second.normal);
+        retireBuffer(it->second.vertex);
+        retireBuffer(it->second.index);
+        retireBuffer(it->second.color);
+        retireBuffer(it->second.normal);
         lineGeomCache_.erase(it);
         it = lineGeomCache_.end();
     }
@@ -1312,7 +1325,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
         const auto& posArr = posAttr->array();
         const VkDeviceSize vbBytes = posArr.size() * sizeof(float);
         if (vbBytes > rec.vertex.size) {
-            destroyBuffer(ctx_.allocator(), rec.vertex);
+            retireBuffer(rec.vertex);
             rec.vertex = createBuffer(
                     ctx_.allocator(), ctx_.device(), vbBytes,
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -1327,7 +1340,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
             const auto& indices = idxAttr->array();
             const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
             if (rec.index.handle == VK_NULL_HANDLE || ibBytes > rec.index.size) {
-                if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.index);
+                retireBuffer(rec.index);
                 rec.index = createBuffer(
                         ctx_.allocator(), ctx_.device(), ibBytes,
                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
@@ -1338,8 +1351,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
             rec.indexCount   = static_cast<uint32_t>(indices.size());
             rec.indexVersion = idxVer;
         } else if (rec.index.handle != VK_NULL_HANDLE) {
-            destroyBuffer(ctx_.allocator(), rec.index);
-            rec.index        = {};
+            retireBuffer(rec.index);
             rec.indexCount   = 0;
             rec.indexVersion = 0;
         }
@@ -1349,7 +1361,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
             FloatAttributeView colView(colAttr);
             const VkDeviceSize cbBytes = colView.size() * sizeof(float);
             if (rec.color.handle == VK_NULL_HANDLE || cbBytes > rec.color.size) {
-                if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.color);
+                retireBuffer(rec.color);
                 rec.color = createBuffer(
                         ctx_.allocator(), ctx_.device(), cbBytes,
                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -1359,8 +1371,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
             uploadHostVisible(ctx_.allocator(), rec.color, colView.data(), cbBytes);
             rec.colorVersion = colVer;
         } else if (rec.color.handle != VK_NULL_HANDLE) {
-            destroyBuffer(ctx_.allocator(), rec.color);
-            rec.color        = {};
+            retireBuffer(rec.color);
             rec.colorVersion = 0;
         }
 
@@ -1369,7 +1380,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
             const auto& nrmArr = nrmAttr->array();
             const VkDeviceSize nbBytes = nrmArr.size() * sizeof(float);
             if (rec.normal.handle == VK_NULL_HANDLE || nbBytes > rec.normal.size) {
-                if (rec.normal.handle != VK_NULL_HANDLE) destroyBuffer(ctx_.allocator(), rec.normal);
+                retireBuffer(rec.normal);
                 rec.normal = createBuffer(
                         ctx_.allocator(), ctx_.device(), nbBytes,
                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -1379,8 +1390,7 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
             uploadHostVisible(ctx_.allocator(), rec.normal, nrmArr.data(), nbBytes);
             rec.normalVersion = nrmVer;
         } else if (rec.normal.handle != VK_NULL_HANDLE) {
-            destroyBuffer(ctx_.allocator(), rec.normal);
-            rec.normal        = {};
+            retireBuffer(rec.normal);
             rec.normalVersion = 0;
         }
         return &rec;
@@ -1490,10 +1500,10 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         const uint64_t cutoff = overlayFrameCounter_ - 8;
         for (auto it = lineGeomCache_.begin(); it != lineGeomCache_.end();) {
             if (it->second.lastTouch < cutoff) {
-                destroyBuffer(ctx_.allocator(), it->second.vertex);
-                if (it->second.index.handle) destroyBuffer(ctx_.allocator(), it->second.index);
-                if (it->second.color.handle) destroyBuffer(ctx_.allocator(), it->second.color);
-                if (it->second.normal.handle) destroyBuffer(ctx_.allocator(), it->second.normal);
+                retireBuffer(it->second.vertex);
+                retireBuffer(it->second.index);
+                retireBuffer(it->second.color);
+                retireBuffer(it->second.normal);
                 it = lineGeomCache_.erase(it);
             } else {
                 ++it;

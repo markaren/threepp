@@ -63,8 +63,16 @@ namespace threepp::vulkan {
         // ensureSpriteAtlasTexture falls back to drain+destroy.
         using RetireImageFn = std::function<void(Image2D&&)>;
 
+        // Same contract for the geometry caches' vertex/index/color/normal
+        // buffers. The overlay re-uploads and evicts these MID-FRAME (a
+        // detection-box overlay rebuilds its line geometry every frame), while
+        // command buffers from the previous frames-in-flight can still be
+        // reading them — freeing inline is a use-after-free with zero margin.
+        // Optional: if unset, the buffer paths fall back to drain+destroy.
+        using RetireBufferFn = std::function<void(Buffer&&)>;
+
         OverlayPass(VulkanContext& ctx, uint32_t framesInFlight, SampledImageCreator uploadFn,
-                    RetireImageFn retireFn = {});
+                    RetireImageFn retireFn = {}, RetireBufferFn retireBufferFn = {});
         ~OverlayPass();
         OverlayPass(const OverlayPass&)            = delete;
         OverlayPass& operator=(const OverlayPass&) = delete;
@@ -146,10 +154,18 @@ namespace threepp::vulkan {
         const SpriteGeomRec*  ensureSpriteGeometryUploaded(const BufferGeometry* geom);
         const LineRec*        ensureLineGeometryUploaded(const BufferGeometry* geom);
 
+        // Free a cached geometry buffer that an in-flight frame may still be
+        // reading: hands it to the renderer's frame-serial retire queue, or
+        // drains the device first when no callback was wired. Zeroes `b`, and
+        // is a no-op on an already-null buffer. NOT for teardown — the
+        // destructor runs with the device idle and destroys inline.
+        void retireBuffer(Buffer& b);
+
         VulkanContext&      ctx_;
         uint32_t            framesInFlight_;
         SampledImageCreator uploadFn_;
         RetireImageFn       retireFn_;
+        RetireBufferFn      retireBufferFn_;
 
         // Draw lists gathered each record() call. Held here (not local vectors)
         // so their heap storage is reused frame to frame instead of realloc'd.

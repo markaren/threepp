@@ -3139,7 +3139,11 @@ namespace threepp {
                     // Retire stale sprite atlases through the frame-serial queue
                     // (no per-swap vkDeviceWaitIdle). Stamped with the frame
                     // being recorded when OverlayPass::record runs.
-                    [this](Image2D&& img) { retire(std::move(img)); });
+                    [this](Image2D&& img) { retire(std::move(img)); },
+                    // Same for the overlay's line/sprite geometry buffers, which
+                    // are re-uploaded and evicted mid-record while the previous
+                    // frames-in-flight may still be drawing from them.
+                    [this](Buffer&& b) { retire(std::move(b)); });
 
             // Optional one-shot fixed-footprint dump. Everything constructed above
             // is scene-independent, so this is the renderer's baseline cost — the
