@@ -19,8 +19,19 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <stdexcept>
 
 namespace threepp::vulkan {
+
+    // Number of descriptor bindings in the deferred set. Binding NUMBERS run
+    // 0..66 with 56 retired, so the table has 66 entries and the highest
+    // binding number is 66 — they are not the same quantity, which is exactly
+    // how the two exact-fit stack arrays below used to drift: adding binding 67
+    // to a 66-entry array wrote one element past the end (a silent stack smash
+    // that no validation layer can see). Both tables are std::array of this
+    // size now, filled through .at(), and the fill count is checked, so the
+    // failure mode is a loud throw at init instead.
+    constexpr uint32_t kDeferredBindingCount = 66;
 
     DeferredShade::DeferredShade(VulkanContext& ctx, uint32_t framesInFlight)
         : ctx_(ctx), framesInFlight_(framesInFlight) {
@@ -72,17 +83,18 @@ namespace threepp::vulkan {
         lci.minFilter  = VK_FILTER_LINEAR;
         check(vkCreateSampler(d, &lci, nullptr, &lutSampler_), "vkCreateSampler(froxel LUT)");
 
-        VkDescriptorSetLayoutBinding b[66]{};// KEEP the bound >= #set() calls below (a lagging bound = stack smash)
+        std::array<VkDescriptorSetLayoutBinding, kDeferredBindingCount> b{};
         // Dense cursor: array index and binding number diverge past the
         // retired 55-56 slot (binding numbers stay stable for the shaders,
         // the array carries no zero-init gap entries — those are invalid
         // layout bindings, not padding).
         uint32_t nb = 0;
         auto set = [&](uint32_t binding, VkDescriptorType t) {
-            b[nb].binding = binding;
-            b[nb].descriptorType = t;
-            b[nb].descriptorCount = 1;
-            b[nb].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            auto& e = b.at(nb);// bound-checked: one slot per set() call, exact fit
+            e.binding = binding;
+            e.descriptorType = t;
+            e.descriptorCount = 1;
+            e.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
             ++nb;
         };
         set(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);          // camera
@@ -166,10 +178,19 @@ namespace threepp::vulkan {
         set(65, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // cloud shadow (LINEAR — sun visibility sample)
         set(66, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // cloud aux CUR (shade's depth-aware upsample; texelFetch)
 
+        // Exact fit is the contract: a new binding must bump
+        // kDeferredBindingCount, and rewriteDescriptors must gain the matching
+        // write. Under-filling would leave a zero-initialised (invalid) binding
+        // in the layout, so this is checked in both directions.
+        if (nb != b.size()) {
+            throw std::runtime_error("[VulkanRenderer] deferred shade binding table "
+                                     "does not match kDeferredBindingCount");
+        }
+
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         dlci.bindingCount = nb;
-        dlci.pBindings = b;
+        dlci.pBindings = b.data();
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
 
@@ -676,16 +697,20 @@ namespace threepp::vulkan {
             froxelLutTexInfo.imageView   = in.froxelLut[f];
             froxelLutTexInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            VkWriteDescriptorSet w[66]{};
+            // One write per layout binding (same exact-fit contract as the
+            // layout table in createPipeline); .at() turns an index that ran
+            // past the end from a stack smash into a throw.
+            std::array<VkWriteDescriptorSet, kDeferredBindingCount> w{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
-                w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                w[n].dstSet = sets_[f];
-                w[n].dstBinding = bind;
-                w[n].descriptorCount = 1;
-                w[n].descriptorType = t;
-                w[n].pImageInfo = img;
-                w[n].pBufferInfo = buf;
+                auto& e = w.at(static_cast<size_t>(n));
+                e.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                e.dstSet = sets_[f];
+                e.dstBinding = bind;
+                e.descriptorCount = 1;
+                e.descriptorType = t;
+                e.pImageInfo = img;
+                e.pBufferInfo = buf;
             };
             setw(0, 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &camInfo);
             setw(1, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr, &lightInfo);
@@ -765,7 +790,7 @@ namespace threepp::vulkan {
             setw(63, 65, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudShadowTexInfo, nullptr);
             setw(64, 66, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &cloudAuxTexInfo,    nullptr);
             setw(65, 55, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &idsPrevInfo,        nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 66, w, 0, nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
         }
     }
 
