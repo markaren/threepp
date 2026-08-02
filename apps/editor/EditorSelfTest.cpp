@@ -23,9 +23,14 @@
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
+#include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
+
+#ifdef THREEPP_WITH_AUDIO
+#include "threepp/extras/editor/AudioPlaySession.hpp"
+#endif
 
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 #ifdef THREEPP_EDITOR_WITH_PHYSX
@@ -64,6 +69,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>// std::getenv (THREEPP_BENCH_DISABLE)
 #include <filesystem>
 #include <fstream>
@@ -103,6 +109,61 @@ namespace {
             farthest = std::max(farthest, nearest);
         }
         return farthest;
+    }
+
+    // A short 16-bit mono PCM WAV, written from scratch.
+    //
+    // The audio block needs a file miniaudio can actually decode, and generating
+    // one is better than reaching for threepp-data: it makes the block run on a
+    // machine that never fetched the assets, and WAV is the one format the
+    // vendored miniaudio decodes with no third-party code at all. A quiet sine,
+    // long enough that a handful of frames cannot run it out.
+    bool writeTestWav(const std::filesystem::path& path, float seconds = 2.f) {
+
+        constexpr int rate = 22050;
+        constexpr int bits = 16;
+        constexpr int channels = 1;
+        const auto frames = static_cast<std::uint32_t>(static_cast<float>(rate) * seconds);
+        const std::uint32_t dataBytes = frames * channels * (bits / 8);
+
+        std::ofstream out(path, std::ios::binary);
+        if (!out) return false;
+
+        const auto u32 = [&out](std::uint32_t v) {
+            const unsigned char bytes[4]{static_cast<unsigned char>(v & 0xff),
+                                         static_cast<unsigned char>((v >> 8) & 0xff),
+                                         static_cast<unsigned char>((v >> 16) & 0xff),
+                                         static_cast<unsigned char>((v >> 24) & 0xff)};
+            out.write(reinterpret_cast<const char*>(bytes), 4);
+        };
+        const auto u16 = [&out](std::uint16_t v) {
+            const unsigned char bytes[2]{static_cast<unsigned char>(v & 0xff),
+                                         static_cast<unsigned char>((v >> 8) & 0xff)};
+            out.write(reinterpret_cast<const char*>(bytes), 2);
+        };
+
+        out.write("RIFF", 4);
+        u32(36 + dataBytes);
+        out.write("WAVE", 4);
+        out.write("fmt ", 4);
+        u32(16);
+        u16(1);// PCM
+        u16(channels);
+        u32(rate);
+        u32(rate * channels * (bits / 8));
+        u16(static_cast<std::uint16_t>(channels * (bits / 8)));
+        u16(bits);
+        out.write("data", 4);
+        u32(dataBytes);
+
+        for (std::uint32_t i = 0; i < frames; ++i) {
+            const auto t = static_cast<float>(i) / rate;
+            const auto sample = static_cast<std::int16_t>(
+                    6000.f * std::sin(math::TWO_PI * 440.f * t));
+            u16(static_cast<std::uint16_t>(sample));
+        }
+
+        return out.good();
     }
 
 }// namespace
@@ -1039,6 +1100,7 @@ int EditorApp::runSelfTest() {
                 child == conveyors_.get() ||
                 child == static_cast<Object3D*>(physicsDebugLines_.get()) ||
                 child == static_cast<Object3D*>(cameraHelper_.get()) ||
+                child == static_cast<Object3D*>(soundRings_.get()) ||
                 child == static_cast<Object3D*>(gizmo_.get())) continue;
             ++n;
         }
@@ -5069,6 +5131,195 @@ int EditorApp::runSelfTest() {
 
         commands_.execute(std::make_unique<RemoveObjectCommand>(*text));
         step();
+    }
+
+    // --- sound -------------------------------------------------------------
+    // The whole authoring path for a sound node: Add ▸ Sound, the marker and
+    // the distance rings it earns, an edit through the same property command
+    // the inspector issues, a document round trip, and then Play — once with a
+    // file that is NOT there (which must not stop the session) and once with a
+    // real one (which must actually be playing).
+    {
+        newScene();
+        step(2);
+
+        auto sound = ObjectFactory::createSound(document_.scene());
+        const auto soundUuid = sound->uuid;
+        check(SoundConfig::read(*sound).has_value(), "the factory's sound node carries the sound entry");
+        check(SoundConfig::read(*sound) == SoundConfig{}, "at the documented defaults");
+
+        addObject(sound, document_.scene(), "Add Sound");
+        step(2);
+        check(inScene(sound.get()), "Add Sound puts it in the scene");
+
+        selectObject(sound.get());
+        step();
+        check(std::any_of(viewportMarkers_.begin(), viewportMarkers_.end(),
+                          [&](const ViewportMarker& marker) { return marker.owner == sound.get(); }),
+              "an authored sound gets a viewport marker");
+        check(soundRings_ != nullptr && soundRings_->visible,
+              "and a selected positional sound draws its distance rings");
+
+        commands_.undo();
+        step();
+        check(!inScene(sound.get()), "undo removes it");
+        commands_.redo();
+        step();
+        check(inScene(sound.get()), "redo puts it back");
+        // Redo re-parents the SAME object, so the shared_ptr above is still the
+        // node in the scene — nothing to re-resolve until the document reloads.
+
+        const auto soundDir = std::filesystem::temp_directory_path() / "threepp-editor-selftest-sound";
+        std::error_code ec;
+        std::filesystem::create_directories(soundDir, ec);
+        const auto wav = soundDir / "tone.wav";
+        const bool haveWav = writeTestWav(wav);
+        check(haveWav, "a decodable test WAV was written");
+
+        // The inspector's edit, verbatim: one SoundAuthoring property command
+        // carrying both userData entries.
+        SoundConfig authored;
+        authored.positional = true;
+        authored.autoplay = true;
+        authored.loop = false;
+        authored.volume = 0.4f;
+        authored.rate = 1.25f;
+        authored.minDistance = 2.5f;
+        authored.maxDistance = 12.f;
+        authored.rolloff = 1.75f;
+        authored.model = SoundConfig::DistanceModel::Linear;
+
+        {
+            auto* target = sound.get();
+            const auto before = SoundAuthoring::read(*sound);
+            commands_.execute(makeProperty<SoundAuthoring>(
+                    "Edit Sound", "sound:" + soundUuid,
+                    [target](const SoundAuthoring& value) { value.write(*target); },
+                    before, SoundAuthoring{authored, wav.generic_string()}));
+            step();
+        }
+        check(SoundConfig::read(*sound) == authored, "an edit rewrites the entry");
+        check(SoundConfig::file(*sound) == wav.generic_string(), "and records the file beside it");
+
+        const auto document = std::filesystem::temp_directory_path() / "threepp_editor_sound.json";
+        saveSceneAs(document);
+        openScene(document);
+        step();
+
+        // Everything past the reload has to go through the uuid: openScene
+        // replaced the scene, and `sound` names a node in the outgoing one.
+        auto* reloaded = findByUuid(document_.scene(), soundUuid);
+        check(reloaded != nullptr, "the sound survives save and reload");
+        check(reloaded && SoundConfig::read(*reloaded) == authored,
+              "its config round-trips through the document");
+        check(reloaded && SoundConfig::file(*reloaded) == wav.generic_string(),
+              "and so does the soundFile key");
+
+        // The audition, which Play never goes near: its own listener, its own
+        // Audio, and a uuid rather than a pointer holding the two together.
+        if (haveWav && reloaded) {
+            startAudition(*reloaded);
+#ifdef THREEPP_WITH_AUDIO
+            // On a machine with no device the button disables itself, and so
+            // does this: the failure is already logged once.
+            if (!auditionUnavailable_) {
+                check(isAuditioning(*reloaded), "Audition starts on the authored file");
+            }
+#endif
+            stopAudition();
+            check(!isAuditioning(*reloaded), "and the audition stops");
+            // Left RUNNING on purpose: the Play below has to take it down. The
+            // global "not while playing" gate does not cover the audition — it
+            // is not a document mutation — so nothing but startPlay() would.
+            startAudition(*reloaded);
+        }
+
+        // A picture of what the PASS lines above cannot describe: the speaker
+        // marker, the populated Sound section, and the min/max rings on the
+        // ground. The bottom panel steps aside the way the texture-settings
+        // shot does, so the section is not below the fold.
+        {
+            const bool bottomPanelWas = bottomPanelOpen_;
+            const auto gizmoWas = gizmoMode_;
+            bottomPanelOpen_ = false;
+            // Select mode, and off the template's Box: the marker is the point
+            // of the shot and both would sit on top of it.
+            gizmoMode_ = "select";
+            applyGizmoMode();
+            if (reloaded) reloaded->position.set(2.4f, 1.4f, 1.2f);
+            selectObject(reloaded);
+            // Far enough back that the 12 m max ring is in frame whole; the
+            // marker keeps a constant screen size, so pulling back costs it
+            // nothing.
+            camera_.position.set(8.f, 12.f, 22.f);
+            orbit_->target.set(2.4f, 0.5f, 1.2f);
+            step(4);
+            shootTo(std::filesystem::temp_directory_path() / "threepp_editor_sound.png");
+            bottomPanelOpen_ = bottomPanelWas;
+            gizmoMode_ = gizmoWas;
+            applyGizmoMode();
+            step();
+        }
+
+        // A file that is not there is an authoring mistake, not a crash and not
+        // a refused Play. It has to reach the console, though — silence here is
+        // the failure everyone spends an afternoon on.
+        {
+            const auto missing = soundDir / "not-here.wav";
+            std::filesystem::remove(missing, ec);
+            if (auto* node = findByUuid(document_.scene(), soundUuid)) {
+                SoundConfig::setFile(*node, missing.generic_string());
+            }
+            const auto logged = console_.size();
+            startPlay();
+            step(3);
+            check(isPlaying(), "Play starts even though the sound file is missing");
+            check(auditionUuid_.empty(), "and entering Play took the audition down");
+            bool reported = false;
+            for (std::size_t i = logged; i < console_.size(); ++i) {
+                if (console_[i].find("not-here.wav") != std::string::npos) reported = true;
+            }
+            check(reported, "and the failure reaches the console");
+            stopPlay();
+            step(2);
+        }
+
+        // And with a file that decodes. Skipped, not failed, on a machine with
+        // no audio device — but this one has audio, so a SKIP here is news.
+        if (haveWav) {
+            if (auto* node = findByUuid(document_.scene(), soundUuid)) {
+                SoundConfig::setFile(*node, wav.generic_string());
+            }
+            startPlay();
+            step(3);
+            check(isPlaying(), "Play starts with a real sound file");
+#ifdef THREEPP_WITH_AUDIO
+            // The audibility bound is a pure curve — pin it here, no device
+            // needed: authored volume inside, silence at and past max, easing
+            // through the band just before it.
+            check(AudioPlaySession::distanceGate(5.f, 12.f) == 1.f,
+                  "the distance gate is unity well inside max");
+            check(AudioPlaySession::distanceGate(12.f, 12.f) == 0.f, "zero at max");
+            check(AudioPlaySession::distanceGate(40.f, 12.f) == 0.f, "and zero beyond it");
+            const float inBand = AudioPlaySession::distanceGate(11.5f, 12.f);
+            check(inBand > 0.f && inBand < 1.f, "and eases through the band before max");
+            if (audio_ && audio_->listenerReady()) {
+                check(audio_->soundCount() == 1, "the session built one sound from it");
+                check(audio_->isPlaying(soundUuid), "and it is playing");
+            } else {
+                std::cout << "[selftest] SKIP no audio device - the audible sound block "
+                             "did not run" << std::endl;
+            }
+#else
+            std::cout << "[selftest] SKIP built without audio - the sound play block "
+                         "did not run" << std::endl;
+#endif
+            stopPlay();
+            step(2);
+        }
+
+        std::filesystem::remove(document, ec);
+        std::filesystem::remove_all(soundDir, ec);
     }
 
     // --- the ortho view SHADES like the perspective one --------------------

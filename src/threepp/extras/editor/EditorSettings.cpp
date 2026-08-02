@@ -98,6 +98,7 @@ bool EditorSettings::load(const std::filesystem::path& path) {
     textureDir = getString(j, "textureDir");
     environmentDir = getString(j, "environmentDir");
     scriptDir = getString(j, "scriptDir");
+    soundDir = getString(j, "soundDir");
 
     if (j.contains("bottomPanelOpen") && j["bottomPanelOpen"].is_boolean()) {
         bottomPanelOpen = j["bottomPanelOpen"].get<bool>();
@@ -144,6 +145,7 @@ bool EditorSettings::save(const std::filesystem::path& path) const {
     j["textureDir"] = textureDir;
     j["environmentDir"] = environmentDir;
     j["scriptDir"] = scriptDir;
+    j["soundDir"] = soundDir;
     j["bottomPanelOpen"] = bottomPanelOpen;
     j["imageStorage"] = storageName(imageStorage);
     j["modelStorage"] = modelStorage == ModelStorage::Reference ? "reference" : "embed";

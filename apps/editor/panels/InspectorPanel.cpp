@@ -13,6 +13,7 @@
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
+#include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
 
@@ -268,6 +269,7 @@ void EditorApp::drawInspector() {
         drawJointsSection(*selected);
         drawSplineSection(*selected);
         drawConveyorSection(*selected);
+        drawSoundSection(*selected);
         drawTextSection(*selected);
         drawScriptSection(*selected);
         drawPhysicsSection(*selected);
@@ -2208,6 +2210,248 @@ void EditorApp::drawSplineSection(Object3D& object) {
 
 
 // --------------------------------------------------------------------- text
+
+void EditorApp::drawSoundSection(Object3D& object) {
+
+    const auto current = SoundConfig::read(object);
+    if (!current) return;
+    if (!section("Sound")) return;
+
+    auto* target = &object;
+    const SoundConfig config = *current;
+    const auto before = SoundAuthoring::read(object);
+
+    // Both userData entries move as one value — see SoundAuthoring — so
+    // "Remove sound" is a single undo step rather than two.
+    const auto commit = [&](SoundConfig after, const char* label) {
+        SoundAuthoring value{after, before.file};
+        commands_.execute(makeProperty<SoundAuthoring>(
+                label, "sound:" + object.uuid,
+                [target](const SoundAuthoring& v) { v.write(*target); },
+                before, std::move(value)));
+        document_.setDirty(true);
+    };
+
+    // --- the file -----------------------------------------------------------
+    const float buttonWidth = 90 * contentScale_;
+
+    if (ImGui::Button(before.file.empty() ? "Load..." : "Change...", {buttonWidth, 0})) {
+        // The dialog resolves a frame or more later; remember the object by
+        // uuid, since a play/stop in between replaces the whole graph.
+        soundTargetUuid_ = object.uuid;
+        pendingDialog_ = PendingDialog::Sound;
+        fileBrowser_.open("Load Sound", FileBrowser::Mode::Open,
+                          settings_.soundDir.empty() ? assetDir_ : std::filesystem::path(settings_.soundDir),
+                          formats::sounds());
+    }
+    ImGui::SameLine();
+    if (before.file.empty()) {
+        ImGui::TextColored(theme::warning(), "no file - nothing will play");
+    } else {
+        ImGui::TextUnformatted(std::filesystem::path(before.file).filename().string().c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", before.file.c_str());
+    }
+
+    // --- audition -----------------------------------------------------------
+    // Edit mode only. The global rejectWhilePlaying gate does not cover this —
+    // it is not a document mutation — so the button is simply not offered while
+    // the scene's own sounds are playing.
+#ifdef THREEPP_WITH_AUDIO
+    if (!isPlaying()) {
+        const bool auditioning = isAuditioning(object);
+        const bool canPlay = !before.file.empty() && !auditionUnavailable_;
+        if (!canPlay && !auditioning) ImGui::BeginDisabled();
+        if (ImGui::Button(auditioning ? "Stop" : "Audition", {buttonWidth, 0})) {
+            if (auditioning) {
+                stopAudition();
+            } else {
+                startAudition(object);
+            }
+        }
+        if (!canPlay && !auditioning) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip(auditionUnavailable_
+                                      ? "No audio device on this machine."
+                                      : "Hear the file at the authored volume and rate,\n"
+                                        "without pressing Play. Plays FLAT - the distance\n"
+                                        "falloff is only applied during Play.");
+        }
+        if (auditioning) {
+            ImGui::SameLine();
+            ImGui::TextColored(theme::playing(), "auditioning");
+        }
+    }
+#else
+    ImGui::TextColored(theme::muted(), "Built without audio - authoring only.");
+#endif
+
+    ImGui::Spacing();
+    ImGui::PushItemWidth(-140 * contentScale_);
+
+    // --- playback -----------------------------------------------------------
+    {
+        bool positional = config.positional;
+        if (ImGui::Checkbox("Positional", &positional)) {
+            auto after = config;
+            after.positional = positional;
+            commit(after, positional ? "Positional Sound" : "Ambient Sound");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("On: the sound comes FROM this object and gets quieter with\n"
+                              "distance. Off: it plays at a constant level wherever the\n"
+                              "listener stands - music, room tone.");
+        }
+    }
+
+    {
+        bool autoplay = config.autoplay;
+        if (ImGui::Checkbox("Play on Start", &autoplay)) {
+            auto after = config;
+            after.autoplay = autoplay;
+            commit(after, autoplay ? "Enable Autoplay" : "Disable Autoplay");
+        }
+        ImGui::SameLine();
+        bool loop = config.loop;
+        if (ImGui::Checkbox("Loop", &loop)) {
+            auto after = config;
+            after.loop = loop;
+            commit(after, "Sound Loop");
+        }
+    }
+
+    {
+        float volume = config.volume;
+        const bool changed = ImGui::SliderFloat("Volume", &volume, 0.f, 1.f, "%.2f");
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.volume = std::clamp(volume, 0.f, 1.f);
+            commit(after, "Sound Volume");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+    }
+
+    {
+        float rate = config.rate;
+        const bool changed = ImGui::SliderFloat("Playback rate", &rate, 0.25f, 4.f, "%.2fx");
+        if (ImGui::IsItemActivated()) commands_.beginTransaction();
+        if (changed) {
+            auto after = config;
+            after.rate = std::clamp(rate, 0.25f, 4.f);
+            commit(after, "Sound Rate");
+        }
+        if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Speed and pitch together, like a tape machine.");
+        }
+    }
+
+    // --- distance falloff ---------------------------------------------------
+    // Hidden, never dropped: switching Positional off and on again must not
+    // reset a tuned curve (SoundConfig writes these entries regardless).
+    if (config.positional) {
+
+        ImGui::Spacing();
+
+        // Under the None model there is no ramp — no start, no steepness. Grey
+        // the two fields that only shape the ramp, so they cannot promise a
+        // falloff the curve refuses; max distance stays live because the
+        // session's audibility gate honours it under every model.
+        const bool noFalloff = config.model == SoundConfig::DistanceModel::None;
+
+        {
+            if (noFalloff) ImGui::BeginDisabled();
+            float minDistance = config.minDistance;
+            const bool changed = ImGui::DragFloat("Min distance", &minDistance, 0.05f, 0.01f, 10000.f, "%.2f m");
+            if (ImGui::IsItemActivated()) commands_.beginTransaction();
+            if (changed) {
+                auto after = config;
+                after.minDistance = std::max(minDistance, 0.01f);
+                commit(after, "Sound Min Distance");
+            }
+            if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Inside this radius the sound plays at full volume.");
+            }
+            if (noFalloff) ImGui::EndDisabled();
+        }
+
+        {
+            float maxDistance = config.maxDistance;
+            const bool changed = ImGui::DragFloat("Max distance", &maxDistance, 0.5f, 0.01f, 100000.f, "%.2f m");
+            if (ImGui::IsItemActivated()) commands_.beginTransaction();
+            if (changed) {
+                auto after = config;
+                after.maxDistance = std::max(maxDistance, after.minDistance);
+                commit(after, "Sound Max Distance");
+            }
+            if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("The sound is silent past this distance, whatever the model\n"
+                                  "- the last stretch eases out so crossing the ring never\n"
+                                  "clicks. The default 10000 m is effectively no limit.");
+            }
+        }
+
+        {
+            if (noFalloff) ImGui::BeginDisabled();
+            float rolloff = config.rolloff;
+            const bool changed = ImGui::DragFloat("Rolloff", &rolloff, 0.01f, 0.f, 20.f, "%.2f");
+            if (ImGui::IsItemActivated()) commands_.beginTransaction();
+            if (changed) {
+                auto after = config;
+                after.rolloff = std::clamp(rolloff, 0.f, 20.f);
+                commit(after, "Sound Rolloff");
+            }
+            if (ImGui::IsItemDeactivated()) commands_.endTransaction();
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("How fast the volume drops once you are past the min\n"
+                                  "distance. Higher = steeper; 0 = no drop at all.");
+            }
+            if (noFalloff) ImGui::EndDisabled();
+        }
+
+        if (ImGui::BeginCombo("Distance model", SoundConfig::label(config.model))) {
+            for (const auto model : SoundConfig::models) {
+                if (ImGui::Selectable(SoundConfig::label(model), model == config.model)) {
+                    auto after = config;
+                    after.model = model;
+                    commit(after, "Sound Distance Model");
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("The shape of the falloff curve between min and max.\n"
+                              "Inverse is how real sound behaves; None keeps the volume\n"
+                              "constant and is the honest way to say \"do not attenuate\".");
+        }
+
+        ImGui::TextColored(theme::muted(), "Rings show min and max.");
+    }
+
+    ImGui::PopItemWidth();
+    ImGui::Spacing();
+
+    if (ImGui::SmallButton("Remove sound")) {
+        if (isAuditioning(object)) stopAudition();
+        commands_.execute(makeProperty<SoundAuthoring>(
+                "Remove Sound", "sound:" + object.uuid,
+                [target](const SoundAuthoring& v) { v.write(*target); },
+                before, SoundAuthoring{}));
+        document_.setDirty(true);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Drops the sound entry and the file reference. The object stays.");
+    }
+
+    ImGui::TextColored(theme::muted(), "Stored in userData[\"sound\"] / [\"soundFile\"]");
+
+    ImGui::TreePop();
+}
+
+
+// ---------------------------------------------------------------------- text
 
 void EditorApp::drawTextSection(Object3D& object) {
 

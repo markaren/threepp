@@ -8,6 +8,7 @@
 
 #include "threepp/extras/editor/AnimationPlaySession.hpp"
 #include "threepp/extras/editor/ConveyorConfig.hpp"
+#include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/GeneratorConfig.hpp"
 #include "threepp/extras/editor/MaterialTextureSlots.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
@@ -22,6 +23,11 @@
 #endif
 
 #include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
+
+#ifdef THREEPP_WITH_AUDIO
+#include "threepp/audio/Audio.hpp"
+#include "threepp/extras/editor/AudioPlaySession.hpp"
+#endif
 
 #include "threepp/extras/editor/SensorPlaySession.hpp"
 #ifdef THREEPP_EDITOR_WITH_PHYSX
@@ -332,6 +338,10 @@ EditorApp::EditorApp(const Options& options)
         clearViewportMarkers();
         clearSplineOverlays();
         clearConveyorOverlays();
+        // The rings are keyed by the outgoing scene's uuid; the audition is
+        // playing a file for a node that is about to stop existing.
+        clearSoundRings();
+        stopAudition();
         // The collider lines are world-space and belong to a world that stop()
         // has already destroyed; the node itself is parented to the surviving
         // overlay, so it has to be taken down explicitly.
@@ -413,6 +423,16 @@ EditorApp::EditorApp(const Options& options)
     play_.addSession(conveyorSession_);
 #endif
     play_.addSession(std::make_shared<AnimationPlaySession>());
+#ifdef THREEPP_WITH_AUDIO
+    // Sounds. Kept as a member for the status readout and the selftest. Its
+    // listener rides the perspective viewport camera, which is the closest
+    // thing the editor has to "where the user is standing" — the ortho views
+    // are a drafting aid, not a vantage.
+    audio_ = std::make_shared<AudioPlaySession>();
+    audio_->setLogger([this](const std::string& message) { log(message); });
+    audio_->setListenerHost(&camera_);
+    play_.addSession(audio_);
+#endif
     // After physics (whose world the pushed sensors register with) and after the
     // animation player, so a scan sees the pose the frame ended on. Before the
     // script session, which stays last by rule — a script that moves a sensor's
@@ -512,6 +532,12 @@ EditorApp::~EditorApp() {
     play_.clearSessions();
     sensors_.reset();
     physics_.reset();
+#ifdef THREEPP_WITH_AUDIO
+    // Same reasoning: its sounds are parented into the scene document_ owns.
+    audio_.reset();
+    // And the audition's, before the listener it was opened on goes.
+    stopAudition();
+#endif
     if (sensorRig_) {
         sensorRig_->clear();
         document_.removeEditorOnly(*sensorRig_);
@@ -710,6 +736,15 @@ void EditorApp::drawUi() {
                     log("script not attached - the object is no longer in the scene");
                 }
                 scriptTargetUuid_.clear();
+                break;
+            case PendingDialog::Sound:
+                settings_.soundDir = fileBrowser_.directory().string();
+                if (auto* target = findByUuid(document_.scene(), soundTargetUuid_)) {
+                    assignSound(*target, path);
+                } else {
+                    log("sound not attached - the object is no longer in the scene");
+                }
+                soundTargetUuid_.clear();
                 break;
             case PendingDialog::RecordDir:
 #ifdef THREEPP_EDITOR_WITH_PHYSX
@@ -1553,6 +1588,40 @@ void EditorApp::assignScript(Object3D& object, const std::filesystem::path& path
         (object.name.empty() ? object.type() : object.name));
 }
 
+void EditorApp::assignSound(Object3D& object, const std::filesystem::path& path) {
+
+    if (rejectWhilePlaying("Attach Sound")) return;
+
+    const auto before = SoundAuthoring::read(object);
+
+    SoundAuthoring after = before;
+    // A file dropped on an object that was not a sound yet makes it one, at the
+    // defaults — the alternative is a file key nothing ever reads.
+    if (!after.config) after.config = SoundConfig{};
+    // Forward slashes, like the script reference: a saved document should not
+    // read differently depending on which platform wrote it.
+    after.file = path.empty() ? std::string{} : path.generic_string();
+
+    // A new file is a new sound; an audition still playing the old one would
+    // be lying about what the button says.
+    if (isAuditioning(object)) stopAudition();
+
+    auto* target = &object;
+    commands_.execute(makeProperty<SoundAuthoring>(
+            path.empty() ? "Clear Sound File" : "Set Sound File", "sound:" + object.uuid,
+            [target](const SoundAuthoring& value) { value.write(*target); },
+            before, after));
+    document_.setDirty(true);
+
+    if (path.empty()) {
+        log("sound file cleared on " + (object.name.empty() ? object.type() : object.name));
+        return;
+    }
+    settings_.soundDir = path.parent_path().string();
+    log("sound " + path.filename().string() + " attached to " +
+        (object.name.empty() ? object.type() : object.name));
+}
+
 void EditorApp::setInlineScript(Object3D& object, const std::string& source, const std::string& label) {
 
     // Belt and braces: both callers already hold off (the script panel goes
@@ -2177,6 +2246,9 @@ void EditorApp::selectObject(Object3D* object, std::optional<int> instance) {
     // A preview belongs to the inspector of the object it runs on; changing
     // the selection (including deleting the object) ends it, pose restored.
     if (animPreview_ && animPreview_->root != object) stopAnimationPreview();
+    // Same rule for the sound audition: it belongs to the inspector of the
+    // object it is playing for.
+    if (!auditionUuid_.empty() && (!object || object->uuid != auditionUuid_)) stopAudition();
 
     selection_.set(object);
 
@@ -2365,6 +2437,77 @@ bool EditorApp::isPreviewing(const Object3D& root) const {
     return animPreview_ && animPreview_->root == &root;
 }
 
+
+// ------------------------------------------------------------ sound audition
+
+void EditorApp::startAudition(const Object3D& object) {
+
+    stopAudition();
+
+#ifdef THREEPP_WITH_AUDIO
+    if (auditionUnavailable_) return;
+
+    const auto config = SoundConfig::read(object);
+    if (!config) return;
+
+    const auto file = SoundConfig::resolveFile(SoundConfig::file(object),
+                                               document_.path().empty()
+                                                       ? std::filesystem::path{}
+                                                       : document_.path().parent_path());
+    if (file.empty()) {
+        log("no sound file to audition on \"" + object.name + "\"");
+        return;
+    }
+
+    if (!auditionListener_) {
+        try {
+            auditionListener_ = std::make_unique<AudioListener>();
+        } catch (const std::exception& e) {
+            // Said once per session: the button goes dead rather than logging
+            // the same failure on every click.
+            auditionUnavailable_ = true;
+            log("audio device unavailable - audition disabled (" + std::string(e.what()) + ")");
+            return;
+        }
+    }
+
+    try {
+        auditionSound_ = std::make_unique<Audio>(*auditionListener_, file);
+    } catch (const std::exception& e) {
+        log("could not play " + file.string() + " (" + e.what() + ")");
+        return;
+    }
+
+    // FLAT on purpose: a plain Audio never spatializes, so what you hear is the
+    // file at the authored volume and rate. Spatial audition would need the
+    // listener to follow the editor camera through every orbit, and answers a
+    // question the distance rings already answer better.
+    auditionSound_->setLooping(config->loop);
+    auditionSound_->setVolume(config->volume);
+    auditionSound_->setPlaybackRate(config->rate);
+    auditionSound_->play();
+
+    auditionUuid_ = object.uuid;
+#else
+    (void) object;
+#endif
+}
+
+void EditorApp::stopAudition() {
+
+    auditionUuid_.clear();
+#ifdef THREEPP_WITH_AUDIO
+    // The listener stays: opening a device costs tens of milliseconds and the
+    // next audition is usually one click away. Only the sound goes.
+    auditionSound_.reset();
+#endif
+}
+
+bool EditorApp::isAuditioning(const Object3D& object) const {
+
+    return !auditionUuid_.empty() && auditionUuid_ == object.uuid;
+}
+
 bool EditorApp::cameraDockRect(float& x, float& y, float& w, float& h) const {
 
     // Collapsing the bottom panel collapses this with it — the two share a
@@ -2460,6 +2603,7 @@ void EditorApp::refreshSelectionHelpers() {
     syncDebugDraw();
     syncSensorOverlay();
     syncCameraHelper();
+    syncSoundRings();
 
     // After the syncs, because two of them BUILD the nodes it hides: a camera
     // selected mid-play gets a fresh frustum helper, and an object that only
@@ -2972,6 +3116,18 @@ void EditorApp::startPlay() {
 
     // The play snapshot must capture the authored pose, not the preview's.
     stopAnimationPreview();
+    // An audition talking over the scene's own sounds helps nobody.
+    stopAudition();
+
+#ifdef THREEPP_WITH_AUDIO
+    // Where a relative userData["soundFile"] resolves from. Set per play rather
+    // than once: Save As moves the document, and with it the anchor.
+    if (audio_) {
+        audio_->setResourcePath(document_.path().empty()
+                                        ? std::filesystem::path{}
+                                        : document_.path().parent_path());
+    }
+#endif
 
     // Per-session, so a scene whose script does not read the keyboard keeps its shortcuts.
     scriptsPolledKeys_ = false;
@@ -3045,6 +3201,9 @@ void EditorApp::applyAuthoringVisibility() {
     // play is still busy placing.
     if (markers_) markers_->visible = visible;
     if (cameraHelper_) cameraHelper_->visible = visible;
+    // Only ever hidden here: syncSoundRings owns the other direction (a config
+    // whose radii are all past the cap leaves nothing to draw).
+    if (soundRings_ && !visible) soundRings_->visible = false;
 }
 
 bool EditorApp::gizmoActive() const {

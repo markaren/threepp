@@ -123,7 +123,7 @@ document can ask for it on open — see [`editorView`](#opening-a-document-edito
 icon at a constant screen size, tinted with the accent colour while selected.
 Every kind has its own shape — a camera body, a sun for directional, a bulb for
 point, a beam for spot, a ringed core for ambient, a dome over ground for
-hemisphere — so a scene reads without clicking anything.
+hemisphere, a speaker for a sound — so a scene reads without clicking anything.
 Clicking an icon selects its owner, and it wins over geometry behind it — the
 icons draw on top, so picking follows what you see rather than raw depth order.
 The artwork is SVG parsed at startup by threepp's `SVGLoader` and embedded as
@@ -137,6 +137,12 @@ degenerate speck at the origin.
 **Splines.** Add ▸ Spline drops a curve whose control points are ordinary scene
 nodes — drag them with the gizmo, insert and delete them, and the sampled curve
 redraws live. See [Splines in `userData`](#splines-in-userdata).
+
+**Sound.** Add ▸ Sound places an emitter — a speaker marker, an audio file, and
+a distance falloff drawn as min/max rings on the ground while it is selected.
+**Audition** hears the file without pressing Play; Play spatializes it through
+miniaudio and the sound follows whatever moves its object. See
+[Sounds in `userData`](#sounds-in-userdata).
 
 **Generators.** A scene can carry inline Python that BUILDS it: select `Scene`,
 write a rule, press Regenerate, and what the script creates becomes ordinary
@@ -610,6 +616,77 @@ During Play, `AnimationPlaySession` (always registered) walks the scene and
 plays the authored clip on every object with `autoplay` on — the default for
 anything that has clips, so an imported character moves the first time you
 press Play. The play snapshot restores all poses on Stop.
+
+### Sounds in `userData`
+
+**Add ▸ Sound** creates a plain `Object3D` carrying `userData["sound"]` — a
+sound has no geometry, so what shows it in the viewport is a speaker marker,
+billboarded like the camera and light icons. Any *other* object can become one
+too: load a file from the **Sound** inspector section and it gains the same two
+entries.
+
+Two entries, because the file needs its own key — a Windows path contains the
+`=` and `;` the flat format uses as delimiters, the same wall `RobotConfig` and
+`ScriptConfig` hit:
+
+```
+userData["sound"]      positional=1;autoplay=1;loop=1;volume=1;rate=1;minDistance=1;maxDistance=10000;rolloff=1;model=inverse
+userData["soundFile"]  C:/audio/rain.wav
+```
+
+`SoundConfig` owns the format. The path is stored exactly as the file dialog
+handed it over (absolute, forward slashes), like the script and URDF references;
+a *relative* path in a hand-edited document resolves against the document's own
+directory, so a scene and its audio can be moved together.
+
+The **Sound** section carries the file row, *Positional* (off makes it ambience
+at a constant level — music, room tone), *Play on Start*, *Loop*, *Volume*,
+*Playback rate*, and, for a positional sound, the distance falloff: min/max
+distance, rolloff and the distance-model curve (`none` / `inverse` / `linear` /
+`exponential`, mirroring the Web Audio panner models). **Max distance is a hard
+audibility bound under every model**: the play session eases the sound out over
+a short band before max and silences it past it — miniaudio alone merely clamps
+the falloff there, which left an `inverse` sound faintly audible across the
+whole map. Under `none` that makes the sound a constant level within range and
+silent outside (a zone ambience); min distance and rolloff shape nothing there
+and are greyed. The falloff entries are hidden rather than dropped when
+*Positional* is off, so switching it back on does not reset a tuned curve. **Remove sound** drops both entries as one undo
+step.
+
+Selecting a positional sound draws its **min and max distance rings** on the
+ground — two line circles under the editor overlay, so they are never saved and
+never picked. `maxDistance` defaults to miniaudio's 10000, which means "no
+limit" rather than "ten kilometres", and a ring that big draws as a straight
+line across the viewport and says nothing — so past 1000 m the ring is simply
+left out. The number is still in the inspector.
+
+**Audition** (edit mode only) plays the file without pressing Play, on the
+editor's own listener. It is deliberately **flat**: the authored volume and
+rate, no spatialization. It answers "is this the right file, at the right
+level"; how it sounds from over there is what Play is for. The audition stops
+on the button, on a selection change, on entering Play and on a scene replace.
+
+During Play, `AudioPlaySession` walks the scene and builds one `PositionalAudio`
+per authored node (parented to it with `addRef`, so the spatialization follows
+whatever moves the object) or a plain non-spatial `Audio` when `positional=0`.
+The listener rides the perspective viewport camera. Sounds with `autoplay` on
+are rewound and started; on Stop every sound is unparented and destroyed before
+the engine is, and the play snapshot takes the rest back.
+
+**No device, no problem.** `AudioListener`'s constructor throws when
+`ma_engine_init` fails — a headless CI machine, a driver holding the device in
+exclusive mode — and each file load throws on its own. Both are caught: the
+failure is logged to the console and the session becomes a no-op (or skips the
+one bad file), so a scene whose audio moved still plays everything else. Same
+discipline as the soft-body CUDA fallback.
+
+The whole feature is gated on `-DTHREEPP_WITH_AUDIO=ON` (the default). A build
+without it still *authors* sounds — the config is plain `userData` — and shows
+"Built without audio - authoring only" where the audition button would be, so a
+document does not lose its sounds by being opened on the wrong build.
+
+miniaudio decodes `.wav`, `.mp3` and `.flac` with no third-party code, and those
+are exactly the three the file dialog offers.
 
 ### Robots (URDF) in `userData`
 

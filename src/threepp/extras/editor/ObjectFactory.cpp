@@ -2,6 +2,7 @@
 #include "threepp/extras/editor/ObjectFactory.hpp"
 
 #include "threepp/extras/editor/ConveyorConfig.hpp"
+#include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 #include "threepp/extras/editor/TextConfig.hpp"
 
@@ -161,6 +162,20 @@ std::shared_ptr<Mesh> ObjectFactory::createText(const Object3D& root) {
     if (box && !box->isEmpty()) mesh->position.y = -box->min().y;
 
     return mesh;
+}
+
+std::shared_ptr<Object3D> ObjectFactory::createSound(const Object3D& root) {
+
+    // A plain Object3D: a sound has no geometry, and what makes it visible in
+    // the viewport is the speaker marker keyed off the entry below.
+    auto node = Object3D::create();
+    SoundConfig{}.write(*node);
+    node->name = uniqueName(root, "Sound");
+    // Off the floor, where an emitter usually lives and where the marker is
+    // not buried in the ground plane.
+    node->position.y = 1.f;
+
+    return node;
 }
 
 std::shared_ptr<Object3D> ObjectFactory::createLight(LightKind kind, const Object3D& root) {

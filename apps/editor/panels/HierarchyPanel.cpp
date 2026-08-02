@@ -80,6 +80,11 @@ void EditorApp::drawAddMenu(Object3D& parent) {
             addObject(ObjectFactory::createText(document_.scene()), *target, "Add Text");
         };
     }
+    if (ImGui::MenuItem("Sound")) {
+        deferred_ = [this, target] {
+            addObject(ObjectFactory::createSound(document_.scene()), *target, "Add Sound");
+        };
+    }
     if (ImGui::MenuItem("Spline")) {
         deferred_ = [this, target] {
             addObject(ObjectFactory::createSpline(document_.scene()), *target, "Add Spline");

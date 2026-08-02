@@ -59,6 +59,8 @@ class ImguiContext;
 
 namespace threepp {
 
+    class Audio;
+    class AudioListener;
     class CameraHelper;
     class Line;
     class LineBasicMaterial;
@@ -84,6 +86,10 @@ namespace threepp::editor {
     // EditorApp.cpp), but still heavy — it pulls in the depth/lidar sensors and
     // the renderer, which the panels have no business recompiling against.
     class SensorPlaySession;
+    // Sounds during Play. Only exists in a THREEPP_WITH_AUDIO build — that
+    // macro is PUBLIC on the threepp target, so every TU that includes this
+    // header agrees on whether the member below is there.
+    class AudioPlaySession;
 
     class EditorApp {
 
@@ -213,6 +219,18 @@ namespace threepp::editor {
         // points — both are ordinary scene nodes, so the section is what tells
         // them apart.
         void drawSplineSection(Object3D& object);
+        // Shown for a node carrying a SoundConfig: the file, the playback
+        // parameters and — in edit mode only — the audition button.
+        void drawSoundSection(Object3D& object);
+        // --- sound audition (edit mode only) --------------------------------
+        // Hears the authored file without pressing Play. Its own listener and
+        // its own Audio, rebuilt from the config on every start, and FLAT: it
+        // answers "is this the right file at the right volume", not "how does
+        // it sound from over there". The uuid is what identifies the target,
+        // since a play/stop or a scene load replaces the whole graph.
+        void startAudition(const Object3D& object);
+        void stopAudition();
+        [[nodiscard]] bool isAuditioning(const Object3D& object) const;
         // Shown for a text mesh (TextConfig): the content and the type
         // parameters, each edit rebuilding the geometry through the same
         // undoable property write every other config section uses.
@@ -431,6 +449,10 @@ namespace threepp::editor {
         // Attaches (or clears, with an empty path) a .py on `object`, as one
         // undoable step. Field values already stored for the same file are kept.
         void assignScript(Object3D& object, const std::filesystem::path& path);
+        // The same for an audio file (userData["soundFile"]). Authors a default
+        // SoundConfig alongside it if the object had none, so a file dropped on
+        // an ordinary mesh makes it a sound source in one step.
+        void assignSound(Object3D& object, const std::filesystem::path& path);
         // Stores inline source on `object` as one undoable step, clearing any
         // file reference — an object carries one script, in one form. Parameter
         // values survive an edit to the same inline script and are dropped when
@@ -515,6 +537,11 @@ namespace threepp::editor {
 
         void syncViewportMarkers();
         void syncCameraHelper();
+        // Min/max distance circles for the SELECTED positional sound, in the
+        // same file and for the same reason as the camera frustum: an authored
+        // falloff is otherwise a pair of numbers with no picture.
+        void syncSoundRings();
+        void clearSoundRings();
         void clearViewportMarkers();
         // --- spline overlay (apps/editor/SplineOverlay.cpp) -----------------
         // One Line per spline, sampled from the CatmullRomCurve3 its control
@@ -861,6 +888,12 @@ namespace threepp::editor {
         // it is torn down whenever the selection or the scene changes.
         std::shared_ptr<CameraHelper> cameraHelper_;
         Object3D* cameraHelperFor_ = nullptr;
+        // Distance rings for the selected positional sound. One LineSegments
+        // under the overlay, rebuilt when the key below changes — the sound's
+        // UUID (not its address: a play/stop replaces the graph) plus the two
+        // radii it is drawn from.
+        std::shared_ptr<LineSegments> soundRings_;
+        std::string soundRingsKey_;
         // The other half of authoringVisible(): a --screenshot pass over a
         // document has no user and nothing being authored, so the whole layer is
         // off for its duration. One flag instead of the four hand-hidden nodes
@@ -956,6 +989,24 @@ namespace threepp::editor {
         std::shared_ptr<Points> sensorCloud_;
         int sensorCloudCapacity_ = 0;
         bool sensorCloudVisible_ = true;
+
+#ifdef THREEPP_WITH_AUDIO
+        // Sounds authored on scene objects, played back during Play. Kept as a
+        // member for the status readout and the selftest, like physics_.
+        std::shared_ptr<AudioPlaySession> audio_;
+        // The audition's own engine, opened on the first audition and kept for
+        // the rest of the session (opening a device costs tens of ms). DECLARED
+        // BEFORE the sound so it is DESTROYED AFTER it — an ma_sound must not
+        // outlive its ma_engine.
+        std::unique_ptr<AudioListener> auditionListener_;
+        std::unique_ptr<Audio> auditionSound_;
+        // No device on this machine: said once, and the button stays disabled
+        // rather than re-trying (and re-logging) on every click.
+        bool auditionUnavailable_ = false;
+#endif
+        // Which object is being auditioned, by uuid — outside the #ifdef so the
+        // inspector's "nothing is auditioning" branch needs no second gate.
+        std::string auditionUuid_;
         // --bench with THREEPP_BENCH_DISABLE=ui: skip the ImGui pass so the
         // frame time measures the renderer alone. Never set outside runBench().
         bool benchSkipUi_ = false;
@@ -985,6 +1036,7 @@ namespace threepp::editor {
             Environment,
             Texture,
             Script,
+            Sound,
             // Where sensor recordings go. The browser has no directory mode, so
             // this is a Save dialog whose PARENT directory is what gets used —
             // the file name the user types is ignored (one CSV per sensor, named
@@ -997,6 +1049,8 @@ namespace threepp::editor {
         // than pointer: the dialog spans frames, and a Play/Stop in between
         // replaces the whole graph.
         std::string scriptTargetUuid_;
+        // Same contract, for the Sound section's "Load..." button.
+        std::string soundTargetUuid_;
 
         // Which material slot an inspector "Load..." button is filling. This
         // cannot be the raw TextureSlotTarget the drop path below uses: that one

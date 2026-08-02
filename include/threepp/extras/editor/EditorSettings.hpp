@@ -43,6 +43,7 @@ namespace threepp::editor {
         std::string textureDir;
         std::string environmentDir;
         std::string scriptDir;
+        std::string soundDir;
 
         bool bottomPanelOpen = true;
 

@@ -79,6 +79,7 @@ set(publicHeaders
         "threepp/extras/editor/ScriptWorkspace.hpp"
         "threepp/extras/editor/Selection.hpp"
         "threepp/extras/editor/SensorConfig.hpp"
+        "threepp/extras/editor/SoundConfig.hpp"
         "threepp/extras/editor/SplineConfig.hpp"
         "threepp/extras/editor/TextConfig.hpp"
         "threepp/extras/editor/ViewSpec.hpp"
@@ -389,6 +390,7 @@ set(sources
         "threepp/extras/editor/ScriptWorkspace.cpp"
         "threepp/extras/editor/Selection.cpp"
         "threepp/extras/editor/SensorConfig.cpp"
+        "threepp/extras/editor/SoundConfig.cpp"
         "threepp/extras/editor/SplineConfig.cpp"
         "threepp/extras/editor/TextConfig.cpp"
 
@@ -607,10 +609,12 @@ endif ()
 if (THREEPP_WITH_AUDIO)
     list(APPEND publicHeaders
             "threepp/audio/Audio.hpp"
+            "threepp/extras/editor/AudioPlaySession.hpp"
     )
 
     list(APPEND sources
             "threepp/audio/Audio.cpp"
+            "threepp/extras/editor/AudioPlaySession.cpp"
     )
 endif ()
 
@@ -792,6 +796,13 @@ if (THREEPP_WITH_AUDIO)
             PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio"
     )
+    # PUBLIC, unlike the other THREEPP_WITH_* macros: threepp/audio/Audio.hpp
+    # and AudioPlaySession.hpp only EXIST in this configuration, so a consumer
+    # (the editor) has to be able to ask. PUBLIC rather than per-target is also
+    # what keeps the library and every consumer compiling AudioPlaySession.hpp
+    # the same way — a per-target macro on a header branch is an ODR violation
+    # waiting to happen (see the V-HACD note in apps/editor/CMakeLists.txt).
+    target_compile_definitions(threepp PUBLIC THREEPP_WITH_AUDIO=1)
 endif ()
 
 if (THREEPP_WITH_USD)

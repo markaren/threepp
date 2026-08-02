@@ -50,6 +50,10 @@ namespace threepp::editor {
         // default content. Double-sided, because flat text seen from behind
         // must read as text and not vanish.
         static std::shared_ptr<Mesh> createText(const Object3D& root);
+        // A plain Object3D carrying a default SoundConfig — a sound has no
+        // geometry of its own; the viewport speaker marker is what shows it.
+        // The file is attached afterwards, from the inspector.
+        static std::shared_ptr<Object3D> createSound(const Object3D& root);
         static std::shared_ptr<Group> createGroup(const Object3D& root);
         static std::shared_ptr<PerspectiveCamera> createCamera(const Object3D& root);
         // A Group carrying SplineConfig, with four control-point children

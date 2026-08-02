@@ -49,6 +49,17 @@ namespace threepp::editor::formats {
         return list;
     }
 
+    // Audio files. Exactly the three decoders the vendored miniaudio builds in
+    // (MA_NO_WAV / MA_NO_MP3 / MA_NO_FLAC are never defined) — offering
+    // anything else would mean a file dialog that accepts what the loader
+    // throws on. Not importable either: a sound is attached to an existing
+    // object, like a script.
+    inline const std::vector<std::string>& sounds() {
+
+        static const std::vector<std::string> list{".wav", ".mp3", ".flac"};
+        return list;
+    }
+
     // Everything the Import action accepts, mesh and robot alike.
     inline const std::vector<std::string>& importable() {
 

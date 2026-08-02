@@ -17,9 +17,11 @@
 
 #include "threepp/extras/editor/ConveyorConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
+#include "threepp/extras/editor/SoundConfig.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
 
 #include "threepp/cameras/Camera.hpp"
+#include "threepp/core/BufferGeometry.hpp"
 #include "threepp/geometries/ShapeGeometry.hpp"
 #include "threepp/helpers/CameraHelper.hpp"
 #include "threepp/lights/AmbientLight.hpp"
@@ -29,9 +31,11 @@
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/loaders/SVGLoader.hpp"
+#include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
@@ -39,6 +43,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <vector>
 
 using namespace threepp;
 using namespace threepp::editor;
@@ -61,6 +67,7 @@ namespace {
         ConveyorPoint,
         WallPoint,
         Sensor,
+        Sound,
         kCount
     };
 
@@ -139,6 +146,16 @@ namespace {
 <path d="M18 2.6 L16.7 1.85 L15.1 4.6 L16.4 5.35 Z"/>
 </svg>)";
 
+            // A driver with a horn and two radiating arcs. Says "something is
+            // heard from here" — which is the whole of what a sound node is,
+            // the file and the falloff being the inspector's business.
+            case Icon::Sound:
+                return R"(<svg viewBox="0 0 24 24">
+<path d="M3.5 9.5 L7.5 9.5 L13 4.5 L13 19.5 L7.5 14.5 L3.5 14.5 Z"/>
+<path d="M15.74 8.95 A4.1 4.1 0 0 1 15.74 15.05 L15.01 14.23 A3 3 0 0 0 15.01 9.77 Z"/>
+<path d="M17.61 7.85 A6.2 6.2 0 0 1 17.61 16.15 L16.79 15.41 A5.1 5.1 0 0 0 16.79 8.59 Z"/>
+</svg>)";
+
             // A fence: two posts and a rail — a conveyor wall's point. Says
             // "this drags a barrier" before it is clicked.
             case Icon::WallPoint:
@@ -177,6 +194,10 @@ namespace {
         if (const auto sensor = SensorConfig::read(object); sensor && sensor->enabled) {
             return Icon::Sensor;
         }
+        // Same reasoning: a sound is authored ON a node that may already be a
+        // mesh or a light, and "there is a sound here" is the more specific
+        // fact. After the sensor, which is the rarer authoring of the two.
+        if (SoundConfig::isSound(object)) return Icon::Sound;
         // Before the type checks: a control point is an ordinary Object3D and
         // is told apart by its parent, not by what it is.
         if (SplineConfig::splineOf(object)) return Icon::SplinePoint;
@@ -197,6 +218,16 @@ namespace {
     // Drawn after scene geometry so an icon is never buried inside the object
     // it stands for.
     constexpr int kMarkerRenderOrder = 4000;
+
+    // Over scene geometry, under the icons — the band every other editor
+    // overlay draws in.
+    constexpr int kSoundRingRenderOrder = 3000;
+    constexpr int kSoundRingSegments = 72;
+    // A ring bigger than this reads as a straight line across the viewport and
+    // says nothing — and maxDistance defaults to miniaudio's 10000, which means
+    // "unbounded" rather than "ten kilometres". Beyond the cap the ring is left
+    // out; the number is still in the inspector.
+    constexpr float kSoundRingMaxRadius = 1000.f;
 
     struct BuiltMarker {
         std::shared_ptr<Object3D> node;
@@ -319,7 +350,7 @@ void EditorApp::syncViewportMarkers() {
         const auto sensor = SensorConfig::read(object);
         if (object.as<Camera>() || object.as<Light>() || SplineConfig::splineOf(object) ||
             ConveyorConfig::conveyorOf(object) || ConveyorWallConfig::wallOf(object) ||
-            (sensor && sensor->enabled)) {
+            (sensor && sensor->enabled) || SoundConfig::isSound(object)) {
             owners.push_back(&object);
         }
     });
@@ -438,4 +469,109 @@ void EditorApp::syncCameraHelper() {
 
     // Cheap, and the frustum has to track fov/near/far edits live.
     cameraHelper_->update();
+}
+
+// --------------------------------------------------------------- sound rings
+
+void EditorApp::syncSoundRings() {
+
+    // Only for the SELECTED sound: rings for every sound in the scene would
+    // bury the scene they are drawn over, and the numbers are in the inspector
+    // either way. Same rule the corner-radius handle and the camera frustum
+    // follow.
+    auto* selected = selection_.get();
+    const auto config = selected ? SoundConfig::read(*selected) : std::nullopt;
+    const bool wanted = config && config->positional;
+
+    if (!wanted) {
+        clearSoundRings();
+        return;
+    }
+
+    // Keyed by uuid, not by pointer: a play/stop replaces the whole graph, and
+    // a stale pointer here would outlive the node it named.
+    char key[160];
+    std::snprintf(key, sizeof(key), "%s|%g|%g", selected->uuid.c_str(),
+                  static_cast<double>(config->minDistance),
+                  static_cast<double>(config->maxDistance));
+
+    if (!soundRings_) {
+        auto material = LineBasicMaterial::create(
+                LineBasicMaterial::Params().vertexColors(true).toneMapped(false));
+        material->transparent = true;
+        material->opacity = 0.7f;
+        soundRings_ = LineSegments::create(BufferGeometry::create(), material);
+        soundRings_->renderOrder = kSoundRingRenderOrder;
+        // World-space vertices written in place, so a cached bound would be
+        // wrong the moment the sound moves.
+        soundRings_->frustumCulled = false;
+        soundRings_->matrixAutoUpdate = false;
+        soundRingsKey_.clear();
+        overlay_->add(soundRings_);
+    }
+
+    if (soundRingsKey_ != key) {
+        soundRingsKey_ = key;
+
+        // maxDistance defaults to miniaudio's 10000 — "effectively unbounded".
+        // A 10 km circle draws as a straight line across the viewport and says
+        // nothing, so beyond a sane radius the ring is simply left out; the
+        // inspector still shows the number.
+        const float radii[2]{config->minDistance, config->maxDistance};
+        const auto tint = theme::markerIdle();
+        const float shade[2]{1.f, 0.45f};
+
+        std::vector<float> positions;
+        std::vector<float> colors;
+        for (int ring = 0; ring < 2; ++ring) {
+            const float radius = radii[ring];
+            if (!(radius > 1e-3f) || radius > kSoundRingMaxRadius) continue;
+            for (int i = 0; i < kSoundRingSegments; ++i) {
+                const float a0 = math::TWO_PI * static_cast<float>(i) / kSoundRingSegments;
+                const float a1 = math::TWO_PI * static_cast<float>(i + 1) / kSoundRingSegments;
+                positions.insert(positions.end(),
+                                 {radius * std::cos(a0), 0.f, radius * std::sin(a0),
+                                  radius * std::cos(a1), 0.f, radius * std::sin(a1)});
+                for (int v = 0; v < 2; ++v) {
+                    colors.insert(colors.end(), {tint.x * shade[ring],
+                                                 tint.y * shade[ring],
+                                                 tint.z * shade[ring]});
+                }
+            }
+        }
+
+        // Replaced wholesale rather than rewritten: the buffer only changes
+        // when a radius is edited, and the old geometry is disposed so the
+        // renderer provably lets go of it (see SplineOverlay's writeSamples).
+        const auto old = soundRings_->geometry();
+        auto geometry = BufferGeometry::create();
+        if (!positions.empty()) {
+            geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
+            geometry->setAttribute("color", FloatBufferAttribute::create(colors, 3));
+        }
+        soundRings_->setGeometry(geometry);
+        if (old) old->dispose();
+    }
+
+    // Every frame, not only on a rebuild: applyAuthoringVisibility hides the
+    // node for a --screenshot pass or a Play, and nothing else would turn it
+    // back on.
+    soundRings_->visible = soundRings_->geometry() &&
+                           soundRings_->geometry()->hasAttribute("position");
+
+    // Placed every frame too: the rings are local to the sound and the gizmo
+    // can be dragging it. Position only — a ring that rolled with the node
+    // would stop reading as a distance on the ground.
+    Vector3 world;
+    selected->getWorldPosition(world);
+    soundRings_->matrix->makeTranslation(world.x, world.y, world.z);
+    soundRings_->matrixWorldNeedsUpdate = true;
+}
+
+void EditorApp::clearSoundRings() {
+
+    if (!soundRings_) return;
+    soundRings_->removeFromParent();
+    soundRings_.reset();
+    soundRingsKey_.clear();
 }
