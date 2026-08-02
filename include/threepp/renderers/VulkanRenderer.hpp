@@ -300,8 +300,13 @@ namespace threepp {
         [[nodiscard]] float sunAngularRadius() const;
 
         // ReSTIR DI master toggle (streaming RIS + temporal + spatial reuse at
-        // primary surfaces) for the deferred shade's next-event estimation. Off
-        // (default) falls back to per-light NEE.
+        // primary surfaces) for the deferred shade's next-event estimation.
+        // ON by default — it is what makes many-light and emissive-geometry
+        // scenes converge at 1 spp, so it is the path the renderer is tuned and
+        // golden-tested against. setRestirDIEnabled(false) bypasses the primary
+        // RIS branch and falls back to the legacy per-light NEE loops: cheaper
+        // with a handful of lights, markedly noisier with many, and a useful
+        // A/B when triaging a reservoir-feedback artifact.
         void setRestirDIEnabled(bool enabled);
         [[nodiscard]] bool restirDIEnabled() const;
 
