@@ -879,6 +879,17 @@ namespace threepp {
         auto* ctx  = impl.ctx.get();
         if (!ctx) return false;
 
+        // Nothing has ever been rendered into the G-buffer until a frame has been
+        // SUBMITTED: the attachments are allocated with the swapchain, so their
+        // handles/extents look valid immediately and the checks below would happily
+        // copy out uninitialised VRAM — plausible-looking noise labelled as depth /
+        // normals / instance ids, the worst failure mode for the sensor pipelines
+        // this API feeds. frameSerial_ advances once per submitted frame
+        // (VulkanCoreFrame.cpp endFrame), and sceneBuilt_ says the scene walk has
+        // produced entries at least once, so both together are the "a real frame's
+        // contents are in there" predicate the header promises.
+        if (impl.frameSerial_ == 0 || !impl.sceneBuilt_) return false;
+
         // The just-rendered G-buffer sits in the slot BEFORE the current one:
         // endFrame advances currentFrame after recording (VulkanCoreImpl.hpp),
         // so the freshest attachment contents are (currentFrame - 1) mod N —
