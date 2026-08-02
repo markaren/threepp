@@ -863,7 +863,6 @@ namespace threepp {
         float    fogWaterSurfaceY_ = 1e30f;
         float    murkDensity_ = 0.0f;               // setUnderwaterMurk (0 = off)
         float    murkColor_[3] = {1.0f, 1.0f, 1.0f};// setUnderwaterMurk tint
-        uint64_t prevFogHash_ = 0u;
         // ── Resolved unified fog medium for THIS frame (computed by updateFogUbo,
         // consumed by updateCloudUbo + the froxel gate) ──────────────────────────
         // Phase 2 "one knob": scene.fog is the primary control — when present it
@@ -1102,16 +1101,6 @@ namespace threepp {
         // ground it vacated). Host-side only; see the stamping loop in
         // VulkanCoreFrame.cpp.
         std::vector<uint32_t> meshMovedSticky_;
-
-        // FNV-1a 64-bit hash of the previous frame's GpuLightsUbo bytes. Used in
-        // updateLightsUbo to detect changes in analytic-light state (visibility,
-        // intensity, color, position, direction, range, decay, cone angles) and
-        // mark the frame as moved so the per-pixel reproject path halves FC and
-        // the new lighting is picked up quickly. RectAreaLight + emissive meshes
-        // already trigger a reset via the per-frame emissive-triangle CDF rebuild;
-        // this covers DirectionalLight / PointLight / SpotLight which only flow
-        // through the lights UBO and would otherwise leave stale accumulation.
-        uint64_t prevLightsHash_ = 0u;
 
         // Unit of work for ray tracing: a single TLAS instance. A regular Mesh
         // expands to one MeshEntry; an InstancedMesh expands to N entries (one

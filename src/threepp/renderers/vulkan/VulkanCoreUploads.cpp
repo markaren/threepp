@@ -1147,27 +1147,6 @@ namespace threepp {
             g.color[2] = envSun_.colorE[2];
         }
 
-        // FNV-1a 64-bit over the packed UBO. Counts + per-light state are
-        // both included, so a hidden light (filtered out by `if (!o.visible)
-        // return` above) zero-pads its slot and the hash flips.
-        uint64_t h = 0xcbf29ce484222325ull;
-        const auto* bytes = reinterpret_cast<const uint8_t*>(&ubo);
-        for (size_t i = 0; i < sizeof(ubo); ++i) {
-            h ^= bytes[i];
-            h *= 0x100000001b3ull;
-        }
-        // Cluster list too — a light BEYOND the UBO's 8-per-type slots
-        // moving/changing must also flag the frame (it lights pixels via
-        // the clustered path even though the UBO bytes are unchanged).
-        const auto* cbytes = reinterpret_cast<const uint8_t*>(clusterCollect.data());
-        for (size_t i = 0; i < sizeof(GpuClusterLight) * clusterCollect.size(); ++i) {
-            h ^= cbytes[i];
-            h *= 0x100000001b3ull;
-        }
-        if (h != prevLightsHash_) {
-            prevLightsHash_       = h;
-        }
-
         uploadHostVisible(ctx->allocator(), lightsUbos[frame], &ubo, sizeof(ubo));
     }
 
@@ -1272,15 +1251,6 @@ namespace threepp {
         ubo.murkColor[1]  = murkColor_[1];
         ubo.murkColor[2]  = murkColor_[2];
 
-        uint64_t h = 0xcbf29ce484222325ull;
-        const auto* bytes = reinterpret_cast<const uint8_t*>(&ubo);
-        for (size_t i = 0; i < sizeof(ubo); ++i) {
-            h ^= bytes[i];
-            h *= 0x100000001b3ull;
-        }
-        if (h != prevFogHash_) {
-            prevFogHash_          = h;
-        }
         // Froxel-volumetrics gate: the deferred leaf records the froxel
         // passes only when a medium exists this frame (fog, or the
         // explicit clear-air beam density).
