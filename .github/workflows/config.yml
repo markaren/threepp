@@ -4,12 +4,36 @@ name: Build
 on: [push, workflow_dispatch]
 
 jobs:
+  # The main Linux gate — and, since it carries the vcpkg "physx" feature, the
+  # only job that builds the PhysX-backed half of the repo.
+  #
+  # PhysX rides along here rather than in a job of its own because it is purely
+  # ADDITIVE: same compiler, same build type, same preset, it only unlocks
+  # targets that CMake otherwise skips. That is what distinguishes it from the
+  # sanitizer job below, which cannot share a build because it mandates
+  # different flags. A separate PhysX job would have re-built the library, the
+  # examples, the editor and the player identically to this one just to reach
+  # the extra targets — roughly doubling the Linux cost for no extra signal.
+  #
+  # What the feature unlocks, none of which was compiled anywhere in CI before:
+  #   * 14 test executables — the four proprioceptive sensors, every play
+  #     session (physics, articulation, joint, vehicle, sensor, conveyor),
+  #     SoftBody, PhysxWorld, and (via v-hacd) the convex decomposition;
+  #   * 8 example directories — Physics, RobotCell, Vehicle, Drive, NorwayDrive,
+  #     Shooter, FPS, Spot.
+  #
+  # CPU only. PhysX GPU dynamics is opt-in (PhysxWorld::Settings::enableGpuDynamics)
+  # and the runners have no CUDA device; SoftBody_test asks for a GPU world, gets
+  # nullptr and skips itself, which is intended behaviour rather than a hole this
+  # job could close.
   linux:
 
     runs-on: ${{ matrix.os }}
     env:
       CC: gcc-${{ matrix.compiler_version }}
       CXX: g++-${{ matrix.compiler_version }}
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
     strategy:
       fail-fast: false
       matrix:
@@ -19,6 +43,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # GLFW is no longer taken from apt: the manifest's "external-glfw" feature
+      # supplies it, so that with the vcpkg toolchain in play there is exactly one
+      # provider for every find_package rather than two whose precedence has to be
+      # reasoned about. THREEPP_USE_EXTERNAL_GLFW stays ON and the code path under
+      # test — find_package(glfw3 CONFIG) plus the imported target — is unchanged;
+      # only who ships the library differs. The X11 dev headers stay, since that is
+      # what vcpkg builds glfw3 against.
       - name: Install prerequisites
         run: |
           sudo apt-get update && sudo apt-get install -y \
@@ -28,10 +59,30 @@ jobs:
           libglu1-mesa-dev \
           pkg-config \
           ninja-build \
-          libglfw3 \
-          libglfw3-dev \
           libgl1-mesa-dri \
           xvfb
+
+      - name: Checkout vcpkg
+        run: |
+          git clone --depth 1 --branch "$VCPKG_RELEASE" \
+            https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+        env:
+          # Pinned so the cache key is stable and a vcpkg-side regression cannot
+          # land here unannounced. This release carries physx 5.5.0#1, which is
+          # what the development machines build against. Bump deliberately, and
+          # move the cache key below with it.
+          VCPKG_RELEASE: 2026.01.16
+
+      # Building PhysX 5.5 from source is tens of minutes; this makes that a
+      # once-per-bump cost rather than a per-push one. The key moves only when
+      # the vcpkg release above or the manifest changes.
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-ubuntu-22.04-2026.01.16-${{ hashFiles('vcpkg.json') }}
 
       # xvfb + the Mesa DRI driver are declared explicitly for the GL pixel tests
       # (tests/renderers/gl), which construct a Canvas and so need a display and a
@@ -42,11 +93,20 @@ jobs:
       # CONFIGURE time, so the install has to precede cmake either way.
       - name: Configure and build
         run: |
-          cmake --preset ci-linux
-          cmake --build --preset ci-linux
+          cmake --preset ci-linux-physx
+          cmake --build --preset ci-linux-physx
+
+      # Fails the job if the PhysX targets did not materialise. Without this,
+      # tests/extras/CMakeLists.txt would quietly take its `physx not found`
+      # branch, every remaining test would pass, and the job would go green
+      # having built none of what it was extended to cover.
+      - name: Assert the PhysX targets were built
+        run: |
+          ctest --preset ci-linux-physx -N | grep -q 'EditorConveyor_test' \
+            || { echo "PhysX tests absent — the vcpkg feature did not take effect"; exit 1; }
 
       - name: Test
-        run: ctest --preset ci-linux
+        run: ctest --preset ci-linux-physx
 
 
   # AddressSanitizer + UndefinedBehaviorSanitizer.
