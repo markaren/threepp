@@ -314,9 +314,9 @@ flies it headlessly, and `--selftest` opens it through the menu's own code path.
 ### Timber Yard
 
 A working sawmill yard that runs **itself**. Nothing here is flown or driven:
-eight logs come off a gravity rack one at a time, ride a conveyor to the saw
-bay, and stack against a flap at the far end — and the whole sequence is five
-inline Python scripts and two coroutines. Where Hover Arena is a thing you
+eight logs come off a gravity rack one at a time, ride a conveyor into a saw
+that **cuts them in half**, and stack against a flap at the far end — and the
+whole sequence is six inline Python scripts and two coroutines. Where Hover Arena is a thing you
 *operate*, this is a thing you *watch*, and it exists to show what
 [coroutines](#coroutines-threeppeditorstart_coroutine) do to code that takes
 time.
@@ -332,23 +332,42 @@ parks at the far end looking at a stack.)
 | what you see | what it is |
 | --- | --- |
 | the gate lifts, one log rolls out, the gate drops | **one coroutine**, read top to bottom: `until(bay clear)` → clamp → `wait(0.35)` → drive open → `wait(1.4)` → drive shut → `until(the encoder says shut)`. The waits are [SIMULATED seconds](#both-clocks-threeppeditortime), so the yard runs the same number of substeps on any machine |
+| **the blade cuts the log in two** | every log is authored as two halves on a breakable **fixed joint** with a slot between them, and the blade is thicker than the slot: it meets the halves on their inner faces, which is a wedge, and the joint gives way. The halves part around the blade and ride on as two. The blade itself is a body on a **driven revolute joint** (zero stiffness, a velocity target — a motor), so it is genuinely spinning, genuinely in the way, and visibly **bogs down** as it bites |
+| the halves separate, they do not fly | the blade's **collider is thin** (9 cm) though its disc is not, and the logs have zero restitution. A fat collider bites harder but leaves the solver a deep overlap to push out in the substep the joint snaps, and the halves inherit that shove instead of the belt's momentum — off the side of the belt, in the first version of this. The **kerb rails** down both edges are the backstop, and the headless test watches every log body every substep for one straying past them |
+| the counter still says eight | the bay counts one named half and skips the other, and latches on the name — a log is one log however many bodies cross the volume and however many times they cross it |
 | the second log does not follow it out | the **hold-back clamp**, a second [driven joint](#joints-in-userdata) the same coroutine works. A packed queue on a slope moves as one body, so timing alone cannot release one log — this is an escapement, and it is why there are two joints |
 | the gate knows it is shut | an **Encoder** [authored on the joint node](#joint-sensors) — a joint sensor on a joint needs no joint name, the node is the reference |
 | each arrival counted, with a throughput | an invisible **[trigger volume](#trigger-volumes)** under the saw. `on_trigger_enter` stamps `threepp.editor.time.sim_time` per log, so *logs per second* is a fact about the yard rather than about the frame rate |
 | the yellow box that flashes as one lands | [`threepp.editor.draw_box`](#debug-draw), for the frame it lasts |
 | the flap at the end of the belt, and the green line out of its mount | a **breakable** joint carrying a **Force/Torque** sensor. `fixed_update` reads the load cell on the physics clock and `draw_line` draws it; one belt-driven log leans the flap open and walks through |
-| **hold SPACE and it fails** | the override folds `is_key_down` into the coroutine's `until()` and skips the escapement: the whole rack pours onto the belt, several logs reach the flap in contact, the mount goes over its break force, `on_break()` fires and the mission is marked failed through [`script_from_object`](#talking-to-other-scripts-threeppeditorscript_from_object) |
+| **hold SPACE and the rack pours out** | the override folds `is_key_down` into the coroutine's `until()` and skips the escapement, so the whole rack goes onto the belt at once. The stop bar's breakable joint and its `on_break()` — which marks the mission failed through [`script_from_object`](#talking-to-other-scripts-threeppeditorscript_from_object) — are the guard rail against what that produces |
+| the lettering on the sign | the editor's [TEXT authoring](#features) — `TextConfig`, glyphs baked into the mesh, so it reads with no font file present. Flat (depth 0): extruded, "TIMBER YARD" alone costs 1.5 MB of vertices |
 | the mission itself | a second coroutine on the yard sign: settle, then `for i in range(8): yield self.release_one(i)` — a NESTED generator per log, which costs no frame of its own — then one report on **both clocks**, `sim_time` against `wall_time` |
 
 The scripts print to the process stdout, not the console panel, so a headless
 run reports its own throughput.
+
+**A note on the stop bar, because the scene used to claim more.** Before the saw
+existed, a SPACE-forced pour-out loaded the flap at the end of the belt harder
+than an authored mission did, and the example advertised "two logs together snap
+it". With sawn cargo that is no longer true and the measurements say so: a full
+mission peaks at 267 N there, a forced pour-out at 170 N — a crowd of half-logs
+arriving at a flap that is already swinging leans on it less than one log
+shouldering it open does. Calibrated by outcome the two overlap completely, so
+nothing separates them and the headless test does not pretend otherwise. What
+demonstrates a joint giving way — eight times a run, on camera — is the saw.
+
+Every threshold in the scene was measured per substep rather than guessed, and
+one of them had to be settled by **outcome** instead: `PxConstraint::getForce`
+reads zero the instant a joint breaks, so the spike that breaks a joint is
+exactly the spike a probe never sees.
 
 **Two things this scene is not.** It carries no procedural trees and no log
 cabin, though both ship with the editor and both were built, exported and
 measured for it: a generator emits a `BufferGeometry` and the serializer writes
 every vertex of one as text, which puts the smallest cabin that is still a
 building at ~985 KB and a pine that still reads as a tree at ~340 KB — against a
-whole document of 172 KB. Sharing one generated pine between six trees (which
+whole document of 352 KB. Sharing one generated pine between six trees (which
 the serializer does support — a geometry is written once per uuid) does not
 rescue it either, because what is left is six copies of the same tree. So the
 clearing and the yard office are **primitives**, which serialize as their

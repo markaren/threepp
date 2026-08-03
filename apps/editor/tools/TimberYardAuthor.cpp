@@ -26,7 +26,7 @@
 //     It was the last thing drifting between two runs;
 //   * nothing samples a clock, a random_device, or an address.
 //
-// SIZE. The document is 172 KB, against a 600 KB ceiling, and the serializer's
+// SIZE. The document is 352 KB, against a 600 KB ceiling, and the serializer's
 // dominant cost is inlined geometry — a BufferGeometry writes every vertex,
 // while a BoxGeometry writes its three numbers. So the yard is built from
 // PRIMITIVES wherever a primitive will do, and the one piece of generated
@@ -46,6 +46,7 @@
 #include "threepp/extras/editor/SceneDocument.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
+#include "threepp/extras/editor/TextConfig.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
@@ -72,6 +73,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <unordered_set>
 #include <vector>
 
@@ -87,8 +89,8 @@ namespace {
     // nothing else.
     constexpr float kSlope = 0.115f;     // rack fall, radians (~6.6 degrees)
     constexpr float kRackCentreX = -9.8f;// rack deck centre
-    constexpr float kRackCentreY = 1.242f;// chosen so the deck ENDS a log's drop
-                                          // above the belt — see kRackEndX
+    constexpr float kRackCentreY = 1.242f;// the deck ends a log's drop above the
+                                          // belt — see kRackEndX
     constexpr float kRackLength = 5.6f;
     constexpr float kRackHalfDepth = 1.15f;// half the width the logs lie across
     constexpr float kDeckHalf = 0.13f;     // half thickness of the rack deck
@@ -160,14 +162,57 @@ namespace {
     constexpr float kApronY = 0.62f;     // top surface at kApronStartX
     constexpr float kApronSlope = 0.035f;// radians of fall toward the berm
 
-    constexpr float kBayX = 0.1f;// centre of the counting volume
+    // Well upstream of the flap. The saw shoves a log's halves apart as it cuts,
+    // and a half that arrives at the flap still skewed from that hits it off
+    // square and loads the mount far harder than a settled one — which put the
+    // mission's own spike into the same range as the abuse case it is supposed
+    // to be told apart from. Three metres of belt between them is what separates
+    // the two again.
+    constexpr float kBayX = -1.5f;// centre of the counting volume
     constexpr float kBermX = 6.0f;
 
     float apronTopY(float x) { return kApronY - (x - kApronStartX) * std::tan(kApronSlope); }
 
     constexpr float kLogRadius = 0.2f;
-    constexpr float kLogLength = 1.7f;
+    // SHORTER THAN THE BELT IS WIDE (1.5 m), with 15 cm of margin each side.
+    // The first version was 1.7 m on a 1.5 m belt: a log could hang its end off
+    // the edge, and an overhanging end that reaches the blade plane is a log
+    // being milled side-on for ever — which is exactly what happened to the last
+    // log of a run, the one that arrives slowest.
+    constexpr float kLogLength = 1.2f;
     constexpr int kLogCount = 8;
+
+    // --- what makes the saw a saw --------------------------------------------
+    // Every log is authored as TWO HALVES held together by a breakable FIXED
+    // joint, with a slot between them. The blade is thicker than the slot, so a
+    // log arriving at the saw meets it on the halves' inner faces — a wedge
+    // whose contact normals point along ±Z, which is the one direction that
+    // separates them. The joint gives way, the halves part around the blade and
+    // ride on down the belt as two, and that is the cut.
+    //
+    // A script COULD do this the other way — the play runtime does support
+    // spawning during Play (build a mesh, add it to the live scene(), give it a
+    // body through threepp.editor.world()) — but authored halves are the better
+    // trade here: they are in the document, so the scene is deterministic and
+    // byte-reproducible, they need no script to exist, and what does the cutting
+    // is a BREAKABLE JOINT, which is the feature worth showing.
+    // THIN. Both of these were four times bigger, and the cut was a detonation:
+    // a wide collider overlaps the halves deeply, the solver has to push that
+    // overlap out in the substep the joint happens to snap, and the halves
+    // inherit a depenetration impulse instead of a cut — off the belt entirely,
+    // sometimes. A blade is a few millimetres of steel, so the COLLIDER is a few
+    // millimetres of steel; nothing says the visual disc has to be a slab.
+    constexpr float kCutSlot = 0.012f;// gap between the halves, at rest
+    constexpr float kHalfLength = (kLogLength - kCutSlot) * 0.5f;
+    constexpr float kHalfOffset = (kHalfLength + kCutSlot) * 0.5f;// centre of each half
+    constexpr float kBladeThickness = 0.09f;// > kCutSlot, or the blade misses
+    constexpr float kBladeRadius = 0.46f;
+    // The blade reaches the log's CENTRE LINE and no further. That is where the
+    // two halves' inner faces are closest, so it is where a thin blade engages
+    // them most for the least penetration — and it means the saw never ploughs
+    // the full cross-section, which is the other half of why the cut used to
+    // throw things.
+    constexpr float kBladeY = 1.51f;
 
     // Top surface of the sloped rack deck at x.
     float rackTopY(float x) {
@@ -392,6 +437,7 @@ editor = getattr(threepp, "editor", None)
 class BayCounter:
 
     cargo = "Log"       # name prefix that counts as cargo
+    ignore = "Offcut"   # ...except this half of a sawn one
     flash_seconds = 0.45
     box_x = 1.3         # the volume this script is drawn as, full extents
     box_y = 1.6
@@ -404,12 +450,28 @@ class BayCounter:
         self.first_at = None
         self.last_at = None
         self.arrivals = []
+        self.seen = set()     # names already counted - see on_trigger_enter
         self.flash = 0.0
 
+    # A log is TWO bodies (see the saw), and both of them cross this volume
+    # whether the blade parted them or not. Counting cargo means counting one
+    # named half and skipping the other, or every log arrives twice.
+    def counts(self, other: threepp.Object3D):
+        return (other is not None and other.name.startswith(self.cargo)
+                and self.ignore not in other.name)
+
     def on_trigger_enter(self, other: threepp.Object3D):
-        if other is None or not other.name.startswith(self.cargo):
+        if not self.counts(other):
             return
         self.occupancy += 1
+        # Occupancy is about RIGHT NOW and counts every crossing; the tally is
+        # about how many logs the yard has sawn, and a log is one log however
+        # many times it crosses. It can cross more than once: the saw is in this
+        # volume, and a log being wedged apart by a blade jostles. Latching on
+        # the name is what makes "13 logs sawn out of 8" impossible.
+        if other.name in self.seen:
+            return
+        self.seen.add(other.name)
         self.count += 1
         now = editor.time.sim_time if editor is not None else 0.0
         self.arrivals.append(now)
@@ -420,7 +482,7 @@ class BayCounter:
         print("Timber Yard: log %d in the bay at %.2f s (sim)" % (self.count, now), flush=True)
 
     def on_trigger_exit(self, other: threepp.Object3D):
-        if other is None or not other.name.startswith(self.cargo):
+        if not self.counts(other):
             return
         self.occupancy = max(0, self.occupancy - 1)
 
@@ -644,7 +706,7 @@ class LogWobble:
     prefix = "Log"
     count = 8
     nudge = 0.16# m/s along the rack
-    drift = 0.07# m/s across it
+    drift = 0.0 # ACROSS it: zero, deliberately - see start()
     spin = 0.5  # rad/s of roll
 
     def start(self, obj: threepp.Object3D):
@@ -660,15 +722,25 @@ class LogWobble:
             log = scene.get_object_by_name("%s %d" % (self.prefix, i))
             if log is None:
                 continue
-            body = body_of(log)
-            if body is None:
-                continue
             a = self.unit(log.uuid, 0)
             b = self.unit(log.uuid, 1)
             c = self.unit(log.uuid, 2)
-            body.velocity = threepp.Vector3(a * self.nudge, 0.0, b * self.drift)
-            body.angular_velocity = threepp.Vector3(0.0, 0.0, c * self.spin)
-            self.wobbled += 1
+            # BOTH halves get the SAME push. They are held together by a
+            # breakable joint that the saw is supposed to break, and nudging
+            # them apart at Play would spend part of its budget before the log
+            # has left the rack.
+            #
+            # And the push is along the rack ONLY. A sideways nudge walks a log
+            # off the blade's line, and a log that meets the blade off-centre is
+            # a log the saw does not cut - which showed up as four of eight
+            # logs reaching the stack in one piece.
+            for name in ("%s %d" % (self.prefix, i), "%s %d Offcut" % (self.prefix, i)):
+                body = body_of(scene.get_object_by_name(name))
+                if body is None:
+                    continue
+                body.velocity = threepp.Vector3(a * self.nudge, 0.0, b * self.drift)
+                body.angular_velocity = threepp.Vector3(0.0, 0.0, c * self.spin)
+                self.wobbled += 1
 
     # FNV-1a over the uuid plus a channel, folded to -1..1. A hash rather than
     # random.seed() so the channels of one log are independent without three
@@ -678,6 +750,95 @@ class LogWobble:
         for ch in text:
             h = ((h ^ ord(ch)) * 16777619) & 0xffffffff
         return (h & 0xffff) / 32767.5 - 1.0
+)PY";
+
+
+    // 6. The saw. Watches the cuts it makes, and flashes where it made them.
+    const char* kSawMillSource = R"PY(# Timber Yard - the saw.
+#
+# The blade does not do the cutting in code: it is a driven body on a revolute
+# joint (a motor - zero stiffness, a velocity target through damping) and it
+# meets each log on the inner faces of its two halves, which is a wedge. What
+# this script does is WATCH: every log carries a breakable fixed joint holding
+# its halves together, and a joint that has gone is a log that has been sawn.
+#
+# It reads the spindle too. A saw fighting a log slows down, and because the
+# motor is a real drive against a real contact, that dip is physics rather than
+# an animation somebody keyframed.
+import threepp
+
+editor = getattr(threepp, "editor", None)
+
+
+def _verb(name):
+    return getattr(editor, name, None) if editor is not None else None
+
+
+class SawMill:
+
+    logs = 8
+    spindle = "Saw Spindle"
+    flash_seconds = 0.3
+    x = -1.5 # where the cut happens, in world terms: this script's object is a
+    y = 1.05 # child of the gantry, so its own position is not the answer
+
+    def start(self, obj: threepp.Object3D):
+        self.obj = obj
+        self.cuts = 0
+        self.flash = 0.0
+        self.speed = 0.0
+        self.pending = []
+        self.joint = None
+        if editor is None:
+            return
+        joint_of = _verb("joint_from_object")
+        if joint_of is None:
+            print("Timber Yard needs the PhysX build to run the saw.", flush=True)
+            return
+        scene = editor.scene()
+        self.joint = joint_of(scene.get_object_by_name(self.spindle))
+        for i in range(1, self.logs + 1):
+            node = scene.get_object_by_name("Log %d Cut" % i)
+            cut = joint_of(node) if node is not None else None
+            if cut is not None:
+                self.pending.append([i, cut])
+
+    def update(self, dt: float):
+        if editor is None:
+            return
+        if self.joint is not None:
+            self.speed = abs(self.joint.velocity)
+
+        # A joint that has gone is a log that has been sawn. Rebuilt rather than
+        # removed from in place: mutating the list being walked is how you miss
+        # every second cut.
+        still = []
+        for index, cut in self.pending:
+            if cut.broken:
+                self.cuts += 1
+                self.flash = self.flash_seconds
+                print("Timber Yard: log %d cut (blade at %.0f rpm)"
+                      % (index, self.speed * 9.5493), flush=True)
+            else:
+                still.append([index, cut])
+        self.pending = still
+
+        if self.flash <= 0.0:
+            return
+        # Sawdust, for the frame it lasts: debug draw is furniture, never saved
+        # and invisible to the sensors.
+        self.flash = max(0.0, self.flash - dt)
+        level = self.flash / self.flash_seconds
+        centre = threepp.Vector3(self.x, self.y, 0.0)
+        editor.draw_box(centre, threepp.Vector3(0.5, 0.5, 0.9), 0xffd27a)
+        for i in range(6):
+            a = (i * 1.0472) + self.cuts
+            spread = 0.35 + 0.5 * level
+            editor.draw_line(centre,
+                             threepp.Vector3(self.x + spread * 0.7,
+                                             self.y + spread * (0.5 - 0.2 * i),
+                                             spread * (0.5 - 0.2 * (i % 3))),
+                             0xffbf5a)
 )PY";
 
     // ------------------------------------------------------------------- scene
@@ -986,27 +1147,84 @@ class LogWobble:
 
         // --- the logs --------------------------------------------------------
         // Cylinders lying ACROSS the yard, so they roll down the rack and along
-        // the belt the way a log does. One geometry, one material, eight bodies.
-        auto logGeometry = CylinderGeometry::create(kLogRadius, kLogRadius, kLogLength, 12, 1);
+        // the belt the way a log does — and each one is TWO of them, jointed,
+        // waiting for the saw (see kCutSlot).
+        auto logGeometry = CylinderGeometry::create(kLogRadius, kLogRadius, kHalfLength, 12, 1);
         // Deliberately lighter than the tree bark that shares the palette: this
         // is SAWN timber, it is the thing the whole scene is about, and eight
         // dark logs on a dark rack are one brown mass at yard distance.
         auto logMaterial = standard(kLogSkin, 0.85f, 0.f);
         for (int i = 0; i < kLogCount; ++i) {
             const float x = logX(i);
-            auto log = mesh("Log " + std::to_string(i + 1), logGeometry, logMaterial);
-            log->position.set(x, rackTopY(x) + kLogRadius, 0.f);
-            // The cylinder's axis is +Y; a quarter turn about X lays it along Z.
-            log->rotation.x = math::PI / 2.f;
-            // CAPSULE, not the convex hull Auto would cook. A cylinder's hull is
-            // a twelve-sided PRISM, and a prism on a 6.6-degree slope does not
-            // roll — it sits in a facet, because rolling over a corner means
-            // climbing fifteen degrees. That is a log rack that never releases
-            // anything, and it looks exactly like a scripting bug. The capsule's
-            // cross-section is a circle, so it rolls like the log it draws.
-            writePhysics(*log, PhysicsConfig::Body::Dynamic, PhysicsConfig::Shape::Capsule,
-                         26.f, 0.55f, 0.02f);
-            scene->add(log);
+            const float y = rackTopY(x) + kLogRadius;
+            const auto label = std::to_string(i + 1);
+
+            // The half that gets counted, and the half that does not. The names
+            // ARE the convention: the bay counts "Log ..." and skips anything
+            // matching its `ignore` field, so a sawn log is still one log.
+            auto half = [&](const std::string& name, float z) {
+                auto piece = mesh(name, logGeometry, logMaterial);
+                piece->position.set(x, y, z);
+                // The cylinder's axis is +Y; a quarter turn about X lays it
+                // along Z.
+                piece->rotation.x = math::PI / 2.f;
+                // CAPSULE, not the convex hull Auto would cook. A cylinder's
+                // hull is a twelve-sided PRISM, and a prism on a 6.6-degree
+                // slope does not roll — it sits in a facet, because rolling over
+                // a corner means climbing fifteen degrees. That is a log rack
+                // that never releases anything, and it looks exactly like a
+                // scripting bug. The capsule's cross-section is a circle, so it
+                // rolls like the log it draws.
+                // Zero restitution. A log that bounces off a blade is a log
+                // being thrown, and the halves have to keep the belt's momentum
+                // through the cut, not gain some of the blade's.
+                writePhysics(*piece, PhysicsConfig::Body::Dynamic,
+                             PhysicsConfig::Shape::Capsule, 13.f, 0.55f, 0.f);
+                scene->add(piece);
+                return piece;
+            };
+            auto front = half("Log " + label, kHalfOffset);
+            half("Log " + label + " Offcut", -kHalfOffset);
+
+            // The cut, waiting to happen. Its parent chain is body A (the
+            // counted half) and body B is the offcut by name; the anchor sits on
+            // the seam between them.
+            //
+            // The node's position is in its PARENT'S frame, and the parent is
+            // lying on its side — a quarter turn about X sends local +Y to world
+            // -Z, so the seam is at local -kHalfOffset in Y, not in Z.
+            auto cut = Object3D::create();
+            cut->name = "Log " + label + " Cut";
+            cut->position.set(0.f, -kHalfOffset, 0.f);
+            {
+                JointConfig joint;
+                joint.type = JointConfig::Type::Fixed;
+                joint.body = "Log " + label + " Offcut";
+                // MEASURED, both directions — see the stop bar's note for why
+                // that has to be per substep. The ride is what it has to
+                // survive: the drop off the rack onto the belt is the loudest
+                // thing that happens to a log before the saw.
+                // MEASURED per substep with the joint made unbreakable, which is
+                // the only way to see the whole curve: everything that happens
+                // to a log BEFORE the saw — the pack leaning on the gate, the
+                // hold-back clamp, the drop off the rack onto the belt — peaks
+                // at 493 N, and the blade's wedge drives this joint to 1155 N.
+                // 650 sits between, and the OUTCOME is what settled it (a probe
+                // reads zero the instant a joint goes, so the spike that breaks
+                // one is the spike it never sees): at 650 all eight logs are
+                // cut, at 700 six are and the two that get through intact hit
+                // the flap hard enough to matter.
+                //
+                // That margin is a THIN BLADE's margin, and it is the right
+                // trade. A fat collider bites far harder (2645 N at 18 cm) but
+                // the solver then has a deep overlap to push out in the substep
+                // the joint happens to snap, and the halves leave with it —
+                // across the belt, sometimes off it. Cutting is not throwing.
+                joint.breakForce = 650.f;
+                joint.breakTorque = 600.f;
+                joint.write(*cut);
+            }
+            front->add(cut);
         }
 
         // --- the gate --------------------------------------------------------
@@ -1134,9 +1352,9 @@ class LogWobble:
             // the drive always has an error to push with.
             joint.lower = -0.05f;
             joint.upper = 1.15f;
-            joint.stiffness = 7000.f;
-            joint.damping = 700.f;
-            joint.maxForce = 2e5f;
+            joint.stiffness = 2200.f;
+            joint.damping = 260.f;
+            joint.maxForce = 6e4f;
             joint.target = 0.f;
             joint.write(*clampHinge);
         }
@@ -1144,6 +1362,39 @@ class LogWobble:
 
         // --- the belt --------------------------------------------------------
         scene->add(makeConveyor());
+
+        // Kerb rails down both edges of the belt. The logs are already shorter
+        // than the belt is wide, but "already" is not "cannot": a log that
+        // wanders sideways far enough to hang an end over the edge presents that
+        // end to the blade PLANE instead of its middle, and then the saw mills
+        // it side-on for ever instead of cutting it. The rails are low (they
+        // clear a log's centre line, so nothing rides up them) and slippery, so
+        // the belt keeps driving while a log slides straight again.
+        for (int side = 0; side < 2; ++side) {
+            const float z = (side == 0) ? 0.83f : -0.83f;
+            auto kerb = mesh("Belt Kerb " + std::to_string(side + 1), unit,
+                             standard(kSteel, 0.6f, 0.5f));
+            // Tall enough to reach over a half-log's CENTRE (a rail lower than
+            // that is a ramp), and the halves ride at |z| ~ 0.3, so there is
+            // half a metre of clearance either side of the cut.
+            // They start downstream of the GATE and run to the end of the belt.
+            // Tall enough to foul the gate leaf's swing if they began any
+            // earlier — a gate that cannot open delivers nothing, which is
+            // exactly how that presented — and the flap at the far end is
+            // narrower than the gap between them, so it swings between them
+            // rather than into them.
+            const float from = kBeltStartX + 0.7f;
+            const float to = kBeltEndX;
+            // As tall as a log, not as tall as half of one. A rail that stops
+            // at a log's centre is a ramp for anything that tumbles, and the
+            // one body that ever left this belt went over exactly such a rail.
+            kerb->position.set((from + to) * 0.5f, kBeltY + 0.2f, z);
+            kerb->scale.set(to - from, 0.4f, 0.1f);
+            kerb->castShadow = false;
+            writePhysics(*kerb, PhysicsConfig::Body::Static, PhysicsConfig::Shape::Box,
+                         1.f, 0.08f, 0.f);
+            scene->add(kerb);
+        }
 
         // --- the discharge apron ---------------------------------------------
         // What the belt hands the logs to: a shallow ramp they roll down and
@@ -1157,8 +1408,12 @@ class LogWobble:
             apron->scale.set(length, 0.24f, 2.8f);
             apron->rotation.z = -kApronSlope;
             apron->castShadow = false;
+            // Slippery on purpose. A log that has just been through the saw is
+            // no longer rolling straight — it has been shoved sideways by the
+            // blade — and a half that slides instead of rolling stops dead on a
+            // two-degree apron with ordinary friction, in a heap by the flap.
             writePhysics(*apron, PhysicsConfig::Body::Static, PhysicsConfig::Shape::Box,
-                         1.f, 0.35f, 0.f);
+                         1.f, 0.12f, 0.f);
             scene->add(apron);
 
             for (int side = 0; side < 2; ++side) {
@@ -1200,6 +1455,7 @@ class LogWobble:
         {
             ScriptConfig config;
             config.source = kBayCounterSource;
+            config.setField("ignore", "Offcut");
             config.setField("box_x", "1.3");
             config.setField("box_y", "1.6");
             config.setField("box_z", "2.4");
@@ -1226,17 +1482,61 @@ class LogWobble:
         beam->position.set(0.f, 2.28f, 0.f);
         beam->scale.set(0.22f, 0.22f, 3.7f);
         gantry->add(beam);
-        auto blade = mesh("Saw Blade", CylinderGeometry::create(0.46f, 0.46f, 0.04f, 24, 1),
+        // The blade is a REAL BODY on a driven hinge, not a prop that turns:
+        // a revolute joint with zero stiffness and a velocity target is a motor
+        // (target acts through stiffness, velocity through damping), so the
+        // blade spins because it is driven, meets the log because it is a
+        // collider, and visibly BOGS DOWN when it is fighting one.
+        auto blade = mesh("Saw Blade",
+                          CylinderGeometry::create(kBladeRadius, kBladeRadius,
+                                                   kBladeThickness, 24, 1),
                           standard(0xc9ccd2, 0.35f, 0.85f));
-        blade->position.set(0.f, 1.78f, 0.f);
-        blade->rotation.x = math::PI / 2.f;
+        blade->position.set(0.f, kBladeY, 0.f);
+        blade->rotation.x = math::PI / 2.f;// the disc's axis lies along Z
+        writePhysics(*blade, PhysicsConfig::Body::Dynamic, PhysicsConfig::Shape::Auto,
+                     8.f, 0.4f, 0.f);
         gantry->add(blade);
 
-        // A blade with nothing driving it is a disc somebody left in the air.
-        auto motor = mesh("Saw Motor", unit, standard(0x3f4650, 0.6f, 0.4f));
-        motor->position.set(0.f, 2.05f, -0.42f);
-        motor->scale.set(0.42f, 0.4f, 0.5f);
-        gantry->add(motor);
+        auto arbor = mesh("Saw Motor", unit, standard(0x3f4650, 0.6f, 0.4f));
+        arbor->position.set(0.f, 2.02f, -0.36f);
+        arbor->scale.set(0.44f, 0.42f, 0.5f);
+        writePhysics(*arbor, PhysicsConfig::Body::Static, PhysicsConfig::Shape::Box,
+                     1.f, 0.5f, 0.f);
+        gantry->add(arbor);
+
+        // The hinge. Its axis is the node's local X, and the blade it hangs off
+        // is already lying on its side — so the quarter turn that lands local X
+        // on world Z (the blade's own axis) is about the node's Z, not its Y.
+        auto spindle = Object3D::create();
+        spindle->name = "Saw Spindle";
+        spindle->rotation.z = math::PI / 2.f;
+        {
+            JointConfig joint;
+            joint.type = JointConfig::Type::Revolute;
+            joint.body = "Saw Motor";
+            joint.stiffness = 0.f;// no position to hold: this is a motor
+            // 26 rad/s on a 0.46 m disc is a RIM SPEED OF 12 m/s, and a rim that
+            // fast in sustained contact with a log that is barely moving does
+            // not cut it, it throws it — which is what happened to the last log
+            // of a run, the one with no pack behind it to push it through. Ten
+            // rad/s is 4.6 m/s at the rim: still four times belt speed, still
+            // obviously spinning, and it drags rather than launches. The cut
+            // comes from the wedge, not from the spin.
+            joint.damping = 40.f;
+            joint.velocity = 10.f;// rad/s, about 95 rpm
+            joint.maxForce = 8e3f;
+            joint.write(*spindle);
+        }
+        blade->add(spindle);
+
+        {
+            ScriptConfig config;
+            config.source = kSawMillSource;
+            config.setField("logs", std::to_string(kLogCount));
+            config.setField("x", "-1.5");
+            config.write(*blade);
+        }
+
         scene->add(gantry);
 
         // --- the stop bar ----------------------------------------------------
@@ -1261,7 +1561,12 @@ class LogWobble:
 
         auto stopBar = mesh("Stop Bar", unit, standard(kOrange, 0.65f, 0.2f));
         stopBar->position.set(kBarX, kBarHingeY - kBarDrop * 0.5f, 0.f);
-        stopBar->scale.set(0.1f, kBarDrop, 2.2f);
+        // NARROWER THAN THE KERBS ARE APART (they stand at z = +-0.83), so the
+        // rails can run the full length of the belt and past the flap instead of
+        // stopping half a metre short of it. That gap was where the one body
+        // that ever left this belt left it: right at the flap, at x = 1.36,
+        // where nothing was holding the sides.
+        stopBar->scale.set(0.1f, kBarDrop, 1.4f);
         writePhysics(*stopBar, PhysicsConfig::Body::Dynamic, PhysicsConfig::Shape::Box,
                      10.f, 0.45f, 0.02f);
         scene->add(stopBar);
@@ -1285,7 +1590,7 @@ class LogWobble:
             // to LOSE: it holds the flap shut against nothing but its own
             // weight, and yields to a log.
             joint.stiffness = 90.f;
-            joint.damping = 190.f;
+            joint.damping = 430.f;
             joint.maxForce = 5e4f;
             joint.target = 0.f;
             // MEASURED, not guessed, over the two runs this scene has: a full
@@ -1311,8 +1616,19 @@ class LogWobble:
             // "more logs" is not "more force" — what a pour-out does is arrive
             // with several logs IN CONTACT, and their belt drives add up. The
             // torque limit is set clear of both peaks so it never governs.
-            joint.breakForce = 280.f;
-            joint.breakTorque = 300.f;
+            // Set clear of everything the yard can do to it, including the
+            // occasional log that reaches it uncut, and no longer used to tell
+            // an abuse case apart from a mission — because with sawn cargo it
+            // cannot be. The numbers say so plainly: an authored mission peaks
+            // at 282 N and 116 N*m here, and a SPACE-forced pour-out peaks
+            // LOWER, at 170 N and 83 N*m. A crowd of half-logs arriving at a
+            // flap that is already swinging leans on it less than one log
+            // shouldering it open does.
+            //
+            // What still demonstrates a joint giving way, eight times a run, is
+            // the SAW — see kCutSlot. This one is the guard rail it always was.
+            joint.breakForce = 6000.f;
+            joint.breakTorque = 2500.f;
             joint.write(*mount);
         }
         {
@@ -1333,17 +1649,13 @@ class LogWobble:
         stopBar->add(mount);
 
         // --- the yard sign ---------------------------------------------------
-        auto signPost = mesh("Sign Post", unit, timberMaterial);
-        signPost->position.set(-3.4f, 0.75f, 3.0f);
-        signPost->scale.set(0.12f, 1.5f, 0.12f);
-        scene->add(signPost);
-
-        // Small, and dark enough to read as a board rather than as a lightbox:
-        // a pale 2.6 m slab beside a grey machine is the brightest thing in the
-        // frame, and the eye goes to it instead of to the belt.
-        auto sign = mesh("Yard Sign", unit, standard(0x6b4f2e, 0.9f, 0.f));
-        sign->position.set(-3.4f, 1.62f, 3.0f);
-        sign->scale.set(1.5f, 0.52f, 0.08f);
+        // The sign is a GROUP, so the board, its posts and the lettering on it
+        // are each authored in world units instead of inside a scaled box's
+        // frame — and the group is what carries the mission script, which is
+        // what script_from_object resolves when the stop bar reports a break.
+        auto sign = Group::create();
+        sign->name = "Yard Sign";
+        sign->position.set(-5.9f, 1.55f, 2.9f);
         sign->rotation.y = 0.22f;
         {
             ScriptConfig config;
@@ -1354,6 +1666,87 @@ class LogWobble:
             config.write(*sign);
         }
         scene->add(sign);
+
+        // Real lettering, from the editor's own TEXT authoring: the glyphs are
+        // baked into the mesh like any other geometry, so the sign reads with no
+        // editor and no font file present, and the entry travels along for
+        // whoever wants to edit the words.
+        //
+        // FLAT (depth 0). Extruded, "TIMBER YARD" alone costs 1.5 MB of vertices
+        // in this document; a painted board wants paint anyway.
+        auto paint = standard(0xe8dcc0, 0.85f, 0.f);
+        struct Line {
+            const char* name;
+            const char* words;
+            float size;
+            float y;
+        };
+        static constexpr Line lines[] = {
+                {"Sign Title", "TIMBER YARD", 0.17f, 0.085f},
+                {"Sign Notice", "8 LOGS - MIND THE SAW", 0.075f, -0.115f},
+        };
+
+        // The BOARD IS SIZED FROM THE LETTERING, not guessed at: build the
+        // glyphs, take their bounds, and cut a plank that clears them. Guessing
+        // is how you get type that runs off the end of the board.
+        float textHalfWidth = 0.f;
+        float textTop = -1e9f;
+        float textBottom = 1e9f;
+        std::vector<std::pair<const Line*, std::shared_ptr<BufferGeometry>>> built;
+        for (const auto& line : lines) {
+            TextConfig text;
+            text.text = line.words;
+            text.size = line.size;
+            text.depth = 0.f;
+            text.curveSegments = 2;
+            text.align = TextConfig::Align::Center;
+
+            auto geometry = text.buildGeometry();
+            geometry->computeBoundingBox();
+            if (const auto& box = geometry->boundingBox; box && !box->isEmpty()) {
+                textHalfWidth = std::max({textHalfWidth, std::abs(box->min().x),
+                                          std::abs(box->max().x)});
+                textTop = std::max(textTop, line.y + box->max().y);
+                textBottom = std::min(textBottom, line.y + box->min().y);
+            }
+            built.emplace_back(&line, geometry);
+        }
+
+        const float boardHalfWidth = textHalfWidth + 0.22f;// margin either side
+        const float boardHalfHeight = std::max(textTop, -textBottom) + 0.13f;
+
+        auto board = mesh("Sign Board", unit, standard(0x6b4f2e, 0.9f, 0.f));
+        board->scale.set(2.f * boardHalfWidth, 2.f * boardHalfHeight, 0.07f);
+        sign->add(board);
+
+        for (const auto& [line, geometry] : built) {
+            auto glyphs = Mesh::create(geometry, paint);
+            glyphs->name = line->name;
+            // Proud of the board's front face, so there is nothing to z-fight
+            // with and the letters catch the light as paint would.
+            glyphs->position.set(0.f, line->y, 0.05f);
+            glyphs->castShadow = false;
+            glyphs->receiveShadow = false;
+            TextConfig text;
+            text.text = line->words;
+            text.size = line->size;
+            text.depth = 0.f;
+            text.curveSegments = 2;
+            text.align = TextConfig::Align::Center;
+            text.write(*glyphs);
+            sign->add(glyphs);
+        }
+
+        // TWO posts, at the board's side edges and set BEHIND its face. A single
+        // pole up the middle stands in front of the lettering, which is a sign
+        // you cannot read — and the plank is what the words are on.
+        for (int side = 0; side < 2; ++side) {
+            const float x = (side == 0 ? 1.f : -1.f) * (boardHalfWidth - 0.09f);
+            auto post = mesh("Sign Post " + std::to_string(side + 1), unit, timberMaterial);
+            post->position.set(x, -0.775f, -0.075f);
+            post->scale.set(0.09f, 1.55f + boardHalfHeight, 0.09f);
+            sign->add(post);
+        }
 
         // --- the clearing edge -----------------------------------------------
         scene->add(makeYardOffice(shared));

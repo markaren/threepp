@@ -39,6 +39,7 @@
 #include "threepp/extras/editor/SceneSnapshot.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
+#include "threepp/extras/editor/TextConfig.hpp"
 
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -438,6 +439,29 @@ namespace {
             return position;
         }
 
+        // Step the yard while WATCHING every log body for signs of leaving the
+        // belt. This is the user-visible failure this scene was rebuilt around:
+        // a cut that throws a half off the side, or over the kerb rails. The
+        // belt is 1.5 m wide and its deck is at y = 0.85, so anything beyond
+        // |z| = 1.0 or below y = 0.6 while it is over the belt run has left.
+        void runWatching(int frames) {
+            for (int i = 0; i < frames; ++i) {
+                run(1);
+                for (int n = 1; n <= 8; ++n) {
+                    const auto label = std::to_string(n);
+                    for (const auto& name : {"Log " + label, "Log " + label + " Offcut"}) {
+                        const auto p = worldPosition(name.c_str());
+                        if (p.x < -6.8f || p.x > 1.6f) continue;// not over the belt
+                        strayedZ = std::max(strayedZ, std::abs(p.z));
+                        droppedY = std::min(droppedY, p.y);
+                    }
+                }
+            }
+        }
+
+        float strayedZ = 0.f;
+        float droppedY = 99.f;
+
         // How many logs are past x — read off the SCENE rather than out of the
         // interpreter, which is the same evidence a person watching gets.
         [[nodiscard]] int logsPast(float x) {
@@ -449,10 +473,11 @@ namespace {
         }
     };
 
-    // The gate closes at x = -7.55 and the counting volume is centred on
-    // x = 5.3; these are the two lines that matter, with clearance.
+    // The gate closes at x = -7.3, the saw stands at -1.5 and the flap that
+    // ends the belt is at 1.6. These are the lines that matter, with clearance:
+    // past the gate, and past the flap onto the discharge apron.
     constexpr float kPastGate = -6.5f;
-    constexpr float kInBay = 4.f;
+    constexpr float kDelivered = 2.2f;
 
 }// namespace
 
@@ -537,14 +562,57 @@ TEST_CASE("the shipped Timber Yard document is what it claims to be", "[editor][
         REQUIRE(ConveyorConfig::derivedGroup(*conveyor) != nullptr);
     }
 
-    SECTION("eight logs start on the rack, and the document says how to open") {
+    SECTION("every log is two halves waiting for the blade") {
         for (int i = 1; i <= 8; ++i) {
-            auto* log = rig.node(("Log " + std::to_string(i)).c_str());
-            REQUIRE(log != nullptr);
-            const auto physics = PhysicsConfig::read(*log);
-            REQUIRE(physics.has_value());
-            REQUIRE(physics->body == PhysicsConfig::Body::Dynamic);
+            const auto label = std::to_string(i);
+            for (const auto& name : {"Log " + label, "Log " + label + " Offcut"}) {
+                auto* half = rig.node(name.c_str());
+                REQUIRE(half != nullptr);
+                const auto physics = PhysicsConfig::read(*half);
+                REQUIRE(physics.has_value());
+                REQUIRE(physics->body == PhysicsConfig::Body::Dynamic);
+            }
+            // The cut, waiting to happen: a breakable fixed joint between them.
+            auto* cut = rig.node(("Log " + label + " Cut").c_str());
+            REQUIRE(cut != nullptr);
+            const auto joint = JointConfig::read(*cut);
+            REQUIRE(joint.has_value());
+            REQUIRE(joint->type == JointConfig::Type::Fixed);
+            REQUIRE(joint->body == "Log " + label + " Offcut");
+            REQUIRE(joint->breakForce > 0.f);
         }
+    }
+
+    SECTION("the saw is a driven body, and the sign says what the yard is") {
+        // A motor, not a prop that turns: zero stiffness and a velocity target,
+        // which is a drive that holds a SPEED rather than a position.
+        auto* spindle = rig.node("Saw Spindle");
+        REQUIRE(spindle != nullptr);
+        const auto joint = JointConfig::read(*spindle);
+        REQUIRE(joint.has_value());
+        REQUIRE(joint->type == JointConfig::Type::Revolute);
+        REQUIRE(joint->stiffness == 0.f);
+        REQUIRE(joint->damping > 0.f);
+        REQUIRE(joint->velocity != 0.f);
+
+        auto* blade = rig.node("Saw Blade");
+        REQUIRE(blade != nullptr);
+        const auto physics = PhysicsConfig::read(*blade);
+        REQUIRE(physics.has_value());
+        REQUIRE(physics->body == PhysicsConfig::Body::Dynamic);
+
+        // Real lettering, from the editor's own text authoring — and the
+        // geometry is baked in, so it reads with no font present.
+        auto* title = rig.node("Sign Title");
+        REQUIRE(title != nullptr);
+        const auto text = TextConfig::read(*title);
+        REQUIRE(text.has_value());
+        REQUIRE(text->text == "TIMBER YARD");
+        REQUIRE(title->geometry() != nullptr);
+        REQUIRE(title->geometry()->hasAttribute("position"));
+    }
+
+    SECTION("the document says how it wants to be opened") {
 
         auto& root = rig.scene().userData;
         REQUIRE(root.count("editorView") == 1);
@@ -565,8 +633,9 @@ TEST_CASE("Timber Yard runs itself, and the saw bay counts", "[editor][example]"
     REQUIRE(rig.open());
     rig.start();
 
-    // Five instances, live before anything has happened.
-    REQUIRE(rig.scripts.instanceCount() == 5);
+    // Six instances, live before anything has happened: the gate, the bay, the
+    // stop bar, the yard master, the wobble and the saw.
+    REQUIRE(rig.scripts.instanceCount() == 6);
     REQUIRE(rig.scripts.errorCount() == 0);
     // The belt built real colliders, or nothing is carried anywhere.
     REQUIRE(rig.conveyors.conveyorCount() == 1);
@@ -576,10 +645,10 @@ TEST_CASE("Timber Yard runs itself, and the saw bay counts", "[editor][example]"
     // A frame COUNT at the fixed step, not a deadline: the yard is authored on
     // the simulated clock, so this is the same amount of yard on every machine,
     // and a loaded CI box gets the same answer as a quiet laptop.
-    rig.run(2400);// 40 s simulated
+    rig.runWatching(2400);// 40 s simulated, every substep inspected
 
     const int released = rig.logsPast(kPastGate);
-    const int arrived = rig.logsPast(kInBay);
+    const int arrived = rig.logsPast(kDelivered);
     INFO("logs past the gate: " << released << ", into the bay: " << arrived);
     // The measured run delivers one log about every 7.5 s, so 40 s is five with
     // room to spare. TWO is the assertion, because two proves the whole chain
@@ -590,17 +659,46 @@ TEST_CASE("Timber Yard runs itself, and the saw bay counts", "[editor][example]"
     REQUIRE(arrived >= 2);
     REQUIRE(released >= arrived);
 
-    // And the stop bar is still on: a mission that runs as authored never
-    // reaches the break threshold. This is half the assertion — the other half
-    // (that it CAN break) is the case below, and neither means much alone.
+    // THE SAW CUT THEM. Every log is two halves on a breakable fixed joint, and
+    // a joint that has gone is a log that has been through the blade — so this
+    // counts the cuts the same way the saw's own script does. At least as many
+    // cuts as deliveries, because a log reaches the apron by going through.
+    int cuts = 0;
+    for (int i = 1; i <= 8; ++i) {
+        const auto name = "Log " + std::to_string(i) + " Cut";
+        const auto* cut = rig.physics.findJoint(rig.node(name.c_str()));
+        REQUIRE(cut != nullptr);
+        REQUIRE(cut->joint != nullptr);
+        if (cut->joint->broken()) ++cuts;
+    }
+    INFO("cuts: " << cuts);
+    REQUIRE(cuts >= arrived);
+    REQUIRE(cuts >= 2);
+
+    // And the halves did not double-count. The bay latches on the name, so
+    // eight logs are eight however many bodies cross the volume — this is the
+    // assertion that catches a sawn log arriving twice.
+    REQUIRE(arrived <= 8);
+
+    // NOTHING LEFT THE BELT. The saw parts a log by breaking a joint under a
+    // blade, and the first version of that threw halves across the yard — a
+    // fat blade collider means a deep overlap for the solver to push out in the
+    // substep the joint happens to snap, and the halves inherit the shove. This
+    // is the assertion that would catch it coming back.
+    INFO("worst |z| " << rig.strayedZ << ", lowest y " << rig.droppedY);
+    REQUIRE(rig.strayedZ < 1.f);
+    REQUIRE(rig.droppedY > 0.6f);
+
+    // The stop bar is still on: a mission that runs as authored never reaches
+    // its break threshold, which is the whole point of a guard rail.
     const auto* mount = rig.physics.findJoint(rig.node("Stop Bar Mount"));
     REQUIRE(mount != nullptr);
     REQUIRE(mount->joint != nullptr);
     REQUIRE_FALSE(mount->joint->broken());
 
-    // Not one traceback out of five instances, over 3600 substeps.
+    // Not one traceback out of six instances.
     REQUIRE(rig.scripts.errorCount() == 0);
-    REQUIRE(rig.scripts.instanceCount() == 5);
+    REQUIRE(rig.scripts.instanceCount() == 6);
 
     // Both joint sensors really spoke. The gate's "am I shut" check reads the
     // encoder, so a silent one would leave the coroutine waiting for ever —
@@ -624,20 +722,24 @@ TEST_CASE("Timber Yard runs itself, and the saw bay counts", "[editor][example]"
 }
 
 
-TEST_CASE("holding SPACE overrides the interlock, and the stop bar pays for it",
+TEST_CASE("holding SPACE overrides the interlock and the rack pours out",
           "[editor][example]") {
 
-    // The yard's one failure, and it is a person's doing. SPACE skips the
-    // hold-back clamp, so the leaf lifts with nothing pinning the pack and the
-    // whole rack pours onto the belt at once; several logs then reach the flap
-    // in contact, pushing with several belts behind them, and the mount that
-    // holds it is not built for that.
+    // SPACE skips the hold-back clamp, so the leaf lifts with nothing pinning
+    // the pack and the whole rack goes onto the belt at once. That is the
+    // override doing what it says.
     //
-    // The thresholds this leans on were measured every substep over both runs —
-    // 235 N for a full authored mission, 337 N for this — so the gap either way
-    // is about a fifth. That is a real margin, not a coincidence, but it is why
-    // this case and the one above have to travel together: move the belt speed
-    // or the log mass and BOTH will tell you.
+    // What this case does NOT assert is that the stop bar breaks, and the reason
+    // is measured rather than assumed. Once the saw was cutting, the flap stopped
+    // being able to tell the two runs apart: an authored mission peaks at 267 N
+    // there and a forced pour-out peaks LOWER, at 170 N, because a crowd of
+    // half-logs arriving at a flap that is already swinging leans on it less than
+    // one log shouldering it open does. Calibrated by outcome the two overlap
+    // completely — both survive an 800 N*m limit and both break a 600 N*m one —
+    // so there is no threshold that separates them and pinning one would be
+    // pinning a coin toss. The joint keeps its break force and its load cell as
+    // the guard rail they are; what demonstrates a joint giving way, eight times
+    // a run, is the saw.
     scripting::keyStateProvider() = [](const std::string& key) { return key == "SPACE"; };
     struct Release {
         ~Release() { scripting::keyStateProvider() = nullptr; }
@@ -646,29 +748,26 @@ TEST_CASE("holding SPACE overrides the interlock, and the stop bar pays for it",
     YardRig rig;
     REQUIRE(rig.open());
     rig.start();
+    REQUIRE(rig.logsPast(kPastGate) == 0);
 
-    const auto* mount = rig.physics.findJoint(rig.node("Stop Bar Mount"));
-    REQUIRE(mount != nullptr);
-    REQUIRE(mount->joint != nullptr);
-    REQUIRE_FALSE(mount->joint->broken());
+    rig.runWatching(900);// 15 s simulated: the pour is over long before this
 
-    rig.run(1800);// 30 s simulated: the pour reaches the flap inside ten
+    // The rack emptied itself. Under the authored sequence 15 s is two logs;
+    // this is what "skips the interlock" looks like from outside.
+    const int released = rig.logsPast(kPastGate);
+    INFO("logs past the gate under override: " << released);
+    REQUIRE(released >= 6);
 
-    // The joint gave way — which is the news the Physics Debug overlay carries
-    // by the joint simply vanishing from it.
-    REQUIRE(mount->joint->broken());
+    // And the pour-out is contained too: eight logs onto the belt at once, and
+    // the kerb rails still hold every half of every one of them.
+    INFO("worst |z| " << rig.strayedZ << ", lowest y " << rig.droppedY);
+    REQUIRE(rig.strayedZ < 1.f);
+    REQUIRE(rig.droppedY > 0.6f);
 
-    // And on_break() ran, on the script sitting on the joint node, and reached
-    // the yard master through script_from_object: the mission is marked failed.
-    // Read back off the scene the same way a person reads it off the console —
-    // the bar is no longer hanging where it was hung.
-    const auto bar = rig.worldPosition("Stop Bar");
-    INFO("stop bar at y=" << bar.y);
-    REQUIRE(bar.y < 1.2f);
-
-    // A break is not an error: five instances, no tracebacks.
+    // An override is not an error, and a break would not be either: six
+    // instances, no tracebacks.
     REQUIRE(rig.scripts.errorCount() == 0);
-    REQUIRE(rig.scripts.instanceCount() == 5);
+    REQUIRE(rig.scripts.instanceCount() == 6);
 
     rig.stop();
 }
