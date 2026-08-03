@@ -5,7 +5,7 @@
 namespace threepp {
 
     void VulkanRenderer::Impl::createCameraUbos() {
-        for (auto& b : cameraUbos) {
+        for (auto& b : view().cameraUbos) {
             b = createBuffer(
                     ctx->allocator(), ctx->device(),
                     /*size*/ 2 * 16 * sizeof(float) + 8 * sizeof(float),
@@ -399,7 +399,7 @@ namespace threepp {
         // length, not a tangent — and the derivation is meaningless. The DoF
         // pass is skipped for that frame (a parallel projection has no lens),
         // so the last perspective value is simply left standing.
-        if (!orthoFrame_ && std::abs(camera.projectionMatrix.elements[5]) > 1e-6f)
+        if (!view().orthoFrame_ && std::abs(camera.projectionMatrix.elements[5]) > 1e-6f)
             tanHalfFovY_ = 1.f / std::abs(camera.projectionMatrix.elements[5]);
 
         // ...and the SENSOR that FOV was derived from. threepp's
@@ -453,7 +453,7 @@ namespace threepp {
         // size in clip space (2/width) must use the resolution the deferred
         // shade + the raster gbuffer actually run at, not the swapchain extent.
         const VkExtent2D ext = renderExtent();
-        uint32_t phaseCount = jitterPhaseCount_(ext, ctx->swapchainExtent());
+        uint32_t phaseCount = jitterPhaseCount_(ext, viewOutExtent());
         float jx, jy;
 #if defined(THREEPP_WITH_FSR)
         // When FSR is the active upscaler, drive the jitter from FSR's own
@@ -464,7 +464,7 @@ namespace threepp {
         // offset + camera near/far/vertical-FOV for the dispatch (no camera there).
         if (useFsr() && fsr_) {
             phaseCount = static_cast<uint32_t>(
-                    fsr_->jitterPhaseCount(ext.width, ctx->swapchainExtent().width));
+                    fsr_->jitterPhaseCount(ext.width, viewOutExtent().width));
             if (phaseCount == 0u) phaseCount = 1u;
             fsr_->jitterOffset(static_cast<int>(haltonFrame_ % phaseCount),
                                static_cast<int>(phaseCount), jx, jy);
@@ -529,8 +529,8 @@ namespace threepp {
         // upload runs before the raster upload, so rasterPrevJitter_ here
         // still holds the PREVIOUS frame's value (which is exactly what we
         // want). First frame: self-seed to curr so the delta is zero.
-        data[34] = rasterPrevJitterValid_ ? rasterPrevJitter_[0] : jClipX;
-        data[35] = rasterPrevJitterValid_ ? rasterPrevJitter_[1] : jClipY;
+        data[34] = view().rasterPrevJitterValid_ ? view().rasterPrevJitter_[0] : jClipX;
+        data[35] = view().rasterPrevJitterValid_ ? view().rasterPrevJitter_[1] : jClipY;
 
         // camAux — the two things a shader cannot get from the matrices alone
         // cheaply. .x flags a PARALLEL projection: under one the primary rays
@@ -545,7 +545,7 @@ namespace threepp {
             float fx = -wme[8], fy = -wme[9], fz = -wme[10];
             const float len = std::sqrt(fx * fx + fy * fy + fz * fz);
             if (len > 1e-12f) { fx /= len; fy /= len; fz /= len; }
-            data[36] = orthoFrame_ ? 1.f : 0.f;
+            data[36] = view().orthoFrame_ ? 1.f : 0.f;
             data[37] = fx;
             data[38] = fy;
             data[39] = fz;
@@ -564,15 +564,15 @@ namespace threepp {
         // Camera-motion detection: position [0..2], forward [4..6], and
         // projection scale [3]=projScaleX / [7]=projScaleY. The projection
         // terms catch FOV and aspect-ratio changes that don't move the camera.
-        if (prevCameraValid) {
-            const float dx = curBuf[0] - prevCamBufData_[0];
-            const float dy = curBuf[1] - prevCamBufData_[1];
-            const float dz = curBuf[2] - prevCamBufData_[2];
-            const float fx = curBuf[4] - prevCamBufData_[4];
-            const float fy = curBuf[5] - prevCamBufData_[5];
-            const float fz = curBuf[6] - prevCamBufData_[6];
-            const float sx = curBuf[3] - prevCamBufData_[3];// projScaleX
-            const float sy = curBuf[7] - prevCamBufData_[7];// projScaleY
+        if (view().prevCameraValid) {
+            const float dx = curBuf[0] - view().prevCamBufData_[0];
+            const float dy = curBuf[1] - view().prevCamBufData_[1];
+            const float dz = curBuf[2] - view().prevCamBufData_[2];
+            const float fx = curBuf[4] - view().prevCamBufData_[4];
+            const float fy = curBuf[5] - view().prevCamBufData_[5];
+            const float fz = curBuf[6] - view().prevCamBufData_[6];
+            const float sx = curBuf[3] - view().prevCamBufData_[3];// projScaleX
+            const float sy = curBuf[7] - view().prevCamBufData_[7];// projScaleY
             // Position threshold lowered 1e-6 → 1e-10 (|Δpos| 1e-3 → 1e-5
             // world units). The old 1e-3 was far too coarse for PURE
             // TRANSLATION: a slow pan moves the camera only ~1e-4 units/frame,
@@ -599,25 +599,25 @@ namespace threepp {
 
         // Update prev camera data (CPU-side only — read by the live
         // prev-camera path via prevCamBufData_, not a GPU buffer).
-        std::memcpy(prevCamBufData_.data(), curBuf, 16 * sizeof(float));
-        prevCameraValid = true;
+        std::memcpy(view().prevCamBufData_.data(), curBuf, 16 * sizeof(float));
+        view().prevCameraValid = true;
 
-        uploadHostVisible(ctx->allocator(), cameraUbos[frame], data, sizeof(data));
+        uploadHostVisible(ctx->allocator(), view().cameraUbos[frame], data, sizeof(data));
     }
 
     void VulkanRenderer::Impl::uploadRasterCameraUbo(uint32_t frame, Camera& camera) {
         camera.updateMatrixWorld(true);
 
-        // VP_unjittered = projection * view, view = matrixWorldInverse.
-        Matrix4 view, proj;
-        std::memcpy(view.elements.data(),
+        // VP_unjittered = projection * viewMat, viewMat = matrixWorldInverse.
+        Matrix4 viewMat, proj;
+        std::memcpy(viewMat.elements.data(),
                     camera.matrixWorldInverse.elements.data(), 64);
         // Reverse-Z projection (near→1, far→0) — feeds the gbuffer VP AND
         // currVPunjit_ (overlay depth prepass). Depth clear + compares flipped
         // to match (see recordRasterGbufPass clears + pipeline depthCompareOp).
         proj = reverseZVk(camera.projectionMatrix);
         Matrix4 vpUnj;
-        vpUnj.multiplyMatrices(proj, view);
+        vpUnj.multiplyMatrices(proj, viewMat);
 
         // Render extent — jitter + the .zw = 1/resolution this writes
         // into the raster camera UBO must match the resolution the
@@ -628,7 +628,7 @@ namespace threepp {
         // Phase count scales with the upscale ratio (FSR2-style) so the
         // sequence covers the output grid when renderScale < 1; matches
         // updateCameraUbo's value this frame (same extents → same count).
-        uint32_t phaseCount = jitterPhaseCount_(ext, ctx->swapchainExtent());
+        uint32_t phaseCount = jitterPhaseCount_(ext, viewOutExtent());
         float jx, jy;
 #if defined(THREEPP_WITH_FSR)
         // When FSR is the active upscaler, drive the jitter from FSR's own
@@ -639,7 +639,7 @@ namespace threepp {
         // offset + camera near/far/vertical-FOV for the dispatch (no camera there).
         if (useFsr() && fsr_) {
             phaseCount = static_cast<uint32_t>(
-                    fsr_->jitterPhaseCount(ext.width, ctx->swapchainExtent().width));
+                    fsr_->jitterPhaseCount(ext.width, viewOutExtent().width));
             if (phaseCount == 0u) phaseCount = 1u;
             fsr_->jitterOffset(static_cast<int>(haltonFrame_ % phaseCount),
                                static_cast<int>(phaseCount), jx, jy);
@@ -650,7 +650,7 @@ namespace threepp {
                 fsrCamFar_  = pcam->farPlane;
                 fsrCamFovY_ = pcam->fov * 3.14159265f / 180.f;// vertical FOV, radians
             } else if (auto* ocam = dynamic_cast<OrthographicCamera*>(&camera)) {
-                // A parallel projection has no field of view. FSR only feeds
+                // A parallel projection has no field of viewMat. FSR only feeds
                 // fovY into its disocclusion/reactivity heuristics, so hand it
                 // the angle a perspective camera would need to cover the same
                 // frustum height at the far plane — the closest honest answer,
@@ -700,7 +700,7 @@ namespace threepp {
         // hardware sample coverage replaces jitter as the geometry AA, and
         // an unjittered raster makes the dominant-sample resolve — and so
         // every edge pixel's surface classification and reconstruction
-        // position — CONSTANT on a static view. With jitter on, the whole
+        // position — CONSTANT on a static viewMat. With jitter on, the whole
         // MSAA sample cloud translates as a unit each frame, so the
         // majority vote flips nearly as often as a point sample (measured:
         // dominant-of-4 under jitter cut edge flicker only ~7 %).
@@ -728,8 +728,8 @@ namespace threepp {
         // sample jitter cancellation (recordCommandBuffer passes it into
         // recordResolve; see taaJitterTexels_'s member comment). Zero when
         // unjittered so the resolve collapses to its exact pre-fix math.
-        taaJitterTexels_[0] = rasterJitterOn ? jx : 0.f;
-        taaJitterTexels_[1] = rasterJitterOn ? jy : 0.f;
+        view().taaJitterTexels_[0] = rasterJitterOn ? jx : 0.f;
+        view().taaJitterTexels_[1] = rasterJitterOn ? jy : 0.f;
 
         // Apply jitter by shifting the projection matrix's m02/m12 (the
         // entries that translate the projected NDC). For a column-major
@@ -752,7 +752,7 @@ namespace threepp {
         // black bands across a lit ground.
         Matrix4 projJ;
         std::memcpy(projJ.elements.data(), proj.elements.data(), 64);
-        if (orthoFrame_) {
+        if (view().orthoFrame_) {
             projJ.elements[12] -= jClipX;
             projJ.elements[13] -= jClipY;
         } else {
@@ -760,7 +760,7 @@ namespace threepp {
             projJ.elements[9]  += jClipY;
         }
         Matrix4 vpJ;
-        vpJ.multiplyMatrices(projJ, view);
+        vpJ.multiplyMatrices(projJ, viewMat);
 
         RasterCameraData ubo{};
         std::memcpy(ubo.currVPjittered,   vpJ.elements.data(),  64);
@@ -770,16 +770,16 @@ namespace threepp {
         // access to the camera; it needs the same unjittered VP that
         // the raster prepass + TAA used so wireframes register pixel-
         // exact with the post-TAA rendered silhouette.
-        std::memcpy(currVPunjit_.data(), vpUnj.elements.data(), 64);
-        // Mirror the unjittered view + reverse-Z projection separately for
+        std::memcpy(view().currVPunjit_.data(), vpUnj.elements.data(), 64);
+        // Mirror the unjittered viewMat + reverse-Z projection separately for
         // the particle billboard pass (it can't use the combined VP — see
         // currViewUnjit_/currProjUnjit_).
-        std::memcpy(currViewUnjit_.data(), view.elements.data(), 64);
-        std::memcpy(currProjUnjit_.data(), proj.elements.data(), 64);
+        std::memcpy(view().currViewUnjit_.data(), viewMat.elements.data(), 64);
+        std::memcpy(view().currProjUnjit_.data(), proj.elements.data(), 64);
         // First frame: self-seed prevVP so motion vectors are zero. The
         // following frame picks up the real history.
         std::memcpy(ubo.prevVP,
-                    rasterPrevVPValid_ ? rasterPrevVP_ : vpUnj.elements.data(),
+                    view().rasterPrevVPValid_ ? view().rasterPrevVP_ : vpUnj.elements.data(),
                     64);
         ubo.jitter[0] = jClipX;
         ubo.jitter[1] = jClipY;
@@ -787,15 +787,15 @@ namespace threepp {
         ubo.jitter[3] = 1.f / float(ext.height);
         // First frame: self-seed prev jitter to curr so motion vec for
         // static surfaces is exactly zero (no spurious offset on cold start).
-        ubo.prevJitter[0] = rasterPrevJitterValid_ ? rasterPrevJitter_[0] : jClipX;
-        ubo.prevJitter[1] = rasterPrevJitterValid_ ? rasterPrevJitter_[1] : jClipY;
+        ubo.prevJitter[0] = view().rasterPrevJitterValid_ ? view().rasterPrevJitter_[0] : jClipX;
+        ubo.prevJitter[1] = view().rasterPrevJitterValid_ ? view().rasterPrevJitter_[1] : jClipY;
         // .z: normal-map Toksvig spec-AA toggle (gbuffer.frag), packed here
         // because prevJitter.zw is otherwise unread by any gbuffer shader —
         // see normalMapToksvig_. .w stays reserved/unused.
         ubo.prevJitter[2] = normalMapToksvig_ ? 1.f : 0.f;
         ubo.prevJitter[3] = 0.f;
 
-        uploadHostVisible(ctx->allocator(), rasterCameraUbos[frame], &ubo, sizeof(ubo));
+        uploadHostVisible(ctx->allocator(), view().rasterCameraUbos[frame], &ubo, sizeof(ubo));
 
         // Far-plane reprojection for the TAA sky path — must be built
         // BEFORE rasterPrevVP_ rolls over to this frame's VP.
@@ -804,12 +804,12 @@ namespace threepp {
             invCurr.copy(vpUnj).invert();
             Matrix4 prevVPm;
             std::memcpy(prevVPm.elements.data(),
-                        rasterPrevVPValid_ ? rasterPrevVP_ : vpUnj.elements.data(), 64);
+                        view().rasterPrevVPValid_ ? view().rasterPrevVP_ : vpUnj.elements.data(), 64);
             Matrix4 sky;
             sky.multiplyMatrices(prevVPm, invCurr);
-            std::memcpy(taaSkyReproj_.data(), sky.elements.data(), 64);
+            std::memcpy(view().taaSkyReproj_.data(), sky.elements.data(), 64);
         }
-        // Reverse-Z view-depth linearization (A,B,C,D) for the TAA depth
+        // Reverse-Z viewMat-depth linearization (A,B,C,D) for the TAA depth
         // disocclusion gate: viewZ = (A·d + B)/(C·d + D), from the inverse
         // reverse-Z projection's z/w rows. Mirrors deferred_shade's
         // cam.projInverse Z unprojection so both passes gate identically.
@@ -817,36 +817,36 @@ namespace threepp {
             Matrix4 projInv;
             projInv.copy(proj).invert();
             const auto& pe = projInv.elements;// column-major [col*4 + row]
-            taaDepthLin_ = {pe[10], pe[14], pe[11], pe[15]};
+            view().taaDepthLin_ = {pe[10], pe[14], pe[11], pe[15]};
         }
-        std::memcpy(rasterPrevVP_, vpUnj.elements.data(), 64);
-        rasterPrevVPValid_ = true;
-        rasterPrevJitter_[0] = jClipX;
-        rasterPrevJitter_[1] = jClipY;
-        rasterPrevJitterValid_ = true;
+        std::memcpy(view().rasterPrevVP_, vpUnj.elements.data(), 64);
+        view().rasterPrevVPValid_ = true;
+        view().rasterPrevJitter_[0] = jClipX;
+        view().rasterPrevJitter_[1] = jClipY;
+        view().rasterPrevJitterValid_ = true;
         // Camera world motion (translation + forward rotation) for the
         // deferred reflection policy — see the member comment.
         {
             const auto& mw = camera.matrixWorld->elements;
             const float pos[3] = {mw[12], mw[13], mw[14]};
-            const float fwd[3] = {-mw[8], -mw[9], -mw[10]};// -Z column = view dir
-            if (deferredCamPrevValid_) {
-                const float dx = pos[0] - deferredCamPrevPos_[0];
-                const float dy = pos[1] - deferredCamPrevPos_[1];
-                const float dz = pos[2] - deferredCamPrevPos_[2];
-                deferredCamDeltaLen_ = std::sqrt(dx * dx + dy * dy + dz * dz);
-                const float c = std::clamp(fwd[0] * deferredCamPrevFwd_[0] +
-                                                   fwd[1] * deferredCamPrevFwd_[1] +
-                                                   fwd[2] * deferredCamPrevFwd_[2],
+            const float fwd[3] = {-mw[8], -mw[9], -mw[10]};// -Z column = viewMat dir
+            if (view().deferredCamPrevValid_) {
+                const float dx = pos[0] - view().deferredCamPrevPos_[0];
+                const float dy = pos[1] - view().deferredCamPrevPos_[1];
+                const float dz = pos[2] - view().deferredCamPrevPos_[2];
+                view().deferredCamDeltaLen_ = std::sqrt(dx * dx + dy * dy + dz * dz);
+                const float c = std::clamp(fwd[0] * view().deferredCamPrevFwd_[0] +
+                                                   fwd[1] * view().deferredCamPrevFwd_[1] +
+                                                   fwd[2] * view().deferredCamPrevFwd_[2],
                                            -1.f, 1.f);
                 deferredCamRotAngle_ = std::acos(c);
             } else {
-                deferredCamDeltaLen_ = 0.f;
+                view().deferredCamDeltaLen_ = 0.f;
                 deferredCamRotAngle_ = 0.f;
             }
-            std::memcpy(deferredCamPrevPos_, pos, sizeof(pos));
-            std::memcpy(deferredCamPrevFwd_, fwd, sizeof(fwd));
-            deferredCamPrevValid_ = true;
+            std::memcpy(view().deferredCamPrevPos_, pos, sizeof(pos));
+            std::memcpy(view().deferredCamPrevFwd_, fwd, sizeof(fwd));
+            view().deferredCamPrevValid_ = true;
         }
         // Free-running jitter index. The active Halton period is derived
         // per-read from the upscale ratio (jitterPhaseCount_) and applied as
@@ -859,7 +859,7 @@ namespace threepp {
         // grow (handle change) when the scene instance/material count
         // increases — rewriting them every frame absorbs that automatically.
         VkDescriptorBufferInfo ubInfo{};
-        ubInfo.buffer = rasterCameraUbos[frame].handle;
+        ubInfo.buffer = view().rasterCameraUbos[frame].handle;
         ubInfo.offset = 0;
         ubInfo.range  = sizeof(RasterCameraData);
 
@@ -875,19 +875,19 @@ namespace threepp {
 
         VkWriteDescriptorSet writes[4]{};
         writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet          = rasterDescSets[frame];
+        writes[0].dstSet          = view().rasterDescSets[frame];
         writes[0].dstBinding      = 0;
         writes[0].descriptorCount = 1;
         writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[0].pBufferInfo     = &ubInfo;
         writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet          = rasterDescSets[frame];
+        writes[1].dstSet          = view().rasterDescSets[frame];
         writes[1].dstBinding      = 1;
         writes[1].descriptorCount = 1;
         writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[1].pBufferInfo     = &mmInfo;
         writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[2].dstSet          = rasterDescSets[frame];
+        writes[2].dstSet          = view().rasterDescSets[frame];
         writes[2].dstBinding      = 2;
         writes[2].descriptorCount = 1;
         writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -907,7 +907,7 @@ namespace threepp {
         if (rasterMatTexValid_[frame] == 0) {
             fillMaterialTextureInfos(matTexInfos);
             writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[3].dstSet          = rasterDescSets[frame];
+            writes[3].dstSet          = view().rasterDescSets[frame];
             writes[3].dstBinding      = 3;
             writes[3].dstArrayElement = 0;
             writes[3].descriptorCount = kMaxMaterialTextures;
@@ -1308,7 +1308,7 @@ namespace threepp {
     }
 
     void VulkanRenderer::Impl::createRasterCameraUbos() {
-        for (auto& b : rasterCameraUbos) {
+        for (auto& b : view().rasterCameraUbos) {
             if (b.handle != VK_NULL_HANDLE) continue;
             b = createBuffer(
                     ctx->allocator(), ctx->device(),

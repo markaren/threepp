@@ -27,8 +27,8 @@ void VulkanRenderer::Impl::clearGbufImages() {
             // frame 0's read side and the deferred shade's temporal-reuse path
             // correctly sees "no prior history" instead of garbage.
             std::array<VkImage, 4> images = {
-                    reservoirPosImagesPP[0].image, reservoirPosImagesPP[1].image,
-                    reservoirWImagesPP[0].image, reservoirWImagesPP[1].image,
+                    view().reservoirPosImagesPP[0].image, view().reservoirPosImagesPP[1].image,
+                    view().reservoirWImagesPP[0].image, view().reservoirWImagesPP[1].image,
             };
 
             std::array<VkImageMemoryBarrier2, 4> toTransfer{};
@@ -119,7 +119,7 @@ void VulkanRenderer::Impl::destroyRasterGbufMsObjects() {
 void VulkanRenderer::Impl::destroyRasterGbufImages() {
             if (!ctx) return;
             VkDevice d = ctx->device();
-            for (auto& g : rasterGbufs) {
+            for (auto& g : view().rasterGbufs) {
                 if (g.framebuffer) {
                     vkDestroyFramebuffer(d, g.framebuffer, nullptr);
                     g.framebuffer = VK_NULL_HANDLE;
@@ -416,8 +416,8 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                     VK_IMAGE_USAGE_SAMPLED_BIT |
                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-            for (size_t fi = 0; fi < rasterGbufs.size(); ++fi) {
-                auto& g = rasterGbufs[fi];
+            for (size_t fi = 0; fi < view().rasterGbufs.size(); ++fi) {
+                auto& g = view().rasterGbufs[fi];
                 char nameBuf[64];
                 auto N = [&](const char* tag) {
                     std::snprintf(nameBuf, sizeof(nameBuf), "rasterGbuf[%zu].%s", fi, tag);
@@ -551,7 +551,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 // shared image, not one per frame in flight), so allocating
                 // these would be pure waste — a swapchain-sized D32 per FIF.
                 if (overlaySamples() <= 1) {
-                    const VkExtent2D swapExt = ctx->swapchainExtent();
+                    const VkExtent2D swapExt = viewOutExtent();
                     g.unjitDepth = createAttachmentImage2D(swapExt.width, swapExt.height,
                                                            VK_FORMAT_D32_SFLOAT,
                                                            depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -637,7 +637,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
             // first frame regardless. Re-runs on resize (images are recreated).
             VkCommandBuffer initCb = beginOneShot();
             std::vector<VkImageMemoryBarrier> inits;
-            inits.reserve(rasterGbufs.size() * (gbufMsaaSamples_ > 1 ? 18 : 12));
+            inits.reserve(view().rasterGbufs.size() * (gbufMsaaSamples_ > 1 ? 18 : 12));
             auto pushInit = [&](VkImage image, VkImageAspectFlags aspect, VkImageLayout layout) {
                 VkImageMemoryBarrier b{};
                 b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -653,7 +653,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
                 inits.push_back(b);
             };
-            for (auto& g : rasterGbufs) {
+            for (auto& g : view().rasterGbufs) {
                 pushInit(g.normal.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 pushInit(g.motion.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 pushInit(g.ids.image,    VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -702,7 +702,7 @@ void VulkanRenderer::Impl::createRasterGbufImages(uint32_t w, uint32_t h) {
                 VkClearColorValue identity{};
                 identity.float32[3] = 1.0f;// (0,0,0,1) — no in-scatter, full T
                 VkClearColorValue zero{};
-                for (auto& g : rasterGbufs) {
+                for (auto& g : view().rasterGbufs) {
                     vkCmdClearColorImage(initCb, g.cloudColor.image,
                                          VK_IMAGE_LAYOUT_GENERAL, &identity, 1, &full);
                     vkCmdClearColorImage(initCb, g.cloudAux.image,
@@ -754,12 +754,18 @@ void VulkanRenderer::Impl::createRasterDsLayoutAndPool() {
             bindings[4].descriptorCount = 1;
             bindings[4].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
 
-            VkDescriptorSetLayoutCreateInfo dlci{};
-            dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            dlci.bindingCount = 5;
-            dlci.pBindings    = bindings;
-            check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rasterDsLayout),
-                  "vkCreateDescriptorSetLayout(raster)");
+            // The LAYOUT is shared by every view — one set shape, created once.
+            // The POOL and SETS below are per-view (see ViewContext), so this
+            // function is called again for each view added and must not
+            // recreate the layout underneath the existing pipelines.
+            if (rasterDsLayout == VK_NULL_HANDLE) {
+                VkDescriptorSetLayoutCreateInfo dlci{};
+                dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+                dlci.bindingCount = 5;
+                dlci.pBindings    = bindings;
+                check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rasterDsLayout),
+                      "vkCreateDescriptorSetLayout(raster)");
+            }
 
             VkDescriptorPoolSize sizes[3]{};
             sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -774,17 +780,17 @@ void VulkanRenderer::Impl::createRasterDsLayoutAndPool() {
             dpci.maxSets       = kFramesInFlight;
             dpci.poolSizeCount = 3;
             dpci.pPoolSizes    = sizes;
-            check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &rasterDescPool),
+            check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &view().rasterDescPool),
                   "vkCreateDescriptorPool(raster)");
 
             std::array<VkDescriptorSetLayout, kFramesInFlight> layouts;
             layouts.fill(rasterDsLayout);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool     = rasterDescPool;
+            ai.descriptorPool     = view().rasterDescPool;
             ai.descriptorSetCount = kFramesInFlight;
             ai.pSetLayouts        = layouts.data();
-            check(vkAllocateDescriptorSets(ctx->device(), &ai, rasterDescSets.data()),
+            check(vkAllocateDescriptorSets(ctx->device(), &ai, view().rasterDescSets.data()),
                   "vkAllocateDescriptorSets(raster)");
         }
 

@@ -47,14 +47,14 @@ namespace threepp::vulkan {
     }
 
     void GpuTimings::begin(VkCommandBuffer cb, TimingPass pass, uint32_t frame) {
-        if (!timingsSupported_) return;
+        if (!timingsSupported_ || suppressed_) return;
         vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
                              pools_[frame], pass * 2u);
         maskRecorded_[frame] |= (1u << pass);
     }
 
     void GpuTimings::end(VkCommandBuffer cb, TimingPass pass, uint32_t frame) {
-        if (!timingsSupported_) return;
+        if (!timingsSupported_ || suppressed_) return;
         vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                              pools_[frame], pass * 2u + 1u);
     }

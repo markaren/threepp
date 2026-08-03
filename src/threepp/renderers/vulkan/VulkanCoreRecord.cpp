@@ -380,11 +380,11 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
             if (rasterGbufPipeline != VK_NULL_HANDLE) {
                 gpuTimings_->begin(cb, TP_RasterGbuf, currentFrame);
                 const bool occlMsaa = gbufMsaaSamples_ > 1 &&
-                                      rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE;
+                                      view().rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE;
                 const VkRenderPass  occlA  = occlMsaa ? occlRenderPassAMS_ : occlRenderPassA_;
                 const VkRenderPass  occlB  = occlMsaa ? occlRenderPassBMS_ : occlRenderPassB_;
-                const VkFramebuffer occlFb = occlMsaa ? rasterGbufs[currentFrame].framebufferMS
-                                                      : rasterGbufs[currentFrame].framebuffer;
+                const VkFramebuffer occlFb = occlMsaa ? view().rasterGbufs[currentFrame].framebufferMS
+                                                      : view().rasterGbufs[currentFrame].framebuffer;
                 if (occlActiveThisFrame_ && occlA != VK_NULL_HANDLE &&
                     occlFb != VK_NULL_HANDLE) {
                     // ── Two-phase occlusion culling ────────────────────────
@@ -420,8 +420,8 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                 // images + resolved depth feed every existing G-buffer
                 // consumer downstream).
                 if (gbufMsaaSamples_ > 1 && gbufResolve_ &&
-                    rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE) {
-                    const VkExtent2D resExt = {rasterGbufs[currentFrame].width, rasterGbufs[currentFrame].height};
+                    view().rasterGbufs[currentFrame].framebufferMS != VK_NULL_HANDLE) {
+                    const VkExtent2D resExt = {view().rasterGbufs[currentFrame].width, view().rasterGbufs[currentFrame].height};
                     gpuTimings_->begin(cb, TP_GbufResolve, currentFrame);
 
                     // The 5 resolved colour images rest at SHADER_READ_ONLY_
@@ -432,9 +432,9 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     // back below.
                     {
                         VkImage resolveImgs[5] = {
-                                rasterGbufs[currentFrame].normal.image, rasterGbufs[currentFrame].motion.image,
-                                rasterGbufs[currentFrame].ids.image, rasterGbufs[currentFrame].uv.image,
-                                rasterGbufs[currentFrame].albedo.image};
+                                view().rasterGbufs[currentFrame].normal.image, view().rasterGbufs[currentFrame].motion.image,
+                                view().rasterGbufs[currentFrame].ids.image, view().rasterGbufs[currentFrame].uv.image,
+                                view().rasterGbufs[currentFrame].albedo.image};
                         VkImageMemoryBarrier2 toGeneral[5]{};
                         for (int i = 0; i < 5; ++i) {
                             toGeneral[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -472,9 +472,9 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     // as the msaa=1 render pass's own finalLayout.
                     {
                         VkImage resolveImgs[5] = {
-                                rasterGbufs[currentFrame].normal.image, rasterGbufs[currentFrame].motion.image,
-                                rasterGbufs[currentFrame].ids.image, rasterGbufs[currentFrame].uv.image,
-                                rasterGbufs[currentFrame].albedo.image};
+                                view().rasterGbufs[currentFrame].normal.image, view().rasterGbufs[currentFrame].motion.image,
+                                view().rasterGbufs[currentFrame].ids.image, view().rasterGbufs[currentFrame].uv.image,
+                                view().rasterGbufs[currentFrame].albedo.image};
                         VkImageMemoryBarrier2 toRead[5]{};
                         for (int i = 0; i < 5; ++i) {
                             toRead[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -516,7 +516,7 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     toDepthAtt.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
                     toDepthAtt.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                     toDepthAtt.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toDepthAtt.image = rasterGbufs[currentFrame].depth.image;
+                    toDepthAtt.image = view().rasterGbufs[currentFrame].depth.image;
                     toDepthAtt.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
                     toDepthAtt.subresourceRange.levelCount = 1;
                     toDepthAtt.subresourceRange.layerCount = 1;
@@ -527,9 +527,9 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     vkCmdPipelineBarrier2(cb, &depDep);
 
                     gbufResolve_->recordDepthResolve(cb, currentFrame, resExt.width, resExt.height,
-                                                     rasterGbufs[currentFrame].depthMS.view,
-                                                     rasterGbufs[currentFrame].ids.view,
-                                                     rasterGbufs[currentFrame].depth.view);
+                                                     view().rasterGbufs[currentFrame].depthMS.view,
+                                                     view().rasterGbufs[currentFrame].ids.view,
+                                                     view().rasterGbufs[currentFrame].depth.view);
 
                     // DEPTH_ATTACHMENT_OPTIMAL -> DEPTH_STENCIL_READ_ONLY
                     // (the layout every existing consumer — DeferredShade,
@@ -549,7 +549,7 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     toRead.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
                     toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                     toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    toRead.image = rasterGbufs[currentFrame].depth.image;
+                    toRead.image = view().rasterGbufs[currentFrame].depth.image;
                     toRead.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
                     toRead.subresourceRange.levelCount = 1;
                     toRead.subresourceRange.layerCount = 1;
@@ -571,7 +571,7 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     gpuTimings_->begin(cb, TP_OverlayDepth, currentFrame);
                     // Swapchain extent — the depth target is full-res so the
                     // post-TAA overlay can depth-test the upscaled image.
-                    const VkExtent2D dext = ctx->swapchainExtent();
+                    const VkExtent2D dext = viewOutExtent();
                     // Hardware-MSAA overlay: rasterize the occluders into the
                     // multisampled overlayMsDepth_ so the overlay's depth test
                     // is correct PER SAMPLE (a 1-sample depth buffer would
@@ -581,9 +581,9 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     ensureOverlayMsaaImages(dext);
                     const bool   overlayMsaa = overlaySamples() > 1;
                     VkImage      depthImg  = overlayMsaa ? overlayMsDepth_.image
-                                                         : rasterGbufs[currentFrame].unjitDepth.image;
+                                                         : view().rasterGbufs[currentFrame].unjitDepth.image;
                     VkImageView  depthView = overlayMsaa ? overlayMsDepth_.view
-                                                         : rasterGbufs[currentFrame].unjitDepth.view;
+                                                         : view().rasterGbufs[currentFrame].unjitDepth.view;
 
                     // UNDEFINED → DEPTH_ATTACHMENT (write). We always clear
                     // each frame so the prior contents are irrelevant; the
@@ -633,7 +633,7 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayDepthPrepassPipeline);
                     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                             rasterPipelineLayout, 0, 1,
-                                            &rasterDescSets[currentFrame], 0, nullptr);
+                                            &view().rasterDescSets[currentFrame], 0, nullptr);
                     // Split-screen: clip the overlay depth prepass to the pane
                     // region. unjitDepth is full-res but the deferred-render
                     // pane lands at regionDst (size regionSwapExt) after the
@@ -650,7 +650,11 @@ bool VulkanRenderer::Impl::recordGbufferStage(VkCommandBuffer cb, uint32_t image
                     for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                         const auto& en = lastVisibleEntries_[i];
                         if (en.isOverlay) continue;// overlay meshes drawn by overlay pass instead
-                        if (!en.inFrustum) continue;// frustum cull (same lever as the gbuf prepass)
+                        // Frustum cull, same lever as the gbuf prepass — read
+                        // from THIS view's results. The overlay only ever runs
+                        // for the primary, and this is the reader that a shared
+                        // cull bit would have fed the last secondary's answer.
+                        if (!viewCulled(i)) continue;
                         const BlasRecord* rec = resolveBlasForEntry(en);
                         if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
 
@@ -874,10 +878,10 @@ void VulkanRenderer::Impl::recordSwapchainPrepare(VkCommandBuffer cb, uint32_t i
             // ReSTIR DI reservoir ping-pong: frame N writes one slot, reads the
             // other; the barrier ensures frame N-1's write is visible to frame
             // N's read in the deferred shade's COMPUTE stage.
-            preBarriers[1] = accumGbufTemplate; preBarriers[1].image = reservoirPosImagesPP[0].image;
-            preBarriers[2] = accumGbufTemplate; preBarriers[2].image = reservoirPosImagesPP[1].image;
-            preBarriers[3] = accumGbufTemplate; preBarriers[3].image = reservoirWImagesPP[0].image;
-            preBarriers[4] = accumGbufTemplate; preBarriers[4].image = reservoirWImagesPP[1].image;
+            preBarriers[1] = accumGbufTemplate; preBarriers[1].image = view().reservoirPosImagesPP[0].image;
+            preBarriers[2] = accumGbufTemplate; preBarriers[2].image = view().reservoirPosImagesPP[1].image;
+            preBarriers[3] = accumGbufTemplate; preBarriers[3].image = view().reservoirWImagesPP[0].image;
+            preBarriers[4] = accumGbufTemplate; preBarriers[4].image = view().reservoirWImagesPP[1].image;
             VkDependencyInfo dep{};
             dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
             dep.imageMemoryBarrierCount = static_cast<uint32_t>(preBarriers.size());
@@ -941,7 +945,7 @@ void VulkanRenderer::Impl::recordDepthOfField(VkCommandBuffer cb) {
             // confusion — every point projects sharp by construction. The CoC
             // derivation below would read a tan(fov/2) the projection never
             // carried and defocus the frame by an arbitrary amount.
-            if (dofEnabled_ && !orthoFrame_ && dof_ && dof_->valid()) {
+            if (dofEnabled_ && !view().orthoFrame_ && dof_ && dof_->valid()) {
                 const float     kSensorH  = filmHeightM_;// sensor height (m)
                 constexpr float kMaxCocPx = 32.f;        // full-res radius clamp
                 const float f = (kSensorH * 0.5f) / std::max(tanHalfFovY_, 1e-3f);
@@ -994,7 +998,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
             // bloom put out for the same slider value. Computed unconditionally
             // (both orders need it; HDR mode's bloom-add moves into TaaResolve).
             const float effBloomIntensity =
-                    bloomIntensity_ / static_cast<float>(std::max(bloom_->levels(), 1u));
+                    bloomIntensity_ / static_cast<float>(std::max(view().bloom_->levels(), 1u));
 
 #if defined(THREEPP_WITH_DLSS) || defined(THREEPP_WITH_FSR)
             // External upscalers (DLSS/FSR) run full-frame only — split-screen
@@ -1014,7 +1018,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
             // (display extent) → PostComposite adds bloom + tonemaps at display
             // res → recordPostFinalize (RCAS) → swapchain. See DlssUpscaler.{hpp,cpp}.
             if (useDlss() && dlss_ && dlss_->valid() && !dlss_->failing() && upscalerFullFrame) {
-                bloom_->recordPyramid(cb, currentFrame,
+                view().bloom_->recordPyramid(cb, currentFrame,
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       bloomIntensity_, bloomThreshold_, bloomClamp_);
 
@@ -1034,20 +1038,20 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
 
                 vulkan::DlssUpscaler::DispatchInputs din{};
                 din.cmd          = cb;
-                din.colorImage   = bloom_->sceneHdrImage(currentFrame);
-                din.colorView    = bloom_->sceneHdrView(currentFrame);
+                din.colorImage   = view().bloom_->sceneHdrImage(currentFrame);
+                din.colorView    = view().bloom_->sceneHdrView(currentFrame);
                 din.colorFormat  = VK_FORMAT_R16G16B16A16_SFLOAT;
                 din.colorLayout  = VK_IMAGE_LAYOUT_GENERAL;
-                din.depthImage   = rasterGbufs[currentFrame].depth.image;
-                din.depthView    = rasterGbufs[currentFrame].depth.view;
+                din.depthImage   = view().rasterGbufs[currentFrame].depth.image;
+                din.depthView    = view().rasterGbufs[currentFrame].depth.view;
                 din.depthFormat  = VK_FORMAT_D32_SFLOAT;
                 din.depthLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                din.motionImage  = rasterGbufs[currentFrame].motion.image;
-                din.motionView   = rasterGbufs[currentFrame].motion.view;
+                din.motionImage  = view().rasterGbufs[currentFrame].motion.image;
+                din.motionView   = view().rasterGbufs[currentFrame].motion.view;
                 din.motionFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
                 din.motionLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                din.outputImage  = taa_->historyImage(writeSlot);
-                din.outputView   = taa_->historyView(writeSlot);
+                din.outputImage  = view().taa_->historyImage(writeSlot);
+                din.outputView   = view().taa_->historyView(writeSlot);
                 din.outputFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
                 din.renderWidth  = regionRenderExt_.width;
                 din.renderHeight = regionRenderExt_.height;
@@ -1066,7 +1070,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // shader displacement isn't in the motion vectors, so history
                 // ghosts at their edges without this). Mirrors the FSR reactive path.
                 din.frame         = currentFrame;
-                din.idsView       = rasterGbufs[currentFrame].ids.view;
+                din.idsView       = view().rasterGbufs[currentFrame].ids.view;
                 din.reactive      = true;
                 din.reactiveValue = 0.6f;
 
@@ -1088,7 +1092,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                     b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
                     b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                     b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    b.image         = taa_->historyImage(writeSlot);
+                    b.image         = view().taa_->historyImage(writeSlot);
                     b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                     b.subresourceRange.levelCount = 1;
                     b.subresourceRange.layerCount = 1;
@@ -1101,7 +1105,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
 
                 // Tonemap at DISPLAY res, reading the DLSS output (history slot
                 // via PostComposite's HDR-mode binding 6), ADDING bloom.
-                post_->recordDispatch(cb, currentFrame,
+                view().post_->recordDispatch(cb, currentFrame,
                                       regionSwapExt_.width, regionSwapExt_.height,
                                       static_cast<uint32_t>(toneMapping_),
                                       exposureBits, preExpBits_, envIsBgColor,
@@ -1110,7 +1114,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                                       /*hdrMode=*/true);
 
                 // Finalize hdrOut_ → swapchain (display-referred RCAS or plain copy).
-                taa_->recordPostFinalize(cb, currentFrame, imageIndex,
+                view().taa_->recordPostFinalize(cb, currentFrame, imageIndex,
                                          regionSwapExt_.width, regionSwapExt_.height,
                                          sharpenStrength_ > 0.0f, sharpenStrength_);
             } else
@@ -1127,7 +1131,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
             // NOT fold bloom in), and recordPostFinalize sends hdrOut_ to the
             // swapchain via RCAS/copy. See FsrUpscaler.{hpp,cpp}.
             if (useFsr() && fsr_ && fsr_->valid() && upscalerFullFrame) {
-                bloom_->recordPyramid(cb, currentFrame,
+                view().bloom_->recordPyramid(cb, currentFrame,
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       bloomIntensity_, bloomThreshold_, bloomClamp_);
 
@@ -1147,16 +1151,16 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
 
                 vulkan::FsrUpscaler::DispatchInputs fin{};
                 fin.cmd          = cb;
-                fin.colorImage   = bloom_->sceneHdrImage(currentFrame);
+                fin.colorImage   = view().bloom_->sceneHdrImage(currentFrame);
                 fin.colorFormat  = VK_FORMAT_R16G16B16A16_SFLOAT;
                 fin.colorLayout  = VK_IMAGE_LAYOUT_GENERAL;
-                fin.depthImage   = rasterGbufs[currentFrame].depth.image;
+                fin.depthImage   = view().rasterGbufs[currentFrame].depth.image;
                 fin.depthFormat  = VK_FORMAT_D32_SFLOAT;
                 fin.depthLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                fin.motionImage  = rasterGbufs[currentFrame].motion.image;
+                fin.motionImage  = view().rasterGbufs[currentFrame].motion.image;
                 fin.motionFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
                 fin.motionLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                fin.outputImage  = taa_->historyImage(writeSlot);
+                fin.outputImage  = view().taa_->historyImage(writeSlot);
                 fin.outputFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
                 fin.renderWidth  = regionRenderExt_.width;
                 fin.renderHeight = regionRenderExt_.height;
@@ -1179,7 +1183,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // frame's G-buffer IDs flags (deformer/animated surfaces → less
                 // ghosting). idsView is the same attachment PostComposite/TAA read.
                 fin.frame         = currentFrame;
-                fin.idsView       = rasterGbufs[currentFrame].ids.view;
+                fin.idsView       = view().rasterGbufs[currentFrame].ids.view;
                 fin.reactive      = true;
                 fin.reactiveValue = 0.6f;
 
@@ -1201,7 +1205,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                     b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
                     b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                     b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    b.image         = taa_->historyImage(writeSlot);
+                    b.image         = view().taa_->historyImage(writeSlot);
                     b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                     b.subresourceRange.levelCount = 1;
                     b.subresourceRange.layerCount = 1;
@@ -1215,7 +1219,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // Tonemap at DISPLAY res, reading the FSR output (history slot via
                 // PostComposite's HDR-mode binding 6), ADDING bloom (non-zero
                 // intensity — FSR didn't fold it in). Sky mask stays render-extent.
-                post_->recordDispatch(cb, currentFrame,
+                view().post_->recordDispatch(cb, currentFrame,
                                       regionSwapExt_.width, regionSwapExt_.height,
                                       static_cast<uint32_t>(toneMapping_),
                                       exposureBits, preExpBits_, envIsBgColor,
@@ -1224,7 +1228,7 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                                       /*hdrMode=*/true);
 
                 // Finalize hdrOut_ → swapchain (display-referred RCAS or plain copy).
-                taa_->recordPostFinalize(cb, currentFrame, imageIndex,
+                view().taa_->recordPostFinalize(cb, currentFrame, imageIndex,
                                          regionSwapExt_.width, regionSwapExt_.height,
                                          sharpenStrength_ > 0.0f, sharpenStrength_);
             } else
@@ -1237,10 +1241,10 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // (skipped when bloomIntensity_ == 0); the post composite then
                 // closes the HDR path — exposure, white balance, tone map,
                 // grade LUT, sRGB — into the TAA input image (render extent).
-                bloom_->recordPyramid(cb, currentFrame,
+                view().bloom_->recordPyramid(cb, currentFrame,
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       bloomIntensity_, bloomThreshold_, bloomClamp_);
-                post_->recordDispatch(cb, currentFrame,
+                view().post_->recordDispatch(cb, currentFrame,
                                       regionRenderExt_.width, regionRenderExt_.height,
                                       static_cast<uint32_t>(toneMapping_),
                                       exposureBits, preExpBits_, envIsBgColor,
@@ -1254,15 +1258,15 @@ void VulkanRenderer::Impl::recordUpscaleAndPost(VkCommandBuffer cb, uint32_t ima
                 // jittered low-res samples accumulate into the full-res
                 // history, reconstructing detail (no separate blit needed).
                 gpuTimings_->begin(cb, TP_TAA, currentFrame);
-                taa_->recordResolve(cb, currentFrame, imageIndex,
+                view().taa_->recordResolve(cb, currentFrame, imageIndex,
                                     regionRenderExt_.width, regionRenderExt_.height,
                                     regionSwapExt_.width, regionSwapExt_.height, effAlpha, taaDtFrames,
                                     sharpenStrength_ > 0.0f, sharpenStrength_,
-                                    taaSkyReproj_.data(),
+                                    view().taaSkyReproj_.data(),
                                     static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
                                     ptExt.width, ptExt.height, ext.width, ext.height,
-                                    taaDepthLin_.data(), motionBlurAmount_,
-                                    taaJitterTexels_[0], taaJitterTexels_[1]);
+                                    view().taaDepthLin_.data(), motionBlurAmount_,
+                                    view().taaJitterTexels_[0], view().taaJitterTexels_[1]);
                 gpuTimings_->end(cb, TP_TAA, currentFrame);
             }
             // ── End post stack / TAA ────────────────────────────────────────────
@@ -1460,7 +1464,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     VkRenderingAttachmentInfo depthAtt{};
                     depthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
                     depthAtt.imageView   = overlayMsaa ? overlayMsDepth_.view
-                                                       : rasterGbufs[currentFrame].unjitDepth.view;
+                                                       : view().rasterGbufs[currentFrame].unjitDepth.view;
                     depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
                     depthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
                     depthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_NONE;
@@ -1509,7 +1513,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     vkCmdSetScissor(cb, 0, 1, &scDyn);
 
                     Matrix4 vpUnjitMat;
-                    std::memcpy(vpUnjitMat.elements.data(), currVPunjit_.data(), 64);
+                    std::memcpy(vpUnjitMat.elements.data(), view().currVPunjit_.data(), 64);
 
                     // Track currently-bound pipeline so we don't redundantly
                     // re-bind on every draw when the scene's overlay objects
@@ -1762,7 +1766,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     std::vector<OverlayItem> overlayItems;
                     overlayItems.reserve(lastVisibleLines_.size() + 16);
                     Matrix4 viewUnjitM;
-                    std::memcpy(viewUnjitM.elements.data(), currViewUnjit_.data(), 64);
+                    std::memcpy(viewUnjitM.elements.data(), view().currViewUnjit_.data(), 64);
                     const auto& ve = viewUnjitM.elements;
                     auto viewZOf = [&](const std::array<float, 16>& world) {
                         return ve[2] * world[12] + ve[6] * world[13] +
@@ -1831,8 +1835,8 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                             // for both billboard kinds (particles + world sprites).
                             vkResetDescriptorPool(ctx->device(), particleDescPools_[currentFrame], 0);
                             Matrix4 viewM, projM;
-                            std::memcpy(viewM.elements.data(), currViewUnjit_.data(), 64);
-                            std::memcpy(projM.elements.data(), currProjUnjit_.data(), 64);
+                            std::memcpy(viewM.elements.data(), view().currViewUnjit_.data(), 64);
+                            std::memcpy(projM.elements.data(), view().currProjUnjit_.data(), 64);
 
                             // ── Overlay-fog snapshot (Phase 2b) ────────────────
                             // Fog the world-space billboards (chimney smoke) that
@@ -2132,7 +2136,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cb, uint32_t imag
 
             // Extents + exposure are shared by both render modes and by the
             // bloom/TAA tail below, so hoist them out of the mode branch.
-            const VkExtent2D ext   = ctx->swapchainExtent();
+            const VkExtent2D ext   = viewOutExtent();
             // Deferred render extent — equals `ext` unless
             // renderScale_ < 1, in which case TAA upsamples to the swapchain.
             const VkExtent2D ptExt = renderExtent();
@@ -2398,12 +2402,12 @@ void VulkanRenderer::Impl::recordEventShade(VkCommandBuffer cb, uint32_t frame) 
             // shenanigans needed.
             VkDescriptorImageInfo normalInfo{};
             normalInfo.sampler     = gbufSampler_;
-            normalInfo.imageView   = rasterGbufs[frame].normal.view;
+            normalInfo.imageView   = view().rasterGbufs[frame].normal.view;
             normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
             VkDescriptorImageInfo idsInfo{};
             idsInfo.sampler     = gbufSampler_;
-            idsInfo.imageView   = rasterGbufs[frame].ids.view;
+            idsInfo.imageView   = view().rasterGbufs[frame].ids.view;
             idsInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
             VkDescriptorBufferInfo matInfo{};

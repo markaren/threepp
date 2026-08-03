@@ -1072,18 +1072,14 @@ namespace threepp {
         // lightPos.xyz + lightType.w (rgba32f), reservoirWImagesPP carries
         // W_sum + M + W + p_hat (rgba16f). At frame N the shade writes slot
         // (N & 1) and reads slot ((N+1) & 1).
-        std::array<Image2D, 2> reservoirPosImagesPP{};
-        std::array<Image2D, 2> reservoirWImagesPP{};
+        // (reservoirPosImagesPP / reservoirWImagesPP moved to ViewContext —
+        //  the reservoirs are SCREEN-space, so they belong to a view.)
         // Frame counter driving Halton jitter + blue-noise offset for the
-        // deferred shade's stochastic GI / soft-shadow sampling.
+        // deferred shade's stochastic GI / soft-shadow sampling. Genuinely
+        // shared: it is the sequence CLOCK, not per-view history. Every view
+        // in a frame samples the same Halton/blue-noise phase.
         uint32_t sampleIndex = 0;
-        // Prev-frame camera packed as four vec4s (matches PrevCameraUbo):
-        //   [0..3]  = vec4(pos.xyz,  projScaleX)   → prevCamPosX
-        //   [4..7]  = vec4(fwd.xyz,  projScaleY)   → prevCamFwdY
-        //   [8..11] = vec4(rgt.xyz,  0)             → prevCamRgt
-        //   [12..15]= vec4(up.xyz,   0)             → prevCamUp
-        std::array<float, 16> prevCamBufData_{};
-        bool prevCameraValid = false;
+        // (prevCamBufData_ / prevCameraValid moved to ViewContext.)
 
         // Per-entry "moved" bitmask, one bit per TLAS instance. Bit i set when
         // entry i's effective worldMatrix / pose / displacement changed since
@@ -1148,15 +1144,11 @@ namespace threepp {
             bool     isInstanced = false;// entry came from an InstancedMesh expansion
                                          // (the snapshot fast path recomputes its world
                                          // matrix as matrixWorld * getMatrixAt(i))
-            // Frustum-cull bit, populated once per frame by
-            // cullEntriesAgainstFrustum() right before record. Raster passes
-            // skip entries with inFrustum == false to dodge the GPU's per-
-            // draw command-processor overhead on off-screen geometry. The
-            // ray-query path is unaffected — TLAS culling handles it implicitly.
-            // Defaults to true so passes work before the first cull pass.
-            // Skinned / displaced / morphed entries always stay true; their
-            // local AABB doesn't reflect deformed extents.
-            bool     inFrustum   = true;
+            // (The frustum-cull bit used to live here. It is now
+            //  ViewContext::inFrustum, indexed in lockstep with
+            //  lastVisibleEntries_, because the answer depends on WHICH CAMERA
+            //  is asking and an entry is shared by all of them. Read it through
+            //  viewCulled(i).)
             // Automatic mesh LOD (setAutoLod): 0 == the geometry's own
             // (finest) buffers; N>0 selects BlasRecord::lodLevels[N-1].
             // Written once per frame by the LOD selection pass in
@@ -1883,7 +1875,269 @@ namespace threepp {
             Image2D       depthMS;
             VkFramebuffer framebufferMS = VK_NULL_HANDLE;// MS render target (rasterGbufRenderPassMS)
         };
-        std::array<RasterGbufImages, kFramesInFlight> rasterGbufs{};
+
+        // ── ViewContext: everything a single camera's render owns ───────────
+        // >>> VIEWCTX_BEGIN (the rename pass that introduced view() skips this
+        //     block — these are the DECLARATIONS, not uses.)
+        //
+        // The deferred pipeline used to be hard-wired to exactly one view: one
+        // G-buffer set, one temporal-history chain, one camera-UBO chain, all
+        // sitting as plain Impl members. Everything below is what turned out to
+        // be genuinely PER-VIEW once that assumption was written down, split
+        // into three groups:
+        //
+        //   1. the G-buffer + every temporal accumulator hanging off it
+        //      (rasterGbufs — GI, moments, reflections, shadow ratio, froxels,
+        //       clouds, depth: all screen-space, all history-bearing),
+        //   2. the per-frame-in-flight buffers/descriptors that describe THIS
+        //      camera to the GPU (camera UBOs, raster camera UBO, the culled
+        //      draw list and its indirect commands, the raster descriptor sets),
+        //   3. the host-side temporal bookkeeping the shaders can't hold
+        //      (previous VP, previous jitter, sky reprojection, depth
+        //       linearization, previous camera pose).
+        //
+        // Group 3 is the subtle one: it is exactly the state that makes a
+        // camera CUT distinguishable from a camera MOVE. Sharing it between
+        // views is what would make view A's cut ghost into view B.
+        //
+        // What deliberately stays on Impl: anything world-space or scene-wide —
+        // TLAS/BLAS, geometry/material descriptor tables, light UBOs, the env
+        // map and its PMREM, probe GI (world-space by construction), and
+        // `sampleIndex` (a clock, not a history).
+        struct ViewContext {
+            // Group 0 — identity and geometry of the view itself.
+            //
+            // `secondary` is the one branch that separates this view from the
+            // swapchain-presenting primary. False for views_[0], and every
+            // extent/target accessor keys off it so the primary path can be
+            // read as untouched.
+            bool     secondary = false;
+            uint32_t id        = 0;// stable handle handed to the public API
+            // addView / removeView are routinely called from inside the
+            // animate callback, i.e. with a frame already open and its command
+            // buffer recording. Allocating (or freeing) GPU resources there is
+            // exactly the hazard the rest of this class defers around — see
+            // pendingRenderScaleRealloc_ / pendingAccumulationReset_. So a view
+            // is registered immediately (the caller gets its handle straight
+            // away) and its resources are created, or released, at the next
+            // frame boundary: post-fence, pre-record, device drained.
+            bool pendingCreate  = false;
+            bool pendingDestroy = false;
+            // Only meaningful when `secondary`: the primary derives both from
+            // the swapchain on every call so it can never go stale on resize.
+            // Native-res by scope fence, so these two are equal.
+            VkExtent2D renderExt{};
+            VkExtent2D outExt{};
+            // The camera this view renders. Held as a raw pointer with a uuid
+            // alongside, NEVER as a bare pointer used as a cache key — pointers
+            // get recycled in this codebase and a recycled Camera* silently
+            // inherits the previous camera's temporal history.
+            Camera*     camera = nullptr;
+            std::string cameraUuid;
+            // Where a secondary's finished frame lands: this view's own colour
+            // image, in the swapchain's format so the whole TAA/post tail
+            // writes it byte-identically to how it writes the swapchain. It is
+            // the single entry of the "swapchain of one" that this view's
+            // TaaResolve was built against (imageCount = 1, imageIndex = 0).
+            // Read back from HERE, never through the swapchain path — a
+            // MAILBOX-mode swapchain read is allowed to be stale.
+            Image2D colorTarget{};
+            // Host-visible landing buffer for readViewRGBPixels. Allocated
+            // eagerly with the rest of the view so a readback never allocates
+            // mid-frame.
+            Buffer  readbackBuf{};
+            // Everything this view cost, in bytes, summed as it was allocated.
+            // Reported at addView time — a robot rig with eight cameras should
+            // find out what it just asked for, not discover it in a VRAM graph.
+            VkDeviceSize allocatedBytes = 0;
+
+            // This view's frustum-cull result, one byte per entry of
+            // lastVisibleEntries_, written by cullEntriesAgainstFrustum.
+            //
+            // This used to be a bool ON the shared MeshEntry, which worked
+            // exactly as long as there was one camera. With N views the last
+            // one to cull would win, and the primary's overlay depth prepass —
+            // the other reader — would silently draw the WRONG occluder set: no
+            // crash, no validation error, just geometry intermittently missing
+            // from the overlay depending on where in the frame the secondaries
+            // ran. Correct frame ordering happens to hide it today, which is
+            // precisely why it should not be left as an ordering obligation.
+            //
+            // Indexed in lockstep with lastVisibleEntries_; sized (and
+            // default-included) by the cull itself, so a view that has never
+            // culled draws everything rather than nothing.
+            std::vector<uint8_t> inFrustum;
+
+            // Per-view raster descriptor POOL. The layout is shared (one set
+            // shape for every view); the pool is not, because it is sized for
+            // exactly kFramesInFlight sets and a second view would exhaust it.
+            // A pool per view also means removeView frees its sets by
+            // destroying one object instead of returning them individually.
+            VkDescriptorPool rasterDescPool = VK_NULL_HANDLE;
+
+            // Group 1 — G-buffer + temporal accumulators.
+            std::array<RasterGbufImages, kFramesInFlight> rasterGbufs{};
+
+            // Group 2 — per-frame-in-flight description of this camera.
+            //
+            // Camera UBO (viewInverse + projInverse), 2 mat4 back-to-back,
+            // std140.
+            std::array<Buffer, kFramesInFlight> cameraUbos{};
+            // Raster camera UBO (RasterCameraData: jittered/unjittered VP,
+            // prev VP, jitter).
+            std::array<Buffer, kFramesInFlight> rasterCameraUbos{};
+            std::array<VkDescriptorSet, kFramesInFlight> rasterDescSets{};
+            // Per-frame draw info ring. Each entry mirrors the GLSL DrawInfo
+            // struct in gbuffer_indirect.vert: model matrix + buffer device
+            // addresses + flags. Sized lazily; grows on demand. Per-view
+            // because the contents are the FRUSTUM-CULLED draw list, and each
+            // camera culls differently.
+            std::array<Buffer, kFramesInFlight> drawInfoBuffers{};
+            std::array<VkDeviceSize, kFramesInFlight> drawInfoBufferCapacity{};
+            // Per-frame indirect command ring. Holds a contiguous array of
+            // VkDrawIndirectCommand structs partitioned by cull mode (Front,
+            // then Back, then Double). Counts + offsets per group recorded in
+            // indirectGroupRanges_ during recordRasterGbufPass.
+            std::array<Buffer, kFramesInFlight> indirectCmdBuffers{};
+            std::array<VkDeviceSize, kFramesInFlight> indirectCmdBufferCapacity{};
+            // ReSTIR DI reservoir ping-pong — [2] PHYSICAL images (not
+            // per-frame-in-flight). Screen-space, so per-view. At frame N the
+            // shade writes slot (N & 1) and reads slot ((N+1) & 1).
+            std::array<Image2D, 2> reservoirPosImagesPP{};
+            std::array<Image2D, 2> reservoirWImagesPP{};
+
+            // Group 3 — host-side temporal bookkeeping.
+            //
+            // Which projection this view shades through. Read by the uploads
+            // (parallel-ray packing, jitter placement) and by DoF, which has no
+            // meaning without a lens.
+            bool orthoFrame_ = false;
+            // Prev-frame camera packed as four vec4s (matches PrevCameraUbo):
+            //   [0..3]  = vec4(pos.xyz,  projScaleX)   → prevCamPosX
+            //   [4..7]  = vec4(fwd.xyz,  projScaleY)   → prevCamFwdY
+            //   [8..11] = vec4(rgt.xyz,  0)             → prevCamRgt
+            //   [12..15]= vec4(up.xyz,   0)             → prevCamUp
+            std::array<float, 16> prevCamBufData_{};
+            bool prevCameraValid = false;
+            // Cached unjittered view-projection matrix (column-major,
+            // row-of-element-4 layout). Computed once per frame in
+            // uploadRasterCameraUbo and read by recordOverlayPass to build
+            // the per-draw mvp = vpUnjit · model push constant.
+            std::array<float, 16> currVPunjit_{};
+            // Cached unjittered view and reverse-Z projection matrices,
+            // mirrored alongside currVPunjit_ each frame. The particle
+            // billboard pass needs them SEPARATELY (not the combined VP): the
+            // distance-attenuated billboard scale uses view-space depth and
+            // proj[1][1] individually, so it pushes
+            // modelView = currViewUnjit_ · meshWorld and currProjUnjit_.
+            std::array<float, 16> currViewUnjit_{};
+            std::array<float, 16> currProjUnjit_{};
+            bool  rasterPrevVPValid_ = false;
+            float rasterPrevVP_[16]{};
+            // prevVPunjit · currVPunjit⁻¹ for the TAA's sky-motion
+            // reconstruction (sky rasterizes nothing → zero motion → wrong
+            // reproject under camera rotation). Computed in
+            // uploadRasterCameraUbo while both VPs are in hand; identity until
+            // the first real frame.
+            std::array<float, 16> taaSkyReproj_{1.f, 0.f, 0.f, 0.f,
+                                                0.f, 1.f, 0.f, 0.f,
+                                                0.f, 0.f, 1.f, 0.f,
+                                                0.f, 0.f, 0.f, 1.f};
+            // Reverse-Z view-depth linearization (A,B,C,D) for the TAA depth
+            // disocclusion gate: viewZ = (A·d + B)/(C·d + D). Set each frame in
+            // uploadRasterCameraUbo from the inverse reverse-Z projection. Zero
+            // until the first real frame ⇒ shader leaves the depth gate off.
+            std::array<float, 4> taaDepthLin_{};
+            // This frame's Halton jitter in RENDER TEXELS for the TAA resolve's
+            // current-sample jitter cancellation (taa_resolve re-anchors every
+            // current-frame read at the unjittered pixel center — without it
+            // the composed output translates with the 8-phase jitter: the
+            // systemic "everything shakes"). {0, 0} whenever the raster renders
+            // unjittered (MSAA mode, event camera) — the resolve then runs
+            // bit-identical to its pre-cancellation arithmetic.
+            float taaJitterTexels_[2]{};
+            float rasterPrevJitter_[2]{};
+            bool  rasterPrevJitterValid_ = false;
+            // Camera WORLD motion this frame (translation m, forward-rotation
+            // rad) for the deferred reflection history policy: a chase-cam
+            // surface (car sunroof with a following camera) is
+            // screen-STATIONARY — its motion vectors are ~0 — while its
+            // view-dependent reflection content slides with every meter the
+            // camera travels. Screen-space motion alone cannot see
+            // camera+object co-motion; these can.
+            float deferredCamPrevPos_[3]{};
+            float deferredCamPrevFwd_[3]{};
+            bool  deferredCamPrevValid_ = false;
+            float deferredCamDeltaLen_ = 0.f;
+
+            // Group 4 — the passes whose DESCRIPTOR SETS or IMAGES are this
+            // view's. Each owns a pipeline it could in principle share with a
+            // sibling view; they are per-view anyway because the alternative is
+            // rewriting a descriptor set that may still be in flight, and this
+            // codebase has already paid for that lesson once (VUID-03047, fixed
+            // by going per-frame-in-flight — this is the same fix extended by
+            // one dimension).
+            //
+            //   taa_    owns the temporal history ping-pong. The most
+            //           view-specific object in the renderer: sharing it is
+            //           exactly how view A's camera cut would ghost view B.
+            //   bloom_  owns sceneHdr at the render extent (the deferred
+            //           shade's output target) plus the pyramid above it.
+            //   post_   owns hdrOut at the display extent.
+            //   deferredShade_  owns per-frame-in-flight sets binding this
+            //           view's G-buffer, reservoirs and sceneHdr.
+            //
+            // Deliberately NOT here, and primary-only by scope: occlusion
+            // culling + its Hi-Z, the MSAA G-buffer resolve, and the thin-lens
+            // DoF. They read per-view images too, but no secondary view is
+            // allowed to use them, so they stay single instances on Impl.
+            std::unique_ptr<vulkan::TaaResolve>    taa_;
+            std::unique_ptr<vulkan::BloomPass>     bloom_;
+            std::unique_ptr<vulkan::PostComposite> post_;
+            std::unique_ptr<vulkan::DeferredShade> deferredShade_;
+        };
+        // Every view this renderer drives. views_[0] is the PRIMARY (the
+        // swapchain-presenting one) and always exists — it is created in the
+        // constructor and never removed, so `view()` is unconditionally valid.
+        std::vector<std::unique_ptr<ViewContext>> views_;
+        // The view currently being set up / recorded. Always views_[0] today;
+        // the per-view render loop retargets it. A raw pointer (not an index)
+        // so a view() call is one indirection in the hot record path.
+        ViewContext* curView_ = nullptr;
+        // Handles are dense and monotonic, never reused. 0 is reserved for the
+        // primary (and doubles as "invalid" from addView), so a stale handle
+        // from a removed view can never alias a later one.
+        uint32_t nextViewId_ = 1;
+        // Total bytes VMA currently has allocated across every heap. Sampled
+        // before/after a view's allocation to report what that view cost —
+        // measured rather than computed from a table of formats that would rot
+        // the moment someone adds an accumulator to the G-buffer.
+        [[nodiscard]] VkDeviceSize vmaAllocatedBytes() const {
+            VkPhysicalDeviceMemoryProperties mp{};
+            vkGetPhysicalDeviceMemoryProperties(ctx->physicalDevice(), &mp);
+            std::vector<VmaBudget> budgets(mp.memoryHeapCount);
+            vmaGetHeapBudgets(ctx->allocator(), budgets.data());
+            VkDeviceSize total = 0;
+            for (uint32_t i = 0; i < mp.memoryHeapCount; ++i)
+                total += budgets[i].statistics.allocationBytes;
+            return total;
+        }
+        ViewContext&       view()       { return *curView_; }
+        const ViewContext& view() const { return *curView_; }
+        // The primary view, by name, for the (many) places that mean "the
+        // swapchain view" rather than "whichever view is being recorded".
+        ViewContext&       primaryView()       { return *views_[0]; }
+        const ViewContext& primaryView() const { return *views_[0]; }
+        // Did entry `i` survive THIS view's frustum cull? Out-of-range reads
+        // answer "yes", which is the conservative direction: a view that has
+        // not culled yet (or an entry list that grew since) draws everything
+        // rather than dropping geometry.
+        [[nodiscard]] bool viewCulled(size_t i) const {
+            const auto& c = curView_->inFrustum;
+            return i >= c.size() || c[i] != 0;
+        }
+        // <<< VIEWCTX_END
+
         VkRenderPass rasterGbufRenderPass = VK_NULL_HANDLE;
         // MSAA render pass, keyed by sample count (2 or 4). Only the pass
         // matching gbufMsaaSamples_ is ever created; the other stays
@@ -1921,19 +2175,10 @@ namespace threepp {
         // decal lerps its albedo over the receiver's, everything else (normal,
         // ids, motion, depth, metalness) stays the receiving surface's.
         VkPipeline            rasterGbufDecalPipeline = VK_NULL_HANDLE;
-        VkDescriptorPool      rasterDescPool       = VK_NULL_HANDLE;
-        std::array<VkDescriptorSet, kFramesInFlight> rasterDescSets{};
-        // Per-frame draw info ring. Each entry mirrors the GLSL DrawInfo
-        // struct in gbuffer_indirect.vert: model matrix + buffer device
-        // addresses + flags. Sized lazily; grows on demand.
-        std::array<Buffer, kFramesInFlight> drawInfoBuffers{};
-        std::array<VkDeviceSize, kFramesInFlight> drawInfoBufferCapacity{};
-        // Per-frame indirect command ring. Holds a contiguous array of
-        // VkDrawIndirectCommand structs partitioned by cull mode (Front,
-        // then Back, then Double). Counts + offsets per group recorded in
-        // indirectGroupRanges_ during recordRasterGbufPass.
-        std::array<Buffer, kFramesInFlight> indirectCmdBuffers{};
-        std::array<VkDeviceSize, kFramesInFlight> indirectCmdBufferCapacity{};
+        // (rasterDescPool / rasterDescSets / drawInfoBuffers /
+        //  indirectCmdBuffers and their capacities moved to ViewContext. Only
+        //  the LAYOUT stays shared — every view's set has the same shape, but
+        //  a pool sized for one view's frames-in-flight cannot serve two.)
 
         // Hybrid raster overlay (wireframe + Line/LineSegments). Runs after
         // TAA resolve, draws onto the swapchain with the G-buffer's depth
@@ -2237,9 +2482,9 @@ namespace threepp {
         // exist. Idempotent; buffers are fixed at creation so the sets are
         // written exactly once.
         void ensureParticleIoSets() {
-            if (particleIoDescPool_ != VK_NULL_HANDLE || !deferredShade_ ||
+            if (particleIoDescPool_ != VK_NULL_HANDLE || !view().deferredShade_ ||
                 particleCenterBufs_[0].handle == VK_NULL_HANDLE) return;
-            VkDescriptorSetLayout ioLayout = deferredShade_->particleIoLayout();
+            VkDescriptorSetLayout ioLayout = view().deferredShade_->particleIoLayout();
             if (ioLayout == VK_NULL_HANDLE) return;
             VkDescriptorPoolSize ips{};
             ips.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -2392,18 +2637,7 @@ namespace threepp {
             bool     isPoints;   // true → POINT_LIST topology, overrides the line topology
         };
         std::vector<LineEntry> lastVisibleLines_;
-        // Cached unjittered view-projection matrix (column-major,
-        // row-of-element-4 layout). Computed once per frame in
-        // uploadRasterCameraUbo and read by recordOverlayPass to build
-        // the per-draw mvp = vpUnjit · model push constant.
-        std::array<float, 16> currVPunjit_{};
-        // Cached unjittered view and reverse-Z projection matrices, mirrored
-        // alongside currVPunjit_ each frame. The particle billboard pass needs
-        // them SEPARATELY (not the combined VP): the distance-attenuated
-        // billboard scale uses view-space depth and proj[1][1] individually, so
-        // it pushes modelView = currViewUnjit_ · meshWorld and currProjUnjit_.
-        std::array<float, 16> currViewUnjit_{};
-        std::array<float, 16> currProjUnjit_{};
+        // (currVPunjit_ / currViewUnjit_ / currProjUnjit_ moved to ViewContext.)
 
         // Per-frame raster camera data. currVPjittered drives gl_Position;
         // currVPunjittered + prevVP drive the motion-vector computation
@@ -2421,42 +2655,9 @@ namespace threepp {
                                       // deferred shade's hybrid reproject tap correction.
                                       // .z smuggles the normal-map Toksvig toggle.
         };
-        std::array<Buffer, kFramesInFlight> rasterCameraUbos{};
-        bool  rasterPrevVPValid_ = false;
-        float rasterPrevVP_[16]{};
-        // prevVPunjit · currVPunjit⁻¹ for the TAA's sky-motion reconstruction
-        // (sky rasterizes nothing → zero motion → wrong reproject under
-        // camera rotation). Computed in uploadRasterCameraUbo while both
-        // VPs are in hand; identity until the first real frame.
-        std::array<float, 16> taaSkyReproj_{1.f, 0.f, 0.f, 0.f,
-                                            0.f, 1.f, 0.f, 0.f,
-                                            0.f, 0.f, 1.f, 0.f,
-                                            0.f, 0.f, 0.f, 1.f};
-        // Reverse-Z view-depth linearization (A,B,C,D) for the TAA depth
-        // disocclusion gate: viewZ = (A·d + B)/(C·d + D). Set each frame in
-        // uploadRasterCameraUbo from the inverse reverse-Z projection. Zero
-        // until the first real frame ⇒ shader leaves the depth gate disabled.
-        std::array<float, 4> taaDepthLin_{};
-        // This frame's Halton jitter in RENDER TEXELS for the TAA resolve's
-        // current-sample jitter cancellation (taa_resolve re-anchors every
-        // current-frame read at the unjittered pixel center — without it the
-        // composed output translates with the 8-phase jitter: the systemic
-        // "everything shakes"). {0, 0} whenever the raster renders unjittered
-        // (MSAA mode, event camera) — the resolve then runs bit-identical to
-        // its pre-cancellation arithmetic. Set in uploadRasterCameraUbo.
-        float taaJitterTexels_[2]{};
-        float rasterPrevJitter_[2]{};
-        bool  rasterPrevJitterValid_ = false;
-        // Camera WORLD motion this frame (translation m, forward-rotation rad)
-        // for the deferred reflection history policy: a chase-cam surface (car
-        // sunroof with a following camera) is screen-STATIONARY — its motion
-        // vectors are ~0 — while its view-dependent reflection content slides
-        // with every meter the camera travels. Screen-space motion alone cannot
-        // see camera+object co-motion; these can.
-        float deferredCamPrevPos_[3]{};
-        float deferredCamPrevFwd_[3]{};
-        bool  deferredCamPrevValid_ = false;
-        float deferredCamDeltaLen_ = 0.f;
+        // (rasterCameraUbos, the prev-VP / prev-jitter / sky-reproject /
+        //  depth-linearization TAA bookkeeping, and the prev camera pose all
+        //  moved to ViewContext — see the RasterCameraData note there.)
         float deferredCamRotAngle_ = 0.f;
 
         // Nearest-filter sampler used by the deferred shade to read gbuffer
@@ -2470,12 +2671,9 @@ namespace threepp {
         // of per-mesh UV availability.
         Buffer dummyUvBuffer_{};
 
-        // ── Raster TAA resolve ─────────────────────────────────────────────
-        // Encapsulated in vulkan/TaaResolve.{hpp,cpp}. Owns its pipeline,
-        // descriptor pool/sets, sampler, input image + history ping-pong.
-        // External deps (raster gbuffer views, swapchain views) are passed
-        // in at descriptor-write time.
-        std::unique_ptr<vulkan::TaaResolve> taa_;
+        // (taa_ moved to ViewContext — TaaResolve owns the temporal HISTORY
+        //  ping-pong, which is the single most view-specific thing in the
+        //  renderer. See the pass-ownership note there.)
 #if defined(THREEPP_WITH_FSR)
         // AMD FidelityFX FSR 3.1 upscaler. When its context creates successfully
         // (Windows only) it REPLACES the TAA temporal resolve — see the
@@ -2580,7 +2778,7 @@ namespace threepp {
 #if defined(THREEPP_WITH_FSR)
             if (fsrEnabled_ == enabled) return;
             fsrEnabled_ = enabled;
-            if (taa_) taa_->invalidateHistory();
+            if (view().taa_) view().taa_->invalidateHistory();
             markMaterialSamplerDirty();// jitter gate flips → sampler policy flips
             fsrResetNext_ = true;
 #if defined(THREEPP_WITH_DLSS)
@@ -2596,7 +2794,7 @@ namespace threepp {
 #if defined(THREEPP_WITH_DLSS)
             if (dlssEnabled_ == enabled) return;
             dlssEnabled_ = enabled;
-            if (taa_) taa_->invalidateHistory();
+            if (view().taa_) view().taa_->invalidateHistory();
             markMaterialSamplerDirty();// jitter gate flips → sampler policy flips
             dlssResetNext_ = true;
 #if defined(THREEPP_WITH_FSR)
@@ -2617,16 +2815,9 @@ namespace threepp {
             (void) enabled;
 #endif
         }
-        // HDR bloom pyramid — the shade/resolve writes linear HDR into
-        // bloom_->sceneHdr (the shared set's binding 1); bloom_ builds the
-        // Jimenez progressive pyramid from it. bloomIntensity_ == 0 skips
-        // the pyramid entirely.
-        std::unique_ptr<vulkan::BloomPass> bloom_;
-        // Exposure / white balance / tone map (incl. AgX) / grade LUT / sRGB
-        // — the camera/display end of the post stack, one dispatch into the
-        // TAA input (post_composite.comp). Owns the white-balance matrix and
-        // the 33³ grade LUT (setWhiteBalance / setColorGrade forward here).
-        std::unique_ptr<vulkan::PostComposite> post_;
+        // (bloom_ and post_ moved to ViewContext — bloom_ owns sceneHdr, the
+        //  render-extent HDR target every view needs its own copy of, and
+        //  post_ owns the display-extent hdrOut fed from it.)
         // Thin-lens depth of field on sceneHdr, recorded between the scene
         // dispatch and the bloom pyramid so bokeh still blooms + tone-maps
         // as HDR (see vulkan/DofPass.hpp). CoC is camera-derived: aperture
@@ -2746,10 +2937,12 @@ namespace threepp {
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
 
-        // Deferred shade pass. Shades the material G-buffer analytically into
-        // bloom_->sceneHdr; bloom + TAA finish the frame. Owns its own focused
-        // descriptor set (see DeferredShade.hpp).
-        std::unique_ptr<vulkan::DeferredShade> deferredShade_;
+        // (deferredShade_ moved to ViewContext — its per-frame-in-flight
+        //  descriptor sets bind this view's G-buffer, reservoirs and sceneHdr,
+        //  so the sets themselves are per-view. The PIPELINE could be shared;
+        //  it is not, because a set can never be rewritten while it may be in
+        //  flight (VUID-03047), and a per-view pass object makes that
+        //  impossible by construction rather than by discipline.)
         // World-space irradiance probe grid (multi-bounce GI for the deferred
         // gather — see vulkan/ProbeGI.hpp). Created alongside deferredShade_;
         // its SH buffer + grid UBO back the deferred set's bindings 36/37, so
@@ -2828,7 +3021,7 @@ namespace threepp {
         // Deferred render extent: swapchain extent × renderScale_, each axis
         // clamped to ≥ 1px. Exactly equal to the swapchain extent when
         // renderScale_ is 1 (the unscaled fast path).
-        VkExtent2D renderExtent() const {
+        VkExtent2D primaryRenderExtent() const {
             const VkExtent2D s = ctx->swapchainExtent();
             if (renderScale_ >= 0.999f) return s;
             const auto px = [](uint32_t v, float k) -> uint32_t {
@@ -2836,6 +3029,29 @@ namespace threepp {
                 return r < 1u ? 1u : r;
             };
             return {px(s.width, renderScale_), px(s.height, renderScale_)};
+        }
+        // ── The two extents every pass in the render chain is written against ──
+        // renderExtent()  — where the G-buffer rasterizes and the shade
+        //                   dispatches (the TAA resolve's INPUT).
+        // viewOutExtent() — where the temporal history lives and the frame is
+        //                   finally written (the TAA resolve's OUTPUT).
+        //
+        // The primary DERIVES both from the swapchain on every call, exactly as
+        // before. That is deliberate: caching them would introduce a staleness
+        // window on resize / renderScale change that the old code could not
+        // have, and the primary path must stay provably identical. Only a
+        // secondary reads its stored pair, which is fixed at addView time and
+        // never tracks the window.
+        //
+        // Secondaries are native-res by scope: renderExt == outExt, so their
+        // TAA resolve is a plain 1:1 temporal filter with no upsampling.
+        VkExtent2D renderExtent() const {
+            if (curView_ && curView_->secondary) return curView_->renderExt;
+            return primaryRenderExtent();
+        }
+        VkExtent2D viewOutExtent() const {
+            if (curView_ && curView_->secondary) return curView_->outExt;
+            return ctx->swapchainExtent();
         }
         // ── Per-frame timing instrumentation ─────────────────────────────
         // Managed by vulkan/GpuTimings.{hpp,cpp}. Owns one VkQueryPool per
@@ -2904,9 +3120,7 @@ namespace threepp {
         };
         HybridDebugView hybridDebugView_ = HybridDebugView::Off;
 
-        // Per-frame-in-flight camera UBO (viewInverse + projInverse).
-        // 2 mat4 packed back-to-back, std140 layout.
-        std::array<Buffer, kFramesInFlight> cameraUbos{};
+        // (cameraUbos moved to ViewContext.)
 
         uint32_t imageCount_ = 0;
 
@@ -2993,12 +3207,11 @@ namespace threepp {
         // through the ortho-only overlay path and must keep doing so.
         bool orthoSceneRendering_ = false;
 
-        // True for the duration of a deferred frame opened by an ORTHOGRAPHIC
-        // camera. Set in beginDeferredFrame, read by the passes that only make
-        // sense under a lens (DoF) and by the uploads that pack the projection
-        // for the shaders. Distinct from orthoSceneRendering_, which is the
-        // user's standing permission rather than this frame's projection.
-        bool orthoFrame_ = false;
+        // (orthoFrame_ moved to ViewContext — under multi-view the projection
+        //  kind is a property of the VIEW, not of the frame: a perspective
+        //  primary and an orthographic secondary coexist in one submission.
+        //  Distinct from orthoSceneRendering_, which is the user's standing
+        //  permission rather than any view's projection.)
 
         // Does THIS render() call mean "shade the scene through a parallel
         // projection"? Only a standalone one (nothing in flight) can — a second
@@ -3043,6 +3256,12 @@ namespace threepp {
         uint32_t gbufMsaaSamples_        = 1;
 
         explicit Impl(Canvas& c) : canvas(c), size(c.size()) {
+            // The PRIMARY view. Created before anything else touches a
+            // per-view resource, because view() dereferences curView_
+            // unconditionally — every createXxx below allocates into it.
+            views_.push_back(std::make_unique<ViewContext>());
+            curView_ = views_[0].get();
+
             ctx = std::make_unique<VulkanContext>(
                     static_cast<GLFWwindow*>(canvas.windowPtr()),
                     /*enableRayTracing*/ true,
@@ -3076,15 +3295,15 @@ namespace threepp {
             // TAA pipeline + images. The deferred shade's descriptor binding 1
             // (shade output target) always points at the TAA input view.
             imageCount_ = static_cast<uint32_t>(ctx->swapchainImages().size());
-            taa_ = std::make_unique<vulkan::TaaResolve>(
+            view().taa_ = std::make_unique<vulkan::TaaResolve>(
                     *ctx, cmdPool, imageCount_, kFramesInFlight);
             {
                 // TAA input is the deferred render extent; history +
                 // output are the swapchain extent. When they differ the
                 // resolve pass runs as a temporal upsampler.
                 const VkExtent2D inExt  = renderExtent();
-                const VkExtent2D outExt = ctx->swapchainExtent();
-                taa_->createImages(inExt.width, inExt.height,
+                const VkExtent2D outExt = viewOutExtent();
+                view().taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
 #if defined(THREEPP_WITH_DLSS)
@@ -3130,11 +3349,11 @@ namespace threepp {
             // HDR bloom pyramid. sceneHdr lives at the deferred render
             // extent (it is the shared set's binding 1 target); the bloom
             // pyramid levels are half that and below.
-            bloom_ = std::make_unique<vulkan::BloomPass>(*ctx, cmdPool, kFramesInFlight);
-            bloom_->createImages(renderExtent().width, renderExtent().height);
+            view().bloom_ = std::make_unique<vulkan::BloomPass>(*ctx, cmdPool, kFramesInFlight);
+            view().bloom_->createImages(renderExtent().width, renderExtent().height);
             onAfterBloomCreateImages();
             // Exposure/WB/tone-map/grade/sRGB composite → TAA input.
-            post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
+            view().post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
             // Thin-lens DoF (images/descriptors fitted in rewriteBloomDescriptors).
             dof_ = std::make_unique<vulkan::DofPass>(*ctx, cmdPool, kFramesInFlight);
             // Lens distortion + sensor noise, applied to the FINISHED frame at
@@ -3149,7 +3368,7 @@ namespace threepp {
             // up when the device supports VK_KHR_ray_query. Without it,
             // deferredShade_ stays null if ray query is unavailable.
             if (ctx->rayQuerySupported()) {
-                deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
+                view().deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
                 // Probe grid backs the deferred set's bindings 36/37 (dummy-
                 // free: real buffers from construction, sampling gated by the
                 // grid UBO's enable flag until setProbeGI(true)).
@@ -3348,7 +3567,17 @@ namespace threepp {
             }
             morphedMeshStates.clear();
 
-            for (auto& b : cameraUbos) destroyBuffer(ctx->allocator(), b);
+            // Per-view buffers/images: walk EVERY view, not just the current
+            // one. Loops here (rather than view().x) so adding a secondary
+            // view can never leak by forgetting to extend the destructor.
+            for (auto& vp : views_) {
+                for (auto& b : vp->cameraUbos)         destroyBuffer(ctx->allocator(), b);
+                for (auto& b : vp->rasterCameraUbos)   destroyBuffer(ctx->allocator(), b);
+                for (auto& b : vp->drawInfoBuffers)    destroyBuffer(ctx->allocator(), b);
+                for (auto& b : vp->indirectCmdBuffers) destroyBuffer(ctx->allocator(), b);
+                for (auto& img : vp->reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
+                for (auto& img : vp->reservoirWImagesPP)   destroyImage2D(ctx->allocator(), d, img);
+            }
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : clusterLightsBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : clusterGridBuffers) destroyBuffer(ctx->allocator(), b);
@@ -3368,8 +3597,6 @@ namespace threepp {
             destroyImage2D(ctx->allocator(), d, oceanFineHeightDummy);
             destroyImage2D(ctx->allocator(), d, oceanFoamDummy);
             destroyImage2D(ctx->allocator(), d, foamDetailImage);
-            for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
-            for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
             materialTextures.clear();
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
@@ -3403,15 +3630,15 @@ namespace threepp {
             // first render(); if render() was never called, all handles stay
             // VK_NULL_HANDLE and these calls become no-ops.
             destroyRasterGbufImages();
-            for (auto& b : rasterCameraUbos)    destroyBuffer(ctx->allocator(), b);
-            for (auto& b : drawInfoBuffers)     destroyBuffer(ctx->allocator(), b);
-            for (auto& b : indirectCmdBuffers)  destroyBuffer(ctx->allocator(), b);
+            // (rasterCameraUbos / drawInfoBuffers / indirectCmdBuffers are
+            //  freed in the per-view loop above, alongside the camera UBOs.)
             if (rasterGbufPipeline)         vkDestroyPipeline(d, rasterGbufPipeline, nullptr);
             if (rasterGbufIndirectPipeline) vkDestroyPipeline(d, rasterGbufIndirectPipeline, nullptr);
             if (rasterGbufDecalPipeline)    vkDestroyPipeline(d, rasterGbufDecalPipeline, nullptr);
             if (rasterPipelineLayout)   vkDestroyPipelineLayout(d, rasterPipelineLayout, nullptr);
             if (rasterDsLayout)         vkDestroyDescriptorSetLayout(d, rasterDsLayout, nullptr);
-            if (rasterDescPool)         vkDestroyDescriptorPool(d, rasterDescPool, nullptr);
+            for (auto& vp : views_)
+                if (vp->rasterDescPool) vkDestroyDescriptorPool(d, vp->rasterDescPool, nullptr);
             if (rasterGbufRenderPass)   vkDestroyRenderPass(d, rasterGbufRenderPass, nullptr);
             if (occlRenderPassA_)       vkDestroyRenderPass(d, occlRenderPassA_, nullptr);
             if (occlRenderPassB_)       vkDestroyRenderPass(d, occlRenderPassB_, nullptr);
@@ -3493,8 +3720,16 @@ namespace threepp {
             // Release the NGX feature + shut NGX down while the device is alive.
             dlss_.reset();
 #endif
-            // TAA resolve subsystem owns its pipeline/layout/sampler/images.
-            taa_.reset();
+            // Per-view passes own pipelines, layouts, samplers, descriptor
+            // pools and images, all of which need the device alive — so they
+            // are released HERE rather than left to ~ViewContext, which runs
+            // when views_ unwinds. Every view, not just the current one.
+            for (auto& vp : views_) {
+                vp->taa_.reset();
+                vp->post_.reset();
+                vp->bloom_.reset();
+                vp->deferredShade_.reset();
+            }
         }
 
         void createCommandResources();
@@ -7052,10 +7287,13 @@ namespace threepp {
 
         // Called once after bloom_->createImages(); wires sceneHdr views.
         void onAfterBloomCreateImages() {
-            if (!autoExposure_) return;
+            // Auto-exposure meters the PRIMARY's sceneHdr — it drives the
+            // display's exposure, and a secondary must not re-point it at its
+            // own (differently exposed, differently sized) image.
+            if (!autoExposure_ || view().secondary) return;
             VkImageView views[kFramesInFlight];
             for (uint32_t f = 0; f < kFramesInFlight; ++f)
-                views[f] = bloom_->sceneHdrView(f);
+                views[f] = view().bloom_->sceneHdrView(f);
             autoExposure_->rewriteDescriptors(views);
         }
 
@@ -7069,7 +7307,7 @@ namespace threepp {
                 autoExposure_->maxEV      = autoExpMaxEV_;
                 VkImageView views[kFramesInFlight];
                 for (uint32_t f = 0; f < kFramesInFlight; ++f)
-                    views[f] = bloom_->sceneHdrView(f);
+                    views[f] = view().bloom_->sceneHdrView(f);
                 autoExposure_->rewriteDescriptors(views);
             }
             // Physical camera: the EMA adapts an EV COMPENSATION around the
@@ -7174,6 +7412,40 @@ namespace threepp {
         // submit + present). Returns false on swapchain OUT_OF_DATE —
         // caller leaves state Idle.
         bool beginDeferredFrame(Object3D& scene, Camera& camera);
+
+        // ── Multi-view API (see ViewContext) ───────────────────────────────
+        // addView stands up a COMPLETE second deferred chain — G-buffer,
+        // history, camera UBOs, descriptor sets, its own TaaResolve /
+        // BloomPass / PostComposite / DeferredShade, and the colour target it
+        // resolves into. Eagerly, all of it: a view is a persistent object, so
+        // the cost is paid once here rather than as a stall on the frame that
+        // first happens to need it. Returns a handle, or 0 on failure.
+        //
+        // Views are NOT churned per frame. Adding one drains the device and
+        // allocates; rendering an existing one costs a second pass over the
+        // shared scene and nothing else.
+        uint32_t addViewImpl(Camera& camera, uint32_t width, uint32_t height);
+        bool     removeViewImpl(uint32_t handle);
+        bool     setViewCameraImpl(uint32_t handle, Camera& camera);
+        ViewContext* findView(uint32_t handle);
+        // Allocate / free everything a SECONDARY view owns. Both assume the
+        // device is idle.
+        void createSecondaryViewResources(ViewContext& v);
+        void destroySecondaryViewResources(ViewContext& v);
+        // Drain, then service every view marked pendingCreate / pendingDestroy.
+        // Called at the frame boundary; a no-op (and harmlessly retried next
+        // frame) until the shared render pass exists.
+        void applyPendingViewChanges();
+        bool pendingViewChanges_ = false;
+        // Record every secondary view's chain into the already-open frame
+        // command buffer, after the primary has been recorded. Shares the
+        // frame's TLAS/BLAS, lights, materials and textures; re-runs only what
+        // is genuinely per-camera.
+        void recordSecondaryViews(VkCommandBuffer cb);
+        // Copy a secondary view's finished colour target to host memory as
+        // tightly-packed RGB8, top-down (matching readRGBPixels — the Vulkan
+        // readback is already top-down and must NOT be flipped).
+        std::vector<unsigned char> readViewPixelsImpl(uint32_t handle);
 
         // Ortho-only frame start: no deferred render, no per-frame uploads.
         // Acquires the swap image, opens the cmd buffer, and clears the

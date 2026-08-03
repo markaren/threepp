@@ -107,7 +107,7 @@ namespace threepp {
         // analytic split (all point/spot lights, no 8-per-type cap).
         // Barrier: cull's grid writes → shade's reads (compute→compute).
         if (clusterLightCountThisFrame_ > 0) {
-            deferredShade_->recordClusterBuild(cb, currentFrame,
+            view().deferredShade_->recordClusterBuild(cb, currentFrame,
                                                clusterLightCountThisFrame_,
                                                regionRenderExt_.width, regionRenderExt_.height);
             VkMemoryBarrier2 cbar{};
@@ -128,7 +128,7 @@ namespace threepp {
         // passes; the barrier makes its write visible to their sampled reads.
         // Only when clouds are on (off = free / image-identical).
         if (cloudsEnabled_) {
-            deferredShade_->recordCloudShadow(cb, currentFrame, sampleIndex);
+            view().deferredShade_->recordCloudShadow(cb, currentFrame, sampleIndex);
             VkMemoryBarrier2 csBar{};
             csBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
             csBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -161,11 +161,11 @@ namespace threepp {
                                    clusterLightCountThisFrame_ > 0;
         if (froxelsActive) {
             gpuTimings_->begin(cb, TP_Froxel, currentFrame);
-            deferredShade_->recordFroxels(cb, currentFrame,
+            view().deferredShade_->recordFroxels(cb, currentFrame,
                                           regionRenderExt_.width, regionRenderExt_.height,
                                           deferredVolFog_, deferredVolDensity_, deferredVolAniso_,
                                           sampleIndex,
-                                          deferredCamDeltaLen_, deferredCamRotAngle_,
+                                          view().deferredCamDeltaLen_, deferredCamRotAngle_,
                                           clusterLightCountThisFrame_);
             gpuTimings_->end(cb, TP_Froxel, currentFrame);
             VkMemoryBarrier2 fbar{};
@@ -189,10 +189,10 @@ namespace threepp {
         // makes its cloudColor + cloudAux writes visible to the shade's
         // depth-aware upsample.
         if (cloudsEnabled_) {
-            deferredShade_->recordCloudMarch(cb, currentFrame,
+            view().deferredShade_->recordCloudMarch(cb, currentFrame,
                                              regionRenderExt_.width, regionRenderExt_.height,
                                              envImage.mipLevels, sampleIndex,
-                                             deferredCamDeltaLen_, deferredCamRotAngle_);
+                                             view().deferredCamDeltaLen_, deferredCamRotAngle_);
             VkMemoryBarrier2 cldBar{};
             cldBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
             cldBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -223,7 +223,7 @@ namespace threepp {
         shadeParams.volDensity         = deferredVolDensity_;
         shadeParams.volAniso           = deferredVolAniso_;
         shadeParams.starIntensity      = deferredStarIntensity_;
-        shadeParams.camDeltaLen        = deferredCamDeltaLen_;
+        shadeParams.camDeltaLen        = view().deferredCamDeltaLen_;
         shadeParams.camRotAngle        = deferredCamRotAngle_;
         shadeParams.timeSec            = static_cast<float>(glfwGetTime());
         shadeParams.sunTanHalfAngle    = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
@@ -236,7 +236,7 @@ namespace threepp {
         shadeParams.bgIsSolidColor     = envIsBgColor;
 
         gpuTimings_->begin(cb, TP_DeferredShade, currentFrame);
-        deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
+        view().deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
         gpuTimings_->end(cb, TP_DeferredShade, currentFrame);// pathTraceMs = deferred SHADE only
 
         // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
@@ -267,7 +267,7 @@ namespace threepp {
             shadeParams.shadeMode    = 1u;
             shadeParams.shadeBActive = true;
             gpuTimings_->begin(cb, TP_ShadeB, currentFrame);
-            deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
+            view().deferredShade_->recordDispatch(cb, currentFrame, shadeParams);
             gpuTimings_->end(cb, TP_ShadeB, currentFrame);
 
             // Dispatch B's outImage write -> bloom/composite's read.
@@ -303,7 +303,7 @@ namespace threepp {
             denoiseDep.pMemoryBarriers = &denoiseBar;
             vkCmdPipelineBarrier2(cb, &denoiseDep);
             gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
-            deferredShade_->recordFilterAndComposite(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
+            view().deferredShade_->recordFilterAndComposite(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
                                                      gbufMsaaSamples_, shadeBActive, preExpBits_);
             gpuTimings_->end(cb, TP_Denoise, currentFrame);
         }
@@ -352,7 +352,7 @@ namespace threepp {
             preDep.pMemoryBarriers    = &preBar;
             vkCmdPipelineBarrier2(cb, &preDep);
 
-            deferredShade_->recordParticleLight(
+            view().deferredShade_->recordParticleLight(
                     cb, currentFrame, particleIoDescSets_[currentFrame],
                     particleLightCount_, /*centerBase=*/0u,
                     clusterLightCountThisFrame_, froxelsActive,
@@ -751,6 +751,33 @@ namespace threepp {
         return rgb;
     }
 
+    uint32_t VulkanRenderer::addView(Camera& camera, int width, int height) {
+        if (width <= 0 || height <= 0) return 0u;
+        return core()->addViewImpl(camera,
+                                   static_cast<uint32_t>(width),
+                                   static_cast<uint32_t>(height));
+    }
+
+    bool VulkanRenderer::removeView(uint32_t handle) {
+        return core()->removeViewImpl(handle);
+    }
+
+    bool VulkanRenderer::setViewCamera(uint32_t handle, Camera& camera) {
+        return core()->setViewCameraImpl(handle, camera);
+    }
+
+    std::vector<unsigned char> VulkanRenderer::readViewRGBPixels(uint32_t handle) {
+        return core()->readViewPixelsImpl(handle);
+    }
+
+    bool VulkanRenderer::viewSize(uint32_t handle, int& width, int& height) const {
+        auto* v = const_cast<Impl*>(core())->findView(handle);
+        if (!v) return false;
+        width  = static_cast<int>(v->outExt.width);
+        height = static_cast<int>(v->outExt.height);
+        return true;
+    }
+
     void VulkanRenderer::setSceneCaptureEnabled(bool enabled) {
         // Scene capture copies the mid-frame swapchain image into a staging
         // buffer (recordSceneCapture) — same TRANSFER_SRC precondition as
@@ -876,6 +903,14 @@ namespace threepp {
     }// namespace
 
     bool VulkanRenderer::readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
+                                        int& width, int& height, int& bytesPerPixel) {
+        // Handle 0 is the primary — the whole body below is view-agnostic
+        // apart from which G-buffer it reads.
+        return readViewGBufferAOV(0u, aov, out, width, height, bytesPerPixel);
+    }
+
+    bool VulkanRenderer::readViewGBufferAOV(uint32_t viewHandle, GBufferAOV aov,
+                                            std::vector<uint8_t>& out,
                                             int& width, int& height, int& bytesPerPixel) {
         auto& impl = *core();
         auto* ctx  = impl.ctx.get();
@@ -896,9 +931,16 @@ namespace threepp {
         // endFrame advances currentFrame after recording (VulkanCoreImpl.hpp),
         // so the freshest attachment contents are (currentFrame - 1) mod N —
         // the same slot arithmetic the fog history uses.
-        const uint32_t n    = static_cast<uint32_t>(impl.rasterGbufs.size());
+        // Which view's G-buffer. 0 = the primary; anything else must name a
+        // live secondary, and a stale handle answers false rather than
+        // silently falling back to the primary — a segmentation dataset
+        // labelled with the wrong camera is worse than a missing frame.
+        auto* src = viewHandle == 0u ? &impl.primaryView() : impl.findView(viewHandle);
+        if (!src || src->rasterGbufs[0].width == 0) return false;
+
+        const uint32_t n    = static_cast<uint32_t>(src->rasterGbufs.size());
         const uint32_t slot = (impl.currentFrame + n - 1u) % n;
-        const auto& g       = impl.rasterGbufs[slot];
+        const auto& g       = src->rasterGbufs[slot];
 
         // Select the attachment, its aspect, and the layout it rests in after a
         // frame (the raster render pass' finalLayout; the MSAA resolve leaves the
@@ -1498,7 +1540,7 @@ namespace threepp {
     void VulkanRenderer::setWhiteBalance(float temperatureK, float tint) {
         core()->wbTemperatureK_ = temperatureK;
         core()->wbTint_ = tint;
-        if (core()->post_) core()->post_->setWhiteBalance(temperatureK, tint);
+        if (core()->primaryView().post_) core()->primaryView().post_->setWhiteBalance(temperatureK, tint);
     }
 
     std::pair<float, float> VulkanRenderer::whiteBalance() const {
@@ -1506,14 +1548,14 @@ namespace threepp {
     }
 
     void VulkanRenderer::setColorGrade(const ColorGrade& grade) {
-        if (!core()->post_) return;
+        if (!core()->primaryView().post_) return;
         vulkan::PostComposite::ColorGrade g;
         g.lift[0]  = grade.lift.x;  g.lift[1]  = grade.lift.y;  g.lift[2]  = grade.lift.z;
         g.gamma[0] = grade.gamma.x; g.gamma[1] = grade.gamma.y; g.gamma[2] = grade.gamma.z;
         g.gain[0]  = grade.gain.x;  g.gain[1]  = grade.gain.y;  g.gain[2]  = grade.gain.z;
         g.saturation = grade.saturation;
         g.contrast   = grade.contrast;
-        core()->post_->setColorGrade(g);
+        core()->primaryView().post_->setColorGrade(g);
     }
 
     void VulkanRenderer::setFireflyClamp(float cap) {

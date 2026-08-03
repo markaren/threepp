@@ -117,13 +117,13 @@ void VulkanRenderer::Impl::createReservoirImages() {
             // reservoir images are sized to the resolution the deferred shade
             // launches at. Equal to the swapchain extent unless renderScale_ < 1.
             const VkExtent2D ext = renderExtent();
-            for (size_t i = 0; i < reservoirPosImagesPP.size(); ++i) {
-                reservoirPosImagesPP[i] = createStorageImage2D(
+            for (size_t i = 0; i < view().reservoirPosImagesPP.size(); ++i) {
+                view().reservoirPosImagesPP[i] = createStorageImage2D(
                         ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
                         0, i == 0 ? "reservoirPosImagePP[0]" : "reservoirPosImagePP[1]");
             }
-            for (size_t i = 0; i < reservoirWImagesPP.size(); ++i) {
-                reservoirWImagesPP[i] = createStorageImage2D(
+            for (size_t i = 0; i < view().reservoirWImagesPP.size(); ++i) {
+                view().reservoirWImagesPP[i] = createStorageImage2D(
                         ext.width, ext.height, VK_FORMAT_R16G16B16A16_SFLOAT,
                         0, i == 0 ? "reservoirWImagePP[0]" : "reservoirWImagePP[1]");
             }
@@ -132,13 +132,13 @@ void VulkanRenderer::Impl::createReservoirImages() {
             // sees M=0 (no prior history) instead of garbage.
             clearGbufImages();
             sampleIndex = 0;
-            prevCameraValid = false;
+            view().prevCameraValid = false;
             prevWorldMats.clear();
         }
 
 void VulkanRenderer::Impl::resetAccumulation() {
             sampleIndex = 0;
-            prevCameraValid = false;
+            view().prevCameraValid = false;
             prevWorldMats.clear();
 #if defined(THREEPP_WITH_FSR)
             fsrResetNext_ = true;// FSR treats the next dispatch as a camera cut
@@ -308,8 +308,8 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
             // known-idle point is the natural place, and it keeps the queue from
             // growing unbounded if the app spams resizes). Safe: device idle.
             flushRetireQueue();
-            for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
-            for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            for (auto& img : view().reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            for (auto& img : view().reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             createReservoirImages();// reallocates the reservoir images + clears them
             // Resize hybrid raster attachments BEFORE descriptor rewrites —
             // bindings point at rasterGbufs[f].*.view, so stale views from the
@@ -323,8 +323,8 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
                 // swapchain extent. When they differ the resolve pass runs as
                 // a temporal upsampler.
                 const VkExtent2D inExt  = renderExtent();
-                const VkExtent2D outExt = ctx->swapchainExtent();
-                taa_->createImages(inExt.width, inExt.height,
+                const VkExtent2D outExt = viewOutExtent();
+                view().taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
 #if defined(THREEPP_WITH_FSR)
@@ -363,7 +363,7 @@ void VulkanRenderer::Impl::reallocateRenderExtentResources() {
                 }
             }
 #endif
-            bloom_->createImages(renderExtent().width, renderExtent().height);
+            view().bloom_->createImages(renderExtent().width, renderExtent().height);
             onAfterBloomCreateImages();
             // TAA descriptor sets are persistent (pool lives inside TaaResolve);
             // just rewrite them to the new image / view handles.
@@ -422,7 +422,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // Which projection this frame shades through. Read by the uploads
             // (parallel-ray packing, jitter placement) and by DoF, which has no
             // meaning without a lens. Stamped before the first upload below.
-            orthoFrame_ = camera.is<OrthographicCamera>();
+            view().orthoFrame_ = camera.is<OrthographicCamera>();
 
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
@@ -442,7 +442,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // pool / clear images — both unsafe with an open cmd buffer in the
             // prior frame. We're past the fence wait now so the GPU is idle for
             // *this* slot at minimum; vkDeviceWaitIdle below drains the rest.
-            if (pendingRenderScaleRealloc_ || pendingAccumulationReset_) {
+            if (pendingRenderScaleRealloc_ || pendingAccumulationReset_ || pendingViewChanges_) {
                 vkDeviceWaitIdle(d);
                 if (pendingRenderScaleRealloc_) {
                     reallocateRenderExtentResources();// also rewrites deferred descriptors
@@ -452,6 +452,9 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                     clearGbufImages();
                     pendingAccumulationReset_ = false;
                 }
+                // Views added / removed since the last frame. Same reasoning as
+                // the two above: the caller asked mid-frame, we act here.
+                if (pendingViewChanges_) applyPendingViewChanges();
             }
 
             uint32_t imageIndex = 0;
@@ -546,8 +549,8 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             if (buildAndUploadEmissiveTris(currentFrame, lastVisibleEntries_)) {
                 // Keep the deferred pass's emissive binding fresh when the
                 // per-frame buffer grows.
-                if (deferredShade_) {
-                    deferredShade_->rewriteEmissive(currentFrame,
+                if (view().deferredShade_) {
+                    view().deferredShade_->rewriteEmissive(currentFrame,
                                                     emissiveTriBuffers[currentFrame].handle);
                     probeGI_->rewriteEmissive(currentFrame,
                                               emissiveTriBuffers[currentFrame].handle);
@@ -591,6 +594,15 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // Record the full deferred-render body into the now-open cmd
             // buffer. Leaves the swapchain image in GENERAL.
             recordCommandBuffer(cmdBuffers[currentFrame], imageIndex);
+
+            // Every secondary view, into the SAME command buffer and therefore
+            // the same submission. They share this frame's TLAS/BLAS, lights,
+            // materials and textures — only the genuinely per-camera work is
+            // repeated. Placed after the primary so the shared scene is fully
+            // built and its barriers are already in the stream, and before the
+            // capture / event-camera / overlay tail, all of which are the
+            // primary's alone.
+            recordSecondaryViews(cmdBuffers[currentFrame]);
 
             // Scene-only swapchain capture. Runs BEFORE the sprite + ImGui
             // overlays composite — sensor pipelines that consume the
@@ -861,7 +873,7 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                                                         renderExtent().height);
                             endAndSubmitOneShot(initCb, "DLSS feature self-heal recreate");
                             dlssResetNext_ = true;
-                            if (taa_) taa_->invalidateHistory();
+                            if (view().taa_) view().taa_->invalidateHistory();
                         } else {
                             dlssActive_ = false;// give up until the next resize
                             std::fprintf(stderr,
@@ -922,6 +934,359 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
             // present still completes from endFrame().
             overlayPass_->record(cmdBuffers[currentFrame], currentFrame, frameImageIndex_,
                                  scene, camera, /*screenSpaceOnly=*/false);
+        }
+
+// ── Multi-view: lifecycle ───────────────────────────────────────────────────
+//
+// A view is a persistent object. Everything it needs is allocated once, here,
+// behind a device drain; from then on rendering it is just a second pass over
+// the frame's already-built scene. Nothing in the per-frame path adds, removes
+// or resizes a view — this codebase has been bitten before by per-frame churn
+// of GPU-visible lists (a rebuild + vkDeviceWaitIdle every frame), and the
+// whole point of persistent views is to never go near that.
+
+VulkanRenderer::Impl::ViewContext* VulkanRenderer::Impl::findView(uint32_t handle) {
+            for (auto& v : views_) {
+                if (v->id != handle) continue;
+                // A view awaiting its deferred free is already GONE as far as
+                // the public API is concerned. The caller asked for it to be
+                // removed; that its memory is released at the next frame
+                // boundary is an implementation detail, and letting a readback
+                // through in the meantime would hand back labels for a camera
+                // the caller believes no longer exists.
+                return v->pendingDestroy ? nullptr : v.get();
+            }
+            return nullptr;
+        }
+
+void VulkanRenderer::Impl::createSecondaryViewResources(ViewContext& v) {
+            // Runs with curView_ pointed at `v`, so every createXxx / rewriteXxx
+            // below — all of which were made view-relative in the ViewContext
+            // extraction — allocates into this view without knowing it exists.
+            // That is the payoff of the extraction: the setup sequence here is
+            // the same one the primary runs in the constructor.
+            ViewContext* saved = curView_;
+            curView_ = &v;
+
+            const VkDeviceSize before = vmaAllocatedBytes();
+
+            // Colour target: the "swapchain of one" this view's TaaResolve
+            // resolves into. Swapchain FORMAT so the entire post/TAA tail
+            // writes it exactly as it writes the real swapchain (the shader
+            // does its own sRGB encode into a UNORM image — a _SRGB image here
+            // would double-encode). GENERAL layout from creation and forever:
+            // TAA imageStores it, the readback copies it, nothing else touches
+            // it, so there is no transition to get wrong.
+            v.colorTarget = createStorageImage2D(
+                    v.outExt.width, v.outExt.height, ctx->swapchainFormat(),
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    "viewColorTarget");
+            // Host-visible landing buffer, allocated with the view rather than
+            // per readback, so reading a camera never allocates mid-frame.
+            const VkDeviceSize rbBytes =
+                    static_cast<VkDeviceSize>(v.outExt.width) * v.outExt.height * 4u;
+            v.readbackBuf = createBuffer(
+                    ctx->allocator(), ctx->device(), rbBytes,
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+            // Camera UBO ring + the ReSTIR reservoir pair, both at this view's
+            // render extent.
+            createCameraUbos();
+            createReservoirImages();
+
+            // G-buffer, raster camera UBOs, raster descriptor pool + sets — all
+            // sized from renderExtent(), which now answers with v.renderExt.
+            ensureHybridResources();
+
+            // This view's own post chain. TaaResolve gets imageCount = 1: its
+            // "swapchain" is v.colorTarget, and recordResolve is always called
+            // with imageIndex 0. Native-res by scope, so in and out extents are
+            // equal and the resolve is a plain 1:1 temporal filter — no
+            // upsampling, and no FSR/DLSS (secondaries never take those paths).
+            v.taa_ = std::make_unique<vulkan::TaaResolve>(*ctx, cmdPool, 1u, kFramesInFlight);
+            v.taa_->createImages(v.renderExt.width, v.renderExt.height,
+                                 v.outExt.width, v.outExt.height);
+            v.bloom_ = std::make_unique<vulkan::BloomPass>(*ctx, cmdPool, kFramesInFlight);
+            v.bloom_->createImages(v.renderExt.width, v.renderExt.height);
+            v.post_ = std::make_unique<vulkan::PostComposite>(*ctx, cmdPool, kFramesInFlight);
+            if (ctx->rayQuerySupported()) {
+                v.deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
+            }
+
+            // Descriptor sets. Per-view objects, so these writes cannot touch
+            // anything the primary might have in flight.
+            rewriteTaaDescriptors();
+            rewriteBloomDescriptors();
+            rewriteDeferredDescriptors();
+
+            v.allocatedBytes = vmaAllocatedBytes() - before;
+            curView_ = saved;
+        }
+
+void VulkanRenderer::Impl::destroySecondaryViewResources(ViewContext& v) {
+            VkDevice d = ctx->device();
+            // Passes first, while the device is alive — they own pipelines,
+            // pools, samplers and images of their own.
+            v.taa_.reset();
+            v.post_.reset();
+            v.bloom_.reset();
+            v.deferredShade_.reset();
+
+            ViewContext* saved = curView_;
+            curView_ = &v;
+            destroyRasterGbufImages();
+            curView_ = saved;
+
+            for (auto& b : v.cameraUbos)         destroyBuffer(ctx->allocator(), b);
+            for (auto& b : v.rasterCameraUbos)   destroyBuffer(ctx->allocator(), b);
+            for (auto& b : v.drawInfoBuffers)    destroyBuffer(ctx->allocator(), b);
+            for (auto& b : v.indirectCmdBuffers) destroyBuffer(ctx->allocator(), b);
+            for (auto& i : v.reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, i);
+            for (auto& i : v.reservoirWImagesPP)   destroyImage2D(ctx->allocator(), d, i);
+            destroyImage2D(ctx->allocator(), d, v.colorTarget);
+            destroyBuffer(ctx->allocator(), v.readbackBuf);
+            // One pool destroy frees every set allocated from it.
+            if (v.rasterDescPool) vkDestroyDescriptorPool(d, v.rasterDescPool, nullptr);
+            v.rasterDescPool = VK_NULL_HANDLE;
+        }
+
+void VulkanRenderer::Impl::applyPendingViewChanges() {
+            // The shared render pass and pipelines are built during the first
+            // render(). A view registered before then simply waits — the flag
+            // stays set and this runs again next frame.
+            if (rasterGbufRenderPass == VK_NULL_HANDLE) return;
+
+            // Destroys first, so a remove+add in the same gap frees before it
+            // allocates rather than peaking at both.
+            for (size_t i = views_.size(); i-- > 1;) {
+                if (!views_[i]->pendingDestroy) continue;
+                // Re-anchor BEFORE destroying: curView_ may still point at the
+                // view whose storage is about to go away.
+                curView_ = views_[0].get();
+                if (!views_[i]->pendingCreate)// never got its resources
+                    destroySecondaryViewResources(*views_[i]);
+                views_.erase(views_.begin() + static_cast<long>(i));
+            }
+            for (auto& v : views_) {
+                if (!v->pendingCreate) continue;
+                v->pendingCreate = false;
+                createSecondaryViewResources(*v);
+                std::fprintf(stderr, "[threepp] view %u: %ux%u, %.1f MB\n",
+                             v->id, v->outExt.width, v->outExt.height,
+                             static_cast<double>(v->allocatedBytes) / (1024.0 * 1024.0));
+            }
+            curView_ = views_[0].get();
+            pendingViewChanges_ = false;
+        }
+
+uint32_t VulkanRenderer::Impl::addViewImpl(Camera& camera, uint32_t width, uint32_t height) {
+            if (width == 0u || height == 0u) return 0u;
+
+            auto v           = std::make_unique<ViewContext>();
+            v->secondary     = true;
+            v->id            = nextViewId_++;
+            v->renderExt     = {width, height};
+            v->outExt        = {width, height};
+            v->camera        = &camera;
+            v->cameraUuid    = camera.uuid;
+            v->pendingCreate = true;
+
+            const uint32_t id = v->id;
+            views_.push_back(std::move(v));
+            pendingViewChanges_ = true;
+            return id;
+        }
+
+bool VulkanRenderer::Impl::removeViewImpl(uint32_t handle) {
+            if (handle == 0u) return false;// 0 is the primary; it is not removable
+            for (size_t i = 1; i < views_.size(); ++i) {
+                if (views_[i]->id != handle || views_[i]->pendingDestroy) continue;
+                views_[i]->pendingDestroy = true;
+                pendingViewChanges_       = true;
+                return true;
+            }
+            return false;
+        }
+
+bool VulkanRenderer::Impl::setViewCameraImpl(uint32_t handle, Camera& camera) {
+            ViewContext* v = findView(handle);
+            if (!v || !v->secondary) return false;
+            // A different camera is a CUT, not a move: its history describes a
+            // viewpoint that no longer exists. Drop it rather than reproject
+            // across the discontinuity. Compared by uuid, never by pointer —
+            // pointers get recycled here, and a recycled Camera* landing on the
+            // same address would inherit the previous camera's history.
+            if (v->cameraUuid != camera.uuid) {
+                v->prevCameraValid        = false;
+                v->rasterPrevVPValid_     = false;
+                v->rasterPrevJitterValid_ = false;
+                v->deferredCamPrevValid_  = false;
+                if (v->taa_) v->taa_->invalidateHistory();
+            }
+            v->camera     = &camera;
+            v->cameraUuid = camera.uuid;
+            return true;
+        }
+
+// ── Multi-view: per-frame recording ─────────────────────────────────────────
+
+void VulkanRenderer::Impl::recordSecondaryViews(VkCommandBuffer cb) {
+            if (views_.size() < 2u) return;
+
+            // Saved so the frame ends exactly where the primary left it. The
+            // pane region is primary state (split-screen scissor); a secondary
+            // always renders full-frame into its own target.
+            const VkExtent2D savedRegionRender = regionRenderExt_;
+            const VkExtent2D savedRegionSwap   = regionSwapExt_;
+            const int32_t    savedDstX         = regionDstX_;
+            const int32_t    savedDstY         = regionDstY_;
+
+            // One query pool per frame-in-flight, one slot pair per pass — a
+            // secondary re-running those passes into the same command buffer
+            // would overwrite timestamps the primary already wrote. Record
+            // silently; lastFrameTimings() stays the primary's.
+            gpuTimings_->setSuppressed(true);
+
+            for (size_t i = 1; i < views_.size(); ++i) {
+                ViewContext& v = *views_[i];
+                // pendingCreate → no resources yet; pendingDestroy → going away
+                // at the next frame boundary, so don't spend a frame on it.
+                if (v.pendingCreate || v.pendingDestroy) continue;
+                if (!v.camera || !v.taa_ || !v.deferredShade_) continue;
+
+                curView_ = &v;
+                Camera& cam = *v.camera;
+
+                // Full-frame into this view's own target: no pane offset.
+                regionRenderExt_ = v.renderExt;
+                regionSwapExt_   = v.outExt;
+                regionDstX_      = 0;
+                regionDstY_      = 0;
+
+                // Per-camera CPU work. Everything world-space — the TLAS/BLAS
+                // build, deformers, lights, materials, motion matrices, the
+                // emissive CDF — was already done once for this frame by the
+                // primary and is deliberately NOT repeated.
+                cam.updateMatrixWorld(true);
+                v.orthoFrame_ = cam.is<OrthographicCamera>();
+                updateCameraUbo(currentFrame, cam);
+                cullEntriesAgainstFrustum(cam);
+                uploadRasterCameraUbo(currentFrame, cam);
+                buildIndirectDrawData(currentFrame);
+                // Sizes/creates this view's G-buffer on the first frame and is
+                // a cheap no-op after (the extent never changes for a view).
+                ensureHybridResources();
+
+                // G-buffer. imageIndex is meaningless here — a secondary never
+                // touches the swapchain — and the debug-blit early-out it feeds
+                // is a primary-only path, gated below.
+                recordGbufferStage(cb, 0u);
+
+                const VkExtent2D ext   = v.outExt;
+                const VkExtent2D ptExt = v.renderExt;
+                const float exposure   = currentExposure();
+                uint32_t exposureBits;
+                std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
+                const float preExp = preExposure();
+
+                recordSceneDispatch(cb, currentFrame, ext, ptExt, exposureBits);
+
+                // Built-in TAA tail only — no DLSS, no FSR, no DoF, no overlay,
+                // no lens/sensor stage. All of those are primary-only by scope,
+                // and recordUpscaleAndPost would branch into them, so the three
+                // passes a secondary does need are recorded directly.
+                const float effBloomIntensity =
+                        bloomIntensity_ / static_cast<float>(std::max(v.bloom_->levels(), 1u));
+                v.bloom_->recordPyramid(cb, currentFrame, ptExt.width, ptExt.height,
+                                        bloomIntensity_, bloomThreshold_, bloomClamp_);
+                v.post_->recordDispatch(cb, currentFrame, ptExt.width, ptExt.height,
+                                        static_cast<uint32_t>(toneMapping_),
+                                        exposureBits, preExpBits_, envIsBgColor,
+                                        effBloomIntensity);
+                // imageIndex 0: this view's TaaResolve was built against a
+                // one-image "swapchain" that is v.colorTarget.
+                v.taa_->recordResolve(cb, currentFrame, /*imageIndex=*/0u,
+                                      ptExt.width, ptExt.height,
+                                      ext.width, ext.height,
+                                      taaBlendAlpha_, 1.0f,
+                                      /*sharpen=*/false, 0.f,
+                                      v.taaSkyReproj_.data(),
+                                      0u, 0u,
+                                      ptExt.width, ptExt.height, ext.width, ext.height,
+                                      v.taaDepthLin_.data(), /*mblurShutter=*/0.f,
+                                      v.taaJitterTexels_[0], v.taaJitterTexels_[1]);
+            }
+
+            gpuTimings_->setSuppressed(false);
+            regionRenderExt_ = savedRegionRender;
+            regionSwapExt_   = savedRegionSwap;
+            regionDstX_      = savedDstX;
+            regionDstY_      = savedDstY;
+            curView_         = views_[0].get();
+        }
+
+std::vector<unsigned char> VulkanRenderer::Impl::readViewPixelsImpl(uint32_t handle) {
+            ViewContext* v = findView(handle);
+            if (!v || !v->secondary || v->colorTarget.image == VK_NULL_HANDLE) return {};
+
+            const uint32_t w = v->outExt.width, h = v->outExt.height;
+            const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4u;
+
+            // The view's target is written by the frame's own submission; wait
+            // for it rather than racing. Same trade-off readRGBPixels makes.
+            vkDeviceWaitIdle(ctx->device());
+
+            VkCommandBuffer cb = beginOneShot();
+            // colorTarget lives in GENERAL permanently (see its creation), so
+            // the copy needs no layout change — only a visibility barrier from
+            // the TAA store.
+            VkImageMemoryBarrier2 b{};
+            b.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            b.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            b.dstStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+            b.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+            b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image         = v->colorTarget.image;
+            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.levelCount = 1;
+            b.subresourceRange.layerCount = 1;
+            VkDependencyInfo dep{};
+            dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dep.imageMemoryBarrierCount = 1;
+            dep.pImageMemoryBarriers    = &b;
+            vkCmdPipelineBarrier2(cb, &dep);
+
+            VkBufferImageCopy region{};
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent                 = {w, h, 1};
+            vkCmdCopyImageToBuffer(cb, v->colorTarget.image, VK_IMAGE_LAYOUT_GENERAL,
+                                   v->readbackBuf.handle, 1, &region);
+            endAndSubmitOneShot(cb, "readViewRGBPixels");
+
+            // BGRA8_UNORM → tightly packed RGB8. NO vertical flip: the Vulkan
+            // readback is already top-down, exactly like readRGBPixels.
+            std::vector<unsigned char> rgb(static_cast<size_t>(w) * h * 3u);
+            void* mapped = nullptr;
+            check(vmaMapMemory(ctx->allocator(), v->readbackBuf.alloc, &mapped),
+                  "vmaMapMemory(readViewRGBPixels)");
+            invalidateHostReads(ctx->allocator(), v->readbackBuf.alloc, 0, bytes);
+            const auto* src = static_cast<const unsigned char*>(mapped);
+            const size_t px = static_cast<size_t>(w) * h;
+            for (size_t i = 0; i < px; ++i) {
+                rgb[i * 3 + 0] = src[i * 4 + 2];
+                rgb[i * 3 + 1] = src[i * 4 + 1];
+                rgb[i * 3 + 2] = src[i * 4 + 0];
+            }
+            vmaUnmapMemory(ctx->allocator(), v->readbackBuf.alloc);
+            return rgb;
         }
 
 }// namespace threepp
