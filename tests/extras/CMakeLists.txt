@@ -26,6 +26,7 @@ add_test_executable(VisionSensor_test)
 if (NOT TARGET unofficial::omniverse-physx-sdk::sdk)
     find_package(unofficial-omniverse-physx-sdk CONFIG QUIET)
 endif ()
+threepp_fix_physx_static_link_order()
 
 if (TARGET unofficial::omniverse-physx-sdk::sdk)
     foreach (name Imu_test JointEncoder_test ContactSensor_test ForceTorqueSensor_test EditorPhysicsPlay_test EditorArticulationPlay_test EditorJointPlay_test EditorVehiclePlay_test EditorSensorPlay_test SoftBody_test EditorConveyor_test PhysxWorld_test)

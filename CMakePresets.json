@@ -139,6 +139,16 @@
       }
     },
     {
+      "name": "ci-linux-physx",
+      "inherits": "ci-linux",
+      "displayName": "CI: Linux, GL + PhysX via vcpkg",
+      "description": "What the Linux CI job configures. As 'ci-linux', plus the vcpkg 'physx' feature, which is what makes CMake build the PhysX-backed test executables (sensors, play sessions, joints, vehicles, conveyors) and the PhysX example directories instead of skipping them. Needs VCPKG_ROOT in the environment — 'ci-linux' remains the vcpkg-free configuration, and the sanitizer preset still inherits that one. The feature pulls in v-hacd too, which is what enables EditorConvexDecomp_test.",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_MANIFEST_FEATURES": "physx;external-glfw"
+      }
+    },
+    {
       "name": "ci-windows",
       "inherits": [
         "gl",
@@ -240,6 +250,11 @@
       "configuration": "Release"
     },
     {
+      "name": "ci-linux-physx",
+      "configurePreset": "ci-linux-physx",
+      "configuration": "Release"
+    },
+    {
       "name": "ci-windows",
       "configurePreset": "ci-windows",
       "configuration": "Release"
@@ -304,6 +319,12 @@
       "name": "ci-linux-no-glfw",
       "inherits": "base",
       "configurePreset": "ci-linux-no-glfw",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-linux-physx",
+      "inherits": "base",
+      "configurePreset": "ci-linux-physx",
       "configuration": "Release"
     },
     {
