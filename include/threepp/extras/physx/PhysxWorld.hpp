@@ -557,6 +557,25 @@ namespace threepp {
             // branches on enableGpuDynamics.
             if (settings_.enableDirectGpu) settings_.enableGpuDynamics = true;
 
+            // Everything from here on can throw (most likely the CUDA context on a
+            // machine without a CUDA GPU). A throwing constructor never runs the
+            // destructor, and PxFoundation is one-instance-per-process — leak it and
+            // every later PhysxWorld in the process dies with "Foundation object
+            // exists already". So a failed construction tears down exactly what it
+            // managed to build, via the same releaseCore() the destructor uses.
+            try {
+                constructCore();
+            } catch (...) {
+                releaseCore();
+                throw;
+            }
+        }
+
+    private:
+        void constructCore() {
+
+            using namespace ::physx;
+
             foundation_ = PxCreateFoundation(PX_PHYSICS_VERSION, allocator_, errorCallback_);
             if (!foundation_) throw std::runtime_error("PxCreateFoundation failed");
 
@@ -568,6 +587,7 @@ namespace threepp {
             if (!PxInitExtensions(*physics_, nullptr)) {
                 throw std::runtime_error("PxInitExtensions failed");
             }
+            extensionsInitialized_ = true;
 
             if (settings_.enableGpuDynamics) {
                 PxCudaContextManagerDesc cudaDesc;
@@ -630,6 +650,40 @@ namespace threepp {
             defaultMat_ = physics_->createMaterial(0.5f, 0.5f, 0.2f);
         }
 
+        // The tail of ~PhysxWorld, shared with the constructor's failure path.
+        // Safe to call on a partially-built world: every branch checks what it
+        // releases, and PxCloseExtensions only runs if PxInitExtensions ran.
+        void releaseCore() {
+            using namespace ::physx;
+            if (scene_) {
+                scene_->release();
+                scene_ = nullptr;
+            }
+            if (dispatcher_) {
+                dispatcher_->release();
+                dispatcher_ = nullptr;
+            }
+            if (cuda_ && cudaCopyStream_) {
+                PxScopedCudaLock _lock(*cuda_);
+                cuda_->getCudaContext()->streamDestroy(cudaCopyStream_);
+                cudaCopyStream_ = nullptr;
+            }
+            if (physics_) {
+                if (extensionsInitialized_) PxCloseExtensions();
+                physics_->release();
+                physics_ = nullptr;
+            }
+            if (cuda_) {
+                cuda_->release();
+                cuda_ = nullptr;
+            }
+            if (foundation_) {
+                foundation_->release();
+                foundation_ = nullptr;
+            }
+        }
+
+    public:
         ~PhysxWorld() {
             using namespace ::physx;
             // A sensor still registered here holds a back-pointer to this world
@@ -649,32 +703,7 @@ namespace threepp {
                 if (entry.mesh) entry.mesh->release();
             }
             cookCache_.clear();
-            if (scene_) {
-                scene_->release();
-                scene_ = nullptr;
-            }
-            if (dispatcher_) {
-                dispatcher_->release();
-                dispatcher_ = nullptr;
-            }
-            if (cuda_ && cudaCopyStream_) {
-                PxScopedCudaLock _lock(*cuda_);
-                cuda_->getCudaContext()->streamDestroy(cudaCopyStream_);
-                cudaCopyStream_ = nullptr;
-            }
-            if (physics_) {
-                PxCloseExtensions();
-                physics_->release();
-                physics_ = nullptr;
-            }
-            if (cuda_) {
-                cuda_->release();
-                cuda_ = nullptr;
-            }
-            if (foundation_) {
-                foundation_->release();
-                foundation_ = nullptr;
-            }
+            releaseCore();
         }
 
         PhysxWorld(const PhysxWorld&) = delete;
@@ -1524,6 +1553,9 @@ namespace threepp {
         ::physx::PxDefaultErrorCallback errorCallback_;
         ::physx::PxFoundation* foundation_ = nullptr;
         ::physx::PxPhysics* physics_ = nullptr;
+        // Whether PxInitExtensions succeeded — releaseCore() must not call
+        // PxCloseExtensions on a physics whose extensions never came up.
+        bool extensionsInitialized_ = false;
         ::physx::PxDefaultCpuDispatcher* dispatcher_ = nullptr;
         ::physx::PxScene* scene_ = nullptr;
         ::physx::PxMaterial* defaultMat_ = nullptr;
