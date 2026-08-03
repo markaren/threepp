@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -965,6 +966,11 @@ namespace threepp {
         // far. This is the clock stamped onto sensor samples.
         [[nodiscard]] double simTime() const { return simTime_; }
 
+        // How many fixed substeps have been advanced. simTime() divided by the
+        // timestep, except that this stays exact if the timestep is ever changed
+        // mid-run and costs no float division to ask for.
+        [[nodiscard]] std::uint64_t substepCount() const { return substeps_; }
+
         // Resolve the PxRigidActor that governs `obj`: walk up the scene graph from
         // obj to the root and return the actor bound (via bind()/add()) to the
         // nearest ancestor (or obj itself). nullptr if none is managed here. Used
@@ -1476,6 +1482,7 @@ namespace threepp {
             // and drive any registered sensors — appended after existing hooks so
             // the dt / stepping path above is untouched.
             simTime_ += static_cast<double>(dt);
+            ++substeps_;
             for (auto* s : sensors_) s->tick(static_cast<double>(dt), simTime_);
         }
 
@@ -1572,6 +1579,7 @@ namespace threepp {
         float accumulator_ = 0.f;
         float dtEma_ = 0.f;// smoothed timestep (see Settings::smoothTimestep); 0 = uninitialised
         double simTime_ = 0.0;// accumulated fixed-substep sim time; stamps sensor samples
+        std::uint64_t substeps_ = 0;// substeps advanced, in step with simTime_
 
         std::vector<ObjBinding> objBindings_;
         std::vector<InstBinding> instBindings_;

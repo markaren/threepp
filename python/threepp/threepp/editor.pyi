@@ -4,7 +4,7 @@ The runtime face of editor-authored data.
 from __future__ import annotations
 import typing
 import threepp
-__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'Joint', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'Vehicle', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'joint_from_object', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object', 'vehicle_from_object']
+__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'Joint', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'Time', 'Vehicle', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'joint_from_object', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object', 'time', 'vehicle_from_object']
 class SplinePath:
     def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> threepp.Vector3:
         """
@@ -568,6 +568,52 @@ class Collision:
         """
         Total impulse over the manifold (N*s), same orientation. Divide by the substep to read it as a force.
         """
+class Time:
+    """
+    The play session's clocks, live - read `threepp.editor.time`.
+
+    There are two, and they do not agree. WALL time is what update(dt) rides: real seconds, however many the last frame took. SIM time is what the physics world advances in fixed substeps, and what fixed_update(dt) and every sensor timestamp are stamped with. A frame that hitches advances wall time in full but simulates at most a few substeps and drops the remainder, so the two drift apart for good - which is why anything integrating toward a physics quantity should be reading sim_time (or living in fixed_update) rather than summing update's dt.
+
+    Every field is zero outside Play.
+    """
+    @property
+    def frame_dt(self) -> float:
+        """
+        Wall-clock seconds the last frame took - the same number update(dt) is handed, readable from the methods that are not handed it.
+        """
+    @property
+    def wall_time(self) -> float:
+        """
+        Real seconds since Play started.
+        """
+    @property
+    def sim_time(self) -> float:
+        """
+        Simulated seconds since Play started: the physics world's own clock, which advances only when substeps run. This is the SAME clock that stamps sensor samples, so comparing a sample's timestamp against it is meaningful. Inside fixed_update it reads the time at the START of the substep about to be solved.
+        """
+    @property
+    def sim_dt(self) -> float:
+        """
+        The fixed substep in seconds - constant for the run, and exactly what fixed_update(dt) is handed.
+        """
+    @property
+    def steps(self) -> int:
+        """
+        Fixed substeps completed since Play started. Advances by 0, 1 or more per frame depending on how long the frame took.
+        """
+    @property
+    def fixed_clock(self) -> bool:
+        """
+        True when sim_time and sim_dt come from a playing physics world. False in a build or a pass without one, where sim_time falls back to wall_time and sim_dt to frame_dt - still an elapsed-time answer, but not a simulated one, and this is how to tell.
+        """
+    @property
+    def playing(self) -> bool:
+        """
+        True between the start of a play session and its stop.
+        """
+
+time: Time
+
 def articulation_from_object(object: threepp.Object3D | None) -> Articulation | None:
     """
     The Articulation PhysX is simulating for `object`, or None when Play is not running or no articulated robot governs it. The lookup walks up the scene graph, so a script on any link of a robot finds the robot's articulation. Robots simulate only when their Articulation section says Simulate.

@@ -17,6 +17,7 @@
 
 #include "threepp/core/Object3D.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -110,6 +111,61 @@ namespace threepp::editor {
 
             static std::function<bool(const std::string&)> provider;
             return provider;
+        }
+
+        // The clock a script reads — threepp.editor.time.
+        //
+        // There are TWO clocks in a play session and they do not agree. update(dt)
+        // is handed the wall-clock delta of the last frame, because that is what a
+        // frame callback is; fixed_update(dt) is handed the physics world's
+        // constant substep. Under load they diverge for good: PhysxWorld::step
+        // takes at most maxSubSteps substeps per call and then DISCARDS the
+        // leftover accumulator to avoid the spiral of death, so a hitching frame
+        // advances wall time in full and simulated time only partly. A script
+        // integrating update()'s dt against anything physics-driven drifts exactly
+        // when frames hitch, and until now had no way to even ask which clock it
+        // was on.
+        //
+        // So both are published here, refreshed by ScriptPlaySession once per
+        // frame before its sweep and again at each substep before fixed_update.
+        // The sim half is READ FROM THE WORLD rather than accumulated separately:
+        // simTime is the same double that stamps sensor samples, so a script
+        // comparing its own clock against a sample's timestamp is comparing one
+        // number against itself.
+        //
+        // Same inline function-local static as its neighbours — the binding lives
+        // in python/src and the session in apps/editor, and neither links the
+        // other.
+        struct ScriptClock {
+
+            // Wall-clock seconds the last frame took: exactly what update(dt) was
+            // handed, published so the other methods can see it too.
+            float frameDt = 0.f;
+            // Wall seconds since the session started — the sum of the above.
+            double wallTime = 0.0;
+            // Simulated seconds since the session started: the physics world's own
+            // clock, which advances only when substeps actually run.
+            double simTime = 0.0;
+            // The fixed substep, constant for the run. Equals frameDt in the
+            // degraded case below, where there is no fixed clock to report.
+            float simDt = 0.f;
+            // Substeps completed since the session started. Stays 0 without a
+            // world — no substep has run, and saying otherwise would invent one.
+            std::uint64_t steps = 0;
+            // True when the sim half above comes from a playing physics world.
+            // False in a build or a scene with no world, where simTime degrades to
+            // wallTime and simDt to frameDt: still a usable elapsed-time answer,
+            // and this flag is how a script tells the difference rather than
+            // discovering it in a plot.
+            bool fixedClock = false;
+            // False outside Play, where every field above is zero.
+            bool active = false;
+        };
+
+        inline ScriptClock& scriptClock() {
+
+            static ScriptClock clock;
+            return clock;
         }
 
         // Debug draw — threepp.editor.draw_line and friends, on their way to the
@@ -251,6 +307,12 @@ namespace threepp::editor {
     // playing physics world there is no fixed clock, so the method never fires
     // and start() says so once; a fabricated clock would be a lie about the only
     // thing the name promises.
+    //
+    // Both clocks are published to threepp.editor.time for the duration (see
+    // ScriptClock): the wall half advances once per frame from update(), the sim
+    // half is read back from the playing world here and again before every
+    // fixed_update. The session owns that lifetime exactly as it owns the
+    // resolver and the draw list — zeroed on the way up, zeroed on the way down.
     //
     // A script that raises is logged once, disabled for the rest of the session
     // and left behind; the others keep running and the editor keeps playing.

@@ -1097,6 +1097,10 @@ class is the one whose name matches it (`spinner.py` → `Spinner`,
 case-insensitively), or — failing that — the single class in the file that
 defines `update()`. Anything else is reported rather than guessed at.
 
+**The clock** is `threepp.editor.time`, readable from all of them: `sim_time` and
+`sim_dt` for the simulated clock, `wall_time` and `frame_dt` for the real one,
+and the two are not the same (see [Both clocks](#both-clocks-threeppeditortime)).
+
 **The scene** is `threepp.editor.scene()` — the ordinary `threepp.Scene`, so
 `scene.get_object_by_name("Ground")`, `scene.children`, and so on. It answers
 from `start()` onwards and for as long as the session runs, which means
@@ -1211,6 +1215,68 @@ class Thrust:
 * **Errors work as everywhere else.** The first raise is reported once with its
   traceback and disables that instance for the rest of the session — all of its
   methods, not just this one. Other scripts keep running.
+
+#### Both clocks: `threepp.editor.time`
+
+The section above says `update(dt)` is wall time and `fixed_update(dt)` is
+simulated time. `threepp.editor.time` is how a script *reads* either one from
+anywhere, instead of having to be handed it:
+
+```python
+import threepp
+
+
+class Mission:
+    def update(self, dt: float):
+        t = threepp.editor.time
+        # 20 s of simulation, however long that takes to render.
+        if t.sim_time > 20.0:
+            print(f"done after {t.steps} substeps, {t.wall_time:.1f} s of your life")
+```
+
+| field | is |
+| --- | --- |
+| `frame_dt` | wall seconds the last frame took — the number `update(dt)` is handed |
+| `wall_time` | real seconds since Play started |
+| `sim_time` | simulated seconds since Play started |
+| `sim_dt` | the fixed substep — the number `fixed_update(dt)` is handed |
+| `steps` | fixed substeps completed since Play started |
+| `fixed_clock` | `True` when the sim fields come from a playing physics world |
+| `playing` | `True` between a session's start and its stop |
+
+* **The two clocks diverge, permanently.** A frame that hitches advances
+  `wall_time` in full, takes at most 4 substeps, and *discards* the rest of the
+  accumulator so it cannot spiral. Nothing catches that up later. One second
+  spent in a single frame buys you 4/60 s of simulation and 1.0 s of wall clock,
+  and they stay that far apart for the rest of the run. Anything integrating
+  toward a physics quantity should read `sim_time` — or live in `fixed_update`,
+  which is handed the right number by construction.
+* **`sim_time` is the sensor clock.** It is read straight off the physics world,
+  the same `double` that stamps every sensor sample — so comparing a sample's
+  timestamp against it is comparing one number against itself, not two clocks
+  that happen to be close.
+* **Read it from anywhere**: `start`, `update`, `fixed_update`, the collision and
+  trigger callbacks, `stop`. Inside `fixed_update` the sim fields describe the
+  substep *about to be solved* — `sim_time` is its start, `steps` counts the ones
+  already done. The wall fields there are one frame stale: physics steps before
+  the frame sweep refreshes them, so `wall_time` and `frame_dt` read as of the
+  last *completed* frame. A `fixed_update` has no business on the wall clock
+  anyway — that staleness is the reminder.
+* **It is live, not a snapshot.** `threepp.editor.time` is one object whose
+  fields are read when you ask for them, so stashing `self.t = threepp.editor.time`
+  in `start()` and reading `self.t.sim_time` a thousand frames later works.
+  Assigning a *field* (`self.t0 = threepp.editor.time.sim_time`) copies a number,
+  which is exactly what you want for "how long since I started".
+* **No world, no fixed clock.** Without the PhysX build, or with no physics
+  session playing, `sim_time` falls back to `wall_time` and `sim_dt` to
+  `frame_dt`, with `fixed_clock` reading `False`. That is a deliberate difference
+  from `fixed_update`, which refuses to run at all rather than fake its clock:
+  "how long have I been playing" still has an honest answer here, and
+  `fixed_clock` is how a script tells which kind of answer it got. `steps` stays
+  `0`, because no substep ran.
+* **Every field is zero outside Play**, and `playing` is `False`. The clock
+  starts from zero on each new session — a second Play does not inherit the
+  first one's elapsed time.
 
 #### Collisions: `on_collision_enter` / `on_collision_exit`
 

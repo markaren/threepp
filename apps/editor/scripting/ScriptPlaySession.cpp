@@ -192,6 +192,17 @@ struct ScriptPlaySession::Impl {
         // from a session that skipped its own teardown.
         scripting::debugDraw().clear();
         scripting::debugDraw().active = true;
+        // From zero, on the way UP for the same reason the draw list is: the
+        // first frame of a Play must not report the previous session's elapsed
+        // time. The world is taken hold of here rather than in attachToPhysics
+        // because the clock wants it whether or not any script defines
+        // fixed_update, and refreshSimClock is what fills in the rest.
+        scripting::scriptClock() = scripting::ScriptClock{};
+        scripting::scriptClock().active = true;
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        bindWorld();
+#endif
+        refreshSimClock();
     }
 
     void clearSessionAccess() {
@@ -206,6 +217,50 @@ struct ScriptPlaySession::Impl {
         scripting::playScene() = nullptr;
         scripting::debugDraw().active = false;
         scripting::debugDraw().clear();
+        // Back to zeros, not to whatever the last frame read: `playing` is False
+        // outside a session and every number with it, so a stashed handle to
+        // editor.time reports "not playing" rather than a frozen final reading.
+        scripting::scriptClock() = scripting::ScriptClock{};
+    }
+
+    // --- the script clock --------------------------------------------------
+    //
+    // Refreshed twice on different beats, because the two halves move on
+    // different beats. The wall half advances once per frame, in update(). The
+    // sim half is not accumulated here at all — it is READ from the world, so
+    // it cannot drift from the clock that stamps sensor samples no matter how
+    // the accumulator behaves under load (maxSubSteps, discarded remainders,
+    // dt smoothing: all of it is already baked into what the world reports).
+
+    void refreshSimClock() {
+
+        auto& clock = scripting::scriptClock();
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+        if (world && !worldLife.expired()) {
+            clock.simTime = world->simTime();
+            clock.steps = world->substepCount();
+            clock.simDt = world->settings().fixedTimestep;
+            clock.fixedClock = true;
+            return;
+        }
+#endif
+        // No world — a build without the SDK, or a pass that stepped no physics
+        // session. There is no fixed clock to report, so the sim half degrades
+        // to the frame clock and says so through `fixedClock`. Deliberately NOT
+        // the fixed_update treatment (never fire, say so once): a script asking
+        // "how long have I been playing" deserves an answer even here, and the
+        // flag is what stops that answer being mistaken for a simulated one.
+        clock.simTime = clock.wallTime;
+        clock.simDt = clock.frameDt;
+        clock.fixedClock = false;
+    }
+
+    void refreshFrameClock(float dt) {
+
+        auto& clock = scripting::scriptClock();
+        clock.frameDt = dt;
+        clock.wallTime += static_cast<double>(dt);
+        refreshSimClock();
     }
 
     // --- the physics clock -------------------------------------------------
@@ -341,6 +396,12 @@ struct ScriptPlaySession::Impl {
     // as the frame sweep: first raise disables the instance for the session, so
     // a script throwing at 60 Hz reports once and then stops costing anything.
     void fixedUpdate(float dt) {
+
+        // Before the early-out and before the sweep: this hook runs pre-simulate,
+        // so the world's clock still reads the time at the START of the substep
+        // about to be solved — which is the reading a controller writing a drive
+        // target for that substep wants, and what the docstring promises.
+        refreshSimClock();
 
         bool any = false;
         for (const auto& instance : instances) {
@@ -1067,6 +1128,13 @@ void ScriptPlaySession::start(Scene& scene) {
 }
 
 void ScriptPlaySession::update(float dt) {
+
+    // First, and above every early-out below it: the clock belongs to the
+    // SESSION, not to the sweep. A scene whose scripts all define fixed_update
+    // and nothing else still advances wall time, and so does one whose scripts
+    // have all failed — a frame happened either way, and a reader of
+    // editor.time must not be told otherwise.
+    impl_->refreshFrameClock(dt);
 
     if (impl_->instances.empty()) return;
 

@@ -80,10 +80,14 @@ if (TARGET threepp_editor_scripting)
     # collision callbacks are driven by that world's contact reports, likewise,
     # and raycast is a query put to that same world. The trigger callbacks ride
     # that world's TRIGGER reports, and their volumes are cooked by the same
-    # physics session.
+    # physics session. threepp.editor.time is the same dependency once more: its
+    # simulated half is read straight off the playing world, and the divergence
+    # between its two clocks only happens where there is a substep accumulator to
+    # fall behind.
     if (TARGET unofficial::omniverse-physx-sdk::sdk)
         foreach (name EditorScriptPhysics_test EditorScriptSensors_test EditorScriptFixedUpdate_test
-                EditorScriptCollision_test EditorScriptRaycast_test EditorScriptTrigger_test)
+                EditorScriptCollision_test EditorScriptRaycast_test EditorScriptTrigger_test
+                EditorScriptClock_test)
             add_test_executable(${name})
             target_link_libraries(${name}
                     PRIVATE threepp_editor_scripting unofficial::omniverse-physx-sdk::sdk)

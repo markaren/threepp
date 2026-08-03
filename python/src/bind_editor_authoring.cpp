@@ -52,6 +52,13 @@ using namespace threepp;
 namespace threepp_py {
 namespace {
 
+    // The type behind threepp.editor.time. Deliberately EMPTY: it carries no
+    // reading of its own, and every property on it reads the live
+    // scripting::scriptClock() when asked. A struct holding a copy would be a
+    // snapshot, and a script that stashed one in start() would read the same
+    // stale numbers forever.
+    struct ScriptClockView {};
+
     // Same handle-not-typed-pointer rule the rest of threepp.editor follows:
     // threepp's virtual bases make a typed shared_ptr<Object3D> parameter
     // unusable, so every editor entry point takes py::handle and converts.
@@ -159,6 +166,87 @@ namespace {
                 "into a field, so driving a robot cannot eat somebody's rename, and False in a "
                 "build or a pass with no window. Query it every update() for continuous "
                 "control; it never sticks.");
+
+        // --- the clock -------------------------------------------------------
+        //
+        // threepp.editor.time — ONE object, bound once, whose every property
+        // reads the live ScriptClock at the moment it is asked. So a script may
+        // keep `t = editor.time` in start() and still read fresh numbers from it
+        // a thousand frames later; there is no snapshot to go stale.
+        //
+        // Why it exists at all: update(dt) is wall time and fixed_update(dt) is
+        // simulated time, the two diverge under load, and a script had no way to
+        // ask which one it was holding (see ScriptClock).
+
+        py::class_<ScriptClockView>(
+                sub, "Time",
+                "The play session's clocks, live - read `threepp.editor.time`.\n\n"
+                "There are two, and they do not agree. WALL time is what update(dt) "
+                "rides: real seconds, however many the last frame took. SIM time is what "
+                "the physics world advances in fixed substeps, and what fixed_update(dt) "
+                "and every sensor timestamp are stamped with. A frame that hitches "
+                "advances wall time in full but simulates at most a few substeps and "
+                "drops the remainder, so the two drift apart for good - which is why "
+                "anything integrating toward a physics quantity should be reading "
+                "sim_time (or living in fixed_update) rather than summing update's dt.\n\n"
+                "Every field is zero outside Play.")
+                .def_property_readonly(
+                        "frame_dt", [](const ScriptClockView&) {
+                            return editor::scripting::scriptClock().frameDt;
+                        },
+                        "Wall-clock seconds the last frame took - the same number update(dt) "
+                        "is handed, readable from the methods that are not handed it.")
+                .def_property_readonly(
+                        "wall_time", [](const ScriptClockView&) {
+                            return editor::scripting::scriptClock().wallTime;
+                        },
+                        "Real seconds since Play started.")
+                .def_property_readonly(
+                        "sim_time", [](const ScriptClockView&) {
+                            return editor::scripting::scriptClock().simTime;
+                        },
+                        "Simulated seconds since Play started: the physics world's own clock, "
+                        "which advances only when substeps run. This is the SAME clock that "
+                        "stamps sensor samples, so comparing a sample's timestamp against it is "
+                        "meaningful. Inside fixed_update it reads the time at the START of the "
+                        "substep about to be solved.")
+                .def_property_readonly(
+                        "sim_dt", [](const ScriptClockView&) {
+                            return editor::scripting::scriptClock().simDt;
+                        },
+                        "The fixed substep in seconds - constant for the run, and exactly what "
+                        "fixed_update(dt) is handed.")
+                .def_property_readonly(
+                        "steps", [](const ScriptClockView&) {
+                            return editor::scripting::scriptClock().steps;
+                        },
+                        "Fixed substeps completed since Play started. Advances by 0, 1 or more "
+                        "per frame depending on how long the frame took.")
+                .def_property_readonly(
+                        "fixed_clock", [](const ScriptClockView&) {
+                            return editor::scripting::scriptClock().fixedClock;
+                        },
+                        "True when sim_time and sim_dt come from a playing physics world. False "
+                        "in a build or a pass without one, where sim_time falls back to wall_time "
+                        "and sim_dt to frame_dt - still an elapsed-time answer, but not a "
+                        "simulated one, and this is how to tell.")
+                .def_property_readonly(
+                        "playing", [](const ScriptClockView&) {
+                            return editor::scripting::scriptClock().active;
+                        },
+                        "True between the start of a play session and its stop.")
+                .def("__repr__", [](const ScriptClockView&) {
+                    const auto& clock = editor::scripting::scriptClock();
+                    if (!clock.active) return std::string("<threepp.editor.time (not playing)>");
+                    return "<threepp.editor.time sim=" + std::to_string(clock.simTime) +
+                           "s wall=" + std::to_string(clock.wallTime) +
+                           "s steps=" + std::to_string(clock.steps) + ">";
+                });
+
+        // The singleton. An instance rather than a module attribute per field,
+        // because a module attribute would be evaluated once at import and freeze
+        // the numbers at zero.
+        sub.attr("time") = ScriptClockView{};
 
         // --- debug draw ------------------------------------------------------
         //
