@@ -56,6 +56,15 @@ namespace {
     constexpr const char* kTaskSource = R"PY(
 _tasks = []
 
+# True while a task is being wound UP - _shed running its finally: blocks. The
+# attribution window is open there on purpose, so a finally: that raises is
+# reported against its owner; the same open window would let a finally: START
+# work, and both teardown paths get that wrong in their own way (_clear snapshots
+# before shedding, so the newcomer survives into the NEXT session; _drop_for
+# rebuilds the list after, so it vanishes silently). One rule instead of two
+# accidents: a finally: may tidy, not begin - _start refuses while this is set.
+_shedding = False
+
 
 def _describe():
     """The exception being handled, as a traceback the console can print.
@@ -224,6 +233,11 @@ class Task:
 
 def _start(generator, owner):
     """Register `generator` as a task owned by the script instance `owner`."""
+    if _shedding:
+        raise RuntimeError(
+            "threepp.editor.start_coroutine: this coroutine is being wound up - "
+            "its owner was disabled or Play is stopping - and a finally: block "
+            "may tidy up, not start new work.")
     if not (hasattr(generator, "send") and hasattr(generator, "throw")
             and hasattr(generator, "close")):
         raise TypeError(
@@ -238,7 +252,9 @@ def _start(generator, owner):
 
 def _shed(task, failures):
     """Close `task`, attributing anything its finally: blocks raise."""
+    global _shedding
     _attribute(task._owner)
+    _shedding = True
     try:
         task._close()
     except BaseException:
@@ -248,6 +264,7 @@ def _shed(task, failures):
         task._done = True
         task._stack = []
     finally:
+        _shedding = False
         _attribute("")
 
 

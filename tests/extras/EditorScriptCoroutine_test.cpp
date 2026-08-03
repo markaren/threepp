@@ -664,6 +664,54 @@ TEST_CASE("tasks are session state and die at Stop", "[editor][scripting]") {
     CHECK(liveTasks() == 0);
 }
 
+TEST_CASE("a finally: may tidy up, not start new work", "[editor][scripting]") {
+
+    // The teardown paths open the attribution window on purpose — a finally:
+    // that raises must be reported against its owner — and the same open window
+    // would let a finally: REGISTER a task. The two teardown paths then disagree
+    // about what happens to it (Stop's snapshot lets it survive into the NEXT
+    // session; an instance-disable's rebuild drops it silently), so the rule is
+    // one refusal instead of two accidents: start_coroutine raises while a task
+    // is being wound up, and the raise is reported like any other finally: error.
+    const char* kRescheduler = R"(
+import threepp
+
+class Rescheduler:
+    def start(self, obj):
+        self.obj = obj
+        threepp.editor.start_coroutine(self.run())
+
+    def run(self):
+        try:
+            while True:
+                yield
+        finally:
+            # Forbidden: the session is unwinding this very task.
+            threepp.editor.start_coroutine(self.run())
+)";
+
+    Rig rig;
+    addScript(rig.scene(), "Rescheduler", kRescheduler);
+    rig.start();
+    rig.runScriptsOnly(2);
+    CHECK(liveTasks() == 1);
+
+    rig.stop();
+
+    // The refusal was reported through the ordinary error path, and — the
+    // point — nothing survived: a zombie here would be pumped by the NEXT
+    // session, owned by an instance that no longer exists.
+    CHECK(rig.errorLines() == 1);
+    CHECK(liveTasks() == 0);
+
+    // A fresh Play starts from exactly one task, the one start() registers.
+    rig.start();
+    CHECK(liveTasks() == 1);
+    rig.runScriptsOnly(2);
+    CHECK(liveTasks() == 1);
+    rig.stop();
+}
+
 TEST_CASE("a coroutine can be started from fixed_update and a collision",
           "[editor][scripting][physx]") {
 

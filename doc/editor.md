@@ -1369,7 +1369,9 @@ whether it has finished. A script may run as many as it likes.
 * **Tasks die at Stop.** They are session state: everything still running is
   unwound (`finally:` blocks included) before the scripts' own `stop()` methods
   are called, and the next Play starts from nothing. Do not keep a `Task` across
-  sessions.
+  sessions. A `finally:` may tidy up, not start new work: `start_coroutine`
+  raises while the task it is called from is being wound up — there is no
+  session left for the newcomer to run in.
 * **Pause pauses them**, for free, and for the same reason `fixed_update` stops:
   paused means no session is updated, which means no pump.
 
