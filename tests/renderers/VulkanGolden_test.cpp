@@ -114,11 +114,13 @@ int main(int argc, char** argv) {
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(6.0f);
     renderer.setRenderScale(1.0f);// full-res readback, no upscale variance
-    // Pin the golden gate to the deterministic FSR/TAA resolve: DLSS output
-    // shifts with every NGX model/DLL update (and across GPU generations), so
-    // references would go stale on driver updates. No-op when built without
-    // THREEPP_WITH_DLSS.
+    // Pin the golden gate to the plain TAA resolve — the one path every build
+    // has. DLSS output shifts with every NGX model/DLL update (and across GPU
+    // generations), and FSR is a compile-time option, so leaving either enabled
+    // makes the references diverge between machines. Both are no-ops when the
+    // feature isn't built in.
     renderer.setDlss(false);
+    renderer.setFsr(false);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
     renderer.setClearColor(Color(0.f, 0.f, 0.f));
