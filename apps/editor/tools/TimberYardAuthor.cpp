@@ -532,7 +532,8 @@ class BayCounter:
 # the actual force the solver is spending to hold the bar on. One log leaning on
 # it is routine. Two logs arriving together is what the yard is not built for,
 # and then on_break() fires: once, on this node, because the script sits on the
-# joint.
+# joint. The load that snapped it is joint.break_force - latched from the
+# breaking step's solver result, the sample no stream used to have.
 import threepp
 
 editor = getattr(threepp, "editor", None)
@@ -565,8 +566,10 @@ class StopBar:
 
     # On the PHYSICS clock, because the load is a physics quantity: reading it
     # per frame would sample it at whatever rate the window happens to run at.
+    # Stops reading once broken - the stream is honestly zero from there, and
+    # the drawn arrow should freeze at the failure load, not collapse.
     def fixed_update(self, dt: float):
-        if self.load is None:
+        if self.load is None or self.broken:
             return
         sample = self.load.latest()
         if sample is None:
@@ -599,11 +602,23 @@ class StopBar:
         editor.draw_line(anchor, tip, 0xff3b1f if hot else 0x39e07a)
 
     # Called once, when the constraint gives way. Only a script ON the joint
-    # node gets this.
+    # node gets this. break_force is the breaking step's solver force - the
+    # TRUE failure load, past the threshold, latched at the break - where
+    # self.peak is only the biggest sample the load cell managed to take (by
+    # now the stream reads zero: a broken joint transmits nothing). The load
+    # cell's final non-zero sample carries the same latched wrench, so the two
+    # figures agree unless the sensor's rate gate skipped the breaking substep.
     def on_break(self):
         self.broken = True
-        print("Timber Yard: the stop bar SNAPPED at %.0f N (peak %.0f N)"
-              % (self.newtons, self.peak), flush=True)
+        snapped = self.peak
+        if self.joint is not None:
+            f = self.joint.break_force
+            snapped = (f.x ** 2 + f.y ** 2 + f.z ** 2) ** 0.5
+            # Freeze the drawn arrow at the failure wrench.
+            self.force = f
+            self.newtons = snapped
+        print("Timber Yard: the stop bar SNAPPED at %.0f N (peak sampled %.0f N)"
+              % (snapped, self.peak), flush=True)
         if editor is None:
             return
         master = editor.script_from_object(editor.scene().get_object_by_name(self.master))

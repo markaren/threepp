@@ -24,6 +24,7 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
+#include <cstdio>
 #include <iostream>
 #include <string>
 
@@ -662,6 +663,72 @@ class Fuse:
 
     // The callback fired exactly where it was authored: on the joint node.
     CHECK(joint->name == "snapped");
+
+    scripts.stop();
+    physics.stop();
+}
+
+TEST_CASE("on_break reads the failure load by name", "[editor][scripting][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    // The weld above, instrumented: the 2 kg crate's weight (~19.6 N) is the
+    // load that snaps the 1 N fuse, and break_force is where the breaking
+    // step's solver force lives — on_break() itself stays argument-free (the
+    // handle is the named way to the facts, same doctrine as start()).
+    auto crate = addBox(scene, "Crate", PhysicsConfig::Body::Dynamic);
+    crate->position.set(0.f, 3.f, 0.f);
+
+    auto joint = Object3D::create();
+    joint->name = "Fuse";
+    JointConfig jointConfig;
+    jointConfig.type = JointConfig::Type::Fixed;
+    jointConfig.breakForce = 1.f;
+    jointConfig.breakTorque = 1e9f;
+    jointConfig.write(*joint);
+
+    ScriptConfig script;
+    script.source = R"(
+import threepp
+
+class Fuse:
+    def start(self, obj):
+        self.obj = obj
+        self.joint = threepp.editor.joint_from_object(obj)
+
+    def on_break(self):
+        f = self.joint.break_force
+        snapped = (f.x ** 2 + f.y ** 2 + f.z ** 2) ** 0.5
+        r = self.joint.reaction_force
+        live = (r.x ** 2 + r.y ** 2 + r.z ** 2) ** 0.5
+        self.obj.name = "snapped %.2f %.2f" % (snapped, live)
+)";
+    script.write(*joint);
+    crate->add(joint);
+
+    PhysicsPlaySession physics;
+    ScriptPlaySession scripts;
+
+    physics.start(scene);
+    scripts.start(scene);
+    REQUIRE(scripts.errorFor(joint->uuid).empty());
+
+    run(physics, scripts, 30);
+
+    // The script stamped what it measured into the node name (the marker
+    // pattern the coroutine tests use): the failure load, then the live load.
+    using Catch::Matchers::WithinAbs;
+    INFO("joint name: " << joint->name);
+    REQUIRE(joint->name.rfind("snapped ", 0) == 0);
+    float snapped = -1.f, live = -1.f;
+    REQUIRE(std::sscanf(joint->name.c_str(), "snapped %f %f", &snapped, &live) == 2);
+    // The failure load is real: past the threshold that armed the break, and
+    // about the weight the weld was carrying when gravity snapped it.
+    CHECK(snapped >= 1.f);
+    CHECK_THAT(snapped, WithinAbs(2.f * 9.81f, 3.f));
+    // reaction_force reads zero by then — a broken joint transmits nothing.
+    CHECK_THAT(live, WithinAbs(0.f, 1e-3f));
 
     scripts.stop();
     physics.stop();

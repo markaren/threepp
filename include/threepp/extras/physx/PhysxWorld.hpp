@@ -99,9 +99,20 @@ namespace threepp {
      * setBreakForce armed the break — compare it against your own records
      * (e.g. Joint::raw()) to name it; do not dereference beyond identity if
      * you cannot prove it is yours.
+     *
+     * `force` / `torque` (world axes) are the wrench the solver applied on the
+     * BREAKING step — the true failure load, necessarily past the threshold
+     * that armed the break. Captured here because this callback is the one
+     * point where that value is defined: it fires inside fetchResults() of the
+     * breaking substep, while PxConstraint::getForce still holds that step's
+     * solver result. Afterwards the broken constraint leaves the solver's
+     * active set and its force buffer is never written again (a stale read,
+     * not a promise — do not rely on it).
      */
     struct ConstraintBreakEvent {
         ::physx::PxJoint* joint = nullptr;
+        Vector3 force;
+        Vector3 torque;
     };
 
     /**
@@ -288,6 +299,15 @@ namespace threepp {
                 if (constraints[i].type != PxConstraintExtIDs::eJOINT) continue;
                 ConstraintBreakEvent ev;
                 ev.joint = static_cast<PxJoint*>(constraints[i].externalReference);
+                // The breaking step's solver wrench — the failure load. Read
+                // NOW, while fetchResults keeps it current (see the event doc);
+                // after this callback the buffer merely goes stale.
+                if (auto* constraint = ev.joint->getConstraint()) {
+                    PxVec3 f(PxZero), t(PxZero);
+                    constraint->getForce(f, t);
+                    ev.force.set(f.x, f.y, f.z);
+                    ev.torque.set(t.x, t.y, t.z);
+                }
                 for (const auto& e : breaks_) e.fn(ev);
             }
         }

@@ -523,8 +523,19 @@ namespace threepp::editor {
                 breakWatch_ = world_->watchConstraintBreaks([this](const ConstraintBreakEvent& event) {
                     for (const auto& played : joints_) {
                         if (played.joint && played.joint->raw() == event.joint) {
+                            // The event carries the breaking step's solver
+                            // wrench — the failure load. Latch it on the Joint
+                            // so breakWrench() (the script handle, the load
+                            // cell's final sample) answers with it for the
+                            // rest of the play.
+                            played.joint->latchBreakWrench(event.force, event.torque);
+                            char load[64];
+                            std::snprintf(load, sizeof(load), "%.1f N / %.1f N*m",
+                                          static_cast<double>(event.force.length()),
+                                          static_cast<double>(event.torque.length()));
                             log("joint: \"" + played.node->name +
-                                "\" broke - the load exceeded its break threshold");
+                                "\" broke at " + load +
+                                " - the load exceeded its break threshold");
                             brokenJoints_.push_back(played.node);
                             return;
                         }

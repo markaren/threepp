@@ -551,6 +551,22 @@ namespace {
             return torque;
         }
 
+        [[nodiscard]] Vector3 breakForce() const {
+
+            require();
+            Vector3 force, torque;
+            joint_->breakWrench(force, torque);
+            return force;
+        }
+
+        [[nodiscard]] Vector3 breakTorque() const {
+
+            require();
+            Vector3 force, torque;
+            joint_->breakWrench(force, torque);
+            return torque;
+        }
+
         [[nodiscard]] std::string repr() const {
 
             const std::string name =
@@ -807,9 +823,17 @@ namespace threepp_py {
                      "inert while damping is zero.")
                 .def_property_readonly("reaction_force", &JointHandle::reactionForce,
                                        "Force (N, world axes) the solver applied to hold the "
-                                       "constraint on the last step.")
+                                       "constraint on the last step. Zero once broken - a broken "
+                                       "joint transmits nothing; the failure load is break_force.")
                 .def_property_readonly("reaction_torque", &JointHandle::reactionTorque,
                                        "Torque (N*m, world axes) alongside reaction_force.")
+                .def_property_readonly("break_force", &JointHandle::breakForce,
+                                       "The force (N, world axes) the solver applied on the step "
+                                       "that BROKE the joint - the true failure load, necessarily "
+                                       "past the authored break threshold. Zero until broken; an "
+                                       "on_break() reads it directly, the break already happened.")
+                .def_property_readonly("break_torque", &JointHandle::breakTorque,
+                                       "Torque (N*m, world axes) alongside break_force.")
                 .def("__repr__", &JointHandle::repr);
 
         py::class_<VehicleHandle, std::shared_ptr<VehicleHandle>>(sub, "Vehicle")

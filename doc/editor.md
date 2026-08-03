@@ -860,16 +860,34 @@ maximal-coordinate twin of the articulation cache's incoming joint force. Same
 noise/quantization/rate model as their articulation forms, same Sensors-panel
 traces, same CSV.
 
+**A breakable joint's failure load is on the record.** The load that snapped a
+joint used to be unobservable — the sample stream just stopped somewhere below
+it. It is captured now, at the one point where it is defined: PhysX reports a
+break during `fetchResults` of the breaking substep, while
+`PxConstraint::getForce` still holds that step's solver result, and the break
+callback latches it (`Joint::breakWrench`). The load cell's first sample after
+the break carries exactly that wrench — the true failure load, necessarily
+past the authored threshold — and every later sample reads zero, because a
+broken joint transmits nothing. (Left alone, `getForce` would freeze on the
+breaking value and report it as live load forever; `Joint::reactionForce`
+answers zero once broken instead.) The console line names the measured load
+too: *"broke at 450.3 N / 0.0 N\*m"*.
+
 **Scripts.** `threepp.editor.joint_from_object(obj)` on the joint node returns
 the live `Joint` handle: `position` / `velocity` (the joint coordinate and its
-rate), `broken`, `reaction_force` / `reaction_torque`, and
+rate), `broken`, `reaction_force` / `reaction_torque`, `break_force` /
+`break_torque` (the latched failure load — zero until broken), and
 `set_drive_target` / `set_drive_velocity` — the setpoints act through the
 authored stiffness and damping respectively, exactly like the inspector's
 fields. A script **on the joint node** may also define `on_break()`, called
 once when the constraint exceeds its break threshold; every break also gets a
-console line, listener or not. The standalone wheel binds the same runtime
+console line, listener or not. `on_break()` takes no payload on purpose — the
+handle is the named way to the facts, so `joint.break_force` inside the
+callback IS the failure measurement (same doctrine that moved the scene out of
+`start()`'s argument list). The standalone wheel binds the same runtime
 type as `threepp.Joint` (with `Joint.Params` / `Joint.Type`), taking two
-`RigidBody` handles — or `None` for the world — and a world-space frame.
+`RigidBody` handles — or `None` for the world — and a world-space frame;
+there the pair is `reaction()` and `break_wrench()`.
 
 The runtime type is `threepp::Joint` (`extras/physx/Joint.hpp`), usable
 without the editor: two `PxRigidActor*` (either may be null, meaning the

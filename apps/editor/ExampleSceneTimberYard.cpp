@@ -11725,7 +11725,7 @@ namespace {
               "joint": "type=revolute;limited=1;lower=-1.7;upper=0.04;coney=0.785398;conez=0.785398;stiffness=90;damping=430;maxforce=50000;target=0;velocity=0;breakforce=6000;breaktorque=2500;collide=0",
               "jointBody": "Stop Post",
               "scriptFields": "master=Yard Sign;limit=240",
-              "scriptSource": "# Timber Yard - the stop bar.\n#\n# The bar at the end of the bay is held by a BREAKABLE joint, and the joint\n# carries a force/torque sensor - the load cell reads PxConstraint::getForce,\n# the actual force the solver is spending to hold the bar on. One log leaning on\n# it is routine. Two logs arriving together is what the yard is not built for,\n# and then on_break() fires: once, on this node, because the script sits on the\n# joint.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\ndef _verb(name):\n    return getattr(editor, name, None) if editor is not None else None\n\n\nclass StopBar:\n\n    master = \"Yard Sign\"# who is told when this goes\n    draw_scale = 0.004  # metres of arrow per newton\n    limit = 240.0       # N; roughly what the joint is authored to survive\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.joint = None\n        self.load = None\n        self.peak = 0.0\n        self.newtons = 0.0\n        self.broken = False\n        self.force = threepp.Vector3(0.0, 0.0, 0.0)\n        joint_of = _verb(\"joint_from_object\")\n        load_of = _verb(\"force_torque_from_object\")\n        if joint_of is not None:\n            self.joint = joint_of(obj)\n        if load_of is not None:\n            self.load = load_of(obj)\n\n    # On the PHYSICS clock, because the load is a physics quantity: reading it\n    # per frame would sample it at whatever rate the window happens to run at.\n    def fixed_update(self, dt: float):\n        if self.load is None:\n            return\n        sample = self.load.latest()\n        if sample is None:\n            return\n        self.force = sample.force\n        self.newtons = (self.force.x ** 2 + self.force.y ** 2 + self.force.z ** 2) ** 0.5\n        self.peak = max(self.peak, self.newtons)\n\n    def update(self, dt: float):\n        if editor is None:\n            return\n        # The load, as a line out of the mount: green while a log is leaning on\n        # the bar, red once it is over what the joint is authored to take.\n        #\n        # Drawn only under MEANINGFUL load (a quarter of the limit) - idle it\n        # said nothing and read as stray debug geometry, which is exactly what\n        # the user called it. An instrument that only appears when something is\n        # actually pushing explains itself.\n        #\n        # WORLD position, not .position: draw_line takes world space, and the\n        # joint node's local position put the line under the conveyor - a real\n        # authored-in-the-wild bug, worth this comment.\n        if not self.broken and self.newtons < self.limit * 0.25:\n            return\n        anchor = self.obj.get_world_position()\n        tip = threepp.Vector3(anchor.x + self.force.x * self.draw_scale,\n                              anchor.y + self.force.y * self.draw_scale,\n                              anchor.z + self.force.z * self.draw_scale)\n        hot = self.broken or self.newtons > self.limit\n        editor.draw_line(anchor, tip, 0xff3b1f if hot else 0x39e07a)\n\n    # Called once, when the constraint gives way. Only a script ON the joint\n    # node gets this.\n    def on_break(self):\n        self.broken = True\n        print(\"Timber Yard: the stop bar SNAPPED at %.0f N (peak %.0f N)\"\n              % (self.newtons, self.peak), flush=True)\n        if editor is None:\n            return\n        master = editor.script_from_object(editor.scene().get_object_by_name(self.master))\n        if master is not None:\n            master.fail(\"the stop bar snapped - two logs reached the bay together\")\n",
+              "scriptSource": "# Timber Yard - the stop bar.\n#\n# The bar at the end of the bay is held by a BREAKABLE joint, and the joint\n# carries a force/torque sensor - the load cell reads PxConstraint::getForce,\n# the actual force the solver is spending to hold the bar on. One log leaning on\n# it is routine. Two logs arriving together is what the yard is not built for,\n# and then on_break() fires: once, on this node, because the script sits on the\n# joint. The load that snapped it is joint.break_force - latched from the\n# breaking step's solver result, the sample no stream used to have.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\ndef _verb(name):\n    return getattr(editor, name, None) if editor is not None else None\n\n\nclass StopBar:\n\n    master = \"Yard Sign\"# who is told when this goes\n    draw_scale = 0.004  # metres of arrow per newton\n    limit = 240.0       # N; roughly what the joint is authored to survive\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.joint = None\n        self.load = None\n        self.peak = 0.0\n        self.newtons = 0.0\n        self.broken = False\n        self.force = threepp.Vector3(0.0, 0.0, 0.0)\n        joint_of = _verb(\"joint_from_object\")\n        load_of = _verb(\"force_torque_from_object\")\n        if joint_of is not None:\n            self.joint = joint_of(obj)\n        if load_of is not None:\n            self.load = load_of(obj)\n\n    # On the PHYSICS clock, because the load is a physics quantity: reading it\n    # per frame would sample it at whatever rate the window happens to run at.\n    # Stops reading once broken - the stream is honestly zero from there, and\n    # the drawn arrow should freeze at the failure load, not collapse.\n    def fixed_update(self, dt: float):\n        if self.load is None or self.broken:\n            return\n        sample = self.load.latest()\n        if sample is None:\n            return\n        self.force = sample.force\n        self.newtons = (self.force.x ** 2 + self.force.y ** 2 + self.force.z ** 2) ** 0.5\n        self.peak = max(self.peak, self.newtons)\n\n    def update(self, dt: float):\n        if editor is None:\n            return\n        # The load, as a line out of the mount: green while a log is leaning on\n        # the bar, red once it is over what the joint is authored to take.\n        #\n        # Drawn only under MEANINGFUL load (a quarter of the limit) - idle it\n        # said nothing and read as stray debug geometry, which is exactly what\n        # the user called it. An instrument that only appears when something is\n        # actually pushing explains itself.\n        #\n        # WORLD position, not .position: draw_line takes world space, and the\n        # joint node's local position put the line under the conveyor - a real\n        # authored-in-the-wild bug, worth this comment.\n        if not self.broken and self.newtons < self.limit * 0.25:\n            return\n        anchor = self.obj.get_world_position()\n        tip = threepp.Vector3(anchor.x + self.force.x * self.draw_scale,\n                              anchor.y + self.force.y * self.draw_scale,\n                              anchor.z + self.force.z * self.draw_scale)\n        hot = self.broken or self.newtons > self.limit\n        editor.draw_line(anchor, tip, 0xff3b1f if hot else 0x39e07a)\n\n    # Called once, when the constraint gives way. Only a script ON the joint\n    # node gets this. break_force is the breaking step's solver force - the\n    # TRUE failure load, past the threshold, latched at the break - where\n    # self.peak is only the biggest sample the load cell managed to take (by\n    # now the stream reads zero: a broken joint transmits nothing). The load\n    # cell's final non-zero sample carries the same latched wrench, so the two\n    # figures agree unless the sensor's rate gate skipped the breaking substep.\n    def on_break(self):\n        self.broken = True\n        snapped = self.peak\n        if self.joint is not None:\n            f = self.joint.break_force\n            snapped = (f.x ** 2 + f.y ** 2 + f.z ** 2) ** 0.5\n            # Freeze the drawn arrow at the failure wrench.\n            self.force = f\n            self.newtons = snapped\n        print(\"Timber Yard: the stop bar SNAPPED at %.0f N (peak sampled %.0f N)\"\n              % (snapped, self.peak), flush=True)\n        if editor is None:\n            return\n        master = editor.script_from_object(editor.scene().get_object_by_name(self.master))\n        if master is not None:\n            master.fail(\"the stop bar snapped - two logs reached the bay together\")\n",
               "sensor": "type=forcetorque;rate=120;seed=5;gyrodensity=0.005;gyrowalk=0.00004;acceldensity=0.06;accelwalk=0.004;near=0.1;far=30;rangestddev=0.02;rangepermetre=0;rangebias=0;fov=60;width=160;height=120;beams=vlp16;facesize=128;joint=;encoderres=0;contactthreshold=0"
             },
             "layers": 1,
@@ -11754,10 +11754,10 @@ namespace {
         "uuid": "2db3ab80-cb72-4c4a-a6c7-94c1cd0e8333",
         "type": "Group",
         "name": "Yard Sign",
-        "userData": {
+    )JSON",
+            R"JSON(    "userData": {
           "scriptFields": "logs=8;gate=Gate Hinge;counter=Bay Trigger",
-          "scriptSource": "# Timber Yard - the yard master.\n#\n# The mission, as a sequence rather than as a state machine. The outer coroutine\n# settles, then releases eight logs; releasing ONE is a generator of its own,\n# yielded from the outer one - a yielded generator costs no frame of its own, so\n# `yield self.release_one(i)` reads like the call it is.\n#\n# SPACE is the manual override, folded into the until() below: it stops the\n# mission waiting for the log that is still on its way and asks for the next one\n# now. The gate honours it too, and two logs arriving in the bay together is\n# what breaks the stop bar - which is the yard's one failure, and it is a\n# person's doing.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass YardMaster:\n\n    logs = 8\n    gate = \"Gate Hinge\"\n    counter = \"Bay Trigger\"\n    settle_seconds = 1.5# SIM seconds before the first release\n    patience = 25.0     # SIM)JSON",
-            R"JSON( seconds to wait for one log before giving up\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.failed = False\n        self.reason = \"\"\n        self.done = False\n        self.delivered = 0\n        self.task = None\n        self.gate_node = None\n        self.counter_node = None\n        if editor is None:\n            return\n        scene = editor.scene()\n        self.gate_node = scene.get_object_by_name(self.gate)\n        self.counter_node = scene.get_object_by_name(self.counter)\n        print(\"Timber Yard: %d logs to run through the saw bay. \"\n              \"Hold SPACE to override the gate interlock.\" % self.logs, flush=True)\n        self.task = editor.start_coroutine(self.mission())\n\n    # --- the mission ---------------------------------------------------------\n    def mission(self):\n        yield editor.wait(self.settle_seconds)\n        for i in range(self.logs):\n            if self.failed:\n                break\n            self.delivered = yield self.release_one(i + 1)\n        self.done = True\n        self.report()\n\n    # One log: ask the gate for it, then wait for the bay to say it arrived.\n    # This is a generator, so the `yield` in the caller resumes with what it\n    # returns.\n    def release_one(self, index: int):\n        gate = editor.script_from_object(self.gate_node)\n        counter = editor.script_from_object(self.counter_node)\n        if gate is None or counter is None:\n            return 0\n        target = counter.count + 1\n        gate.request()\n        deadline = editor.time.sim_time + self.patience\n        # SPACE is the override; self.failed and the deadline are the two ways\n        # this stops waiting for a log that is not coming.\n        yield editor.until(lambda: counter.count >= target\n                           or self.failed\n                           or editor.is_key_down(\"SPACE\")\n                           or editor.time.sim_time > deadline)\n        return counter.count\n\n    # Called by the stop bar when the joint gives way.\n    def fail(self, reason: str):\n        if self.failed:\n            return\n        self.failed = True\n        self.reason = reason\n        print(\"Timber Yard: MISSION FAILED -\", reason, flush=True)\n\n    # BOTH clocks, side by side. They do not agree and they never catch up: a\n    # frame that hitches advances wall_time in full and simulates at most a few\n    # substeps. The throughput is quoted on the simulated one, because that is\n    # the one that describes the yard.\n    def report(self):\n        counter = editor.script_from_object(self.counter_node)\n        count = counter.count if counter is not None else 0\n        rate = counter.throughput() if counter is not None else 0.0\n        t = editor.time\n        print(\"Timber Yard: %d/%d logs sawn%s\" %\n              (count, self.logs, \" (mission failed)\" if self.failed else \"\"), flush=True)\n        print(\"Timber Yard: %.1f s simulated in %.1f s of wall clock (%d substeps), \"\n              \"%.2f logs per simulated second\"\n              % (t.sim_time, t.wall_time, t.steps, rate), flush=True)\n"
+          "scriptSource": "# Timber Yard - the yard master.\n#\n# The mission, as a sequence rather than as a state machine. The outer coroutine\n# settles, then releases eight logs; releasing ONE is a generator of its own,\n# yielded from the outer one - a yielded generator costs no frame of its own, so\n# `yield self.release_one(i)` reads like the call it is.\n#\n# SPACE is the manual override, folded into the until() below: it stops the\n# mission waiting for the log that is still on its way and asks for the next one\n# now. The gate honours it too, and two logs arriving in the bay together is\n# what breaks the stop bar - which is the yard's one failure, and it is a\n# person's doing.\nimport threepp\n\neditor = getattr(threepp, \"editor\", None)\n\n\nclass YardMaster:\n\n    logs = 8\n    gate = \"Gate Hinge\"\n    counter = \"Bay Trigger\"\n    settle_seconds = 1.5# SIM seconds before the first release\n    patience = 25.0     # SIM seconds to wait for one log before giving up\n\n    def start(self, obj: threepp.Object3D):\n        self.obj = obj\n        self.failed = False\n        self.reason = \"\"\n        self.done = False\n        self.delivered = 0\n        self.task = None\n        self.gate_node = None\n        self.counter_node = None\n        if editor is None:\n            return\n        scene = editor.scene()\n        self.gate_node = scene.get_object_by_name(self.gate)\n        self.counter_node = scene.get_object_by_name(self.counter)\n        print(\"Timber Yard: %d logs to run through the saw bay. \"\n              \"Hold SPACE to override the gate interlock.\" % self.logs, flush=True)\n        self.task = editor.start_coroutine(self.mission())\n\n    # --- the mission ---------------------------------------------------------\n    def mission(self):\n        yield editor.wait(self.settle_seconds)\n        for i in range(self.logs):\n            if self.failed:\n                break\n            self.delivered = yield self.release_one(i + 1)\n        self.done = True\n        self.report()\n\n    # One log: ask the gate for it, then wait for the bay to say it arrived.\n    # This is a generator, so the `yield` in the caller resumes with what it\n    # returns.\n    def release_one(self, index: int):\n        gate = editor.script_from_object(self.gate_node)\n        counter = editor.script_from_object(self.counter_node)\n        if gate is None or counter is None:\n            return 0\n        target = counter.count + 1\n        gate.request()\n        deadline = editor.time.sim_time + self.patience\n        # SPACE is the override; self.failed and the deadline are the two ways\n        # this stops waiting for a log that is not coming.\n        yield editor.until(lambda: counter.count >= target\n                           or self.failed\n                           or editor.is_key_down(\"SPACE\")\n                           or editor.time.sim_time > deadline)\n        return counter.count\n\n    # Called by the stop bar when the joint gives way.\n    def fail(self, reason: str):\n        if self.failed:\n            return\n        self.failed = True\n        self.reason = reason\n        print(\"Timber Yard: MISSION FAILED -\", reason, flush=True)\n\n    # BOTH clocks, side by side. They do not agree and they never catch up: a\n    # frame that hitches advances wall_time in full and simulates at most a few\n    # substeps. The throughput is quoted on the simulated one, because that is\n    # the one that describes the yard.\n    def report(self):\n        counter = editor.script_from_object(self.counter_node)\n        count = counter.count if counter is not None else 0\n        rate = counter.throughput() if counter is not None else 0.0\n        t = editor.time\n        print(\"Timber Yard: %d/%d logs sawn%s\" %\n              (count, self.logs, \" (mission failed)\" if self.failed else \"\"), flush=True)\n        print(\"Timber Yard: %.1f s simulated in %.1f s of wall clock (%d substeps), \"\n              \"%.2f logs per simulated second\"\n              % (t.sim_time, t.wall_time, t.steps, rate), flush=True)\n"
         },
         "layers": 1,
         "matrix": [
@@ -11899,7 +11899,8 @@ namespace {
             "uuid": "997dd596-fd22-4ee7-b658-129b51492660",
             "type": "Mesh",
             "name": "Sign Post 2",
-            "castShadow": true,
+  )JSON",
+            R"JSON(          "castShadow": true,
             "receiveShadow": true,
             "layers": 1,
             "matrix": [
@@ -11941,8 +11942,7 @@ namespace {
           0.0,
           0.4077604413032532,
           0.0,
- )JSON",
-            R"JSON(         0.9130889177322388,
+          0.9130889177322388,
           0.0,
           -8.199999809265137,
           0.0,
@@ -12198,7 +12198,8 @@ namespace {
           0.0,
           -5.599999904632568,
           1.0
-        ],
+       )JSON",
+            R"JSON( ],
         "children": [
           {
             "uuid": "38f58462-18b9-4a60-908f-cd8d7a54daba",
@@ -12234,8 +12235,7 @@ namespace {
             "name": "Stacked Log 2",
             "castShadow": true,
             "receiveShadow": true,
-            "layers")JSON",
-            R"JSON(: 1,
+            "layers": 1,
             "matrix": [
               1.0,
               0.0,
@@ -12485,7 +12485,8 @@ namespace {
             "name": "Needles 3",
             "castShadow": true,
             "receiveShadow": true,
-            "layers": 1,
+     )JSON",
+            R"JSON(       "layers": 1,
             "matrix": [
               0.3373452425003052,
               0.0,
@@ -12525,8 +12526,7 @@ namespace {
           0.0,
           0.9463001489639282,
           0.0,
-          -0.3232897520)JSON",
-            R"JSON(0653076,
+          -0.32328975200653076,
           0.0,
           -5.5,
           0.0,
@@ -12787,7 +12787,8 @@ namespace {
         ]
       },
       {
-        "uuid": "e2e2305d-3a7a-4a58-905e-7ad216e7bc5d",
+        "u)JSON",
+            R"JSON(uid": "e2e2305d-3a7a-4a58-905e-7ad216e7bc5d",
         "type": "Group",
         "name": "Spruce 4",
         "layers": 1,
@@ -12829,8 +12830,7 @@ namespace {
               0.0,
               0.0,
               0.3700000047683716,
-  )JSON",
-            R"JSON(            0.0,
+              0.0,
               0.0,
               3.240000009536743,
               0.0,
@@ -13088,7 +13088,8 @@ namespace {
         ],
         "children": [
           {
-            "uuid": "65707d59-0bcb-46dc-aa48-0b1897af0c3e",
+            "uuid": "65707d59-0bcb-46dc-aa48-0)JSON",
+            R"JSON(b1897af0c3e",
             "type": "Mesh",
             "name": "Bole",
             "castShadow": true,
@@ -13127,8 +13128,7 @@ namespace {
               0.0,
               0.0,
               0.0,
- )JSON",
-            R"JSON(             0.0,
+              0.0,
               5.87999963760376,
               0.0,
               0.0,

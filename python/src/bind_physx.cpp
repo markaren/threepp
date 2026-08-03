@@ -332,7 +332,18 @@ namespace threepp_py {
                             return py::make_tuple(force, torque);
                         },
                         "(force N, torque N*m) the solver applied to hold the constraint on "
-                        "the last step, world axes.");
+                        "the last step, world axes. Zero once broken - the failure load is "
+                        "break_wrench().")
+                .def(
+                        "break_wrench",
+                        [](const Joint& j) {
+                            Vector3 force, torque;
+                            j.breakWrench(force, torque);
+                            return py::make_tuple(force, torque);
+                        },
+                        "(force N, torque N*m) the solver applied on the step that BROKE the "
+                        "joint - the true failure load, past the break threshold. Zero until "
+                        "broken.");
 
         py::class_<PhysxMaterial>(m, "PhysxMaterial",
                                   "A contact material (surface friction + restitution). Create via "

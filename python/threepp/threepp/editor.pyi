@@ -270,12 +270,22 @@ class Joint:
     @property
     def reaction_force(self) -> threepp.Vector3:
         """
-        Force (N, world axes) the solver applied to hold the constraint on the last step.
+        Force (N, world axes) the solver applied to hold the constraint on the last step. Zero once broken - a broken joint transmits nothing; the failure load is break_force.
         """
     @property
     def reaction_torque(self) -> threepp.Vector3:
         """
         Torque (N*m, world axes) alongside reaction_force.
+        """
+    @property
+    def break_force(self) -> threepp.Vector3:
+        """
+        The force (N, world axes) the solver applied on the step that BROKE the joint - the true failure load, necessarily past the authored break threshold. Zero until broken; an on_break() reads it directly, the break already happened.
+        """
+    @property
+    def break_torque(self) -> threepp.Vector3:
+        """
+        Torque (N*m, world axes) alongside break_force.
         """
 class Vehicle:
     """

@@ -2038,7 +2038,11 @@ class Joint:
         """
     def reaction(self) -> tuple[Vector3, Vector3]:
         """
-        (force N, torque N*m) the solver applied to hold the constraint on the last step, world axes.
+        (force N, torque N*m) the solver applied to hold the constraint on the last step, world axes. Zero once broken - the failure load is break_wrench().
+        """
+    def break_wrench(self) -> tuple[Vector3, Vector3]:
+        """
+        (force N, torque N*m) the solver applied on the step that BROKE the joint - the true failure load, past the break threshold. Zero until broken.
         """
     def set_drive_target(self, value: typing.SupportsFloat | typing.SupportsIndex) -> None:
         """

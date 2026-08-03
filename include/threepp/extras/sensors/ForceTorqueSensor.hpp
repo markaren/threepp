@@ -16,6 +16,14 @@
 // above. Which source feeds the sensor is fixed at construction; the noise
 // model, rate gate and buffering are identical either way.
 //
+// A BREAKABLE joint's failure load is part of the record: the first sample
+// after the break carries the breaking step's solver wrench (the load that
+// actually snapped it — see Joint::breakWrench), and every sample after that
+// reads zero. Without this, the stream would be poisoned right where it
+// matters most: PxConstraint::getForce freezes on the breaking step's value
+// once the constraint leaves the solver, so a naive read reports the failure
+// load as live load forever.
+//
 // Frame: PhysX reports the articulation wrench in the CHILD JOINT FRAME of the
 // measured link's inbound joint (see
 // PxArticulationJointReducedCoordinate::getChildPose), which is the joint
@@ -142,6 +150,7 @@ namespace threepp {
             forceNoiseState_.reset(forceNoise);
             torqueNoiseState_.reset(torqueNoise);
             ring_.clear();
+            breakSampled_ = false;
             resetTiming();
         }
 
@@ -150,7 +159,22 @@ namespace threepp {
 
             Vector3 force, torque;
             if (joint_) {
-                joint_->reactionForce(force, torque);
+                // A BREAKABLE joint's failure is part of the record: the first
+                // sample after the break carries the breaking step's solver
+                // wrench (Joint::breakWrench — the true failure load, past the
+                // authored threshold), every later one reads zero, because a
+                // broken joint transmits nothing. On a rate-gated sensor the
+                // break sample lands on the next due tick and is stamped with
+                // that tick's time — the load cell reports on its own clock,
+                // the value is latched at the break instant either way.
+                if (joint_->broken()) {
+                    if (!breakSampled_) {
+                        joint_->breakWrench(force, torque);
+                        breakSampled_ = true;
+                    }// else: zeros, through the same noise pipeline as any sample
+                } else {
+                    joint_->reactionForce(force, torque);
+                }
             } else {
                 if (!cache_) return;// not registered
 
@@ -188,6 +212,8 @@ namespace threepp {
         ::physx::PxArticulationCache* cache_ = nullptr;
         ::physx::PxU32 linkIndex_ = 0;
         const Joint* joint_ = nullptr;
+        // The one-shot break sample has been emitted (plain-joint form only).
+        bool breakSampled_ = false;
 
         GaussianNoise forceNoiseState_;
         GaussianNoise torqueNoiseState_;

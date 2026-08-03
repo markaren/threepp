@@ -13,6 +13,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/extras/physx/Articulation.hpp"
+#include "threepp/extras/physx/Joint.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/sensors/ForceTorqueSensor.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
@@ -247,6 +248,101 @@ TEST_CASE("F/T noise is reproducible for a fixed seed") {
         REQUIRE(a[i].force.y == b[i].force.y);
         REQUIRE(a[i].torque.x == b[i].torque.x);
     }
+}
+
+TEST_CASE("A load cell across a breaking weld records the failure load, then zero") {
+
+    // A crate welded to the world with nothing under it, the weld armed to
+    // fail under the crate's own weight. The load that snapped it is a known
+    // number — the weight — so the break sample can be pinned against physics
+    // rather than against the implementation.
+    //
+    // Deliberately NO break subscription here: this is the standalone path,
+    // where the failure load is recovered by Joint's lazy latch (the first
+    // post-break read of PxConstraint::getForce, whose buffer freezes on the
+    // breaking step's value) rather than handed over by the world's callback.
+    PhysxWorld world(fixedStep());
+    auto crate = box(0.2f, 0.f, 3.f, 0.f);
+    auto* body = world.add(*crate, /*density*/ 1000.f);// 8 kg -> 78.5 N of weight
+
+    const float weight = 0.2f * 0.2f * 0.2f * 1000.f * kG;
+
+    Joint::Params params;
+    params.breakForce = weight * 0.5f;// gravity alone snaps it, first substep
+    params.breakTorque = 1e9f;
+    Joint weld(world, body, nullptr,
+               ::physx::PxTransform(::physx::PxVec3(0.f, 3.f, 0.f)), params);
+
+    ForceTorqueSensor ft(*crate, weld);
+    world.registerSensor(&ft);
+
+    stepFor(world, 24);
+    REQUIRE(weld.broken());
+
+    std::vector<WrenchSample> samples;
+    ft.drain(samples);
+    REQUIRE(samples.size() == 24);
+
+    // The first sample is the breaking substep's, carrying the true failure
+    // load: past the threshold that armed the break, equal to the weight the
+    // weld was holding when it gave way.
+    INFO("break sample |F|=" << samples[0].force.length() << " N, weight=" << weight << " N");
+    CHECK(samples[0].force.length() >= params.breakForce);
+    CHECK_THAT(samples[0].force.length(), WithinRel(weight, 0.1f));
+    // Every sample after it reads zero: a broken joint transmits nothing.
+    // (Without the latch-and-zero this stream would repeat the failure load
+    // forever — getForce's buffer freezes, it does not clear.)
+    for (std::size_t i = 1; i < samples.size(); ++i) {
+        INFO("sample " << i);
+        REQUIRE_THAT(samples[i].force.length(), WithinAbs(0.f, 1e-4f));
+        REQUIRE_THAT(samples[i].torque.length(), WithinAbs(0.f, 1e-4f));
+    }
+
+    // The joint keeps both answers apart: breakWrench is the failure load for
+    // the rest of its life, reactionForce is honestly zero.
+    Vector3 force, torque;
+    weld.breakWrench(force, torque);
+    CHECK_THAT(force.length(), WithinRel(weight, 0.1f));
+    weld.reactionForce(force, torque);
+    CHECK_THAT(force.length(), WithinAbs(0.f, 1e-4f));
+
+    world.unregisterSensor(&ft);
+}
+
+TEST_CASE("The break event carries the breaking step's wrench") {
+
+    // The callback is the one point where the failure load is DEFINED (it
+    // fires inside fetchResults of the breaking substep, solver results
+    // current); everything downstream latches from here. Same rig as above,
+    // this time listening.
+    PhysxWorld world(fixedStep());
+    auto crate = box(0.2f, 0.f, 3.f, 0.f);
+    auto* body = world.add(*crate, /*density*/ 1000.f);
+
+    const float weight = 0.2f * 0.2f * 0.2f * 1000.f * kG;
+
+    Joint::Params params;
+    params.breakForce = weight * 0.5f;
+    params.breakTorque = 1e9f;
+    Joint weld(world, body, nullptr,
+               ::physx::PxTransform(::physx::PxVec3(0.f, 3.f, 0.f)), params);
+
+    bool fired = false;
+    Vector3 eventForce;
+    const auto watch = world.watchConstraintBreaks([&](const ConstraintBreakEvent& event) {
+        if (event.joint != weld.raw()) return;
+        fired = true;
+        eventForce.copy(event.force);
+    });
+
+    stepFor(world, 24);
+    REQUIRE(fired);
+
+    INFO("event |F|=" << eventForce.length() << " N, weight=" << weight << " N");
+    CHECK(eventForce.length() >= params.breakForce);
+    CHECK_THAT(eventForce.length(), WithinRel(weight, 0.1f));
+
+    world.unwatchConstraintBreaks(watch);
 }
 
 TEST_CASE("Attaching an F/T sensor to the root link throws") {

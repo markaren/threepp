@@ -274,20 +274,72 @@ namespace threepp {
 
         // The force and torque the solver applied to hold the constraint on
         // the last step — what a force/torque sensor bolted across the joint
-        // reads. Zero before the first step, and forever once broken.
+        // reads. Zero before the first step, and zero once broken: a broken
+        // joint transmits nothing. (PxConstraint::getForce does NOT say zero
+        // then — the broken constraint leaves the solver's active set and the
+        // buffer freezes on the breaking step's value, a stale reading that
+        // would otherwise be reported as live load forever. breakWrench()
+        // is where that final value lives, on purpose.)
         void reactionForce(Vector3& force, Vector3& torque) const {
+            if (broken()) {
+                latchBreakWrench();
+                force.set(0, 0, 0);
+                torque.set(0, 0, 0);
+                return;
+            }
             ::physx::PxVec3 f(::physx::PxZero), t(::physx::PxZero);
             if (auto* constraint = joint_->getConstraint()) constraint->getForce(f, t);
             force.set(f.x, f.y, f.z);
             torque.set(t.x, t.y, t.z);
         }
 
+        // The wrench the solver applied on the BREAKING step — the true
+        // failure load, necessarily past the authored threshold. Zero until
+        // the joint breaks. Latched from the world's break callback when a
+        // session is wired for it (see PhysxWorld::watchConstraintBreaks);
+        // a standalone reader is covered by the lazy latch below either way.
+        void breakWrench(Vector3& force, Vector3& torque) const {
+            if (broken()) latchBreakWrench();
+            force.copy(breakForce_);
+            torque.copy(breakTorque_);
+        }
+
+        // Stamp the failure load, first writer wins. Called by whoever hears
+        // the break callback with the event's wrench; harmless to call again.
+        void latchBreakWrench(const Vector3& force, const Vector3& torque) const {
+            if (breakLatched_) return;
+            breakLatched_ = true;
+            breakForce_.copy(force);
+            breakTorque_.copy(torque);
+        }
+
         [[nodiscard]] Type type() const { return type_; }
         [[nodiscard]] ::physx::PxJoint* raw() const { return joint_; }
 
     private:
+        // The lazy half of the latch, for a reader with no break callback
+        // wired: after the breaking step PxConstraint::getForce holds that
+        // step's value — frozen, because a broken constraint is never solved
+        // again — so the first post-break read still recovers the failure
+        // load. Measured (ForceTorqueSensor_test pins this path), not
+        // promised by PhysX, which is why the callback latch above is
+        // preferred when available.
+        void latchBreakWrench() const {
+            if (breakLatched_) return;
+            ::physx::PxVec3 f(::physx::PxZero), t(::physx::PxZero);
+            if (auto* constraint = joint_->getConstraint()) constraint->getForce(f, t);
+            breakLatched_ = true;
+            breakForce_.set(f.x, f.y, f.z);
+            breakTorque_.set(t.x, t.y, t.z);
+        }
+
         ::physx::PxJoint* joint_ = nullptr;
         Type type_;
+        // The latch is a measurement cache, not object state — mutable so the
+        // const read paths above can fill it on first sight of the break.
+        mutable bool breakLatched_ = false;
+        mutable Vector3 breakForce_;
+        mutable Vector3 breakTorque_;
     };
 
 }// namespace threepp

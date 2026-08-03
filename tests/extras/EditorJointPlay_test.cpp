@@ -461,6 +461,96 @@ TEST_CASE("a sensor authored on a joint node reads the joint", "[editor][physx]"
     sensors.stop();
 }
 
+TEST_CASE("an impact break records the failure spike, not the last quiet sample",
+          "[editor][physx]") {
+
+    SceneDocument document;
+    auto& scene = document.scene();
+
+    // The Timber Yard shape: a weld carrying a settled ~10 N standing load,
+    // rated for 50 N, and a crate dropped on it to spike past the rating. The
+    // interesting number — the load at the instant of failure — is far above
+    // both the threshold and anything the pre-break stream saw, which is
+    // exactly the gap this exists to close.
+    auto crate = makeDynamicBox(scene, "Crate", {0.f, 3.f, 0.f});
+    scene.add(crate);
+    auto hammer = makeDynamicBox(scene, "Hammer", {0.f, 6.f, 0.f});
+    scene.add(hammer);
+
+    JointConfig config;
+    config.type = JointConfig::Type::Fixed;
+    config.breakForce = 50.f;
+    config.breakTorque = 1e9f;
+    auto joint = Object3D::create();
+    joint->name = "Fuse";
+    config.write(*joint);
+    crate->add(joint);
+
+    PhysicsPlaySession session;
+    std::vector<std::string> logged;
+    session.setLogger([&](const std::string& line) { logged.push_back(line); });
+    session.start(scene);
+    REQUIRE(session.jointCount() == 1);
+    const auto* played = session.findJoint(joint.get());
+    REQUIRE(played);
+    REQUIRE(played->joint);
+
+    ForceTorqueSensor ft(*joint, *played->joint);
+    session.world()->registerSensor(&ft);
+
+    for (int i = 0; i < 300 && !played->joint->broken(); ++i) session.update(1.f / 60.f);
+    REQUIRE(played->joint->broken());
+    run(session, 6);// a few steps past the break, so the stream shows the zeros
+
+    // The session's break watch latched the breaking step's wrench onto the
+    // joint: the failure load, past the threshold that armed the break and
+    // far above the standing load.
+    Vector3 breakForce, breakTorque;
+    played->joint->breakWrench(breakForce, breakTorque);
+    INFO("break |F|=" << breakForce.length() << " N");
+    CHECK(breakForce.length() >= config.breakForce);
+
+    // The sensor stream tells the whole story in order: quiet standing load,
+    // ONE sample carrying the failure spike, zeros from there on.
+    std::vector<WrenchSample> samples;
+    ft.drain(samples);
+    REQUIRE(samples.size() >= 8);
+    std::size_t spikes = 0;
+    std::size_t spikeAt = 0;
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        if (samples[i].force.length() >= config.breakForce) {
+            ++spikes;
+            spikeAt = i;
+        }
+    }
+    REQUIRE(spikes == 1);
+    INFO("spike |F|=" << samples[spikeAt].force.length() << " N at sample " << spikeAt);
+    // The spike IS the latched failure load...
+    CHECK_THAT(samples[spikeAt].force.length(), WithinAbs(breakForce.length(), 1e-3f));
+    // ...preceded by the settled standing load (the crate's ~10 N weight)...
+    REQUIRE(spikeAt > 0);
+    CHECK_THAT(samples[spikeAt - 1].force.length(), WithinAbs(9.81f, 2.f));
+    // ...and followed by silence: a broken joint transmits nothing.
+    for (std::size_t i = spikeAt + 1; i < samples.size(); ++i) {
+        INFO("sample " << i);
+        REQUIRE_THAT(samples[i].force.length(), WithinAbs(0.f, 1e-4f));
+    }
+
+    // reaction_force (what scripts poll) reads zero now; the console line
+    // named the measured load.
+    Vector3 liveForce, liveTorque;
+    played->joint->reactionForce(liveForce, liveTorque);
+    CHECK_THAT(liveForce.length(), WithinAbs(0.f, 1e-4f));
+    const bool reported = std::any_of(logged.begin(), logged.end(), [](const std::string& line) {
+        return line.find("Fuse") != std::string::npos && line.find("broke at") != std::string::npos &&
+               line.find(" N") != std::string::npos;
+    });
+    CHECK(reported);
+
+    session.world()->unregisterSensor(&ft);
+    session.stop();
+}
+
 TEST_CASE("a joint naming a missing body is skipped, play intact", "[editor][physx]") {
 
     SceneDocument document;
