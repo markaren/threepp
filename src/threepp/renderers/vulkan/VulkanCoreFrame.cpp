@@ -946,8 +946,16 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
 // whole point of persistent views is to never go near that.
 
 VulkanRenderer::Impl::ViewContext* VulkanRenderer::Impl::findView(uint32_t handle) {
-            for (auto& v : views_)
-                if (v->id == handle) return v.get();
+            for (auto& v : views_) {
+                if (v->id != handle) continue;
+                // A view awaiting its deferred free is already GONE as far as
+                // the public API is concerned. The caller asked for it to be
+                // removed; that its memory is released at the next frame
+                // boundary is an implementation detail, and letting a readback
+                // through in the meantime would hand back labels for a camera
+                // the caller believes no longer exists.
+                return v->pendingDestroy ? nullptr : v.get();
+            }
             return nullptr;
         }
 

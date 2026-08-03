@@ -50,6 +50,8 @@
 #include "capture_util.hpp"
 
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -151,7 +153,7 @@ namespace {
 
     struct Mode {
         bool parity = false, history = false, lifecycle = false, bench = false, sweep = false;
-        bool cullCheck = false;
+        bool cullCheck = false, aov = false;
         // --nocut: run the history gate WITHOUT moving the other camera. The
         // control. Whatever this reports is the still view's own residual
         // convergence drift over the same number of frames, and the real run
@@ -173,9 +175,10 @@ int main(int argc, char** argv) {
         else if (a == "--nocut") mode.noCut = true;
         else if (a == "--sweep") mode.sweep = true;
         else if (a == "--cullcheck") mode.cullCheck = true;
+        else if (a == "--aov") mode.aov = true;
     }
     const bool headless = mode.parity || mode.history || mode.lifecycle ||
-                          mode.bench || mode.sweep || mode.cullCheck;
+                          mode.bench || mode.sweep || mode.cullCheck || mode.aov;
 
     std::unique_ptr<Canvas> canvasPtr;
     std::unique_ptr<VulkanRenderer> rendererPtr;
@@ -457,6 +460,103 @@ int main(int argc, char** argv) {
                         "  is built once and shared; what a view costs is its own pixels.\n");
             benchDone = true;
             std::exit(0);
+        });
+        return 0;
+    }
+
+    // ── Per-view G-buffer AOVs: depth + segmentation ground truth ──────────
+    // The payoff for a synthetic-data rig. Each camera yields not just colour
+    // but lossless depth and the Ids attachment, whose .y channel is a stable
+    // per-object instance id — so one readback per camera gives depth and
+    // instance segmentation for the same simulated instant, from N viewpoints.
+    //
+    // Checks the two things that could be quietly wrong: that each view's AOV
+    // has that VIEW's dimensions (not the primary's), and that two cameras
+    // looking at the same scene from different places return DIFFERENT depth —
+    // which is what a shared G-buffer would fail.
+    if (mode.aov) {
+        PerspectiveCamera camA(50.f, 1.6f, 0.1f, 100.f);
+        camA.position.set(4.0f, 2.5f, 4.5f);
+        camA.lookAt(Vector3(0.f, 1.5f, 0.f));
+        camA.updateMatrixWorld();
+        PerspectiveCamera camB(50.f, 1.6f, 0.1f, 100.f);
+        camB.position.set(-4.0f, 2.5f, 4.5f);
+        camB.lookAt(Vector3(0.f, 1.5f, 0.f));
+        camB.updateMatrixWorld();
+
+        uint32_t hA = 0, hB = 0;
+        canvas.animate([&] {
+            renderer.render(scene, primaryCam);
+            ++frame;
+            if (frame == 2) {
+                hA = renderer.addView(camA, 320, 200);
+                hB = renderer.addView(camB, 512, 320);
+                return;
+            }
+            if (frame < 40) return;
+
+            int failures = 0;
+            std::vector<uint8_t> dA, dB, idA;
+            int w = 0, h = 0, bpp = 0;
+
+            const bool okA = renderer.readViewGBufferAOV(
+                    hA, VulkanRenderer::GBufferAOV::Depth, dA, w, h, bpp);
+            std::printf("view A depth: ok=%d %dx%d bpp=%d (want 320x200 bpp=4)\n",
+                        int(okA), w, h, bpp);
+            if (!okA || w != 320 || h != 200 || bpp != 4) ++failures;
+
+            int wB = 0, hB2 = 0, bppB = 0;
+            const bool okB = renderer.readViewGBufferAOV(
+                    hB, VulkanRenderer::GBufferAOV::Depth, dB, wB, hB2, bppB);
+            std::printf("view B depth: ok=%d %dx%d bpp=%d (want 512x320 bpp=4)\n",
+                        int(okB), wB, hB2, bppB);
+            if (!okB || wB != 512 || hB2 != 320 || bppB != 4) ++failures;
+
+            int wI = 0, hI = 0, bppI = 0;
+            const bool okI = renderer.readViewGBufferAOV(
+                    hA, VulkanRenderer::GBufferAOV::Ids, idA, wI, hI, bppI);
+            // Ids is RGBA16UI: .x = instanceCustomIndex+1, 0 = sky. Count the
+            // pixels that hit geometry — a per-view Ids attachment that was
+            // accidentally the primary's would still be non-empty, so the
+            // dimension check above is what separates them; this confirms the
+            // attachment carries real labels rather than zeroes.
+            long hits = 0;
+            if (okI) {
+                const auto* px = reinterpret_cast<const uint16_t*>(idA.data());
+                for (long i = 0; i < long(wI) * hI; ++i)
+                    if (px[i * 4] != 0) ++hits;
+            }
+            std::printf("view A ids  : ok=%d %dx%d bpp=%d, %ld/%d pixels carry an instance id\n",
+                        int(okI), wI, hI, bppI, hits, wI * hI);
+            if (!okI || wI != 320 || hI != 200 || bppI != 8 || hits == 0) ++failures;
+
+            // Two cameras, same scene, different places: their depth buffers
+            // must not agree. (Compared over the overlapping top-left region,
+            // since the two views are different sizes.)
+            long differing = 0, compared = 0;
+            if (okA && okB) {
+                const auto* fa = reinterpret_cast<const float*>(dA.data());
+                const auto* fb = reinterpret_cast<const float*>(dB.data());
+                for (int y = 0; y < 200; ++y)
+                    for (int x = 0; x < 320; ++x, ++compared)
+                        if (std::fabs(fa[y * 320 + x] - fb[y * 512 + x]) > 1e-4f) ++differing;
+            }
+            const double pct = compared ? 100.0 * double(differing) / double(compared) : 0.0;
+            std::printf("A vs B depth differs on %.1f%% of compared pixels (want > 50%%)\n", pct);
+            if (pct <= 50.0) ++failures;
+
+            // A stale handle must refuse rather than quietly answer with the
+            // primary's G-buffer.
+            (void) renderer.removeView(hA);
+            std::vector<uint8_t> junk;
+            int jw = 0, jh = 0, jb = 0;
+            const bool stale = renderer.readViewGBufferAOV(
+                    hA, VulkanRenderer::GBufferAOV::Depth, junk, jw, jh, jb);
+            std::printf("stale handle rejected: %d (want 1)\n", int(!stale));
+            if (stale) ++failures;
+
+            std::printf("per-view AOV: %s\n", failures == 0 ? "PASS" : "FAIL");
+            std::exit(failures == 0 ? 0 : 1);
         });
         return 0;
     }

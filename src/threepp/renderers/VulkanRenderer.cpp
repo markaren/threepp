@@ -903,6 +903,14 @@ namespace threepp {
     }// namespace
 
     bool VulkanRenderer::readGBufferAOV(GBufferAOV aov, std::vector<uint8_t>& out,
+                                        int& width, int& height, int& bytesPerPixel) {
+        // Handle 0 is the primary — the whole body below is view-agnostic
+        // apart from which G-buffer it reads.
+        return readViewGBufferAOV(0u, aov, out, width, height, bytesPerPixel);
+    }
+
+    bool VulkanRenderer::readViewGBufferAOV(uint32_t viewHandle, GBufferAOV aov,
+                                            std::vector<uint8_t>& out,
                                             int& width, int& height, int& bytesPerPixel) {
         auto& impl = *core();
         auto* ctx  = impl.ctx.get();
@@ -923,9 +931,16 @@ namespace threepp {
         // endFrame advances currentFrame after recording (VulkanCoreImpl.hpp),
         // so the freshest attachment contents are (currentFrame - 1) mod N —
         // the same slot arithmetic the fog history uses.
-        const uint32_t n    = static_cast<uint32_t>(impl.primaryView().rasterGbufs.size());
+        // Which view's G-buffer. 0 = the primary; anything else must name a
+        // live secondary, and a stale handle answers false rather than
+        // silently falling back to the primary — a segmentation dataset
+        // labelled with the wrong camera is worse than a missing frame.
+        auto* src = viewHandle == 0u ? &impl.primaryView() : impl.findView(viewHandle);
+        if (!src || src->rasterGbufs[0].width == 0) return false;
+
+        const uint32_t n    = static_cast<uint32_t>(src->rasterGbufs.size());
         const uint32_t slot = (impl.currentFrame + n - 1u) % n;
-        const auto& g       = impl.primaryView().rasterGbufs[slot];
+        const auto& g       = src->rasterGbufs[slot];
 
         // Select the attachment, its aspect, and the layout it rests in after a
         // frame (the raster render pass' finalLayout; the MSAA resolve leaves the

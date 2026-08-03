@@ -165,6 +165,25 @@ namespace threepp {
         // Pixel size of a view's output, as passed to addView. False if unknown.
         bool viewSize(uint32_t handle, int& width, int& height) const;
 
+        // readGBufferAOV for a specific view. Handle 0 means the primary, so
+        // this is the general form and readGBufferAOV is the shorthand.
+        //
+        // This is what makes a multi-camera rig useful for training data rather
+        // than just for looking at: every camera yields not only colour but
+        // lossless depth and the Ids attachment, whose .y channel is a stable
+        // per-object instance id and whose .z carries the 8-bit semantic class
+        // (see setObjectInstanceId / setObjectClassId). One readback per camera
+        // gives depth, instance segmentation and semantic segmentation ground
+        // truth for the same simulated instant, from N viewpoints.
+        //
+        // A stale or unknown handle returns false rather than falling back to
+        // the primary: labels attributed to the wrong camera are worse than no
+        // labels. Same layout contract as readGBufferAOV — tightly packed,
+        // row-major, top-left origin, native GPU format.
+        [[nodiscard]] bool readViewGBufferAOV(uint32_t viewHandle, GBufferAOV aov,
+                                              std::vector<uint8_t>& out,
+                                              int& width, int& height, int& bytesPerPixel);
+
         // ── Segmentation labels for the Ids AOV ──────────────────────────
         // The Ids attachment's .y channel is a STABLE per-object instance id,
         // auto-assigned on first draw (unlike .x, the per-frame visible index,
