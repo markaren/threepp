@@ -126,6 +126,7 @@ endif ()
 # point it at an existing install:
 #   -Dunofficial-omniverse-physx-sdk_DIR=<vcpkg_installed>/x64-windows/share/unofficial-omniverse-physx-sdk
 find_package(unofficial-omniverse-physx-sdk CONFIG QUIET)
+threepp_fix_physx_static_link_order()
 if (TARGET unofficial::omniverse-physx-sdk::sdk)
     target_link_libraries(threepp_py PRIVATE unofficial::omniverse-physx-sdk::sdk)
     target_compile_definitions(threepp_py PRIVATE THREEPP_PY_HAS_PHYSX)

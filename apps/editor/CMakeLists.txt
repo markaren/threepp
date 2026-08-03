@@ -56,6 +56,7 @@ target_compile_definitions(threepp_editor
 if (NOT TARGET unofficial::omniverse-physx-sdk::sdk)
     find_package(unofficial-omniverse-physx-sdk CONFIG QUIET)
 endif ()
+threepp_fix_physx_static_link_order()
 
 if (TARGET unofficial::omniverse-physx-sdk::sdk)
     target_link_libraries(threepp_editor PRIVATE unofficial::omniverse-physx-sdk::sdk)

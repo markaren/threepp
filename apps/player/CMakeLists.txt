@@ -28,6 +28,7 @@ target_compile_features(threepp_player_core PUBLIC cxx_std_20)
 if (NOT TARGET unofficial::omniverse-physx-sdk::sdk)
     find_package(unofficial-omniverse-physx-sdk CONFIG QUIET)
 endif ()
+threepp_fix_physx_static_link_order()
 
 if (TARGET unofficial::omniverse-physx-sdk::sdk)
     # PUBLIC throughout: PlayerCore.hpp does not include the PhysX headers, but

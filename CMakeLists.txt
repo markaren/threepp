@@ -113,6 +113,12 @@ endif ()
 
 include(cmake/FetchOptionalDeps.cmake)
 
+# Static PhysX + GNU ld needs the archives wrapped in a rescan group (see the
+# module for the full story). Included here so the function is defined for
+# every subdirectory; each find_package site calls it — the port's imported
+# targets are directory-scoped, so there is no central place to patch them.
+include(cmake/PhysxStaticLinkFix.cmake)
+
 add_subdirectory(src)
 
 # V-HACD convex decomposition, a small static library the editor and the PhysX
