@@ -229,7 +229,21 @@ void PlayerCore::step(float dt) {
 
     play_.update(dt);
     ++current_.frames;
-    current_.seconds += dt;
+    // Simulated seconds, not stepped wall time. The two disagree whenever a
+    // step is longer than the world's catch-up cap (maxSubSteps substeps, then
+    // the leftover accumulator is DISCARDED): a --dt=0.5 step advances the sim
+    // by 4/60 s, not 0.5 s. --seconds promises simulated seconds, so it is read
+    // off the world's own clock — the one that stamps sensor samples — and the
+    // sum of deltas is only the fallback for a build or a document with no
+    // world to ask. The world is fresh per episode, so no baseline subtraction.
+    bool simulated = false;
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    if (physics_ && physics_->world()) {
+        current_.seconds = static_cast<float>(physics_->world()->simTime());
+        simulated = true;
+    }
+#endif
+    if (!simulated) current_.seconds += dt;
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
     // Somebody has to empty this every frame — see setDebugDrawDrain(). A

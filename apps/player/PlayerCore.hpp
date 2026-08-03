@@ -62,9 +62,12 @@ namespace threepp::player {
         std::string error;
 
         int frames = 0;
-        // Simulated seconds, summed from the deltas actually stepped. With a
-        // fixed step this is exact; with a real clock it is what the sim saw,
-        // which is the number worth reporting either way.
+        // Simulated seconds, read off the physics world's own clock — the sum
+        // of the fixed substeps it actually took, which is NOT the sum of the
+        // deltas stepped: a step longer than the world's catch-up cap simulates
+        // 4/60 s and discards the rest, however long the step claimed to be.
+        // Without a world (no SDK in the build) it degrades to the sum of
+        // deltas, the only elapsed time there is.
         float seconds = 0.f;
 
         // Scripts that raised and were disabled for the rest of the episode,
@@ -151,6 +154,10 @@ namespace threepp::player {
 
         bool beginEpisode(int index, std::string* error = nullptr);
         void step(float dt);
+        // Simulated seconds of the episode in flight (see EpisodeResult::seconds)
+        // — what a --seconds budget must be checked against, precisely because it
+        // is not the sum of the deltas the caller has been stepping.
+        [[nodiscard]] float episodeSeconds() const { return current_.seconds; }
         // Stops the sessions, restores the snapshot and returns the finished
         // result, which is also appended to results().
         EpisodeResult endEpisode();

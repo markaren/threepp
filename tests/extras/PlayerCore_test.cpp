@@ -211,6 +211,32 @@ TEST_CASE("a stopped episode leaves the document exactly as it was", "[player]")
     CHECK_FALSE(core.playing());
 }
 
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+
+TEST_CASE("an episode's seconds are simulated seconds, not stepped wall time", "[player]") {
+
+    // The number --seconds gates on and the log reports as "s sim". At a step
+    // of exactly one substep the two definitions coincide; the case that tells
+    // them apart is a step LONGER than the world's catch-up cap. A 0.5 s step
+    // wants 30 substeps, PhysxWorld takes its capped 4 and discards the rest of
+    // the accumulator, so ten such steps are five claimed seconds of which the
+    // sim saw forty substeps. `seconds` must report the forty.
+    PlayerCore core;
+    REQUIRE(core.openJson(documentJson(nullptr)));
+
+    const auto matched = core.runEpisode(0, 60, kFrame);
+    CHECK(matched.frames == 60);
+    CHECK(std::abs(matched.seconds - 1.f) < 1e-4f);
+
+    const auto hitched = core.runEpisode(1, 10, 0.5f);
+    CHECK(hitched.frames == 10);
+    CHECK(std::abs(hitched.seconds - 40.f * kFrame) < 1e-4f);
+
+    CHECK(core.exitCode() == 0);
+}
+
+#endif
+
 TEST_CASE("episodes are independent", "[player]") {
 
     PlayerCore core;

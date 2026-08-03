@@ -313,13 +313,16 @@ bool PlayerApp::playEpisode(int index) {
     const float fixedDt = options_.dt > 0.f ? options_.dt : PlayerCore::defaultDt;
 
     Clock clock;
-    float elapsed = 0.f;
     int frames = 0;
     bool windowOpen = true;
 
     while (true) {
         if (options_.frames > 0 && frames >= options_.frames) break;
-        if (budgetSeconds > 0.f && elapsed >= budgetSeconds) break;
+        // Against the sim clock the core keeps, NOT a sum of the dts stepped:
+        // --seconds promises simulated seconds, and a dt bigger than the physics
+        // catch-up cap simulates less than it steps. Summing dt here would end a
+        // --dt=0.5 --seconds=1 run after two frames of which the sim saw 0.13 s.
+        if (budgetSeconds > 0.f && core_.episodeSeconds() >= budgetSeconds) break;
 
         float dt = fixedDt;
         if (!fixed) dt = std::min(clock.getDelta(), kMaxWallDt);
@@ -333,7 +336,6 @@ bool PlayerApp::playEpisode(int index) {
             frame(dt);
         }
 
-        elapsed += dt;
         ++frames;
     }
 
