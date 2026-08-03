@@ -95,6 +95,35 @@ namespace threepp::editor {
             return scene;
         }
 
+        // Whose method is running right now: the uuid of the script instance
+        // ScriptPlaySession is currently dispatching into, or empty outside any
+        // dispatch.
+        //
+        // threepp.editor.start_coroutine is what needs it. A coroutine has to
+        // BELONG to somebody — a raise inside one disables an instance, and an
+        // instance's tasks die with it — and nothing in the call itself says
+        // who: a generator is a plain Python object and the scheduler is one
+        // shared list. So ownership is read off the dispatch that is running,
+        // which the session sets around EVERY call into script code (start,
+        // update, fixed_update, the collision, trigger and break callbacks,
+        // stop) and which the coroutine pump sets around each task it steps.
+        //
+        // Empty means nobody is being dispatched, and start_coroutine RAISES
+        // rather than guessing — the same refusal threepp.editor.add makes
+        // outside a generator run. The consequence worth knowing: a coroutine
+        // started inside a NEIGHBOUR's method, reached through
+        // script_from_object, belongs to the instance that was DISPATCHED, not
+        // to the one whose code happened to run.
+        //
+        // Same inline function-local static as its neighbours, and free of
+        // Python for the same reason: the session sets it and the binding reads
+        // it, and neither wants to include the other.
+        inline std::string& dispatchingScript() {
+
+            static std::string uuid;
+            return uuid;
+        }
+
         // Key state for a script that wants to be DRIVEN — threepp.editor.is_key_down.
         //
         // Installed by the editor app, which owns the window and the ImGui context and is
@@ -307,6 +336,17 @@ namespace threepp::editor {
     // playing physics world there is no fixed clock, so the method never fires
     // and start() says so once; a fabricated clock would be a lie about the only
     // thing the name promises.
+    //
+    // A script may also start COROUTINES — threepp.editor.start_coroutine —
+    // generators that yield a condition and are resumed once per frame when it
+    // is met. The scheduler lives in ScriptTasks.cpp; this session pumps it once
+    // per update(), AFTER the update() sweep and inside the same GIL
+    // acquisition, so an until() predicate reads a world that has been stepped
+    // and then updated. Tasks belong to the instance that was being dispatched
+    // when they were registered (see scripting::dispatchingScript), which is
+    // what makes a raise inside one disable that instance whole, like any other
+    // method. They are session state: dropped at stop(), rebuilt from nothing on
+    // the next Play.
     //
     // Both clocks are published to threepp.editor.time for the duration (see
     // ScriptClock): the wall half advances once per frame from update(), the sim

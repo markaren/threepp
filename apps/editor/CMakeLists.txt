@@ -132,6 +132,7 @@ if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
             scripting/ScriptHost.cpp
             scripting/ScriptModule.cpp
             scripting/ScriptPlaySession.cpp
+            scripting/ScriptTasks.cpp
             "${PROJECT_SOURCE_DIR}/python/src/bind_math.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_textures.cpp"
             "${PROJECT_SOURCE_DIR}/python/src/bind_core.cpp"

@@ -4,7 +4,7 @@ The runtime face of editor-authored data.
 from __future__ import annotations
 import typing
 import threepp
-__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'Joint', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'Time', 'Vehicle', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'joint_from_object', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object', 'time', 'vehicle_from_object']
+__all__: list[str] = ['Articulation', 'Collision', 'Contact', 'ContactSample', 'Encoder', 'EncoderSample', 'ForceTorque', 'Imu', 'ImuSample', 'Joint', 'RaycastHit', 'RigidBody', 'SoftBody', 'SplinePath', 'Task', 'Time', 'Vehicle', 'WrenchSample', 'add', 'articulation_from_object', 'contact_from_object', 'encoder_from_object', 'encoders_from_object', 'force_torque_from_object', 'imu_from_object', 'is_key_down', 'joint_from_object', 'raycast', 'rigid_body_from_object', 'scene', 'script_from_object', 'soft_body_from_object', 'spline_from_object', 'start_coroutine', 'time', 'until', 'vehicle_from_object', 'wait']
 class SplinePath:
     def get_point_at(self, u: typing.SupportsFloat | typing.SupportsIndex) -> threepp.Vector3:
         """
@@ -568,6 +568,23 @@ class Collision:
         """
         Total impulse over the manifold (N*s), same orientation. Divide by the substep to read it as a force.
         """
+class Task:
+    """
+    A running coroutine, as start_coroutine hands it back.
+
+    Keep it to cancel(), or to ask whether it is done. Dropping it does NOT stop the coroutine - the scheduler holds it until it finishes, its owning script is disabled, or Play stops.
+    """
+    def cancel(self) -> None:
+        """
+        Stop the coroutine now. Not an error, and harmless if already done.
+
+        The generator is close()d, so a `finally:` inside it runs - which is where anything a half-finished mission has to put back belongs.
+        """
+    @property
+    def done(self) -> bool:
+        """
+        True once the coroutine returned, raised, or was cancelled.
+        """
 class Time:
     """
     The play session's clocks, live - read `threepp.editor.time`.
@@ -721,4 +738,26 @@ def draw_sphere(center: threepp.Vector3, radius: float = 1.0, color: int | three
 def draw_axes(object: threepp.Object3D, size: float = 1.0) -> None:
     """
     Draw object's world-space frame: X red, Y green, Z blue — the one question every attitude bug comes down to. Current frame only; no-op outside Play.
+    """
+def start_coroutine(generator: typing.Generator[typing.Any, typing.Any, typing.Any]) -> Task:
+    """
+    Run generator as a coroutine, and return the Task driving it.
+
+    The generator is resumed once per frame, AFTER physics has stepped and after every script's update() has run - so what it sees is the settled state of the frame. Nothing of it executes inside this call; the body runs up to its first yield at the next pump.
+
+    What it may yield: nothing (resume next frame); threepp.editor.wait(seconds) to resume after that much SIMULATED time; threepp.editor.until(predicate) to resume once the predicate is truthy, receiving that value (`hit = yield editor.until(...)`); or another generator, which is run to completion with its return value handed back.
+
+    The task belongs to the script instance whose method is running, and raises when there is none. A raise inside it is reported once and disables that instance whole, exactly as a raise in update() does; the instance's other tasks go with it. Every task is dropped at Stop. Start as many as you like.
+    """
+def wait(seconds: typing.SupportsFloat) -> typing.Any:
+    """
+    Yield this from a coroutine to suspend for `seconds` of SIMULATED time.
+
+    Simulated, not wall: a mission written this way freezes when physics is paused or starved, and takes the same number of substeps on a machine that renders half as fast. Without a physics world sim time degrades to wall time, so this still measures something honest there. See threepp.editor.time.
+    """
+def until(predicate: typing.Callable[[], typing.Any]) -> typing.Any:
+    """
+    Yield this from a coroutine to suspend until predicate() is truthy.
+
+    The truthy value is sent back in, so `hit = yield threepp.editor.until(lambda: threepp.editor.raycast(o, d, 2.0))` both waits for the hit and hands you the hit. Polled once per frame, after physics has stepped and after every script's update() has run.
     """

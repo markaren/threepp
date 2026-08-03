@@ -83,11 +83,12 @@ if (TARGET threepp_editor_scripting)
     # physics session. threepp.editor.time is the same dependency once more: its
     # simulated half is read straight off the playing world, and the divergence
     # between its two clocks only happens where there is a substep accumulator to
-    # fall behind.
+    # fall behind. start_coroutine's wait() rides that same simulated clock, and
+    # the case that proves it is not wall-paced needs a world to starve.
     if (TARGET unofficial::omniverse-physx-sdk::sdk)
         foreach (name EditorScriptPhysics_test EditorScriptSensors_test EditorScriptFixedUpdate_test
                 EditorScriptCollision_test EditorScriptRaycast_test EditorScriptTrigger_test
-                EditorScriptClock_test)
+                EditorScriptClock_test EditorScriptCoroutine_test)
             add_test_executable(${name})
             target_link_libraries(${name}
                     PRIVATE threepp_editor_scripting unofficial::omniverse-physx-sdk::sdk)

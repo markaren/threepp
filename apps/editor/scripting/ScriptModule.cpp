@@ -29,6 +29,8 @@
 
 #include "ScriptHost.hpp"
 
+#include "ScriptTasks.hpp"
+
 #include "bindings.hpp"
 
 #include "threepp/core/Object3D.hpp"
@@ -76,6 +78,12 @@ PYBIND11_EMBEDDED_MODULE(threepp, m) {
     // instance. Registered unconditionally, unlike the handles below it: this
     // needs nothing but a running session.
     threepp::editor::scripting::initScriptLookup(m);
+    // threepp.editor.start_coroutine and its wait/until/Task — a scheduler the
+    // play session pumps once per frame. Registered unconditionally for the
+    // same reason: a coroutine needs a running script and nothing else. It
+    // execs its Python half into the submodule right here, so the names exist
+    // from the first `import threepp` rather than from the first Play.
+    threepp::editor::scripting::initTasks(m);
     tp::init_materials(m);
     tp::init_objects(m);
     tp::init_animation(m);

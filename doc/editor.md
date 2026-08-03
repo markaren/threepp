@@ -1278,6 +1278,101 @@ class Mission:
   starts from zero on each new session — a second Play does not inherit the
   first one's elapsed time.
 
+#### Coroutines: `threepp.editor.start_coroutine`
+
+`update()` has to return before the frame can continue, so anything that takes
+*time* — settle, lift, wait half a second, open the gripper, drive to the next
+marker — comes out as a state machine: an enum, a timer, and the actual sequence
+scattered across both. `threepp.editor.start_coroutine` lets you write the
+sequence as a sequence. Hand it a generator; it yields a **condition**, and the
+session resumes it once per frame when that condition is met:
+
+```python
+import threepp
+
+
+class Mission:
+    def start(self, obj: threepp.Object3D):
+        self.obj = obj
+        self.body = threepp.editor.rigid_body_from_object(obj)
+        self.task = threepp.editor.start_coroutine(self.run())
+
+    def run(self):
+        yield threepp.editor.wait(1.0)                 # let it settle
+        self.body.apply_impulse(threepp.Vector3(0, 12, 0))
+        down = threepp.Vector3(0, -1, 0)
+        hit = yield threepp.editor.until(              # ...until it is home again
+            lambda: threepp.editor.raycast(self.obj.position, down, 0.6, self.obj))
+        print("landed on", hit.object.name)
+```
+
+| yield | resumes |
+| --- | --- |
+| `yield` | at the next frame's pump |
+| `yield threepp.editor.wait(s)` | at the first pump `s` **simulated** seconds later |
+| `yield threepp.editor.until(pred)` | at the first pump where `pred()` is truthy — and that value is what the `yield` evaluates to |
+| `yield another_generator()` | when that generator returns — and its `return` value is what the `yield` evaluates to |
+
+That is the whole vocabulary. There is no `any_of`, no wall-clock wait and no
+cross-script join, because none of them has been needed yet and each would be a
+promise about ordering that this section would then have to keep.
+
+`start_coroutine` returns a `Task`: `task.cancel()` stops it, `task.done` says
+whether it has finished. A script may run as many as it likes.
+
+* **`wait()` is on the simulated clock**, the one
+  [`threepp.editor.time.sim_time`](#both-clocks-threeppeditortime) reports. A
+  mission written this way therefore *freezes* when physics is paused or starved
+  and takes the same number of substeps on a machine that renders half as fast —
+  which is the entire reason to prefer it to counting `update`'s `dt`. Without a
+  physics world `sim_time` falls back to wall time, so a wait still measures
+  something honest there.
+* **The pump runs after everything else in the frame.** The order inside a frame
+  is: physics steps (and `fixed_update` with it) → collisions → triggers → breaks
+  → every `update()` → the coroutine pump. So an `until()` predicate reads the
+  *settled* frame: physics has run, and so has every script's `update()`,
+  including ones authored after yours. A flag another script sets in its
+  `update()` is caught by your predicate in the **same** frame.
+* **Nothing runs inside `start_coroutine`.** The body waits for the next pump,
+  even the part before its first `yield`. That is what makes it safe to start one
+  from `fixed_update`, where you are standing inside a physics substep — the
+  coroutine still runs frame-paced, where it belongs. Registration works from any
+  script method: `start`, `update`, `fixed_update`, the collision, trigger and
+  break callbacks, `stop`, and from inside another coroutine.
+* **A yielded generator costs no frame of its own.** It is pushed onto the same
+  task and entered immediately, and the parent resumes the moment it returns —
+  so `yield self.approach(marker)` reads like a call, and nesting three deep is
+  three deep, not three frames of latency.
+* **Tasks belong to a script instance**, and which one is decided by *whose
+  method was being dispatched* when `start_coroutine` was called. Called from
+  nowhere — module scope, a callback the editor never dispatched — it raises and
+  says so rather than registering an orphan. The edge worth knowing: a coroutine
+  started inside a neighbour's method that you reached through
+  [`script_from_object`](#talking-to-other-scripts-threeppeditorscript_from_object)
+  belongs to *your* instance, because yours is the one being dispatched.
+* **A raise inside a coroutine disables the owning instance whole**, exactly as a
+  raise in `update()` does: one traceback in the console, every method of that
+  instance dead for the rest of the session, its *other* tasks dropped with it,
+  and every other script untouched.
+* **`cancel()` is not an error.** The generator is `close()`d, so a `finally:`
+  inside it runs — which is where anything a half-finished mission has to put
+  back belongs:
+
+  ```python
+  def run(self):
+      self.gripper.close()
+      try:
+          yield threepp.editor.wait(5.0)
+      finally:
+          self.gripper.open()      # runs on cancel, and at Stop
+  ```
+* **Tasks die at Stop.** They are session state: everything still running is
+  unwound (`finally:` blocks included) before the scripts' own `stop()` methods
+  are called, and the next Play starts from nothing. Do not keep a `Task` across
+  sessions.
+* **Pause pauses them**, for free, and for the same reason `fixed_update` stops:
+  paused means no session is updated, which means no pump.
+
 #### Collisions: `on_collision_enter` / `on_collision_exit`
 
 Two more optional methods, fired when the body governing the script's object

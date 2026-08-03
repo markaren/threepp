@@ -2,6 +2,7 @@
 #include "Scripting.hpp"
 
 #include "ScriptHost.hpp"
+#include "ScriptTasks.hpp"
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
@@ -46,6 +47,35 @@ namespace {
         if (config.isInline()) return "inline script";
         return std::filesystem::path(config.path).filename().string();
     }
+
+    // Whose method is running, for the duration of ONE call into script code.
+    //
+    // threepp.editor.start_coroutine reads this to decide which instance a task
+    // belongs to (see scripting::dispatchingScript), which is what makes "a
+    // raise inside a coroutine disables the owning instance" enforceable at all.
+    // Every dispatch below is wrapped — start, update, fixed_update, the
+    // collision, trigger and break callbacks, stop — because a coroutine
+    // started from any of them is equally a coroutine.
+    //
+    // RESTORES rather than clears on the way out. A script reaching a neighbour
+    // through script_from_object and calling one of its methods is a nested
+    // call, not a nested dispatch: the outer attribution has to survive it, and
+    // the neighbour's coroutine belongs to the instance the SESSION dispatched.
+    struct Dispatch {
+
+        std::string previous;
+
+        explicit Dispatch(const std::string& uuid)
+            : previous(scripting::dispatchingScript()) {
+
+            scripting::dispatchingScript() = uuid;
+        }
+
+        ~Dispatch() { scripting::dispatchingScript() = std::move(previous); }
+
+        Dispatch(const Dispatch&) = delete;
+        Dispatch& operator=(const Dispatch&) = delete;
+    };
 
 }// namespace
 
@@ -416,6 +446,7 @@ struct ScriptPlaySession::Impl {
         for (auto& instance : instances) {
             if (instance.failed || !instance.hasFixedUpdate) continue;
             try {
+                Dispatch dispatching(instance.uuid);
                 instance.self.attr("fixed_update")(dt);
             } catch (py::error_already_set& e) {
                 fail(instance, "fixed_update", scripting::describeError(e));
@@ -832,6 +863,7 @@ struct ScriptPlaySession::Impl {
                 const auto object = instance.object.lock();
                 if (object.get() != node) continue;
                 try {
+                    Dispatch dispatching(instance.uuid);
                     instance.self.attr("on_break")();
                 } catch (py::error_already_set& e) {
                     fail(instance, "on_break", scripting::describeError(e));
@@ -860,6 +892,7 @@ struct ScriptPlaySession::Impl {
                 const char* method = event.enter ? "on_trigger_enter" : "on_trigger_exit";
                 if (event.enter ? !instance.hasTriggerEnter : !instance.hasTriggerExit) continue;
                 try {
+                    Dispatch dispatching(instance.uuid);
                     // The object itself, not a struct wrapping it: a trigger
                     // overlap has no contact data to carry alongside.
                     if (const auto other = event.other.lock()) {
@@ -896,6 +929,7 @@ struct ScriptPlaySession::Impl {
                 const char* method = event.enter ? "on_collision_enter" : "on_collision_exit";
                 if (event.enter ? !instance.hasCollisionEnter : !instance.hasCollisionExit) continue;
                 try {
+                    Dispatch dispatching(instance.uuid);
                     scripting::Collision contact;
                     contact.point = event.point;
                     contact.normal = event.normal;
@@ -916,17 +950,82 @@ struct ScriptPlaySession::Impl {
 #endif
     }
 
+    // --- coroutines --------------------------------------------------------
+    //
+    // threepp.editor.start_coroutine registers a generator with the scheduler in
+    // ScriptTasks.cpp; this is the whole of what the session does about it.
+    //
+    // The pump runs ONCE PER FRAME, from update(), AFTER the update() sweep and
+    // inside the same GIL acquisition. That position is the feature's contract:
+    // an until() predicate sees a world physics has already stepped and every
+    // update() has already run on, i.e. the settled state of the frame rather
+    // than a half-built one. Tasks step in registration order, so a scene's
+    // coroutines are as deterministic as its sweeps.
+    //
+    // Errors come back as (uuid, traceback) rather than as exceptions: one pump
+    // covers every task in the session, so a raise cannot be allowed to abandon
+    // the rest of them, and the uuid is what turns "a coroutine broke" into the
+    // ordinary one-report one-disable path fail() implements. Attribution is
+    // what makes that uuid trustworthy — see Dispatch above.
+
+    [[nodiscard]] Instance* instanceFor(const std::string& uuid) {
+
+        for (auto& instance : instances) {
+            if (instance.uuid == uuid) return &instance;
+        }
+        return nullptr;
+    }
+
+    // GIL must be held.
+    void reportTaskFailures(const py::object& failures) {
+
+        for (const auto& entry : py::cast<py::list>(failures)) {
+            const auto tuple = py::cast<py::tuple>(entry);
+            const auto uuid = py::cast<std::string>(tuple[0]);
+            auto* instance = instanceFor(uuid);
+            // Already disabled, or belonging to a session that has moved on:
+            // one report per instance per session, same as everywhere else.
+            if (!instance || instance->failed) continue;
+            fail(*instance, "coroutine", py::cast<std::string>(tuple[1]));
+            // The instance's OTHER tasks go with it. A disabled script is
+            // disabled whole — its methods stop running, and so must the work
+            // it left in flight.
+            scripting::dropTasksFor(uuid);
+        }
+    }
+
+    // GIL must be held. Reads the sim clock refreshed at the top of update().
+    void pumpTasks() {
+
+        if (scripting::taskCount() == 0) return;
+        reportTaskFailures(scripting::pumpTasks(scripting::scriptClock().simTime));
+    }
+
+    // GIL must be held. `report` is false on the teardown paths that have no
+    // console to report to (the destructor, and the replay in start()).
+    void dropTasks(bool report) {
+
+        auto failures = scripting::clearTasks();
+        if (report) reportTaskFailures(failures);
+    }
+
     // Drops every interpreter-side object. GIL is acquired here rather than by
     // the caller so this is safe from the destructor too.
     void release() {
 
-        if (instances.empty()) return;
+        // Tasks are asked about BESIDE the instance list, not behind it. The
+        // scheduler is one process-wide registry rather than a member here, so
+        // "no instances" is not evidence that it is empty — and a task surviving
+        // into the next Play would be pumped by a session that never started it.
+        const bool tasks = scripting::taskCount() > 0;
+        if (instances.empty() && !tasks) return;
         if (!scripting::interpreterStarted()) {
             // Nothing was ever created; the py::objects are all null.
             instances.clear();
             return;
         }
         py::gil_scoped_acquire gil;
+        dropTasks(false);
         instances.clear();
     }
 };
@@ -1095,6 +1194,7 @@ void ScriptPlaySession::start(Scene& scene) {
         if (instance.failed || !instance.hasStart) continue;
 
         try {
+            Dispatch dispatching(instance.uuid);
             // ONE signature: start(self, obj). Everything else a script may want
             // to reach is a named call on threepp.editor — the scene included,
             // which is why this no longer sniffs the signature to decide how many
@@ -1136,7 +1236,13 @@ void ScriptPlaySession::update(float dt) {
     // editor.time must not be told otherwise.
     impl_->refreshFrameClock(dt);
 
-    if (impl_->instances.empty()) return;
+    // Registered coroutines keep the sweep alive on their own, hoisted above
+    // the instance check for the same reason the clock is above everything: a
+    // task is session state, and a frame that skipped its pump is a frame a
+    // mission silently did not advance through. GIL-free by construction — see
+    // scripting::taskCount().
+    const bool tasks = scripting::taskCount() > 0;
+    if (impl_->instances.empty() && !tasks) return;
 
     bool any = false;
     for (const auto& instance : impl_->instances) {
@@ -1150,7 +1256,7 @@ void ScriptPlaySession::update(float dt) {
     const bool collisions = impl_->collisionsPending();
     const bool triggers = impl_->triggersPending();
     const bool breaks = impl_->breaksPending();
-    if (!any && !collisions && !triggers && !breaks) return;
+    if (!any && !collisions && !triggers && !breaks && !tasks) return;
 
     // Once for the whole sweep, not once per script: acquiring the GIL is the
     // expensive part, and there is nothing else running that wants it.
@@ -1179,6 +1285,7 @@ void ScriptPlaySession::update(float dt) {
     for (auto& instance : impl_->instances) {
         if (instance.failed || !instance.hasUpdate) continue;
         try {
+            Dispatch dispatching(instance.uuid);
             instance.self.attr("update")(dt);
         } catch (py::error_already_set& e) {
             impl_->fail(instance, "update", scripting::describeError(e));
@@ -1186,6 +1293,18 @@ void ScriptPlaySession::update(float dt) {
             impl_->fail(instance, "update", e.what());
         }
     }
+
+    // LAST, and in the same acquisition. A coroutine's until() predicate
+    // therefore reads a world physics has stepped and every update() has
+    // already had its say on — the frame as it will be drawn, not a state
+    // halfway through being built. That position is the documented contract,
+    // not an implementation detail: see doc/editor.md.
+    //
+    // It also means a task registered from THIS frame's fixed_update, collision
+    // callback or update() is pumped in this frame rather than the next: the
+    // pump advances everything registered by the time it runs, which is one
+    // rule instead of four.
+    impl_->pumpTasks();
 }
 
 void ScriptPlaySession::stop() {
@@ -1194,11 +1313,21 @@ void ScriptPlaySession::stop() {
     // being empty says nothing about whether a callback is still registered.
     impl_->detachFromPhysics();
 
-    if (!impl_->instances.empty() && scripting::interpreterStarted()) {
+    if ((!impl_->instances.empty() || scripting::taskCount() > 0) &&
+        scripting::interpreterStarted()) {
         py::gil_scoped_acquire gil;
+        // Coroutines unwind BEFORE stop(), not after it. A task is work in
+        // progress and its finally: blocks are part of that work, so they run
+        // while the session is still standing — scene, resolver and every
+        // instance alive — and stop() stays what its name says: the script's
+        // last word, after everything it had running has been wound up.
+        // A finally: that raises is reported like any other coroutine error,
+        // which disables that instance and therefore skips its stop() below.
+        impl_->dropTasks(true);
         for (auto& instance : impl_->instances) {
             if (instance.failed || !instance.hasStop) continue;
             try {
+                Dispatch dispatching(instance.uuid);
                 instance.self.attr("stop")();
             } catch (py::error_already_set& e) {
                 impl_->fail(instance, "stop", scripting::describeError(e));
