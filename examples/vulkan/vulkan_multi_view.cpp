@@ -23,6 +23,7 @@
 //                                     (THREEPP_VULKAN_VALIDATION=1)
 //   vulkan_multi_view --cullcheck     regression: a secondary's frustum cull
 //                                     must be invisible to the primary
+//   vulkan_multi_view --aov           per-view depth + instance-id readback
 //   vulkan_multi_view --bench         0 vs 3 secondary views, interleaved
 //   vulkan_multi_view --sweep         marginal cost of one view, per resolution
 //
