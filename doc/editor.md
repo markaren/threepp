@@ -249,9 +249,12 @@ the same layer through the same predicate, for the same reason.
 through the same unsaved-changes guard as Open and the same loader, and they
 arrive as an **untitled** document — no path, not dirty — so the first Save asks
 where to put it and nothing can write over an example in place. The JSON is
-embedded as source (`apps/editor/ExampleScenes.cpp`) for the reason
-`ViewportMarkers.cpp` embeds its SVG: the editor does not depend on finding
-asset files at runtime.
+embedded as source for the reason `ViewportMarkers.cpp` embeds its SVG: the
+editor does not depend on finding asset files at runtime. Each example's JSON is
+its own GENERATED translation unit (`apps/editor/ExampleScene*.cpp`), written by
+the program that authors that scene; the registry listing them —
+`apps/editor/ExampleScenes.cpp` — is hand-written, so adding one does not mean
+regenerating the others.
 
 ### Hover Arena
 
@@ -307,6 +310,56 @@ builds it through the editor core, runs the generator exactly as **Regenerate**
 does, and writes both the `.json` and the translation unit that embeds it.
 `tests/extras/EditorExampleScene_test.cpp` loads that same embedded string and
 flies it headlessly, and `--selftest` opens it through the menu's own code path.
+
+### Timber Yard
+
+A working sawmill yard that runs **itself**. Nothing here is flown or driven:
+eight logs come off a gravity rack one at a time, ride a conveyor to the saw
+bay, and stack against a flap at the far end — and the whole sequence is five
+inline Python scripts and two coroutines. Where Hover Arena is a thing you
+*operate*, this is a thing you *watch*, and it exists to show what
+[coroutines](#coroutines-threeppeditorstart_coroutine) do to code that takes
+time.
+
+**It opens on the mechanism.** The document's
+[`editorView`](#opening-a-document-editorview--editorfollow) frames the yard
+square-on, and `editorFollow = Gate Hinge` picks the *joint* — so the scene
+arrives with the Joint, Sensor and Script sections already open on the thing the
+example is about, and because the hinge does not move, the framing holds through
+Play. (Following a log was tried: the camera goes down the yard with it and
+parks at the far end looking at a stack.)
+
+| what you see | what it is |
+| --- | --- |
+| the gate lifts, one log rolls out, the gate drops | **one coroutine**, read top to bottom: `until(bay clear)` → clamp → `wait(0.35)` → drive open → `wait(1.4)` → drive shut → `until(the encoder says shut)`. The waits are [SIMULATED seconds](#both-clocks-threeppeditortime), so the yard runs the same number of substeps on any machine |
+| the second log does not follow it out | the **hold-back clamp**, a second [driven joint](#joints-in-userdata) the same coroutine works. A packed queue on a slope moves as one body, so timing alone cannot release one log — this is an escapement, and it is why there are two joints |
+| the gate knows it is shut | an **Encoder** [authored on the joint node](#joint-sensors) — a joint sensor on a joint needs no joint name, the node is the reference |
+| each arrival counted, with a throughput | an invisible **[trigger volume](#trigger-volumes)** under the saw. `on_trigger_enter` stamps `threepp.editor.time.sim_time` per log, so *logs per second* is a fact about the yard rather than about the frame rate |
+| the yellow box that flashes as one lands | [`threepp.editor.draw_box`](#debug-draw), for the frame it lasts |
+| the flap at the end of the belt, and the green line out of its mount | a **breakable** joint carrying a **Force/Torque** sensor. `fixed_update` reads the load cell on the physics clock and `draw_line` draws it; one belt-driven log leans the flap open and walks through |
+| **hold SPACE and it fails** | the override folds `is_key_down` into the coroutine's `until()` and skips the escapement: the whole rack pours onto the belt, several logs reach the flap in contact, the mount goes over its break force, `on_break()` fires and the mission is marked failed through [`script_from_object`](#talking-to-other-scripts-threeppeditorscript_from_object) |
+| the mission itself | a second coroutine on the yard sign: settle, then `for i in range(8): yield self.release_one(i)` — a NESTED generator per log, which costs no frame of its own — then one report on **both clocks**, `sim_time` against `wall_time` |
+
+The scripts print to the process stdout, not the console panel, so a headless
+run reports its own throughput.
+
+**Two things this scene is not.** It carries no procedural trees and no log
+cabin, though both ship with the editor and both were built, exported and
+measured for it: a generator emits a `BufferGeometry` and the serializer writes
+every vertex of one as text, which puts the smallest cabin that is still a
+building at ~985 KB and a pine that still reads as a tree at ~340 KB — against a
+whole document of 172 KB. Sharing one generated pine between six trees (which
+the serializer does support — a geometry is written once per uuid) does not
+rescue it either, because what is left is six copies of the same tree. So the
+clearing and the yard office are **primitives**, which serialize as their
+parameters: a cone costs nine numbers however finely it is tessellated.
+
+The document is regenerable end to end by
+`apps/editor/tools/TimberYardAuthor.cpp`, and that program is **byte
+reproducible** — every uuid is derived from the scene path of the node carrying
+it, textures included, so regenerating an unchanged scene leaves the committed
+file untouched and a diff is something somebody authored.
+`timber_yard_author --check` authors the document twice and compares the bytes.
 
 ---
 

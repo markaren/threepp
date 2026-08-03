@@ -29,10 +29,14 @@
 #include "ExampleScenes.hpp"
 #include "Scripting.hpp"
 
+#include "threepp/extras/editor/ConveyorConfig.hpp"
+#include "threepp/extras/editor/ConveyorPlaySession.hpp"
+#include "threepp/extras/editor/JointConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/PhysicsPlaySession.hpp"
 #include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
+#include "threepp/extras/editor/SceneSnapshot.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
 
@@ -348,6 +352,323 @@ TEST_CASE("flying forward takes a ring, and the scoreboard hears about it", "[ed
     REQUIRE(beaconAfter.r > beaconBefore.r + 0.05f);
 
     REQUIRE(rig.scripts.errorCount() == 0);
+
+    rig.stop();
+}
+
+
+// --- Timber Yard -------------------------------------------------------------
+//
+// The second shipped example, and a different bet from Hover Arena: nothing
+// here is teleoperated. The yard runs ITSELF, out of five inline scripts and
+// two coroutines, so what these cases ask is whether the machine works — logs
+// off the rack one at a time, along the belt, counted at the far end, with
+// nobody touching the keyboard.
+//
+// Frame COUNTS at a fixed dt, never wall-clock: a test that asserts "within two
+// seconds" fails on a loaded machine and passes on a laptop, which this repo
+// has been bitten by. Every bound below carries margin, because the point is
+// that the yard works, not that it works to the substep.
+
+namespace {
+
+    // Hover Arena's rig plus the belt, which is the one session that example
+    // does not need. Registration order is the editor's, and the stop order is
+    // its reverse — physics goes down last, since everything else borrows its
+    // world.
+    struct YardRig {
+
+        SceneDocument document;
+        PhysicsPlaySession physics;
+        ConveyorPlaySession conveyors;
+        PhysxSensorPlaySession sensors;
+        ScriptPlaySession scripts;
+        std::vector<std::string> log;
+
+        YardRig() {
+            conveyors.setPhysics(&physics);
+            sensors.setPhysics(&physics);
+            scripts.setLogger([this](const std::string& line) { log.push_back(line); });
+            physics.setLogger([this](const std::string& line) { log.push_back(line); });
+        }
+
+        Scene& scene() { return document.scene(); }
+
+        bool open() {
+            std::string error;
+            const auto json = examples::json("timber-yard");
+            return !json.empty() && document.openJson(json, &error);
+        }
+
+        // Play, as the editor plays it: the document is SNAPSHOT first, and the
+        // snapshot is what Stop puts back. Without that half, "Stop restores the
+        // document" is a claim about a step nothing in the test performed.
+        void start() {
+            REQUIRE(document.capture(snapshot));
+            physics.start(scene());
+            conveyors.start(scene());
+            sensors.start(scene());
+            scripts.start(scene());
+        }
+
+        void run(int frames) {
+            for (int i = 0; i < frames; ++i) {
+                physics.update(kFixed);
+                conveyors.update(kFixed);
+                sensors.update(kFixed);
+                scripts.update(kFixed);
+            }
+        }
+
+        void stop() {
+            scripts.stop();
+            sensors.stop();
+            conveyors.stop();
+            physics.stop();
+            REQUIRE(document.restore(snapshot));
+        }
+
+        SceneSnapshot snapshot;
+
+        Object3D* node(const char* name) { return scene().getObjectByName(name); }
+
+        [[nodiscard]] Vector3 worldPosition(const char* name) {
+            Vector3 position;
+            if (auto* object = node(name)) object->getWorldPosition(position);
+            return position;
+        }
+
+        // How many logs are past x — read off the SCENE rather than out of the
+        // interpreter, which is the same evidence a person watching gets.
+        [[nodiscard]] int logsPast(float x) {
+            int count = 0;
+            for (int i = 1; i <= 8; ++i) {
+                if (worldPosition(("Log " + std::to_string(i)).c_str()).x > x) ++count;
+            }
+            return count;
+        }
+    };
+
+    // The gate closes at x = -7.55 and the counting volume is centred on
+    // x = 5.3; these are the two lines that matter, with clearance.
+    constexpr float kPastGate = -6.5f;
+    constexpr float kInBay = 4.f;
+
+}// namespace
+
+
+TEST_CASE("the shipped Timber Yard document is what it claims to be", "[editor][example]") {
+
+    const auto json = examples::json("timber-yard");
+    REQUIRE_FALSE(json.empty());
+    // The ceiling the author tool is written against — it lands at 172 KB.
+    // Generated geometry is what blows a document up; the scenery note in
+    // TimberYardAuthor.cpp carries the measurements that kept this under it.
+    REQUIRE(json.size() < 600 * 1024);
+
+    REQUIRE(examples::find("timber-yard") != nullptr);
+    // Both examples ship, in this menu order.
+    REQUIRE(examples::all().size() >= 2);
+    REQUIRE(examples::all()[0].slug == "hover-arena");
+    REQUIRE(examples::all()[1].slug == "timber-yard");
+
+    YardRig rig;
+    REQUIRE(rig.open());
+    REQUIRE_FALSE(rig.document.hasPath());
+    REQUIRE_FALSE(rig.document.dirty());
+
+    SECTION("the gate is a driven, instrumented revolute joint") {
+        auto* hinge = rig.node("Gate Hinge");
+        REQUIRE(hinge != nullptr);
+
+        const auto joint = JointConfig::read(*hinge);
+        REQUIRE(joint.has_value());
+        REQUIRE(joint->type == JointConfig::Type::Revolute);
+        REQUIRE(joint->body == "Gate Post");
+        // "Driven" is not a stored flag — it IS stiffness/damping > 0, which is
+        // the condition the play session builds a drive under.
+        REQUIRE(joint->stiffness > 0.f);
+        REQUIRE(joint->damping > 0.f);
+
+        // The encoder rides the joint node itself, so it names no joint.
+        const auto encoder = SensorConfig::read(*hinge);
+        REQUIRE(encoder.has_value());
+        REQUIRE(encoder->type == SensorConfig::Type::Encoder);
+
+        const auto script = ScriptConfig::read(*hinge);
+        REQUIRE(script.has_value());
+        REQUIRE(script->path.empty());// inline: the document stands on its own
+        REQUIRE(script->source.find("start_coroutine") != std::string::npos);
+    }
+
+    SECTION("the stop bar is a breakable joint with a load cell in it") {
+        auto* mount = rig.node("Stop Bar Mount");
+        REQUIRE(mount != nullptr);
+
+        const auto joint = JointConfig::read(*mount);
+        REQUIRE(joint.has_value());
+        REQUIRE(joint->breakForce > 0.f);
+        REQUIRE(joint->breakTorque > 0.f);
+
+        const auto load = SensorConfig::read(*mount);
+        REQUIRE(load.has_value());
+        REQUIRE(load->type == SensorConfig::Type::ForceTorque);
+
+        const auto script = ScriptConfig::read(*mount);
+        REQUIRE(script.has_value());
+        REQUIRE(script->source.find("on_break") != std::string::npos);
+    }
+
+    SECTION("the bay is an invisible trigger and the belt is a real conveyor") {
+        auto* bay = rig.node("Bay Trigger");
+        REQUIRE(bay != nullptr);
+        REQUIRE_FALSE(bay->visible);
+        const auto physics = PhysicsConfig::read(*bay);
+        REQUIRE(physics.has_value());
+        REQUIRE(physics->trigger);
+
+        auto* conveyor = rig.node("Conveyor");
+        REQUIRE(conveyor != nullptr);
+        const auto belt = ConveyorConfig::read(*conveyor);
+        REQUIRE(belt.has_value());
+        REQUIRE(belt->speed > 0.f);
+        // The generated parts ship IN the document: opening it regenerates
+        // nothing.
+        REQUIRE(ConveyorConfig::derivedGroup(*conveyor) != nullptr);
+    }
+
+    SECTION("eight logs start on the rack, and the document says how to open") {
+        for (int i = 1; i <= 8; ++i) {
+            auto* log = rig.node(("Log " + std::to_string(i)).c_str());
+            REQUIRE(log != nullptr);
+            const auto physics = PhysicsConfig::read(*log);
+            REQUIRE(physics.has_value());
+            REQUIRE(physics->body == PhysicsConfig::Body::Dynamic);
+        }
+
+        auto& root = rig.scene().userData;
+        REQUIRE(root.count("editorView") == 1);
+        const auto view = std::any_cast<const std::string&>(root.at("editorView"));
+        REQUIRE(view.find('@') != std::string::npos);
+        REQUIRE(std::count(view.begin(), view.end(), ',') == 4);
+        REQUIRE(root.count("editorFollow") == 1);
+        // What it names has to be in the scene, or the chase has nothing to
+        // chase and the editor says so instead of doing it.
+        REQUIRE(rig.node(std::any_cast<const std::string&>(root.at("editorFollow")).c_str()) !=
+                nullptr);
+    }
+}
+
+TEST_CASE("Timber Yard runs itself, and the saw bay counts", "[editor][example]") {
+
+    YardRig rig;
+    REQUIRE(rig.open());
+    rig.start();
+
+    // Five instances, live before anything has happened.
+    REQUIRE(rig.scripts.instanceCount() == 5);
+    REQUIRE(rig.scripts.errorCount() == 0);
+    // The belt built real colliders, or nothing is carried anywhere.
+    REQUIRE(rig.conveyors.conveyorCount() == 1);
+    REQUIRE(rig.conveyors.beltCount() > 0);
+    REQUIRE(rig.logsPast(kPastGate) == 0);
+
+    // A frame COUNT at the fixed step, not a deadline: the yard is authored on
+    // the simulated clock, so this is the same amount of yard on every machine,
+    // and a loaded CI box gets the same answer as a quiet laptop.
+    rig.run(2400);// 40 s simulated
+
+    const int released = rig.logsPast(kPastGate);
+    const int arrived = rig.logsPast(kInBay);
+    INFO("logs past the gate: " << released << ", into the bay: " << arrived);
+    // The measured run delivers one log about every 7.5 s, so 40 s is five with
+    // room to spare. TWO is the assertion, because two proves the whole chain
+    // twice over — the gate coroutine pinned, opened, shut and RE-ARMED, the
+    // belt carried, the flap let one through, the trigger fired, the counter
+    // counted, and the mission asked for the next one. Everything above two is
+    // margin, deliberately.
+    REQUIRE(arrived >= 2);
+    REQUIRE(released >= arrived);
+
+    // And the stop bar is still on: a mission that runs as authored never
+    // reaches the break threshold. This is half the assertion — the other half
+    // (that it CAN break) is the case below, and neither means much alone.
+    const auto* mount = rig.physics.findJoint(rig.node("Stop Bar Mount"));
+    REQUIRE(mount != nullptr);
+    REQUIRE(mount->joint != nullptr);
+    REQUIRE_FALSE(mount->joint->broken());
+
+    // Not one traceback out of five instances, over 3600 substeps.
+    REQUIRE(rig.scripts.errorCount() == 0);
+    REQUIRE(rig.scripts.instanceCount() == 5);
+
+    // Both joint sensors really spoke. The gate's "am I shut" check reads the
+    // encoder, so a silent one would leave the coroutine waiting for ever —
+    // which the count above would have caught, but this says WHY.
+    std::size_t encoderSamples = 0;
+    std::size_t wrenchSamples = 0;
+    for (const auto& entry : rig.sensors.entries()) {
+        if (entry->config.type == SensorConfig::Type::Encoder) encoderSamples += entry->samples;
+        if (entry->config.type == SensorConfig::Type::ForceTorque) wrenchSamples += entry->samples;
+    }
+    REQUIRE(encoderSamples > 0);
+    REQUIRE(wrenchSamples > 0);
+
+    rig.stop();
+
+    // Stop puts the document back — the play snapshot is what makes an example
+    // something you can press Play on twice. Every log is on the rack again,
+    // and every instance is gone.
+    REQUIRE(rig.logsPast(kPastGate) == 0);
+    REQUIRE(rig.scripts.instanceCount() == 0);
+}
+
+
+TEST_CASE("holding SPACE overrides the interlock, and the stop bar pays for it",
+          "[editor][example]") {
+
+    // The yard's one failure, and it is a person's doing. SPACE skips the
+    // hold-back clamp, so the leaf lifts with nothing pinning the pack and the
+    // whole rack pours onto the belt at once; several logs then reach the flap
+    // in contact, pushing with several belts behind them, and the mount that
+    // holds it is not built for that.
+    //
+    // The thresholds this leans on were measured every substep over both runs —
+    // 235 N for a full authored mission, 337 N for this — so the gap either way
+    // is about a fifth. That is a real margin, not a coincidence, but it is why
+    // this case and the one above have to travel together: move the belt speed
+    // or the log mass and BOTH will tell you.
+    scripting::keyStateProvider() = [](const std::string& key) { return key == "SPACE"; };
+    struct Release {
+        ~Release() { scripting::keyStateProvider() = nullptr; }
+    } release;
+
+    YardRig rig;
+    REQUIRE(rig.open());
+    rig.start();
+
+    const auto* mount = rig.physics.findJoint(rig.node("Stop Bar Mount"));
+    REQUIRE(mount != nullptr);
+    REQUIRE(mount->joint != nullptr);
+    REQUIRE_FALSE(mount->joint->broken());
+
+    rig.run(1800);// 30 s simulated: the pour reaches the flap inside ten
+
+    // The joint gave way — which is the news the Physics Debug overlay carries
+    // by the joint simply vanishing from it.
+    REQUIRE(mount->joint->broken());
+
+    // And on_break() ran, on the script sitting on the joint node, and reached
+    // the yard master through script_from_object: the mission is marked failed.
+    // Read back off the scene the same way a person reads it off the console —
+    // the bar is no longer hanging where it was hung.
+    const auto bar = rig.worldPosition("Stop Bar");
+    INFO("stop bar at y=" << bar.y);
+    REQUIRE(bar.y < 1.2f);
+
+    // A break is not an error: five instances, no tracebacks.
+    REQUIRE(rig.scripts.errorCount() == 0);
+    REQUIRE(rig.scripts.instanceCount() == 5);
 
     rig.stop();
 }

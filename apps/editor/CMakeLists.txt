@@ -9,7 +9,14 @@ endif ()
 # The shipped example scenes, as JSON compiled into the binary. Its own library
 # so the headless test can load the same string File ▸ Open Example does without
 # linking the app; nothing in it depends on ImGui, PhysX or Python.
-add_library(threepp_editor_examples STATIC ExampleScenes.cpp)
+#
+# ExampleScenes.cpp is the hand-written registry; the ExampleScene*.cpp beside it
+# are GENERATED, one per example, by the author programs at the bottom of this
+# file. See ExampleSceneData.hpp for why the two are kept apart.
+add_library(threepp_editor_examples STATIC
+        ExampleScenes.cpp
+        ExampleSceneHoverArena.cpp
+        ExampleSceneTimberYard.cpp)
 target_link_libraries(threepp_editor_examples PUBLIC threepp)
 target_include_directories(threepp_editor_examples PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(threepp_editor_examples PUBLIC cxx_std_20)
@@ -196,13 +203,18 @@ if (THREEPP_EDITOR_WITH_PYTHON AND Python3_FOUND AND TARGET pybind11::headers)
 
     target_link_libraries(threepp_editor PRIVATE threepp_editor_scripting)
 
-    # The program that authors the shipped Hover Arena document and writes
-    # ExampleScenes.cpp from it. Not part of the editor, and not a test: it is
-    # the scene's SOURCE, kept in the tree so the example can be changed by
-    # changing code rather than by hand-editing 60 KB of JSON. Gated here
-    # because the arena is a generator, and a generator needs the interpreter.
+    # The programs that author the shipped documents and write their generated
+    # translation units. Not part of the editor, and not tests: they are the
+    # scenes' SOURCE, kept in the tree so an example can be changed by changing
+    # code rather than by hand-editing a hundred KB of JSON. Gated here because
+    # the arena is a generator, and a generator needs the interpreter — and
+    # because a document whose point is five scripts wants an interpreter to
+    # have been present when it was built.
     add_executable(hover_arena_author tools/HoverArenaAuthor.cpp)
     target_link_libraries(hover_arena_author PRIVATE threepp threepp_editor_scripting)
+
+    add_executable(timber_yard_author tools/TimberYardAuthor.cpp)
+    target_link_libraries(timber_yard_author PRIVATE threepp threepp_editor_scripting)
 
     message(STATUS "threepp_editor: Python scripting enabled (${Python3_VERSION})")
 elseif (THREEPP_EDITOR_WITH_PYTHON)
