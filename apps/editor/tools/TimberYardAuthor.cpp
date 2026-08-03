@@ -157,10 +157,26 @@ namespace {
     constexpr float kBarHingeY = 1.92f;
     constexpr float kBarDrop = 0.92f;// hangs to just above the belt
 
-    constexpr float kApronStartX = 1.7f;
-    constexpr float kApronEndX = 6.1f;
-    constexpr float kApronY = 0.62f;     // top surface at kApronStartX
-    constexpr float kApronSlope = 0.035f;// radians of fall toward the berm
+    // The bin has to be SELF-CLEARING at the mouth — the user watched halves
+    // bunch up at the intake twice, and the second time was the tell. A gentler
+    // slope with slicker friction was tried first and the pile formed anyway,
+    // because the pile is not a friction problem: a half drops off the belt,
+    // the landing kills its momentum (zero restitution, impact friction), and
+    // the NEXT half lands on it — log-on-log friction jams the heap right
+    // where it falls, and no apron slope ever gets a say.
+    //
+    // So the mouth is a CHUTE: twenty degrees, where tan θ is seven times any
+    // friction in play and a piece cannot come to rest BY CONSTRUCTION —
+    // whatever lands there, pile or no pile, goes down. The chute empties onto
+    // a shallow RUNOUT whose only job is to be long: pieces may stall there,
+    // heap there, arrive there sideways — all of it is a metre and more from
+    // the intake, and later arrivals shove the heap toward the berm.
+    constexpr float kChuteStartX = 1.7f;
+    constexpr float kChuteEndX = 3.0f;
+    constexpr float kChuteTopY = 0.78f;  // just below the deck, clear of the flap's swing
+    constexpr float kChuteBottomY = 0.30f;// ~20 degrees over the 1.3 m run
+    constexpr float kRunoutEndX = 7.0f;
+    constexpr float kRunoutSlope = 0.06f;// radians; tan ≈ 0.060, still over the 0.05 friction
 
     // Well upstream of the flap. The saw shoves a log's halves apart as it cuts,
     // and a half that arrives at the flap still skewed from that hits it off
@@ -169,9 +185,12 @@ namespace {
     // to be told apart from. Three metres of belt between them is what separates
     // the two again.
     constexpr float kBayX = -1.5f;// centre of the counting volume
-    constexpr float kBermX = 6.0f;
+    constexpr float kBermX = 6.9f;// the stack leans here, well away from the mouth
 
-    float apronTopY(float x) { return kApronY - (x - kApronStartX) * std::tan(kApronSlope); }
+    // Top surface of the runout at x. The runout starts a hand under the
+    // chute's lower lip (overlapped, so there is no edge to catch on).
+    constexpr float kRunoutStartX = 2.88f;
+    float runoutTopY(float x) { return kChuteBottomY - (x - kRunoutStartX) * std::tan(kRunoutSlope); }
 
     constexpr float kLogRadius = 0.2f;
     // SHORTER THAN THE BELT IS WIDE (1.5 m), with 15 cm of margin each side.
@@ -559,9 +578,20 @@ class StopBar:
     def update(self, dt: float):
         if editor is None:
             return
-        # The load, as a line out of the mount: green while it is routine, red
-        # once it is over what the joint is authored to take.
-        anchor = self.obj.position
+        # The load, as a line out of the mount: green while a log is leaning on
+        # the bar, red once it is over what the joint is authored to take.
+        #
+        # Drawn only under MEANINGFUL load (a quarter of the limit) - idle it
+        # said nothing and read as stray debug geometry, which is exactly what
+        # the user called it. An instrument that only appears when something is
+        # actually pushing explains itself.
+        #
+        # WORLD position, not .position: draw_line takes world space, and the
+        # joint node's local position put the line under the conveyor - a real
+        # authored-in-the-wild bug, worth this comment.
+        if not self.broken and self.newtons < self.limit * 0.25:
+            return
+        anchor = self.obj.get_world_position()
         tip = threepp.Vector3(anchor.x + self.force.x * self.draw_scale,
                               anchor.y + self.force.y * self.draw_scale,
                               anchor.z + self.force.z * self.draw_scale)
@@ -1013,16 +1043,12 @@ class SawMill:
         // level with a conveyor is a view of its side rail) and far enough back
         // that the rack and the bay are both in shot.
         //
-        // It is also the follow offset, since Follow keeps whatever offset the
-        // camera has when the document opens — which is why what it follows is
-        // the GATE HINGE and not a log. Following the cargo was tried and
-        // photographed: the camera goes down the yard with it and parks at the
-        // far end looking at a stack, and the machine that is the point of the
-        // scene is behind you. The hinge does not move, so the authored framing
-        // HOLDS through Play — and opening the document lands the selection on
-        // the joint, with its Joint, Sensor and Script sections already up.
+        // editorView ONLY, no editorFollow — user's call after playing it. The
+        // scene is a fixed machine watched from a composed vantage; Follow
+        // tethered the orbit camera to the gate hinge for no benefit (the hinge
+        // never moves) and cost the normal orbit feel. The framing carries the
+        // whole job now, which is why it is authored square onto the line.
         scene->userData["editorView"] = std::string("-4,9.5,21@-0.5,1.2,0");
-        scene->userData["editorFollow"] = std::string("Gate Hinge");
 
         // --- lights ----------------------------------------------------------
         auto sun = DirectionalLight::create(0xfff2dc, 3.1f);
@@ -1396,36 +1422,65 @@ class SawMill:
             scene->add(kerb);
         }
 
-        // --- the discharge apron ---------------------------------------------
-        // What the belt hands the logs to: a shallow ramp they roll down and
-        // stack on. Low friction, because a stack that grips is a stack that
-        // never settles.
+        // --- the discharge chute and runout ------------------------------------
+        // What the belt hands the logs to, in two segments (see the constants
+        // for why one shallow ramp was not enough): a chute at the mouth that
+        // nothing can rest on, and a long shallow runout where resting is fine.
         {
-            const float length = kApronEndX - kApronStartX;
-            const float centreX = (kApronStartX + kApronEndX) * 0.5f;
-            auto apron = mesh("Discharge Apron", unit, standard(kYardDirt, 0.9f, 0.f));
-            apron->position.set(centreX, apronTopY(centreX) - 0.12f, 0.f);
-            apron->scale.set(length, 0.24f, 2.8f);
-            apron->rotation.z = -kApronSlope;
-            apron->castShadow = false;
-            // Slippery on purpose. A log that has just been through the saw is
-            // no longer rolling straight — it has been shoved sideways by the
-            // blade — and a half that slides instead of rolling stops dead on a
-            // two-degree apron with ordinary friction, in a heap by the flap.
-            writePhysics(*apron, PhysicsConfig::Body::Static, PhysicsConfig::Shape::Box,
-                         1.f, 0.12f, 0.f);
-            scene->add(apron);
+            // The chute. Steep by design: at twenty degrees over friction 0.05
+            // a piece cannot come to rest here, so the intake clears itself no
+            // matter what lands, in what pose, on top of what.
+            const float chuteRun = kChuteEndX - kChuteStartX;
+            const float chuteDrop = kChuteTopY - kChuteBottomY;
+            const float chuteAngle = std::atan2(chuteDrop, chuteRun);
+            const float chuteLength = std::sqrt(chuteRun * chuteRun + chuteDrop * chuteDrop);
+            auto chute = mesh("Discharge Chute", unit, standard(kYardDirt, 0.9f, 0.f));
+            chute->position.set((kChuteStartX + kChuteEndX) * 0.5f,
+                                (kChuteTopY + kChuteBottomY) * 0.5f - 0.12f, 0.f);
+            chute->scale.set(chuteLength, 0.24f, 2.8f);
+            chute->rotation.z = -chuteAngle;
+            chute->castShadow = false;
+            writePhysics(*chute, PhysicsConfig::Body::Static, PhysicsConfig::Shape::Box,
+                         1.f, 0.05f, 0.f);
+            scene->add(chute);
 
-            for (int side = 0; side < 2; ++side) {
-                const float z = (side == 0) ? 1.5f : -1.5f;
-                auto rail = mesh("Apron Rail " + std::to_string(side + 1), unit,
-                                 standard(kTimber, 0.9f, 0.f));
-                rail->position.set(centreX, apronTopY(centreX) + 0.11f, z);
-                rail->scale.set(length, 0.22f, 0.14f);
-                rail->rotation.z = -kApronSlope;
-                writePhysics(*rail, PhysicsConfig::Body::Static, PhysicsConfig::Shape::Box,
-                             1.f, 0.3f, 0.f);
-                scene->add(rail);
+            // The runout. Slippery and just over its own friction so movers
+            // keep moving, but nothing here is load-bearing for the intake:
+            // its job is to hold the day's cargo AWAY from the chute.
+            const float runoutLength = kRunoutEndX - kRunoutStartX;
+            const float runoutCentreX = (kRunoutStartX + kRunoutEndX) * 0.5f;
+            auto runout = mesh("Runout Apron", unit, standard(kYardDirt, 0.9f, 0.f));
+            runout->position.set(runoutCentreX, runoutTopY(runoutCentreX) - 0.12f, 0.f);
+            runout->scale.set(runoutLength, 0.24f, 2.8f);
+            runout->rotation.z = -kRunoutSlope;
+            runout->castShadow = false;
+            writePhysics(*runout, PhysicsConfig::Body::Static, PhysicsConfig::Shape::Box,
+                         1.f, 0.05f, 0.f);
+            scene->add(runout);
+
+            // Rails on both segments: the chute throws pieces with real speed
+            // now, and a rail only at the far end is a rail discovered too late.
+            const struct {
+                const char* name;
+                float centreX, centreY, length, angle;
+            } segments[] = {
+                    {"Chute Rail", (kChuteStartX + kChuteEndX) * 0.5f,
+                     (kChuteTopY + kChuteBottomY) * 0.5f + 0.11f, chuteLength, chuteAngle},
+                    {"Runout Rail", runoutCentreX,
+                     runoutTopY(runoutCentreX) + 0.11f, runoutLength, kRunoutSlope},
+            };
+            for (const auto& segment : segments) {
+                for (int side = 0; side < 2; ++side) {
+                    const float z = (side == 0) ? 1.5f : -1.5f;
+                    auto rail = mesh(std::string(segment.name) + " " + std::to_string(side + 1),
+                                     unit, standard(kTimber, 0.9f, 0.f));
+                    rail->position.set(segment.centreX, segment.centreY, z);
+                    rail->scale.set(segment.length, 0.22f, 0.14f);
+                    rail->rotation.z = -segment.angle;
+                    writePhysics(*rail, PhysicsConfig::Body::Static, PhysicsConfig::Shape::Box,
+                                 1.f, 0.3f, 0.f);
+                    scene->add(rail);
+                }
             }
 
             // What the stack leans on. A capsule on a flat deck has nothing to
@@ -1433,7 +1488,7 @@ class SawMill:
             // speak of — so without this the delivered logs roll off the end of
             // the yard and keep going.
             auto berm = mesh("Stack Berm", unit, standard(kTimber, 0.9f, 0.f));
-            berm->position.set(kBermX, apronTopY(kBermX) + 0.25f, 0.f);
+            berm->position.set(kBermX, runoutTopY(kBermX) + 0.25f, 0.f);
             berm->scale.set(0.3f, 0.7f, 2.8f);
             writePhysics(*berm, PhysicsConfig::Body::Static, PhysicsConfig::Shape::Box,
                          1.f, 0.6f, 0.f);

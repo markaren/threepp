@@ -619,11 +619,11 @@ TEST_CASE("the shipped Timber Yard document is what it claims to be", "[editor][
         const auto view = std::any_cast<const std::string&>(root.at("editorView"));
         REQUIRE(view.find('@') != std::string::npos);
         REQUIRE(std::count(view.begin(), view.end(), ',') == 4);
-        REQUIRE(root.count("editorFollow") == 1);
-        // What it names has to be in the scene, or the chase has nothing to
-        // chase and the editor says so instead of doing it.
-        REQUIRE(rig.node(std::any_cast<const std::string&>(root.at("editorFollow")).c_str()) !=
-                nullptr);
+        // And NO editorFollow — the user's call, after playing it: the machine
+        // is fixed and the vantage composed, so a tether bought nothing and
+        // cost the normal orbit camera. This pins the absence so it cannot
+        // quietly come back with a regeneration.
+        REQUIRE(root.count("editorFollow") == 0);
     }
 }
 

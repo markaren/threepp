@@ -321,13 +321,13 @@ whole sequence is six inline Python scripts and two coroutines. Where Hover Aren
 [coroutines](#coroutines-threeppeditorstart_coroutine) do to code that takes
 time.
 
-**It opens on the mechanism.** The document's
+**It opens on the mechanism, untethered.** The document's
 [`editorView`](#opening-a-document-editorview--editorfollow) frames the yard
-square-on, and `editorFollow = Gate Hinge` picks the *joint* — so the scene
-arrives with the Joint, Sensor and Script sections already open on the thing the
-example is about, and because the hinge does not move, the framing holds through
-Play. (Following a log was tried: the camera goes down the yard with it and
-parks at the far end looking at a stack.)
+square-on — rack to stack, left to right — and that is all it authors: no
+`editorFollow`, so the camera is the ordinary orbit from the first frame. The
+machine is fixed and the vantage is composed; a tether was tried and bought
+nothing the framing did not already give (and following a *log* parks you at
+the far end looking at a stack).
 
 | what you see | what it is |
 | --- | --- |
@@ -339,7 +339,7 @@ parks at the far end looking at a stack.)
 | the gate knows it is shut | an **Encoder** [authored on the joint node](#joint-sensors) — a joint sensor on a joint needs no joint name, the node is the reference |
 | each arrival counted, with a throughput | an invisible **[trigger volume](#trigger-volumes)** under the saw. `on_trigger_enter` stamps `threepp.editor.time.sim_time` per log, so *logs per second* is a fact about the yard rather than about the frame rate |
 | the yellow box that flashes as one lands | [`threepp.editor.draw_box`](#debug-draw), for the frame it lasts |
-| the flap at the end of the belt, and the green line out of its mount | a **breakable** joint carrying a **Force/Torque** sensor. `fixed_update` reads the load cell on the physics clock and `draw_line` draws it; one belt-driven log leans the flap open and walks through |
+| the flap at the end of the belt, and the green line that appears at its mount when cargo leans on it | a **breakable** joint carrying a **Force/Torque** sensor. `fixed_update` reads the load cell on the physics clock and `draw_line` draws the force vector — but only above a quarter of the break threshold, so the instrument shows up exactly when something is pushing and reddens toward the snap. (Idle, it drew a wobbling stick nobody could name.) One belt-driven log leans the flap open and walks through |
 | **hold SPACE and the rack pours out** | the override folds `is_key_down` into the coroutine's `until()` and skips the escapement, so the whole rack goes onto the belt at once. The stop bar's breakable joint and its `on_break()` — which marks the mission failed through [`script_from_object`](#talking-to-other-scripts-threeppeditorscript_from_object) — are the guard rail against what that produces |
 | the lettering on the sign | the editor's [TEXT authoring](#features) — `TextConfig`, glyphs baked into the mesh, so it reads with no font file present. Flat (depth 0): extruded, "TIMBER YARD" alone costs 1.5 MB of vertices |
 | the mission itself | a second coroutine on the yard sign: settle, then `for i in range(8): yield self.release_one(i)` — a NESTED generator per log, which costs no frame of its own — then one report on **both clocks**, `sim_time` against `wall_time` |
