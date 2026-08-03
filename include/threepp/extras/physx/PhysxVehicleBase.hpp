@@ -261,6 +261,7 @@ namespace threepp {
             }
             initialised_ = true;
 
+            resetSimulationStates();
             buildAxleDescription();
             buildRigidBodyParams();
             buildWheelParams();
@@ -269,6 +270,38 @@ namespace threepp {
         }
 
         // ---- Construction helpers ----
+
+        // Explicitly default-initialise every simulation state block, the way
+        // PhysX's own snippets do. The `{}` member initialisers are NOT enough:
+        // PxVec3 / PxTransform / PxQuat have user-provided default constructors
+        // that deliberately leave data uninitialised, and on GCC/Linux the
+        // state arrays holding them (verified byte-exact with a poisoned heap:
+        // tireDirectionStates_ and wheelLocalPoses_) come out of construction
+        // as raw heap garbage. On a heap-allocated vehicle — which is how the
+        // play sessions build one — that garbage reads as NaN, the first
+        // component-sequence update writes NaN velocities onto the chassis
+        // actor, and the car never moves. MSVC happened to hand out benign
+        // memory, which is why the Windows test runs never caught it.
+        void resetSimulationStates() {
+            using namespace ::physx;
+            rigidBodyState_.setToDefault();
+            for (PxU32 i = 0; i < 4; ++i) {
+                suspensionStates_[i].setToDefault();
+                suspensionComplianceStates_[i].setToDefault();
+                suspensionForces_[i].setToDefault();
+                tireDirectionStates_[i].setToDefault();
+                tireSpeedStates_[i].setToDefault();
+                tireSlipStates_[i].setToDefault();
+                tireGripStates_[i].setToDefault();
+                tireCamberAngleStates_[i].setToDefault();
+                tireStickyStates_[i].setToDefault();
+                tireForces_[i].setToDefault();
+                actuationStates_[i].setToDefault();
+                wheelRigidBody1dStates_[i].setToDefault();
+                wheelLocalPoses_[i].setToDefault();
+                roadGeometryStates_[i].setToDefault();
+            }
+        }
 
         // Steer response: front wheels (ids 0, 1) steer, rear wheels do not.
         void buildSteerResponseParams() {
@@ -345,7 +378,9 @@ namespace threepp {
                     m / 12.f * (H * H + L * L),
                     m / 12.f * (W * W + L * L),
                     m / 12.f * (W * W + H * H));
-            rigidBodyState_ = ::physx::vehicle2::PxVehicleRigidBodyState();
+            // setToDefault, not `= PxVehicleRigidBodyState()`: the temp would be
+            // built from the same untrustworthy PxVec3/PxTransform default ctors.
+            rigidBodyState_.setToDefault();
             rigidBodyState_.pose = toPxTransform(settings_.spawnPosition, settings_.spawnRotation);
         }
 
